@@ -4,3 +4,7 @@ _work/
 .DS_Store
 __pycache__/
 *.pyc
+*.deb
+*.whl
+*.tar.gz
+tmp/

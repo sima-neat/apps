@@ -1,0 +1,5 @@
+add_subdirectory(yolov8_multi_rtsp_demo)
+add_subdirectory(MultiCameraUDPYOLOv8)
+add_subdirectory(OneCameraYOLOOptiview)
+add_subdirectory(GraphPipesYOLOOptiview)
+add_subdirectory(4PipesYOLOOptiview)

@@ -6,26 +6,127 @@
       "name": "ResNet50 Model Example",
       "language": "cpp",
       "category": "classification",
-      "tags": [
-        "pilot",
-        "classification"
-      ],
+      "tags": ["classification"],
       "status": "experimental",
       "source_path": "examples/cpp/classification/model_resnet50",
-      "binary_name": "model_resnet50",
-      "notes": "Pilot migrated C++ example built against installed SimaNeat"
+      "binary_name": "model_resnet50"
     },
     {
-      "id": "python/classification",
-      "name": "Python Classification Examples",
-      "language": "python",
+      "id": "cpp/classification/modelmpk_resnet50",
+      "language": "cpp",
       "category": "classification",
-      "tags": [
-        "planned"
-      ],
-      "status": "planned",
-      "source_path": "examples/python/classification",
-      "notes": "Reserved for future Python examples"
+      "tags": ["classification"],
+      "status": "experimental",
+      "source_path": "examples/cpp/classification/modelmpk_resnet50",
+      "binary_name": "modelmpk_resnet50"
+    },
+    {
+      "id": "cpp/classification/pipelinesession_resnet50",
+      "language": "cpp",
+      "category": "classification",
+      "tags": ["classification"],
+      "status": "experimental",
+      "source_path": "examples/cpp/classification/pipelinesession_resnet50",
+      "binary_name": "pipelinesession_resnet50"
+    },
+    {
+      "id": "cpp/object-detection/yolov8_multi_rtsp_demo",
+      "language": "cpp",
+      "category": "object-detection",
+      "tags": ["object-detection", "rtsp", "multistream"],
+      "status": "experimental",
+      "source_path": "examples/cpp/object-detection/yolov8_multi_rtsp_demo",
+      "binary_name": "yolov8_multi_rtsp_demo"
+    },
+    {
+      "id": "cpp/object-detection/MultiCameraUDPYOLOv8",
+      "language": "cpp",
+      "category": "object-detection",
+      "tags": ["object-detection", "rtsp"],
+      "status": "experimental",
+      "source_path": "examples/cpp/object-detection/MultiCameraUDPYOLOv8",
+      "binary_name": "MultiCameraUDPYOLOv8"
+    },
+    {
+      "id": "cpp/object-detection/OneCameraYOLOOptiview",
+      "language": "cpp",
+      "category": "object-detection",
+      "tags": ["object-detection", "rtsp", "optiview"],
+      "status": "experimental",
+      "source_path": "examples/cpp/object-detection/OneCameraYOLOOptiview",
+      "binary_name": "OneCameraYOLOOptiview"
+    },
+    {
+      "id": "cpp/object-detection/GraphPipesYOLOOptiview",
+      "language": "cpp",
+      "category": "object-detection",
+      "tags": ["object-detection", "rtsp", "optiview", "multistream"],
+      "status": "experimental",
+      "source_path": "examples/cpp/object-detection/GraphPipesYOLOOptiview",
+      "binary_name": "GraphPipesYOLOOptiview"
+    },
+    {
+      "id": "cpp/object-detection/4PipesYOLOOptiview",
+      "language": "cpp",
+      "category": "object-detection",
+      "tags": ["object-detection", "rtsp", "optiview", "multistream"],
+      "status": "experimental",
+      "source_path": "examples/cpp/object-detection/4PipesYOLOOptiview",
+      "binary_name": "4PipesYOLOOptiview"
+    },
+    {
+      "id": "cpp/semantic-segmentation/fcn_hrnet_seg_overlay",
+      "language": "cpp",
+      "category": "semantic-segmentation",
+      "tags": ["semantic-segmentation"],
+      "status": "experimental",
+      "source_path": "examples/cpp/semantic-segmentation/fcn_hrnet_seg_overlay",
+      "binary_name": "fcn_hrnet_seg_overlay"
+    },
+    {
+      "id": "cpp/instance-segmentation/yolov5_seg_overlay",
+      "language": "cpp",
+      "category": "instance-segmentation",
+      "tags": ["instance-segmentation"],
+      "status": "experimental",
+      "source_path": "examples/cpp/instance-segmentation/yolov5_seg_overlay",
+      "binary_name": "yolov5_seg_overlay"
+    },
+    {
+      "id": "cpp/instance-segmentation/yolov8n_seg_detess_simple",
+      "language": "cpp",
+      "category": "instance-segmentation",
+      "tags": ["instance-segmentation"],
+      "status": "experimental",
+      "source_path": "examples/cpp/instance-segmentation/yolov8n_seg_detess_simple",
+      "binary_name": "yolov8n_seg_detess_simple"
+    },
+    {
+      "id": "cpp/depth-estimation/depth_anything_v2",
+      "language": "cpp",
+      "category": "depth-estimation",
+      "tags": ["depth-estimation"],
+      "status": "experimental",
+      "source_path": "examples/cpp/depth-estimation/depth_anything_v2",
+      "binary_name": "depth_anything_v2"
+    },
+    {
+      "id": "cpp/depth-estimation/midas_v21_rtsp",
+      "language": "cpp",
+      "category": "depth-estimation",
+      "tags": ["depth-estimation", "rtsp"],
+      "status": "experimental",
+      "source_path": "examples/cpp/depth-estimation/midas_v21_rtsp",
+      "binary_name": "midas_v21_rtsp"
+    },
+    {
+      "id": "cpp/throughput/yolov8_coco_tput",
+      "language": "cpp",
+      "category": "throughput",
+      "tags": ["throughput", "object-detection"],
+      "status": "experimental",
+      "source_path": "examples/cpp/throughput/yolov8_coco_tput",
+      "binary_name": "yolov8_coco_tput"
     }
   ]
 }

@@ -41,5 +41,9 @@ CMAKE_PREFIX_PATH=/opt/sima-neat ./build.sh
 
 ## Python Examples
 
-Python examples are planned and the layout is reserved under `examples/python/`.
-No Python examples are implemented in this initial skeleton yet.
+Python examples are not implemented yet.
+`examples/python/` will be populated as Python examples are migrated.
+
+## CI NEAT Dependency Source
+
+`ci/neat-core-link.json` controls which NEAT/core metadata manifest URL is used by apps CI.

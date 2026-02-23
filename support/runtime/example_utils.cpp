@@ -327,28 +327,8 @@ bool probe_rtsp_decoded_dims(const std::string& url, const RtspProbeOptions& opt
   return ok;
 }
 
-bool download_file(const std::string& url, const fs::path& out_path) {
-  return sima_test::download_file(url, out_path);
-}
-
-fs::path default_goldfish_path() {
-  return sima_test::default_goldfish_path();
-}
-
 std::string resolve_resnet50_tar() {
-  return sima_test::resolve_resnet50_tar();
-}
-
-std::string resolve_yolov8s_tar_local_first(const fs::path& root_in, bool skip_download) {
-  return sima_test::resolve_yolov8s_tar_local_first(root_in, skip_download);
-}
-
-std::string resolve_yolov8s_tar(const fs::path& root_in) {
-  return sima_test::resolve_yolov8s_tar(root_in);
-}
-
-fs::path ensure_coco_sample(const fs::path& root_in) {
-  return sima_test::ensure_coco_sample(root_in);
+  return sima_examples::resolve_resnet50_tar(fs::path{});
 }
 
 std::string find_boxdecode_config(const fs::path& etc_dir) {

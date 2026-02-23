@@ -1,4 +1,5 @@
 add_library(sima_neat_apps_support_runtime STATIC
+  runtime/asset_utils.cpp
   runtime/example_utils.cpp
   object_detection/obj_detection_utils.cpp
 )
@@ -9,9 +10,7 @@ target_link_libraries(sima_neat_apps_support_runtime
     SimaNeat::sima_neat
 )
 
-if (TARGET nlohmann_json::nlohmann_json)
-  target_link_libraries(sima_neat_apps_support_runtime PUBLIC nlohmann_json::nlohmann_json)
-endif()
+target_link_libraries(sima_neat_apps_support_runtime PUBLIC nlohmann_json::nlohmann_json)
 
 target_include_directories(sima_neat_apps_support_runtime
   PUBLIC

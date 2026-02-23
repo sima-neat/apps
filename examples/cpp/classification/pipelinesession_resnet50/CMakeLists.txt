@@ -1,0 +1,1 @@
+sima_neat_apps_add_example("pipelinesession_resnet50")
