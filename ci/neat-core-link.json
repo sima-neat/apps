@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "neat_core": {
+    "base_url": "https://neat-artifacts.modalix.info/neat",
+    "selector": "main:latest",
+    "metadata_preference": [
+      "metadata-all.json",
+      "metadata.json"
+    ]
+  }
+}

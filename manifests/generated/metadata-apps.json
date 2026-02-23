@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "artifact_name": "sima-neat-apps",
+  "apps_version": "0.1.0-dev",
+  "notes": "Placeholder metadata for early apps CI/release design; not consumed by sima-cli in phase 1.",
+  "tested_with_core": {
+    "metadata_url": "https://neat-artifacts.modalix.info/neat/main/latest/metadata-all.json"
+  }
+}

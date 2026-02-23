@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "examples": [
+    {
+      "id": "cpp/classification/model_resnet50",
+      "name": "ResNet50 Model Example",
+      "language": "cpp",
+      "category": "classification",
+      "tags": [
+        "pilot",
+        "classification"
+      ],
+      "status": "experimental",
+      "source_path": "examples/cpp/classification/model_resnet50",
+      "binary_name": "model_resnet50",
+      "notes": "Pilot migrated C++ example built against installed SimaNeat"
+    },
+    {
+      "id": "python/classification",
+      "name": "Python Classification Examples",
+      "language": "python",
+      "category": "classification",
+      "tags": [
+        "planned"
+      ],
+      "status": "planned",
+      "source_path": "examples/python/classification",
+      "notes": "Reserved for future Python examples"
+    }
+  ]
+}
