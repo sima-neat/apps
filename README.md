@@ -24,8 +24,8 @@ This keeps examples editable and easy to customize.
 - `examples/python/`: reserved for future Python examples (same category model)
 - `support/`: shared C++ helper code used by multiple examples
 - `utils/rtsp/`: RTSP helper scripts used by streaming demos
-- `ci/`: apps CI configuration (including NEAT core metadata selector)
-- `manifests/`: apps catalog and release metadata artifacts (for CI/release traceability)
+- `ci/`: apps CI configuration (including NEAT core metadata selector and schemas)
+- `catalog.json`: example catalog (for CI/release traceability)
 
 ## C++ Build (requires installed NEAT SDK)
 
