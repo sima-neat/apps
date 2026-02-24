@@ -1,5 +1,11 @@
 # SiMa NEAT Apps
 
+![Standard Build & Archive](https://img.shields.io/badge/Standard%20Build%20%26%20Archive-TBA-lightgrey)
+![Fuzz Nightly](https://img.shields.io/badge/Fuzz%20Nightly-TBA-lightgrey)
+![Crash Correctness Nightly](https://img.shields.io/badge/Crash%20Correctness%20Nightly-TBA-lightgrey)
+![SDK](https://img.shields.io/badge/SDK-2.0-green)
+![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
+
 Source-first example applications for SiMa NEAT.
 
 This repo is intentionally separate from `core`:
