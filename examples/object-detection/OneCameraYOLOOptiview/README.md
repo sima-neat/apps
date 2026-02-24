@@ -17,7 +17,7 @@ Single-camera YOLO detection with results forwarded to OptiView for visualizatio
 - Installed NEAT SDK
 - RTSP camera source
 - OptiView endpoint
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
+- Model downloaded: `sima-cli modelzoo get yolo_v8s`
 
 ## Run
 ### C++

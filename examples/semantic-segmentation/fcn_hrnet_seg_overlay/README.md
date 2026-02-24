@@ -20,7 +20,7 @@ Download any variant: `sima-cli modelzoo get fcn_hrnet18`
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get fcn_hrnet48`)
+- Model downloaded: `sima-cli modelzoo get fcn_hrnet48`
 
 ## Run
 ### C++

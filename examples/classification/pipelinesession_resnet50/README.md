@@ -15,7 +15,7 @@ ResNet50 classification using Session with ImageInputGroup and Model nodes. Demo
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get resnet_50`)
+- Model downloaded: `sima-cli modelzoo get resnet_50`
 
 ## Run
 ### C++

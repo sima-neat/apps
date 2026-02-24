@@ -17,7 +17,7 @@ Multi-channel YOLO detection using the Graph API with strict frame synchronizati
 - Installed NEAT SDK
 - RTSP camera sources
 - OptiView endpoint
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
+- Model downloaded: `sima-cli modelzoo get yolo_v8s`
 
 ## Run
 ### C++

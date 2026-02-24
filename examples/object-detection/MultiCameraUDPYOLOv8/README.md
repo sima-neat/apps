@@ -16,7 +16,7 @@ Multi-camera YOLOv8 detection with UDP output using the Session API and GStreame
 ## Prerequisites
 - Installed NEAT SDK
 - RTSP camera sources
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
+- Model downloaded: `sima-cli modelzoo get yolo_v8s`
 
 ## Run
 ### C++

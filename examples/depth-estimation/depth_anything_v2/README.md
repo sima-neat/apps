@@ -15,7 +15,7 @@ Minimal Depth Anything V2 pipeline: loads a depth model and infers depth maps fo
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get depth_anything_v2_vits`)
+- Model downloaded: `sima-cli modelzoo get depth_anything_v2_vits`
 
 ## Run
 ### C++

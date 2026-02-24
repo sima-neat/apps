@@ -20,7 +20,7 @@ Download any variant: `sima-cli modelzoo get yolo_v8s_seg`
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8n_seg`)
+- Model downloaded: `sima-cli modelzoo get yolo_v8n_seg`
 
 ## Run
 ### C++

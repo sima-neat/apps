@@ -21,7 +21,7 @@ Download any variant: `sima-cli modelzoo get <model_variant_1>`
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get <default_model_name>`)
+- Model downloaded: `sima-cli modelzoo get <default_model_name>`
 
 ## Run
 ### C++

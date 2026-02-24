@@ -16,7 +16,7 @@ Depth estimation from an RTSP camera stream using a MiDaS v2.1 model with the Se
 ## Prerequisites
 - Installed NEAT SDK
 - RTSP camera source
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get midas_v21_small_256`)
+- Model downloaded: `sima-cli modelzoo get midas_v21_small_256`
 
 ## Run
 ### C++

@@ -20,7 +20,7 @@ Download any variant: `sima-cli modelzoo get yolov5s`
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolov5n`)
+- Model downloaded: `sima-cli modelzoo get yolov5n`
 
 ## Run
 ### C++

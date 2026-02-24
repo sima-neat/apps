@@ -16,7 +16,7 @@ Multi-camera RTSP object detection using YOLOv8 with the Session API. Demonstrat
 ## Prerequisites
 - Installed NEAT SDK
 - One or more RTSP camera sources
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
+- Model downloaded: `sima-cli modelzoo get yolo_v8s`
 
 ## Run
 ### C++

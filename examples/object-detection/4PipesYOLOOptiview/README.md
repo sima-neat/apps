@@ -17,7 +17,7 @@ Four-camera YOLO detection pipeline with concurrent RTSP capture, decode, and UD
 - Installed NEAT SDK
 - Up to 4 RTSP camera sources
 - OptiView endpoint
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
+- Model downloaded: `sima-cli modelzoo get yolo_v8s`
 
 ## Run
 ### C++

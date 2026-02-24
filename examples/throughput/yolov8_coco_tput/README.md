@@ -16,7 +16,7 @@ Throughput benchmark for YOLOv8 on COCO images using the Session API. Measures i
 ## Prerequisites
 - Installed NEAT SDK
 - COCO dataset images
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
+- Model downloaded: `sima-cli modelzoo get yolo_v8s`
 
 ## Run
 ### C++

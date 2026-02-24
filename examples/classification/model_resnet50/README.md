@@ -15,7 +15,7 @@ Minimal Model API usage with a ResNet50 MPK. Loads a compiled model package, run
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get resnet_50`)
+- Model downloaded: `sima-cli modelzoo get resnet_50`
 
 ## Run
 ### C++
