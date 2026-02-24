@@ -10,3 +10,4 @@ __pycache__/
 models/
 tmp/
 sandbox/
+.neat-core-installed

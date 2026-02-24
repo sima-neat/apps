@@ -121,6 +121,13 @@ def validate_readme(readme_path: Path) -> list[str]:
     return errors
 
 
+def progress_bar(current: int, total: int, width: int = 20) -> str:
+    pct = current * 100 // total
+    filled = pct // 5
+    bar = "#" * filled + " " * (width - filled)
+    return f"[{bar}] {pct:3d}%  ({current}/{total})"
+
+
 def main() -> int:
     # Find the examples directory relative to this script or cwd
     script_dir = Path(__file__).resolve().parent
@@ -142,30 +149,33 @@ def main() -> int:
         print("ERROR: No example directories found", file=sys.stderr)
         return 1
 
-    total_errors = 0
-    checked = 0
+    total = len(example_dirs)
+    all_errors: list[tuple[str, str]] = []
 
-    for example_dir in example_dirs:
+    for i, example_dir in enumerate(example_dirs, 1):
         readme = example_dir / "README.md"
         rel_path = readme.relative_to(repo_root)
+        print(f"\r  [validate-readmes] {progress_bar(i, total)}", end="", flush=True)
 
         if not readme.exists():
-            print(f"FAIL  {rel_path}: README.md is missing")
-            total_errors += 1
+            all_errors.append((str(rel_path), "README.md is missing"))
             continue
 
         errors = validate_readme(readme)
-        checked += 1
+        for error in errors:
+            all_errors.append((str(rel_path), error))
+    print()
 
-        if errors:
-            total_errors += len(errors)
-            for error in errors:
-                print(f"FAIL  {rel_path}: {error}")
-        else:
-            print(f"OK    {rel_path}")
+    if all_errors:
+        print()
+        for path, error in all_errors:
+            print(f"  FAIL  {path}: {error}")
+        print()
+        print(f"  RESULT: FAILED ({len(all_errors)} errors in {total} READMEs)")
+        return 1
 
-    print(f"\n{checked} READMEs checked, {total_errors} error(s) found.")
-    return 1 if total_errors > 0 else 0
+    print(f"  RESULT: PASSED ({total} READMEs)")
+    return 0
 
 
 if __name__ == "__main__":
