@@ -27,13 +27,31 @@ This keeps examples editable and easy to customize.
 - `examples/python/`: reserved for future Python examples (same category model)
 - `support/`: shared C++ helper code used by multiple examples
 - `utils/rtsp/`: RTSP helper scripts used by streaming demos
-- `ci/`: apps CI configuration (including NEAT core metadata selector and schemas)
+- `scripts/ci/`: CI scripts (public include boundary check, quality gates)
+- `scripts/cd/`: continuous delivery scripts (reserved)
+- `scripts/release/`: release scripts (reserved)
+- `schemas/`: JSON schemas (e.g. catalog validation)
+- `neat-core.json`: NEAT core SDK dependency declaration (branch, version, install method)
 - `catalog.json`: example catalog (for CI/release traceability)
 
-## C++ Build (requires installed NEAT SDK)
+## Build
+
+Install NEAT core SDK and build all examples in one step:
+
+```bash
+./build.sh --all
+```
+
+If NEAT core is already installed, build only:
 
 ```bash
 ./build.sh
+```
+
+To install NEAT core SDK without building (useful for app developers):
+
+```bash
+./build.sh --only-install-neat-core
 ```
 
 If NEAT is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH`:
@@ -47,6 +65,7 @@ CMAKE_PREFIX_PATH=/opt/sima-neat ./build.sh
 Python examples are not implemented yet.
 `examples/python/` will be populated as Python examples are migrated.
 
-## CI NEAT Dependency Source
+## NEAT Core Dependency
 
-`ci/neat-core-link.json` controls which NEAT/core metadata manifest URL is used by apps CI.
+`neat-core.json` declares which NEAT core SDK branch and version this repo depends on.
+`./build.sh --all` reads this file to install the correct SDK before building.
