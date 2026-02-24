@@ -18,7 +18,7 @@ if (SIMANEAT_APPS_BUILD_CPP)
   find_package(SimaNeat REQUIRED)
   find_package(nlohmann_json REQUIRED)
   add_subdirectory(support)
-  add_subdirectory(examples/cpp)
+  add_subdirectory(examples)
 endif()
 
 if (SIMANEAT_APPS_BUILD_PYTHON)
