@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(SIMANEAT_APPS_BUILD_CPP "Build C++ examples" ON)
-option(SIMANEAT_APPS_BUILD_PYTHON "Reserved toggle for future Python example tooling" OFF)
+option(SIMANEAT_APPS_BUILD_PYTHON "Build Python tooling" OFF)
 option(SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT "Build shared OptiView support library" ON)
 
 message(STATUS "Configuring SimaNeatApps")
@@ -22,5 +22,5 @@ if (SIMANEAT_APPS_BUILD_CPP)
 endif()
 
 if (SIMANEAT_APPS_BUILD_PYTHON)
-  message(STATUS "Python examples are source-only placeholders in this initial implementation.")
+  message(STATUS "Python tooling placeholder — not yet implemented.")
 endif()
