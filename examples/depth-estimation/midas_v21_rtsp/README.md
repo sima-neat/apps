@@ -8,19 +8,20 @@
 | Tags | depth-estimation, rtsp |
 | Status | experimental |
 | Binary Name | midas_v21_rtsp |
+| Model | midas_v21_small_256 |
 
 ## Concept
 Depth estimation from an RTSP camera stream using a MiDaS v2.1 model with the Session API.
 
 ## Prerequisites
-- Compiled MiDaS v2.1 MPK (`.tar.gz`)
-- RTSP camera source
 - Installed NEAT SDK
+- RTSP camera source
+- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get midas_v21_small_256`)
 
 ## Run
 ### C++
 ```bash
-./build/examples/depth-estimation/midas_v21_rtsp/midas_v21_rtsp <model.tar.gz> <rtsp_url>
+./build/examples/depth-estimation/midas_v21_rtsp/midas_v21_rtsp --model models/midas_v21_small_256_mpk.tar.gz --rtsp <rtsp_url>
 ```
 
 ## Source Files

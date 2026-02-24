@@ -8,19 +8,20 @@
 | Tags | object-detection, rtsp, multistream |
 | Status | experimental |
 | Binary Name | yolov8_multi_rtsp_demo |
+| Model | yolo_v8s |
 
 ## Concept
 Multi-camera RTSP object detection using YOLOv8 with the Session API. Demonstrates concurrent stream handling.
 
 ## Prerequisites
-- Compiled YOLOv8 MPK (`.tar.gz`)
-- One or more RTSP camera sources
 - Installed NEAT SDK
+- One or more RTSP camera sources
+- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/yolov8_multi_rtsp_demo/yolov8_multi_rtsp_demo <model.tar.gz> <rtsp_url> [rtsp_url...]
+./build/examples/object-detection/yolov8_multi_rtsp_demo/yolov8_multi_rtsp_demo --rtsp-list utils/rtsp/rtsp_list.sample.txt
 ```
 
 ## Source Files

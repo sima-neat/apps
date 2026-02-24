@@ -7,4 +7,6 @@ __pycache__/
 *.deb
 *.whl
 *.tar.gz
+models/
 tmp/
+sandbox/

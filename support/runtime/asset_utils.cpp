@@ -78,6 +78,12 @@ std::string resolve_resnet50_tar_local_only(const fs::path& root_in) {
     return std::string(env);
   }
 
+  for (const auto& name : {"resnet50_mpk.tar.gz", "resnet_50_mpk.tar.gz"}) {
+    const fs::path p = root / "models" / name;
+    if (fs::exists(p))
+      return p.string();
+  }
+
   const fs::path local = root / "tmp" / "resnet_50_mpk.tar.gz";
   if (fs::exists(local))
     return local.string();
@@ -100,6 +106,12 @@ std::string resolve_resnet50_tar(const fs::path& root_in) {
   const char* env = std::getenv("SIMA_RESNET50_TAR");
   if (env && *env && fs::exists(env)) {
     return std::string(env);
+  }
+
+  for (const auto& name : {"resnet50_mpk.tar.gz", "resnet_50_mpk.tar.gz"}) {
+    const fs::path p = root / "models" / name;
+    if (fs::exists(p))
+      return p.string();
   }
 
   const fs::path local = root / "tmp" / "resnet_50_mpk.tar.gz";
@@ -145,6 +157,7 @@ std::string resolve_yolov8s_tar_local_first(const fs::path& root_in, bool skip_d
   const char* home = std::getenv("HOME");
   const fs::path home_path = home ? fs::path(home) : fs::path();
   const std::vector<fs::path> search_dirs = {
+      root / "models",
       root,
       fs::current_path(),
       root / "tmp",
@@ -272,6 +285,7 @@ std::string resolve_modelzoo_tar(const std::string& model_name, const fs::path& 
   const char* home = std::getenv("HOME");
   const fs::path home_path = home ? fs::path(home) : fs::path();
   const std::vector<fs::path> search_dirs = {
+      root / "models",
       tmp_dir,
       root,
       fs::current_path(),

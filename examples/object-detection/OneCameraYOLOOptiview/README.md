@@ -8,20 +8,21 @@
 | Tags | object-detection, rtsp, optiview |
 | Status | experimental |
 | Binary Name | OneCameraYOLOOptiview |
+| Model | yolo_v8s |
 
 ## Concept
 Single-camera YOLO detection with results forwarded to OptiView for visualization over RTSP.
 
 ## Prerequisites
-- Compiled YOLO MPK (`.tar.gz`)
+- Installed NEAT SDK
 - RTSP camera source
 - OptiView endpoint
-- Installed NEAT SDK
+- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/OneCameraYOLOOptiview/OneCameraYOLOOptiview <model.tar.gz> <rtsp_url>
+./build/examples/object-detection/OneCameraYOLOOptiview/OneCameraYOLOOptiview --rtsp <rtsp_url>
 ```
 
 ## Source Files

@@ -1,2 +1,1 @@
-add_subdirectory(yolov5_seg_overlay)
 add_subdirectory(yolov8n_seg_detess_simple)

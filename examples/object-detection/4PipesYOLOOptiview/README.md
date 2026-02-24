@@ -8,20 +8,21 @@
 | Tags | object-detection, rtsp, optiview, multistream |
 | Status | experimental |
 | Binary Name | 4PipesYOLOOptiview |
+| Model | yolo_v8s |
 
 ## Concept
 Four-camera YOLO detection pipeline with concurrent RTSP capture, decode, and UDP forwarding to OptiView. Uses bounded queues and frame dropping under load.
 
 ## Prerequisites
-- Compiled YOLO MPK (`.tar.gz`)
+- Installed NEAT SDK
 - Up to 4 RTSP camera sources
 - OptiView endpoint
-- Installed NEAT SDK
+- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get yolo_v8s`)
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/4PipesYOLOOptiview/4PipesYOLOOptiview <model.tar.gz> <rtsp_url> [rtsp_url...]
+./build/examples/object-detection/4PipesYOLOOptiview/4PipesYOLOOptiview --rtsp <rtsp_url> [--rtsp <rtsp_url>...]
 ```
 
 ## Source Files

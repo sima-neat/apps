@@ -8,18 +8,19 @@
 | Tags | classification, model, mpk |
 | Status | experimental |
 | Binary Name | modelmpk_resnet50 |
+| Model | resnet_50 |
 
 ## Concept
 ResNet50 classification using the ModelMPK API with OpenCV-based preprocessing. Demonstrates tensor extraction from inference samples.
 
 ## Prerequisites
-- Compiled ResNet50 MPK (`.tar.gz`)
 - Installed NEAT SDK
+- Model downloaded: `./scripts/download_models.sh` (or `sima-cli modelzoo get resnet_50`)
 
 ## Run
 ### C++
 ```bash
-./build/examples/classification/modelmpk_resnet50/modelmpk_resnet50 <model.tar.gz> <image>
+./build/examples/classification/modelmpk_resnet50/modelmpk_resnet50 models/resnet_50_mpk.tar.gz <image>
 ```
 
 ## Source Files
