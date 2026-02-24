@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Validate that every example README.md conforms to the required template.
+
+Scans examples/*/*/README.md files and verifies:
+- Metadata table exists with all required fields
+- Field values match allowed enums (categories, difficulties, statuses)
+- Required sections are present
+
+Exit code 0 on success, 1 if any README is missing or malformed.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+VALID_CATEGORIES = {
+    "classification",
+    "object-detection",
+    "semantic-segmentation",
+    "instance-segmentation",
+    "depth-estimation",
+    "throughput",
+}
+
+VALID_DIFFICULTIES = {"Beginner", "Intermediate", "Advanced"}
+
+VALID_STATUSES = {"experimental", "stable"}
+
+REQUIRED_METADATA_FIELDS = {"Category", "Difficulty", "Tags", "Status", "Binary Name", "Model"}
+
+REQUIRED_SECTIONS = {"Metadata", "Concept", "Prerequisites", "Run", "Source Files"}
+
+
+def parse_metadata_table(content: str) -> dict[str, str] | None:
+    """Extract field->value pairs from the Metadata markdown table."""
+    metadata = {}
+    in_table = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## Metadata"):
+            in_table = True
+            continue
+        if in_table:
+            if stripped.startswith("## "):
+                break
+            match = re.match(r"\|\s*(.+?)\s*\|\s*(.+?)\s*\|", stripped)
+            if match:
+                key, value = match.group(1).strip(), match.group(2).strip()
+                if key in ("---", "Field"):
+                    continue
+                metadata[key] = value
+    return metadata if metadata else None
+
+
+def get_sections(content: str) -> set[str]:
+    """Return set of H2 section names found in the content."""
+    sections = set()
+    for line in content.splitlines():
+        match = re.match(r"^##\s+(.+)$", line)
+        if match:
+            sections.add(match.group(1).strip())
+    return sections
+
+
+def validate_readme(readme_path: Path) -> list[str]:
+    """Validate a single README.md. Returns list of error strings."""
+    errors = []
+    content = readme_path.read_text()
+
+    # Check required sections
+    sections = get_sections(content)
+    for section in REQUIRED_SECTIONS:
+        if section not in sections:
+            errors.append(f"Missing required section: ## {section}")
+
+    # Parse and validate metadata
+    metadata = parse_metadata_table(content)
+    if metadata is None:
+        errors.append("Metadata table not found or empty")
+        return errors
+
+    for field in REQUIRED_METADATA_FIELDS:
+        if field not in metadata:
+            errors.append(f"Missing required metadata field: {field}")
+
+    category = metadata.get("Category", "")
+    if category and category not in VALID_CATEGORIES:
+        errors.append(
+            f"Invalid Category '{category}'. "
+            f"Must be one of: {', '.join(sorted(VALID_CATEGORIES))}"
+        )
+
+    difficulty = metadata.get("Difficulty", "")
+    if difficulty and difficulty not in VALID_DIFFICULTIES:
+        errors.append(
+            f"Invalid Difficulty '{difficulty}'. "
+            f"Must be one of: {', '.join(sorted(VALID_DIFFICULTIES))}"
+        )
+
+    status = metadata.get("Status", "")
+    if status and status not in VALID_STATUSES:
+        errors.append(
+            f"Invalid Status '{status}'. "
+            f"Must be one of: {', '.join(sorted(VALID_STATUSES))}"
+        )
+
+    # Verify the example directory matches its category
+    parts = readme_path.parts
+    # Expected path: .../examples/<category>/<name>/README.md
+    try:
+        examples_idx = list(parts).index("examples")
+        dir_category = parts[examples_idx + 1]
+        if category and dir_category != category:
+            errors.append(
+                f"Directory category '{dir_category}' does not match "
+                f"metadata Category '{category}'"
+            )
+    except (ValueError, IndexError):
+        pass
+
+    return errors
+
+
+def main() -> int:
+    # Find the examples directory relative to this script or cwd
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent
+    examples_dir = repo_root / "examples"
+
+    if not examples_dir.is_dir():
+        print(f"ERROR: examples directory not found at {examples_dir}", file=sys.stderr)
+        return 1
+
+    # Find all example directories (examples/<category>/<name>/)
+    example_dirs = sorted(
+        d
+        for d in examples_dir.glob("*/*")
+        if d.is_dir() and not d.name.startswith(".")
+    )
+
+    if not example_dirs:
+        print("ERROR: No example directories found", file=sys.stderr)
+        return 1
+
+    total_errors = 0
+    checked = 0
+
+    for example_dir in example_dirs:
+        readme = example_dir / "README.md"
+        rel_path = readme.relative_to(repo_root)
+
+        if not readme.exists():
+            print(f"FAIL  {rel_path}: README.md is missing")
+            total_errors += 1
+            continue
+
+        errors = validate_readme(readme)
+        checked += 1
+
+        if errors:
+            total_errors += len(errors)
+            for error in errors:
+                print(f"FAIL  {rel_path}: {error}")
+        else:
+            print(f"OK    {rel_path}")
+
+    print(f"\n{checked} READMEs checked, {total_errors} error(s) found.")
+    return 1 if total_errors > 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
