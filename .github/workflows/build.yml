@@ -13,15 +13,10 @@ jobs:
       - name: Checkout apps repo
         uses: actions/checkout@v4
 
-      - name: Install SiMa NEAT core from metadata
+      - name: Install SiMa NEAT core and build
         run: |
-          chmod +x ci/install_neat_core.sh ci/check_public_includes.sh
-          ./ci/install_neat_core.sh
+          chmod +x build.sh scripts/ci/check_public_includes.sh
+          ./build.sh --all --clean
 
       - name: Enforce public include boundary
-        run: ./ci/check_public_includes.sh
-
-      - name: Build C++ examples
-        run: |
-          chmod +x build.sh
-          ./build.sh --clean
+        run: ./scripts/ci/check_public_includes.sh
