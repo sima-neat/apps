@@ -8,11 +8,8 @@ This repo is intentionally separate from `core`:
 
 ## Customer Workflow (Early Release)
 
-1. Install NEAT/core dependencies:
-
-```bash
-sima-cli install -m https://neat-artifacts.modalix.info/neat/main/latest/metadata-all.json
-```
+1. Install NEAT/core dependencies by following the official guide:
+   https://neat.modalix.info/getting-started/install
 
 2. Clone this repo and build/run examples.
 
