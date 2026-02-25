@@ -28,5 +28,13 @@ Download any variant: `sima-cli modelzoo get yolo_v8s_seg`
 ./build/examples/instance-segmentation/yolov8n_seg_detess_simple/yolov8n_seg_detess_simple models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
 ```
 
+### Python
+```bash
+source ~/pyneat/.venv/bin/activate
+pip install -r examples/instance-segmentation/yolov8n_seg_detess_simple/requirements.txt
+python examples/instance-segmentation/yolov8n_seg_detess_simple/main.py models/yolov8n_seg_detess_simple_mpk.tar.gz <input_dir> <output_dir>
+```
+
 ## Source Files
 - C++: `main.cpp`
+- Python: `main.py`
