@@ -1,3 +1,1 @@
 add_subdirectory(model_resnet50)
-add_subdirectory(modelmpk_resnet50)
-add_subdirectory(pipelinesession_resnet50)
