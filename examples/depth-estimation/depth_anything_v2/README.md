@@ -23,5 +23,13 @@ Minimal Depth Anything V2 pipeline: loads a depth model and infers depth maps fo
 ./build/examples/depth-estimation/depth_anything_v2/depth_anything_v2 models/depth_anything_v2_vits_mpk.tar.gz <input_dir> <output_dir>
 ```
 
+### Python
+```bash
+source ~/pyneat/.venv/bin/activate
+pip install -r examples/depth-estimation/depth_anything_v2/requirements.txt
+python examples/depth-estimation/depth_anything_v2/main.py models/depth_anything_v2_vits_mpk.tar.gz <input_dir> <output_dir>
+```
+
 ## Source Files
 - C++: `main.cpp`
+- Python: `main.py`
