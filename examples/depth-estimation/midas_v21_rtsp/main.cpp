@@ -9,19 +9,29 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double elapsed_s(const Clock::time_point& t0) {
+  return std::chrono::duration<double>(Clock::now() - t0).count();
+}
 
 bool has_flag(int argc, char** argv, const std::string& key) {
   for (int i = 1; i < argc; ++i) {
@@ -183,23 +193,32 @@ bool depth_tensor_to_u8(const simaai::neat::Tensor& t, int fallback_w, int fallb
   if (!t.is_dense())
     return false;
 
-  int w = t.width() > 0 ? t.width() : fallback_w;
-  int h = t.height() > 0 ? t.height() : fallback_h;
-  if ((w <= 0 || h <= 0) && t.shape.size() >= 2) {
-    h = static_cast<int>(t.shape[0]);
-    w = static_cast<int>(t.shape[1]);
+  // Do not rely on Tensor::width()/height() for model outputs with a leading batch
+  // dimension (e.g. MiDaS commonly returns 1x256x256x1 with layout=HWC). In that case
+  // width()/height()/channels() can be interpreted as w=256,h=1,c=256, which is not a
+  // depth image. Match the Python example and infer spatial dims from non-singleton axes.
+  std::vector<int> spatial_dims;
+  spatial_dims.reserve(t.shape.size());
+  for (auto d64 : t.shape) {
+    const int d = static_cast<int>(d64);
+    if (d > 1)
+      spatial_dims.push_back(d);
+  }
+
+  int h = fallback_h;
+  int w = fallback_w;
+  if (spatial_dims.size() >= 2) {
+    h = spatial_dims[0];
+    w = spatial_dims[1];
+  } else if (spatial_dims.size() == 1) {
+    h = spatial_dims[0];
+    w = spatial_dims[0];
   }
   if (w <= 0 || h <= 0)
     return false;
 
-  int depth = 1;
-  if (t.shape.size() >= 3) {
-    depth = static_cast<int>(t.shape[2]);
-  }
-
   const size_t elem_size = dtype_bytes(t.dtype);
-  const size_t needed =
-      static_cast<size_t>(w) * static_cast<size_t>(h) * static_cast<size_t>(depth) * elem_size;
+  const size_t needed = static_cast<size_t>(w) * static_cast<size_t>(h) * elem_size;
   std::vector<uint8_t> raw = t.copy_dense_bytes_tight();
   if (raw.size() < needed)
     return false;
@@ -212,9 +231,7 @@ bool depth_tensor_to_u8(const simaai::neat::Tensor& t, int fallback_w, int fallb
   for (int y = 0; y < h; ++y) {
     float* row = depth_f.ptr<float>(y);
     for (int x = 0; x < w; ++x) {
-      const size_t idx =
-          (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) *
-          static_cast<size_t>(depth);
+      const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
       float v = read_elem(data, idx, t.dtype);
       row[x] = v;
       minv = std::min(minv, v);
@@ -244,11 +261,49 @@ bool tensor_to_depth_bgr(const simaai::neat::Tensor& t, int fallback_w, int fall
   }
 
   if (use_colormap) {
-    cv::applyColorMap(depth_u8, bgr_out, cv::COLORMAP_TURBO);
+    cv::applyColorMap(depth_u8, bgr_out, cv::COLORMAP_INFERNO);
   } else {
     cv::cvtColor(depth_u8, bgr_out, cv::COLOR_GRAY2BGR);
   }
   return true;
+}
+
+const simaai::neat::Tensor* find_first_tensor(const simaai::neat::Sample& s) {
+  if (s.kind == simaai::neat::SampleKind::Tensor && s.tensor.has_value()) {
+    return &(*s.tensor);
+  }
+  if (s.kind == simaai::neat::SampleKind::Bundle) {
+    for (const auto& field : s.fields) {
+      if (const auto* t = find_first_tensor(field)) {
+        return t;
+      }
+    }
+  }
+  return nullptr;
+}
+
+const simaai::neat::Tensor* find_depth_tensor(const simaai::neat::Sample& s) {
+  const simaai::neat::Tensor* first = find_first_tensor(s);
+  if (s.kind == simaai::neat::SampleKind::Tensor && s.tensor.has_value()) {
+    const auto& t = *s.tensor;
+    const bool looks_like_depth =
+        !t.semantic.image.has_value() && t.dtype != simaai::neat::TensorDType::UInt8;
+    if (looks_like_depth)
+      return &t;
+    return first;
+  }
+  if (s.kind == simaai::neat::SampleKind::Bundle) {
+    for (const auto& field : s.fields) {
+      if (field.kind != simaai::neat::SampleKind::Tensor || !field.tensor.has_value())
+        continue;
+      const auto& t = *field.tensor;
+      const bool looks_like_depth =
+          !t.semantic.image.has_value() && t.dtype != simaai::neat::TensorDType::UInt8;
+      if (looks_like_depth)
+        return &t;
+    }
+  }
+  return first;
 }
 
 bool tensor_to_bgr_mat(const simaai::neat::Tensor& t, cv::Mat& bgr_out) {
@@ -277,56 +332,175 @@ bool tensor_to_bgr_mat(const simaai::neat::Tensor& t, cv::Mat& bgr_out) {
   return true;
 }
 
-bool process_stream(simaai::neat::Model& model, const std::function<bool(cv::Mat&)>& next_frame,
-                    cv::VideoWriter& writer, int max_frames, float alpha, bool use_colormap) {
-  simaai::neat::Model::Runner run;
-  int frames = 0;
-  for (; frames < max_frames; ++frames) {
-    cv::Mat frame;
-    if (!next_frame(frame))
-      break;
+struct FetchedFrame {
+  cv::Mat frame;
+  double pull_s = 0.0;
+  double tensor_s = 0.0;
+  bool skip_profile = false;
+};
 
+class StageProfiler {
+public:
+  explicit StageProfiler(bool enabled) : enabled_(enabled), skip_next_frame_(enabled) {}
+
+  bool begin_frame(bool skip_current) {
+    if (!enabled_)
+      return false;
+    if (skip_next_frame_) {
+      skip_next_frame_ = false;
+      return false;
+    }
+    if (skip_current)
+      return false;
+    return true;
+  }
+
+  void skip_next_frame() {
+    if (enabled_)
+      skip_next_frame_ = true;
+  }
+
+  void add_pull(double dt_s, bool include) { add(pull_, dt_s, include); }
+  void add_tensor(double dt_s, bool include) { add(tensor_, dt_s, include); }
+  void add_model(double dt_s, bool include) { add(model_, dt_s, include); }
+  void add_post(double dt_s, bool include) { add(post_, dt_s, include); }
+  void add_write(double dt_s, bool include) { add(write_, dt_s, include); }
+  void add_frame(double dt_s, bool include) { add(frame_, dt_s, include); }
+
+  void print(const std::string& label) const {
+    if (!enabled_)
+      return;
+    std::cout << "--------------------------\n";
+    std::cout << "[PROFILE] " << label << "\n";
+    std::cout << "[PROFILE]   stage         avg(ms)   max(ms)   n\n";
+    print_row("pull", pull_);
+    print_row("tensor", tensor_);
+    print_row("model", model_);
+    print_row("post", post_);
+    print_row("write", write_);
+    print_row("frame", frame_);
+  }
+
+private:
+  struct Stat {
+    double sum_s = 0.0;
+    double max_s = 0.0;
+    int n = 0;
+  };
+
+  static void add(Stat& s, double dt_s, bool include) {
+    if (!include)
+      return;
+    s.sum_s += dt_s;
+    s.max_s = std::max(s.max_s, dt_s);
+    ++s.n;
+  }
+
+  static void print_row(const char* name, const Stat& s) {
+    if (s.n <= 0)
+      return;
+    const double avg_ms = 1000.0 * s.sum_s / static_cast<double>(s.n);
+    const double max_ms = 1000.0 * s.max_s;
+    std::cout << "[PROFILE]   " << std::left << std::setw(12) << name << std::right
+              << std::setw(8) << std::fixed << std::setprecision(1) << avg_ms
+              << std::setw(9) << std::fixed << std::setprecision(1) << max_ms << std::setw(5)
+              << s.n << "\n";
+  }
+
+  bool enabled_ = false;
+  bool skip_next_frame_ = false;
+  Stat pull_;
+  Stat tensor_;
+  Stat model_;
+  Stat post_;
+  Stat write_;
+  Stat frame_;
+};
+
+bool process_stream(simaai::neat::Model& model,
+                    const std::function<bool(FetchedFrame&)>& next_frame,
+                    cv::VideoWriter& writer, int max_frames, int log_every, bool profile,
+                    float alpha, bool use_colormap) {
+  simaai::neat::Model::Runner model_run;
+  StageProfiler profiler(profile);
+  int processed = 0;
+  std::optional<Clock::time_point> log_window_start;
+  int log_window_start_frames = 0;
+
+  while (processed < max_frames) {
+    const auto t_frame0 = Clock::now();
+
+    FetchedFrame fetched;
+    if (!next_frame(fetched))
+      break;
+    cv::Mat frame = fetched.frame;
     if (frame.empty())
       continue;
     if (frame.type() != CV_8UC3) {
       cv::Mat converted;
       frame.convertTo(converted, CV_8UC3);
-      frame = converted;
+      frame = std::move(converted);
     }
 
-    if (!run) {
-      run = model.build(frame);
+    const bool profile_frame = profiler.begin_frame(fetched.skip_profile);
+    profiler.add_pull(fetched.pull_s, profile_frame);
+    profiler.add_tensor(fetched.tensor_s, profile_frame);
+
+    if (!model_run) {
+      model_run = model.build(frame);
     }
-    simaai::neat::Sample out = run.run(frame);
-    if (!out.tensor.has_value()) {
+    const auto t_model0 = Clock::now();
+    simaai::neat::Sample out = model_run.run(frame);
+    const double model_dt_s = elapsed_s(t_model0);
+    const simaai::neat::Tensor* out_tensor = find_depth_tensor(out);
+    if (out_tensor == nullptr) {
       std::cerr << "Model output missing tensor\n";
       return false;
     }
-    simaai::neat::Tensor t = *out.tensor;
+    const simaai::neat::Tensor& t = *out_tensor;
 
+    const auto t_post0 = Clock::now();
     cv::Mat depth_bgr;
-    float minv = 0.0f;
-    float maxv = 0.0f;
-    if (!tensor_to_depth_bgr(t, frame.cols, frame.rows, use_colormap, depth_bgr, &minv, &maxv)) {
+    if (!tensor_to_depth_bgr(t, frame.cols, frame.rows, use_colormap, depth_bgr, nullptr, nullptr)) {
       std::cerr << "Failed to convert depth tensor\n";
       return false;
     }
-
     if (depth_bgr.size() != frame.size()) {
       cv::resize(depth_bgr, depth_bgr, frame.size(), 0, 0, cv::INTER_NEAREST);
     }
-
     const double a = std::max(0.0f, std::min(1.0f, alpha));
     cv::Mat blended;
     cv::addWeighted(frame, 1.0 - a, depth_bgr, a, 0.0, blended);
-    writer.write(blended);
+    const double post_dt_s = elapsed_s(t_post0);
 
-    if (frames == 0 || (frames + 1) % 10 == 0) {
-      std::cout << "frame " << (frames + 1) << " depth range: [" << minv << ", " << maxv << "]\n";
+    const auto t_write0 = Clock::now();
+    writer.write(blended);
+    const double write_dt_s = elapsed_s(t_write0);
+
+    ++processed;
+    profiler.add_model(model_dt_s, profile_frame);
+    profiler.add_post(post_dt_s, profile_frame);
+    profiler.add_write(write_dt_s, profile_frame);
+    profiler.add_frame(elapsed_s(t_frame0), profile_frame);
+
+    if (!log_window_start.has_value())
+      log_window_start = Clock::now();
+    if (processed % std::max(1, log_every) == 0) {
+      const auto now = Clock::now();
+      const int interval_frames = processed - log_window_start_frames;
+      const double interval_elapsed_s =
+          std::max(1e-6, std::chrono::duration<double>(now - *log_window_start).count());
+      std::cout << "[PROGRESS] frames=" << processed << " FPS=" << std::fixed
+                << std::setprecision(2)
+                << (static_cast<double>(interval_frames) / interval_elapsed_s) << " (last "
+                << interval_frames << " frames)\n";
+      log_window_start = now;
+      log_window_start_frames = processed;
+      profiler.print("frames=" + std::to_string(processed));
     }
   }
 
-  std::cout << "Processed " << frames << " frames\n";
+  profiler.print("summary");
   return true;
 }
 
@@ -337,19 +511,23 @@ void usage(const char* prog) {
             << "\n"
             << "Options:\n"
             << "  --model <tar.gz>     Path to midas_v21_small_256 MPK tar.gz\n"
-            << "  --out <file.mp4>     Output mp4 path (default: midas_depth.mp4)\n"
+            << "  --output-file <file.mp4>\n"
+            << "                     Output mp4 path (alias: --out, default: midas_depth.mp4)\n"
             << "  --frames <n>         Number of frames to record (default: 120)\n"
             << "  --width <n>          Input width (default: 256)\n"
             << "  --height <n>         Input height (default: 256)\n"
             << "  --fps <n>            Output fps (default: 30)\n"
-            << "  --alpha <f>          Overlay alpha (default: 0.5)\n"
+            << "  --alpha <f>          Overlay alpha (default: 0.6)\n"
             << "  --format <BGR>       Input format (default: BGR)\n"
-            << "  --colormap           Apply color map to depth output\n"
+            << "  --no-colormap        Disable depth colormap overlay (default: inferno on)\n"
+            << "  --colormap           Deprecated alias (colormap is on by default)\n"
             << "  --video <file.mp4>   Local video for --self-test\n"
             << "  --normalize          Enable normalization in Model\n"
             << "  --mean <a,b,c>       Channel mean when --normalize is set\n"
             << "  --std <a,b,c>        Channel stddev when --normalize is set\n"
             << "  --latency <ms>       RTSP latency (default: 200)\n"
+            << "  --log-every <n>      Print progress/profile every N frames (default: 100)\n"
+            << "  --profile            Print simple per-stage timing breakdowns\n"
             << "  --tcp                Force TCP (default)\n"
             << "  --udp                Use UDP\n";
 }
@@ -382,16 +560,20 @@ int main(int argc, char** argv) {
   }
 
   std::string out_path = "midas_depth.mp4";
-  sima_examples::get_arg(argc, argv, "--out", out_path);
+  if (!sima_examples::get_arg(argc, argv, "--output-file", out_path)) {
+    sima_examples::get_arg(argc, argv, "--out", out_path);
+  }
 
   const int frames = get_int_arg(argc, argv, "--frames", 120);
   const int width = get_int_arg(argc, argv, "--width", 256);
   const int height = get_int_arg(argc, argv, "--height", 256);
   const int fps = get_int_arg(argc, argv, "--fps", 30);
-  const float alpha = get_float_arg(argc, argv, "--alpha", 0.5f);
+  const int log_every = get_int_arg(argc, argv, "--log-every", 100);
+  const float alpha = get_float_arg(argc, argv, "--alpha", 0.6f);
   const int latency_ms = get_int_arg(argc, argv, "--latency", 200);
-  const bool use_colormap = has_flag(argc, argv, "--colormap");
+  const bool use_colormap = !has_flag(argc, argv, "--no-colormap");
   const bool tcp = !has_flag(argc, argv, "--udp");
+  const bool profile = has_flag(argc, argv, "--profile");
 
   std::string format = "BGR";
   sima_examples::get_arg(argc, argv, "--format", format);
@@ -471,7 +653,8 @@ int main(int argc, char** argv) {
       return 7;
     }
 
-    auto next_frame = [&](cv::Mat& frame) -> bool {
+    auto next_frame = [&](FetchedFrame& out) -> bool {
+      const auto t0 = Clock::now();
       cv::Mat bgr;
       if (!cap.read(bgr))
         return false;
@@ -480,11 +663,14 @@ int main(int argc, char** argv) {
       if (bgr.cols != width || bgr.rows != height) {
         cv::resize(bgr, bgr, cv::Size(width, height), 0, 0, cv::INTER_AREA);
       }
-      frame = bgr;
+      out.pull_s = elapsed_s(t0);
+      out.tensor_s = 0.0;
+      out.skip_profile = false;
+      out.frame = std::move(bgr);
       return true;
     };
 
-    ok = process_stream(model, next_frame, writer, frames, alpha, use_colormap);
+    ok = process_stream(model, next_frame, writer, frames, log_every, profile, alpha, use_colormap);
   } else {
     simaai::neat::nodes::groups::RtspDecodedInputOptions ro;
     ro.url = url;
@@ -504,25 +690,81 @@ int main(int argc, char** argv) {
     ro.output_caps.fps = fps;
     ro.output_caps.memory = simaai::neat::CapsMemory::SystemMemory;
 
-    simaai::neat::Session p;
-    p.add(simaai::neat::nodes::groups::RtspDecodedInput(ro));
-    p.add(simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(5)));
+    std::unique_ptr<simaai::neat::Session> rtsp_session;
+    std::unique_ptr<simaai::neat::Run> rtsp_run;
 
-    simaai::neat::RunOptions run_opt;
-    auto run = p.build(run_opt);
-    auto next_frame = [&](cv::Mat& frame) -> bool {
-      auto ref_opt = run.pull_tensor(/*timeout_ms=*/2000);
-      if (!ref_opt.has_value())
-        return false;
-      cv::Mat view;
-      if (!tensor_to_bgr_mat(*ref_opt, view))
-        return false;
-      frame = view;
+    auto build_rtsp = [&]() -> bool {
+      auto session = std::make_unique<simaai::neat::Session>();
+      session->add(simaai::neat::nodes::groups::RtspDecodedInput(ro));
+      session->add(simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(1)));
+      simaai::neat::RunOptions run_opt;
+      auto run = std::make_unique<simaai::neat::Run>(session->build(run_opt));
+      rtsp_session = std::move(session);
+      rtsp_run = std::move(run);
       return true;
     };
+    if (!build_rtsp()) {
+      std::cerr << "Failed to build RTSP pipeline\n";
+      return 7;
+    }
 
-    ok = process_stream(model, next_frame, writer, frames, alpha, use_colormap);
-    run.close();
+    int reconnect_attempts = 0;
+    const int max_reconnect_attempts = 8;
+    bool skip_profile_next_frame = false;
+    auto next_frame = [&](FetchedFrame& out) -> bool {
+      while (true) {
+        if (!rtsp_run) {
+          if (!build_rtsp()) {
+            std::cerr << "Failed to rebuild RTSP pipeline\n";
+            return false;
+          }
+        }
+        const auto t_pull0 = Clock::now();
+        auto ref_opt = rtsp_run->pull_tensor(/*timeout_ms=*/5000);
+        const double pull_dt_s = elapsed_s(t_pull0);
+        if (!ref_opt.has_value()) {
+          if (reconnect_attempts < max_reconnect_attempts) {
+            ++reconnect_attempts;
+            std::cerr << "RTSP pull timed out; reconnecting (" << reconnect_attempts << "/"
+                      << max_reconnect_attempts << ")\n";
+            try {
+              rtsp_run->close();
+            } catch (...) {
+            }
+            rtsp_run.reset();
+            rtsp_session.reset();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            if (!build_rtsp()) {
+              std::cerr << "Failed to rebuild RTSP pipeline\n";
+              return false;
+            }
+            skip_profile_next_frame = true;
+            continue;
+          }
+          std::cerr << "RTSP pull timed out / stream closed\n";
+          return false;
+        }
+
+        reconnect_attempts = 0;
+        const auto t_tensor0 = Clock::now();
+        cv::Mat view;
+        if (!tensor_to_bgr_mat(*ref_opt, view))
+          return false;
+        out.pull_s = pull_dt_s;
+        out.tensor_s = elapsed_s(t_tensor0);
+        out.skip_profile = skip_profile_next_frame;
+        skip_profile_next_frame = false;
+        out.frame = std::move(view);
+        return true;
+      }
+    };
+
+    ok = process_stream(model, next_frame, writer, frames, log_every, profile, alpha, use_colormap);
+    if (rtsp_run) {
+      rtsp_run->close();
+      rtsp_run.reset();
+    }
+    rtsp_session.reset();
   }
 
   writer.release();
