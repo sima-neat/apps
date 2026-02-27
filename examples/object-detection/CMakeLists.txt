@@ -1,5 +1,8 @@
-add_subdirectory(yolov8_multi_rtsp_demo)
-add_subdirectory(MultiCameraUDPYOLOv8)
-add_subdirectory(OneCameraYOLOOptiview)
-add_subdirectory(GraphPipesYOLOOptiview)
-add_subdirectory(4PipesYOLOOptiview)
+foreach(example IN ITEMS
+    yolov8_multi_rtsp_demo
+    yolov8_simple_detection_pipeline
+)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/CMakeLists.txt")
+    add_subdirectory(${example})
+  endif()
+endforeach()
