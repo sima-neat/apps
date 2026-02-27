@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import os
 import sys
 import time
@@ -10,6 +11,29 @@ import time
 import cv2
 import numpy as np
 import pyneat as pn
+
+
+@dataclass(frozen=True)
+class DepthModelProfile:
+    name: str
+    input_format: str  # "BGR" or "RGB"
+    default_size: int
+    depth_order: str  # "row_major" or "column_major"
+
+
+MIDAS_V21_PROFILE = DepthModelProfile(
+    name="midas_v21_small_256", input_format="BGR", default_size=256, depth_order="row_major"
+)
+DEPTH_ANYTHING_V2_VITS_PROFILE = DepthModelProfile(
+    name="depth_anything_v2_vits", input_format="RGB", default_size=518, depth_order="column_major"
+)
+
+
+def detect_model_profile(model_path: str) -> DepthModelProfile:
+    name = os.path.basename(model_path).lower()
+    if "depth_anything_v2" in name:
+        return DEPTH_ANYTHING_V2_VITS_PROFILE
+    return MIDAS_V21_PROFILE
 
 
 def tensor_to_numpy(t: pn.Tensor) -> np.ndarray:
@@ -40,7 +64,19 @@ def first_tensor(sample: pn.Sample) -> pn.Tensor | None:
     return None
 
 
-def depth_colormap_from_tensor(t: pn.Tensor) -> np.ndarray:
+def depth_tensor_from_sample(sample: pn.Sample) -> pn.Tensor | None:
+    tensors = list(iter_tensors(sample))
+    if not tensors:
+        return None
+    for t in tensors:
+        sem = getattr(t, "semantic", None)
+        image_sem = getattr(sem, "image", None) if sem is not None else None
+        if image_sem is None and t.dtype != pn.TensorDType.UInt8:
+            return t
+    return tensors[0]
+
+
+def depth_colormap_from_tensor(t: pn.Tensor, *, depth_order: str) -> np.ndarray:
     arr = tensor_to_numpy(t).reshape(-1)
     spatial = [int(d) for d in t.shape if int(d) > 1]
     if len(spatial) >= 2:
@@ -53,9 +89,12 @@ def depth_colormap_from_tensor(t: pn.Tensor) -> np.ndarray:
     if arr.size < total:
         raise ValueError("depth tensor payload too small")
 
-    # Tensor payload is laid out row-major in the Python binding.
-    # Keep this fully vectorized; the per-pixel Python loop is very expensive.
-    depth = np.asarray(arr[:total], dtype=np.float32).reshape(h, w)
+    if depth_order == "column_major":
+        # Depth Anything V2 exports values grouped by columns (idx = x*h + y).
+        depth = np.asarray(arr[:total], dtype=np.float32).reshape(w, h).T
+    else:
+        # MiDaS path: row-major (idx = y*w + x).
+        depth = np.asarray(arr[:total], dtype=np.float32).reshape(h, w)
 
     if np.isfinite(depth).all() and float(depth.max()) > float(depth.min()):
         depth_u8 = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
@@ -92,15 +131,13 @@ def build_rtsp_run(
     return sess, run
 
 
-def build_depth_model(model_path: str, width: int, height: int):
+def build_depth_model(model_path: str, width: int, height: int, profile: DepthModelProfile):
     opt = pn.ModelOptions()
     opt.media_type = "video/x-raw"
-    opt.format = "BGR"
+    opt.format = profile.input_format
     opt.input_max_width = width
     opt.input_max_height = height
     opt.input_max_depth = 3
-    # MiDaS models commonly require normalization in preproc; leave defaults unless
-    # model package embeds exact preprocessing.
     model = pn.Model(model_path, opt)
     return model
 
@@ -111,19 +148,23 @@ def render_depth_overlay(
     width: int,
     height: int,
     alpha: float,
+    model_profile: DepthModelProfile,
     timings: dict[str, float] | None = None,
 ) -> np.ndarray:
     if bgr.shape[1] != width or bgr.shape[0] != height:
         bgr = cv2.resize(bgr, (width, height))
+    model_input = bgr
+    if model_profile.input_format == "RGB":
+        model_input = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
     t0 = time.perf_counter()
-    sample = model.run(bgr, timeout_ms=5000)
+    sample = model.run(model_input, timeout_ms=5000)
     t1 = time.perf_counter()
-    depth_t = first_tensor(sample)
+    depth_t = depth_tensor_from_sample(sample)
     if depth_t is None:
         raise RuntimeError("Model output missing depth tensor")
 
-    depth_cm = depth_colormap_from_tensor(depth_t)
+    depth_cm = depth_colormap_from_tensor(depth_t, depth_order=model_profile.depth_order)
     if depth_cm.shape[1] != width or depth_cm.shape[0] != height:
         depth_cm = cv2.resize(depth_cm, (width, height))
     out = cv2.addWeighted(bgr, 1.0 - alpha, depth_cm, alpha, 0.0)
@@ -197,12 +238,26 @@ class StageProfiler:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="MiDaS v2.1 RTSP depth estimation")
-    p.add_argument("--model", required=True, help="Path to midas_v21_small_256 MPK tarball")
+    p = argparse.ArgumentParser(description="RTSP depth estimation (MiDaS v2.1 / Depth Anything V2)")
+    p.add_argument(
+        "--model",
+        required=True,
+        help="Path to supported depth model MPK tarball (e.g. midas_v21_small_256 or depth_anything_v2_vits)",
+    )
     p.add_argument("--rtsp", required=True, help="RTSP URL")
     p.add_argument("--frames", type=int, default=300, help="Number of frames to process")
-    p.add_argument("--width", type=int, default=256)
-    p.add_argument("--height", type=int, default=256)
+    p.add_argument(
+        "--width",
+        type=int,
+        default=0,
+        help="Output/model width (default: model-dependent, 256 for MiDaS, 518 for Depth Anything V2)",
+    )
+    p.add_argument(
+        "--height",
+        type=int,
+        default=0,
+        help="Output/model height (default: model-dependent, 256 for MiDaS, 518 for Depth Anything V2)",
+    )
     p.add_argument("--fps", type=int, default=15)
     p.add_argument("--latency-ms", type=int, default=200)
     p.add_argument("--tcp", action="store_true")
@@ -233,7 +288,14 @@ def main() -> int:
     writer = None
     rtsp_run = None
     try:
-        model = build_depth_model(args.model, args.width, args.height)
+        model_profile = detect_model_profile(args.model)
+        width = args.width if args.width > 0 else model_profile.default_size
+        height = args.height if args.height > 0 else model_profile.default_size
+        print(
+            f"Using model profile: {model_profile.name} "
+            f"(input_format={model_profile.input_format}, size={width}x{height})"
+        )
+        model = build_depth_model(args.model, width, height, model_profile)
         out_dir = os.path.dirname(os.path.abspath(args.output_file))
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
@@ -247,7 +309,7 @@ def main() -> int:
         max_reconnect_attempts = 8
         # Keep a reference to the Session object alive for the lifetime of the Run.
         rtsp_session, rtsp_run = build_rtsp_run(
-            args.rtsp, args.width, args.height, args.fps, args.latency_ms, args.tcp, args.sample_every
+            args.rtsp, width, height, args.fps, args.latency_ms, args.tcp, args.sample_every
         )
         while processed < args.frames:
             t_frame0 = time.perf_counter()
@@ -269,8 +331,8 @@ def main() -> int:
                     time.sleep(0.5)
                     rtsp_session, rtsp_run = build_rtsp_run(
                         args.rtsp,
-                        args.width,
-                        args.height,
+                        width,
+                        height,
                         args.fps,
                         args.latency_ms,
                         args.tcp,
@@ -291,7 +353,7 @@ def main() -> int:
             profiler.add("tensor_to_bgr", time.perf_counter() - t_bgr0, include=profile_frame)
             render_timings: dict[str, float] | None = {} if args.profile else None
             overlay = render_depth_overlay(
-                model, bgr, args.width, args.height, args.alpha, timings=render_timings
+                model, bgr, width, height, args.alpha, model_profile, timings=render_timings
             )
             if render_timings:
                 profiler.add("model_run", render_timings.get("model_s", 0.0), include=profile_frame)
@@ -301,7 +363,7 @@ def main() -> int:
                     args.output_file,
                     cv2.VideoWriter_fourcc(*"mp4v"),
                     max(1, args.fps),
-                    (args.width, args.height),
+                    (width, height),
                     True,
                 )
                 if not writer.isOpened():

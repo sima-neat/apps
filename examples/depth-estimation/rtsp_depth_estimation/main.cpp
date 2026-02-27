@@ -89,6 +89,29 @@ std::string to_upper(std::string s) {
   return s;
 }
 
+std::string to_lower(std::string s) {
+  for (char& c : s) {
+    if (c >= 'A' && c <= 'Z')
+      c = static_cast<char>(c - 'A' + 'a');
+  }
+  return s;
+}
+
+struct DepthModelProfile {
+  std::string name;
+  std::string input_format; // "BGR" or "RGB"
+  int default_size = 256;
+  bool depth_column_major = false;
+};
+
+DepthModelProfile detect_model_profile(const std::string& model_path) {
+  const std::string lower = to_lower(fs::path(model_path).filename().string());
+  if (lower.find("depth_anything_v2") != std::string::npos) {
+    return {"depth_anything_v2_vits", "RGB", 518, true};
+  }
+  return {"midas_v21_small_256", "BGR", 256, false};
+}
+
 std::string resolve_midas_tar() {
   const char* env = std::getenv("SIMA_MIDAS_TAR");
   if (env && *env && fs::exists(env))
@@ -189,7 +212,8 @@ float read_elem(const uint8_t* data, size_t idx, simaai::neat::TensorDType dtype
 }
 
 bool depth_tensor_to_u8(const simaai::neat::Tensor& t, int fallback_w, int fallback_h,
-                        cv::Mat& depth_u8, float* out_min, float* out_max) {
+                        bool column_major_order, cv::Mat& depth_u8, float* out_min,
+                        float* out_max) {
   if (!t.is_dense())
     return false;
 
@@ -231,7 +255,11 @@ bool depth_tensor_to_u8(const simaai::neat::Tensor& t, int fallback_w, int fallb
   for (int y = 0; y < h; ++y) {
     float* row = depth_f.ptr<float>(y);
     for (int x = 0; x < w; ++x) {
-      const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
+      const size_t idx = column_major_order
+                             ? (static_cast<size_t>(x) * static_cast<size_t>(h) +
+                                static_cast<size_t>(y))
+                             : (static_cast<size_t>(y) * static_cast<size_t>(w) +
+                                static_cast<size_t>(x));
       float v = read_elem(data, idx, t.dtype);
       row[x] = v;
       minv = std::min(minv, v);
@@ -254,9 +282,11 @@ bool depth_tensor_to_u8(const simaai::neat::Tensor& t, int fallback_w, int fallb
 }
 
 bool tensor_to_depth_bgr(const simaai::neat::Tensor& t, int fallback_w, int fallback_h,
-                         bool use_colormap, cv::Mat& bgr_out, float* out_min, float* out_max) {
+                         bool column_major_order, bool use_colormap, cv::Mat& bgr_out,
+                         float* out_min, float* out_max) {
   cv::Mat depth_u8;
-  if (!depth_tensor_to_u8(t, fallback_w, fallback_h, depth_u8, out_min, out_max)) {
+  if (!depth_tensor_to_u8(t, fallback_w, fallback_h, column_major_order, depth_u8, out_min,
+                          out_max)) {
     return false;
   }
 
@@ -420,7 +450,7 @@ private:
 bool process_stream(simaai::neat::Model& model,
                     const std::function<bool(FetchedFrame&)>& next_frame,
                     cv::VideoWriter& writer, int max_frames, int log_every, bool profile,
-                    float alpha, bool use_colormap) {
+                    float alpha, bool use_colormap, const DepthModelProfile& model_profile) {
   simaai::neat::Model::Runner model_run;
   StageProfiler profiler(profile);
   int processed = 0;
@@ -446,11 +476,15 @@ bool process_stream(simaai::neat::Model& model,
     profiler.add_pull(fetched.pull_s, profile_frame);
     profiler.add_tensor(fetched.tensor_s, profile_frame);
 
+    cv::Mat model_input = frame;
+    if (model_profile.input_format == "RGB") {
+      cv::cvtColor(frame, model_input, cv::COLOR_BGR2RGB);
+    }
     if (!model_run) {
-      model_run = model.build(frame);
+      model_run = model.build(model_input);
     }
     const auto t_model0 = Clock::now();
-    simaai::neat::Sample out = model_run.run(frame);
+    simaai::neat::Sample out = model_run.run(model_input);
     const double model_dt_s = elapsed_s(t_model0);
     const simaai::neat::Tensor* out_tensor = find_depth_tensor(out);
     if (out_tensor == nullptr) {
@@ -461,7 +495,8 @@ bool process_stream(simaai::neat::Model& model,
 
     const auto t_post0 = Clock::now();
     cv::Mat depth_bgr;
-    if (!tensor_to_depth_bgr(t, frame.cols, frame.rows, use_colormap, depth_bgr, nullptr, nullptr)) {
+    if (!tensor_to_depth_bgr(t, frame.cols, frame.rows, model_profile.depth_column_major,
+                             use_colormap, depth_bgr, nullptr, nullptr)) {
       std::cerr << "Failed to convert depth tensor\n";
       return false;
     }
@@ -510,12 +545,13 @@ void usage(const char* prog) {
             << "  " << prog << " --self-test [options]\n"
             << "\n"
             << "Options:\n"
-            << "  --model <tar.gz>     Path to midas_v21_small_256 MPK tar.gz\n"
+            << "  --model <tar.gz>     Path to supported depth model MPK tar.gz "
+               "(midas_v21_small_256, depth_anything_v2_vits)\n"
             << "  --output-file <file.mp4>\n"
             << "                     Output mp4 path (alias: --out, default: midas_depth.mp4)\n"
             << "  --frames <n>         Number of frames to record (default: 120)\n"
-            << "  --width <n>          Input width (default: 256)\n"
-            << "  --height <n>         Input height (default: 256)\n"
+            << "  --width <n>          Input/output width (default: model-dependent)\n"
+            << "  --height <n>         Input/output height (default: model-dependent)\n"
             << "  --fps <n>            Output fps (default: 30)\n"
             << "  --alpha <f>          Overlay alpha (default: 0.6)\n"
             << "  --format <BGR>       Input format (default: BGR)\n"
@@ -564,9 +600,12 @@ int main(int argc, char** argv) {
     sima_examples::get_arg(argc, argv, "--out", out_path);
   }
 
+  const DepthModelProfile model_profile = detect_model_profile(tar_gz);
   const int frames = get_int_arg(argc, argv, "--frames", 120);
-  const int width = get_int_arg(argc, argv, "--width", 256);
-  const int height = get_int_arg(argc, argv, "--height", 256);
+  const int width_arg = get_int_arg(argc, argv, "--width", 0);
+  const int height_arg = get_int_arg(argc, argv, "--height", 0);
+  const int width = width_arg > 0 ? width_arg : model_profile.default_size;
+  const int height = height_arg > 0 ? height_arg : model_profile.default_size;
   const int fps = get_int_arg(argc, argv, "--fps", 30);
   const int log_every = get_int_arg(argc, argv, "--log-every", 100);
   const float alpha = get_float_arg(argc, argv, "--alpha", 0.6f);
@@ -596,13 +635,15 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "Using model: " << tar_gz << "\n";
+  std::cout << "Model profile: " << model_profile.name << " (input_format=" << model_profile.input_format
+            << ", size=" << width << "x" << height << ")\n";
   if (!self_test)
     std::cout << "RTSP url: " << url << "\n";
   std::cout << "Output: " << out_path << "\n";
 
   simaai::neat::Model::Options model_opt;
   model_opt.media_type = "video/x-raw";
-  model_opt.format = "BGR";
+  model_opt.format = model_profile.input_format;
   model_opt.preproc.input_width = width;
   model_opt.preproc.input_height = height;
   model_opt.input_max_width = width;
@@ -670,7 +711,8 @@ int main(int argc, char** argv) {
       return true;
     };
 
-    ok = process_stream(model, next_frame, writer, frames, log_every, profile, alpha, use_colormap);
+    ok = process_stream(model, next_frame, writer, frames, log_every, profile, alpha, use_colormap,
+                        model_profile);
   } else {
     simaai::neat::nodes::groups::RtspDecodedInputOptions ro;
     ro.url = url;
@@ -759,7 +801,8 @@ int main(int argc, char** argv) {
       }
     };
 
-    ok = process_stream(model, next_frame, writer, frames, log_every, profile, alpha, use_colormap);
+    ok = process_stream(model, next_frame, writer, frames, log_every, profile, alpha, use_colormap,
+                        model_profile);
     if (rtsp_run) {
       rtsp_run->close();
       rtsp_run.reset();

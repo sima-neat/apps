@@ -1,0 +1,1 @@
+sima_neat_apps_add_example("rtsp_depth_estimation")
