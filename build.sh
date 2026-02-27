@@ -31,7 +31,8 @@ Options:
 
 Environment:
   SIMA_CLI_BIN              Path to sima-cli binary (default: sima-cli)
-  CMAKE_PREFIX_PATH         Set if SimaNeatConfig.cmake is not in a default prefix
+  CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
+  SYSROOT                   Target sysroot (used by the default cross toolchain file)
 EOF
 }
 
@@ -134,10 +135,29 @@ if [[ "${CLEAN}" -eq 1 ]]; then
   rm -rf "${BUILD_DIR}"
 fi
 
+# Auto-enable repo toolchain for cross builds unless caller already set one.
+TOOLCHAIN_FILE="${CMAKE_TOOLCHAIN_FILE:-}"
+DEFAULT_CROSS_TOOLCHAIN="${ROOT_DIR}/cmake/toolchains/aarch64-modalix.cmake"
+if [[ -z "${TOOLCHAIN_FILE}" ]]; then
+  if [[ -n "${SYSROOT:-}" || -n "${CROSS_COMPILE:-}" || "${CC:-}" == *aarch64-linux-gnu* || "${CXX:-}" == *aarch64-linux-gnu* ]]; then
+    if [[ -f "${DEFAULT_CROSS_TOOLCHAIN}" ]]; then
+      TOOLCHAIN_FILE="${DEFAULT_CROSS_TOOLCHAIN}"
+    fi
+  fi
+fi
+
+TOOLCHAIN_ARG=()
+if [[ -n "${TOOLCHAIN_FILE}" ]]; then
+  TOOLCHAIN_ARG=("-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE}")
+fi
+
+echo "  Toolchain file         : ${TOOLCHAIN_FILE:-"(none)"}"
+
 cmake -S . -B "${BUILD_DIR}" \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
   -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}" \
-  -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}"
+  -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}" \
+  "${TOOLCHAIN_ARG[@]}"
 
 if [[ "${BUILD_CPP}" == "ON" ]]; then
   cmake --build "${BUILD_DIR}" -j"$(nproc 2>/dev/null || echo 8)"
