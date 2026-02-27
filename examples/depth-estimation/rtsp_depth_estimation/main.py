@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import os
+import re
 import sys
 import time
 
@@ -174,6 +175,16 @@ def render_depth_overlay(
     return out
 
 
+def parse_queue2_depth(report: str) -> int | None:
+    m = re.search(r"queue2 depth=(\d+)", report)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
 class StageProfiler:
     """Lightweight cumulative stage profiler for optional debug output."""
 
@@ -234,7 +245,21 @@ class StageProfiler:
             print(
                 f"[PROFILE]   {pretty:<12} "
                 f"{self._mean_ms(key):8.1f} {self._max_ms(key):8.1f} {c:4d}"
-            )
+                )
+
+
+def print_queue_profile(run: pn.Run, queue2_depth: int | None) -> None:
+    rs = run.stats()
+    ins = run.input_stats()
+    pending = max(0, int(rs.outputs_ready) - int(rs.outputs_pulled))
+    print("[PROFILE]   queue                            value")
+    print(f"[PROFILE]   run_output_pending              {pending}")
+    print(f"[PROFILE]   run_outputs_ready_total         {int(rs.outputs_ready)}")
+    print(f"[PROFILE]   run_outputs_pulled_total        {int(rs.outputs_pulled)}")
+    print(f"[PROFILE]   run_outputs_dropped_total       {int(rs.outputs_dropped)}")
+    print(f"[PROFILE]   input_dropped_frames_total      {int(ins.dropped_frames)}")
+    if queue2_depth is not None:
+        print(f"[PROFILE]   gst_queue2_depth_config         {queue2_depth}")
 
 
 def main() -> int:
@@ -307,10 +332,13 @@ def main() -> int:
         log_window_start_frames = 0
         reconnect_attempts = 0
         max_reconnect_attempts = 8
+        queue2_depth = None
         # Keep a reference to the Session object alive for the lifetime of the Run.
         rtsp_session, rtsp_run = build_rtsp_run(
             args.rtsp, width, height, args.fps, args.latency_ms, args.tcp, args.sample_every
         )
+        if args.profile:
+            queue2_depth = parse_queue2_depth(rtsp_run.report())
         while processed < args.frames:
             t_frame0 = time.perf_counter()
             t_pull0 = time.perf_counter()
@@ -338,6 +366,8 @@ def main() -> int:
                         args.tcp,
                         args.sample_every,
                     )
+                    if args.profile:
+                        queue2_depth = parse_queue2_depth(rtsp_run.report())
                     profiler.skip_next_frame()
                     continue
                 print("RTSP pull timed out / stream closed", file=sys.stderr)
@@ -386,15 +416,16 @@ def main() -> int:
                 log_window_start = now
                 log_window_start_frames = processed
                 profiler.print(f"frames={processed}")
-        if writer is not None:
-            writer.release()
-            writer = None
-        if rtsp_run is not None:
-            rtsp_run.close()
-            rtsp_run = None
-        rtsp_session = None
-
+                if args.profile and rtsp_run is not None:
+                    print_queue_profile(rtsp_run, queue2_depth)
         if processed == 0:
+            if writer is not None:
+                writer.release()
+                writer = None
+            if rtsp_run is not None:
+                rtsp_run.close()
+                rtsp_run = None
+            rtsp_session = None
             if os.path.exists(args.output_file):
                 try:
                     os.remove(args.output_file)
@@ -404,6 +435,15 @@ def main() -> int:
             return 8
 
         profiler.print("summary")
+        if args.profile and rtsp_run is not None:
+            print_queue_profile(rtsp_run, queue2_depth)
+        if writer is not None:
+            writer.release()
+            writer = None
+        if rtsp_run is not None:
+            rtsp_run.close()
+            rtsp_run = None
+        rtsp_session = None
         print(f"Wrote depth overlay video to: {os.path.abspath(args.output_file)}")
         return 0
     except Exception as e:
