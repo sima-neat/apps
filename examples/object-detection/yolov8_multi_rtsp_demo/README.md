@@ -8,7 +8,7 @@
 | Tags | object-detection, rtsp, multistream |
 | Status | experimental |
 | Binary Name | yolov8_multi_rtsp_demo |
-| Model | yolo_v8s |
+| Model | yolo_v8m |
 
 ## Concept
 Multi-camera RTSP object detection using YOLOv8 with the Session API. Demonstrates concurrent stream handling with real-time bounding box visualization via OpenCV.
@@ -18,10 +18,15 @@ Both C++ and Python versions process frames from each stream, run YOLOv8 inferen
 `--frames` controls how many frames are processed per stream.  
 `--save-every` controls output cadence (default `10`), so saved images per stream are approximately `frames / save-every`.
 
+## Supported Models
+Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`
+
+Download any variant: `sima-cli modelzoo get yolo_v8n`
+
 ## Prerequisites
 - Installed NEAT SDK
 - One or more RTSP camera sources (or use the file-based RTSP server below)
-- Model downloaded: `sima-cli modelzoo get yolo_v8s`
+- Model downloaded: `sima-cli modelzoo get yolo_v8m`
 
 ## Setting Up RTSP Streams (using a video file)
 
@@ -37,7 +42,7 @@ This will serve the video on `rtsp://127.0.0.1:8554/stream0` through `rtsp://127
 ### C++
 ```bash
 ./build/examples/object-detection/yolov8_multi_rtsp_demo/yolov8_multi_rtsp_demo \
-  --model /path/to/yolo_v8s_mpk.tar.gz \
+  --model /path/to/yolo_v8m_mpk.tar.gz \
   --output /path/to/output \
   --labels-file examples/object-detection/yolov8_multi_rtsp_demo/coco_label.txt \
   --frames 100 \
@@ -68,7 +73,7 @@ This will serve the video on `rtsp://127.0.0.1:8554/stream0` through `rtsp://127
 source ~/pyneat/.venv/bin/activate
 pip install -r examples/object-detection/yolov8_multi_rtsp_demo/requirements.txt
 python examples/object-detection/yolov8_multi_rtsp_demo/main.py \
-  --model /path/to/yolo_v8s_mpk.tar.gz \
+  --model /path/to/yolo_v8m_mpk.tar.gz \
   --output /path/to/output \
   --labels-file examples/object-detection/yolov8_multi_rtsp_demo/coco_label.txt \
   --frames 100 \
