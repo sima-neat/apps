@@ -1,1 +1,0 @@
-add_subdirectory(yolov8_coco_tput)
