@@ -147,22 +147,21 @@ std::vector<Box> parse_boxes_strict(const std::vector<uint8_t>& bytes, int img_w
 void parse_boxes_strict_into(const std::vector<uint8_t>& bytes, int img_w, int img_h,
                              int expected_topk, bool debug, std::vector<Box>& out) {
   require(bytes.size() >= 4, "bbox buffer too small");
-  const size_t payload = bytes.size() - 4;
-  require(payload % 24 == 0, "bbox buffer size mismatch");
-
   uint32_t header = 0;
   std::memcpy(&header, bytes.data(), sizeof(header));
 
+  const size_t payload = bytes.size() - sizeof(header);
+  const size_t max_boxes = payload / sizeof(RawBox);
+  const size_t trailing = payload % sizeof(RawBox);
+
   if (debug) {
     std::cerr << "[DBG] bbox header=" << header << " expected_topk=" << expected_topk
-              << " payload=" << payload << "\n";
+              << " payload=" << payload << " trailing=" << trailing << "\n";
   }
 
-  const size_t max_boxes = payload / 24;
   require(header <= max_boxes, "bbox header exceeds payload count");
   if (expected_topk > 0) {
-    const size_t expected_size = 4 + static_cast<size_t>(expected_topk) * 24;
-    require(bytes.size() <= expected_size, "bbox buffer size > expected topk");
+    require(header <= static_cast<uint32_t>(expected_topk), "bbox header exceeds expected topk");
   }
 
   const size_t count = header;
@@ -202,16 +201,19 @@ std::vector<Box> parse_boxes_lenient(const std::vector<uint8_t>& bytes, int img_
   uint32_t header = 0;
   std::memcpy(&header, bytes.data(), sizeof(header));
   const size_t payload = bytes.size() - sizeof(header);
-  if (payload % 24 != 0)
+  // Some runtimes can append trailing metadata bytes; accept and ignore remainder.
+  if (payload < sizeof(RawBox))
     return out;
 
-  const size_t max_boxes = payload / 24;
+  const size_t max_boxes = payload / sizeof(RawBox);
   if (header > max_boxes)
     header = static_cast<uint32_t>(max_boxes);
   if (expected_topk > 0) {
     const size_t expected_size = sizeof(header) + static_cast<size_t>(expected_topk) * 24;
-    if (bytes.size() < expected_size)
-      return out;
+    if (bytes.size() < expected_size) {
+      header = static_cast<uint32_t>(
+          std::min<std::size_t>(header, static_cast<size_t>(expected_topk)));
+    }
   }
 
   const uint8_t* base = bytes.data() + sizeof(header);
