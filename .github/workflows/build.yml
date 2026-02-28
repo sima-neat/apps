@@ -56,7 +56,7 @@ jobs:
           aws s3 cp \
             --endpoint-url "${R2_ENDPOINT_URL}" \
             "${{ steps.artifact-meta.outputs.archive_name }}" \
-            "s3://neat-artifacts/apps/${{ steps.artifact-meta.outputs.archive_name }}"
+            "s3://neat-artifacts/download/${{ steps.artifact-meta.outputs.archive_name }}"
 
   portal-build:
     runs-on: ubuntu-latest
@@ -76,8 +76,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: portal/package-lock.json
+
 
       - name: Install portal dependencies
         working-directory: portal
@@ -92,5 +91,30 @@ jobs:
           aws s3 sync \
             --endpoint-url "${R2_ENDPOINT_URL}" \
             portal/dist/ \
-            s3://neat-artifacts/apps-portal/ \
+            s3://neat-artifacts/portal/ \
             --delete
+
+      - name: Purge Cloudflare cache for portal entry files
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          PORTAL_BASE_URL: https://apps.sima-neat.com/portal
+        run: |
+          if [[ -z "${CLOUDFLARE_API_TOKEN}" || -z "${CLOUDFLARE_ZONE_ID}" || -z "${PORTAL_BASE_URL}" ]]; then
+            echo "Skipping purge because CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID, or PORTAL_BASE_URL is not set."
+            exit 0
+          fi
+
+          BASE_URL="${PORTAL_BASE_URL%/}"
+          curl -fsSL -X POST "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @- <<EOF
+          {
+            "files": [
+              "${BASE_URL}/",
+              "${BASE_URL}/index.html",
+              "${BASE_URL}/catalog.json"
+            ]
+          }
+          EOF
