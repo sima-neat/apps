@@ -1,0 +1,92 @@
+name: Cleanup R2 Artifacts
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  cleanup-apps-artifacts:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      R2_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+
+    steps:
+      - name: Checkout apps repo
+        uses: actions/checkout@v4
+
+      - name: List apps artifacts from Cloudflare R2
+        run: |
+          aws s3api list-objects-v2 \
+            --endpoint-url "${R2_ENDPOINT_URL}" \
+            --bucket neat-artifacts \
+            --prefix apps/ \
+            > /tmp/apps-r2-objects.json
+
+      - name: Decide which artifacts to delete
+        run: |
+          python3 - <<'PY'
+          import json
+          from collections import defaultdict
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          objects_path = Path("/tmp/apps-r2-objects.json")
+          payload = json.loads(objects_path.read_text(encoding="utf-8"))
+          contents = payload.get("Contents", [])
+
+          groups = defaultdict(list)
+          for item in contents:
+            key = item.get("Key", "")
+            if not key or key.endswith("/"):
+              continue
+            name = key.rsplit("/", 1)[-1]
+            if "main-" in name or "-v" in name:
+              groups["stable"].append(item)
+            else:
+              groups["ephemeral"].append(item)
+
+          now = datetime.now(timezone.utc)
+          retention = {
+            "stable": timedelta(days=30),
+            "ephemeral": timedelta(hours=48),
+          }
+
+          to_delete = []
+          for group_name, items in groups.items():
+            items.sort(key=lambda item: item["LastModified"], reverse=True)
+            keep_key = items[0]["Key"]
+            cutoff = now - retention[group_name]
+
+            for item in items[1:]:
+              last_modified = datetime.fromisoformat(
+                item["LastModified"].replace("Z", "+00:00")
+              )
+              if last_modified < cutoff:
+                to_delete.append(item["Key"])
+
+            print(f"[cleanup] group={group_name} keep={keep_key} total={len(items)}")
+
+          out_path = Path("/tmp/apps-r2-delete.txt")
+          out_path.write_text("\n".join(to_delete) + ("\n" if to_delete else ""), encoding="utf-8")
+          print(f"[cleanup] marked_for_delete={len(to_delete)}")
+          PY
+
+      - name: Delete expired artifacts from Cloudflare R2
+        run: |
+          if [[ ! -s /tmp/apps-r2-delete.txt ]]; then
+            echo "No expired artifacts to delete."
+            exit 0
+          fi
+
+          while IFS= read -r key; do
+            [[ -z "${key}" ]] && continue
+            echo "Deleting ${key}"
+            aws s3 rm \
+              --endpoint-url "${R2_ENDPOINT_URL}" \
+              "s3://neat-artifacts/${key}"
+          done < /tmp/apps-r2-delete.txt
