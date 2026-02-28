@@ -32,3 +32,18 @@ if (SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT)
       ${PROJECT_SOURCE_DIR}
   )
 endif()
+
+if (BUILD_TESTING)
+  add_library(sima_neat_apps_support_testing STATIC
+    testing/optiview_json_listener.cpp
+  )
+  add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
+  target_link_libraries(sima_neat_apps_support_testing
+    PUBLIC
+      nlohmann_json::nlohmann_json
+  )
+  target_include_directories(sima_neat_apps_support_testing
+    PUBLIC
+      ${PROJECT_SOURCE_DIR}
+  )
+endif()

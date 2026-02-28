@@ -1,6 +1,7 @@
 function(sima_neat_apps_add_example example_name)
   set(options OPTIVIEW)
-  cmake_parse_arguments(APP "${options}" "" "" ${ARGN})
+  set(one_value_args OUTPUT_TARGET_VAR)
+  cmake_parse_arguments(APP "${options}" "${one_value_args}" "" ${ARGN})
 
   set(source_path "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")
   if (NOT EXISTS "${source_path}")
@@ -36,6 +37,10 @@ function(sima_neat_apps_add_example example_name)
   )
 
   set_target_properties("${target_name}" PROPERTIES OUTPUT_NAME "${example_name}")
+
+  if (APP_OUTPUT_TARGET_VAR)
+    set(${APP_OUTPUT_TARGET_VAR} "${target_name}" PARENT_SCOPE)
+  endif()
 endfunction()
 
 add_subdirectory(classification)

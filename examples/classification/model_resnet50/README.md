@@ -25,7 +25,7 @@ Minimal Model API usage with a ResNet50 MPK. Loads a compiled model package, run
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source <venv-path>/bin/activate
 pip install -r examples/classification/model_resnet50/requirements.txt
 python examples/classification/model_resnet50/main.py --model models/resnet_50_mpk.tar.gz
 ```

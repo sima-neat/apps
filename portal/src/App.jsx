@@ -1,0 +1,462 @@
+import { marked } from "marked";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { extractFilterOptions, findExample, githubUrlForExample, loadCatalog, matchesFilters } from "./catalog";
+
+marked.setOptions({ breaks: true });
+
+function readInitialTheme() {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+
+  const savedTheme = window.localStorage.getItem("portal-theme");
+  if (savedTheme === "light" || savedTheme === "dark") {
+    return savedTheme;
+  }
+
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function App() {
+  const [catalog, setCatalog] = useState(null);
+  const [error, setError] = useState("");
+  const [theme, setTheme] = useState(readInitialTheme);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCatalog()
+      .then((data) => {
+        if (!cancelled) {
+          setCatalog(data);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("portal-theme", theme);
+  }, [theme]);
+
+  if (error) {
+    return (
+      <div className="portal-shell">
+        <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
+        <div className="state-panel error-panel">{error}</div>
+      </div>
+    );
+  }
+
+  if (!catalog) {
+    return (
+      <div className="portal-shell">
+        <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
+        <div className="state-panel">Loading app catalog...</div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
+      <Routes>
+        <Route path="/" element={<CatalogPage catalog={catalog} />} />
+        <Route path="/app/:appId" element={<DetailPage catalog={catalog} />} />
+      </Routes>
+    </>
+  );
+}
+
+function CatalogPage({ catalog }) {
+  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState({
+    category: "",
+    difficulty: "",
+    status: "",
+    model: "",
+    tag: "",
+  });
+  const deferredQuery = useDeferredValue(query);
+  const options = extractFilterOptions(catalog.examples);
+  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters, deferredQuery));
+
+  return (
+    <div className="portal-shell">
+      <header className="hero">
+        <div className="hero-copy">
+          <p className="eyebrow">SiMa NEAT Apps Portal</p>
+          <h1>Discover SiMa NEAT reference examples that expedite the path from proof of concept to product.</h1>
+          <p className="hero-text">
+            Browse source-first applications, search across tags and models, and drill into structured
+            example documentation generated from the repo itself.
+          </p>
+        </div>
+        <div className="hero-search">
+          <input
+            id="catalog-search"
+            className="search-input"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search by app name, tag, model, or category"
+          />
+          <p className="search-meta">{filtered.length} of {catalog.examples.length} examples</p>
+        </div>
+      </header>
+
+      <div className="portal-layout">
+        <main className="card-grid">
+          {filtered.map((example) => (
+            <ExampleCard key={example.id} example={example} />
+          ))}
+          {filtered.length === 0 ? (
+            <div className="empty-state">
+              <h2>No examples matched the current search.</h2>
+              <p>Try clearing a filter or using a broader search term.</p>
+            </div>
+          ) : null}
+        </main>
+
+        <aside className="filter-panel">
+          <FilterGroup
+            label="Category"
+            value={filters.category}
+            options={options.categories}
+            onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
+          />
+          <FilterGroup
+            label="Difficulty"
+            value={filters.difficulty}
+            options={options.difficulties}
+            onChange={(value) => setFilters((current) => ({ ...current, difficulty: value }))}
+          />
+          <FilterGroup
+            label="Status"
+            value={filters.status}
+            options={options.statuses}
+            onChange={(value) => setFilters((current) => ({ ...current, status: value }))}
+          />
+          <FilterGroup
+            label="Model"
+            value={filters.model}
+            options={options.models}
+            onChange={(value) => setFilters((current) => ({ ...current, model: value }))}
+          />
+          <FilterGroup
+            label="Tag"
+            value={filters.tag}
+            options={options.tags}
+            onChange={(value) => setFilters((current) => ({ ...current, tag: value }))}
+          />
+          <button
+            className="clear-button"
+            type="button"
+            onClick={() => setFilters({ category: "", difficulty: "", status: "", model: "", tag: "" })}
+          >
+            Clear Filters
+          </button>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function ExampleCard({ example }) {
+  const fallbackImage = `./category-assets/${slugTone(example.category)}.svg`;
+  const displayName = formatDisplayLabel(example.name || example.binary_name || example.id);
+  const summaryHtml = marked.parseInline(example.summary || "No summary available.");
+
+  return (
+    <Link className="app-card" to={`/app/${encodeURIComponent(example.id)}`}>
+      <div className="card-image">
+        <img
+          src={example.image_path ? `./${example.image_path}` : fallbackImage}
+          alt={displayName}
+        />
+      </div>
+      <div className="card-body">
+        <p className="card-category">{example.category}</p>
+        <h2>{displayName}</h2>
+        <div className="card-summary" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
+      </div>
+    </Link>
+  );
+}
+
+function DetailPage({ catalog }) {
+  const { appId = "" } = useParams();
+  const navigate = useNavigate();
+  const decodedId = decodeURIComponent(appId);
+  const example = findExample(catalog, decodedId);
+  const githubUrl = githubUrlForExample(example);
+  const sections = (example?.sections || []).filter((section) => section.slug !== "metadata");
+  const displayName = formatDisplayLabel(example?.name || example?.binary_name || decodedId);
+  const binaryLabel = formatDisplayLabel(example?.binary_name || "");
+  const modelLabel = formatDisplayLabel(example?.model || "");
+  const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
+  const pathLabel = decodedId
+    .split("/")
+    .map((segment, index, items) => (index === items.length - 1 ? displayName : segment))
+    .join(" / ");
+  const docPanelRef = useRef(null);
+  const [activeSection, setActiveSection] = useState(sections[0]?.slug || "");
+
+  useEffect(() => {
+    setActiveSection(sections[0]?.slug || "");
+  }, [decodedId, sections]);
+
+  useEffect(() => {
+    if (!sections.length) {
+      return undefined;
+    }
+
+    const root = docPanelRef.current;
+    if (!root) {
+      return undefined;
+    }
+
+    const targets = sections
+      .map((section) => root.querySelector(`#${CSS.escape(section.slug)}`))
+      .filter(Boolean);
+
+    if (!targets.length) {
+      return undefined;
+    }
+
+    const updateActiveSection = () => {
+      const readingOffset = Math.max(96, Math.round(root.clientHeight * 0.18));
+      const readingLine = root.scrollTop + readingOffset;
+      let nextActive = targets[0].id;
+      let bestDistance = Number.POSITIVE_INFINITY;
+
+      for (const target of targets) {
+        const targetTop =
+          root.scrollTop +
+          target.getBoundingClientRect().top -
+          root.getBoundingClientRect().top;
+        const distance = Math.abs(targetTop - readingLine);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          nextActive = target.id;
+        }
+      }
+
+      setActiveSection((current) => (current === nextActive ? current : nextActive));
+    };
+
+    updateActiveSection();
+    root.addEventListener("scroll", updateActiveSection, { passive: true });
+    return () => root.removeEventListener("scroll", updateActiveSection);
+  }, [sections]);
+
+  if (!example) {
+    return (
+      <div className="portal-shell">
+        <div className="state-panel error-panel">
+          Example not found.
+          <button className="clear-button" type="button" onClick={() => navigate("/")}>Back to catalog</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="detail-shell">
+      <div className="detail-topbar">
+        <button
+          className="back-link icon-link"
+          type="button"
+          onClick={() => navigate("/")}
+          aria-label="Back to catalog"
+          title="Back to catalog"
+        >
+          <span aria-hidden="true">⌂</span>
+        </button>
+        <div className="detail-path">{pathLabel}</div>
+      </div>
+
+      <section className="detail-hero">
+        <div className="detail-hero-copy">
+          <p className="eyebrow">{example.category}</p>
+          <h1>{displayName}</h1>
+          <p className="hero-text" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
+          <div className="detail-meta">
+            <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
+            <Chip label={example.status || "experimental"} tone="status" />
+            {example.model ? <Chip label={modelLabel} tone="model" /> : null}
+            <Chip label={binaryLabel} tone="binary" />
+          </div>
+        </div>
+        <div className="detail-hero-card">
+          <h2>Metadata</h2>
+          <dl>
+            <MetaItem label="Category" value={example.category} />
+            <MetaItem label="Difficulty" value={example.difficulty || "Unspecified"} />
+            <MetaItem label="Status" value={example.status || "experimental"} />
+            <MetaItem label="Model" value={modelLabel || "Not specified"} />
+            <MetaItem label="Binary" value={binaryLabel} />
+          </dl>
+          {githubUrl ? (
+            <a className="source-link" href={githubUrl} target="_blank" rel="noreferrer">
+              View Source on GitHub
+            </a>
+          ) : null}
+        </div>
+      </section>
+
+      <div className="detail-layout">
+        <article ref={docPanelRef} className="doc-panel">
+          {sections.length > 0 ? (
+            <div className="doc-content">
+              {sections.map((section) => (
+                <section key={section.slug} id={section.slug} className="doc-section">
+                  <header className="section-header">
+                    <p className="section-kicker">Section</p>
+                    <h2>{section.title}</h2>
+                  </header>
+                  <div
+                    className="markdown-body"
+                    dangerouslySetInnerHTML={{ __html: marked.parse(section.markdown || "") }}
+                  />
+                </section>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <h2>No sections available.</h2>
+            </div>
+          )}
+        </article>
+
+        <nav className="toc-panel" aria-label="Table of contents">
+          <p className="toc-title">On this page</p>
+          {sections.map((section) => (
+            <button
+              key={section.slug}
+              className={`toc-button ${activeSection === section.slug ? "active" : ""}`}
+              type="button"
+              onClick={() => {
+                const root = docPanelRef.current;
+                const target = root?.querySelector(`#${CSS.escape(section.slug)}`);
+                if (root && target) {
+                  const topPadding = 32;
+                  const targetTop =
+                    root.scrollTop +
+                    target.getBoundingClientRect().top -
+                    root.getBoundingClientRect().top;
+                  root.scrollTo({ top: Math.max(targetTop - topPadding, 0), behavior: "smooth" });
+                }
+                setActiveSection(section.slug);
+              }}
+            >
+              {section.title}
+            </button>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+function FilterGroup({ label, value, options, onChange }) {
+  return (
+    <label className="filter-group">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">All</option>
+        {options.map((option) => (
+          <option key={option} value={option}>{formatDisplayLabel(option)}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ThemeToggle({ theme, onToggle }) {
+  return (
+    <button
+      className="theme-toggle"
+      type="button"
+      onClick={onToggle}
+      aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+      title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+    >
+      <span className={`theme-toggle-track ${theme === "dark" ? "dark" : ""}`}>
+        <span className="theme-toggle-label">{theme === "light" ? "Light" : "Dark"}</span>
+        <span className="theme-toggle-thumb" />
+      </span>
+    </button>
+  );
+}
+
+function Chip({ label, tone }) {
+  return <span className={`chip chip-${tone}`}>{label}</span>;
+}
+
+function MetaItem({ label, value }) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </>
+  );
+}
+
+function slugTone(category) {
+  return category.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
+function formatDisplayLabel(value) {
+  if (!value) {
+    return "";
+  }
+
+  const needsFormatting = value.includes("_") || /^[a-z0-9-]+$/i.test(value);
+  if (!needsFormatting) {
+    return value;
+  }
+
+  const acronyms = new Map([
+    ["rtsp", "RTSP"],
+    ["optiview", "OptiView"],
+    ["yolo", "YOLO"],
+    ["mpk", "MPK"],
+    ["api", "API"],
+    ["sdk", "SDK"],
+    ["fps", "FPS"],
+    ["rgb", "RGB"],
+    ["nv12", "NV12"],
+  ]);
+
+  return value
+    .replace(/[-/]+/g, " ")
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (acronyms.has(lower)) {
+        return acronyms.get(lower);
+      }
+      if (/^yolov\d+[a-z0-9-]*$/i.test(part)) {
+        return part.replace(/^yolo/i, "YOLO");
+      }
+      if (/^midas_v?\d+/i.test(part)) {
+        return part.replace(/^midas/i, "MiDaS");
+      }
+      if (/^v\d+(\.\d+)?$/i.test(part)) {
+        return part.toUpperCase();
+      }
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(" ");
+}
+
+export default App;

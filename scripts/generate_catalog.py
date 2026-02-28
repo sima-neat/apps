@@ -1,59 +1,165 @@
 #!/usr/bin/env python3
-"""Generate catalog.json from per-example README.md metadata tables."""
+"""Generate a portal-ready catalog.json from per-example README.md files."""
 
 import json
 import re
 import sys
 from pathlib import Path
 
-EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+EXAMPLES_DIR = REPO_ROOT / "examples"
 FIELD_RE = re.compile(r"^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$")
+H2_RE = re.compile(r"^##\s+(.+?)\s*$")
+IMAGE_CANDIDATES = (
+    "assets/card.png",
+    "assets/card.jpg",
+    "assets/card.jpeg",
+    "assets/card.webp",
+    "assets/hero.png",
+    "assets/hero.jpg",
+    "assets/hero.jpeg",
+    "assets/hero.webp",
+)
 
 
-def parse_metadata(readme: Path) -> dict | None:
+def readme_title(content: str) -> str:
+    first_line = content.splitlines()[0] if content.splitlines() else ""
+    return first_line.lstrip("# ").strip()
+
+
+def parse_metadata(content: str) -> dict[str, str] | None:
     in_table = False
-    fields = {}
-    for line in readme.read_text().splitlines():
-        if line.strip().startswith("## Metadata"):
+    fields: dict[str, str] = {}
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## Metadata"):
             in_table = True
             continue
         if in_table:
-            if line.strip().startswith("##") or (line.strip() and not line.strip().startswith("|")):
+            if stripped.startswith("##") or (stripped and not stripped.startswith("|")):
                 break
-            m = FIELD_RE.match(line)
-            if m and m.group(1).strip() != "Field":  # skip header row
-                fields[m.group(1).strip()] = m.group(2).strip()
-    if not fields:
-        return None
-    return fields
+            match = FIELD_RE.match(stripped)
+            if match:
+                key = match.group(1).strip()
+                value = match.group(2).strip()
+                if key in {"Field", "---"}:
+                    continue
+                fields[key] = value
+    return fields or None
 
 
-def main():
-    examples = []
-    for readme in sorted(EXAMPLES_DIR.glob("*/*/README.md")):
-        meta = parse_metadata(readme)
-        if meta is None:
-            print(f"WARNING: no metadata in {readme}", file=sys.stderr)
-            continue
+def parse_sections(content: str) -> list[dict[str, str]]:
+    sections: list[dict[str, str]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
 
-        app_dir = readme.parent
-        category = app_dir.parent.name
-        app_name = app_dir.name
-        tags = [t.strip() for t in meta.get("Tags", "").split(",") if t.strip()]
-
-        examples.append({
-            "id": f"{category}/{app_name}",
-            "name": readme.read_text().split("\n")[0].lstrip("# ").strip(),
-            "category": meta.get("Category", category),
-            "tags": tags,
-            "status": meta.get("Status", "experimental"),
-            "source_path": f"examples/{category}/{app_name}",
-            "binary_name": meta.get("Binary Name", app_name),
+    def flush() -> None:
+        nonlocal current_title, current_lines
+        if current_title is None:
+          return
+        body = "\n".join(current_lines).strip()
+        sections.append({
+            "title": current_title,
+            "slug": slugify(current_title),
+            "markdown": body,
         })
+        current_title = None
+        current_lines = []
 
-    catalog = {"schema_version": 1, "examples": examples}
+    for line in content.splitlines():
+        match = H2_RE.match(line)
+        if match:
+            flush()
+            current_title = match.group(1).strip()
+            current_lines = []
+            continue
+        if current_title is not None:
+            current_lines.append(line)
+    flush()
+    return sections
+
+
+def slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def first_nonempty_paragraph(markdown: str) -> str:
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", markdown) if p.strip()]
+    return paragraphs[0] if paragraphs else ""
+
+
+def normalize_tags(raw: str) -> list[str]:
+    return [tag.strip() for tag in raw.split(",") if tag.strip()]
+
+
+def find_image_path(app_dir: Path) -> str | None:
+    for rel in IMAGE_CANDIDATES:
+        path = app_dir / rel
+        if path.exists():
+            return str(path.relative_to(REPO_ROOT))
+    return None
+
+
+def section_map(sections: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    return {section["slug"]: section for section in sections}
+
+
+def parse_example(readme: Path) -> dict | None:
+    content = readme.read_text()
+    metadata = parse_metadata(content)
+    if metadata is None:
+        print(f"WARNING: no metadata in {readme}", file=sys.stderr)
+        return None
+
+    app_dir = readme.parent
+    category = app_dir.parent.name
+    app_name = app_dir.name
+    sections = parse_sections(content)
+    sections_by_slug = section_map(sections)
+    concept = sections_by_slug.get("concept", {"markdown": ""})["markdown"]
+
+    return {
+        "id": f"{category}/{app_name}",
+        "name": readme_title(content),
+        "category": metadata.get("Category", category),
+        "difficulty": metadata.get("Difficulty", ""),
+        "tags": normalize_tags(metadata.get("Tags", "")),
+        "status": metadata.get("Status", "experimental"),
+        "binary_name": metadata.get("Binary Name", app_name),
+        "model": metadata.get("Model", ""),
+        "source_path": str(app_dir.relative_to(REPO_ROOT)),
+        "readme_path": str(readme.relative_to(REPO_ROOT)),
+        "image_path": find_image_path(app_dir),
+        "summary": first_nonempty_paragraph(concept),
+        "metadata": metadata,
+        "sections": sections,
+    }
+
+
+def main() -> int:
+    examples: list[dict] = []
+    categories: dict[str, int] = {}
+
+    for readme in sorted(EXAMPLES_DIR.glob("*/*/README.md")):
+        parsed = parse_example(readme)
+        if parsed is None:
+            continue
+        examples.append(parsed)
+        categories[parsed["category"]] = categories.get(parsed["category"], 0) + 1
+
+    catalog = {
+        "schema_version": 2,
+        "generated_from": "scripts/generate_catalog.py",
+        "examples_root": str(EXAMPLES_DIR.relative_to(REPO_ROOT)),
+        "categories": [
+            {"name": name, "count": count}
+            for name, count in sorted(categories.items())
+        ],
+        "examples": examples,
+    }
     print(json.dumps(catalog, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

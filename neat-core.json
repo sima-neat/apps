@@ -1,9 +1,6 @@
 {
   "neat_core": {
     "branch": "main",
-    "version": "latest",
-    "install_method": "script",
-    "install_script": "wget -O /tmp/install-neat.sh https://tools.modalix.info/install-neat.sh && bash /tmp/install-neat.sh",
-    "metadata_url": "https://neat-artifacts.modalix.info/neat/main/latest/metadata-all.json"
+    "version": "latest"
   }
 }
