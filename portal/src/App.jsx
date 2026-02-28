@@ -171,29 +171,21 @@ function CatalogPage({ catalog }) {
 
 function ExampleCard({ example }) {
   const fallbackImage = `./category-assets/${slugTone(example.category)}.svg`;
+  const displayName = formatDisplayLabel(example.name || example.binary_name || example.id);
+  const summaryHtml = marked.parseInline(example.summary || "No summary available.");
 
   return (
     <Link className="app-card" to={`/app/${encodeURIComponent(example.id)}`}>
       <div className="card-image">
         <img
           src={example.image_path ? `./${example.image_path}` : fallbackImage}
-          alt={example.name}
+          alt={displayName}
         />
       </div>
       <div className="card-body">
         <p className="card-category">{example.category}</p>
-        <h2>{example.name}</h2>
-        <p className="card-summary">{example.summary || "No summary available."}</p>
-        <div className="card-meta">
-          <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
-          <Chip label={example.status || "experimental"} tone="status" />
-          {example.model ? <Chip label={example.model} tone="model" /> : null}
-        </div>
-        <div className="tag-row">
-          {(example.tags || []).slice(0, 4).map((tag) => (
-            <span key={tag} className="tag-pill">{tag}</span>
-          ))}
-        </div>
+        <h2>{displayName}</h2>
+        <div className="card-summary" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
       </div>
     </Link>
   );
@@ -206,6 +198,14 @@ function DetailPage({ catalog }) {
   const example = findExample(catalog, decodedId);
   const githubUrl = githubUrlForExample(example);
   const sections = (example?.sections || []).filter((section) => section.slug !== "metadata");
+  const displayName = formatDisplayLabel(example?.name || example?.binary_name || decodedId);
+  const binaryLabel = formatDisplayLabel(example?.binary_name || "");
+  const modelLabel = formatDisplayLabel(example?.model || "");
+  const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
+  const pathLabel = decodedId
+    .split("/")
+    .map((segment, index, items) => (index === items.length - 1 ? displayName : segment))
+    .join(" / ");
   const docPanelRef = useRef(null);
   const [activeSection, setActiveSection] = useState(sections[0]?.slug || "");
 
@@ -230,15 +230,22 @@ function DetailPage({ catalog }) {
     if (!targets.length) {
       return undefined;
     }
+
     const updateActiveSection = () => {
-      const scrollAnchor = root.scrollTop + 48;
+      const readingOffset = Math.max(96, Math.round(root.clientHeight * 0.18));
+      const readingLine = root.scrollTop + readingOffset;
       let nextActive = targets[0].id;
+      let bestDistance = Number.POSITIVE_INFINITY;
 
       for (const target of targets) {
-        if (target.offsetTop <= scrollAnchor) {
+        const targetTop =
+          root.scrollTop +
+          target.getBoundingClientRect().top -
+          root.getBoundingClientRect().top;
+        const distance = Math.abs(targetTop - readingLine);
+        if (distance < bestDistance) {
+          bestDistance = distance;
           nextActive = target.id;
-        } else {
-          break;
         }
       }
 
@@ -264,20 +271,28 @@ function DetailPage({ catalog }) {
   return (
     <div className="detail-shell">
       <div className="detail-topbar">
-        <button className="back-link" type="button" onClick={() => navigate("/")}>Back to catalog</button>
-        <div className="detail-path">{example.id}</div>
+        <button
+          className="back-link icon-link"
+          type="button"
+          onClick={() => navigate("/")}
+          aria-label="Back to catalog"
+          title="Back to catalog"
+        >
+          <span aria-hidden="true">⌂</span>
+        </button>
+        <div className="detail-path">{pathLabel}</div>
       </div>
 
       <section className="detail-hero">
         <div className="detail-hero-copy">
           <p className="eyebrow">{example.category}</p>
-          <h1>{example.name}</h1>
-          <p className="hero-text">{example.summary || "No summary available."}</p>
+          <h1>{displayName}</h1>
+          <p className="hero-text" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
           <div className="detail-meta">
             <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
             <Chip label={example.status || "experimental"} tone="status" />
-            {example.model ? <Chip label={example.model} tone="model" /> : null}
-            <Chip label={example.binary_name} tone="binary" />
+            {example.model ? <Chip label={modelLabel} tone="model" /> : null}
+            <Chip label={binaryLabel} tone="binary" />
           </div>
         </div>
         <div className="detail-hero-card">
@@ -286,8 +301,8 @@ function DetailPage({ catalog }) {
             <MetaItem label="Category" value={example.category} />
             <MetaItem label="Difficulty" value={example.difficulty || "Unspecified"} />
             <MetaItem label="Status" value={example.status || "experimental"} />
-            <MetaItem label="Model" value={example.model || "Not specified"} />
-            <MetaItem label="Binary" value={example.binary_name} />
+            <MetaItem label="Model" value={modelLabel || "Not specified"} />
+            <MetaItem label="Binary" value={binaryLabel} />
           </dl>
           {githubUrl ? (
             <a className="source-link" href={githubUrl} target="_blank" rel="noreferrer">
@@ -332,7 +347,12 @@ function DetailPage({ catalog }) {
                 const root = docPanelRef.current;
                 const target = root?.querySelector(`#${CSS.escape(section.slug)}`);
                 if (root && target) {
-                  root.scrollTo({ top: target.offsetTop - 24, behavior: "smooth" });
+                  const topPadding = 32;
+                  const targetTop =
+                    root.scrollTop +
+                    target.getBoundingClientRect().top -
+                    root.getBoundingClientRect().top;
+                  root.scrollTo({ top: Math.max(targetTop - topPadding, 0), behavior: "smooth" });
                 }
                 setActiveSection(section.slug);
               }}
@@ -353,7 +373,7 @@ function FilterGroup({ label, value, options, onChange }) {
       <select value={value} onChange={(event) => onChange(event.target.value)}>
         <option value="">All</option>
         {options.map((option) => (
-          <option key={option} value={option}>{option}</option>
+          <option key={option} value={option}>{formatDisplayLabel(option)}</option>
         ))}
       </select>
     </label>
@@ -392,6 +412,51 @@ function MetaItem({ label, value }) {
 
 function slugTone(category) {
   return category.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
+function formatDisplayLabel(value) {
+  if (!value) {
+    return "";
+  }
+
+  const needsFormatting = value.includes("_") || /^[a-z0-9-]+$/i.test(value);
+  if (!needsFormatting) {
+    return value;
+  }
+
+  const acronyms = new Map([
+    ["rtsp", "RTSP"],
+    ["optiview", "OptiView"],
+    ["yolo", "YOLO"],
+    ["mpk", "MPK"],
+    ["api", "API"],
+    ["sdk", "SDK"],
+    ["fps", "FPS"],
+    ["rgb", "RGB"],
+    ["nv12", "NV12"],
+  ]);
+
+  return value
+    .replace(/[-/]+/g, " ")
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (acronyms.has(lower)) {
+        return acronyms.get(lower);
+      }
+      if (/^yolov\d+[a-z0-9-]*$/i.test(part)) {
+        return part.replace(/^yolo/i, "YOLO");
+      }
+      if (/^midas_v?\d+/i.test(part)) {
+        return part.replace(/^midas/i, "MiDaS");
+      }
+      if (/^v\d+(\.\d+)?$/i.test(part)) {
+        return part.toUpperCase();
+      }
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(" ");
 }
 
 export default App;

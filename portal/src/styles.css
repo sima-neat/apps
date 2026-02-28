@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Condensed:wght@400;700&display=swap");
+
 :root {
   color-scheme: light;
   --bg: #f3eee5;
@@ -38,7 +40,7 @@ html, body, #root {
 
 body {
   margin: 0;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: "Roboto", "Segoe UI", sans-serif;
   color: var(--text);
   background:
     radial-gradient(circle at top left, rgba(214, 120, 42, 0.18), transparent 26%),
@@ -136,7 +138,7 @@ select {
 .hero h1,
 .detail-hero h1 {
   margin: 0;
-  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
   font-size: clamp(2.25rem, 5vw, 4.2rem);
   line-height: 0.95;
   letter-spacing: -0.04em;
@@ -192,6 +194,30 @@ select {
   border-color: rgba(243, 234, 220, 0.14);
   background: rgba(15, 18, 19, 0.42);
   color: var(--text);
+}
+
+.filter-group {
+  position: relative;
+}
+
+.filter-group select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 46px;
+  color: var(--text);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 22px) calc(50% - 4px),
+    calc(100% - 16px) calc(50% - 4px);
+  background-size: 7px 7px, 7px 7px;
+  background-repeat: no-repeat;
+}
+
+.filter-group select::-ms-expand {
+  display: none;
 }
 
 .search-input {
@@ -298,7 +324,7 @@ select {
   width: 100%;
   height: 100%;
   padding: 18px;
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
   font-size: 1rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -340,7 +366,7 @@ select {
 
 .card-body h2 {
   margin: 0 0 10px;
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
   font-size: 1.45rem;
   line-height: 1.05;
 }
@@ -352,11 +378,25 @@ select {
 }
 
 .card-meta,
-.detail-meta,
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  column-gap: 12px;
+  row-gap: 12px;
+}
+
+.card-meta {
+  margin-top: 6px;
+}
+
 .tag-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: flex-start;
+  column-gap: 12px;
+  row-gap: 18px;
+  margin-top: 18px;
 }
 
 .chip,
@@ -431,6 +471,26 @@ select {
   color: white;
 }
 
+.icon-link {
+  display: inline-grid;
+  place-items: center;
+  min-width: 68px;
+  min-height: 52px;
+  padding: 0 14px;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid rgba(14, 122, 109, 0.18);
+  box-shadow: none;
+}
+
+.icon-link:hover {
+  transform: translateY(-1px);
+  border-color: rgba(14, 122, 109, 0.38);
+  background: rgba(14, 122, 109, 0.08);
+}
+
 .source-link {
   display: inline-flex;
   align-items: center;
@@ -458,7 +518,7 @@ select {
 
 .detail-hero-card h2 {
   margin: 0 0 16px;
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
 }
 
 .detail-hero-card dl {
@@ -592,7 +652,7 @@ select {
   color: #ebdfd0;
 }
 
-.markdown-body code {
+.markdown-body pre code {
   font-family: "IBM Plex Mono", monospace;
 }
 
@@ -601,13 +661,20 @@ select {
   word-break: inherit;
 }
 
+.card-summary code,
+.hero-text code,
 .markdown-body p code,
 .markdown-body li code {
+  font-family: inherit;
+  font-size: 0.95em;
+  font-weight: 500;
   padding: 2px 6px;
   border-radius: 8px;
   background: rgba(47, 33, 20, 0.08);
 }
 
+:root[data-theme="dark"] .card-summary code,
+:root[data-theme="dark"] .hero-text code,
 :root[data-theme="dark"] .markdown-body p code,
 :root[data-theme="dark"] .markdown-body li code {
   background: rgba(243, 234, 220, 0.08);
