@@ -31,7 +31,7 @@ This keeps examples editable and easy to customize.
 - `scripts/cd/`: continuous delivery scripts (reserved)
 - `scripts/release/`: release scripts (reserved)
 - `schemas/`: JSON schemas (e.g. catalog validation)
-- `neat-core.json`: NEAT core SDK dependency declaration (branch, version, install method)
+- `neat-core.json`: NEAT core SDK dependency declaration (branch and version)
 - `catalog.json`: example catalog (for CI/release traceability)
 
 ## Build
@@ -61,6 +61,12 @@ To install NEAT core SDK without building (useful for app developers):
 ./build.sh --only-install-neat-core
 ```
 
+To override the default NEAT core dependency for one build:
+
+```bash
+./build.sh --all --neat-core-version main:latest
+```
+
 If NEAT is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH`:
 
 ```bash
@@ -86,4 +92,5 @@ Python examples are not implemented yet.
 ## NEAT Core Dependency
 
 `neat-core.json` declares which NEAT core SDK branch and version this repo depends on.
-`./build.sh --all` reads this file to install the correct SDK before building.
+`./build.sh --all` reads this file and uses the hosted `install-neat-from-a-branch.sh`
+installer to install the correct SDK before building.

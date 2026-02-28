@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NEAT_CORE_JSON="${ROOT_DIR}/neat-core.json"
 NEAT_CORE_MARKER="${ROOT_DIR}/.neat-core-installed"
+NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.modalix.info/install-neat-from-a-branch.sh}"
 
 BUILD_DIR="${BUILD_DIR:-build}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
@@ -13,6 +14,7 @@ BUILD_PYTHON=OFF
 INSTALL_CORE=0
 ONLY_INSTALL=0
 CLI_BIN="${SIMA_CLI_BIN:-sima-cli}"
+NEAT_CORE_OVERRIDE=""
 
 usage() {
   cat <<'EOF'
@@ -27,10 +29,12 @@ Options:
   --python                  Enable Python tooling (placeholder)
   --all                     Install NEAT core SDK (from neat-core.json) then build
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
+  --neat-core-version <b:v> Override neat-core.json with branch:version (example: main:latest)
   -h, --help                Show help
 
 Environment:
   SIMA_CLI_BIN              Path to sima-cli binary (default: sima-cli)
+  NEAT_INSTALLER_URL        Hosted branch installer URL
   CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
   SYSROOT                   Target sysroot (used by the default cross toolchain file)
 EOF
@@ -46,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --python) BUILD_PYTHON=ON; shift ;;
     --all) INSTALL_CORE=1; shift ;;
     --only-install-neat-core) INSTALL_CORE=1; ONLY_INSTALL=1; shift ;;
+    --neat-core-version) NEAT_CORE_OVERRIDE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -59,16 +64,52 @@ extract_json_field() {
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['neat_core'][sys.argv[2]])" "$1" "$2"
 }
 
+download_file() {
+  local url="$1"
+  local output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${url}" -o "${output}"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "${output}" "${url}"
+    return 0
+  fi
+  echo "ERROR: neither curl nor wget is installed." >&2
+  return 1
+}
+
+resolve_neat_core_target() {
+  local branch version
+  branch="$(extract_json_field "${NEAT_CORE_JSON}" "branch")"
+  version="$(extract_json_field "${NEAT_CORE_JSON}" "version")"
+
+  if [[ -n "${NEAT_CORE_OVERRIDE}" ]]; then
+    if [[ "${NEAT_CORE_OVERRIDE}" != *:* ]]; then
+      echo "ERROR: --neat-core-version must use branch:version (example: main:latest)." >&2
+      exit 1
+    fi
+    branch="${NEAT_CORE_OVERRIDE%%:*}"
+    version="${NEAT_CORE_OVERRIDE#*:}"
+    if [[ -z "${branch}" || -z "${version}" ]]; then
+      echo "ERROR: --neat-core-version must provide both branch and version." >&2
+      exit 1
+    fi
+  fi
+
+  printf '%s\n%s\n' "${branch}" "${version}"
+}
+
 ensure_neat_core() {
   if [[ ! -f "${NEAT_CORE_JSON}" ]]; then
     echo "ERROR: Missing ${NEAT_CORE_JSON}" >&2
     exit 1
   fi
 
-  local branch version install_method
-  branch="$(extract_json_field "${NEAT_CORE_JSON}" "branch")"
-  version="$(extract_json_field "${NEAT_CORE_JSON}" "version")"
-  install_method="$(extract_json_field "${NEAT_CORE_JSON}" "install_method")"
+  local branch version
+  mapfile -t neat_core_target < <(resolve_neat_core_target)
+  branch="${neat_core_target[0]}"
+  version="${neat_core_target[1]}"
 
   # Check marker file — skip install if already at this version.
   local expected_tag="${branch}/${version}"
@@ -82,27 +123,14 @@ ensure_neat_core() {
   fi
 
   echo "Installing NEAT core (${expected_tag})..."
-
-  if [[ "${install_method}" == "script" ]]; then
-    local install_script
-    install_script="$(extract_json_field "${NEAT_CORE_JSON}" "install_script")"
-    echo "Using install script method..."
-    bash -c "${install_script}"
-  else
-    local metadata_url
-    metadata_url="$(extract_json_field "${NEAT_CORE_JSON}" "metadata_url")"
-    if [[ -z "${metadata_url}" ]]; then
-      echo "ERROR: neat-core.json must define a non-empty metadata_url." >&2
-      exit 1
-    fi
-    if ! command -v "${CLI_BIN}" >/dev/null 2>&1; then
-      echo "ERROR: ${CLI_BIN} not found. Install sima-cli first:" >&2
-      echo "  wget -O /tmp/install-neat.sh https://tools.modalix.info/install-neat.sh && bash /tmp/install-neat.sh" >&2
-      exit 1
-    fi
-    echo "Via: ${CLI_BIN} install -m ${metadata_url}"
-    "${CLI_BIN}" install -m "${metadata_url}"
-  fi
+  local installer_path
+  installer_path="$(mktemp /tmp/install-neat-from-a-branch.XXXXXX.sh)"
+  trap 'rm -f "${installer_path}"' RETURN
+  download_file "${NEAT_INSTALLER_URL}" "${installer_path}"
+  chmod +x "${installer_path}"
+  "${installer_path}" --minimum "${branch}" "${version}"
+  rm -f "${installer_path}"
+  trap - RETURN
 
   # Write marker on success.
   printf '%s\n' "${expected_tag}" > "${NEAT_CORE_MARKER}"
@@ -128,6 +156,7 @@ echo "  Build directory       : ${BUILD_DIR}"
 echo "  Build type            : ${BUILD_TYPE}"
 echo "  Build C++ examples    : ${BUILD_CPP}"
 echo "  Install NEAT core     : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF (use --all to enable)"; fi)"
+echo "  NEAT core override    : ${NEAT_CORE_OVERRIDE:-"(from neat-core.json)"}"
 echo ""
 
 if [[ "${CLEAN}" -eq 1 ]]; then
