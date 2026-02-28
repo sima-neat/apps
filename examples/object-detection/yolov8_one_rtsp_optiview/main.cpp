@@ -14,7 +14,6 @@
 
 #include "support/runtime/example_utils.h"
 #include "support/object_detection/obj_detection_utils.h"
-#include "pipeline/DetectionTypes.h"
 #include "neat/session.h"
 #include "neat/models.h"
 #include "neat/nodes.h"
@@ -678,12 +677,7 @@ int main(int argc, char** argv) {
         const double t_parse0 = time_ms();
         std::vector<objdet::Box> boxes;
         try {
-          const auto decoded = simaai::neat::parse_bbox_bytes(payload, frame_w, frame_h, topk, true);
-          boxes.reserve(decoded.size());
-          for (const auto& box : decoded) {
-            boxes.push_back(
-                objdet::Box{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
-          }
+          boxes = objdet::parse_boxes_strict(payload, frame_w, frame_h, topk, cfg.debug);
         } catch (const std::exception& ex) {
           std::cerr << "[warn] bbox parse failed: " << ex.what() << "\n";
           continue;
