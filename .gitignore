@@ -11,3 +11,5 @@ models/
 tmp/
 sandbox/
 .neat-core-installed
+portal/node_modules/
+package-lock.json

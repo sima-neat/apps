@@ -121,13 +121,13 @@ TODO: describe what this example demonstrates.
 ## Build
 ### Build From The Apps Repo
 \`\`\`bash
-cd /home/jim/workspace2/apps
+cd <apps-repo-root>
 ./build.sh
 \`\`\`
 
 ### Build This Example Directly With CMake
 \`\`\`bash
-cd /home/jim/workspace2/apps/examples/${category}/${example_name}
+cd <apps-repo-root>/examples/${category}/${example_name}
 cmake -S . -B build
 cmake --build build -j
 \`\`\`

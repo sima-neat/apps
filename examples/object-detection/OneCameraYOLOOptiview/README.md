@@ -94,7 +94,7 @@ Within either environment, the example can be built in two ways.
 Build all C++ examples from the `apps` repo root:
 
 ```bash
-cd /home/jim/workspace2/apps
+cd <apps-repo-root>
 ./build.sh
 ```
 
@@ -108,7 +108,7 @@ The resulting binary is:
 Configure and build only this example from its own directory:
 
 ```bash
-cd /home/jim/workspace2/apps/examples/object-detection/OneCameraYOLOOptiview
+cd <apps-repo-root>/examples/object-detection/OneCameraYOLOOptiview
 cmake -S . -B build
 cmake --build build -j
 ```
@@ -152,6 +152,3 @@ Example with explicit OptiView host:
 
 ## Reference
 - OptiView documentation: <https://docs.sima.ai/pages/optiview/main.html>
-
-## Source Files
-- C++: `main.cpp`
