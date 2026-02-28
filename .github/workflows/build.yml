@@ -79,11 +79,6 @@ jobs:
           cache: npm
           cache-dependency-path: portal/package-lock.json
 
-      - name: Install AWS CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y awscli
-
       - name: Install portal dependencies
         working-directory: portal
         run: npm install
