@@ -110,6 +110,16 @@ bool get_arg(int argc, char** argv, const std::string& key, std::string& out) {
   return false;
 }
 
+std::vector<std::string> get_args(int argc, char** argv, const std::string& key) {
+  std::vector<std::string> result;
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (key == argv[i]) {
+      result.push_back(argv[i + 1]);
+    }
+  }
+  return result;
+}
+
 bool has_flag(int argc, char** argv, const std::string& key) {
   for (int i = 1; i < argc; ++i) {
     if (key == argv[i])

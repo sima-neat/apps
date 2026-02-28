@@ -36,4 +36,4 @@ python3 examples/<category>/<name>/<script>.py [args]
 
 ## Source Files
 - C++: `main.cpp`
-- Python: `<script>.py`
+- Python: `main.py`

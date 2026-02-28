@@ -36,6 +36,13 @@ This keeps examples editable and easy to customize.
 
 ## Build
 
+Install `nlohmann-json3-dev` before building:
+
+```bash
+sudo apt update
+sudo apt install nlohmann-json3-dev
+```
+
 Install NEAT core SDK and build all examples in one step:
 
 ```bash

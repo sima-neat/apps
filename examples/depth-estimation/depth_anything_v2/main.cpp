@@ -18,7 +18,7 @@
 namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
-// Helpers (adapted from midas_v21_rtsp.cpp)
+// Helpers (adapted from rtsp_depth_estimation.cpp)
 // ---------------------------------------------------------------------------
 
 static size_t dtype_bytes(simaai::neat::TensorDType dtype) {

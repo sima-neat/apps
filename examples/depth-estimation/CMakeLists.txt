@@ -1,2 +1,2 @@
 add_subdirectory(depth_anything_v2)
-add_subdirectory(midas_v21_rtsp)
+add_subdirectory(rtsp_depth_estimation)

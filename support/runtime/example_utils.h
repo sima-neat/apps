@@ -16,6 +16,7 @@
 namespace sima_examples {
 
 bool get_arg(int argc, char** argv, const std::string& key, std::string& out);
+std::vector<std::string> get_args(int argc, char** argv, const std::string& key);
 bool has_flag(int argc, char** argv, const std::string& key);
 bool parse_int_arg(int argc, char** argv, const std::string& key, int& out);
 bool parse_float_arg(int argc, char** argv, const std::string& key, float& out);
