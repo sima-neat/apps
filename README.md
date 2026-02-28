@@ -60,6 +60,17 @@ If NEAT is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH`:
 CMAKE_PREFIX_PATH=/opt/sima-neat ./build.sh
 ```
 
+### Cross Compilation
+
+`build.sh` auto-selects `cmake/toolchains/aarch64-modalix.cmake` when cross
+environment variables are present (`SYSROOT`, `CROSS_COMPILE`, `CC`, `CXX`).
+
+Typical usage:
+
+```bash
+./build.sh
+```
+
 ## Python Examples
 
 Python examples are not implemented yet.
