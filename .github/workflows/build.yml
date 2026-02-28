@@ -59,7 +59,6 @@ jobs:
             "s3://neat-artifacts/apps/${{ steps.artifact-meta.outputs.archive_name }}"
 
   portal-build:
-    if: github.ref_name == 'main'
     runs-on: [self-hosted, Linux, X64, elxr-sdk]
     needs: cpp-build
     env:
