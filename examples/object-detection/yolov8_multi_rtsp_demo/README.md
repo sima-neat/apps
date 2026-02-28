@@ -6,6 +6,7 @@
 | Category | object-detection |
 | Difficulty | Advanced |
 | Tags | object-detection, rtsp, multistream |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolov8_multi_rtsp_demo |
 | Model | yolo_v8m |

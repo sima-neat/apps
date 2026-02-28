@@ -6,6 +6,7 @@
 | Category | semantic-segmentation |
 | Difficulty | Intermediate |
 | Tags | semantic-segmentation |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolov5_seg_overlay |
 | Model | yolov5n |

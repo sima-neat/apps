@@ -6,6 +6,7 @@
 | Category | depth-estimation |
 | Difficulty | Intermediate |
 | Tags | depth-estimation |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | depth_anything_v2 |
 | Model | depth_anything_v2_vits |

@@ -49,7 +49,17 @@ jobs:
 
       - name: Package build output
         run: |
-          tar -czf "${{ steps.artifact-meta.outputs.archive_name }}" build
+          STAGE_DIR="neat-apps-runtime"
+          rm -rf "${STAGE_DIR}"
+          mkdir -p "${STAGE_DIR}/bin"
+
+          find build -type f -executable \
+            ! -path '*/CMakeFiles/*' \
+            ! -name '*_e2e_test' \
+            ! -name 'cmTC_*' \
+            -exec cp {} "${STAGE_DIR}/bin/" \;
+
+          tar -czf "${{ steps.artifact-meta.outputs.archive_name }}" "${STAGE_DIR}"
 
       - name: Upload build archive to Cloudflare R2
         run: |
@@ -57,6 +67,81 @@ jobs:
             --endpoint-url "${R2_ENDPOINT_URL}" \
             "${{ steps.artifact-meta.outputs.archive_name }}" \
             "s3://neat-artifacts/download/${{ steps.artifact-meta.outputs.archive_name }}"
+
+  publish-index:
+    runs-on: ubuntu-latest
+    needs: cpp-build
+    if: github.event_name != 'pull_request'
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      R2_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+
+    steps:
+      - name: Write latest.tag for branch
+        run: |
+          BRANCH_RAW="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          BRANCH_KEY="$(echo "${BRANCH_RAW}" | tr '/ ' '--')"
+          SHORT_SHA="${{ needs.cpp-build.outputs.short_sha }}"
+          mkdir -p _work/index
+          printf '%s\n' "${SHORT_SHA}" > _work/index/latest.tag
+          aws s3 cp \
+            --endpoint-url "${R2_ENDPOINT_URL}" \
+            _work/index/latest.tag \
+            "s3://neat-artifacts/download/${BRANCH_KEY}/latest.tag"
+
+      - name: Refresh branches.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p _work/index
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+
+          branches = []
+          page = 1
+          while True:
+            url = f"https://api.github.com/repos/{repo}/branches?per_page=100&page={page}"
+            req = urllib.request.Request(
+              url,
+              headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            )
+            with urllib.request.urlopen(req) as resp:
+              batch = json.loads(resp.read().decode("utf-8"))
+            if not batch:
+              break
+            branches.extend(str(item.get("name", "")).strip() for item in batch)
+            if len(batch) < 100:
+              break
+            page += 1
+
+          payload = {
+            "branches": sorted({branch for branch in branches if branch}),
+          }
+          Path("_work/index/branches.json").write_text(
+            json.dumps(payload, indent=2) + "\n",
+            encoding="utf-8",
+          )
+          print(json.dumps(payload, indent=2))
+          PY
+
+          aws s3 cp \
+            --endpoint-url "${R2_ENDPOINT_URL}" \
+            _work/index/branches.json \
+            s3://neat-artifacts/download/branches.json \
+            --content-type application/json
 
   portal-build:
     runs-on: ubuntu-latest

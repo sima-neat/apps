@@ -6,6 +6,7 @@
 | Category | semantic-segmentation |
 | Difficulty | Intermediate |
 | Tags | semantic-segmentation |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | fcn_hrnet_seg_overlay |
 | Model | fcn_hrnet48 |

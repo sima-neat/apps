@@ -6,6 +6,7 @@
 | Category | object-detection |
 | Difficulty | Intermediate |
 | Tags | object-detection, rtsp, optiview |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolov8_one_rtsp_optiview |
 | Model | yolo_v8s |
@@ -88,7 +89,7 @@ This example can be built in either of these environments:
 - from an `eLxr SDK` environment
 - directly on a `DevKit`
 
-Within either environment, the example can be built in two ways.
+Within either environment, the C++ implementation can be built in two ways. The Python implementation does not require a compile step.
 
 ### Build From The Apps Repo
 Build all C++ examples from the `apps` repo root:
@@ -143,6 +144,35 @@ Example with explicit OptiView host:
 ./build/examples/object-detection/yolov8_one_rtsp_optiview/yolov8_one_rtsp_optiview \
   --rtsp rtsp://192.168.1.10:8554/src1
 ```
+
+### Python Implementation
+Run the Python sample directly from the example folder:
+
+```bash
+cd <apps-repo-root>/examples/object-detection/yolov8_one_rtsp_optiview
+python3 main.py --model <path-to-yolo_v8s-mpk.tar.gz> --rtsp <rtsp_url>
+```
+
+Example workflow:
+
+Download the `yolo_v8s` model using `sima-cli`:
+
+```bash
+sima-cli modelzoo get yolo_v8s
+```
+
+Then start the Python app:
+
+```bash
+source /media/nvme/pyneat/.venv/bin/activate
+python3 main.py --rtsp rtsp://127.0.0.1:8554/src5 --model yolo_v8s_mpk.tar.gz
+```
+
+Python-specific notes:
+
+- if `--model` / `--mpk` is omitted, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo get yolo_v8s`
+- it sends OptiView JSON directly over UDP and streams video to the OptiView UDP video port
+- it expects OpenCV to be built with GStreamer support for the UDP H.264 video path
 
 ## Debugging Notes
 - If the sample times out waiting for the first RTSP frame, the problem is usually upstream stream delivery or device connectivity, not YOLO itself.

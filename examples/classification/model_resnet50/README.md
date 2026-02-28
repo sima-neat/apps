@@ -6,6 +6,7 @@
 | Category | classification |
 | Difficulty | Beginner |
 | Tags | classification, model, mpk |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | model_resnet50 |
 | Model | resnet_50 |

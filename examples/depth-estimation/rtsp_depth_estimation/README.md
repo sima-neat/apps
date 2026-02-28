@@ -6,6 +6,7 @@
 | Category | depth-estimation |
 | Difficulty | Intermediate |
 | Tags | depth-estimation, rtsp |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | rtsp_depth_estimation |
 | Model | midas_v21_small_256 |

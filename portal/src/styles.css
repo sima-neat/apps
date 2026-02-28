@@ -419,6 +419,11 @@ select {
   color: #0d675d;
 }
 
+.chip-languages {
+  background: rgba(84, 92, 214, 0.12);
+  color: #4450b0;
+}
+
 .chip-model,
 .chip-binary,
 .tag-pill {
@@ -426,9 +431,37 @@ select {
   color: #5f4b39;
 }
 
+.chip-github {
+  justify-content: center;
+  min-width: 42px;
+  background: rgba(47, 33, 20, 0.08);
+  color: #5f4b39;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.chip-github svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chip-github:hover {
+  transform: translateY(-1px);
+  background: rgba(14, 122, 109, 0.12);
+}
+
 :root[data-theme="dark"] .chip-model,
 :root[data-theme="dark"] .chip-binary,
 :root[data-theme="dark"] .tag-pill {
+  background: rgba(243, 234, 220, 0.1);
+  color: #d8ccbd;
+}
+
+:root[data-theme="dark"] .chip-languages {
+  background: rgba(142, 154, 255, 0.16);
+  color: #dbe0ff;
+}
+
+:root[data-theme="dark"] .chip-github {
   background: rgba(243, 234, 220, 0.1);
   color: #d8ccbd;
 }
@@ -491,20 +524,6 @@ select {
   background: rgba(14, 122, 109, 0.08);
 }
 
-.source-link {
-  display: inline-flex;
-  align-items: center;
-  margin-top: 18px;
-  padding-bottom: 2px;
-  border-bottom: 2px solid rgba(14, 122, 109, 0.22);
-  color: var(--accent);
-  font-weight: 700;
-}
-
-.source-link:hover {
-  border-bottom-color: var(--accent);
-}
-
 .detail-topbar {
   display: flex;
   justify-content: space-between;
@@ -514,27 +533,6 @@ select {
 
 .detail-path {
   font-size: 0.92rem;
-}
-
-.detail-hero-card h2 {
-  margin: 0 0 16px;
-  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
-}
-
-.detail-hero-card dl {
-  display: grid;
-  grid-template-columns: minmax(0, 120px) minmax(0, 1fr);
-  gap: 10px 14px;
-  margin: 0;
-}
-
-.detail-hero-card dt {
-  font-weight: 700;
-  color: var(--muted);
-}
-
-.detail-hero-card dd {
-  margin: 0;
 }
 
 .detail-layout {

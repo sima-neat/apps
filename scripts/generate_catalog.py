@@ -123,6 +123,7 @@ def parse_example(readme: Path) -> dict | None:
         "name": readme_title(content),
         "category": metadata.get("Category", category),
         "difficulty": metadata.get("Difficulty", ""),
+        "languages": metadata.get("Languages", ""),
         "tags": normalize_tags(metadata.get("Tags", "")),
         "status": metadata.get("Status", "experimental"),
         "binary_name": metadata.get("Binary Name", app_name),

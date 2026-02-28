@@ -6,6 +6,7 @@
 | Category | instance-segmentation |
 | Difficulty | Intermediate |
 | Tags | instance-segmentation |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolov8n_seg_detess_simple |
 | Model | yolo_v8n_seg |
