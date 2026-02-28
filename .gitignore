@@ -15,4 +15,3 @@ portal/node_modules/
 portal/.vite/
 portal/dist/
 portal/public/catalog.json
-package-lock.json
