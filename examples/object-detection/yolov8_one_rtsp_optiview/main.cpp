@@ -45,7 +45,7 @@ using sima_examples::time_ms;
 
 namespace {
 
-// OneCameraYOLOOptiview is a reference pipeline for the common deployment:
+// yolov8_one_rtsp_optiview is a reference pipeline for the common deployment:
 // one RTSP source, one YOLO detector, and OptiView video/JSON output.
 //
 // The code keeps ingest, inference, and output transport separate so each

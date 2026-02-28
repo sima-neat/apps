@@ -1,5 +1,5 @@
 foreach(example IN ITEMS
-    OneCameraYOLOOptiview
+    yolov8_one_rtsp_optiview
     yolov8_multi_rtsp_demo
     yolov8_simple_detection_pipeline
 )

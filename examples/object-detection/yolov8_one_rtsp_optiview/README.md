@@ -1,4 +1,4 @@
-# Single-Camera YOLO OptiView
+# YOLOv8 One RTSP OptiView
 
 ## Metadata
 | Field | Value |
@@ -7,11 +7,11 @@
 | Difficulty | Intermediate |
 | Tags | object-detection, rtsp, optiview |
 | Status | experimental |
-| Binary Name | OneCameraYOLOOptiview |
+| Binary Name | yolov8_one_rtsp_optiview |
 | Model | yolo_v8s |
 
 ## Concept
-`OneCameraYOLOOptiview` is a focused reference example for a common deployment pattern:
+`yolov8_one_rtsp_optiview` is a focused reference example for a common deployment pattern:
 
 - ingest one RTSP camera stream
 - decode the stream into NV12 frames
@@ -101,14 +101,14 @@ cd <apps-repo-root>
 The resulting binary is:
 
 ```bash
-./build/examples/object-detection/OneCameraYOLOOptiview/OneCameraYOLOOptiview
+./build/examples/object-detection/yolov8_one_rtsp_optiview/yolov8_one_rtsp_optiview
 ```
 
 ### Build This Example Directly With CMake
 Configure and build only this example from its own directory:
 
 ```bash
-cd <apps-repo-root>/examples/object-detection/OneCameraYOLOOptiview
+cd <apps-repo-root>/examples/object-detection/yolov8_one_rtsp_optiview
 cmake -S . -B build
 cmake --build build -j
 ```
@@ -116,7 +116,7 @@ cmake --build build -j
 The resulting binary is:
 
 ```bash
-./build/OneCameraYOLOOptiview
+./build/yolov8_one_rtsp_optiview
 ```
 
 Direct CMake builds use the shared example module support in the `apps` repo and link against the available NEAT/core installation or local core build.
@@ -129,18 +129,18 @@ In practice:
 ## Run
 ### Binary Built From The Apps Repo
 ```bash
-./build/examples/object-detection/OneCameraYOLOOptiview/OneCameraYOLOOptiview --rtsp <rtsp_url>
+./build/examples/object-detection/yolov8_one_rtsp_optiview/yolov8_one_rtsp_optiview --rtsp <rtsp_url>
 ```
 
 ### Binary Built Directly In The Example Folder
 ```bash
-./build/OneCameraYOLOOptiview --rtsp <rtsp_url>
+./build/yolov8_one_rtsp_optiview --rtsp <rtsp_url>
 ```
 
 Example with explicit OptiView host:
 
 ```bash
-./build/examples/object-detection/OneCameraYOLOOptiview/OneCameraYOLOOptiview \
+./build/examples/object-detection/yolov8_one_rtsp_optiview/yolov8_one_rtsp_optiview \
   --rtsp rtsp://192.168.1.10:8554/src1
 ```
 
