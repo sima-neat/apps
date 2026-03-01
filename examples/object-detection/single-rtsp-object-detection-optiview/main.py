@@ -29,7 +29,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pyneat as pn
+import pyneat
 
 
 INFER_SIZE = 640
@@ -59,12 +59,12 @@ COCO80_NAMES = [
 DFL_BINS_16 = np.arange(16, dtype=np.float32)
 
 
-def tensor_to_numpy(tensor: pn.Tensor) -> np.ndarray:
+def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
     """Copy a pyneat tensor into a NumPy array owned by Python."""
     return np.asarray(tensor.to_numpy(copy=True))
 
 
-def tensor_bgr_from_decoded(tensor: pn.Tensor) -> np.ndarray:
+def tensor_bgr_from_decoded(tensor: pyneat.Tensor) -> np.ndarray:
     """Normalize decoded output into a writable HWC uint8 BGR frame."""
     arr = tensor_to_numpy(tensor)
     if arr.ndim == 4 and arr.shape[0] == 1:
@@ -76,15 +76,15 @@ def tensor_bgr_from_decoded(tensor: pn.Tensor) -> np.ndarray:
     return np.ascontiguousarray(arr)
 
 
-def iter_tensors(sample: pn.Sample):
+def iter_tensors(sample: pyneat.Sample):
     """Depth-first walk over all tensor leaves in a pyneat sample tree."""
-    if sample.kind == pn.SampleKind.Tensor and sample.tensor is not None:
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
     for field in sample.fields:
         yield from iter_tensors(field)
 
 
-def extract_bbox_payload(sample: pn.Sample) -> bytes | None:
+def extract_bbox_payload(sample: pyneat.Sample) -> bytes | None:
     """Prefer the runtime's pre-decoded BBOX payload when the model emits it.
 
     Some YOLO pipelines already attach a compact BBOX payload. When that exists
@@ -95,7 +95,7 @@ def extract_bbox_payload(sample: pn.Sample) -> bytes | None:
     while stack:
         current = stack.pop()
         stack.extend(reversed(list(current.fields)))
-        if current.kind != pn.SampleKind.Tensor or current.tensor is None:
+        if current.kind != pyneat.SampleKind.Tensor or current.tensor is None:
             continue
         fmt = (current.payload_tag or current.format or "").upper()
         if fmt and fmt != "BBOX":
@@ -148,7 +148,7 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
     return boxes
 
 
-def tensor_to_hwc_f32(tensor: pn.Tensor) -> np.ndarray:
+def tensor_to_hwc_f32(tensor: pyneat.Tensor) -> np.ndarray:
     """Convert a model output tensor into HWC float32 for Python-side decoding."""
     arr = tensor_to_numpy(tensor).astype(np.float32)
     if arr.ndim == 4 and arr.shape[0] == 1:
@@ -174,7 +174,7 @@ def iou_xyxy(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def decode_yolov8_boxes_from_sample(
-    sample: pn.Sample,
+    sample: pyneat.Sample,
     infer_size: int,
     img_w: int,
     img_h: int,
@@ -314,9 +314,9 @@ def build_rtsp_run(
     fps: int,
     latency_ms: int,
     tcp: bool,
-) -> tuple[pn.Session, pn.Run]:
+) -> tuple[pyneat.Session, pyneat.Run]:
     """Build a decoded RTSP input session that yields BGR frames to Python."""
-    ro = pn.RtspDecodedInputOptions()
+    ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
     ro.latency_ms = latency_ms
     ro.tcp = tcp
@@ -331,29 +331,29 @@ def build_rtsp_run(
     ro.output_caps.width = width
     ro.output_caps.height = height
     ro.output_caps.fps = fps
-    ro.output_caps.memory = pn.CapsMemory.SystemMemory
+    ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
-    sess = pn.Session()
-    sess.add(pn.groups.rtsp_decoded_input(ro))
-    sess.add(pn.nodes.output(pn.OutputOptions.every_frame(1)))
+    sess = pyneat.Session()
+    sess.add(pyneat.groups.rtsp_decoded_input(ro))
+    sess.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
 
-    run_opt = pn.RunOptions()
+    run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 4
-    run_opt.overflow_policy = pn.OverflowPolicy.Block
-    run_opt.output_memory = pn.OutputMemory.Owned
+    run_opt.overflow_policy = pyneat.OverflowPolicy.Block
+    run_opt.output_memory = pyneat.OutputMemory.Owned
     run = sess.build(run_opt)
     return sess, run
 
 
-def build_model(model_path: str, width: int, height: int) -> pn.Model:
+def build_model(model_path: str, width: int, height: int) -> pyneat.Model:
     """Create the YOLO model with input bounds derived from the live stream."""
-    opt = pn.ModelOptions()
+    opt = pyneat.ModelOptions()
     opt.media_type = "video/x-raw"
     opt.format = "BGR"
     opt.input_max_width = width
     opt.input_max_height = height
     opt.input_max_depth = 3
-    return pn.Model(model_path, opt)
+    return pyneat.Model(model_path, opt)
 
 
 def build_udp_video_writer(host: str, port: int, width: int, height: int, fps: int) -> cv2.VideoWriter:
