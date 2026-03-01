@@ -1,5 +1,6 @@
 """E2E tests for simple-image-classification-pipeline (Python)."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,23 +23,20 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
-        self, models_dir, test_images_dir, test_timeout_ms, skip_unless_e2e_ready
+        self, models_dir, apps_root, test_timeout_ms, skip_unless_e2e_ready
     ):
         model = _find_model(models_dir, "resnet")
         skip_unless_e2e_ready(model is not None, "resnet model not found in models_dir")
-        skip_unless_e2e_ready(
-            test_images_dir.exists() and any(test_images_dir.iterdir()),
-            "test_images_dir is missing or empty",
+
+        image_env = Path(
+            os.environ.get(
+                "SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
+                str(apps_root / "assets" / "test_images_classification" / "goldfish.jpeg"),
+            )
         )
-        image = None
-        for name in ("goldfish.jpeg", "goldfish.jpg", "n01443537_goldfish.JPEG"):
-            candidate = test_images_dir / name
-            if candidate.exists():
-                image = candidate
-                break
         skip_unless_e2e_ready(
-            image is not None,
-            "test_images_dir must contain goldfish.jpeg (or n01443537_goldfish.JPEG)",
+            image_env.exists(),
+            "classification image missing; set SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
         )
 
         result = subprocess.run(
@@ -48,7 +46,7 @@ class TestE2E:
                 "--model",
                 str(model),
                 "--image",
-                str(image),
+                str(image_env),
                 "--min-prob",
                 "0.0",
             ],

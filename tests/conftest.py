@@ -1,11 +1,13 @@
 """Shared pytest fixtures for NEAT Apps example tests."""
 
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 
-APPS_ROOT = Path(__file__).resolve().parent
+APPS_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _require_env(key: str, description: str) -> str:
@@ -54,11 +56,27 @@ def rtsp_urls() -> list[str]:
 
 
 @pytest.fixture
-def tmp_output_dir(tmp_path: Path) -> Path:
-    """Provide a temporary output directory that is cleaned up after the test."""
-    out = tmp_path / "output"
-    out.mkdir()
-    return out
+def tmp_output_dir(request) -> Path:
+    """Provide a temporary output directory rooted at env output dir or /tmp."""
+    base_raw = os.environ.get("SIMANEAT_APPS_TEST_OUTPUT_DIR", "").strip() or "/tmp"
+    keep_output = os.environ.get("SIMANEAT_APPS_TEST_KEEP_OUTPUT", "").strip() == "1"
+    out: Path
+    cleanup_needed = not keep_output
+    # tests/python/test_e2e.py -> example directory is parents[2]
+    test_file = Path(str(request.node.fspath))
+    example_name = test_file.parents[2].name
+    prefix = f"{example_name}_e2e_"
+
+    base = Path(base_raw) / "python"
+    base.mkdir(parents=True, exist_ok=True)
+    out_str = tempfile.mkdtemp(prefix=prefix, dir=str(base))
+    out = Path(out_str)
+
+    try:
+        yield out
+    finally:
+        if cleanup_needed:
+            shutil.rmtree(out, ignore_errors=True)
 
 
 @pytest.fixture

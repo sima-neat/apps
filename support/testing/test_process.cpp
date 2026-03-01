@@ -169,7 +169,18 @@ ProcessResult spawn_and_wait(const std::string& binary,
 // ---------------------------------------------------------------------------
 
 std::string create_temp_dir(const std::string& prefix) {
-  std::string tmpl = "/tmp/" + prefix + "XXXXXX";
+  const char* out_root_raw = env_or_null("SIMANEAT_APPS_TEST_OUTPUT_DIR");
+  const std::string base_root = out_root_raw ? out_root_raw : "/tmp";
+  const std::string out_root = (fs::path(base_root) / "cpp").string();
+  std::error_code ec;
+  fs::create_directories(out_root, ec);
+  if (ec) {
+    std::cerr << "[ERR] failed to create output root directory '" << out_root
+              << "': " << ec.message() << "\n";
+    return "";
+  }
+
+  std::string tmpl = (fs::path(out_root) / (prefix + "XXXXXX")).string();
   char* result = ::mkdtemp(tmpl.data());
   if (!result) {
     std::cerr << "[ERR] mkdtemp failed: " << std::strerror(errno) << "\n";
@@ -179,6 +190,10 @@ std::string create_temp_dir(const std::string& prefix) {
 }
 
 void remove_dir(const std::string& path) {
+  const char* keep_raw = env_or_null("SIMANEAT_APPS_TEST_KEEP_OUTPUT");
+  if (keep_raw && std::string(keep_raw) == "1") {
+    return;
+  }
   std::error_code ec;
   fs::remove_all(path, ec);
 }

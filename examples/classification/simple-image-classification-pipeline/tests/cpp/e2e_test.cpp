@@ -38,23 +38,15 @@ int main(int argc, char** argv) {
         "ResNet model (.tar.gz) in SIMANEAT_APPS_TEST_MODELS_DIR or SIMANEAT_APPS_TEST_MPK");
   }
 
-  const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
-  const std::string input_dir = images_raw ? images_raw : "assets/test_images";
-  if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
-    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory with test images (assets/test_images is empty or missing)");
-  }
-
-  std::string image_path = (fs::path(input_dir) / "goldfish.jpeg").string();
-  if (!fs::exists(image_path)) {
-    image_path = (fs::path(input_dir) / "goldfish.jpg").string();
+  std::string image_path;
+  if (const char* image_env = env_or_null("SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE")) {
+    image_path = image_env;
+  } else {
+    image_path = "assets/test_images_classification/goldfish.jpeg";
   }
   if (!fs::exists(image_path)) {
-    image_path = (fs::path(input_dir) / "n01443537_goldfish.JPEG").string();
-  }
-  if (!fs::exists(image_path)) {
-    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory must contain a goldfish image (goldfish.jpeg or n01443537_goldfish.JPEG)");
+    env_or_skip("SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
+        "path to goldfish image for classification e2e (e.g. assets/test_images_classification/goldfish.jpeg)");
   }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 30000);

@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
         "depth model (.tar.gz) in SIMANEAT_APPS_TEST_MODELS_DIR or SIMANEAT_APPS_TEST_MPK");
   }
 
-  auto out_dir = create_temp_dir("depth_rtsp_e2e_");
+  auto out_dir = create_temp_dir("live-rtsp-depth-estimation_e2e_");
   if (out_dir.empty()) return 1;
   std::string out_file = out_dir + "/depth_test.mp4";
 

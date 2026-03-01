@@ -59,7 +59,7 @@ jobs:
             -exec cp {} "${STAGE_DIR}/bin/" \;
 
           cp -a build "${STAGE_DIR}/build"
-          cp -a test.sh pytest.ini conftest.py "${STAGE_DIR}/"
+          cp -a tests "${STAGE_DIR}/tests"
           cp -a examples "${STAGE_DIR}/examples"
           cp -a assets/test_images "${STAGE_DIR}/assets/test_images"
 

@@ -39,7 +39,8 @@ ProcessResult spawn_and_wait(const std::string& binary,
                              const std::vector<std::string>& args,
                              int timeout_ms = 30000);
 
-// Create a temporary directory under /tmp.  Returns the path.
+// Create a temporary directory under SIMANEAT_APPS_TEST_OUTPUT_DIR
+// (or /tmp if unset). Returns the path.
 std::string create_temp_dir(const std::string& prefix = "sima_test_");
 
 // Remove a directory tree.

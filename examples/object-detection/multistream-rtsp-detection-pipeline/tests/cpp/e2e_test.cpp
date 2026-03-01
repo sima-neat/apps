@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
         "YOLO model (.tar.gz) in SIMANEAT_APPS_TEST_MODELS_DIR or SIMANEAT_APPS_TEST_MPK");
   }
 
-  auto out_dir = create_temp_dir("multistream_e2e_");
+  auto out_dir = create_temp_dir("multistream-rtsp-detection-pipeline_e2e_");
   if (out_dir.empty()) return 1;
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
@@ -69,8 +69,8 @@ int main(int argc, char** argv) {
     "--output", out_dir,
     "--frames", "10",
     "--fps", "30",
-    "--width", "640",
-    "--height", "360",
+    "--width", "1280",
+    "--height", "720",
     "--save-every", "1",
     "--tcp"
   };

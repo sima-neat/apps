@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
         "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_temp_dir("depth_e2e_");
+  auto out_dir = create_temp_dir("offline-depth-map-generation_e2e_");
   if (out_dir.empty()) return 1;
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);

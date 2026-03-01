@@ -34,8 +34,8 @@ class TestE2E:
             "--rtsp", rtsp_url,
             "--frames", "10",
             "--fps", "30",
-            "--width", "640",
-            "--height", "360",
+            "--width", "1280",
+            "--height", "720",
             "--save-every", "1",
             "--tcp",
         ]
@@ -70,8 +70,8 @@ class TestE2E:
             "--output", str(tmp_output_dir),
             "--frames", "10",
             "--fps", "30",
-            "--width", "640",
-            "--height", "360",
+            "--width", "1280",
+            "--height", "720",
             "--save-every", "1",
             "--tcp",
         ]
