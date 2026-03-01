@@ -15,3 +15,4 @@ portal/node_modules/
 portal/.vite/
 portal/dist/
 portal/public/catalog.json
+install_neat_framework.sh
