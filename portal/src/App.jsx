@@ -93,7 +93,10 @@ function CatalogPage({ catalog }) {
     <div className="portal-shell">
       <header className="hero">
         <div className="hero-copy">
-          <p className="eyebrow">SiMa NEAT Apps Portal</p>
+          <div className="brand-row">
+            <img className="brand-logo" src="./sima-logo.png" alt="SiMa.ai" />
+            <p className="eyebrow">SiMa NEAT Apps Portal</p>
+          </div>
           <h1>Discover SiMa NEAT reference examples that expedite the path from proof of concept to product.</h1>
           <p className="hero-text">
             Browse source-first applications, search across tags and models, and drill into structured
