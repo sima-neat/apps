@@ -1,1 +1,0 @@
-sima_neat_apps_add_example("yolov8_multi_rtsp_demo")

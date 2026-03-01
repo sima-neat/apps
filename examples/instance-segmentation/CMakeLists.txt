@@ -1,1 +1,1 @@
-add_subdirectory(yolov8n_seg_detess_simple)
+add_subdirectory(offline-instance-segmentation-overlay)

@@ -1,2 +1,2 @@
-add_subdirectory(depth_anything_v2)
-add_subdirectory(rtsp_depth_estimation)
+add_subdirectory(offline-depth-map-generation)
+add_subdirectory(live-rtsp-depth-estimation)
