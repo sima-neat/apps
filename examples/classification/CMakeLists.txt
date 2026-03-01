@@ -1,1 +1,1 @@
-add_subdirectory(model_resnet50)
+add_subdirectory(simple-image-classification-pipeline)

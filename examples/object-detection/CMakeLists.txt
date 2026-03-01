@@ -1,7 +1,7 @@
 foreach(example IN ITEMS
-    yolov8_one_rtsp_optiview
-    yolov8_multi_rtsp_demo
-    yolov8_simple_detection_pipeline
+    single-rtsp-object-detection-optiview
+    multistream-rtsp-detection-pipeline
+    simple-object-detection-overlay-pipeline
 )
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/CMakeLists.txt")
     add_subdirectory(${example})

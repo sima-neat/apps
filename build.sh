@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NEAT_CORE_JSON="${ROOT_DIR}/neat-core.json"
 NEAT_CORE_MARKER="${ROOT_DIR}/.neat-core-installed"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.modalix.info/install-neat-from-a-branch.sh}"
+NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://neat-artifacts.modalix.info/neat}"
 
 BUILD_DIR="${BUILD_DIR:-build}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
@@ -79,6 +80,20 @@ download_file() {
   return 1
 }
 
+download_text() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${url}"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- "${url}"
+    return 0
+  fi
+  echo "ERROR: neither curl nor wget is installed." >&2
+  return 1
+}
+
 resolve_neat_core_target() {
   local branch version
   branch="$(extract_json_field "${NEAT_CORE_JSON}" "branch")"
@@ -111,6 +126,15 @@ ensure_neat_core() {
   branch="${neat_core_target[0]}"
   version="${neat_core_target[1]}"
 
+  # Resolve "latest" to the actual commit tag so the marker is precise.
+  if [[ "${version}" == "latest" ]]; then
+    version="$(download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag" | tr -d '[:space:]')"
+    if [[ -z "${version}" ]]; then
+      echo "ERROR: latest.tag is empty for branch: ${branch}" >&2
+      exit 1
+    fi
+  fi
+
   # Check marker file — skip install if already at this version.
   local expected_tag="${branch}/${version}"
   if [[ -f "${NEAT_CORE_MARKER}" ]]; then
@@ -123,6 +147,14 @@ ensure_neat_core() {
   fi
 
   echo "Installing NEAT core (${expected_tag})..."
+
+  # Remove stale artifacts from previous installs so the upstream installer
+  # downloads fresh copies and is not tripped by corrupted cached files.
+  rm -f "${ROOT_DIR}"/install_neat_framework.sh \
+        "${ROOT_DIR}"/pyneat-*.whl \
+        "${ROOT_DIR}"/sima-neat-*-Linux-core.deb \
+        "${ROOT_DIR}"/neat-*.deb
+
   local installer_path
   installer_path="$(mktemp /tmp/install-neat-from-a-branch.XXXXXX.sh)"
   trap 'rm -f "${installer_path}"' RETURN

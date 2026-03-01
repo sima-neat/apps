@@ -1,1 +1,0 @@
-sima_neat_apps_add_example("yolov8n_seg_detess_simple")

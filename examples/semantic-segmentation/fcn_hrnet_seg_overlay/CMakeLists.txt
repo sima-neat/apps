@@ -1,1 +1,0 @@
-sima_neat_apps_add_example("fcn_hrnet_seg_overlay")

@@ -1,2 +1,2 @@
-add_subdirectory(fcn_hrnet_seg_overlay)
-add_subdirectory(yolov5_seg_overlay)
+add_subdirectory(simple-semantic-segmentation-overlay-pipeline)
+add_subdirectory(simple-detess-segmentation-mask-overlay)
