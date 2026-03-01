@@ -16,7 +16,7 @@ Depth estimation from an RTSP camera stream using a supported depth model with t
 ## Supported Models
 Also works with: `depth_anything_v2_vits`
 
-Download either variant:
+Download either variant into `assets/models/`:
 - `sima-cli modelzoo get midas_v21_small_256`
 - `sima-cli modelzoo get depth_anything_v2_vits`
 
@@ -30,13 +30,15 @@ correct defaults and tensor unpacking:
 ## Prerequisites
 - Installed NEAT SDK
 - RTSP camera source (for RTSP mode)
-- Model downloaded: `sima-cli modelzoo get midas_v21_small_256` or `sima-cli modelzoo get depth_anything_v2_vits`
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Download command (MiDaS): `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get midas_v21_small_256 && cd ../..`
+- Download command (Depth Anything V2): `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get depth_anything_v2_vits && cd ../..`
 
 ## Run
 ### C++
 ```bash
 ./build/examples/depth-estimation/live-rtsp-depth-estimation/live-rtsp-depth-estimation \
-  --model models/midas_v21_small_256_mpk.tar.gz \
+  --model assets/models/midas_v21_small_256_mpk.tar.gz \
   --url <rtsp_url> \
   --tcp \
   --frames <num_frames> \
@@ -49,7 +51,7 @@ source ~/pyneat/.venv/bin/activate
 cd apps
 pip install -r examples/depth-estimation/live-rtsp-depth-estimation/requirements.txt
 python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py \
-  --model models/midas_v21_small_256_mpk.tar.gz \
+  --model assets/models/midas_v21_small_256_mpk.tar.gz \
   --rtsp <rtsp_url> \
   --tcp \
   --frames <num_frames> \
@@ -62,7 +64,7 @@ Example with Depth Anything V2 ViT-S (auto-detects `RGB` + `518x518` defaults):
 ### C++
 ```bash
 ./build/examples/depth-estimation/live-rtsp-depth-estimation/live-rtsp-depth-estimation \
-  --model models/depth_anything_v2_vits_mpk.tar.gz \
+  --model assets/models/depth_anything_v2_vits_mpk.tar.gz \
   --url <rtsp_url> \
   --tcp \
   --frames <num_frames> \
@@ -76,7 +78,7 @@ source ~/pyneat/.venv/bin/activate
 cd apps
 pip install -r examples/depth-estimation/live-rtsp-depth-estimation/requirements.txt
 python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py \
-  --model models/depth_anything_v2_vits_mpk.tar.gz \
+  --model assets/models/depth_anything_v2_vits_mpk.tar.gz \
   --rtsp <rtsp_url> \
   --tcp \
   --frames <num_frames> \
@@ -88,7 +90,7 @@ python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py \
 Start a local RTSP server (in a separate terminal):
 ```bash
 cd apps
-python3 utils/rtsp/rtsp_file_server.py data/videos/neat-video.mp4 \
+python3 utils/rtsp/rtsp_file_server.py assets/videos/neat-video.mp4 \
   --width 1280 --height 720 --fps 25
 ```
 Then run the Python example:
@@ -97,7 +99,7 @@ source ~/pyneat/.venv/bin/activate
 cd apps
 pip install -r examples/depth-estimation/live-rtsp-depth-estimation/requirements.txt
 python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py \
-  --model models/midas_v21_small_256_mpk.tar.gz \
+  --model assets/models/midas_v21_small_256_mpk.tar.gz \
   --rtsp rtsp://127.0.0.1:8554/stream \
   --tcp \
   --frames 200 \
@@ -108,7 +110,7 @@ python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py \
 Then run the C++ example:
 ```bash
 ./build/examples/depth-estimation/live-rtsp-depth-estimation/live-rtsp-depth-estimation \
-  --model models/midas_v21_small_256_mpk.tar.gz \
+  --model assets/models/midas_v21_small_256_mpk.tar.gz \
   --url rtsp://127.0.0.1:8554/stream \
   --tcp \
   --frames 200 \

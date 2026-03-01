@@ -21,12 +21,13 @@ Both C++ and Python versions process frames from each stream, run YOLOv8 inferen
 ## Supported Models
 Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`
 
-Download any variant: `sima-cli modelzoo get yolo_v8n`
+Download any variant into `assets/models/`: `sima-cli modelzoo get yolo_v8n`
 
 ## Prerequisites
 - Installed NEAT SDK
 - One or more RTSP camera sources (or use the file-based RTSP server below)
-- Model downloaded: `sima-cli modelzoo get yolo_v8m`
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8m && cd ../..`
 
 ## Setting Up RTSP Streams (using a video file)
 
@@ -42,7 +43,7 @@ This will serve the video on `rtsp://127.0.0.1:8554/stream0` through `rtsp://127
 ### C++
 ```bash
 ./build/examples/object-detection/multistream-rtsp-detection-pipeline/multistream-rtsp-detection-pipeline \
-  --model /path/to/yolo_v8m_mpk.tar.gz \
+  --model assets/models/yolo_v8m_mpk.tar.gz \
   --output /path/to/output \
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
   --frames 100 \
@@ -73,7 +74,7 @@ This will serve the video on `rtsp://127.0.0.1:8554/stream0` through `rtsp://127
 source ~/pyneat/.venv/bin/activate
 pip install -r examples/object-detection/multistream-rtsp-detection-pipeline/requirements.txt
 python examples/object-detection/multistream-rtsp-detection-pipeline/main.py \
-  --model /path/to/yolo_v8m_mpk.tar.gz \
+  --model assets/models/yolo_v8m_mpk.tar.gz \
   --output /path/to/output \
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
   --frames 100 \

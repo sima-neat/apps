@@ -16,23 +16,24 @@ Minimal YOLOv8-seg pipeline using DetessDequant postprocessing (no boxdecode). P
 ## Supported Models
 Also works with: `yolo_v8s_seg`, `yolo_v8m_seg`, `yolo_v8l_seg`
 
-Download any variant: `sima-cli modelzoo get yolo_v8s_seg`
+Download any variant into `assets/models/`: `sima-cli modelzoo get yolo_v8s_seg`
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `sima-cli modelzoo get yolo_v8n_seg`
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8n_seg && cd ../..`
 
 ## Run
 ### C++
 ```bash
-./build/examples/instance-segmentation/offline-instance-segmentation-overlay/offline-instance-segmentation-overlay models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
+./build/examples/instance-segmentation/offline-instance-segmentation-overlay/offline-instance-segmentation-overlay assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/.venv/bin/activate
 pip install -r examples/instance-segmentation/offline-instance-segmentation-overlay/requirements.txt
-python3 examples/instance-segmentation/offline-instance-segmentation-overlay/main.py models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
+python3 examples/instance-segmentation/offline-instance-segmentation-overlay/main.py assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ## Source Files

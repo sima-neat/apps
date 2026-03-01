@@ -18,11 +18,12 @@ Both C++ and Python examples read images from an input folder, run inference one
 ## Supported Models
 Also works with: `yolo_v8s`, `yolo_v8m`, `yolo_v8l`
 
-Download any variant: `sima-cli modelzoo get yolo_v8s`
+Download any variant into `assets/models/`: `sima-cli modelzoo get yolo_v8s`
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `sima-cli modelzoo get yolo_v8n`
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8n && cd ../..`
 
 ## Run
 From the `apps` directory:
@@ -30,7 +31,7 @@ From the `apps` directory:
 ### C++
 ```bash
 ./build/examples/object-detection/simple-object-detection-overlay-pipeline/simple-object-detection-overlay-pipeline \
-  models/yolo_v8n_mpk.tar.gz \
+  assets/models/yolo_v8n_mpk.tar.gz \
   examples/object-detection/simple-object-detection-overlay-pipeline/coco_label.txt \
   <input_dir> \
   <output_dir>
@@ -41,7 +42,7 @@ From the `apps` directory:
 source ~/pyneat/.venv/bin/activate
 pip install -r examples/object-detection/simple-object-detection-overlay-pipeline/requirements.txt
 python examples/object-detection/simple-object-detection-overlay-pipeline/main.py \
-  models/yolo_v8n_mpk.tar.gz \
+  assets/models/yolo_v8n_mpk.tar.gz \
   examples/object-detection/simple-object-detection-overlay-pipeline/coco_label.txt \
   <input_dir> \
   <output_dir>

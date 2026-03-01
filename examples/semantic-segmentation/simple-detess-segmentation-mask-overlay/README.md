@@ -16,23 +16,24 @@ Minimal YOLOv5 segmentation overlay from DetessDequant outputs. Processes images
 ## Supported Models
 Also works with: `yolov5s`, `yolov5m`, `yolov5l`
 
-Download any variant: `sima-cli modelzoo get yolov5s`
+Download any variant into `assets/models/`: `sima-cli modelzoo get yolov5s`
 
 ## Prerequisites
 - Installed NEAT SDK
-- Model downloaded: `sima-cli modelzoo get yolov5n`
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolov5n && cd ../..`
 
 ## Run
 ### C++
 ```bash
-./build/examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay models/yolov5n_mpk.tar.gz <input_dir> <output_dir>
+./build/examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay assets/models/yolov5n_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/.venv/bin/activate
 pip install -r examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/requirements.txt
-python examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/main.py models/yolov5_seg_overlay_mpk.tar.gz <input_dir> <output_dir>
+python examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/main.py assets/models/yolov5_seg_overlay_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ## Source Files

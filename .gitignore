@@ -8,6 +8,7 @@ __pycache__/
 *.whl
 *.tar.gz
 models/
+assets/models/
 tmp/
 sandbox/
 .neat-core-installed

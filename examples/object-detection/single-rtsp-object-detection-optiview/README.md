@@ -57,6 +57,8 @@ This separation keeps the RTSP session from being tightly coupled to the inferen
 - Installed NEAT framework and OptiView on the DevKit
 - RTSP camera source or use OptiView to start RTSP source
 - SiMa.ai developer portal account so the sample can download the model from modelzoo
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8s && cd ../..`
 
 
 ## Important Behavior
@@ -131,14 +133,14 @@ In practice:
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview \
   --rtsp <rtsp_url> \
-  --mpk <path/to/model_mpk.tar.gz>
+  --mpk assets/models/yolo_v8s_mpk.tar.gz
 ```
 
 ### Binary Built Directly In The Example Folder
 ```bash
 ./build/single-rtsp-object-detection-optiview \
   --rtsp <rtsp_url> \
-  --mpk <path/to/model_mpk.tar.gz>
+  --mpk assets/models/yolo_v8s_mpk.tar.gz
 ```
 
 Example with explicit OptiView host:
@@ -146,7 +148,7 @@ Example with explicit OptiView host:
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview \
   --rtsp rtsp://192.168.1.10:8554/src1 \
-  --mpk models/yolo_v8s_mpk.tar.gz
+  --mpk assets/models/yolo_v8s_mpk.tar.gz
 ```
 
 ## Debugging Notes
