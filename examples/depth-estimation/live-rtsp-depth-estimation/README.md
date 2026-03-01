@@ -1,4 +1,4 @@
-# RTSP Depth Estimation (MiDaS v2.1 / Depth Anything V2)
+# Live RTSP Depth Estimation
 
 ## Metadata
 | Field | Value |

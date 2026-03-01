@@ -1,4 +1,4 @@
-# Depth Anything V2
+# Offline Depth Map Generation
 
 ## Metadata
 | Field | Value |

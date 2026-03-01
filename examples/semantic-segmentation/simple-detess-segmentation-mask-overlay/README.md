@@ -1,4 +1,4 @@
-# YOLOv5 Segmentation Overlay
+# Simple DetESS Segmentation Mask Overlay
 
 ## Metadata
 | Field | Value |

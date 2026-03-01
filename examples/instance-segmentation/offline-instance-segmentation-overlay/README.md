@@ -1,4 +1,4 @@
-# YOLOv8n Instance Segmentation (DetessDequant)
+# Offline Instance Segmentation Overlay
 
 ## Metadata
 | Field | Value |

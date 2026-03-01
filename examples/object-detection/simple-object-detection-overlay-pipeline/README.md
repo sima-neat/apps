@@ -1,4 +1,4 @@
-# YOLOv8n Simple Detection Pipeline
+# Simple Object Detection Overlay Pipeline
 
 ## Metadata
 | Field | Value |

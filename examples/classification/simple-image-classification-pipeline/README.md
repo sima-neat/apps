@@ -1,4 +1,4 @@
-# ResNet50 Model Example
+# Simple Image Classification Pipeline
 
 ## Metadata
 | Field | Value |

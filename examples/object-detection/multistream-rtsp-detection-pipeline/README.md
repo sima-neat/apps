@@ -1,4 +1,4 @@
-# YOLOv8 Multi-RTSP Demo
+# Multistream RTSP Detection Pipeline
 
 ## Metadata
 | Field | Value |

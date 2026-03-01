@@ -1,4 +1,4 @@
-# FCN-HRNet Semantic Segmentation Overlay
+# Simple Semantic Segmentation Overlay Pipeline
 
 ## Metadata
 | Field | Value |
