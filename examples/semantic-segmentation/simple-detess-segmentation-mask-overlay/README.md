@@ -1,4 +1,4 @@
-# Simple DetESS Segmentation Mask Overlay
+# Simple DetessDequant Segmentation Mask Overlay
 
 ## Metadata
 | Field | Value |
