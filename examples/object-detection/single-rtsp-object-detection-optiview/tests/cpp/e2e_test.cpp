@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <sys/types.h>
@@ -59,11 +60,45 @@ int main(int argc, char** argv) {
 
   const char* rtsp_url = env_or_null("SIMANEAT_APPS_TEST_RTSP_URL");
   if (!rtsp_url) {
+    const char* require = env_or_null("SIMANEAT_APPS_TEST_REQUIRE_E2E");
+    if (require && std::string(require) == "1") {
+      std::cerr << "[FAIL] SIMANEAT_APPS_TEST_RTSP_URL is required in strict e2e mode\n";
+      return 1;
+    }
     std::cerr << "[SKIP] set SIMANEAT_APPS_TEST_RTSP_URL to run the OptiView e2e test\n";
     return kSkipCode;
   }
 
-  const char* mpk_path = env_or_null("SIMANEAT_APPS_TEST_MPK");
+  namespace fs = std::filesystem;
+  const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
+  std::string mpk_path;
+  if (fs::exists(models_dir)) {
+    for (const auto& entry : fs::directory_iterator(models_dir)) {
+      const std::string name = entry.path().filename().string();
+      if (name.find("yolo_v8s") != std::string::npos &&
+          name.find(".tar.gz") != std::string::npos) {
+        mpk_path = entry.path().string();
+        break;
+      }
+    }
+  }
+  if (mpk_path.empty()) {
+    const char* mpk_env = env_or_null("SIMANEAT_APPS_TEST_MPK");
+    if (!mpk_env) {
+      const char* require = env_or_null("SIMANEAT_APPS_TEST_REQUIRE_E2E");
+      if (require && std::string(require) == "1") {
+        std::cerr
+            << "[FAIL] Missing model: set SIMANEAT_APPS_TEST_MPK or place YOLO model under SIMANEAT_APPS_TEST_MODELS_DIR\n";
+        return 1;
+      }
+      std::cerr << "[SKIP] Missing model: set SIMANEAT_APPS_TEST_MPK or place YOLO model under "
+                   "SIMANEAT_APPS_TEST_MODELS_DIR\n";
+      return kSkipCode;
+    }
+    mpk_path = mpk_env;
+  }
+
   const int json_port = env_int_or_default("SIMANEAT_APPS_TEST_OPTIVIEW_JSON_PORT", kDefaultJsonPort);
   const int video_port =
       env_int_or_default("SIMANEAT_APPS_TEST_OPTIVIEW_VIDEO_PORT", kDefaultVideoPort);
@@ -94,10 +129,8 @@ int main(int argc, char** argv) {
   arg_storage.push_back(std::to_string(json_port));
   arg_storage.push_back("--frames");
   arg_storage.push_back("300");
-  if (mpk_path) {
-    arg_storage.push_back("--mpk");
-    arg_storage.push_back(mpk_path);
-  }
+  arg_storage.push_back("--mpk");
+  arg_storage.push_back(mpk_path);
 
   std::vector<char*> child_argv;
   child_argv.reserve(arg_storage.size() + 1);

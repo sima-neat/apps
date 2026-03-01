@@ -139,7 +139,7 @@ cmake --build build -j
 
 ## Source Files
 - C++: \`main.cpp\`
-- Tests: \`tests/e2e_test.cpp\`
+- Tests: \`tests/cpp/e2e_test.cpp\`
 EOF
 }
 
@@ -195,7 +195,7 @@ python3 main.py
 
 ## Source Files
 - Python: \`main.py\`
-- Tests: \`tests/e2e_test.py\`
+- Tests: \`tests/python/test_e2e.py\`
 EOF
 }
 
@@ -233,11 +233,12 @@ create_cpp_example() {
   [[ -f "${category_cmake}" ]] || die "Missing category CMakeLists: ${category_cmake}"
   [[ ! -e "${module_dir}" ]] || die "Example already exists: ${module_dir}"
 
-  ensure_dir "${module_dir}/tests"
+  ensure_dir "${module_dir}/tests/cpp"
+  ensure_dir "${module_dir}/tests/python"
   render_cpp_main "${example_name}" > "${module_dir}/main.cpp"
   render_cpp_cmakelists "${example_name}" > "${module_dir}/CMakeLists.txt"
   render_cpp_readme "${example_name}" "${category}" > "${module_dir}/README.md"
-  render_cpp_e2e_test > "${module_dir}/tests/e2e_test.cpp"
+  render_cpp_e2e_test > "${module_dir}/tests/cpp/e2e_test.cpp"
   register_cpp_example "${category_cmake}" "${example_name}"
 }
 
@@ -248,11 +249,11 @@ create_python_example() {
 
   [[ ! -e "${module_dir}" ]] || die "Example already exists: ${module_dir}"
 
-  ensure_dir "${module_dir}/tests"
+  ensure_dir "${module_dir}/tests/python"
   render_python_main "${example_name}" > "${module_dir}/main.py"
   render_python_readme "${example_name}" "${category}" > "${module_dir}/README.md"
-  render_python_e2e_test > "${module_dir}/tests/e2e_test.py"
-  chmod +x "${module_dir}/main.py" "${module_dir}/tests/e2e_test.py"
+  render_python_e2e_test > "${module_dir}/tests/python/test_e2e.py"
+  chmod +x "${module_dir}/main.py" "${module_dir}/tests/python/test_e2e.py"
 }
 
 main() {

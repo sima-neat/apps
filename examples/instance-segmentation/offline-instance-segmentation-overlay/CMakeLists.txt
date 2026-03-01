@@ -9,4 +9,4 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/ExampleModule.cmake")
-sima_neat_apps_module("offline-instance-segmentation-overlay")
+sima_neat_apps_module("offline-instance-segmentation-overlay" UNIT_TEST E2E_TEST)

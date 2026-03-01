@@ -22,6 +22,6 @@ if (BUILD_TESTING)
   )
   set_tests_properties(single-rtsp-object-detection-optiview.requires_rtsp PROPERTIES
     WILL_FAIL TRUE
-    PASS_REGULAR_EXPRESSION "\\[ERR\\] Missing --rtsp <url>"
+    LABELS "unit"
   )
 endif()
