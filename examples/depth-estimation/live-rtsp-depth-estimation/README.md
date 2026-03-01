@@ -25,6 +25,8 @@ correct defaults and tensor unpacking:
 - `midas_v21_small_256`: `BGR`, default size `256x256`
 - `depth_anything_v2_vits`: `RGB`, default size `518x518`
 
+`--model` is required for both C++ and Python; no automatic model download/lookup is performed.
+
 ## Prerequisites
 - Installed NEAT SDK
 - RTSP camera source (for RTSP mode)

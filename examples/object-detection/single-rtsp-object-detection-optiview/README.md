@@ -63,14 +63,14 @@ This separation keeps the RTSP session from being tightly coupled to the inferen
 - The sample always publishes to OptiView.
 - Video is sent to the OptiView video UDP port 9000.
 - Detection metadata is sent to the OptiView JSON UDP port 9100.
-- If `--mpk` is not supplied, the sample tries to resolve the `yolo_v8s` model automatically.
+- `--mpk` is required and must point to a valid YOLO MPK tarball.
 - If `--frames` is omitted, the sample runs continuously.
 
 ## Command-Line Options
 - `--rtsp <url>`
   Required. RTSP source URL.
 - `--mpk <path>`
-  Optional. Path to the YOLO model pack. If omitted, the sample tries to locate `yolo_v8s`.
+  Required. Path to the YOLO model pack.
 - `--frames <n>`
   Optional. Number of frames to process before exiting.
 - `--debug`
@@ -129,19 +129,24 @@ In practice:
 ## Run
 ### Binary Built From The Apps Repo
 ```bash
-./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview --rtsp <rtsp_url>
+./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview \
+  --rtsp <rtsp_url> \
+  --mpk <path/to/model_mpk.tar.gz>
 ```
 
 ### Binary Built Directly In The Example Folder
 ```bash
-./build/single-rtsp-object-detection-optiview --rtsp <rtsp_url>
+./build/single-rtsp-object-detection-optiview \
+  --rtsp <rtsp_url> \
+  --mpk <path/to/model_mpk.tar.gz>
 ```
 
 Example with explicit OptiView host:
 
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview \
-  --rtsp rtsp://192.168.1.10:8554/src1
+  --rtsp rtsp://192.168.1.10:8554/src1 \
+  --mpk models/yolo_v8s_mpk.tar.gz
 ```
 
 ## Debugging Notes

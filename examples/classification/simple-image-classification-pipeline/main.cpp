@@ -40,11 +40,8 @@ int main(int argc, char** argv) {
     min_prob = std::stof(tmp);
 
   if (model_path.empty()) {
-    model_path = sima_examples::resolve_resnet50_tar();
-  }
-  if (model_path.empty()) {
     std::cerr << "Missing ResNet50 MPK tarball.\n";
-    std::cerr << "Set SIMA_RESNET50_TAR or run 'sima-cli modelzoo get resnet_50'.\n";
+    std::cerr << "Pass it explicitly with --model <path/to/resnet_50_mpk.tar.gz>.\n";
     return 2;
   }
 

@@ -77,26 +77,12 @@ def print_topk(scores: np.ndarray, k: int = 5) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="ResNet50 classification example")
-    parser.add_argument("--model", type=str, default="", help="Path to ResNet50 MPK tarball")
+    parser.add_argument("--model", type=str, required=True, help="Path to ResNet50 MPK tarball")
     parser.add_argument("--image", type=str, default="", help="Path to input image")
     parser.add_argument("--min-prob", type=float, default=0.2, help="Minimum probability threshold")
     args = parser.parse_args()
 
-    # Resolve model path
     model_path = args.model
-    if not model_path:
-        candidates = [
-            Path("models/resnet_50_mpk.tar.gz"),
-            Path.home() / ".sima" / "modelzoo" / "resnet_50" / "resnet_50_mpk.tar.gz",
-        ]
-        for p in candidates:
-            if p.exists():
-                model_path = str(p)
-                break
-    if not model_path:
-        print("Missing ResNet50 MPK tarball.", file=sys.stderr)
-        print("Set --model or run 'sima-cli modelzoo get resnet_50'.", file=sys.stderr)
-        return 2
 
     # Resolve image path
     image_path = args.image

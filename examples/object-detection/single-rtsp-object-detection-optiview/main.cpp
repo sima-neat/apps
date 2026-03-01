@@ -372,9 +372,7 @@ int main(int argc, char** argv) {
   try {
     Config cfg = parse_config(argc, argv);
     sima_examples::require(!cfg.url.empty(), "Missing --rtsp <url>");
-    if (cfg.mpk.empty())
-      cfg.mpk = sima_examples::resolve_yolov8s_tar(fs::current_path());
-    sima_examples::require(!cfg.mpk.empty(), "Failed to locate yolo_v8s MPK tarball");
+    sima_examples::require(!cfg.mpk.empty(), "Missing --mpk <path/to/model_mpk.tar.gz>");
 
     enable_optiview_diagnostics(true);
 

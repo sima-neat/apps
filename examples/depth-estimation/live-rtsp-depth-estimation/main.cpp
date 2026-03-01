@@ -106,56 +106,10 @@ struct DepthModelProfile {
 
 DepthModelProfile detect_model_profile(const std::string& model_path) {
   const std::string lower = to_lower(fs::path(model_path).filename().string());
-  if (lower.find("offline-depth-map-generation") != std::string::npos) {
+  if (lower.find("depth_anything_v2") != std::string::npos) {
     return {"depth_anything_v2_vits", "RGB", 518, true};
   }
   return {"midas_v21_small_256", "BGR", 256, false};
-}
-
-std::string resolve_midas_tar() {
-  const char* env = std::getenv("SIMA_MIDAS_TAR");
-  if (env && *env && fs::exists(env))
-    return std::string(env);
-
-  const fs::path local = fs::path("tmp") / "midas_v21_small_256_mpk.tar.gz";
-  if (fs::exists(local))
-    return local.string();
-
-  auto move_to_tmp = [&](const fs::path& src) -> bool {
-    std::error_code ec;
-    fs::create_directories(local.parent_path(), ec);
-    ec.clear();
-    fs::rename(src, local, ec);
-    if (!ec)
-      return true;
-
-    ec.clear();
-    fs::copy_file(src, local, fs::copy_options::overwrite_existing, ec);
-    if (ec)
-      return false;
-    fs::remove(src, ec);
-    return true;
-  };
-
-  const int rc = std::system("sima-cli modelzoo get midas_v21_small_256");
-  if (rc != 0)
-    return "";
-
-  if (fs::exists(local))
-    return local.string();
-
-  const std::vector<fs::path> candidates = {
-      "midas_v21_small_256_mpk.tar.gz",
-      "midas-v21_small_256_mpk.tar.gz",
-      "midas_v21_small_256.tar.gz",
-  };
-  for (const auto& candidate : candidates) {
-    if (fs::exists(candidate) && move_to_tmp(candidate)) {
-      return local.string();
-    }
-  }
-
-  return "";
 }
 
 std::string resolve_sample_video() {
@@ -587,12 +541,8 @@ int main(int argc, char** argv) {
   std::string tar_gz;
   sima_examples::get_arg(argc, argv, "--model", tar_gz);
   if (tar_gz.empty()) {
-    tar_gz = resolve_midas_tar();
-    if (tar_gz.empty()) {
-      std::cerr << "Missing midas_v21_small_256 MPK tarball.\n";
-      std::cerr << "Set SIMA_MIDAS_TAR or run 'sima-cli modelzoo get midas_v21_small_256'.\n";
-      return 3;
-    }
+    std::cerr << "Missing --model <path/to/model_mpk.tar.gz>.\n";
+    return 3;
   }
 
   std::string out_path = "midas_depth.mp4";
