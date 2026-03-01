@@ -10,6 +10,7 @@ export async function loadCatalog() {
 
 export function extractFilterOptions(examples) {
   const difficulties = new Set();
+  const languages = new Set();
   const statuses = new Set();
   const models = new Set();
   const tags = new Set();
@@ -18,6 +19,9 @@ export function extractFilterOptions(examples) {
   for (const example of examples) {
     if (example.difficulty) {
       difficulties.add(example.difficulty);
+    }
+    if (example.languages) {
+      languages.add(example.languages);
     }
     if (example.status) {
       statuses.add(example.status);
@@ -36,6 +40,7 @@ export function extractFilterOptions(examples) {
   return {
     categories: [...categories].sort(),
     difficulties: [...difficulties].sort(),
+    languages: [...languages].sort(),
     statuses: [...statuses].sort(),
     models: [...models].sort(),
     tags: [...tags].sort(),
@@ -47,6 +52,7 @@ export function matchesFilters(example, filters, query) {
     example.name,
     example.summary,
     example.category,
+    example.languages,
     example.model,
     example.binary_name,
     ...(example.tags || []),
@@ -62,6 +68,9 @@ export function matchesFilters(example, filters, query) {
     return false;
   }
   if (filters.difficulty && example.difficulty !== filters.difficulty) {
+    return false;
+  }
+  if (filters.languages && example.languages !== filters.languages) {
     return false;
   }
   if (filters.status && example.status !== filters.status) {

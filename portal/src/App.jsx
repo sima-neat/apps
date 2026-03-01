@@ -80,6 +80,7 @@ function CatalogPage({ catalog }) {
   const [filters, setFilters] = useState({
     category: "",
     difficulty: "",
+    languages: "",
     status: "",
     model: "",
     tag: "",
@@ -92,7 +93,10 @@ function CatalogPage({ catalog }) {
     <div className="portal-shell">
       <header className="hero">
         <div className="hero-copy">
-          <p className="eyebrow">SiMa NEAT Apps Portal</p>
+          <div className="brand-row">
+            <img className="brand-logo" src="./sima-logo.png" alt="SiMa.ai" />
+            <p className="eyebrow">SiMa NEAT Apps Portal</p>
+          </div>
           <h1>Discover SiMa NEAT reference examples that expedite the path from proof of concept to product.</h1>
           <p className="hero-text">
             Browse source-first applications, search across tags and models, and drill into structured
@@ -139,6 +143,12 @@ function CatalogPage({ catalog }) {
             onChange={(value) => setFilters((current) => ({ ...current, difficulty: value }))}
           />
           <FilterGroup
+            label="Languages"
+            value={filters.languages}
+            options={options.languages}
+            onChange={(value) => setFilters((current) => ({ ...current, languages: value }))}
+          />
+          <FilterGroup
             label="Status"
             value={filters.status}
             options={options.statuses}
@@ -159,7 +169,7 @@ function CatalogPage({ catalog }) {
           <button
             className="clear-button"
             type="button"
-            onClick={() => setFilters({ category: "", difficulty: "", status: "", model: "", tag: "" })}
+            onClick={() => setFilters({ category: "", difficulty: "", languages: "", status: "", model: "", tag: "" })}
           >
             Clear Filters
           </button>
@@ -198,13 +208,12 @@ function DetailPage({ catalog }) {
   const example = findExample(catalog, decodedId);
   const githubUrl = githubUrlForExample(example);
   const sections = (example?.sections || []).filter((section) => section.slug !== "metadata");
-  const displayName = formatDisplayLabel(example?.name || example?.binary_name || decodedId);
-  const binaryLabel = formatDisplayLabel(example?.binary_name || "");
-  const modelLabel = formatDisplayLabel(example?.model || "");
+  const displayName = example?.name || example?.binary_name || decodedId;
+  const binaryLabel = example?.binary_name || "";
+  const modelLabel = example?.model || "";
   const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
   const pathLabel = decodedId
     .split("/")
-    .map((segment, index, items) => (index === items.length - 1 ? displayName : segment))
     .join(" / ");
   const docPanelRef = useRef(null);
   const [activeSection, setActiveSection] = useState(sections[0]?.slug || "");
@@ -291,24 +300,27 @@ function DetailPage({ catalog }) {
           <div className="detail-meta">
             <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
             <Chip label={example.status || "experimental"} tone="status" />
+            {example.languages ? <Chip label={example.languages} tone="languages" /> : null}
             {example.model ? <Chip label={modelLabel} tone="model" /> : null}
             <Chip label={binaryLabel} tone="binary" />
+            {githubUrl ? (
+              <a
+                className="chip chip-github"
+                href={githubUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="View source on GitHub"
+                title="View source on GitHub"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M12 2C6.48 2 2 6.59 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-1.03-.01-1.87-2.78.62-3.37-1.21-3.37-1.21-.45-1.2-1.11-1.52-1.11-1.52-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.89 1.58 2.34 1.12 2.91.86.09-.67.35-1.12.63-1.38-2.22-.26-4.56-1.15-4.56-5.14 0-1.14.4-2.07 1.05-2.8-.11-.27-.46-1.33.1-2.77 0 0 .86-.28 2.82 1.07A9.54 9.54 0 0 1 12 6.92c.85 0 1.71.12 2.51.36 1.96-1.35 2.82-1.07 2.82-1.07.56 1.44.21 2.5.1 2.77.65.73 1.05 1.66 1.05 2.8 0 4-2.34 4.87-4.57 5.13.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.8 0 .27.18.59.69.49A10.27 10.27 0 0 0 22 12.25C22 6.59 17.52 2 12 2Z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </a>
+            ) : null}
           </div>
-        </div>
-        <div className="detail-hero-card">
-          <h2>Metadata</h2>
-          <dl>
-            <MetaItem label="Category" value={example.category} />
-            <MetaItem label="Difficulty" value={example.difficulty || "Unspecified"} />
-            <MetaItem label="Status" value={example.status || "experimental"} />
-            <MetaItem label="Model" value={modelLabel || "Not specified"} />
-            <MetaItem label="Binary" value={binaryLabel} />
-          </dl>
-          {githubUrl ? (
-            <a className="source-link" href={githubUrl} target="_blank" rel="noreferrer">
-              View Source on GitHub
-            </a>
-          ) : null}
         </div>
       </section>
 
@@ -399,15 +411,6 @@ function ThemeToggle({ theme, onToggle }) {
 
 function Chip({ label, tone }) {
   return <span className={`chip chip-${tone}`}>{label}</span>;
-}
-
-function MetaItem({ label, value }) {
-  return (
-    <>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </>
-  );
 }
 
 function slugTone(category) {

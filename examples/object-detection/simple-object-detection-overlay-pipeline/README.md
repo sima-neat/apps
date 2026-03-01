@@ -6,6 +6,7 @@
 | Category | object-detection |
 | Difficulty | Beginner |
 | Tags | object-detection, yolov8, folder-inference |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | simple-object-detection-overlay-pipeline |
 | Model | yolo_v8n |
