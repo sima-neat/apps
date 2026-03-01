@@ -13,7 +13,7 @@ import pyneat
 
 
 INFER_SIZE = 640
-MIN_SCORE = 0.52
+MIN_SCORE = 0.55
 NMS_IOU = 0.50
 MAX_DET = 100
 
@@ -66,7 +66,7 @@ def extract_bbox_payload(sample: pyneat.Sample) -> bytes | None:
     return None
 
 
-def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
+def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, min_score: float) -> list[dict]:
     if len(payload) < 4:
         return []
     count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24)
@@ -79,7 +79,7 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
         y1 = max(0.0, min(float(img_h), float(y)))
         x2 = max(0.0, min(float(img_w), float(x + w)))
         y2 = max(0.0, min(float(img_h), float(y + h)))
-        if x2 <= x1 or y2 <= y1:
+        if x2 <= x1 or y2 <= y1 or float(score) < min_score:
             continue
         out.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(score), class_id=int(cls_id)))
     return out
@@ -116,7 +116,7 @@ def iou_xyxy(a, b) -> float:
     return inter / den if den > 0 else 0.0
 
 
-def decode_yolov8_boxes_from_sample(sample: pyneat.Sample, infer_size: int) -> list[dict]:
+def decode_yolov8_boxes_from_sample(sample: pyneat.Sample, infer_size: int, min_score: float) -> list[dict]:
     tensors = list(iter_tensors(sample))
     if len(tensors) < 6:
         raise ValueError(f"expected at least 6 tensors, got {len(tensors)}")
@@ -135,7 +135,7 @@ def decode_yolov8_boxes_from_sample(sample: pyneat.Sample, infer_size: int) -> l
                 cls_sig = 1.0 / (1.0 + np.exp(-cls_vec))
                 class_id = int(np.argmax(cls_sig))
                 score = float(cls_sig[class_id])
-                if score < MIN_SCORE:
+                if score < min_score:
                     continue
                 r = reg[y, x, :]
                 l = dfl_distance_16(r[0:16]) * stride
@@ -207,6 +207,12 @@ def main() -> int:
     parser.add_argument("labels_file", type=str, help="Path to labels txt file (one label per line)")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=MIN_SCORE,
+        help="Detection confidence threshold (default: 0.55)",
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -270,9 +276,9 @@ def main() -> int:
 
             payload = extract_bbox_payload(out_opt)
             if payload:
-                boxes = parse_bbox_payload(payload, INFER_SIZE, INFER_SIZE)
+                boxes = parse_bbox_payload(payload, INFER_SIZE, INFER_SIZE, args.min_score)
             else:
-                boxes = decode_yolov8_boxes_from_sample(out_opt, INFER_SIZE)
+                boxes = decode_yolov8_boxes_from_sample(out_opt, INFER_SIZE, args.min_score)
 
             boxes = scale_boxes(boxes, INFER_SIZE, orig_w, orig_h)
             draw_boxes(bgr, boxes, labels)

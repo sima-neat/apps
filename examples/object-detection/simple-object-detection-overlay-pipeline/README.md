@@ -42,11 +42,11 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/object-detection/simple-object-detection-overlay-pipeline/main.py <model.tar.gz> <labels.txt> <input_dir> <output_dir>`
+  `python examples/object-detection/simple-object-detection-overlay-pipeline/main.py <model.tar.gz> <labels.txt> <input_dir> <output_dir> [--min-score 0.55]`
 - Required arguments:
   `<model.tar.gz> <labels.txt> <input_dir> <output_dir>`
 - Optional arguments:
-  None.
+  `--min-score` (default: `0.55`)
 
 ## Build
 ### Build From The Apps Repo
