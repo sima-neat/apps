@@ -2,7 +2,6 @@
 
 import os
 import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -57,7 +56,7 @@ def rtsp_urls() -> list[str]:
 
 @pytest.fixture
 def tmp_output_dir(request) -> Path:
-    """Provide a temporary output directory rooted at env output dir or /tmp."""
+    """Provide a stable per-test output directory, cleared before each run."""
     base_raw = os.environ.get("SIMANEAT_APPS_TEST_OUTPUT_DIR", "").strip() or "/tmp"
     keep_output = os.environ.get("SIMANEAT_APPS_TEST_KEEP_OUTPUT", "").strip() == "1"
     out: Path
@@ -65,12 +64,14 @@ def tmp_output_dir(request) -> Path:
     # tests/python/test_e2e.py -> example directory is parents[2]
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
-    prefix = f"{example_name}_e2e_"
-
     base = Path(base_raw) / "python"
     base.mkdir(parents=True, exist_ok=True)
-    out_str = tempfile.mkdtemp(prefix=prefix, dir=str(base))
-    out = Path(out_str)
+    test_name = request.node.name.replace("/", "_")
+    out = base / example_name / test_name
+
+    # Keep output paths stable and readable by replacing previous run artifacts.
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
 
     try:
         yield out
