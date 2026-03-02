@@ -13,7 +13,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pyneat as pn
+import pyneat
 import struct
 
 
@@ -63,23 +63,23 @@ def draw_boxes(frame: np.ndarray, boxes: list[dict], labels: dict[int, str]) -> 
 
 
 
-def tensor_to_numpy(t: pn.Tensor) -> np.ndarray:
+def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
 
-def iter_tensors(sample: pn.Sample):
-    if sample.kind == pn.SampleKind.Tensor and sample.tensor is not None:
+def iter_tensors(sample: pyneat.Sample):
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
     for field in sample.fields:
         yield from iter_tensors(field)
 
 
-def extract_bbox_payload(sample: pn.Sample) -> bytes | None:
+def extract_bbox_payload(sample: pyneat.Sample) -> bytes | None:
     stack = [sample]
     while stack:
         s = stack.pop()
         stack.extend(reversed(list(s.fields)))
-        if s.kind != pn.SampleKind.Tensor or s.tensor is None:
+        if s.kind != pyneat.SampleKind.Tensor or s.tensor is None:
             continue
         fmt = (s.payload_tag or s.format or "").upper()
         if fmt and fmt != "BBOX":
@@ -112,7 +112,7 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
     return out
 
 
-def tensor_to_hwc_f32(t: pn.Tensor) -> np.ndarray:
+def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
     arr = tensor_to_numpy(t).astype(np.float32)
     if arr.ndim == 4 and arr.shape[0] == 1:
         arr = arr[0]
@@ -136,7 +136,7 @@ def iou_xyxy(a, b) -> float:
 
 
 def decode_yolov8_boxes_from_sample(
-    sample: pn.Sample,
+    sample: pyneat.Sample,
     infer_size: int,
     img_w: int,
     img_h: int,
@@ -253,10 +253,10 @@ def build_rtsp_run(
     fps: int,
     sample_every: int,
     run_queue_depth: int,
-    overflow_policy: pn.OverflowPolicy,
-    output_memory: pn.OutputMemory,
+    overflow_policy: pyneat.OverflowPolicy,
+    output_memory: pyneat.OutputMemory,
 ):
-    ro = pn.RtspDecodedInputOptions()
+    ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
     ro.latency_ms = latency_ms
     ro.tcp = tcp
@@ -271,12 +271,12 @@ def build_rtsp_run(
     ro.output_caps.width = out_w
     ro.output_caps.height = out_h
     ro.output_caps.fps = fps
-    ro.output_caps.memory = pn.CapsMemory.SystemMemory
+    ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
-    sess = pn.Session()
-    sess.add(pn.groups.rtsp_decoded_input(ro))
-    sess.add(pn.nodes.output(pn.OutputOptions.every_frame(max(1, sample_every))))
-    run_opt = pn.RunOptions()
+    sess = pyneat.Session()
+    sess.add(pyneat.groups.rtsp_decoded_input(ro))
+    sess.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(max(1, sample_every))))
+    run_opt = pyneat.RunOptions()
     run_opt.queue_depth = max(1, run_queue_depth)
     run_opt.overflow_policy = overflow_policy
     run_opt.output_memory = output_memory
@@ -284,25 +284,25 @@ def build_rtsp_run(
     return sess, run
 
 
-def parse_overflow_policy(value: str) -> pn.OverflowPolicy:
+def parse_overflow_policy(value: str) -> pyneat.OverflowPolicy:
     v = value.strip().lower()
     if v == "block":
-        return pn.OverflowPolicy.Block
+        return pyneat.OverflowPolicy.Block
     if v == "keep-latest":
-        return pn.OverflowPolicy.KeepLatest
+        return pyneat.OverflowPolicy.KeepLatest
     if v == "drop-incoming":
-        return pn.OverflowPolicy.DropIncoming
+        return pyneat.OverflowPolicy.DropIncoming
     raise ValueError(f"unsupported overflow policy: {value}")
 
 
-def parse_output_memory(value: str) -> pn.OutputMemory:
+def parse_output_memory(value: str) -> pyneat.OutputMemory:
     v = value.strip().lower()
     if v == "auto":
-        return pn.OutputMemory.Auto
+        return pyneat.OutputMemory.Auto
     if v == "zero-copy":
-        return pn.OutputMemory.ZeroCopy
+        return pyneat.OutputMemory.ZeroCopy
     if v == "owned":
-        return pn.OutputMemory.Owned
+        return pyneat.OutputMemory.Owned
     raise ValueError(f"unsupported output memory: {value}")
 
 
@@ -310,8 +310,8 @@ def parse_output_memory(value: str) -> pn.OutputMemory:
 class StreamState:
     idx: int
     url: str
-    session: pn.Session
-    run: pn.Run
+    session: pyneat.Session
+    run: pyneat.Run
     processed: int = 0
     pulled: int = 0
     producer_done: bool = False
@@ -570,14 +570,14 @@ def main() -> int:
     try:
         class_labels = load_labels(args.labels_file or None)
 
-        def make_model() -> pn.Model:
-            mopt = pn.ModelOptions()
+        def make_model() -> pyneat.Model:
+            mopt = pyneat.ModelOptions()
             mopt.media_type = "video/x-raw"
             mopt.format = "BGR"
             mopt.input_max_width = args.width
             mopt.input_max_height = args.height
             mopt.input_max_depth = 3
-            return pn.Model(model_path, mopt)
+            return pyneat.Model(model_path, mopt)
 
         streams: list[StreamState] = []
         out_dirs: list[Path] = []
@@ -600,7 +600,7 @@ def main() -> int:
             out_dirs.append(stream_dir)
             print(f"[stream {i}] started: {url} -> {stream_dir}/")
 
-        models: list[pn.Model] = [make_model() for _ in streams]
+        models: list[pyneat.Model] = [make_model() for _ in streams]
         frame_queues: list[queue.Queue[FramePacket]] = [
             queue.Queue(maxsize=max(1, args.frame_queue)) for _ in streams
         ]
@@ -692,7 +692,7 @@ def main() -> int:
                 with stats_mu:
                     st.producer_done = True
 
-        def infer_worker(stream_idx: int, model_local: pn.Model) -> None:
+        def infer_worker(stream_idx: int, model_local: pyneat.Model) -> None:
             frame_q = frame_queues[stream_idx]
             result_q = result_queues[stream_idx]
             runner = None
@@ -716,7 +716,7 @@ def main() -> int:
                 except queue.Empty:
                     return None
 
-            def _process_result(sample: pn.Sample, pkt: FramePacket) -> None:
+            def _process_result(sample: pyneat.Sample, pkt: FramePacket) -> None:
                 """Post-process a model output and enqueue the result."""
                 t_dec0 = time.perf_counter()
                 payload = extract_bbox_payload(sample)
@@ -763,10 +763,10 @@ def main() -> int:
                                 break
                         try:
                             if runner is None:
-                                sopt = pn.ModelSessionOptions()
-                                ropt = pn.RunOptions()
+                                sopt = pyneat.ModelSessionOptions()
+                                ropt = pyneat.RunOptions()
                                 ropt.queue_depth = model_qdepth
-                                ropt.overflow_policy = pn.OverflowPolicy.Block
+                                ropt.overflow_policy = pyneat.OverflowPolicy.Block
                                 with model_build_mu:
                                     runner = model_local.build(pkt.frame, sopt, ropt)
                             t_push0 = time.perf_counter()

@@ -1,4 +1,4 @@
-# YOLOv8 Multi-RTSP Demo
+# Multistream RTSP Detection Pipeline
 
 ## Metadata
 | Field | Value |
@@ -12,62 +12,76 @@
 | Model | yolo_v8m |
 
 ## Concept
-Multi-camera RTSP object detection using YOLOv8 with the Session API. Demonstrates concurrent stream handling with real-time bounding box visualization via OpenCV.
-
-Both C++ and Python versions process frames from each stream, run YOLOv8 inference, and can draw/save annotated JPEG outputs in per-stream subfolders under `--output`.
-
-`--frames` controls how many frames are processed per stream.  
-`--save-every` controls output cadence (default `10`), so saved images per stream are approximately `frames / save-every`.
+Multi-camera RTSP object detection pipeline using YOLOv8. The sample demonstrates concurrent stream ingestion, batched runtime behavior, and per-stream annotated output writing.
 
 ## Supported Models
 Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`
 
-Download any variant into `assets/models/`: `sima-cli modelzoo get yolo_v8n`
+Download any variant into `assets/models/`:
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8m && cd ../..`
 
 ## Prerequisites
-- Installed NEAT SDK
-- One or more RTSP camera sources (or use the file-based RTSP server below)
+- Installed NEAT SDK.
+- One or more RTSP camera sources.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8m && cd ../..`
 
-## Setting Up RTSP Streams (using a video file)
+## Important Behavior
+- `--model`, `--output`, and at least one `--rtsp` are required.
+- Use repeated `--rtsp` flags for multistream input.
+- Output images are written per stream under the output directory.
 
-If you don't have live RTSP cameras, use the included multi-file RTSP server to simulate multiple camera streams from a single video file:
+## Command-Line Options
+### C++
+- Invocation:
+  `./build/examples/object-detection/multistream-rtsp-detection-pipeline/multistream-rtsp-detection-pipeline --model <path> --output <dir> --rtsp <url0> [--rtsp <url1> ...] [options]`
+- Required arguments:
+  `--model`, `--output`, one or more `--rtsp`
+- Optional arguments:
+  `--labels-file`, `--frames`, `--fps`, `--tcp`, `--sample-every`, `--save-every`, `--run-queue-depth`, `--overflow-policy`, `--output-memory`, `--min-score`, `--nms-iou`, `--max-det`, `--model-timeout-ms`, `--frame-queue`, `--result-queue`, `--pull-timeout-ms`, `--max-idle-ms`, `--reconnect-miss`, `--debug`, `--profile`, `--profile-every`
 
+### Python
+- Invocation:
+  `python examples/object-detection/multistream-rtsp-detection-pipeline/main.py --model <path> --output <dir> --rtsp <url0> [--rtsp <url1> ...] [options]`
+- Required arguments:
+  `--model`, `--output`, one or more `--rtsp`
+- Optional arguments:
+  `--labels-file`, `--frames`, `--fps`, `--tcp`, `--latency-ms`, `--sample-every`, `--save-every`, `--run-queue-depth`, `--overflow-policy`, `--output-memory`, `--infer-size`, `--min-score`, `--nms-iou`, `--max-det`, `--model-timeout-ms`, `--model-queue-depth`, `--frame-queue`, `--result-queue`, `--pull-timeout-ms`, `--max-idle-ms`, `--reconnect-miss`, `--debug`, `--profile`, `--profile-every`
+
+## Build
+### Build From The Apps Repo
 ```bash
-python utils/rtsp/rtsp_multi_file_server.py /path/to/video.mp4 --streams 4 --width 1280 --height 720 --fps 10
+cd <apps-repo-root>
+./build.sh
 ```
 
-This will serve the video on `rtsp://127.0.0.1:8554/stream0` through `rtsp://127.0.0.1:8554/stream3`.
+Binary output:
+```bash
+./build/examples/object-detection/multistream-rtsp-detection-pipeline/multistream-rtsp-detection-pipeline
+```
+
+### Build This Example Directly With CMake
+```bash
+cd <apps-repo-root>/examples/object-detection/multistream-rtsp-detection-pipeline
+cmake -S . -B build
+cmake --build build -j
+```
+
+Binary output:
+```bash
+./build/multistream-rtsp-detection-pipeline
+```
 
 ## Run
 ### C++
 ```bash
 ./build/examples/object-detection/multistream-rtsp-detection-pipeline/multistream-rtsp-detection-pipeline \
   --model assets/models/yolo_v8m_mpk.tar.gz \
-  --output /path/to/output \
+  --output <output_dir> \
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
-  --frames 100 \
-  --tcp \
-  --fps 10 \
-  --sample-every 1 \
-  --save-every 10 \
-  --run-queue-depth 4 \
-  --overflow-policy keep-latest \
-  --output-memory owned \
-  --min-score 0.60 \
-  --nms-iou 0.50 \
-  --max-det 100 \
-  --model-timeout-ms 3000 \
-  --frame-queue 128 \
-  --result-queue 128 \
-  --pull-timeout-ms 150 \
-  --max-idle-ms 15000 \
-  --reconnect-miss 3 \
+  --frames 100 --tcp --fps 10 --save-every 10 \
   --rtsp rtsp://127.0.0.1:8554/stream0 \
-  --rtsp rtsp://127.0.0.1:8554/stream1 \
-  --rtsp rtsp://127.0.0.1:8554/stream2 \
-  --rtsp rtsp://127.0.0.1:8554/stream3
+  --rtsp rtsp://127.0.0.1:8554/stream1
 ```
 
 ### Python
@@ -76,39 +90,19 @@ source ~/pyneat/.venv/bin/activate
 pip install -r examples/object-detection/multistream-rtsp-detection-pipeline/requirements.txt
 python examples/object-detection/multistream-rtsp-detection-pipeline/main.py \
   --model assets/models/yolo_v8m_mpk.tar.gz \
-  --output /path/to/output \
+  --output <output_dir> \
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
-  --frames 100 \
-  --tcp \
-  --fps 10 \
-  --sample-every 1 \
-  --save-every 10 \
-  --run-queue-depth 4 \
-  --overflow-policy keep-latest \
-  --output-memory owned \
-  --infer-size 640 \
-  --min-score 0.60 \
-  --nms-iou 0.50 \
-  --max-det 100 \
-  --model-timeout-ms 3000 \
-  --frame-queue 128 \
-  --result-queue 128 \
-  --pull-timeout-ms 150 \
-  --max-idle-ms 15000 \
-  --reconnect-miss 3 \
+  --frames 100 --tcp --fps 10 --save-every 10 \
   --rtsp rtsp://127.0.0.1:8554/stream0 \
-  --rtsp rtsp://127.0.0.1:8554/stream1 \
-  --rtsp rtsp://127.0.0.1:8554/stream2 \
-  --rtsp rtsp://127.0.0.1:8554/stream3
+  --rtsp rtsp://127.0.0.1:8554/stream1
 ```
 
-Optional flags:
-```bash
---debug
---profile --profile-every 50
---save-every 10
-```
+## Debugging Notes
+- Start with one stream first, then scale to multiple URLs.
+- If streams stall, check pull timeout, queue sizes, and RTSP source health.
+- If no detections appear, verify model path and labels file.
 
-## Source Files
-- C++: `main.cpp`
-- Python: `main.py`
+## Reference
+- C++ source: `main.cpp`
+- Python source: `main.py`
+- RTSP helper: `utils/rtsp/rtsp_multi_file_server.py`

@@ -114,6 +114,7 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
 
   add_library(sima_neat_apps_support_testing STATIC
     "${apps_root}/support/testing/optiview_json_listener.cpp"
+    "${apps_root}/support/testing/test_process.cpp"
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
 
@@ -129,7 +130,8 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
 endfunction()
 
 function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_target)
-  set(_e2e_source "${module_dir}/tests/e2e_test.cpp")
+  get_filename_component(_apps_root "${module_dir}/../../.." ABSOLUTE)
+  set(_e2e_source "${module_dir}/tests/cpp/e2e_test.cpp")
   if (NOT EXISTS "${_e2e_source}")
     message(FATAL_ERROR
       "Example ${example_name} requested standard e2e testing but ${_e2e_source} does not exist.")
@@ -152,32 +154,104 @@ function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_t
   )
   set_tests_properties("${example_name}.optiview_json_e2e" PROPERTIES
     SKIP_RETURN_CODE 77
+    LABELS "e2e"
+    WORKING_DIRECTORY "${_apps_root}"
+  )
+endfunction()
+
+# ---------------------------------------------------------------------------
+# Generic unit test: compile tests/unit_test.cpp, register with label "unit".
+# ---------------------------------------------------------------------------
+function(_sima_neat_apps_add_unit_test example_name module_dir example_target)
+  get_filename_component(_apps_root "${module_dir}/../../.." ABSOLUTE)
+  set(_unit_source "${module_dir}/tests/cpp/unit_test.cpp")
+  if (NOT EXISTS "${_unit_source}")
+    message(FATAL_ERROR
+      "Example ${example_name} requested UNIT_TEST but ${_unit_source} does not exist.")
+  endif()
+
+  set(_unit_target "${example_name}_unit_test")
+  add_executable("${_unit_target}" "${_unit_source}")
+  target_link_libraries("${_unit_target}"
+    PRIVATE
+      SimaNeatApps::support_testing
+  )
+  target_include_directories("${_unit_target}"
+    PRIVATE
+      "${module_dir}/../../.."
+  )
+
+  add_test(
+    NAME "${example_name}.unit"
+    COMMAND $<TARGET_FILE:${_unit_target}> $<TARGET_FILE:${example_target}>
+  )
+  set_tests_properties("${example_name}.unit" PROPERTIES
+    SKIP_RETURN_CODE 77
+    LABELS "unit"
+    WORKING_DIRECTORY "${_apps_root}"
+  )
+endfunction()
+
+# ---------------------------------------------------------------------------
+# Generic e2e test: compile tests/e2e_test.cpp, register with label "e2e".
+# ---------------------------------------------------------------------------
+function(_sima_neat_apps_add_generic_e2e_test example_name module_dir example_target)
+  get_filename_component(_apps_root "${module_dir}/../../.." ABSOLUTE)
+  set(_e2e_source "${module_dir}/tests/cpp/e2e_test.cpp")
+  if (NOT EXISTS "${_e2e_source}")
+    message(FATAL_ERROR
+      "Example ${example_name} requested E2E_TEST but ${_e2e_source} does not exist.")
+  endif()
+
+  set(_e2e_target "${example_name}_e2e_test")
+  add_executable("${_e2e_target}" "${_e2e_source}")
+  target_link_libraries("${_e2e_target}"
+    PRIVATE
+      SimaNeatApps::support_testing
+  )
+  target_include_directories("${_e2e_target}"
+    PRIVATE
+      "${module_dir}/../../.."
+  )
+
+  add_test(
+    NAME "${example_name}.e2e"
+    COMMAND $<TARGET_FILE:${_e2e_target}> $<TARGET_FILE:${example_target}>
+  )
+  set_tests_properties("${example_name}.e2e" PROPERTIES
+    SKIP_RETURN_CODE 77
+    LABELS "e2e"
+    WORKING_DIRECTORY "${_apps_root}"
   )
 endfunction()
 
 function(sima_neat_apps_module example_name)
-  set(options OPTIVIEW OPTIVIEW_E2E_TEST)
+  set(options OPTIVIEW OPTIVIEW_E2E_TEST UNIT_TEST E2E_TEST)
   set(one_value_args OUTPUT_TARGET_VAR)
   set(multi_value_args SOURCES)
   cmake_parse_arguments(APP "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
   if (COMMAND sima_neat_apps_add_example)
     if (APP_OPTIVIEW)
-      if (APP_OUTPUT_TARGET_VAR)
-        sima_neat_apps_add_example("${example_name}" OPTIVIEW OUTPUT_TARGET_VAR _module_target_name)
-      else()
-        sima_neat_apps_add_example("${example_name}" OPTIVIEW)
-      endif()
+      sima_neat_apps_add_example("${example_name}" OPTIVIEW OUTPUT_TARGET_VAR _module_target_name)
     else()
-      if (APP_OUTPUT_TARGET_VAR)
-        sima_neat_apps_add_example("${example_name}" OUTPUT_TARGET_VAR _module_target_name)
-      else()
-        sima_neat_apps_add_example("${example_name}")
-      endif()
+      sima_neat_apps_add_example("${example_name}" OUTPUT_TARGET_VAR _module_target_name)
     endif()
     if (APP_OUTPUT_TARGET_VAR)
       set(${APP_OUTPUT_TARGET_VAR} "${_module_target_name}" PARENT_SCOPE)
     endif()
+
+    get_filename_component(_module_dir "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+    if (BUILD_TESTING AND APP_OPTIVIEW_E2E_TEST)
+      _sima_neat_apps_add_optiview_e2e_test("${example_name}" "${_module_dir}" "${_module_target_name}")
+    endif()
+    if (BUILD_TESTING AND APP_UNIT_TEST)
+      _sima_neat_apps_add_unit_test("${example_name}" "${_module_dir}" "${_module_target_name}")
+    endif()
+    if (BUILD_TESTING AND APP_E2E_TEST)
+      _sima_neat_apps_add_generic_e2e_test("${example_name}" "${_module_dir}" "${_module_target_name}")
+    endif()
+
     return()
   endif()
 
@@ -222,5 +296,13 @@ function(sima_neat_apps_module example_name)
 
   if (BUILD_TESTING AND APP_OPTIVIEW_E2E_TEST)
     _sima_neat_apps_add_optiview_e2e_test("${example_name}" "${_module_dir}" "${example_name}")
+  endif()
+
+  if (BUILD_TESTING AND APP_UNIT_TEST)
+    _sima_neat_apps_add_unit_test("${example_name}" "${_module_dir}" "${example_name}")
+  endif()
+
+  if (BUILD_TESTING AND APP_E2E_TEST)
+    _sima_neat_apps_add_generic_e2e_test("${example_name}" "${_module_dir}" "${example_name}")
   endif()
 endfunction()

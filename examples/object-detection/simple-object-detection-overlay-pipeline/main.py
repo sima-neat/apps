@@ -9,11 +9,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pyneat as pn
+import pyneat
 
 
 INFER_SIZE = 640
-MIN_SCORE = 0.52
+MIN_SCORE = 0.55
 NMS_IOU = 0.50
 MAX_DET = 100
 
@@ -36,23 +36,23 @@ def load_labels(path: Path) -> list[str]:
     return labels
 
 
-def tensor_to_numpy(t: pn.Tensor) -> np.ndarray:
+def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
 
-def iter_tensors(sample: pn.Sample):
-    if sample.kind == pn.SampleKind.Tensor and sample.tensor is not None:
+def iter_tensors(sample: pyneat.Sample):
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
     for field in sample.fields:
         yield from iter_tensors(field)
 
 
-def extract_bbox_payload(sample: pn.Sample) -> bytes | None:
+def extract_bbox_payload(sample: pyneat.Sample) -> bytes | None:
     stack = [sample]
     while stack:
         s = stack.pop()
         stack.extend(reversed(list(s.fields)))
-        if s.kind != pn.SampleKind.Tensor or s.tensor is None:
+        if s.kind != pyneat.SampleKind.Tensor or s.tensor is None:
             continue
         fmt = (s.payload_tag or s.format or "").upper()
         if fmt and fmt != "BBOX":
@@ -66,7 +66,7 @@ def extract_bbox_payload(sample: pn.Sample) -> bytes | None:
     return None
 
 
-def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
+def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, min_score: float) -> list[dict]:
     if len(payload) < 4:
         return []
     count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24)
@@ -79,13 +79,13 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
         y1 = max(0.0, min(float(img_h), float(y)))
         x2 = max(0.0, min(float(img_w), float(x + w)))
         y2 = max(0.0, min(float(img_h), float(y + h)))
-        if x2 <= x1 or y2 <= y1:
+        if x2 <= x1 or y2 <= y1 or float(score) < min_score:
             continue
         out.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(score), class_id=int(cls_id)))
     return out
 
 
-def tensor_to_hwc_f32(t: pn.Tensor) -> np.ndarray:
+def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
     arr = tensor_to_numpy(t).astype(np.float32)
     if arr.ndim == 4 and arr.shape[0] == 1:
         arr = arr[0]
@@ -116,7 +116,7 @@ def iou_xyxy(a, b) -> float:
     return inter / den if den > 0 else 0.0
 
 
-def decode_yolov8_boxes_from_sample(sample: pn.Sample, infer_size: int) -> list[dict]:
+def decode_yolov8_boxes_from_sample(sample: pyneat.Sample, infer_size: int, min_score: float) -> list[dict]:
     tensors = list(iter_tensors(sample))
     if len(tensors) < 6:
         raise ValueError(f"expected at least 6 tensors, got {len(tensors)}")
@@ -135,7 +135,7 @@ def decode_yolov8_boxes_from_sample(sample: pn.Sample, infer_size: int) -> list[
                 cls_sig = 1.0 / (1.0 + np.exp(-cls_vec))
                 class_id = int(np.argmax(cls_sig))
                 score = float(cls_sig[class_id])
-                if score < MIN_SCORE:
+                if score < min_score:
                     continue
                 r = reg[y, x, :]
                 l = dfl_distance_16(r[0:16]) * stride
@@ -207,6 +207,12 @@ def main() -> int:
     parser.add_argument("labels_file", type=str, help="Path to labels txt file (one label per line)")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=MIN_SCORE,
+        help="Detection confidence threshold (default: 0.55)",
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -229,24 +235,24 @@ def main() -> int:
     print(f"Found {len(images)} images")
 
     try:
-        opt = pn.ModelOptions()
+        opt = pyneat.ModelOptions()
         opt.media_type = "video/x-raw"
         opt.format = "BGR"
         opt.input_max_width = INFER_SIZE
         opt.input_max_height = INFER_SIZE
         opt.input_max_depth = 3
-        model = pn.Model(args.model, opt)
+        model = pyneat.Model(args.model, opt)
 
-        sess = pn.Session()
+        sess = pyneat.Session()
         sess.add(model.session())
         print(f"[BUILD] Pipeline:\n{sess.describe_backend()}")
 
         dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
-        t_dummy = pn.Tensor.from_numpy(dummy, copy=True, image_format=pn.PixelFormat.BGR)
-        run_opt = pn.RunOptions()
+        t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.BGR)
+        run_opt = pyneat.RunOptions()
         run_opt.queue_depth = 4
-        run_opt.overflow_policy = pn.OverflowPolicy.Block
-        run = sess.build(t_dummy, pn.RunMode.Async, run_opt)
+        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
+        run = sess.build(t_dummy, pyneat.RunMode.Async, run_opt)
 
         processed = 0
         for img_path in images:
@@ -258,7 +264,7 @@ def main() -> int:
             orig_h, orig_w = bgr.shape[:2]
             resized = cv2.resize(bgr, (INFER_SIZE, INFER_SIZE), interpolation=cv2.INTER_LINEAR)
             resized = np.ascontiguousarray(resized, dtype=np.uint8)
-            t_in = pn.Tensor.from_numpy(resized, copy=True, image_format=pn.PixelFormat.BGR)
+            t_in = pyneat.Tensor.from_numpy(resized, copy=True, image_format=pyneat.PixelFormat.BGR)
 
             if not run.push(t_in):
                 print(f"Push failed for {img_path.name}", file=sys.stderr)
@@ -270,9 +276,9 @@ def main() -> int:
 
             payload = extract_bbox_payload(out_opt)
             if payload:
-                boxes = parse_bbox_payload(payload, INFER_SIZE, INFER_SIZE)
+                boxes = parse_bbox_payload(payload, INFER_SIZE, INFER_SIZE, args.min_score)
             else:
-                boxes = decode_yolov8_boxes_from_sample(out_opt, INFER_SIZE)
+                boxes = decode_yolov8_boxes_from_sample(out_opt, INFER_SIZE, args.min_score)
 
             boxes = scale_boxes(boxes, INFER_SIZE, orig_w, orig_h)
             draw_boxes(bgr, boxes, labels)

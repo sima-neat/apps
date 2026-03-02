@@ -8,7 +8,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pyneat as pn
+import pyneat
 
 
 INFER_SIZE = 518
@@ -18,18 +18,18 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
 
-def tensor_to_numpy(t: pn.Tensor) -> np.ndarray:
+def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
 
-def iter_tensors(sample: pn.Sample):
-    if sample.kind == pn.SampleKind.Tensor and sample.tensor is not None:
+def iter_tensors(sample: pyneat.Sample):
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
     for field in sample.fields:
         yield from iter_tensors(field)
 
 
-def first_tensor(sample: pn.Sample) -> pn.Tensor | None:
+def first_tensor(sample: pyneat.Sample) -> pyneat.Tensor | None:
     for t in iter_tensors(sample):
         return t
     return None
@@ -39,7 +39,7 @@ def _read_elem(raw: np.ndarray, idx: int, dtype) -> float:
     return float(raw[idx])
 
 
-def depth_tensor_to_colormap(t: pn.Tensor) -> np.ndarray:
+def depth_tensor_to_colormap(t: pyneat.Tensor) -> np.ndarray:
     if not t.is_dense():
         raise ValueError("depth output tensor is not dense")
 
@@ -94,24 +94,24 @@ def main() -> int:
     print(f"Found {len(images)} images")
 
     try:
-        opt = pn.ModelOptions()
+        opt = pyneat.ModelOptions()
         opt.media_type = "video/x-raw"
         opt.format = "RGB"
         opt.input_max_width = INFER_SIZE
         opt.input_max_height = INFER_SIZE
         opt.input_max_depth = 3
-        model = pn.Model(args.model, opt)
+        model = pyneat.Model(args.model, opt)
 
-        sess = pn.Session()
+        sess = pyneat.Session()
         sess.add(model.session())
         print(f"[BUILD] Pipeline:\n{sess.describe_backend()}")
 
         dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
-        t_dummy = pn.Tensor.from_numpy(dummy, copy=True, image_format=pn.PixelFormat.RGB)
-        run_opt = pn.RunOptions()
+        t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.RGB)
+        run_opt = pyneat.RunOptions()
         run_opt.queue_depth = 4
-        run_opt.overflow_policy = pn.OverflowPolicy.Block
-        run = sess.build(t_dummy, pn.RunMode.Async, run_opt)
+        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
+        run = sess.build(t_dummy, pyneat.RunMode.Async, run_opt)
 
         processed = 0
         for img_path in images:
@@ -123,7 +123,7 @@ def main() -> int:
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             rgb = cv2.resize(rgb, (INFER_SIZE, INFER_SIZE), interpolation=cv2.INTER_LINEAR)
             rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
-            t_in = pn.Tensor.from_numpy(rgb, copy=True, image_format=pn.PixelFormat.RGB)
+            t_in = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
             if not run.push(t_in):
                 print(f"Push failed for {img_path.name}", file=sys.stderr)

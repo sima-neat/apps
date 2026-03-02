@@ -23,18 +23,14 @@ This keeps examples editable and easy to customize.
 
 ## Repo Layout
 
-- `examples/cpp/`: C++ examples organized by task/category
-- `examples/python/`: reserved for future Python examples (same category model)
+- `examples/`: examples organized by task/category (each example has C++ and Python implementations)
 - `support/`: shared C++ helper code used by multiple examples
+- `assets/`: user-managed runtime assets (models under `assets/models/`, test media under `assets/test_images/`)
 - `utils/rtsp/`: RTSP helper scripts used by streaming demos
-- `scripts/ci/`: CI scripts (public include boundary check, quality gates)
-- `scripts/cd/`: continuous delivery scripts (reserved)
-- `scripts/release/`: release scripts (reserved)
-- `schemas/`: JSON schemas (e.g. catalog validation)
+- `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
 - `neat-core.json`: NEAT core SDK dependency declaration (branch and version)
-- `catalog.json`: example catalog (for CI/release traceability)
 
-## Build
+## Build (`build.sh` only)
 
 Install `nlohmann-json3-dev` before building:
 
@@ -43,29 +39,43 @@ sudo apt update
 sudo apt install nlohmann-json3-dev
 ```
 
-Install NEAT core SDK and build all examples in one step:
+`build.sh` is only for configure/build (and optional NEAT SDK install). It does not run tests.
+
+Common commands:
 
 ```bash
-./build.sh --all
-```
-
-If NEAT core is already installed, build only:
-
-```bash
+# Build only (default)
 ./build.sh
-```
 
-To install NEAT core SDK without building (useful for app developers):
+# Clean build directory then build
+./build.sh --clean
 
-```bash
+# Install NEAT core from neat-core.json, then build
+./build.sh --all
+
+# Install NEAT core only, no build
 ./build.sh --only-install-neat-core
-```
 
-To override the default NEAT core dependency for one build:
-
-```bash
+# Override neat-core.json for one run (branch:version)
 ./build.sh --all --neat-core-version main:latest
+
+# Debug build
+./build.sh --debug
+
+# Build to a custom directory
+./build.sh --build-dir out/build
 ```
+
+Main `build.sh` args:
+
+- `--all`: install NEAT core then build
+- `--only-install-neat-core`: install NEAT core and exit
+- `--neat-core-version <branch:version>`: override `neat-core.json`
+- `--clean`: remove build dir before configure
+- `--debug` / `--release`: build type
+- `--build-dir <dir>`: build directory
+- `--no-cpp`: skip C++ build
+- `--python`: enable Python tooling placeholder flag in CMake config
 
 If NEAT is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH`:
 
@@ -84,10 +94,15 @@ Typical usage:
 ./build.sh
 ```
 
-## Python Examples
+## Test (`tests/test.sh` only)
 
-Python examples are not implemented yet.
-`examples/python/` will be populated as Python examples are migrated.
+Testing is documented in [tests/README.md](./tests/README.md).
+
+Summary:
+
+- `build.sh` is build-only.
+- `tests/test.sh` is test-only.
+- For RTSP e2e tests, run RTSP stream source(s) before invoking `tests/test.sh`.
 
 ## NEAT Core Dependency
 

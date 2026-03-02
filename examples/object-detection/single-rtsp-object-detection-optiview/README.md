@@ -1,4 +1,4 @@
-# YOLOv8 One RTSP OptiView
+# Single RTSP Object Detection OptiView
 
 ## Metadata
 | Field | Value |

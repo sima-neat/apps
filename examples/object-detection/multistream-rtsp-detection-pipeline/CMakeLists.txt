@@ -9,4 +9,4 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/ExampleModule.cmake")
-sima_neat_apps_module("multistream-rtsp-detection-pipeline")
+sima_neat_apps_module("multistream-rtsp-detection-pipeline" UNIT_TEST E2E_TEST)

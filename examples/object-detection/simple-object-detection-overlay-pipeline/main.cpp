@@ -29,7 +29,7 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr int kInferSize = 640;
-constexpr float kMinScore = 0.52f;
+constexpr float kMinScore = 0.55f;
 constexpr float kNmsIou = 0.50f;
 constexpr int kMaxDet = 100;
 constexpr int kTimeoutMs = 5000;

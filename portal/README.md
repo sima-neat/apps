@@ -11,6 +11,15 @@ The portal reads `catalog.json`, which is generated from the per-example `README
 - detail view per example
 - tabbed rendering of README-derived sections
 
+## Prerequisites
+
+Install Node.js and npm if not already available:
+
+```bash
+sudo apt update
+sudo apt install -y nodejs npm
+```
+
 ## Run
 
 Install dependencies:

@@ -11,7 +11,7 @@ import time
 
 import cv2
 import numpy as np
-import pyneat as pn
+import pyneat
 
 
 @dataclass(frozen=True)
@@ -37,11 +37,11 @@ def detect_model_profile(model_path: str) -> DepthModelProfile:
     return MIDAS_V21_PROFILE
 
 
-def tensor_to_numpy(t: pn.Tensor) -> np.ndarray:
+def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
 
-def tensor_bgr_from_decoded(t: pn.Tensor) -> np.ndarray:
+def tensor_bgr_from_decoded(t: pyneat.Tensor) -> np.ndarray:
     arr = tensor_to_numpy(t)
     if arr.ndim == 4 and arr.shape[0] == 1:
         arr = arr[0]
@@ -52,32 +52,32 @@ def tensor_bgr_from_decoded(t: pn.Tensor) -> np.ndarray:
     return np.ascontiguousarray(arr)
 
 
-def iter_tensors(sample: pn.Sample):
-    if sample.kind == pn.SampleKind.Tensor and sample.tensor is not None:
+def iter_tensors(sample: pyneat.Sample):
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
     for field in sample.fields:
         yield from iter_tensors(field)
 
 
-def first_tensor(sample: pn.Sample) -> pn.Tensor | None:
+def first_tensor(sample: pyneat.Sample) -> pyneat.Tensor | None:
     for t in iter_tensors(sample):
         return t
     return None
 
 
-def depth_tensor_from_sample(sample: pn.Sample) -> pn.Tensor | None:
+def depth_tensor_from_sample(sample: pyneat.Sample) -> pyneat.Tensor | None:
     tensors = list(iter_tensors(sample))
     if not tensors:
         return None
     for t in tensors:
         sem = getattr(t, "semantic", None)
         image_sem = getattr(sem, "image", None) if sem is not None else None
-        if image_sem is None and t.dtype != pn.TensorDType.UInt8:
+        if image_sem is None and t.dtype != pyneat.TensorDType.UInt8:
             return t
     return tensors[0]
 
 
-def depth_colormap_from_tensor(t: pn.Tensor, *, depth_order: str) -> np.ndarray:
+def depth_colormap_from_tensor(t: pyneat.Tensor, *, depth_order: str) -> np.ndarray:
     arr = tensor_to_numpy(t).reshape(-1)
     spatial = [int(d) for d in t.shape if int(d) > 1]
     if len(spatial) >= 2:
@@ -107,7 +107,7 @@ def depth_colormap_from_tensor(t: pn.Tensor, *, depth_order: str) -> np.ndarray:
 def build_rtsp_run(
     url: str, width: int, height: int, fps: int, latency_ms: int, tcp: bool, sample_every: int
 ):
-    ro = pn.RtspDecodedInputOptions()
+    ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
     ro.latency_ms = latency_ms
     ro.tcp = tcp
@@ -123,28 +123,28 @@ def build_rtsp_run(
     ro.output_caps.width = width
     ro.output_caps.height = height
     ro.output_caps.fps = fps
-    ro.output_caps.memory = pn.CapsMemory.SystemMemory
+    ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
-    sess = pn.Session()
-    sess.add(pn.groups.rtsp_decoded_input(ro))
-    sess.add(pn.nodes.output(pn.OutputOptions.every_frame(max(1, sample_every))))
+    sess = pyneat.Session()
+    sess.add(pyneat.groups.rtsp_decoded_input(ro))
+    sess.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(max(1, sample_every))))
     run = sess.build()
     return sess, run
 
 
 def build_depth_model(model_path: str, width: int, height: int, profile: DepthModelProfile):
-    opt = pn.ModelOptions()
+    opt = pyneat.ModelOptions()
     opt.media_type = "video/x-raw"
     opt.format = profile.input_format
     opt.input_max_width = width
     opt.input_max_height = height
     opt.input_max_depth = 3
-    model = pn.Model(model_path, opt)
+    model = pyneat.Model(model_path, opt)
     return model
 
 
 def render_depth_overlay(
-    model: pn.Model,
+    model: pyneat.Model,
     bgr: np.ndarray,
     width: int,
     height: int,
@@ -248,7 +248,7 @@ class StageProfiler:
                 )
 
 
-def print_queue_profile(run: pn.Run, queue2_depth: int | None) -> None:
+def print_queue_profile(run: pyneat.Run, queue2_depth: int | None) -> None:
     rs = run.stats()
     ins = run.input_stats()
     pending = max(0, int(rs.outputs_ready) - int(rs.outputs_pulled))
