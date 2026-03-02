@@ -147,6 +147,29 @@ jobs:
             s3://neat-artifacts/download/branches.json \
             --content-type application/json
 
+      - name: Upload install script to Cloudflare R2
+        if: github.ref_name == 'main'
+        run: |
+          mkdir -p _work/tools
+          REMOTE_COPY="_work/tools/install-neat-apps.remote.sh"
+          REMOTE_URI="s3://neat-artifacts/tools/install-neat-apps.sh"
+
+          if aws s3 cp \
+            --endpoint-url "${R2_ENDPOINT_URL}" \
+            "${REMOTE_URI}" \
+            "${REMOTE_COPY}" >/dev/null 2>&1; then
+            if cmp -s scripts/install-neat-apps.sh "${REMOTE_COPY}"; then
+              echo "install-neat-apps.sh is unchanged; skipping upload."
+              exit 0
+            fi
+          fi
+
+          aws s3 cp \
+            --endpoint-url "${R2_ENDPOINT_URL}" \
+            scripts/install-neat-apps.sh \
+            "${REMOTE_URI}" \
+            --content-type text/x-shellscript
+
   portal-build:
     runs-on: ubuntu-latest
     needs: cpp-build
