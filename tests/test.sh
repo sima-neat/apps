@@ -211,7 +211,7 @@ resolve_pytest_python() {
   if "${PYTHON_TEST_BIN}" -m pytest --version >/dev/null 2>&1; then
     return 0
   fi
-  for cand in "/root/pyneat/.venv/bin/python3" "/root/pyneat/bin/python3"; do
+  for cand in "${HOME}/pyneat/bin/python3"; do
     if [[ -x "${cand}" ]] && "${cand}" -m pytest --version >/dev/null 2>&1; then
       PYTHON_TEST_BIN="${cand}"
       return 0

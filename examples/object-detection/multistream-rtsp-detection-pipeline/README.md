@@ -86,7 +86,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/object-detection/multistream-rtsp-detection-pipeline/requirements.txt
 python examples/object-detection/multistream-rtsp-detection-pipeline/main.py \
   --model assets/models/yolo_v8m_mpk.tar.gz \

@@ -79,7 +79,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/depth-estimation/offline-depth-map-generation/requirements.txt
 python examples/depth-estimation/offline-depth-map-generation/main.py \
   assets/models/depth_anything_v2_vits_mpk.tar.gz <input_dir> <output_dir>

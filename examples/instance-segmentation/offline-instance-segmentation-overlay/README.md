@@ -79,7 +79,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/instance-segmentation/offline-instance-segmentation-overlay/requirements.txt
 python3 examples/instance-segmentation/offline-instance-segmentation-overlay/main.py \
   assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>

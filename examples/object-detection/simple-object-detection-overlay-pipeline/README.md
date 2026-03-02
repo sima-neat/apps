@@ -83,7 +83,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/object-detection/simple-object-detection-overlay-pipeline/requirements.txt
 python examples/object-detection/simple-object-detection-overlay-pipeline/main.py \
   assets/models/yolo_v8n_mpk.tar.gz \

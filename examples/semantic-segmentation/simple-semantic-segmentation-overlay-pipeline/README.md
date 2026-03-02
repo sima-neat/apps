@@ -79,7 +79,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/requirements.txt
 python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/main.py \
   assets/models/fcn_hrnet48_mpk.tar.gz <input_dir> <output_dir>

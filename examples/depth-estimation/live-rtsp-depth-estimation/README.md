@@ -89,7 +89,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/depth-estimation/live-rtsp-depth-estimation/requirements.txt
 python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py \
   --model assets/models/midas_v21_small_256_mpk.tar.gz \

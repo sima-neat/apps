@@ -171,7 +171,7 @@ sima-cli modelzoo get yolo_v8s
 Then start the Python app:
 
 ```bash
-source /media/nvme/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 python3 main.py --rtsp rtsp://127.0.0.1:8554/src5 --model yolo_v8s_mpk.tar.gz
 ```
 

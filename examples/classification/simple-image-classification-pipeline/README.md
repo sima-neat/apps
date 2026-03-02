@@ -79,7 +79,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/classification/simple-image-classification-pipeline/requirements.txt
 python examples/classification/simple-image-classification-pipeline/main.py \
   --model assets/models/resnet_50_mpk.tar.gz

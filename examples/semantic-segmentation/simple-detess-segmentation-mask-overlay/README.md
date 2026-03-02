@@ -79,7 +79,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/requirements.txt
 python examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/main.py \
   assets/models/yolov5_seg_overlay_mpk.tar.gz <input_dir> <output_dir>

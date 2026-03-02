@@ -78,7 +78,7 @@ Binary output:
 
 ### Python
 ```bash
-source ~/pyneat/.venv/bin/activate
+source ~/pyneat/bin/activate
 pip install -r examples/<category>/<name>/requirements.txt
 python3 examples/<category>/<name>/main.py <args>
 ```
