@@ -155,6 +155,7 @@ PY
   done < <(
     find "${ROOT_DIR}/examples" -type f \
       \( -name 'main.py' \
+         -o -name 'README.md' \
          -o -path '*/tests/python/test_*.py' \
          -o -name 'requirements.txt' \
          -o -name 'coco_label.txt' \
@@ -163,6 +164,8 @@ PY
   )
 
   cp -a "${ROOT_DIR}/tests" "${stage_dir}/tests"
+  mkdir -p "${stage_dir}/scripts"
+  cp "${ROOT_DIR}/scripts/download_models.sh" "${stage_dir}/scripts/download_models.sh"
   cp "${ROOT_DIR}/tests/conftest.py" "${stage_dir}/examples/conftest.py"
   cp -a "${ROOT_DIR}/assets/." "${stage_dir}/assets/"
 

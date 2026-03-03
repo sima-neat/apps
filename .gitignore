@@ -17,3 +17,4 @@ portal/.vite/
 portal/dist/
 portal/public/catalog.json
 install_neat_framework.sh
+neat-apps-runtime/

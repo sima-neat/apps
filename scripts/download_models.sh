@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download all models required by the examples into ./models/.
+# Download all models required by the examples into ./assets/models.
 # Parses the "Model" field from each example's README.md metadata table.
 # Skips models that are already downloaded.
 #
@@ -11,8 +11,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-MODELS_DIR="$ROOT/models"
+MODELS_DIR="${MODELS_DIR:-$ROOT/assets/models}"
 EXAMPLES_DIR="$ROOT/examples"
+SIMA_CLI_BIN="${SIMA_CLI_BIN:-sima-cli}"
 
 mkdir -p "$MODELS_DIR"
 
@@ -51,7 +52,7 @@ download_model() {
     before=$(ls "$MODELS_DIR"/*.tar.gz 2>/dev/null | wc -l)
 
     echo "[download] $model_name"
-    (cd "$MODELS_DIR" && sima-cli modelzoo get "$model_name")
+    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo get "$model_name")
 
     local after
     after=$(ls "$MODELS_DIR"/*.tar.gz 2>/dev/null | wc -l)
