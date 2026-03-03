@@ -139,7 +139,7 @@ PY
   )
 
   cp -a "${ROOT_DIR}/tests" "${stage_dir}/tests"
-  cp "${ROOT_DIR}/tests/conftest.py" "${stage_dir}/conftest.py"
+  cp "${ROOT_DIR}/tests/conftest.py" "${stage_dir}/examples/conftest.py"
   cp -a "${ROOT_DIR}/assets/." "${stage_dir}/assets/"
 
   find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
