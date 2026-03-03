@@ -228,8 +228,37 @@ if [[ "${RUN_E2E}" -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# C++ tests via CTest
+# C++ tests via CTest or packaged prebuilt binaries
 # ---------------------------------------------------------------------------
+run_packaged_cpp_tests() {
+  local label="$1"
+  local label_upper
+  local suffix
+  label_upper="$(echo "${label}" | tr '[:lower:]' '[:upper:]')"
+  suffix="_${label}_test"
+
+  mapfile -t cpp_test_bins < <(
+    find "${ROOT_DIR}/examples" -type f -path '*/tests/cpp/*' -name "*${suffix}" | sort
+  )
+
+  if [[ "${#cpp_test_bins[@]}" -eq 0 ]]; then
+    echo "  [SKIP] No packaged C++ ${label} test binaries found under ${ROOT_DIR}/examples."
+    return 0
+  fi
+
+  echo ""
+  echo "  C++ ${label_upper} tests (packaged binaries)"
+  echo "  $(printf '%.0s-' {1..50})"
+
+  local test_bin
+  for test_bin in "${cpp_test_bins[@]}"; do
+    echo "  [RUN] ${test_bin#${ROOT_DIR}/}"
+    if ! "${test_bin}"; then
+      OVERALL_RC=1
+    fi
+  done
+}
+
 run_ctest() {
   local label="$1"
   local label_upper
@@ -237,8 +266,8 @@ run_ctest() {
 
   local build_path="${ROOT_DIR}/${BUILD_DIR}"
   if [[ ! -d "${build_path}" ]]; then
-    echo "  [SKIP] Build directory ${build_path} not found. Run ./build.sh first."
-    return 0
+    run_packaged_cpp_tests "${label}"
+    return $?
   fi
 
   echo ""
