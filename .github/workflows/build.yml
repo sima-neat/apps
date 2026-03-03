@@ -95,6 +95,9 @@ jobs:
 
       - name: Run tests from installed apps runtime
         shell: bash
+        env:
+          SIMANEAT_APPS_TEST_RTSP_URL: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URL }}
+          SIMANEAT_APPS_TEST_RTSP_URLS: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URLS }}
         run: |
           /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
