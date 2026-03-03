@@ -739,446 +739,475 @@ double elapsed_ms(TimePoint a, TimePoint b) {
 
 } // namespace
 
-int main(int argc, char** argv) {
-  try {
-    const Config cfg = parse_config(argc, argv);
-    const auto labels = load_labels(cfg.labels_file);
-    const fs::path out_root(cfg.output_dir);
-    fs::create_directories(out_root);
+// Orchestrates producer/infer/overlay workers while keeping NEAT pipeline construction explicit.
+// NEAT usage (C++):
+// - build_rtsp_runtime_with_fallback(...) creates per-stream simaai::neat::Session + Run for RTSP decode.
+// - build_infer_runtime(...) creates model session:
+//   Input -> Preprocess -> Infer -> SimaBoxDecode -> Output.
+class PipelineApp {
+public:
+  explicit PipelineApp(Config cfg)
+      : cfg_(std::move(cfg)), labels_(load_labels(cfg_.labels_file)),
+        out_root_(cfg_.output_dir), profiler_(cfg_.profile, cfg_.profile_every) {}
 
-    std::mutex log_mu;
-    std::mutex stats_mu;
-    std::atomic<bool> stop_event{false};
-    ProfileTracker profiler(cfg.profile, cfg.profile_every);
+  int run() {
+    fs::create_directories(out_root_);
+    setup_streams();
+    total_target_ = cfg_.frames * static_cast<int>(streams_.size());
+    t0_ = Clock::now();
+    start_producer_threads();
+    setup_infer_runtimes();
+    start_infer_threads();
+    start_overlay_threads();
 
-    std::vector<std::shared_ptr<StreamState>> streams;
-    streams.reserve(cfg.rtsp_urls.size());
-    std::vector<std::shared_ptr<KeepLatestQueue<FramePacket>>> frame_queues;
-    frame_queues.reserve(cfg.rtsp_urls.size());
-    std::vector<std::shared_ptr<KeepLatestQueue<ResultPacket>>> result_queues;
-    result_queues.reserve(cfg.rtsp_urls.size());
+    // Release producers only after infer/overlay workers are live to avoid startup pull backlog.
+    start_producers_.store(true, std::memory_order_release);
+    monitor_until_done();
+    close_queues();
+    join_threads();
+    print_summary();
+    close_runs();
+    return 0;
+  }
 
-    for (std::size_t i = 0; i < cfg.rtsp_urls.size(); ++i) {
-      const std::string& url = cfg.rtsp_urls[i];
+private:
+  void setup_streams() {
+    streams_.reserve(cfg_.rtsp_urls.size());
+    frame_queues_.reserve(cfg_.rtsp_urls.size());
+    result_queues_.reserve(cfg_.rtsp_urls.size());
+
+    for (std::size_t i = 0; i < cfg_.rtsp_urls.size(); ++i) {
+      const std::string& url = cfg_.rtsp_urls[i];
       bool used_fallback_allocator = false;
-      RtspRuntime rtsp = build_rtsp_runtime_with_fallback(cfg, url, used_fallback_allocator);
+      RtspRuntime rtsp = build_rtsp_runtime_with_fallback(cfg_, url, used_fallback_allocator);
 
       auto st = std::make_shared<StreamState>();
       st->idx = static_cast<int>(i);
       st->url = url;
       st->session = std::move(rtsp.session);
       st->run = std::move(rtsp.run);
-      st->out_dir = out_root / ("stream_" + std::to_string(i));
+      st->out_dir = out_root_ / ("stream_" + std::to_string(i));
       fs::create_directories(st->out_dir);
 
-      frame_queues.push_back(
-          std::make_shared<KeepLatestQueue<FramePacket>>(static_cast<std::size_t>(cfg.frame_queue)));
-      result_queues.push_back(std::make_shared<KeepLatestQueue<ResultPacket>>(
-          static_cast<std::size_t>(cfg.result_queue)));
-      streams.push_back(st);
+      frame_queues_.push_back(
+          std::make_shared<KeepLatestQueue<FramePacket>>(static_cast<std::size_t>(cfg_.frame_queue)));
+      result_queues_.push_back(std::make_shared<KeepLatestQueue<ResultPacket>>(
+          static_cast<std::size_t>(cfg_.result_queue)));
+      streams_.push_back(st);
 
-      std::lock_guard<std::mutex> log_lock(log_mu);
+      std::lock_guard<std::mutex> log_lock(log_mu_);
       std::cout << "[stream " << i << "] started: " << url << " -> " << st->out_dir.string() << "/\n";
       if (used_fallback_allocator) {
         std::cout << "[stream " << i << "] decoder allocator fallback: using sima_allocator_type=1\n";
       }
-      if (cfg.debug) {
+      if (cfg_.debug) {
         std::cout << "[PIPE][rtsp " << i << "] " << rtsp.pipeline << "\n";
       }
     }
+  }
 
-    const int total_target = cfg.frames * static_cast<int>(streams.size());
-    std::atomic<int> total_done{0};
-    const auto t0 = Clock::now();
-
-    std::vector<std::thread> producer_threads;
-    std::vector<std::thread> infer_threads;
-    std::vector<std::thread> overlay_threads;
-    std::vector<std::unique_ptr<InferRuntime>> infer_runtimes;
-    infer_runtimes.reserve(streams.size());
-    std::atomic<bool> start_producers{false};
-
-    for (const auto& st : streams) {
-      const int idx = st->idx;
-      auto frame_q = frame_queues[idx];
-      producer_threads.emplace_back([&, st, frame_q]() {
-        try {
-          while (!stop_event.load(std::memory_order_relaxed) &&
-                 !start_producers.load(std::memory_order_acquire)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          }
-          const int miss_limit = std::max(1, cfg.max_idle_ms / std::max(1, cfg.pull_timeout_ms));
-          int miss_count = 0;
-          while (!stop_event.load()) {
-            {
-              std::lock_guard<std::mutex> stats_lock(stats_mu);
-              if (st->processed >= cfg.frames) {
-                break;
-              }
-            }
-
-            const auto t_pull0 = Clock::now();
-            auto frame_opt = st->run.pull_tensor(cfg.pull_timeout_ms);
-            const auto t_pull1 = Clock::now();
-            profiler.add_time(ProfileTracker::stage_key("pull_call", st->idx), elapsed_ms(t_pull0, t_pull1));
-
-            if (!frame_opt.has_value()) {
-              ++miss_count;
-              bool running = false;
-              try {
-                running = st->run.running();
-              } catch (...) {
-                running = false;
-              }
-
-              if (!running && miss_count >= std::max(1, cfg.reconnect_miss)) {
-                try {
-                  st->run.close();
-                } catch (...) {
-                }
-                try {
-                  bool used_fallback_allocator = false;
-                  RtspRuntime rtsp_new =
-                      build_rtsp_runtime_with_fallback(cfg, st->url, used_fallback_allocator);
-                  st->session = std::move(rtsp_new.session);
-                  st->run = std::move(rtsp_new.run);
-                  miss_count = 0;
-                  std::lock_guard<std::mutex> log_lock(log_mu);
-                  std::cout << "[stream " << st->idx << "] reconnecting RTSP run\n";
-                  if (used_fallback_allocator) {
-                    std::cout << "[stream " << st->idx
-                              << "] decoder allocator fallback: using sima_allocator_type=1\n";
-                  }
-                  if (cfg.debug) {
-                    std::cout << "[PIPE][rtsp " << st->idx << "] " << rtsp_new.pipeline << "\n";
-                  }
-                } catch (const std::exception& ex) {
-                  std::lock_guard<std::mutex> log_lock(log_mu);
-                  std::cerr << "[stream " << st->idx << "] reconnect failed: " << ex.what() << "\n";
-                }
-              }
-
-              if (miss_count >= miss_limit) {
-                std::lock_guard<std::mutex> log_lock(log_mu);
-                std::cerr << "[stream " << st->idx << "] no frames for ~" << cfg.max_idle_ms
-                          << "ms; closing stream\n";
-                break;
-              }
-              continue;
-            }
-
-            miss_count = 0;
-            const auto pulled_ts = Clock::now();
-            const auto t_np0 = Clock::now();
-            cv::Mat bgr = tensor_to_bgr_mat(*frame_opt);
-            const auto t_np1 = Clock::now();
-            profiler.add_time(ProfileTracker::stage_key("to_numpy", st->idx), elapsed_ms(t_np0, t_np1));
-
-            {
-              std::lock_guard<std::mutex> stats_lock(stats_mu);
-              st->pulled += 1;
-            }
-
-            auto [dropped, qsize] =
-                frame_q->push_keep_latest(FramePacket{st->idx, std::move(bgr), pulled_ts});
-            if (dropped > 0) {
-              std::lock_guard<std::mutex> stats_lock(stats_mu);
-              st->frame_q_dropped += dropped;
-            }
-          }
-        } catch (const std::exception& ex) {
-          std::lock_guard<std::mutex> log_lock(log_mu);
-          std::cerr << "[stream " << st->idx << "] pull error: " << ex.what() << "\n";
-        }
-        {
-          std::lock_guard<std::mutex> stats_lock(stats_mu);
-          st->producer_done = true;
-        }
-      });
-    }
-
+  void setup_infer_runtimes() {
+    infer_runtimes_.reserve(streams_.size());
     // Build infer runtimes sequentially to avoid shared model-config race during startup.
-    for (const auto& st : streams) {
+    for (const auto& st : streams_) {
       try {
-        auto infer = std::make_unique<InferRuntime>(build_infer_runtime(cfg));
-        if (cfg.debug) {
-          std::lock_guard<std::mutex> log_lock(log_mu);
+        auto infer = std::make_unique<InferRuntime>(build_infer_runtime(cfg_));
+        if (cfg_.debug) {
+          std::lock_guard<std::mutex> log_lock(log_mu_);
           std::cout << "[PIPE][infer " << st->idx << "] " << infer->pipeline << "\n";
         }
-        infer_runtimes.push_back(std::move(infer));
+        infer_runtimes_.push_back(std::move(infer));
       } catch (const std::exception& ex) {
-        std::lock_guard<std::mutex> log_lock(log_mu);
+        std::lock_guard<std::mutex> log_lock(log_mu_);
         std::cerr << "[stream " << st->idx << "] infer worker setup failed: " << ex.what() << "\n";
-        infer_runtimes.push_back(nullptr);
+        infer_runtimes_.push_back(nullptr);
         {
-          std::lock_guard<std::mutex> stats_lock(stats_mu);
+          std::lock_guard<std::mutex> stats_lock(stats_mu_);
           st->infer_done = true;
         }
       }
     }
+  }
 
-    for (const auto& st : streams) {
+  void start_producer_threads() {
+    for (const auto& st : streams_) {
       const int idx = st->idx;
-      if (!infer_runtimes[static_cast<std::size_t>(idx)]) {
+      auto frame_q = frame_queues_[static_cast<std::size_t>(idx)];
+      producer_threads_.emplace_back([this, st, frame_q]() { producer_worker(st, frame_q); });
+    }
+  }
+
+  void start_infer_threads() {
+    for (const auto& st : streams_) {
+      const int idx = st->idx;
+      if (!infer_runtimes_[static_cast<std::size_t>(idx)]) {
         continue;
       }
-      auto frame_q = frame_queues[idx];
-      auto result_q = result_queues[idx];
-      auto infer_ptr = std::move(infer_runtimes[static_cast<std::size_t>(idx)]);
-      infer_threads.emplace_back(
-          [&, st, frame_q, result_q, infer_ptr = std::move(infer_ptr)]() mutable {
-        try {
-          InferRuntime& infer = *infer_ptr;
-          const int qdepth = std::max(1, cfg.run_queue_depth);
-          std::deque<FramePacket> pending;
-          bool input_done = false;
+      auto frame_q = frame_queues_[static_cast<std::size_t>(idx)];
+      auto result_q = result_queues_[static_cast<std::size_t>(idx)];
+      auto infer_ptr = std::move(infer_runtimes_[static_cast<std::size_t>(idx)]);
+      infer_threads_.emplace_back([this, st, frame_q, result_q, infer_ptr = std::move(infer_ptr)]() mutable {
+        infer_worker(st, frame_q, result_q, std::move(infer_ptr));
+      });
+    }
+  }
 
-          // Helper: pull one result from the model and post-process it.
-          auto pull_and_process = [&]() -> bool {
-            const auto t_model0 = Clock::now();
-            simaai::neat::Sample sample;
-            simaai::neat::PullError perr;
-            const auto pst = infer.run.pull(cfg.model_timeout_ms, sample, &perr);
-            const auto t_model1 = Clock::now();
-            if (pst != simaai::neat::PullStatus::Ok) {
-              if (pst == simaai::neat::PullStatus::Timeout) {
-                return false;
-              }
-              if (!perr.message.empty()) {
-                throw std::runtime_error("model pull failed: " + perr.message);
-              }
-              if (pst == simaai::neat::PullStatus::Closed) {
-                throw std::runtime_error("model run closed");
-              }
-              throw std::runtime_error("model pull failed");
-            }
-            profiler.add_time(ProfileTracker::stage_key("model_run", st->idx),
-                              elapsed_ms(t_model0, t_model1));
+  void start_overlay_threads() {
+    for (const auto& st : streams_) {
+      const int idx = st->idx;
+      auto result_q = result_queues_[static_cast<std::size_t>(idx)];
+      overlay_threads_.emplace_back([this, st, result_q]() { overlay_worker(st, result_q); });
+    }
+  }
 
-            FramePacket fpkt = std::move(pending.front());
-            pending.pop_front();
+  void producer_worker(const std::shared_ptr<StreamState>& st,
+                       const std::shared_ptr<KeepLatestQueue<FramePacket>>& frame_q) {
+    try {
+      while (!stop_event_.load(std::memory_order_relaxed) &&
+             !start_producers_.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      const int miss_limit = std::max(1, cfg_.max_idle_ms / std::max(1, cfg_.pull_timeout_ms));
+      int miss_count = 0;
+      while (!stop_event_.load()) {
+        {
+          std::lock_guard<std::mutex> stats_lock(stats_mu_);
+          if (st->processed >= cfg_.frames) {
+            break;
+          }
+        }
 
-            const auto t_post0 = Clock::now();
-            std::vector<uint8_t> payload;
-            std::string bbox_err;
-            std::vector<objdet::Box> boxes;
-            if (objdet::extract_bbox_payload(sample, payload, bbox_err)) {
-              try {
-                boxes = objdet::parse_boxes_strict(payload, fpkt.frame.cols, fpkt.frame.rows,
-                                                   cfg.max_det, false);
-              } catch (const std::exception& ex) {
-                boxes =
-                    objdet::parse_boxes_lenient(payload, fpkt.frame.cols, fpkt.frame.rows, cfg.max_det);
-                if (cfg.debug) {
-                  std::lock_guard<std::mutex> log_lock(log_mu);
-                  std::cerr << "[stream " << st->idx
-                            << "] strict bbox parse failed (" << ex.what()
-                            << "), using lenient parser\n";
-                }
-              }
-            } else if (cfg.debug) {
-              std::lock_guard<std::mutex> log_lock(log_mu);
-              std::cerr << "[stream " << st->idx << "] bbox payload missing: " << bbox_err << "\n";
-            }
-            const auto t_post1 = Clock::now();
-            profiler.add_time(ProfileTracker::stage_key("decode_boxes", st->idx),
-                              elapsed_ms(t_post0, t_post1));
+        const auto t_pull0 = Clock::now();
+        auto frame_opt = st->run.pull_tensor(cfg_.pull_timeout_ms);
+        const auto t_pull1 = Clock::now();
+        profiler_.add_time(ProfileTracker::stage_key("pull_call", st->idx), elapsed_ms(t_pull0, t_pull1));
 
-            auto [dropped, qsize] = result_q->push_keep_latest(
-                ResultPacket{fpkt.stream_idx, std::move(fpkt.frame), std::move(boxes), fpkt.pulled_ts});
-            if (dropped > 0) {
-              std::lock_guard<std::mutex> stats_lock(stats_mu);
-              st->result_q_dropped += dropped;
-            }
-            return true;
-          };
-
-          while (true) {
-            if (stop_event.load() && frame_q->empty() && pending.empty()) {
-              break;
-            }
-
-            // Push phase: fill pipeline up to qdepth.
-            while (static_cast<int>(pending.size()) < qdepth && !input_done) {
-              FramePacket pkt;
-              const auto t_wait0 = Clock::now();
-              const bool got = frame_q->pop_wait(pkt, 50);
-              const auto t_wait1 = Clock::now();
-              if (!got) {
-                bool producer_done = false;
-                {
-                  std::lock_guard<std::mutex> stats_lock(stats_mu);
-                  producer_done = st->producer_done;
-                }
-                if (producer_done && frame_q->empty()) {
-                  input_done = true;
-                }
-                break; // No frame available right now, move to pull phase.
-              }
-
-              profiler.add_time(ProfileTracker::stage_key("infer_q_wait", st->idx), elapsed_ms(t_wait0, t_wait1));
-
-              {
-                std::lock_guard<std::mutex> stats_lock(stats_mu);
-                if (streams[static_cast<std::size_t>(pkt.stream_idx)]->processed >= cfg.frames) {
-                  input_done = true;
-                  break;
-                }
-              }
-
-              if (!infer.run.push(pkt.frame)) {
-                std::lock_guard<std::mutex> log_lock(log_mu);
-                std::cerr << "[stream " << st->idx << "] model push failed\n";
-                break;
-              }
-              pending.push_back(std::move(pkt));
-            }
-
-            // Pull phase: drain one result if anything is in-flight.
-            if (!pending.empty()) {
-              try {
-                pull_and_process();
-              } catch (const std::exception& ex) {
-                std::lock_guard<std::mutex> log_lock(log_mu);
-                std::cerr << "[stream " << st->idx << "] inference error: " << ex.what() << "\n";
-                pending.pop_front(); // Drop the failed frame.
-              }
-            } else if (input_done) {
-              break;
-            }
-
-            if (stop_event.load() && pending.empty()) {
-              break;
-            }
+        if (!frame_opt.has_value()) {
+          ++miss_count;
+          bool running = false;
+          try {
+            running = st->run.running();
+          } catch (...) {
+            running = false;
           }
 
-          // Drain phase: pull remaining in-flight results.
-          while (!pending.empty()) {
+          if (!running && miss_count >= std::max(1, cfg_.reconnect_miss)) {
             try {
-              if (!pull_and_process()) {
-                pending.pop_front(); // Timeout, skip.
+              st->run.close();
+            } catch (...) {
+            }
+            try {
+              bool used_fallback_allocator = false;
+              RtspRuntime rtsp_new =
+                  build_rtsp_runtime_with_fallback(cfg_, st->url, used_fallback_allocator);
+              st->session = std::move(rtsp_new.session);
+              st->run = std::move(rtsp_new.run);
+              miss_count = 0;
+              std::lock_guard<std::mutex> log_lock(log_mu_);
+              std::cout << "[stream " << st->idx << "] reconnecting RTSP run\n";
+              if (used_fallback_allocator) {
+                std::cout << "[stream " << st->idx
+                          << "] decoder allocator fallback: using sima_allocator_type=1\n";
+              }
+              if (cfg_.debug) {
+                std::cout << "[PIPE][rtsp " << st->idx << "] " << rtsp_new.pipeline << "\n";
               }
             } catch (const std::exception& ex) {
-              std::lock_guard<std::mutex> log_lock(log_mu);
-              std::cerr << "[stream " << st->idx << "] drain error: " << ex.what() << "\n";
-              pending.pop_front();
+              std::lock_guard<std::mutex> log_lock(log_mu_);
+              std::cerr << "[stream " << st->idx << "] reconnect failed: " << ex.what() << "\n";
             }
           }
 
-          infer.run.close();
-        } catch (const std::exception& ex) {
-          std::lock_guard<std::mutex> log_lock(log_mu);
-          std::cerr << "[stream " << st->idx << "] infer worker failed: " << ex.what() << "\n";
+          if (miss_count >= miss_limit) {
+            std::lock_guard<std::mutex> log_lock(log_mu_);
+            std::cerr << "[stream " << st->idx << "] no frames for ~" << cfg_.max_idle_ms
+                      << "ms; closing stream\n";
+            break;
+          }
+          continue;
         }
+
+        miss_count = 0;
+        const auto pulled_ts = Clock::now();
+        const auto t_np0 = Clock::now();
+        cv::Mat bgr = tensor_to_bgr_mat(*frame_opt);
+        const auto t_np1 = Clock::now();
+        profiler_.add_time(ProfileTracker::stage_key("to_numpy", st->idx), elapsed_ms(t_np0, t_np1));
 
         {
-          std::lock_guard<std::mutex> stats_lock(stats_mu);
-          st->infer_done = true;
+          std::lock_guard<std::mutex> stats_lock(stats_mu_);
+          st->pulled += 1;
         }
-      });
+
+        auto [dropped, qsize] =
+            frame_q->push_keep_latest(FramePacket{st->idx, std::move(bgr), pulled_ts});
+        (void)qsize;
+        if (dropped > 0) {
+          std::lock_guard<std::mutex> stats_lock(stats_mu_);
+          st->frame_q_dropped += dropped;
+        }
+      }
+    } catch (const std::exception& ex) {
+      std::lock_guard<std::mutex> log_lock(log_mu_);
+      std::cerr << "[stream " << st->idx << "] pull error: " << ex.what() << "\n";
     }
+    {
+      std::lock_guard<std::mutex> stats_lock(stats_mu_);
+      st->producer_done = true;
+    }
+  }
 
-    for (const auto& st : streams) {
-      const int idx = st->idx;
-      auto result_q = result_queues[idx];
-      overlay_threads.emplace_back([&, st, result_q]() {
-        while (true) {
-          if (stop_event.load() && result_q->empty()) {
-            break;
+  void infer_worker(const std::shared_ptr<StreamState>& st,
+                    const std::shared_ptr<KeepLatestQueue<FramePacket>>& frame_q,
+                    const std::shared_ptr<KeepLatestQueue<ResultPacket>>& result_q,
+                    std::unique_ptr<InferRuntime> infer_ptr) {
+    try {
+      InferRuntime& infer = *infer_ptr;
+      const int qdepth = std::max(1, cfg_.run_queue_depth);
+      std::deque<FramePacket> pending;
+      bool input_done = false;
+
+      // Helper: pull one result from the model and post-process it.
+      auto pull_and_process = [&]() -> bool {
+        const auto t_model0 = Clock::now();
+        simaai::neat::Sample sample;
+        simaai::neat::PullError perr;
+        const auto pst = infer.run.pull(cfg_.model_timeout_ms, sample, &perr);
+        const auto t_model1 = Clock::now();
+        if (pst != simaai::neat::PullStatus::Ok) {
+          if (pst == simaai::neat::PullStatus::Timeout) {
+            return false;
           }
+          if (!perr.message.empty()) {
+            throw std::runtime_error("model pull failed: " + perr.message);
+          }
+          if (pst == simaai::neat::PullStatus::Closed) {
+            throw std::runtime_error("model run closed");
+          }
+          throw std::runtime_error("model pull failed");
+        }
+        profiler_.add_time(ProfileTracker::stage_key("model_run", st->idx),
+                           elapsed_ms(t_model0, t_model1));
 
-          ResultPacket pkt;
+        FramePacket fpkt = std::move(pending.front());
+        pending.pop_front();
+
+        const auto t_post0 = Clock::now();
+        std::vector<uint8_t> payload;
+        std::string bbox_err;
+        std::vector<objdet::Box> boxes;
+        if (objdet::extract_bbox_payload(sample, payload, bbox_err)) {
+          try {
+            boxes = objdet::parse_boxes_strict(payload, fpkt.frame.cols, fpkt.frame.rows,
+                                               cfg_.max_det, false);
+          } catch (const std::exception& ex) {
+            boxes =
+                objdet::parse_boxes_lenient(payload, fpkt.frame.cols, fpkt.frame.rows, cfg_.max_det);
+            if (cfg_.debug) {
+              std::lock_guard<std::mutex> log_lock(log_mu_);
+              std::cerr << "[stream " << st->idx
+                        << "] strict bbox parse failed (" << ex.what()
+                        << "), using lenient parser\n";
+            }
+          }
+        } else if (cfg_.debug) {
+          std::lock_guard<std::mutex> log_lock(log_mu_);
+          std::cerr << "[stream " << st->idx << "] bbox payload missing: " << bbox_err << "\n";
+        }
+        const auto t_post1 = Clock::now();
+        profiler_.add_time(ProfileTracker::stage_key("decode_boxes", st->idx),
+                           elapsed_ms(t_post0, t_post1));
+
+        auto [dropped, qsize] = result_q->push_keep_latest(
+            ResultPacket{fpkt.stream_idx, std::move(fpkt.frame), std::move(boxes), fpkt.pulled_ts});
+        (void)qsize;
+        if (dropped > 0) {
+          std::lock_guard<std::mutex> stats_lock(stats_mu_);
+          st->result_q_dropped += dropped;
+        }
+        return true;
+      };
+
+      while (true) {
+        if (stop_event_.load() && frame_q->empty() && pending.empty()) {
+          break;
+        }
+
+        // Push phase: fill pipeline up to qdepth.
+        while (static_cast<int>(pending.size()) < qdepth && !input_done) {
+          FramePacket pkt;
           const auto t_wait0 = Clock::now();
-          const bool got = result_q->pop_wait(pkt, 50);
+          const bool got = frame_q->pop_wait(pkt, 50);
           const auto t_wait1 = Clock::now();
           if (!got) {
-            bool infer_done = false;
+            bool producer_done = false;
             {
-              std::lock_guard<std::mutex> stats_lock(stats_mu);
-              infer_done = st->infer_done;
+              std::lock_guard<std::mutex> stats_lock(stats_mu_);
+              producer_done = st->producer_done;
             }
-            if (infer_done && result_q->empty()) {
+            if (producer_done && frame_q->empty()) {
+              input_done = true;
+            }
+            break; // No frame available right now, move to pull phase.
+          }
+
+          profiler_.add_time(ProfileTracker::stage_key("infer_q_wait", st->idx), elapsed_ms(t_wait0, t_wait1));
+
+          {
+            std::lock_guard<std::mutex> stats_lock(stats_mu_);
+            if (streams_[static_cast<std::size_t>(pkt.stream_idx)]->processed >= cfg_.frames) {
+              input_done = true;
               break;
             }
-            continue;
           }
 
-          profiler.add_time(ProfileTracker::stage_key("overlay_q_wait", st->idx),
-                            elapsed_ms(t_wait0, t_wait1));
-
-          int frame_idx = -1;
-          int pulled_now = 0;
-          {
-            std::lock_guard<std::mutex> stats_lock(stats_mu);
-            if (st->processed >= cfg.frames) {
-              continue;
-            }
-            frame_idx = st->processed;
-            st->processed += 1;
-            pulled_now = st->pulled;
-          }
-
-          profiler.mark_processing_started(total_done.load());
-
-          const bool should_save = (frame_idx % cfg.save_every) == 0;
-          if (should_save) {
-            const auto t_draw0 = Clock::now();
-            draw_boxes(pkt.frame, pkt.boxes, labels);
-            const auto t_draw1 = Clock::now();
-            profiler.add_time(ProfileTracker::stage_key("draw_boxes", st->idx),
-                              elapsed_ms(t_draw0, t_draw1));
-
-            const fs::path out_path = st->out_dir / ("frame_" + cv::format("%06d.jpg", frame_idx));
-            const auto t_wr0 = Clock::now();
-            cv::imwrite(out_path.string(), pkt.frame);
-            const auto t_wr1 = Clock::now();
-            profiler.add_time(ProfileTracker::stage_key("imwrite", st->idx), elapsed_ms(t_wr0, t_wr1));
-            profiler.add_time(ProfileTracker::stage_key("end_to_end", st->idx),
-                              elapsed_ms(pkt.pulled_ts, t_wr1));
-          }
-
-          if (cfg.debug || ((frame_idx + 1) % 10 == 0)) {
-            std::lock_guard<std::mutex> log_lock(log_mu);
-            std::cout << "[stream " << st->idx << "] frames=" << (frame_idx + 1) << " pulled=" << pulled_now
-                      << " det=" << pkt.boxes.size() << "\n";
-          }
-
-          const int done_now = total_done.fetch_add(1) + 1;
-          if (cfg.profile && (done_now % std::max(1, cfg.profile_every) == 0)) {
-            std::vector<StreamSnapshot> snapshot;
-            snapshot.reserve(streams.size());
-            {
-              std::lock_guard<std::mutex> stats_lock(stats_mu);
-              for (const auto& s : streams) {
-                snapshot.push_back(StreamSnapshot{s->idx, s->processed, s->pulled,
-                                                  s->frame_q_dropped, s->result_q_dropped});
-              }
-            }
-            profiler.maybe_report(done_now, snapshot, log_mu);
-          }
-
-          if (done_now >= total_target) {
-            stop_event.store(true);
+          if (!infer.run.push(pkt.frame)) {
+            std::lock_guard<std::mutex> log_lock(log_mu_);
+            std::cerr << "[stream " << st->idx << "] model push failed\n";
             break;
           }
+          pending.push_back(std::move(pkt));
         }
-      });
+
+        // Pull phase: drain one result if anything is in-flight.
+        if (!pending.empty()) {
+          try {
+            pull_and_process();
+          } catch (const std::exception& ex) {
+            std::lock_guard<std::mutex> log_lock(log_mu_);
+            std::cerr << "[stream " << st->idx << "] inference error: " << ex.what() << "\n";
+            pending.pop_front(); // Drop the failed frame.
+          }
+        } else if (input_done) {
+          break;
+        }
+
+        if (stop_event_.load() && pending.empty()) {
+          break;
+        }
+      }
+
+      // Drain phase: pull remaining in-flight results.
+      while (!pending.empty()) {
+        try {
+          if (!pull_and_process()) {
+            pending.pop_front(); // Timeout, skip.
+          }
+        } catch (const std::exception& ex) {
+          std::lock_guard<std::mutex> log_lock(log_mu_);
+          std::cerr << "[stream " << st->idx << "] drain error: " << ex.what() << "\n";
+          pending.pop_front();
+        }
+      }
+
+      infer.run.close();
+    } catch (const std::exception& ex) {
+      std::lock_guard<std::mutex> log_lock(log_mu_);
+      std::cerr << "[stream " << st->idx << "] infer worker failed: " << ex.what() << "\n";
     }
 
-    // Release producers only after infer/overlay workers are live to avoid startup pull backlog.
-    start_producers.store(true, std::memory_order_release);
+    {
+      std::lock_guard<std::mutex> stats_lock(stats_mu_);
+      st->infer_done = true;
+    }
+  }
 
-    while (!stop_event.load()) {
-      const int done = total_done.load();
-      if (done >= total_target) {
-        stop_event.store(true);
+  void overlay_worker(const std::shared_ptr<StreamState>& st,
+                      const std::shared_ptr<KeepLatestQueue<ResultPacket>>& result_q) {
+    while (true) {
+      if (stop_event_.load() && result_q->empty()) {
+        break;
+      }
+
+      ResultPacket pkt;
+      const auto t_wait0 = Clock::now();
+      const bool got = result_q->pop_wait(pkt, 50);
+      const auto t_wait1 = Clock::now();
+      if (!got) {
+        bool infer_done = false;
+        {
+          std::lock_guard<std::mutex> stats_lock(stats_mu_);
+          infer_done = st->infer_done;
+        }
+        if (infer_done && result_q->empty()) {
+          break;
+        }
+        continue;
+      }
+
+      profiler_.add_time(ProfileTracker::stage_key("overlay_q_wait", st->idx),
+                         elapsed_ms(t_wait0, t_wait1));
+
+      int frame_idx = -1;
+      int pulled_now = 0;
+      {
+        std::lock_guard<std::mutex> stats_lock(stats_mu_);
+        if (st->processed >= cfg_.frames) {
+          continue;
+        }
+        frame_idx = st->processed;
+        st->processed += 1;
+        pulled_now = st->pulled;
+      }
+
+      profiler_.mark_processing_started(total_done_.load());
+
+      const bool should_save = (frame_idx % cfg_.save_every) == 0;
+      if (should_save) {
+        const auto t_draw0 = Clock::now();
+        draw_boxes(pkt.frame, pkt.boxes, labels_);
+        const auto t_draw1 = Clock::now();
+        profiler_.add_time(ProfileTracker::stage_key("draw_boxes", st->idx),
+                           elapsed_ms(t_draw0, t_draw1));
+
+        const fs::path out_path = st->out_dir / ("frame_" + cv::format("%06d.jpg", frame_idx));
+        const auto t_wr0 = Clock::now();
+        cv::imwrite(out_path.string(), pkt.frame);
+        const auto t_wr1 = Clock::now();
+        profiler_.add_time(ProfileTracker::stage_key("imwrite", st->idx), elapsed_ms(t_wr0, t_wr1));
+        profiler_.add_time(ProfileTracker::stage_key("end_to_end", st->idx),
+                           elapsed_ms(pkt.pulled_ts, t_wr1));
+      }
+
+      if (cfg_.debug || ((frame_idx + 1) % 10 == 0)) {
+        std::lock_guard<std::mutex> log_lock(log_mu_);
+        std::cout << "[stream " << st->idx << "] frames=" << (frame_idx + 1) << " pulled=" << pulled_now
+                  << " det=" << pkt.boxes.size() << "\n";
+      }
+
+      const int done_now = total_done_.fetch_add(1) + 1;
+      if (cfg_.profile && (done_now % std::max(1, cfg_.profile_every) == 0)) {
+        std::vector<StreamSnapshot> snapshot;
+        snapshot.reserve(streams_.size());
+        {
+          std::lock_guard<std::mutex> stats_lock(stats_mu_);
+          for (const auto& s : streams_) {
+            snapshot.push_back(StreamSnapshot{s->idx, s->processed, s->pulled,
+                                              s->frame_q_dropped, s->result_q_dropped});
+          }
+        }
+        profiler_.maybe_report(done_now, snapshot, log_mu_);
+      }
+
+      if (done_now >= total_target_) {
+        stop_event_.store(true);
+        break;
+      }
+    }
+  }
+
+  void monitor_until_done() {
+    while (!stop_event_.load()) {
+      const int done = total_done_.load();
+      if (done >= total_target_) {
+        stop_event_.store(true);
         break;
       }
 
       bool all_infer_done = true;
       {
-        std::lock_guard<std::mutex> stats_lock(stats_mu);
-        for (const auto& s : streams) {
+        std::lock_guard<std::mutex> stats_lock(stats_mu_);
+        for (const auto& s : streams_) {
           if (!s->infer_done) {
             all_infer_done = false;
             break;
@@ -1186,62 +1215,96 @@ int main(int argc, char** argv) {
         }
       }
       bool result_empty = true;
-      for (const auto& q : result_queues) {
+      for (const auto& q : result_queues_) {
         if (!q->empty()) {
           result_empty = false;
           break;
         }
       }
       if (all_infer_done && result_empty) {
-        stop_event.store(true);
+        stop_event_.store(true);
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+  }
 
-    for (const auto& q : frame_queues) {
+  void close_queues() {
+    for (const auto& q : frame_queues_) {
       q->close();
     }
-    for (const auto& q : result_queues) {
+    for (const auto& q : result_queues_) {
       q->close();
     }
+  }
 
-    for (auto& t : producer_threads) {
+  void join_threads() {
+    for (auto& t : producer_threads_) {
       t.join();
     }
-    for (auto& t : infer_threads) {
+    for (auto& t : infer_threads_) {
       t.join();
     }
-    for (auto& t : overlay_threads) {
+    for (auto& t : overlay_threads_) {
       t.join();
     }
+  }
 
+  void print_summary() {
     const auto t_end = Clock::now();
-    const int done = total_done.load();
-    const int done_since_start = profiler.processed_since_start(done);
-    const double elapsed_from_start_s = profiler.elapsed_since_start_s(t_end);
+    const int done = total_done_.load();
+    const int done_since_start = profiler_.processed_since_start(done);
+    const double elapsed_from_start_s = profiler_.elapsed_since_start_s(t_end);
     const double elapsed_s =
         (done_since_start > 0 && elapsed_from_start_s > 0.0)
             ? std::max(1e-6, elapsed_from_start_s)
-            : std::max(1e-6, std::chrono::duration<double>(t_end - t0).count());
+            : std::max(1e-6, std::chrono::duration<double>(t_end - t0_).count());
     {
-      std::lock_guard<std::mutex> log_lock(log_mu);
+      std::lock_guard<std::mutex> log_lock(log_mu_);
       std::cout << "Processed " << done << " outputs in " << std::fixed << std::setprecision(2)
                 << elapsed_s << "s avg_fps="
                 << (static_cast<double>(std::max(0, done_since_start)) / elapsed_s) << "\n";
-      for (const auto& s : streams) {
+      for (const auto& s : streams_) {
         std::cout << "stream[" << s->idx << "] processed=" << s->processed << " pulled=" << s->pulled
                   << " saved to " << s->out_dir.string() << "/\n";
       }
     }
+  }
 
-    for (const auto& s : streams) {
+  void close_runs() {
+    for (const auto& s : streams_) {
       try {
         s->run.close();
       } catch (...) {
       }
     }
-    return 0;
+  }
+
+private:
+  Config cfg_;
+  std::vector<std::string> labels_;
+  fs::path out_root_;
+  std::mutex log_mu_;
+  std::mutex stats_mu_;
+  std::atomic<bool> stop_event_{false};
+  std::atomic<bool> start_producers_{false};
+  ProfileTracker profiler_;
+  std::vector<std::shared_ptr<StreamState>> streams_;
+  std::vector<std::shared_ptr<KeepLatestQueue<FramePacket>>> frame_queues_;
+  std::vector<std::shared_ptr<KeepLatestQueue<ResultPacket>>> result_queues_;
+  int total_target_ = 0;
+  std::atomic<int> total_done_{0};
+  TimePoint t0_{};
+  std::vector<std::thread> producer_threads_;
+  std::vector<std::thread> infer_threads_;
+  std::vector<std::thread> overlay_threads_;
+  std::vector<std::unique_ptr<InferRuntime>> infer_runtimes_;
+};
+
+int main(int argc, char** argv) {
+  try {
+    PipelineApp app(parse_config(argc, argv));
+    return app.run();
   } catch (const std::exception& ex) {
     std::cerr << "[ERR] " << ex.what() << "\n";
     usage();
