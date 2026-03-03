@@ -234,6 +234,7 @@ run_packaged_cpp_tests() {
   local label="$1"
   local label_upper
   local suffix
+  local skipped_count=0
   label_upper="$(echo "${label}" | tr '[:lower:]' '[:upper:]')"
   suffix="_${label}_test"
 
@@ -252,11 +253,43 @@ run_packaged_cpp_tests() {
 
   local test_bin
   for test_bin in "${cpp_test_bins[@]}"; do
+    local example_name test_dir example_bin rc
+    example_name="$(basename "${test_bin}")"
+    example_name="${example_name%${suffix}}"
+    test_dir="$(dirname "${test_bin}")"
+    # Packaged layout:
+    # examples/<category>/<example>/tests/cpp/<example>_{unit,e2e}_test
+    # examples/<category>/<example>/<example>
+    example_bin="${test_dir}/../../${example_name}"
+
     echo "  [RUN] ${test_bin#${ROOT_DIR}/}"
-    if ! "${test_bin}"; then
+    if [[ ! -x "${example_bin}" ]]; then
+      echo "  [ERR] example binary not found for test: ${example_bin}"
+      OVERALL_RC=1
+      continue
+    fi
+
+    if "${test_bin}" "${example_bin}"; then
+      rc=0
+    else
+      rc=$?
+    fi
+
+    if [[ "${rc}" -eq 77 ]]; then
+      echo "  [SKIP] ${test_bin#${ROOT_DIR}/} (exit 77)"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    if [[ "${rc}" -ne 0 ]]; then
       OVERALL_RC=1
     fi
   done
+
+  if [[ "${STRICT_E2E}" == "1" && "${label}" == "e2e" && "${skipped_count}" -gt 0 ]]; then
+    echo "  [FAIL] Strict e2e mode is enabled but packaged C++ e2e tests were skipped (${skipped_count})."
+    OVERALL_RC=1
+  fi
 }
 
 run_ctest() {
