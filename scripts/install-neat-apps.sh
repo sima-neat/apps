@@ -15,6 +15,7 @@ set -euo pipefail
 # - Extract the archive into ./neat-apps.
 
 BASE_URL="${NEAT_APPS_BASE_URL:-https://apps.sima-neat.com/download}"
+NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.modalix.info/install-neat-from-a-branch.sh}"
 BRANCH="${1:-}"
 TAG_INPUT="${2:-latest}"
 DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
@@ -27,6 +28,8 @@ Usage:
 Environment:
   NEAT_APPS_BASE_URL      Base URL for apps downloads
                           default: https://apps.sima-neat.com/download
+  NEAT_INSTALLER_URL      Hosted NEAT core installer URL
+                          default: https://tools.modalix.info/install-neat-from-a-branch.sh
   NEAT_APPS_INSTALL_DIR   Destination directory for extracted files
                           default: ./neat-apps
 USAGE
@@ -63,6 +66,27 @@ download_file() {
 
 branch_key_for_url() {
   printf '%s' "$1" | tr '/ ' '--'
+}
+
+extract_neat_core_target() {
+  local json_path="$1"
+  python3 - <<'PY' "${json_path}"
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+neat_core = data.get("neat_core", {})
+branch = str(neat_core.get("branch", "")).strip()
+version = str(neat_core.get("version", "")).strip()
+
+if not branch or not version:
+    raise SystemExit(1)
+
+print(branch)
+print(version)
+PY
 }
 
 if [[ "${BRANCH}" == "-h" || "${BRANCH}" == "--help" ]]; then
@@ -125,9 +149,13 @@ fi
 ARCHIVE_NAME="neat-apps-${BRANCH_KEY}-${TAG}.tar.gz"
 ARCHIVE_URL="${BASE_URL}/${ARCHIVE_NAME}"
 TMP_ARCHIVE="$(mktemp -t neat-apps.XXXXXX.tar.gz)"
+TMP_INSTALLER=""
 
 cleanup() {
   rm -f "${TMP_ARCHIVE}"
+  if [[ -n "${TMP_INSTALLER}" ]]; then
+    rm -f "${TMP_INSTALLER}"
+  fi
 }
 trap cleanup EXIT
 
@@ -141,6 +169,41 @@ download_file "${ARCHIVE_URL}" "${TMP_ARCHIVE}"
 mkdir -p "${DEST_DIR}"
 echo "Extracting into ${DEST_DIR}/ ..."
 tar -xzf "${TMP_ARCHIVE}" -C "${DEST_DIR}"
+
+RUNTIME_DIR="${DEST_DIR}/neat-apps-runtime"
+NEAT_CORE_JSON_PATH="${RUNTIME_DIR}/neat-core.json"
+
+if [[ ! -f "${NEAT_CORE_JSON_PATH}" ]]; then
+  echo "ERROR: extracted apps package is missing neat-core.json." >&2
+  exit 1
+fi
+
+if ! mapfile -t NEAT_CORE_TARGET < <(extract_neat_core_target "${NEAT_CORE_JSON_PATH}"); then
+  echo "ERROR: failed to parse NEAT core dependency from ${NEAT_CORE_JSON_PATH}." >&2
+  exit 1
+fi
+
+NEAT_CORE_BRANCH="${NEAT_CORE_TARGET[0]}"
+NEAT_CORE_VERSION="${NEAT_CORE_TARGET[1]}"
+
+TMP_INSTALLER="$(mktemp -t install-neat-core.XXXXXX.sh)"
+download_file "${NEAT_INSTALLER_URL}" "${TMP_INSTALLER}"
+chmod +x "${TMP_INSTALLER}"
+
+echo
+echo "Installing matching NEAT core:"
+echo "  Branch : ${NEAT_CORE_BRANCH}"
+echo "  Version: ${NEAT_CORE_VERSION}"
+if ! "${TMP_INSTALLER}" --minimum "${NEAT_CORE_BRANCH}" "${NEAT_CORE_VERSION}"; then
+  if [[ "${NEAT_CORE_VERSION}" != "latest" ]]; then
+    echo
+    echo "Exact NEAT core version ${NEAT_CORE_VERSION} was not installable."
+    echo "Falling back to latest for branch ${NEAT_CORE_BRANCH} ..."
+    "${TMP_INSTALLER}" --minimum "${NEAT_CORE_BRANCH}" latest
+  else
+    exit 1
+  fi
+fi
 
 echo
 echo "Installed apps runtime under:"

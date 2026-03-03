@@ -47,23 +47,9 @@ jobs:
           echo "short_sha=${SHORT_SHA}" >> "${GITHUB_OUTPUT}"
           echo "archive_name=${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
 
-      - name: Package build output
+      - name: Verify build.sh distribution archive exists
         run: |
-          STAGE_DIR="neat-apps-runtime"
-          rm -rf "${STAGE_DIR}"
-          mkdir -p "${STAGE_DIR}/bin" "${STAGE_DIR}/assets"
-
-          find build -type f -executable \
-            ! -path '*/CMakeFiles/*' \
-            ! -name 'cmTC_*' \
-            -exec cp {} "${STAGE_DIR}/bin/" \;
-
-          cp -a build "${STAGE_DIR}/build"
-          cp -a tests "${STAGE_DIR}/tests"
-          cp -a examples "${STAGE_DIR}/examples"
-          cp -a assets/test_images "${STAGE_DIR}/assets/test_images"
-
-          tar -czf "${{ steps.artifact-meta.outputs.archive_name }}" "${STAGE_DIR}"
+          test -f "${{ steps.artifact-meta.outputs.archive_name }}"
 
       - name: Upload build archive to Cloudflare R2
         run: |
