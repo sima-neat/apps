@@ -77,6 +77,7 @@ function App() {
 
 function CatalogPage({ catalog }) {
   const [query, setQuery] = useState("");
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [filters, setFilters] = useState({
     category: "",
     difficulty: "",
@@ -102,6 +103,30 @@ function CatalogPage({ catalog }) {
             Browse source-first applications, search across tags and models, and drill into structured
             example documentation generated from the repo itself.
           </p>
+          <div className="hero-actions">
+            <a className="hero-action" href="https://github.com/sima-neat/apps" target="_blank" rel="noreferrer">
+              <span className="hero-action-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path
+                    d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.36 6.84 9.71.5.1.68-.22.68-.49 0-.24-.01-1.04-.01-1.88-2.78.62-3.37-1.21-3.37-1.21-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .08 1.53 1.06 1.53 1.06.9 1.57 2.36 1.12 2.93.86.09-.67.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.09 0-1.13.39-2.05 1.03-2.77-.1-.26-.45-1.31.1-2.73 0 0 .84-.28 2.75 1.06A9.32 9.32 0 0 1 12 6.84c.85 0 1.71.12 2.51.35 1.91-1.34 2.75-1.06 2.75-1.06.55 1.42.2 2.47.1 2.73.64.72 1.03 1.64 1.03 2.77 0 3.96-2.34 4.83-4.57 5.08.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.25 10.25 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </span>
+              <span>GitHub</span>
+            </a>
+            <button className="hero-action" type="button" onClick={() => setShowDownloadModal(true)}>
+              <span className="hero-action-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path
+                    d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.29a1 1 0 1 1 1.4 1.41l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.41L11 12.59V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </span>
+              <span>Download</span>
+            </button>
+          </div>
         </div>
         <div className="hero-search">
           <input
@@ -175,6 +200,45 @@ function CatalogPage({ catalog }) {
           </button>
         </aside>
       </div>
+      {showDownloadModal ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowDownloadModal(false)}>
+          <div
+            className="download-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="download-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="download-modal-header">
+              <div>
+                <p className="eyebrow">Download</p>
+                <h2 id="download-modal-title">Install prebuilt apps from any branch</h2>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                aria-label="Dismiss download instructions"
+                onClick={() => setShowDownloadModal(false)}
+              >
+                <svg viewBox="0 0 24 24" focusable="false">
+                  <path
+                    d="M6.7 5.3a1 1 0 0 0-1.4 1.4L10.6 12l-5.3 5.3a1 1 0 1 0 1.4 1.4l5.3-5.3 5.3 5.3a1 1 0 0 0 1.4-1.4L13.4 12l5.3-5.3a1 1 0 1 0-1.4-1.4L12 10.6 6.7 5.3Z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </button>
+            </div>
+            <p className="download-modal-copy">
+              To download the prebuilt apps package from any branch, run this command from the Modalix DevKit:
+            </p>
+            <pre className="download-code">
+              <code>{`cd /media/nvme &&
+wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh &&
+bash /tmp/install-neat-apps-from-a-branch.sh`}</code>
+            </pre>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

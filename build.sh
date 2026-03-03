@@ -28,7 +28,7 @@ Options:
   --clean                   Remove build directory before configure
   --no-cpp                  Skip C++ example build (layout/metadata only)
   --python                  Enable Python tooling (placeholder)
-  --all                     Install NEAT core SDK (from neat-core.json) then build
+  --all                     Install NEAT core SDK, build apps, build portal, then package
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
   --neat-core-version <b:v> Override neat-core.json with branch:version (example: main:latest)
   -h, --help                Show help
@@ -150,6 +150,24 @@ PY
   echo ""
   echo "Distribution package created:"
   echo "  ${archive_path}"
+}
+
+build_portal() {
+  local portal_dir="${ROOT_DIR}/portal"
+
+  if [[ ! -f "${portal_dir}/package.json" ]]; then
+    echo "Skipping portal build: package.json not found under ${portal_dir}"
+    return 0
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm is required to build the portal during ./build.sh --all." >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "Building portal..."
+  (cd "${portal_dir}" && npm install && npm run build)
 }
 
 while [[ $# -gt 0 ]]; do
@@ -332,6 +350,7 @@ echo "  ==============="
 echo "  Build directory       : ${BUILD_DIR}"
 echo "  Build type            : ${BUILD_TYPE}"
 echo "  Build C++ examples    : ${BUILD_CPP}"
+echo "  Build portal          : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF"; fi)"
 echo "  Install NEAT core     : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF (use --all to enable)"; fi)"
 echo "  NEAT core override    : ${NEAT_CORE_OVERRIDE:-"(from neat-core.json)"}"
 echo ""
@@ -372,5 +391,6 @@ else
 fi
 
 if [[ "${INSTALL_CORE}" -eq 1 ]]; then
+  build_portal
   package_distribution
 fi
