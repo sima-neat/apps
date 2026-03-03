@@ -71,16 +71,36 @@ jobs:
           wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
           bash /tmp/install-neat-apps-from-a-branch.sh "${BRANCH_RAW}" "${SHORT_SHA}"
 
+      - name: Install Python test dependencies
+        shell: bash
+        run: |
+          if [[ -x /media/nvme/pyneat/bin/python3 ]]; then
+            PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3
+          elif [[ -x "${HOME}/pyneat/bin/python3" ]]; then
+            PYTHON_TEST_BIN="${HOME}/pyneat/bin/python3"
+          else
+            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
+            exit 1
+          fi
+
+          echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
+          "${PYTHON_TEST_BIN}" -m pip install pytest
+
       - name: Run tests from installed apps runtime
         shell: bash
         run: |
           cd neat-apps/neat-apps-runtime
+          if [[ -x /media/nvme/pyneat/bin/python3 ]]; then
+            export PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3
+          elif [[ -x "${HOME}/pyneat/bin/python3" ]]; then
+            export PYTHON_TEST_BIN="${HOME}/pyneat/bin/python3"
+          fi
           source tests/scripts/testing/setup_test_env.sh
           ./tests/test.sh
 
   publish-index:
     runs-on: ubuntu-latest
-    needs: cpp-build
+    needs: [cpp-build, modalix-test]
     if: github.event_name != 'pull_request'
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
@@ -178,7 +198,7 @@ jobs:
 
   portal-build:
     runs-on: ubuntu-latest
-    needs: cpp-build
+    needs: [cpp-build, modalix-test]
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
