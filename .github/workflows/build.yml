@@ -29,6 +29,8 @@ jobs:
       - name: Build apps on eLxr SDK
         env:
           SIMA_CLI_BIN: /home/sima/.sima-cli/.venv/bin/sima-cli
+          NEAT_APPS_ARTIFACT_BRANCH_KEY: ${{ github.head_ref || github.ref_name }}
+          NEAT_APPS_ARTIFACT_SHORT_SHA: ${{ github.sha }}
         run: |
           chmod +x build.sh scripts/ci/check_public_includes.sh
           ./build.sh --all --clean
@@ -36,20 +38,25 @@ jobs:
       - name: Enforce public include boundary
         run: ./scripts/ci/check_public_includes.sh
 
-      - name: Compute archive metadata
+      - name: Capture distribution archive metadata
         id: artifact-meta
         run: |
-          BRANCH_RAW="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          BRANCH_KEY="$(echo "${BRANCH_RAW}" | tr '/ ' '--')"
-          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          ARCHIVE_NAME="neat-apps-${BRANCH_KEY}-${SHORT_SHA}.tar.gz"
+          mapfile -t archives < <(find . -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' -printf '%f\n' | sort)
+          if [[ "${#archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one neat-apps archive, found ${#archives[@]}" >&2
+            printf 'Archives:\n%s\n' "${archives[*]-<none>}" >&2
+            exit 1
+          fi
+
+          ARCHIVE_NAME="${archives[0]}"
+          ARCHIVE_STEM="${ARCHIVE_NAME%.tar.gz}"
+          SHORT_SHA="${ARCHIVE_STEM##*-}"
+          BRANCH_KEY="${ARCHIVE_STEM#neat-apps-}"
+          BRANCH_KEY="${BRANCH_KEY%-${SHORT_SHA}}"
+
           echo "branch_key=${BRANCH_KEY}" >> "${GITHUB_OUTPUT}"
           echo "short_sha=${SHORT_SHA}" >> "${GITHUB_OUTPUT}"
           echo "archive_name=${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
-
-      - name: Verify build.sh distribution archive exists
-        run: |
-          test -f "${{ steps.artifact-meta.outputs.archive_name }}"
 
       - name: Upload build archive to Cloudflare R2
         run: |

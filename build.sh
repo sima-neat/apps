@@ -41,7 +41,19 @@ Environment:
 EOF
 }
 
+sanitize_branch_key() {
+  printf '%s' "$1" | tr '/ ' '--'
+}
+
 git_short_sha() {
+  if [[ -n "${NEAT_APPS_ARTIFACT_SHORT_SHA:-}" ]]; then
+    printf '%.7s\n' "${NEAT_APPS_ARTIFACT_SHORT_SHA}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_SHA:-}" ]]; then
+    printf '%.7s\n' "${GITHUB_SHA}"
+    return 0
+  fi
   if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "${ROOT_DIR}" rev-parse --short HEAD
     return 0
@@ -51,10 +63,22 @@ git_short_sha() {
 
 git_branch_key() {
   local raw="local"
+  if [[ -n "${NEAT_APPS_ARTIFACT_BRANCH_KEY:-}" ]]; then
+    sanitize_branch_key "${NEAT_APPS_ARTIFACT_BRANCH_KEY}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+    sanitize_branch_key "${GITHUB_HEAD_REF}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+    sanitize_branch_key "${GITHUB_REF_NAME}"
+    return 0
+  fi
   if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     raw="$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo local)"
   fi
-  printf '%s' "${raw}" | tr '/ ' '--'
+  sanitize_branch_key "${raw}"
 }
 
 package_distribution() {

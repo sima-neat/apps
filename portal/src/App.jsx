@@ -232,9 +232,9 @@ function CatalogPage({ catalog }) {
               To download the prebuilt apps package from any branch, run this command from the Modalix DevKit:
             </p>
             <pre className="download-code">
-              <code>{`cd /media/nvme &&
-wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh &&
-bash /tmp/install-neat-apps-from-a-branch.sh`}</code>
+              <code>{`mkdir /media/nvme/neat-apps && cd /media/nvme/neat-apps &&
+wget -O /tmp/install.sh https://apps.sima-neat.com/tools/install-neat-apps.sh &&
+bash /tmp/install.sh`}</code>
             </pre>
           </div>
         </div>
