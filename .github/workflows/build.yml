@@ -58,6 +58,26 @@ jobs:
             "${{ steps.artifact-meta.outputs.archive_name }}" \
             "s3://neat-artifacts/download/${{ steps.artifact-meta.outputs.archive_name }}"
 
+  modalix-test:
+    runs-on: [self-hosted, Linux, ARM64, modalix]
+    needs: cpp-build
+
+    steps:
+      - name: Install apps runtime for this branch and commit
+        run: |
+          BRANCH_RAW="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          SHORT_SHA="${{ needs.cpp-build.outputs.short_sha }}"
+
+          wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
+          bash /tmp/install-neat-apps-from-a-branch.sh "${BRANCH_RAW}" "${SHORT_SHA}"
+
+      - name: Run tests from installed apps runtime
+        shell: bash
+        run: |
+          cd neat-apps/neat-apps-runtime
+          source tests/scripts/testing/setup_test_env.sh
+          ./tests/test.sh
+
   publish-index:
     runs-on: ubuntu-latest
     needs: cpp-build
