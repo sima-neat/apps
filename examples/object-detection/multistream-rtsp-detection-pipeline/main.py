@@ -495,7 +495,41 @@ class ProfileTracker:
             self.window_start_frame = done_frames
 
 
-def main() -> int:
+@dataclass(frozen=True)
+class AppConfig:
+    rtsp_urls: list[str]
+    model_path: str
+    labels_file: str | None
+    output_dir: Path
+    frames: int
+    debug: bool
+    tcp: bool
+    latency_ms: int
+    width: int
+    height: int
+    fps: int
+    sample_every: int
+    save_every: int
+    run_queue_depth: int
+    overflow_policy: pyneat.OverflowPolicy
+    output_memory: pyneat.OutputMemory
+    pull_timeout_ms: int
+    max_idle_ms: int
+    reconnect_miss: int
+    infer_size: int
+    min_score: float
+    min_score_logit: float
+    nms_iou: float
+    max_det: int
+    model_timeout_ms: int
+    model_queue_depth: int
+    frame_queue: int
+    result_queue: int
+    profile: bool
+    profile_every: int
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="YOLOv8 multi-RTSP demo (pyneat)")
     parser.add_argument("--rtsp", type=str, action="append", required=True,
                         help="RTSP URL (repeat for multiple streams)")
@@ -549,8 +583,12 @@ def main() -> int:
     parser.add_argument("--result-queue", type=int, default=64, help="Infer->overlay queue size")
     parser.add_argument("--profile", action="store_true", help="Enable timing/queue profiling logs")
     parser.add_argument("--profile-every", type=int, default=50, help="Emit profile logs every N processed frames")
-    args = parser.parse_args()
+    return parser
 
+
+def parse_config(argv: list[str] | None = None) -> AppConfig:
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
     if not (0.0 < args.min_score < 1.0):
         parser.error("--min-score must be in (0, 1)")
     if not (0.0 < args.nms_iou < 1.0):
@@ -559,413 +597,471 @@ def main() -> int:
         parser.error("--max-det must be > 0")
     if args.save_every <= 0:
         parser.error("--save-every must be > 0")
-    min_score_logit = float(np.log(args.min_score / (1.0 - args.min_score)))
-    overflow_policy = parse_overflow_policy(args.overflow_policy)
-    output_memory = parse_output_memory(args.output_memory)
+    return AppConfig(
+        rtsp_urls=list(args.rtsp),
+        model_path=args.model,
+        labels_file=args.labels_file or None,
+        output_dir=Path(args.output),
+        frames=args.frames,
+        debug=bool(args.debug),
+        tcp=bool(args.tcp),
+        latency_ms=args.latency_ms,
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        sample_every=args.sample_every,
+        save_every=args.save_every,
+        run_queue_depth=args.run_queue_depth,
+        overflow_policy=parse_overflow_policy(args.overflow_policy),
+        output_memory=parse_output_memory(args.output_memory),
+        pull_timeout_ms=args.pull_timeout_ms,
+        max_idle_ms=args.max_idle_ms,
+        reconnect_miss=args.reconnect_miss,
+        infer_size=args.infer_size,
+        min_score=args.min_score,
+        min_score_logit=float(np.log(args.min_score / (1.0 - args.min_score))),
+        nms_iou=args.nms_iou,
+        max_det=args.max_det,
+        model_timeout_ms=args.model_timeout_ms,
+        model_queue_depth=args.model_queue_depth,
+        frame_queue=args.frame_queue,
+        result_queue=args.result_queue,
+        profile=bool(args.profile),
+        profile_every=args.profile_every,
+    )
 
-    model_path = args.model
-    urls = args.rtsp
-    out_root = Path(args.output)
 
-    try:
-        class_labels = load_labels(args.labels_file or None)
+class PipelineApp:
+    """Pipeline orchestrator.
 
-        def make_model() -> pyneat.Model:
-            mopt = pyneat.ModelOptions()
-            mopt.media_type = "video/x-raw"
-            mopt.format = "BGR"
-            mopt.input_max_width = args.width
-            mopt.input_max_height = args.height
-            mopt.input_max_depth = 3
-            return pyneat.Model(model_path, mopt)
+    NEAT usage (Python):
+    - RTSP decode runs are created per stream via pyneat.Session in build_rtsp_run(...)
+    - Model objects are created per stream in _make_model(...)
+    - Model runner sessions are lazily built in _infer_worker(...) on first frame
+    """
 
-        streams: list[StreamState] = []
-        out_dirs: list[Path] = []
-        for i, url in enumerate(urls):
+    def __init__(self, cfg: AppConfig):
+        self.cfg = cfg
+        self.class_labels = load_labels(cfg.labels_file)
+        self.out_root = cfg.output_dir
+        self.streams: list[StreamState] = []
+        self.out_dirs: list[Path] = []
+        self.models: list[pyneat.Model] = []
+        self.frame_queues: list[queue.Queue[FramePacket]] = []
+        self.result_queues: list[queue.Queue[ResultPacket]] = []
+        self.stats_mu = threading.Lock()
+        self.model_build_mu = threading.Lock()
+        self.stop_event = threading.Event()
+        self.total_target = 0
+        self.total_done = 0
+        self.t0 = 0.0
+        self.profiler = ProfileTracker(cfg.profile, cfg.profile_every)
+        self.producer_threads: list[threading.Thread] = []
+        self.infer_threads: list[threading.Thread] = []
+        self.overlay_threads: list[threading.Thread] = []
+
+    def _make_model(self) -> pyneat.Model:
+        mopt = pyneat.ModelOptions()
+        mopt.media_type = "video/x-raw"
+        mopt.format = "BGR"
+        mopt.input_max_width = self.cfg.width
+        mopt.input_max_height = self.cfg.height
+        mopt.input_max_depth = 3
+        return pyneat.Model(self.cfg.model_path, mopt)
+
+    def _setup(self) -> None:
+        self.out_root.mkdir(parents=True, exist_ok=True)
+        for i, url in enumerate(self.cfg.rtsp_urls):
             sess, run = build_rtsp_run(
                 url,
-                args.latency_ms,
-                args.tcp,
-                args.width,
-                args.height,
-                args.fps,
-                args.sample_every,
-                args.run_queue_depth,
-                overflow_policy,
-                output_memory,
+                self.cfg.latency_ms,
+                self.cfg.tcp,
+                self.cfg.width,
+                self.cfg.height,
+                self.cfg.fps,
+                self.cfg.sample_every,
+                self.cfg.run_queue_depth,
+                self.cfg.overflow_policy,
+                self.cfg.output_memory,
             )
-            streams.append(StreamState(i, url, sess, run))
-            stream_dir = out_root / f"stream_{i}"
+            self.streams.append(StreamState(i, url, sess, run))
+            stream_dir = self.out_root / f"stream_{i}"
             stream_dir.mkdir(parents=True, exist_ok=True)
-            out_dirs.append(stream_dir)
+            self.out_dirs.append(stream_dir)
             print(f"[stream {i}] started: {url} -> {stream_dir}/")
 
-        models: list[pyneat.Model] = [make_model() for _ in streams]
-        frame_queues: list[queue.Queue[FramePacket]] = [
-            queue.Queue(maxsize=max(1, args.frame_queue)) for _ in streams
+        self.models = [self._make_model() for _ in self.streams]
+        self.frame_queues = [
+            queue.Queue(maxsize=max(1, self.cfg.frame_queue)) for _ in self.streams
         ]
-        result_queues: list[queue.Queue[ResultPacket]] = [
-            queue.Queue(maxsize=max(1, args.result_queue)) for _ in streams
+        self.result_queues = [
+            queue.Queue(maxsize=max(1, self.cfg.result_queue)) for _ in self.streams
         ]
-        stats_mu = threading.Lock()
-        model_build_mu = threading.Lock()
-        stop_event = threading.Event()
-        total_target = args.frames * len(streams)
-        total_done = 0
-        t0 = time.perf_counter()
-        profiler = ProfileTracker(args.profile, args.profile_every)
+        self.total_target = self.cfg.frames * len(self.streams)
+        self.t0 = time.perf_counter()
 
-        def producer_worker(st: StreamState) -> None:
-            try:
-                miss_limit = max(1, args.max_idle_ms // max(1, args.pull_timeout_ms))
-                miss_count = 0
-                while not stop_event.is_set():
-                    with stats_mu:
-                        if st.processed >= args.frames:
-                            break
-                    t_pull0 = time.perf_counter()
-                    frame_t = st.run.pull_tensor(timeout_ms=args.pull_timeout_ms)
-                    profiler.add_time(
-                        ProfileTracker.stage_key("pull_call", st.idx), time.perf_counter() - t_pull0
-                    )
-                    if frame_t is None:
-                        miss_count += 1
-                        running = True
+    def _producer_worker(self, st: StreamState) -> None:
+        try:
+            miss_limit = max(1, self.cfg.max_idle_ms // max(1, self.cfg.pull_timeout_ms))
+            miss_count = 0
+            while not self.stop_event.is_set():
+                with self.stats_mu:
+                    if st.processed >= self.cfg.frames:
+                        break
+                t_pull0 = time.perf_counter()
+                frame_t = st.run.pull_tensor(timeout_ms=self.cfg.pull_timeout_ms)
+                self.profiler.add_time(
+                    ProfileTracker.stage_key("pull_call", st.idx), time.perf_counter() - t_pull0
+                )
+                if frame_t is None:
+                    miss_count += 1
+                    running = True
+                    try:
+                        running = st.run.running()
+                    except Exception:
+                        running = False
+                    if not running and miss_count >= max(1, self.cfg.reconnect_miss):
                         try:
-                            running = st.run.running()
+                            st.run.close()
                         except Exception:
-                            running = False
-                        if not running and miss_count >= max(1, args.reconnect_miss):
-                            try:
-                                st.run.close()
-                            except Exception:
-                                pass
-                            try:
-                                sess_new, run_new = build_rtsp_run(
-                                    st.url,
-                                    args.latency_ms,
-                                    args.tcp,
-                                    args.width,
-                                    args.height,
-                                    args.fps,
-                                    args.sample_every,
-                                    args.run_queue_depth,
-                                    overflow_policy,
-                                    output_memory,
-                                )
-                                st.session = sess_new
-                                st.run = run_new
-                                miss_count = 0
-                                print(f"[stream {st.idx}] reconnecting RTSP run")
-                                continue
-                            except Exception as e:
-                                print(f"[stream {st.idx}] reconnect failed: {e}", file=sys.stderr)
-                        if miss_count >= miss_limit:
-                            print(
-                                f"[stream {st.idx}] no frames for ~{args.max_idle_ms}ms; closing stream",
-                                file=sys.stderr,
+                            pass
+                        try:
+                            sess_new, run_new = build_rtsp_run(
+                                st.url,
+                                self.cfg.latency_ms,
+                                self.cfg.tcp,
+                                self.cfg.width,
+                                self.cfg.height,
+                                self.cfg.fps,
+                                self.cfg.sample_every,
+                                self.cfg.run_queue_depth,
+                                self.cfg.overflow_policy,
+                                self.cfg.output_memory,
                             )
-                            break
-                        continue
-                    miss_count = 0
-                    pulled_ts = time.perf_counter()
-                    t_np0 = time.perf_counter()
-                    bgr = tensor_to_numpy(frame_t)
-                    if bgr.ndim == 4 and bgr.shape[0] == 1:
-                        bgr = bgr[0]
-                    if bgr.dtype != np.uint8:
-                        bgr = np.clip(bgr, 0, 255).astype(np.uint8)
-                    bgr = np.ascontiguousarray(bgr)
-                    profiler.add_time(
-                        ProfileTracker.stage_key("to_numpy", st.idx), time.perf_counter() - t_np0
-                    )
-                    with stats_mu:
-                        st.pulled += 1
-                    dropped, qsize = put_keep_latest(
-                        frame_queues[st.idx], FramePacket(st.idx, bgr, pulled_ts)
-                    )
-                    profiler.note_queue(f"frame_q_{st.idx}", qsize, dropped)
-                    profiler.note_queue("frame_q", sum(q.qsize() for q in frame_queues), dropped)
-            except Exception as e:
-                print(f"[stream {st.idx}] pull error: {e} — closing stream", file=sys.stderr)
-            finally:
-                with stats_mu:
-                    st.producer_done = True
-
-        def infer_worker(stream_idx: int, model_local: pyneat.Model) -> None:
-            frame_q = frame_queues[stream_idx]
-            result_q = result_queues[stream_idx]
-            runner = None
-            pending: deque[FramePacket] = deque()
-            model_qdepth = max(1, args.model_queue_depth)
-            push_failures = 0
-            max_push_failures = 3
-
-            def _get_frame(block_timeout: float = 0.05) -> FramePacket | None:
-                """Try to get a frame from the queue, returns None on empty/stop."""
-                try:
-                    t_wait0 = time.perf_counter()
-                    pkt = frame_q.get(timeout=block_timeout)
-                    profiler.add_time(
-                        ProfileTracker.stage_key("infer_q_wait", stream_idx),
-                        time.perf_counter() - t_wait0,
-                    )
-                    profiler.note_queue(f"frame_q_{stream_idx}", frame_q.qsize(), 0)
-                    profiler.note_queue("frame_q", sum(q.qsize() for q in frame_queues), 0)
-                    return pkt
-                except queue.Empty:
-                    return None
-
-            def _process_result(sample: pyneat.Sample, pkt: FramePacket) -> None:
-                """Post-process a model output and enqueue the result."""
-                t_dec0 = time.perf_counter()
-                payload = extract_bbox_payload(sample)
-                if payload:
-                    boxes = parse_bbox_payload(payload, pkt.frame.shape[1], pkt.frame.shape[0])
-                else:
-                    boxes = decode_yolov8_boxes_from_sample(
-                        sample,
-                        args.infer_size,
-                        pkt.frame.shape[1],
-                        pkt.frame.shape[0],
-                        min_score_logit,
-                        args.nms_iou,
-                        args.max_det,
-                    )
-                profiler.add_time(
-                    ProfileTracker.stage_key("decode_boxes", stream_idx),
-                    time.perf_counter() - t_dec0,
+                            st.session = sess_new
+                            st.run = run_new
+                            miss_count = 0
+                            print(f"[stream {st.idx}] reconnecting RTSP run")
+                            continue
+                        except Exception as e:
+                            print(f"[stream {st.idx}] reconnect failed: {e}", file=sys.stderr)
+                    if miss_count >= miss_limit:
+                        print(
+                            f"[stream {st.idx}] no frames for ~{self.cfg.max_idle_ms}ms; closing stream",
+                            file=sys.stderr,
+                        )
+                        break
+                    continue
+                miss_count = 0
+                pulled_ts = time.perf_counter()
+                t_np0 = time.perf_counter()
+                bgr = tensor_to_numpy(frame_t)
+                if bgr.ndim == 4 and bgr.shape[0] == 1:
+                    bgr = bgr[0]
+                if bgr.dtype != np.uint8:
+                    bgr = np.clip(bgr, 0, 255).astype(np.uint8)
+                bgr = np.ascontiguousarray(bgr)
+                self.profiler.add_time(
+                    ProfileTracker.stage_key("to_numpy", st.idx), time.perf_counter() - t_np0
                 )
+                with self.stats_mu:
+                    st.pulled += 1
                 dropped, qsize = put_keep_latest(
-                    result_q, ResultPacket(pkt.stream_idx, pkt.frame, boxes, pkt.pulled_ts)
+                    self.frame_queues[st.idx], FramePacket(st.idx, bgr, pulled_ts)
                 )
-                profiler.note_queue(f"result_q_{stream_idx}", qsize, dropped)
-                profiler.note_queue("result_q", sum(q.qsize() for q in result_queues), dropped)
+                self.profiler.note_queue(f"frame_q_{st.idx}", qsize, dropped)
+                self.profiler.note_queue("frame_q", sum(q.qsize() for q in self.frame_queues), dropped)
+        except Exception as e:
+            print(f"[stream {st.idx}] pull error: {e} — closing stream", file=sys.stderr)
+        finally:
+            with self.stats_mu:
+                st.producer_done = True
 
+    def _infer_worker(self, stream_idx: int, model_local: pyneat.Model) -> None:
+        frame_q = self.frame_queues[stream_idx]
+        result_q = self.result_queues[stream_idx]
+        runner = None
+        pending: deque[FramePacket] = deque()
+        model_qdepth = max(1, self.cfg.model_queue_depth)
+        push_failures = 0
+        max_push_failures = 3
+
+        def get_frame(block_timeout: float = 0.05) -> FramePacket | None:
             try:
-                input_done = False
-                while True:
-                    # --- push phase: fill pipeline up to queue_depth ---
-                    while len(pending) < model_qdepth and not input_done:
-                        if stop_event.is_set() and frame_q.empty():
+                t_wait0 = time.perf_counter()
+                pkt = frame_q.get(timeout=block_timeout)
+                self.profiler.add_time(
+                    ProfileTracker.stage_key("infer_q_wait", stream_idx),
+                    time.perf_counter() - t_wait0,
+                )
+                self.profiler.note_queue(f"frame_q_{stream_idx}", frame_q.qsize(), 0)
+                self.profiler.note_queue("frame_q", sum(q.qsize() for q in self.frame_queues), 0)
+                return pkt
+            except queue.Empty:
+                return None
+
+        def process_result(sample: pyneat.Sample, pkt: FramePacket) -> None:
+            t_dec0 = time.perf_counter()
+            payload = extract_bbox_payload(sample)
+            if payload:
+                boxes = parse_bbox_payload(payload, pkt.frame.shape[1], pkt.frame.shape[0])
+            else:
+                boxes = decode_yolov8_boxes_from_sample(
+                    sample,
+                    self.cfg.infer_size,
+                    pkt.frame.shape[1],
+                    pkt.frame.shape[0],
+                    self.cfg.min_score_logit,
+                    self.cfg.nms_iou,
+                    self.cfg.max_det,
+                )
+            self.profiler.add_time(
+                ProfileTracker.stage_key("decode_boxes", stream_idx),
+                time.perf_counter() - t_dec0,
+            )
+            dropped, qsize = put_keep_latest(
+                result_q, ResultPacket(pkt.stream_idx, pkt.frame, boxes, pkt.pulled_ts)
+            )
+            self.profiler.note_queue(f"result_q_{stream_idx}", qsize, dropped)
+            self.profiler.note_queue("result_q", sum(q.qsize() for q in self.result_queues), dropped)
+
+        try:
+            input_done = False
+            while True:
+                while len(pending) < model_qdepth and not input_done:
+                    if self.stop_event.is_set() and frame_q.empty():
+                        input_done = True
+                        break
+                    pkt = get_frame(block_timeout=0.01 if pending else 0.05)
+                    if pkt is None:
+                        with self.stats_mu:
+                            producer_done = self.streams[stream_idx].producer_done
+                        if producer_done and frame_q.empty():
+                            input_done = True
+                        break
+                    with self.stats_mu:
+                        if self.streams[pkt.stream_idx].processed >= self.cfg.frames:
                             input_done = True
                             break
-                        pkt = _get_frame(block_timeout=0.01 if pending else 0.05)
-                        if pkt is None:
-                            with stats_mu:
-                                producer_done = streams[stream_idx].producer_done
-                            if producer_done and frame_q.empty():
-                                input_done = True
-                            break
-                        with stats_mu:
-                            if streams[pkt.stream_idx].processed >= args.frames:
-                                input_done = True
-                                break
-                        try:
-                            if runner is None:
-                                sopt = pyneat.ModelSessionOptions()
-                                ropt = pyneat.RunOptions()
-                                ropt.queue_depth = model_qdepth
-                                ropt.overflow_policy = pyneat.OverflowPolicy.Block
-                                with model_build_mu:
-                                    runner = model_local.build(pkt.frame, sopt, ropt)
-                            t_push0 = time.perf_counter()
-                            ok = runner.push(pkt.frame)
-                            profiler.add_time(
-                                ProfileTracker.stage_key("model_push", stream_idx),
-                                time.perf_counter() - t_push0,
-                            )
-                            if ok:
-                                pending.append(pkt)
-                                push_failures = 0
-                            else:
-                                print(f"[stream {stream_idx}] runner.push rejected frame", file=sys.stderr)
-                        except Exception as e:
-                            push_failures += 1
-                            print(f"[stream {stream_idx}] push error ({push_failures}/{max_push_failures}): {e}", file=sys.stderr)
-                            if push_failures >= max_push_failures:
-                                print(f"[stream {stream_idx}] too many push failures; stopping", file=sys.stderr)
-                                input_done = True
-                                break
-
-                    # --- pull phase: drain available results ---
-                    if not pending:
-                        if input_done:
-                            break
-                        continue
-
                     try:
-                        t_pull0 = time.perf_counter()
-                        sample = runner.pull(timeout_ms=args.model_timeout_ms)
-                        profiler.add_time(
-                            ProfileTracker.stage_key("model_run", stream_idx),
-                            time.perf_counter() - t_pull0,
+                        if runner is None:
+                            sopt = pyneat.ModelSessionOptions()
+                            ropt = pyneat.RunOptions()
+                            ropt.queue_depth = model_qdepth
+                            ropt.overflow_policy = pyneat.OverflowPolicy.Block
+                            with self.model_build_mu:
+                                runner = model_local.build(pkt.frame, sopt, ropt)
+                        t_push0 = time.perf_counter()
+                        ok = runner.push(pkt.frame)
+                        self.profiler.add_time(
+                            ProfileTracker.stage_key("model_push", stream_idx),
+                            time.perf_counter() - t_push0,
                         )
-                        if sample is not None:
-                            pkt = pending.popleft()
-                            _process_result(sample, pkt)
-                        elif input_done and not pending:
-                            break
+                        if ok:
+                            pending.append(pkt)
+                            push_failures = 0
+                        else:
+                            print(f"[stream {stream_idx}] runner.push rejected frame", file=sys.stderr)
                     except Exception as e:
-                        print(f"[stream {stream_idx}] pull error: {e}", file=sys.stderr)
-                        if pending:
-                            pending.popleft()
+                        push_failures += 1
+                        print(f"[stream {stream_idx}] push error ({push_failures}/{max_push_failures}): {e}", file=sys.stderr)
+                        if push_failures >= max_push_failures:
+                            print(f"[stream {stream_idx}] too many push failures; stopping", file=sys.stderr)
+                            input_done = True
+                            break
 
-                # --- drain phase: pull remaining in-flight results ---
-                if runner is not None and pending:
-                    while pending:
-                        try:
-                            sample = runner.pull(timeout_ms=args.model_timeout_ms)
-                            if sample is not None:
-                                pkt = pending.popleft()
-                                _process_result(sample, pkt)
-                            else:
-                                break
-                        except Exception as e:
-                            print(f"[stream {stream_idx}] drain error: {e}", file=sys.stderr)
-                            pending.popleft()
-            finally:
-                if runner is not None:
-                    try:
-                        runner.close()
-                    except Exception:
-                        pass
-                with stats_mu:
-                    streams[stream_idx].infer_done = True
-
-        def overlay_worker(stream_idx: int) -> None:
-            nonlocal total_done
-            result_q = result_queues[stream_idx]
-            while True:
-                if stop_event.is_set() and result_q.empty():
-                    return
-                try:
-                    t_wait0 = time.perf_counter()
-                    pkt = result_q.get(timeout=0.05)
-                    profiler.add_time(
-                        ProfileTracker.stage_key("overlay_q_wait", stream_idx),
-                        time.perf_counter() - t_wait0,
-                    )
-                    profiler.note_queue(f"result_q_{stream_idx}", result_q.qsize(), 0)
-                    profiler.note_queue("result_q", sum(q.qsize() for q in result_queues), 0)
-                except queue.Empty:
-                    with stats_mu:
-                        infer_done = streams[stream_idx].infer_done
-                    if infer_done and result_q.empty():
-                        return
+                if not pending:
+                    if input_done:
+                        break
                     continue
 
-                st = streams[pkt.stream_idx]
-                with stats_mu:
-                    if st.processed >= args.frames:
-                        continue
-                    frame_idx = st.processed
-                    st.processed += 1
-                    done_before = total_done
+                try:
+                    t_pull0 = time.perf_counter()
+                    sample = runner.pull(timeout_ms=self.cfg.model_timeout_ms)
+                    self.profiler.add_time(
+                        ProfileTracker.stage_key("model_run", stream_idx),
+                        time.perf_counter() - t_pull0,
+                    )
+                    if sample is not None:
+                        pkt = pending.popleft()
+                        process_result(sample, pkt)
+                    elif input_done and not pending:
+                        break
+                except Exception as e:
+                    print(f"[stream {stream_idx}] pull error: {e}", file=sys.stderr)
+                    if pending:
+                        pending.popleft()
 
-                profiler.mark_processing_started(done_before)
+            if runner is not None and pending:
+                while pending:
+                    try:
+                        sample = runner.pull(timeout_ms=self.cfg.model_timeout_ms)
+                        if sample is not None:
+                            pkt = pending.popleft()
+                            process_result(sample, pkt)
+                        else:
+                            break
+                    except Exception as e:
+                        print(f"[stream {stream_idx}] drain error: {e}", file=sys.stderr)
+                        pending.popleft()
+        finally:
+            if runner is not None:
+                try:
+                    runner.close()
+                except Exception:
+                    pass
+            with self.stats_mu:
+                self.streams[stream_idx].infer_done = True
 
-                should_save = (frame_idx % args.save_every) == 0
-                if should_save:
-                    t_draw0 = time.perf_counter()
-                    draw_boxes(pkt.frame, pkt.boxes, class_labels)
-                    profiler.add_time(
-                        ProfileTracker.stage_key("draw_boxes", stream_idx),
-                        time.perf_counter() - t_draw0,
-                    )
-                    out_path = out_dirs[pkt.stream_idx] / f"frame_{frame_idx:06d}.jpg"
-                    t_wr0 = time.perf_counter()
-                    cv2.imwrite(str(out_path), pkt.frame)
-                    profiler.add_time(
-                        ProfileTracker.stage_key("imwrite", stream_idx),
-                        time.perf_counter() - t_wr0,
-                    )
-                    profiler.add_time(
-                        ProfileTracker.stage_key("end_to_end", stream_idx),
-                        time.perf_counter() - pkt.pulled_ts,
-                    )
-
-                if args.debug or ((frame_idx + 1) % 10 == 0):
-                    with stats_mu:
-                        pulled_now = st.pulled
-                    print(
-                        f"[stream {pkt.stream_idx}] frames={frame_idx + 1} "
-                        f"pulled={pulled_now} det={len(pkt.boxes)}"
-                    )
-                with stats_mu:
-                    total_done += 1
-                    done_now = total_done
-                if args.profile and (done_now % max(1, args.profile_every) == 0):
-                    with stats_mu:
-                        stream_snapshot = [(s.idx, s.processed, s.pulled) for s in streams]
-                    profiler.maybe_report(
-                        done_now,
-                        stream_snapshot,
-                        [q.qsize() for q in frame_queues],
-                        [q.qsize() for q in result_queues],
-                    )
-                if done_now >= total_target:
-                    stop_event.set()
+    def _overlay_worker(self, stream_idx: int) -> None:
+        result_q = self.result_queues[stream_idx]
+        while True:
+            if self.stop_event.is_set() and result_q.empty():
+                return
+            try:
+                t_wait0 = time.perf_counter()
+                pkt = result_q.get(timeout=0.05)
+                self.profiler.add_time(
+                    ProfileTracker.stage_key("overlay_q_wait", stream_idx),
+                    time.perf_counter() - t_wait0,
+                )
+                self.profiler.note_queue(f"result_q_{stream_idx}", result_q.qsize(), 0)
+                self.profiler.note_queue("result_q", sum(q.qsize() for q in self.result_queues), 0)
+            except queue.Empty:
+                with self.stats_mu:
+                    infer_done = self.streams[stream_idx].infer_done
+                if infer_done and result_q.empty():
                     return
+                continue
 
-        producer_threads: list[threading.Thread] = []
-        for st in streams:
-            t = threading.Thread(target=producer_worker, args=(st,), name=f"pull-{st.idx}", daemon=True)
+            st = self.streams[pkt.stream_idx]
+            with self.stats_mu:
+                if st.processed >= self.cfg.frames:
+                    continue
+                frame_idx = st.processed
+                st.processed += 1
+                done_before = self.total_done
+
+            self.profiler.mark_processing_started(done_before)
+            should_save = (frame_idx % self.cfg.save_every) == 0
+            if should_save:
+                t_draw0 = time.perf_counter()
+                draw_boxes(pkt.frame, pkt.boxes, self.class_labels)
+                self.profiler.add_time(
+                    ProfileTracker.stage_key("draw_boxes", stream_idx),
+                    time.perf_counter() - t_draw0,
+                )
+                out_path = self.out_dirs[pkt.stream_idx] / f"frame_{frame_idx:06d}.jpg"
+                t_wr0 = time.perf_counter()
+                cv2.imwrite(str(out_path), pkt.frame)
+                self.profiler.add_time(
+                    ProfileTracker.stage_key("imwrite", stream_idx),
+                    time.perf_counter() - t_wr0,
+                )
+                self.profiler.add_time(
+                    ProfileTracker.stage_key("end_to_end", stream_idx),
+                    time.perf_counter() - pkt.pulled_ts,
+                )
+
+            if self.cfg.debug or ((frame_idx + 1) % 10 == 0):
+                with self.stats_mu:
+                    pulled_now = st.pulled
+                print(
+                    f"[stream {pkt.stream_idx}] frames={frame_idx + 1} "
+                    f"pulled={pulled_now} det={len(pkt.boxes)}"
+                )
+            with self.stats_mu:
+                self.total_done += 1
+                done_now = self.total_done
+            if self.cfg.profile and (done_now % max(1, self.cfg.profile_every) == 0):
+                with self.stats_mu:
+                    stream_snapshot = [(s.idx, s.processed, s.pulled) for s in self.streams]
+                self.profiler.maybe_report(
+                    done_now,
+                    stream_snapshot,
+                    [q.qsize() for q in self.frame_queues],
+                    [q.qsize() for q in self.result_queues],
+                )
+            if done_now >= self.total_target:
+                self.stop_event.set()
+                return
+
+    def _start_threads(self) -> None:
+        for st in self.streams:
+            t = threading.Thread(target=self._producer_worker, args=(st,), name=f"pull-{st.idx}", daemon=True)
             t.start()
-            producer_threads.append(t)
-
-        infer_threads: list[threading.Thread] = []
-        for idx, model_local in enumerate(models):
+            self.producer_threads.append(t)
+        for idx, model_local in enumerate(self.models):
             t = threading.Thread(
-                target=infer_worker,
+                target=self._infer_worker,
                 args=(idx, model_local),
                 name=f"infer-{idx}",
                 daemon=True,
             )
             t.start()
-            infer_threads.append(t)
-        overlay_threads: list[threading.Thread] = []
-        for idx in range(len(streams)):
-            t = threading.Thread(target=overlay_worker, args=(idx,), name=f"overlay-{idx}", daemon=True)
+            self.infer_threads.append(t)
+        for idx in range(len(self.streams)):
+            t = threading.Thread(target=self._overlay_worker, args=(idx,), name=f"overlay-{idx}", daemon=True)
             t.start()
-            overlay_threads.append(t)
+            self.overlay_threads.append(t)
 
-        while not stop_event.is_set():
-            with stats_mu:
-                done = total_done
-                infers_done = all(s.infer_done for s in streams)
-            if done >= total_target:
-                stop_event.set()
+    def _monitor_completion(self) -> None:
+        while not self.stop_event.is_set():
+            with self.stats_mu:
+                done = self.total_done
+                infers_done = all(s.infer_done for s in self.streams)
+            if done >= self.total_target:
+                self.stop_event.set()
                 break
-            if infers_done and all(q.empty() for q in result_queues):
-                stop_event.set()
+            if infers_done and all(q.empty() for q in self.result_queues):
+                self.stop_event.set()
                 break
             time.sleep(0.02)
 
-        for t in producer_threads:
+    def _join_threads(self) -> None:
+        for t in self.producer_threads:
             t.join()
-        for t in infer_threads:
+        for t in self.infer_threads:
             t.join()
-        for t in overlay_threads:
+        for t in self.overlay_threads:
             t.join()
 
+    def _print_summary_and_close(self) -> None:
         t_end = time.perf_counter()
-        done_since_start = profiler.processed_since_start(total_done)
-        elapsed_from_start = profiler.elapsed_since_start_s(t_end)
+        done_since_start = self.profiler.processed_since_start(self.total_done)
+        elapsed_from_start = self.profiler.elapsed_since_start_s(t_end)
         elapsed = (
             max(1e-6, elapsed_from_start)
             if done_since_start > 0 and elapsed_from_start > 0.0
-            else max(1e-6, t_end - t0)
+            else max(1e-6, t_end - self.t0)
         )
         avg_fps = done_since_start / elapsed
-        print(f"Processed {total_done} outputs in {elapsed:.2f}s avg_fps={avg_fps:.2f}")
-        for st in streams:
-            print(f"stream[{st.idx}] processed={st.processed} pulled={st.pulled} saved to {out_dirs[st.idx]}/")
+        print(f"Processed {self.total_done} outputs in {elapsed:.2f}s avg_fps={avg_fps:.2f}")
+        for st in self.streams:
+            print(f"stream[{st.idx}] processed={st.processed} pulled={st.pulled} saved to {self.out_dirs[st.idx]}/")
             st.run.close()
-        return 0
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 4
+
+    def run(self) -> int:
+        try:
+            self._setup()
+            self._start_threads()
+            self._monitor_completion()
+            self._join_threads()
+            self._print_summary_and_close()
+            return 0
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            for st in self.streams:
+                try:
+                    st.run.close()
+                except Exception:
+                    pass
+            return 4
+
+
+def main() -> int:
+    cfg = parse_config()
+    return PipelineApp(cfg).run()
 
 
 if __name__ == "__main__":
