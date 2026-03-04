@@ -14,6 +14,42 @@
 ## Concept
 Depth estimation from an RTSP stream with optional depth-overlay recording. The example supports MiDaS v2.1 and Depth Anything V2 with auto profile selection based on model filename.
 
+## Architecture
+
+Pipeline:
+
+`RTSP Decode -> Depth Model -> Colorized Depth Overlay -> Video Writer`
+
+Both implementations keep source/session setup, model setup, processing loop, reconnect handling, and teardown as explicit lifecycle stages.
+
+## NEAT API Mapping
+
+- RTSP source:
+  Python: `RtspDecodedInputOptions` -> `Session.add(rtsp_decoded_input)` -> `build()`
+  C++: `RtspDecodedInputOptions` -> `Session.add(RtspDecodedInput)` -> `build(...)`
+- Model setup:
+  Python: `ModelOptions` + `Model(path, options)` then `model.run(...)`
+  C++: `Model::Options` + `Model(path, options)` then runner/session execution
+- Pull loop:
+  Python: `run.pull_tensor(timeout_ms=...)`
+  C++: `run.pull_tensor(...)` / `run.pull(...)` with timeout-driven reconnect policy
+
+## Lifecycle
+
+1. Parse config and infer model profile.
+2. Build RTSP decode runtime.
+3. Build model runtime.
+4. Enter frame loop (pull, infer, overlay, write).
+5. Handle reconnect on pull timeout.
+6. Close run/writer and print summary.
+
+## Behavior Preserved
+
+- Same model-profile inference from model filename.
+- Same pull timeout and reconnect thresholds.
+- Same output-file semantics and frame-limit handling.
+- Same CLI distinction: C++ uses `--url`, Python uses `--rtsp`.
+
 ## Supported Models
 Also works with: `depth_anything_v2_vits`
 

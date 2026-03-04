@@ -528,6 +528,7 @@ int main(int argc, char** argv) {
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
 
+  // Lifecycle: parse/validate runtime options.
   const bool self_test = has_flag(argc, argv, "--self-test");
 
   std::string url;
@@ -591,6 +592,7 @@ int main(int argc, char** argv) {
     std::cout << "RTSP url: " << url << "\n";
   std::cout << "Output: " << out_path << "\n";
 
+  // NEAT API boundary: model object creation and preprocessing configuration.
   simaai::neat::Model::Options model_opt;
   model_opt.media_type = "video/x-raw";
   model_opt.format = model_profile.input_format;
@@ -685,6 +687,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<simaai::neat::Session> rtsp_session;
     std::unique_ptr<simaai::neat::Run> rtsp_run;
 
+    // Lifecycle: source setup/reconnect stage with fixed RTSP decode options.
     auto build_rtsp = [&]() -> bool {
       auto session = std::make_unique<simaai::neat::Session>();
       session->add(simaai::neat::nodes::groups::RtspDecodedInput(ro));
@@ -716,6 +719,7 @@ int main(int argc, char** argv) {
         const double pull_dt_s = elapsed_s(t_pull0);
         if (!ref_opt.has_value()) {
           if (reconnect_attempts < max_reconnect_attempts) {
+            // Contract: reconnect policy/threshold is preserved.
             ++reconnect_attempts;
             std::cerr << "RTSP pull timed out; reconnecting (" << reconnect_attempts << "/"
                       << max_reconnect_attempts << ")\n";
@@ -760,6 +764,7 @@ int main(int argc, char** argv) {
     rtsp_session.reset();
   }
 
+  // Lifecycle: teardown stage (release writer after processing loop ends).
   writer.release();
 
   if (!ok) {
