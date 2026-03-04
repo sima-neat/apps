@@ -28,18 +28,24 @@ jobs:
           wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
           bash /tmp/install-neat-apps-from-a-branch.sh "${{ matrix.branch }}"
 
-      - name: Install Python test dependencies
+      - name: Locate pyneat
         shell: bash
         run: |
-          if [[ -x /media/nvme/pyneat/bin/python3 ]]; then
-            PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3
-          elif [[ -x "${HOME}/pyneat/bin/python3" ]]; then
-            PYTHON_TEST_BIN="${HOME}/pyneat/bin/python3"
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
           else
             echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
             exit 1
           fi
 
+      - name: Install Python test dependencies
+        shell: bash
+        run: |
+          source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
           "${PYTHON_TEST_BIN}" -m pip install pytest
 
@@ -51,11 +57,7 @@ jobs:
         run: |
           /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
-          if [[ -x /media/nvme/pyneat/bin/python3 ]]; then
-            export PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3
-          elif [[ -x "${HOME}/pyneat/bin/python3" ]]; then
-            export PYTHON_TEST_BIN="${HOME}/pyneat/bin/python3"
-          fi
+          source "${PYNEAT_ACTIVATE}"
           source tests/scripts/testing/setup_test_env.sh
           ./tests/test.sh --e2e
 
@@ -69,18 +71,24 @@ jobs:
           wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
           bash /tmp/install-neat-apps-from-a-branch.sh "${{ inputs.branch }}"
 
-      - name: Install Python test dependencies
+      - name: Locate pyneat
         shell: bash
         run: |
-          if [[ -x /media/nvme/pyneat/bin/python3 ]]; then
-            PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3
-          elif [[ -x "${HOME}/pyneat/bin/python3" ]]; then
-            PYTHON_TEST_BIN="${HOME}/pyneat/bin/python3"
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
           else
             echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
             exit 1
           fi
 
+      - name: Install Python test dependencies
+        shell: bash
+        run: |
+          source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
           "${PYTHON_TEST_BIN}" -m pip install pytest
 
@@ -92,10 +100,6 @@ jobs:
         run: |
           /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
-          if [[ -x /media/nvme/pyneat/bin/python3 ]]; then
-            export PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3
-          elif [[ -x "${HOME}/pyneat/bin/python3" ]]; then
-            export PYTHON_TEST_BIN="${HOME}/pyneat/bin/python3"
-          fi
+          source "${PYNEAT_ACTIVATE}"
           source tests/scripts/testing/setup_test_env.sh
           ./tests/test.sh --e2e
