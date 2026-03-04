@@ -22,7 +22,7 @@ Pipeline:
 
 Both implementations keep source/session setup, model setup, processing loop, reconnect handling, and teardown as explicit lifecycle stages.
 
-## NEAT API Mapping
+## NEAT API Usage
 
 - RTSP source:
   Python: `RtspDecodedInputOptions` -> `Session.add(rtsp_decoded_input)` -> `build()`

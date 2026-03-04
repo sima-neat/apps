@@ -35,7 +35,7 @@ Both implementations are intentionally kept in one file (`main.py`, `main.cpp`) 
 4. Worker methods (producer, infer, overlay)
 5. Orchestration (thread startup, monitor loop, shutdown, summary)
 
-### NEAT API Usage
+## NEAT API Usage
 
 **Python (`pyneat`)**
 - RTSP session build (`build_rtsp_run` in `main.py`):

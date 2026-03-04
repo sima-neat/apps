@@ -46,7 +46,7 @@ The sample is split into three independent runtime stages:
 3. `OptiView output`
    The original decoded frame is copied into a second runtime path that re-encodes to H.264, packetizes to RTP, and sends video over UDP to OptiView. Detection results from the YOLO path are converted into OptiView JSON and sent on the JSON side channel.
 
-## NEAT API Mapping
+## NEAT API Usage
 
 - RTSP ingest: `RtspDecodedInputOptions` -> `Session.add(rtsp_decoded_input)` -> `Session.build(...)`
 - YOLO path:
