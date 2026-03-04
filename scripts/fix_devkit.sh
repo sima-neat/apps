@@ -13,6 +13,12 @@ echo "[fix-devkit] stopping stale app/test processes"
 pkill -f "/data/workspace/sima-neat/apps/examples/.*/main.py" || true
 pkill -f "/data/workspace/sima-neat/apps/tests/pytest.ini" || true
 
+echo "[fix-devkit] stopping core services"
+run_root systemctl stop simaai-pipeline-manager.service || true
+run_root systemctl stop simaai-appcomplex.service || true
+run_root systemctl stop rctd.service || true
+sleep 1
+
 echo "[fix-devkit] resetting remoteproc"
 run_root sh -c 'echo stop > /sys/class/remoteproc/remoteproc0/state'
 run_root sh -c 'echo stop > /sys/class/remoteproc/remoteproc1/state'
@@ -20,12 +26,19 @@ run_root sh -c 'echo start > /sys/class/remoteproc/remoteproc1/state'
 run_root sh -c 'echo start > /sys/class/remoteproc/remoteproc0/state'
 
 echo "[fix-devkit] reinitializing MLA memory"
-run_root /usr/bin/init_mla_memory.sh
+if ! run_root /usr/bin/init_mla_memory.sh; then
+  echo "[fix-devkit] MLA init failed, retrying after one more remoteproc reset"
+  run_root sh -c 'echo stop > /sys/class/remoteproc/remoteproc0/state'
+  run_root sh -c 'echo stop > /sys/class/remoteproc/remoteproc1/state'
+  run_root sh -c 'echo start > /sys/class/remoteproc/remoteproc1/state'
+  run_root sh -c 'echo start > /sys/class/remoteproc/remoteproc0/state'
+  run_root /usr/bin/init_mla_memory.sh
+fi
 
 echo "[fix-devkit] restarting core services"
-run_root systemctl restart simaai-appcomplex.service
-run_root systemctl restart simaai-pipeline-manager.service
-run_root systemctl restart rctd.service
+run_root systemctl start simaai-appcomplex.service
+run_root systemctl start simaai-pipeline-manager.service
+run_root systemctl start rctd.service
 
 sleep 2
 
