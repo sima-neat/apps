@@ -64,13 +64,6 @@ The example uses a producer/consumer design:
 
 This separation keeps the RTSP session from being tightly coupled to the inference latency of each frame and makes timing/debug output easier to interpret.
 
-## Behavior Preserved
-
-- Same producer/consumer threading model and queue semantics in C++.
-- Same RTSP probe/build behavior in C++ and Python.
-- Same OptiView publish order: video then JSON.
-- Same YOLO decoding policy: packed BBOX preferred, Python fallback decode retained.
-
 ## Prerequisites
 - Installed NEAT framework and OptiView on the DevKit
 - RTSP camera source or use OptiView to start RTSP source
