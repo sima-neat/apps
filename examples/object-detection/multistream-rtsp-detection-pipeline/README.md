@@ -25,20 +25,54 @@ RTSP Source ──► Frame Queue ──► Model Inference ──► Result Que
 
 Each RTSP stream gets its own set of producer, infer, and overlay worker threads connected by bounded queues with keep-latest overflow semantics.
 
+### Code Structure (Single-File Entrypoints)
+
+Both implementations are intentionally kept in one file (`main.py`, `main.cpp`) but now follow the same high-level structure:
+
+1. CLI/config parsing and validation
+2. NEAT runtime builders (RTSP and model/infer)
+3. Shared runtime state (stream state, packets, queues, profiling)
+4. Worker methods (producer, infer, overlay)
+5. Orchestration (thread startup, monitor loop, shutdown, summary)
+
 ### NEAT API Usage
 
-**RTSP input session** (in `main.py` / `main.cpp`):
-- Configure stream options via `pyneat.RtspDecodedInputOptions` / `simaai::neat::nodes::groups::RtspDecodedInputOptions`
-- Build a session: `pyneat.Session` → `add(rtsp_decoded_input)` → `add(output)` → `session.build(run_options)` (Python) or `simaai::neat::Session` → `add(RtspDecodedInput)` → `add(Output)` → `session.build(run_opt)` (C++)
-- Pull decoded frames: `run.pull_tensor(timeout_ms=...)`
+**Python (`pyneat`)**
+- RTSP session build (`build_rtsp_run` in `main.py`):
+  - `pyneat.RtspDecodedInputOptions`
+  - `pyneat.Session` + `add(pyneat.groups.rtsp_decoded_input(...))` + `add(pyneat.nodes.output(...))`
+  - `session.build(run_opt)` returns `run`; producer thread uses `run.pull_tensor(...)`
+- Model object creation (`PipelineApp._make_model`):
+  - `pyneat.ModelOptions` + `pyneat.Model(model_path, mopt)`
+- Inference runner build (`PipelineApp._infer_worker`, initialized on first frame):
+  - `model.build(frame, model_session_opt, run_opt)`
+  - infer thread uses `runner.push(frame)` and `runner.pull(timeout_ms=...)`
+- Box decode behavior:
+  - Parse `BBOX` payload if present (`extract_bbox_payload` + `parse_bbox_payload`)
+  - Otherwise use manual YOLOv8 decode (`decode_yolov8_boxes_from_sample`)
+  - No Python `SimaBoxDecode` node is used
 
-**Model setup** (in `main.py` / `main.cpp`):
-- Configure model: `pyneat.ModelOptions` / `simaai::neat::Model::Options` — set `format`, `input_max_width`, `input_max_height`, `input_max_depth`
-- Load model: `pyneat.Model(path, options)` / `simaai::neat::Model(path, options)`
+**C++ (`simaai::neat`)**
+- RTSP session build (`build_rtsp_runtime` / `build_rtsp_runtime_with_fallback` in `main.cpp`):
+  - `simaai::neat::nodes::groups::RtspDecodedInputOptions`
+  - `simaai::neat::Session` + `add(RtspDecodedInput)` + `add(Output)`
+  - `session.build(run_opt)` returns `run`; producer thread uses `run.pull_tensor(...)`
+- Model + infer session build (`build_infer_runtime`):
+  - `simaai::neat::Model::Options` + `simaai::neat::Model`
+  - Explicit graph: `Input → Preprocess → Infer → SimaBoxDecode → Output`
+  - Async run built via `session.build(dummy_frame, RunMode::Async, run_opt)`
+  - infer thread uses `run.push(frame)` and `run.pull(timeout_ms, sample, ...)`
 
-**Inference** (in `pipeline.py` / `pipeline.h`):
-- Python: lazy-build via `model.build(frame, session_opts, run_opts)`, then `runner.push(frame)` / `runner.pull(timeout_ms=...)` with async pipeline depth
-- C++: explicit session with `Input → Preprocess → Infer → SimaBoxDecode → Output` nodes, built via `session.build(dummy_frame, RunMode::Async, run_opts)`, then `run.push(frame)` / `run.pull(timeout_ms, sample)`
+### Worker Thread Lifecycle
+
+For each stream, both languages use:
+
+1. Producer worker: pull decoded RTSP frames and push to frame queue (keep-latest behavior)
+2. Infer worker: push frames to model run, pull inference outputs, decode boxes, push to result queue
+3. Overlay worker: draw boxes and save every `--save-every` frame
+
+Shutdown is coordinated by a monitor loop plus per-stream done flags and queue emptiness checks.  
+In C++, producer start is intentionally gated until infer/overlay workers are live to avoid startup backlog.
 
 ## Supported Models
 Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`
@@ -103,13 +137,13 @@ Binary output:
 ### Start an RTSP test source
 If you don't have live RTSP cameras, use the bundled test server to serve a local video file as multiple RTSP streams:
 ```bash
-# In a separate terminal — start 2 looping RTSP streams on port 8554
-python utils/rtsp/rtsp_multi_file_server.py /path/to/video.mp4 --streams 2
+# In a separate terminal — start 4 looping RTSP streams on port 8554
+python utils/rtsp/rtsp_multi_file_server.py /path/to/video.mp4 --streams 4
 
 # With transcoding to match the pipeline's expected resolution
-python utils/rtsp/rtsp_multi_file_server.py /path/to/video.mp4 --streams 2 --width 1280 --height 720 --fps 30
+python utils/rtsp/rtsp_multi_file_server.py /path/to/video.mp4 --streams 4 --width 1280 --height 720 --fps 30
 ```
-Streams are mounted at `rtsp://127.0.0.1:8554/stream0`, `rtsp://127.0.0.1:8554/stream1`, etc.
+Streams are mounted at `rtsp://127.0.0.1:8554/stream0`, `rtsp://127.0.0.1:8554/stream1`, `rtsp://127.0.0.1:8554/stream2`, `rtsp://127.0.0.1:8554/stream3`, etc.
 
 ### C++
 ```bash
@@ -119,7 +153,9 @@ Streams are mounted at `rtsp://127.0.0.1:8554/stream0`, `rtsp://127.0.0.1:8554/s
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
   --frames 100 --tcp --fps 10 --save-every 10 \
   --rtsp rtsp://127.0.0.1:8554/stream0 \
-  --rtsp rtsp://127.0.0.1:8554/stream1
+  --rtsp rtsp://127.0.0.1:8554/stream1 \
+  --rtsp rtsp://127.0.0.1:8554/stream2 \
+  --rtsp rtsp://127.0.0.1:8554/stream3
 ```
 
 ### Python
@@ -132,7 +168,9 @@ python examples/object-detection/multistream-rtsp-detection-pipeline/main.py \
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
   --frames 100 --tcp --fps 10 --save-every 10 \
   --rtsp rtsp://127.0.0.1:8554/stream0 \
-  --rtsp rtsp://127.0.0.1:8554/stream1
+  --rtsp rtsp://127.0.0.1:8554/stream1 \
+  --rtsp rtsp://127.0.0.1:8554/stream2 \
+  --rtsp rtsp://127.0.0.1:8554/stream3
 ```
 
 ## Debugging Notes
