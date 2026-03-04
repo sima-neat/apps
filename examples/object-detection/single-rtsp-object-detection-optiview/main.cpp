@@ -377,18 +377,14 @@ int main(int argc, char** argv) {
     enable_optiview_diagnostics(true);
 
     // Probe once before building the main decode session so decoder fallback
-    // caps can follow the real stream resolution instead of a hardcoded size.
-    int rtsp_probe_w = 0;
-    int rtsp_probe_h = 0;
+    // caps can follow the source dimensions and FPS instead of hardcoded values.
+    sima_examples::RtspStreamInfo rtsp_probe;
     sima_examples::RtspProbeOptions rtsp_probe_opt;
     rtsp_probe_opt.payload_type = 96;
     rtsp_probe_opt.latency_ms = 200;
     rtsp_probe_opt.rtsp_tcp = true;
     rtsp_probe_opt.debug = cfg.debug;
-    (void)sima_examples::probe_rtsp_decoded_dims(cfg.url, rtsp_probe_opt,
-                                                 /*tries=*/8,
-                                                 /*timeout_ms=*/1000,
-                                                 rtsp_probe_w, rtsp_probe_h);
+    (void)sima_examples::probe_rtsp_stream_info(cfg.url, rtsp_probe_opt, rtsp_probe);
 
     // Camera session:
     // RTSP -> depay/parse -> hardware decode -> NV12 output.
@@ -403,13 +399,16 @@ int main(int argc, char** argv) {
     cam_opt.decoder_name = "decoder";
     cam_opt.decoder_raw_output = true;
     cam_opt.auto_caps_from_stream = true;
-    if (rtsp_probe_w > 0 && rtsp_probe_h > 0) {
-      cam_opt.fallback_h264_width = rtsp_probe_w;
-      cam_opt.fallback_h264_height = rtsp_probe_h;
-      std::cout << "[init] probed RTSP decode dims " << rtsp_probe_w << "x" << rtsp_probe_h << "\n";
+    if (rtsp_probe.width > 0 && rtsp_probe.height > 0) {
+      cam_opt.fallback_h264_width = rtsp_probe.width;
+      cam_opt.fallback_h264_height = rtsp_probe.height;
+      std::cout << "[init] probed RTSP decode dims " << rtsp_probe.width << "x" << rtsp_probe.height;
+      if (rtsp_probe.fps > 0)
+        std::cout << " @" << rtsp_probe.fps << " fps";
+      std::cout << "\n";
     }
-    // RTSP servers often omit framerate in caps; provide a fallback for negotiation.
-    cam_opt.fallback_h264_fps = 30;
+    if (rtsp_probe.fps > 0)
+      cam_opt.fallback_h264_fps = rtsp_probe.fps;
     camera.add(simaai::neat::nodes::groups::RtspDecodedInput(cam_opt));
     camera.add(simaai::neat::nodes::Output());
     simaai::neat::RunOptions cam_run_opt;
@@ -449,6 +448,7 @@ int main(int argc, char** argv) {
     // appsrc(NV12) -> H264 encode -> RTP packetize -> UDP sink.
     const std::string udp_host = cfg.optiview_host;
     const int udp_port = cfg.optiview_video_port;
+    const int output_fps = (rtsp_probe.fps > 0) ? rtsp_probe.fps : 30;
     simaai::neat::Run udp_run;
     std::unique_ptr<sima_examples::OptiViewSender> optiview_sender;
     std::vector<std::string> optiview_labels;
@@ -461,10 +461,11 @@ int main(int argc, char** argv) {
     udp_src.width = frame_w;
     udp_src.height = frame_h;
     udp_src.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
-                            ",height=" + std::to_string(frame_h) + ",framerate=30/1";
+                            ",height=" + std::to_string(frame_h) + ",framerate=" +
+                            std::to_string(output_fps) + "/1";
     udp_src.use_simaai_pool = false;
     udp.add(simaai::neat::nodes::Input(udp_src));
-    udp.add(simaai::neat::nodes::H264EncodeSima(frame_w, frame_h, 30, 4000));
+    udp.add(simaai::neat::nodes::H264EncodeSima(frame_w, frame_h, output_fps, 4000));
     udp.add(simaai::neat::nodes::H264Parse());
     udp.add(simaai::neat::nodes::H264Packetize(96, 1));
     simaai::neat::UdpOutputOptions udp_opt;
