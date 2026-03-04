@@ -104,8 +104,30 @@ def depth_colormap_from_tensor(t: pyneat.Tensor, *, depth_order: str) -> np.ndar
     return cv2.applyColorMap(depth_u8, cv2.COLORMAP_INFERNO)
 
 
+def probe_rtsp(url: str) -> tuple[int, int, int]:
+    """Probe the live stream once so downstream caps match the real source."""
+    cap = cv2.VideoCapture(url)
+    if not cap.isOpened():
+        raise RuntimeError(f"failed to open RTSP source for probing: {url}")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
+    cap.release()
+    if width <= 0 or height <= 0:
+        raise RuntimeError("failed to probe RTSP frame size")
+    return width, height, max(0, fps)
+
+
 def build_rtsp_run(
-    url: str, width: int, height: int, fps: int, latency_ms: int, tcp: bool, sample_every: int
+    url: str,
+    width: int,
+    height: int,
+    stream_fps: int,
+    latency_ms: int,
+    tcp: bool,
+    sample_every: int,
+    fallback_width: int = 0,
+    fallback_height: int = 0,
 ):
     ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
@@ -116,13 +138,21 @@ def build_rtsp_run(
     ro.out_format = "BGR"
     ro.decoder_raw_output = False
     ro.decoder_name = "decoder"
+    ro.auto_caps_from_stream = True
     ro.use_videoconvert = False
     ro.use_videoscale = True
+    if fallback_width > 0:
+        ro.fallback_h264_width = fallback_width
+    if fallback_height > 0:
+        ro.fallback_h264_height = fallback_height
+    if stream_fps > 0:
+        ro.fallback_h264_fps = stream_fps
     ro.output_caps.enable = True
     ro.output_caps.format = "BGR"
     ro.output_caps.width = width
     ro.output_caps.height = height
-    ro.output_caps.fps = fps
+    if stream_fps > 0:
+        ro.output_caps.fps = stream_fps
     ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
     sess = pyneat.Session()
@@ -324,6 +354,11 @@ def main() -> int:
         out_dir = os.path.dirname(os.path.abspath(args.output_file))
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
+        source_width, source_height, source_fps = probe_rtsp(args.rtsp)
+        print(
+            f"[init] probed RTSP decode dims {source_width}x{source_height}"
+            + (f" @{source_fps} fps" if source_fps > 0 else "")
+        )
 
         profiler = StageProfiler(args.profile)
         log_every = max(1, args.log_every)
@@ -335,7 +370,15 @@ def main() -> int:
         queue2_depth = None
         # Keep a reference to the Session object alive for the lifetime of the Run.
         rtsp_session, rtsp_run = build_rtsp_run(
-            args.rtsp, width, height, args.fps, args.latency_ms, args.tcp, args.sample_every
+            args.rtsp,
+            width,
+            height,
+            source_fps,
+            args.latency_ms,
+            args.tcp,
+            args.sample_every,
+            fallback_width=source_width,
+            fallback_height=source_height,
         )
         if args.profile:
             queue2_depth = parse_queue2_depth(rtsp_run.report())
@@ -361,10 +404,12 @@ def main() -> int:
                         args.rtsp,
                         width,
                         height,
-                        args.fps,
+                        source_fps,
                         args.latency_ms,
                         args.tcp,
                         args.sample_every,
+                        fallback_width=source_width,
+                        fallback_height=source_height,
                     )
                     if args.profile:
                         queue2_depth = parse_queue2_depth(rtsp_run.report())
