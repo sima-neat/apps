@@ -93,7 +93,7 @@ jobs:
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
           "${PYTHON_TEST_BIN}" -m pip install pytest
 
-      - name: Run tests from installed apps runtime
+      - name: Unit Tests
         shell: bash
         env:
           SIMANEAT_APPS_TEST_RTSP_URL: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URL }}
@@ -107,7 +107,7 @@ jobs:
             export PYTHON_TEST_BIN="${HOME}/pyneat/bin/python3"
           fi
           source tests/scripts/testing/setup_test_env.sh
-          ./tests/test.sh
+          ./tests/test.sh --unit
 
   publish-index:
     runs-on: ubuntu-latest
