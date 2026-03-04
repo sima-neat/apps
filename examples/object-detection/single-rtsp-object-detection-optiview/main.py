@@ -17,15 +17,23 @@ runtime path is easy to reason about:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+import glob
 import json
 import math
 import os
+import shutil
 import socket
 import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# Prefer system OpenCV (built with GStreamer) when running inside a venv.
+for p in glob.glob("/usr/lib/python3*/dist-packages"):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import cv2
 import numpy as np
@@ -57,6 +65,19 @@ COCO80_NAMES = [
 ]
 
 DFL_BINS_16 = np.arange(16, dtype=np.float32)
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    rtsp: str
+    model: str
+    frames: int
+    optiview_host: str
+    optiview_video_port: int
+    optiview_json_port: int
+    latency_ms: int
+    udp: bool
+    debug: bool
 
 
 def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
@@ -356,7 +377,82 @@ def build_model(model_path: str, width: int, height: int) -> pyneat.Model:
     return pyneat.Model(model_path, opt)
 
 
-def build_udp_video_writer(host: str, port: int, width: int, height: int, fps: int) -> cv2.VideoWriter:
+class FfmpegUdpWriter:
+    """Raw-frame stdin -> RTP/H.264 UDP writer used when OpenCV lacks GStreamer."""
+
+    def __init__(self, host: str, port: int, width: int, height: int, fps: int):
+        self._width = width
+        self._height = height
+        self._proc = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgr24",
+                "-s",
+                f"{width}x{height}",
+                "-r",
+                str(max(1, fps)),
+                "-i",
+                "-",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-pix_fmt",
+                "yuv420p",
+                "-g",
+                str(max(1, fps)),
+                "-keyint_min",
+                str(max(1, fps)),
+                "-f",
+                "rtp",
+                f"rtp://{host}:{port}?pkt_size=1200",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def write(self, frame: np.ndarray) -> None:
+        if frame.shape[1] != self._width or frame.shape[0] != self._height:
+            raise RuntimeError(
+                f"unexpected frame size for ffmpeg writer: got {frame.shape[1]}x{frame.shape[0]}, "
+                f"expected {self._width}x{self._height}"
+            )
+        if frame.dtype != np.uint8:
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
+        if not frame.flags.c_contiguous:
+            frame = np.ascontiguousarray(frame)
+        if self._proc.poll() is not None:
+            raise RuntimeError("ffmpeg UDP writer exited unexpectedly")
+        assert self._proc.stdin is not None
+        try:
+            self._proc.stdin.write(frame.tobytes())
+        except BrokenPipeError as exc:
+            raise RuntimeError("ffmpeg UDP writer pipe broken") from exc
+
+    def release(self) -> None:
+        if self._proc.stdin is not None:
+            try:
+                self._proc.stdin.close()
+            except Exception:
+                pass
+        try:
+            self._proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self._proc.wait(timeout=2.0)
+
+
+def build_udp_video_writer(host: str, port: int, width: int, height: int, fps: int):
     """Open a GStreamer-backed RTP/H.264 UDP writer for the OptiView video port.
 
     OptiView expects video on its UDP video channel, so the Python version uses
@@ -372,9 +468,15 @@ def build_udp_video_writer(host: str, port: int, width: int, height: int, fps: i
         f'udpsink host={host} port={port} sync=false async=false'
     )
     writer = cv2.VideoWriter(pipeline, cv2.CAP_GSTREAMER, 0, float(max(1, fps)), (width, height), True)
-    if not writer.isOpened():
-        raise RuntimeError("failed to open UDP H.264 writer; verify OpenCV GStreamer and x264enc")
-    return writer
+    if writer.isOpened():
+        return writer
+
+    # Some pyneat OpenCV builds are compiled without GStreamer; keep OptiView
+    # video output by falling back to an ffmpeg RTP/H.264 subprocess writer.
+    if shutil.which("ffmpeg"):
+        return FfmpegUdpWriter(host, port, width, height, fps)
+
+    raise RuntimeError("failed to open UDP H.264 writer; verify OpenCV GStreamer and x264enc")
 
 
 def make_optiview_json(timestamp_ms: int, frame_id: str, boxes: list[dict]) -> str:
@@ -406,7 +508,7 @@ def make_optiview_json(timestamp_ms: int, frame_id: str, boxes: list[dict]) -> s
     )
 
 
-def parse_args() -> argparse.Namespace:
+def build_arg_parser() -> argparse.ArgumentParser:
     """Expose only the small set of controls needed for this reference flow."""
     parser = argparse.ArgumentParser(description="Single-camera RTSP YOLOv8 OptiView example")
     parser.add_argument("--rtsp", required=True, help="RTSP URL")
@@ -418,7 +520,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--latency-ms", type=int, default=200, help="RTSP latency in milliseconds")
     parser.add_argument("--udp", action="store_true", help="Use UDP RTSP transport instead of TCP")
     parser.add_argument("--debug", action="store_true", help="Enable timing prints")
-    return parser.parse_args()
+    return parser
+
+
+def parse_config(argv: list[str] | None = None) -> AppConfig:
+    args = build_arg_parser().parse_args(argv)
+    return AppConfig(
+        rtsp=args.rtsp,
+        model=args.model,
+        frames=args.frames,
+        optiview_host=args.optiview_host,
+        optiview_video_port=args.optiview_video_port,
+        optiview_json_port=args.optiview_json_port,
+        latency_ms=args.latency_ms,
+        udp=args.udp,
+        debug=args.debug,
+    )
 
 
 def resolve_yolov8s_model(root: Path) -> str:
@@ -482,8 +599,8 @@ def resolve_yolov8s_model(root: Path) -> str:
 
 
 def main() -> int:
-    args = parse_args()
-    model_path = args.model or resolve_yolov8s_model(Path.cwd())
+    cfg = parse_config()
+    model_path = cfg.model or resolve_yolov8s_model(Path.cwd())
     if not model_path or not Path(model_path).is_file():
         print("Failed to locate yolo_v8s MPK tarball.", file=sys.stderr)
         print("Set --model/--mpk or run 'sima-cli modelzoo get yolo_v8s'.", file=sys.stderr)
@@ -496,32 +613,34 @@ def main() -> int:
     try:
         # Probe first so decode, inference, and UDP output all agree on the
         # same live frame dimensions.
-        frame_w, frame_h, fps = probe_rtsp(args.rtsp)
+        frame_w, frame_h, fps = probe_rtsp(cfg.rtsp)
         print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
 
-        # The runtime is intentionally simple:
-        # RTSP decode -> Python frame -> model.run() -> OptiView outputs.
+        # NEAT boundary: build YOLO model runtime from the resolved MPK.
         model = build_model(model_path, frame_w, frame_h)
+        # NEAT boundary: build RTSP decode runtime used by pull_tensor().
         rtsp_session, rtsp_run = build_rtsp_run(
-            args.rtsp,
+            cfg.rtsp,
             frame_w,
             frame_h,
             fps,
-            args.latency_ms,
-            tcp=not args.udp,
+            cfg.latency_ms,
+            tcp=not cfg.udp,
         )
+        # NEAT boundary: build OptiView video/json transports.
         writer = build_udp_video_writer(
-            args.optiview_host, args.optiview_video_port, frame_w, frame_h, fps
+            cfg.optiview_host, cfg.optiview_video_port, frame_w, frame_h, fps
         )
         json_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-        print(f"optiview host={args.optiview_host} video_port={args.optiview_video_port} "
-              f"json_port={args.optiview_json_port} channel=0")
+        print(f"optiview host={cfg.optiview_host} video_port={cfg.optiview_video_port} "
+              f"json_port={cfg.optiview_json_port} channel=0")
 
         processed = 0
         started = time.perf_counter()
-        while args.frames <= 0 or processed < args.frames:
-            # Pull one decoded frame from the RTSP session.
+        # Contract: single-threaded frame order is pull -> infer -> publish video -> publish JSON.
+        while cfg.frames <= 0 or processed < cfg.frames:
+            # Push/pull integration point: pull one decoded frame from RTSP run.
             t_pull0 = time.perf_counter()
             tensor = rtsp_run.pull_tensor(timeout_ms=5000)
             t_pull1 = time.perf_counter()
@@ -532,7 +651,7 @@ def main() -> int:
             frame = tensor_bgr_from_decoded(tensor)
             infer_input = frame
 
-            # Run synchronous YOLO inference on the current frame.
+            # Push/pull integration point: run model and pull one output sample.
             t_inf0 = time.perf_counter()
             result = model.run(infer_input, timeout_ms=5000)
             t_inf1 = time.perf_counter()
@@ -553,15 +672,14 @@ def main() -> int:
                     MAX_DET,
                 )
 
-            # Publish the original video frame and the detection side-channel
-            # independently, matching the OptiView contract used by the C++ sample.
+            # Contract: publish video first, then publish matching JSON metadata.
             writer.write(frame)
             fid = str(processed)
             payload_json = make_optiview_json(int(time.time() * 1000), fid, boxes)
-            json_sock.sendto(payload_json.encode("utf-8"), (args.optiview_host, args.optiview_json_port))
+            json_sock.sendto(payload_json.encode("utf-8"), (cfg.optiview_host, cfg.optiview_json_port))
 
             processed += 1
-            if args.debug and (processed <= 5 or processed % 30 == 0):
+            if cfg.debug and (processed <= 5 or processed % 30 == 0):
                 print(
                     f"[debug] frame={processed} pull_ms={(t_pull1 - t_pull0) * 1000.0:.2f} "
                     f"infer_ms={(t_inf1 - t_inf0) * 1000.0:.2f} boxes={len(boxes)}"
@@ -569,14 +687,13 @@ def main() -> int:
 
         elapsed = max(time.perf_counter() - started, 1e-6)
         print(f"processed={processed} fps={processed / elapsed:.2f} "
-              f"udp={args.optiview_host}:{args.optiview_video_port}")
+              f"udp={cfg.optiview_host}:{cfg.optiview_video_port}")
         return 0 if processed > 0 else 3
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     finally:
-        # Clean shutdown matters on the DevKit because OpenCV/GStreamer and the
-        # RTSP runtime otherwise tend to hold resources after exceptions.
+        # Contract: release video writer, then close RTSP run, then close JSON socket.
         try:
             if writer is not None:
                 writer.release()
