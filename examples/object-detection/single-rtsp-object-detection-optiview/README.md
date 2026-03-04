@@ -31,7 +31,7 @@ For this sample, the most important part is the viewer/output contract: the appl
 
 For more information regarding OptiView, please refer to this [page](https://docs.sima.ai/pages/optiview/main.html#).
 
-## Design
+## Architecture
 The sample is split into three independent runtime stages:
 
 1. `RTSP ingest and decode`
@@ -46,13 +46,30 @@ The sample is split into three independent runtime stages:
 3. `OptiView output`
    The original decoded frame is copied into a second runtime path that re-encodes to H.264, packetizes to RTP, and sends video over UDP to OptiView. Detection results from the YOLO path are converted into OptiView JSON and sent on the JSON side channel.
 
-## Runtime Model
+## NEAT API Mapping
+
+- RTSP ingest: `RtspDecodedInputOptions` -> `Session.add(rtsp_decoded_input)` -> `Session.build(...)`
+- YOLO path:
+  C++ graph uses `Input -> Preprocess -> Infer -> SimaBoxDecode -> Output`
+  Python path uses `Model.build(...)`/`Model.run(...)` with packed BBOX parsing first and manual decode fallback.
+- OptiView output:
+  C++ builds a dedicated OptiView video runtime and UDP JSON sender.
+  Python builds a UDP video writer plus UDP JSON sender.
+
+## Lifecycle
 The example uses a producer/consumer design:
 
 - the producer thread pulls decoded frames from the RTSP session and places them into a bounded queue
 - the consumer thread pulls frames from that queue, submits them to YOLO, converts detection results to OptiView objects, and publishes both video and JSON
 
 This separation keeps the RTSP session from being tightly coupled to the inference latency of each frame and makes timing/debug output easier to interpret.
+
+## Behavior Preserved
+
+- Same producer/consumer threading model and queue semantics in C++.
+- Same RTSP probe/build behavior in C++ and Python.
+- Same OptiView publish order: video then JSON.
+- Same YOLO decoding policy: packed BBOX preferred, Python fallback decode retained.
 
 ## Prerequisites
 - Installed NEAT framework and OptiView on the DevKit
@@ -156,7 +173,7 @@ Example with explicit OptiView host:
 Run the Python sample directly from the example folder:
 
 ```bash
-cd <apps-repo-root>/examples/object-detection/yolov8_one_rtsp_optiview
+cd <apps-repo-root>/examples/object-detection/single-rtsp-object-detection-optiview
 python3 main.py --model <path-to-yolo_v8s-mpk.tar.gz> --rtsp <rtsp_url>
 ```
 
