@@ -29,6 +29,8 @@ jobs:
       - name: Build apps on eLxr SDK
         env:
           SIMA_CLI_BIN: /home/sima/.sima-cli/.venv/bin/sima-cli
+          NEAT_APPS_ARTIFACT_BRANCH_KEY: ${{ github.head_ref || github.ref_name }}
+          NEAT_APPS_ARTIFACT_SHORT_SHA: ${{ github.sha }}
         run: |
           chmod +x build.sh scripts/ci/check_public_includes.sh
           ./build.sh --all --clean
@@ -36,34 +38,25 @@ jobs:
       - name: Enforce public include boundary
         run: ./scripts/ci/check_public_includes.sh
 
-      - name: Compute archive metadata
+      - name: Capture distribution archive metadata
         id: artifact-meta
         run: |
-          BRANCH_RAW="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          BRANCH_KEY="$(echo "${BRANCH_RAW}" | tr '/ ' '--')"
-          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          ARCHIVE_NAME="neat-apps-${BRANCH_KEY}-${SHORT_SHA}.tar.gz"
+          mapfile -t archives < <(find . -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' -printf '%f\n' | sort)
+          if [[ "${#archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one neat-apps archive, found ${#archives[@]}" >&2
+            printf 'Archives:\n%s\n' "${archives[*]-<none>}" >&2
+            exit 1
+          fi
+
+          ARCHIVE_NAME="${archives[0]}"
+          ARCHIVE_STEM="${ARCHIVE_NAME%.tar.gz}"
+          SHORT_SHA="${ARCHIVE_STEM##*-}"
+          BRANCH_KEY="${ARCHIVE_STEM#neat-apps-}"
+          BRANCH_KEY="${BRANCH_KEY%-${SHORT_SHA}}"
+
           echo "branch_key=${BRANCH_KEY}" >> "${GITHUB_OUTPUT}"
           echo "short_sha=${SHORT_SHA}" >> "${GITHUB_OUTPUT}"
           echo "archive_name=${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
-
-      - name: Package build output
-        run: |
-          STAGE_DIR="neat-apps-runtime"
-          rm -rf "${STAGE_DIR}"
-          mkdir -p "${STAGE_DIR}/bin" "${STAGE_DIR}/assets"
-
-          find build -type f -executable \
-            ! -path '*/CMakeFiles/*' \
-            ! -name 'cmTC_*' \
-            -exec cp {} "${STAGE_DIR}/bin/" \;
-
-          cp -a build "${STAGE_DIR}/build"
-          cp -a tests "${STAGE_DIR}/tests"
-          cp -a examples "${STAGE_DIR}/examples"
-          cp -a assets/test_images "${STAGE_DIR}/assets/test_images"
-
-          tar -czf "${{ steps.artifact-meta.outputs.archive_name }}" "${STAGE_DIR}"
 
       - name: Upload build archive to Cloudflare R2
         run: |
@@ -72,9 +65,55 @@ jobs:
             "${{ steps.artifact-meta.outputs.archive_name }}" \
             "s3://neat-artifacts/download/${{ steps.artifact-meta.outputs.archive_name }}"
 
+  modalix-test:
+    runs-on: [self-hosted, Linux, ARM64, modalix]
+    needs: cpp-build
+
+    steps:
+      - name: Install apps runtime for this branch and commit
+        run: |
+          BRANCH_RAW="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          SHORT_SHA="${{ needs.cpp-build.outputs.short_sha }}"
+
+          wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
+          bash /tmp/install-neat-apps-from-a-branch.sh "${BRANCH_RAW}" "${SHORT_SHA}"
+
+      - name: Locate pyneat
+        shell: bash
+        run: |
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          else
+            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
+            exit 1
+          fi
+
+      - name: Install Python test dependencies
+        shell: bash
+        run: |
+          source "${PYNEAT_ACTIVATE}"
+          echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
+          "${PYTHON_TEST_BIN}" -m pip install pytest
+
+      - name: Unit Tests
+        shell: bash
+        env:
+          SIMANEAT_APPS_TEST_RTSP_URL: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URL }}
+          SIMANEAT_APPS_TEST_RTSP_URLS: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URLS }}
+        run: |
+          /usr/bin/fix_devkit_runtime.sh
+          cd neat-apps/neat-apps-runtime
+          source "${PYNEAT_ACTIVATE}"
+          source tests/scripts/testing/setup_test_env.sh
+          ./tests/test.sh --unit
+
   publish-index:
     runs-on: ubuntu-latest
-    needs: cpp-build
+    needs: [cpp-build, modalix-test]
     if: github.event_name != 'pull_request'
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
@@ -172,7 +211,7 @@ jobs:
 
   portal-build:
     runs-on: ubuntu-latest
-    needs: cpp-build
+    needs: [cpp-build, modalix-test]
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}

@@ -176,6 +176,47 @@ select {
   color: var(--muted);
 }
 
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.hero-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-strong);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.hero-action:hover {
+  transform: translateY(-2px);
+  border-color: rgba(14, 122, 109, 0.28);
+  background: rgba(14, 122, 109, 0.08);
+}
+
+.hero-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.hero-action-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
 :root[data-theme="dark"] .hero-text,
 :root[data-theme="dark"] .search-meta,
 :root[data-theme="dark"] .detail-path {
@@ -266,6 +307,82 @@ select {
   margin-top: 26px;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 18, 20, 0.42);
+  backdrop-filter: blur(10px);
+}
+
+.download-modal {
+  width: min(680px, calc(100vw - 32px));
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: linear-gradient(135deg, rgba(255, 250, 241, 0.98), rgba(246, 239, 227, 0.96));
+  box-shadow: var(--shadow);
+}
+
+.download-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.download-modal-header h2 {
+  margin: 0;
+  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  line-height: 1;
+}
+
+.download-modal-copy {
+  margin: 18px 0 16px;
+  color: var(--muted);
+}
+
+.download-code {
+  margin: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel-strong);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, color 160ms ease, background-color 160ms ease;
+}
+
+.modal-close:hover {
+  transform: translateY(-1px);
+  color: var(--text);
+  border-color: rgba(14, 122, 109, 0.28);
+  background: rgba(14, 122, 109, 0.08);
+}
+
+.modal-close svg {
+  width: 18px;
+  height: 18px;
+}
+
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -283,6 +400,17 @@ select {
 
 :root[data-theme="dark"] .app-card {
   background: rgba(24, 28, 30, 0.94);
+}
+
+:root[data-theme="dark"] .hero-action,
+:root[data-theme="dark"] .download-modal,
+:root[data-theme="dark"] .download-code {
+  background: var(--panel);
+}
+
+:root[data-theme="dark"] .hero-action:hover,
+:root[data-theme="dark"] .modal-close:hover {
+  background: rgba(103, 201, 180, 0.12);
 }
 
 :root[data-theme="dark"] .card-summary,

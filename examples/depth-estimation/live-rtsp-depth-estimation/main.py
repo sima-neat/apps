@@ -104,8 +104,30 @@ def depth_colormap_from_tensor(t: pyneat.Tensor, *, depth_order: str) -> np.ndar
     return cv2.applyColorMap(depth_u8, cv2.COLORMAP_INFERNO)
 
 
+def probe_rtsp(url: str) -> tuple[int, int, int]:
+    """Probe the live stream once so downstream caps match the real source."""
+    cap = cv2.VideoCapture(url)
+    if not cap.isOpened():
+        raise RuntimeError(f"failed to open RTSP source for probing: {url}")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
+    cap.release()
+    if width <= 0 or height <= 0:
+        raise RuntimeError("failed to probe RTSP frame size")
+    return width, height, max(0, fps)
+
+
 def build_rtsp_run(
-    url: str, width: int, height: int, fps: int, latency_ms: int, tcp: bool, sample_every: int
+    url: str,
+    width: int,
+    height: int,
+    stream_fps: int,
+    latency_ms: int,
+    tcp: bool,
+    sample_every: int,
+    fallback_width: int = 0,
+    fallback_height: int = 0,
 ):
     ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
@@ -116,13 +138,21 @@ def build_rtsp_run(
     ro.out_format = "BGR"
     ro.decoder_raw_output = False
     ro.decoder_name = "decoder"
+    ro.auto_caps_from_stream = True
     ro.use_videoconvert = False
     ro.use_videoscale = True
+    if fallback_width > 0:
+        ro.fallback_h264_width = fallback_width
+    if fallback_height > 0:
+        ro.fallback_h264_height = fallback_height
+    if stream_fps > 0:
+        ro.fallback_h264_fps = stream_fps
     ro.output_caps.enable = True
     ro.output_caps.format = "BGR"
     ro.output_caps.width = width
     ro.output_caps.height = height
-    ro.output_caps.fps = fps
+    if stream_fps > 0:
+        ro.output_caps.fps = stream_fps
     ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
     sess = pyneat.Session()
@@ -478,23 +508,115 @@ def main() -> int:
         out_dir = os.path.dirname(os.path.abspath(args.output_file))
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-
-        processed, writer, rtsp_session, rtsp_run = run_frame_loop(
-            model=model,
-            rtsp_url=args.rtsp,
-            width=width,
-            height=height,
-            fps=args.fps,
-            latency_ms=args.latency_ms,
-            tcp=args.tcp,
-            sample_every=args.sample_every,
-            alpha=args.alpha,
-            model_profile=model_profile,
-            profile_enabled=args.profile,
-            log_every=max(1, args.log_every),
-            frame_limit=args.frames,
-            output_file=args.output_file,
+        source_width, source_height, source_fps = probe_rtsp(args.rtsp)
+        print(
+            f"[init] probed RTSP decode dims {source_width}x{source_height}"
+            + (f" @{source_fps} fps" if source_fps > 0 else "")
         )
+
+        profiler = StageProfiler(args.profile)
+        log_every = max(1, args.log_every)
+        processed = 0
+        log_window_start = None
+        log_window_start_frames = 0
+        reconnect_attempts = 0
+        max_reconnect_attempts = 8
+        queue2_depth = None
+        # Keep a reference to the Session object alive for the lifetime of the Run.
+        rtsp_session, rtsp_run = build_rtsp_run(
+            args.rtsp,
+            width,
+            height,
+            source_fps,
+            args.latency_ms,
+            args.tcp,
+            args.sample_every,
+            fallback_width=source_width,
+            fallback_height=source_height,
+        )
+        if args.profile:
+            queue2_depth = parse_queue2_depth(rtsp_run.report())
+        while processed < args.frames:
+            t_frame0 = time.perf_counter()
+            t_pull0 = time.perf_counter()
+            t = rtsp_run.pull_tensor(timeout_ms=5000)
+            pull_dt = time.perf_counter() - t_pull0
+            if t is None:
+                if processed > 0 and reconnect_attempts < max_reconnect_attempts:
+                    reconnect_attempts += 1
+                    print(
+                        f"RTSP pull timed out; reconnecting ({reconnect_attempts}/{max_reconnect_attempts})",
+                        file=sys.stderr,
+                    )
+                    try:
+                        rtsp_run.close()
+                    except Exception:
+                        pass
+                    rtsp_run = None
+                    time.sleep(0.5)
+                    rtsp_session, rtsp_run = build_rtsp_run(
+                        args.rtsp,
+                        width,
+                        height,
+                        source_fps,
+                        args.latency_ms,
+                        args.tcp,
+                        args.sample_every,
+                        fallback_width=source_width,
+                        fallback_height=source_height,
+                    )
+                    if args.profile:
+                        queue2_depth = parse_queue2_depth(rtsp_run.report())
+                    profiler.skip_next_frame()
+                    continue
+                print("RTSP pull timed out / stream closed", file=sys.stderr)
+                break
+
+            profile_frame = profiler.begin_frame()
+            profiler.add("pull_ok", pull_dt, include=profile_frame)
+            reconnect_attempts = 0
+            if log_window_start is None:
+                log_window_start = time.perf_counter()
+            t_bgr0 = time.perf_counter()
+            bgr = tensor_bgr_from_decoded(t)
+            profiler.add("tensor_to_bgr", time.perf_counter() - t_bgr0, include=profile_frame)
+            render_timings: dict[str, float] | None = {} if args.profile else None
+            overlay = render_depth_overlay(
+                model, bgr, width, height, args.alpha, model_profile, timings=render_timings
+            )
+            if render_timings:
+                profiler.add("model_run", render_timings.get("model_s", 0.0), include=profile_frame)
+                profiler.add("postprocess", render_timings.get("post_s", 0.0), include=profile_frame)
+            if writer is None:
+                writer = cv2.VideoWriter(
+                    args.output_file,
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    max(1, args.fps),
+                    (width, height),
+                    True,
+                )
+                if not writer.isOpened():
+                    print(f"Failed to open output video: {args.output_file}", file=sys.stderr)
+                    return 5
+            t_write0 = time.perf_counter()
+            writer.write(overlay)
+            profiler.add("writer_write", time.perf_counter() - t_write0, include=profile_frame)
+            processed += 1
+            profiler.add("frame_total", time.perf_counter() - t_frame0, include=profile_frame)
+            if processed % log_every == 0:
+                now = time.perf_counter()
+                interval_frames = processed - log_window_start_frames
+                interval_elapsed = max(1e-6, now - log_window_start)
+                print(
+                    f"[PROGRESS] frames={processed} "
+                    f"FPS={interval_frames/interval_elapsed:.2f} "
+                    f"(last {interval_frames} frames)"
+                )
+                log_window_start = now
+                log_window_start_frames = processed
+                profiler.print(f"frames={processed}")
+                if args.profile and rtsp_run is not None:
+                    print_queue_profile(rtsp_run, queue2_depth)
         if processed == 0:
             shutdown(writer, rtsp_run)
             writer = None

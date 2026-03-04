@@ -375,6 +375,7 @@ struct RtspRuntime {
   double first_pull_ts = 0.0;
   int frame_w = 0;
   int frame_h = 0;
+  int output_fps = 30;
 };
 
 struct OptiViewRuntime {
@@ -387,16 +388,16 @@ struct OptiViewRuntime {
 };
 
 struct YoloRuntime {
+  float min_score = 0.52f;
+  int topk = 100;
   std::unique_ptr<simaai::neat::Model> model;
   simaai::neat::Session session;
   simaai::neat::Run run;
-  int topk = 100;
-  float min_score = 0.52f;
 };
 
 struct WorkerSharedState {
-  const Config& cfg;
-  const std::optional<int>& frame_limit;
+  Config& cfg;
+  std::optional<int> frame_limit;
   FrameQueue& queue;
   ProducerTiming& producer_stats;
   ConsumerTiming& consumer_stats;
@@ -410,21 +411,15 @@ struct WorkerSharedState {
 };
 
 RtspRuntime build_rtsp_runtime(const Config& cfg) {
-  // NEAT boundary: build source Session/Run for decoded RTSP ingest.
   RtspRuntime runtime;
 
-  // NEAT boundary: probe and build the RTSP decode runtime.
-  int rtsp_probe_w = 0;
-  int rtsp_probe_h = 0;
+  sima_examples::RtspStreamInfo rtsp_probe;
   sima_examples::RtspProbeOptions rtsp_probe_opt;
   rtsp_probe_opt.payload_type = 96;
   rtsp_probe_opt.latency_ms = 200;
   rtsp_probe_opt.rtsp_tcp = true;
   rtsp_probe_opt.debug = cfg.debug;
-  (void)sima_examples::probe_rtsp_decoded_dims(cfg.url, rtsp_probe_opt,
-                                               /*tries=*/8,
-                                               /*timeout_ms=*/1000,
-                                               rtsp_probe_w, rtsp_probe_h);
+  (void)sima_examples::probe_rtsp_stream_info(cfg.url, rtsp_probe_opt, rtsp_probe);
 
   simaai::neat::nodes::groups::RtspDecodedInputOptions cam_opt;
   cam_opt.url = cfg.url;
@@ -436,15 +431,20 @@ RtspRuntime build_rtsp_runtime(const Config& cfg) {
   cam_opt.decoder_name = "decoder";
   cam_opt.decoder_raw_output = true;
   cam_opt.auto_caps_from_stream = true;
-  if (rtsp_probe_w > 0 && rtsp_probe_h > 0) {
-    cam_opt.fallback_h264_width = rtsp_probe_w;
-    cam_opt.fallback_h264_height = rtsp_probe_h;
-    std::cout << "[init] probed RTSP decode dims " << rtsp_probe_w << "x" << rtsp_probe_h << "\n";
+  if (rtsp_probe.width > 0 && rtsp_probe.height > 0) {
+    cam_opt.fallback_h264_width = rtsp_probe.width;
+    cam_opt.fallback_h264_height = rtsp_probe.height;
+    std::cout << "[init] probed RTSP decode dims " << rtsp_probe.width << "x" << rtsp_probe.height;
+    if (rtsp_probe.fps > 0)
+      std::cout << " @" << rtsp_probe.fps << " fps";
+    std::cout << "\n";
   }
-  cam_opt.fallback_h264_fps = 30;
+  if (rtsp_probe.fps > 0)
+    cam_opt.fallback_h264_fps = rtsp_probe.fps;
+  runtime.output_fps = (rtsp_probe.fps > 0) ? rtsp_probe.fps : 30;
+
   runtime.session.add(simaai::neat::nodes::groups::RtspDecodedInput(cam_opt));
   runtime.session.add(simaai::neat::nodes::Output());
-
   simaai::neat::RunOptions cam_run_opt;
   cam_run_opt.enable_metrics = true;
   cam_run_opt.queue_depth = 4;
@@ -455,7 +455,7 @@ RtspRuntime build_rtsp_runtime(const Config& cfg) {
   try {
     runtime.first_frame = runtime.run.pull_tensor_or_throw(5000);
   } catch (const std::exception& e) {
-    std::string msg = e.what();
+    const std::string msg = e.what();
     if (msg.find("timeout") != std::string::npos) {
       throw std::runtime_error(
           "Timed out waiting for first RTSP frame. This is usually upstream connectivity or stream "
@@ -467,7 +467,6 @@ RtspRuntime build_rtsp_runtime(const Config& cfg) {
   const double first_pull_end = time_ms();
   runtime.first_pull_ms = first_pull_end - first_pull_start;
   runtime.first_pull_ts = first_pull_end;
-
   sima_examples::require(infer_dims(runtime.first_frame, runtime.frame_w, runtime.frame_h),
                          "first frame missing dimensions");
   if (runtime.frame_w == 1280 && runtime.frame_h == 720 && cam_opt.h264_width <= 0 &&
@@ -478,22 +477,21 @@ RtspRuntime build_rtsp_runtime(const Config& cfg) {
   return runtime;
 }
 
-OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame_h) {
-  // NEAT boundary: build dedicated OptiView video runtime + JSON sender.
+OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame_h, int output_fps) {
   OptiViewRuntime runtime;
   runtime.host = cfg.optiview_host;
   runtime.video_port = cfg.optiview_video_port;
 
-  // NEAT boundary: build the OptiView video transport runtime.
   simaai::neat::InputOptions udp_src;
   udp_src.format = "NV12";
   udp_src.width = frame_w;
   udp_src.height = frame_h;
   udp_src.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
-                          ",height=" + std::to_string(frame_h) + ",framerate=30/1";
+                          ",height=" + std::to_string(frame_h) + ",framerate=" +
+                          std::to_string(output_fps) + "/1";
   udp_src.use_simaai_pool = false;
   runtime.session.add(simaai::neat::nodes::Input(udp_src));
-  runtime.session.add(simaai::neat::nodes::H264EncodeSima(frame_w, frame_h, 30, 4000));
+  runtime.session.add(simaai::neat::nodes::H264EncodeSima(frame_w, frame_h, output_fps, 4000));
   runtime.session.add(simaai::neat::nodes::H264Parse());
   runtime.session.add(simaai::neat::nodes::H264Packetize(96, 1));
   simaai::neat::UdpOutputOptions udp_opt;
@@ -506,7 +504,8 @@ OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame
   sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, udp_dummy, udp_err), udp_err);
   simaai::neat::RunOptions udp_run_opt;
   udp_run_opt.enable_metrics = true;
-  runtime.video_run = runtime.session.build(udp_dummy, simaai::neat::RunMode::Async, udp_run_opt);
+  runtime.video_run =
+      runtime.session.build(udp_dummy, simaai::neat::RunMode::Async, udp_run_opt);
   std::cout << "udp=" << runtime.host << ":" << runtime.video_port << "\n";
 
   sima_examples::OptiViewOptions opt;
@@ -803,7 +802,8 @@ int main(int argc, char** argv) {
 
     RtspRuntime rtsp_runtime = build_rtsp_runtime(cfg);
     OptiViewRuntime optiview_runtime =
-        build_optiview_runtime(cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h);
+        build_optiview_runtime(cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h,
+                               rtsp_runtime.output_fps);
     YoloRuntime yolo_runtime = build_yolo_runtime(cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h);
 
     std::optional<int> frame_limit = resolve_frame_limit(cfg);

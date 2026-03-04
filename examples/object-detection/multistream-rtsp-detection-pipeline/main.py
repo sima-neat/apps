@@ -20,6 +20,13 @@ import struct
 DFL_BINS_16 = np.arange(16, dtype=np.float32)
 DEFAULT_LABELS_FILE = Path(__file__).with_name("coco_label.txt")
 
+
+@dataclass(frozen=True)
+class RtspProbe:
+    width: int
+    height: int
+    fps: int
+
 def class_color(cls_id: int) -> tuple[int, int, int]:
     # Stable deterministic color per class id.
     return (
@@ -110,6 +117,19 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
             continue
         out.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(score), class_id=int(cls_id)))
     return out
+
+
+def probe_rtsp(url: str) -> RtspProbe:
+    cap = cv2.VideoCapture(url)
+    if not cap.isOpened():
+        raise RuntimeError(f"failed to open RTSP source for probing: {url}")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
+    cap.release()
+    if width <= 0 or height <= 0:
+        raise RuntimeError("failed to probe RTSP frame size")
+    return RtspProbe(width=width, height=height, fps=max(0, fps))
 
 
 def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
@@ -250,11 +270,13 @@ def build_rtsp_run(
     tcp: bool,
     out_w: int,
     out_h: int,
-    fps: int,
+    stream_fps: int,
     sample_every: int,
     run_queue_depth: int,
     overflow_policy: pyneat.OverflowPolicy,
     output_memory: pyneat.OutputMemory,
+    fallback_width: int = 0,
+    fallback_height: int = 0,
 ):
     ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
@@ -264,13 +286,21 @@ def build_rtsp_run(
     ro.insert_queue = True
     ro.out_format = "BGR"
     ro.decoder_raw_output = False
+    ro.auto_caps_from_stream = True
     ro.use_videoconvert = False
     ro.use_videoscale = True
+    if fallback_width > 0:
+        ro.fallback_h264_width = fallback_width
+    if fallback_height > 0:
+        ro.fallback_h264_height = fallback_height
+    if stream_fps > 0:
+        ro.fallback_h264_fps = stream_fps
     ro.output_caps.enable = True
     ro.output_caps.format = "BGR"
     ro.output_caps.width = out_w
     ro.output_caps.height = out_h
-    ro.output_caps.fps = fps
+    if stream_fps > 0:
+        ro.output_caps.fps = stream_fps
     ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
     sess = pyneat.Session()
@@ -310,6 +340,7 @@ def parse_output_memory(value: str) -> pyneat.OutputMemory:
 class StreamState:
     idx: int
     url: str
+    probe: RtspProbe
     session: pyneat.Session
     run: pyneat.Run
     processed: int = 0
@@ -672,23 +703,30 @@ class PipelineApp:
     def _setup(self) -> None:
         self.out_root.mkdir(parents=True, exist_ok=True)
         for i, url in enumerate(self.cfg.rtsp_urls):
+            probe = probe_rtsp(url)
             sess, run = build_rtsp_run(
                 url,
                 self.cfg.latency_ms,
                 self.cfg.tcp,
                 self.cfg.width,
                 self.cfg.height,
-                self.cfg.fps,
+                probe.fps,
                 self.cfg.sample_every,
                 self.cfg.run_queue_depth,
                 self.cfg.overflow_policy,
                 self.cfg.output_memory,
+                fallback_width=probe.width,
+                fallback_height=probe.height,
             )
-            self.streams.append(StreamState(i, url, sess, run))
+            self.streams.append(StreamState(i, url, probe, sess, run))
             stream_dir = self.out_root / f"stream_{i}"
             stream_dir.mkdir(parents=True, exist_ok=True)
             self.out_dirs.append(stream_dir)
-            print(f"[stream {i}] started: {url} -> {stream_dir}/")
+            fps_part = f" @{probe.fps} fps" if probe.fps > 0 else ""
+            print(
+                f"[stream {i}] probed {probe.width}x{probe.height}{fps_part}; "
+                f"started: {url} -> {stream_dir}/"
+            )
 
         self.models = [self._make_model() for _ in self.streams]
         self.frame_queues = [
@@ -732,11 +770,13 @@ class PipelineApp:
                                 self.cfg.tcp,
                                 self.cfg.width,
                                 self.cfg.height,
-                                self.cfg.fps,
+                                st.probe.fps,
                                 self.cfg.sample_every,
                                 self.cfg.run_queue_depth,
                                 self.cfg.overflow_policy,
                                 self.cfg.output_memory,
+                                fallback_width=st.probe.width,
+                                fallback_height=st.probe.height,
                             )
                             st.session = sess_new
                             st.run = run_new

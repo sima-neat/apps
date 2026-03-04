@@ -36,8 +36,15 @@ struct RtspProbeOptions {
   int decoder_num_buffers = 7;
 };
 
+struct RtspStreamInfo {
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+};
+
 bool parse_dim_from_caps(const std::string& caps, const char* key, int& out);
 bool parse_fps_from_caps(const std::string& caps, int& fps_out);
+bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt, RtspStreamInfo& out);
 bool probe_rtsp_encoded(const std::string& url, const RtspProbeOptions& opt, int fps, int w, int h,
                         int tries, int timeout_ms, bool enforce_caps);
 bool probe_rtsp_decoded_dims(const std::string& url, const RtspProbeOptions& opt, int tries,
