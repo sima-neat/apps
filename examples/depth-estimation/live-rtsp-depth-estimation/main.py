@@ -173,6 +173,11 @@ def build_depth_model(model_path: str, width: int, height: int, profile: DepthMo
     return model
 
 
+def make_model(model_path: str, width: int, height: int, profile: DepthModelProfile):
+    """Named model stage for lifecycle readability."""
+    return build_depth_model(model_path, width, height, profile)
+
+
 def render_depth_overlay(
     model: pyneat.Model,
     bgr: np.ndarray,
@@ -292,6 +297,154 @@ def print_queue_profile(run: pyneat.Run, queue2_depth: int | None) -> None:
         print(f"[PROFILE]   gst_queue2_depth_config         {queue2_depth}")
 
 
+def handle_reconnect(
+    rtsp_url: str,
+    width: int,
+    height: int,
+    fps: int,
+    latency_ms: int,
+    tcp: bool,
+    sample_every: int,
+    profile_enabled: bool,
+    profiler: StageProfiler,
+) -> tuple[pyneat.Session, pyneat.Run, int | None]:
+    """Reconnect stage: rebuild source session/run with unchanged options."""
+    rtsp_session, rtsp_run = build_rtsp_run(
+        rtsp_url, width, height, fps, latency_ms, tcp, sample_every
+    )
+    queue2_depth = parse_queue2_depth(rtsp_run.report()) if profile_enabled else None
+    profiler.skip_next_frame()
+    return rtsp_session, rtsp_run, queue2_depth
+
+
+def shutdown(writer, rtsp_run) -> None:
+    """Teardown stage: release writer then close RTSP run."""
+    try:
+        if writer is not None:
+            writer.release()
+    except Exception:
+        pass
+    try:
+        if rtsp_run is not None:
+            rtsp_run.close()
+    except Exception:
+        pass
+
+
+def run_frame_loop(
+    *,
+    model,
+    rtsp_url: str,
+    width: int,
+    height: int,
+    fps: int,
+    latency_ms: int,
+    tcp: bool,
+    sample_every: int,
+    alpha: float,
+    model_profile: DepthModelProfile,
+    profile_enabled: bool,
+    log_every: int,
+    frame_limit: int,
+    output_file: str,
+):
+    """Processing stage: pull -> infer -> overlay -> write with reconnect handling."""
+    writer = None
+    rtsp_session, rtsp_run = build_rtsp_run(rtsp_url, width, height, fps, latency_ms, tcp, sample_every)
+    queue2_depth = parse_queue2_depth(rtsp_run.report()) if profile_enabled else None
+    profiler = StageProfiler(profile_enabled)
+    reconnect_attempts = 0
+    max_reconnect_attempts = 8
+    processed = 0
+    log_window_start = None
+    log_window_start_frames = 0
+
+    while processed < frame_limit:
+        t_frame0 = time.perf_counter()
+        t_pull0 = time.perf_counter()
+        t = rtsp_run.pull_tensor(timeout_ms=5000)
+        pull_dt = time.perf_counter() - t_pull0
+        if t is None:
+            if processed > 0 and reconnect_attempts < max_reconnect_attempts:
+                reconnect_attempts += 1
+                print(
+                    f"RTSP pull timed out; reconnecting ({reconnect_attempts}/{max_reconnect_attempts})",
+                    file=sys.stderr,
+                )
+                try:
+                    rtsp_run.close()
+                except Exception:
+                    pass
+                rtsp_run = None
+                time.sleep(0.5)
+                rtsp_session, rtsp_run, queue2_depth = handle_reconnect(
+                    rtsp_url,
+                    width,
+                    height,
+                    fps,
+                    latency_ms,
+                    tcp,
+                    sample_every,
+                    profile_enabled,
+                    profiler,
+                )
+                continue
+            print("RTSP pull timed out / stream closed", file=sys.stderr)
+            break
+
+        profile_frame = profiler.begin_frame()
+        profiler.add("pull_ok", pull_dt, include=profile_frame)
+        reconnect_attempts = 0
+        if log_window_start is None:
+            log_window_start = time.perf_counter()
+
+        t_bgr0 = time.perf_counter()
+        bgr = tensor_bgr_from_decoded(t)
+        profiler.add("tensor_to_bgr", time.perf_counter() - t_bgr0, include=profile_frame)
+        render_timings: dict[str, float] | None = {} if profile_enabled else None
+        overlay = render_depth_overlay(
+            model, bgr, width, height, alpha, model_profile, timings=render_timings
+        )
+        if render_timings:
+            profiler.add("model_run", render_timings.get("model_s", 0.0), include=profile_frame)
+            profiler.add("postprocess", render_timings.get("post_s", 0.0), include=profile_frame)
+        if writer is None:
+            writer = cv2.VideoWriter(
+                output_file,
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                max(1, fps),
+                (width, height),
+                True,
+            )
+            if not writer.isOpened():
+                raise RuntimeError(f"Failed to open output video: {output_file}")
+        t_write0 = time.perf_counter()
+        writer.write(overlay)
+        profiler.add("writer_write", time.perf_counter() - t_write0, include=profile_frame)
+        processed += 1
+        profiler.add("frame_total", time.perf_counter() - t_frame0, include=profile_frame)
+
+        if processed % log_every == 0:
+            now = time.perf_counter()
+            interval_frames = processed - log_window_start_frames
+            interval_elapsed = max(1e-6, now - log_window_start)
+            print(
+                f"[PROGRESS] frames={processed} "
+                f"FPS={interval_frames/interval_elapsed:.2f} "
+                f"(last {interval_frames} frames)"
+            )
+            log_window_start = now
+            log_window_start_frames = processed
+            profiler.print(f"frames={processed}")
+            if profile_enabled and rtsp_run is not None:
+                print_queue_profile(rtsp_run, queue2_depth)
+
+    profiler.print("summary")
+    if profile_enabled and rtsp_run is not None:
+        print_queue_profile(rtsp_run, queue2_depth)
+    return processed, writer, rtsp_session, rtsp_run
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="RTSP depth estimation (MiDaS v2.1 / Depth Anything V2)")
     p.add_argument(
@@ -350,7 +503,8 @@ def main() -> int:
             f"Using model profile: {model_profile.name} "
             f"(input_format={model_profile.input_format}, size={width}x{height})"
         )
-        model = build_depth_model(args.model, width, height, model_profile)
+        # Lifecycle stage: make model runtime.
+        model = make_model(args.model, width, height, model_profile)
         out_dir = os.path.dirname(os.path.abspath(args.output_file))
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
@@ -464,12 +618,9 @@ def main() -> int:
                 if args.profile and rtsp_run is not None:
                     print_queue_profile(rtsp_run, queue2_depth)
         if processed == 0:
-            if writer is not None:
-                writer.release()
-                writer = None
-            if rtsp_run is not None:
-                rtsp_run.close()
-                rtsp_run = None
+            shutdown(writer, rtsp_run)
+            writer = None
+            rtsp_run = None
             rtsp_session = None
             if os.path.exists(args.output_file):
                 try:
@@ -478,16 +629,9 @@ def main() -> int:
                     pass
             print("No frames were written; output file was not created.", file=sys.stderr)
             return 8
-
-        profiler.print("summary")
-        if args.profile and rtsp_run is not None:
-            print_queue_profile(rtsp_run, queue2_depth)
-        if writer is not None:
-            writer.release()
-            writer = None
-        if rtsp_run is not None:
-            rtsp_run.close()
-            rtsp_run = None
+        shutdown(writer, rtsp_run)
+        writer = None
+        rtsp_run = None
         rtsp_session = None
         print(f"Wrote depth overlay video to: {os.path.abspath(args.output_file)}")
         return 0
@@ -495,17 +639,8 @@ def main() -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 2
     finally:
-        # Always finalize the container, even if processing raises.
-        try:
-            if "writer" in locals() and writer is not None:
-                writer.release()
-        except Exception:
-            pass
-        try:
-            if "rtsp_run" in locals() and rtsp_run is not None:
-                rtsp_run.close()
-        except Exception:
-            pass
+        # Always finalize resources, even if processing raises.
+        shutdown(writer, rtsp_run)
 
 
 if __name__ == "__main__":

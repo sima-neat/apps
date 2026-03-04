@@ -35,7 +35,7 @@ Both implementations are intentionally kept in one file (`main.py`, `main.cpp`) 
 4. Worker methods (producer, infer, overlay)
 5. Orchestration (thread startup, monitor loop, shutdown, summary)
 
-### NEAT API Usage
+## NEAT API Usage
 
 **Python (`pyneat`)**
 - RTSP session build (`build_rtsp_run` in `main.py`):
@@ -44,7 +44,7 @@ Both implementations are intentionally kept in one file (`main.py`, `main.cpp`) 
   - `session.build(run_opt)` returns `run`; producer thread uses `run.pull_tensor(...)`
 - Model object creation (`PipelineApp._make_model`):
   - `pyneat.ModelOptions` + `pyneat.Model(model_path, mopt)`
-- Inference runner build (`PipelineApp._infer_worker`, lazy on first frame):
+- Inference runner build (`PipelineApp._infer_worker`, initialized on first frame):
   - `model.build(frame, model_session_opt, run_opt)`
   - infer thread uses `runner.push(frame)` and `runner.pull(timeout_ms=...)`
 - Box decode behavior:

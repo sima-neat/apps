@@ -28,6 +28,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -366,190 +367,451 @@ struct ConsumerTiming {
   }
 };
 
+struct RtspRuntime {
+  simaai::neat::Session session;
+  simaai::neat::Run run;
+  simaai::neat::Tensor first_frame;
+  double first_pull_ms = 0.0;
+  double first_pull_ts = 0.0;
+  int frame_w = 0;
+  int frame_h = 0;
+  int output_fps = 30;
+};
+
+struct OptiViewRuntime {
+  std::string host;
+  int video_port = 0;
+  simaai::neat::Session session;
+  simaai::neat::Run video_run;
+  std::unique_ptr<sima_examples::OptiViewSender> sender;
+  std::vector<std::string> labels;
+};
+
+struct YoloRuntime {
+  float min_score = 0.52f;
+  int topk = 100;
+  std::unique_ptr<simaai::neat::Model> model;
+  simaai::neat::Session session;
+  simaai::neat::Run run;
+};
+
+struct WorkerSharedState {
+  Config& cfg;
+  std::optional<int> frame_limit;
+  FrameQueue& queue;
+  ProducerTiming& producer_stats;
+  ConsumerTiming& consumer_stats;
+  std::atomic<bool>& stop;
+  std::atomic<int>& published;
+  std::atomic<int>& det_outputs;
+  double& producer_start_ms;
+  double& producer_end_ms;
+  double& consumer_start_ms;
+  double& consumer_end_ms;
+};
+
+RtspRuntime build_rtsp_runtime(const Config& cfg) {
+  RtspRuntime runtime;
+
+  sima_examples::RtspStreamInfo rtsp_probe;
+  sima_examples::RtspProbeOptions rtsp_probe_opt;
+  rtsp_probe_opt.payload_type = 96;
+  rtsp_probe_opt.latency_ms = 200;
+  rtsp_probe_opt.rtsp_tcp = true;
+  rtsp_probe_opt.debug = cfg.debug;
+  (void)sima_examples::probe_rtsp_stream_info(cfg.url, rtsp_probe_opt, rtsp_probe);
+
+  simaai::neat::nodes::groups::RtspDecodedInputOptions cam_opt;
+  cam_opt.url = cfg.url;
+  cam_opt.latency_ms = 200;
+  cam_opt.tcp = true;
+  cam_opt.payload_type = 96;
+  cam_opt.insert_queue = true;
+  cam_opt.out_format = "NV12";
+  cam_opt.decoder_name = "decoder";
+  cam_opt.decoder_raw_output = true;
+  cam_opt.auto_caps_from_stream = true;
+  if (rtsp_probe.width > 0 && rtsp_probe.height > 0) {
+    cam_opt.fallback_h264_width = rtsp_probe.width;
+    cam_opt.fallback_h264_height = rtsp_probe.height;
+    std::cout << "[init] probed RTSP decode dims " << rtsp_probe.width << "x" << rtsp_probe.height;
+    if (rtsp_probe.fps > 0)
+      std::cout << " @" << rtsp_probe.fps << " fps";
+    std::cout << "\n";
+  }
+  if (rtsp_probe.fps > 0)
+    cam_opt.fallback_h264_fps = rtsp_probe.fps;
+  runtime.output_fps = (rtsp_probe.fps > 0) ? rtsp_probe.fps : 30;
+
+  runtime.session.add(simaai::neat::nodes::groups::RtspDecodedInput(cam_opt));
+  runtime.session.add(simaai::neat::nodes::Output());
+  simaai::neat::RunOptions cam_run_opt;
+  cam_run_opt.enable_metrics = true;
+  cam_run_opt.queue_depth = 4;
+  cam_run_opt.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
+  runtime.run = runtime.session.build(cam_run_opt);
+
+  const double first_pull_start = time_ms();
+  try {
+    runtime.first_frame = runtime.run.pull_tensor_or_throw(5000);
+  } catch (const std::exception& e) {
+    const std::string msg = e.what();
+    if (msg.find("timeout") != std::string::npos) {
+      throw std::runtime_error(
+          "Timed out waiting for first RTSP frame. This is usually upstream connectivity or stream "
+          "delivery, not framerate derivation. If diagnostics show zero buffers at rtspsrc/depay/"
+          "decoder, the device is not receiving RTP from the source.");
+    }
+    throw;
+  }
+  const double first_pull_end = time_ms();
+  runtime.first_pull_ms = first_pull_end - first_pull_start;
+  runtime.first_pull_ts = first_pull_end;
+  sima_examples::require(infer_dims(runtime.first_frame, runtime.frame_w, runtime.frame_h),
+                         "first frame missing dimensions");
+  if (runtime.frame_w == 1280 && runtime.frame_h == 720 && cam_opt.h264_width <= 0 &&
+      cam_opt.h264_height <= 0 && cam_opt.fallback_h264_width <= 0 &&
+      cam_opt.fallback_h264_height <= 0) {
+    std::fprintf(stderr, "[WARN] deriving width=1280 and height=720 from SDP or timestamp\n");
+  }
+  return runtime;
+}
+
+OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame_h, int output_fps) {
+  OptiViewRuntime runtime;
+  runtime.host = cfg.optiview_host;
+  runtime.video_port = cfg.optiview_video_port;
+
+  simaai::neat::InputOptions udp_src;
+  udp_src.format = "NV12";
+  udp_src.width = frame_w;
+  udp_src.height = frame_h;
+  udp_src.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
+                          ",height=" + std::to_string(frame_h) + ",framerate=" +
+                          std::to_string(output_fps) + "/1";
+  udp_src.use_simaai_pool = false;
+  runtime.session.add(simaai::neat::nodes::Input(udp_src));
+  runtime.session.add(simaai::neat::nodes::H264EncodeSima(frame_w, frame_h, output_fps, 4000));
+  runtime.session.add(simaai::neat::nodes::H264Parse());
+  runtime.session.add(simaai::neat::nodes::H264Packetize(96, 1));
+  simaai::neat::UdpOutputOptions udp_opt;
+  udp_opt.host = runtime.host;
+  udp_opt.port = runtime.video_port;
+  runtime.session.add(simaai::neat::nodes::UdpOutput(udp_opt));
+
+  simaai::neat::Tensor udp_dummy;
+  std::string udp_err;
+  sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, udp_dummy, udp_err), udp_err);
+  simaai::neat::RunOptions udp_run_opt;
+  udp_run_opt.enable_metrics = true;
+  runtime.video_run =
+      runtime.session.build(udp_dummy, simaai::neat::RunMode::Async, udp_run_opt);
+  std::cout << "udp=" << runtime.host << ":" << runtime.video_port << "\n";
+
+  sima_examples::OptiViewOptions opt;
+  opt.host = cfg.optiview_host;
+  opt.channel = 0;
+  opt.video_port_base = cfg.optiview_video_port;
+  opt.json_port_base = cfg.optiview_json_port;
+  std::string opt_err;
+  runtime.sender = std::make_unique<sima_examples::OptiViewSender>(opt, &opt_err);
+  sima_examples::require(runtime.sender->ok(), opt_err);
+  runtime.labels = yolo_coco_labels();
+  std::cout << "optiview host=" << runtime.sender->host()
+            << " video_port=" << runtime.sender->video_port()
+            << " json_port=" << runtime.sender->json_port() << " channel=0\n";
+  return runtime;
+}
+
+YoloRuntime build_yolo_runtime(const Config& cfg, int frame_w, int frame_h) {
+  // NEAT boundary: build detection Session/Run graph.
+  YoloRuntime runtime;
+
+  // NEAT boundary: build model + async inference runtime.
+  simaai::neat::Model::Options model_opt;
+  model_opt.media_type = "video/x-raw";
+  model_opt.format = "NV12";
+  model_opt.preproc.input_width = frame_w;
+  model_opt.preproc.input_height = frame_h;
+  model_opt.input_max_width = frame_w;
+  model_opt.input_max_height = frame_h;
+  model_opt.input_max_depth = 1;
+  runtime.model = std::make_unique<simaai::neat::Model>(cfg.mpk, model_opt);
+  std::cout << "[init] model configured for " << frame_w << "x" << frame_h << " NV12\n";
+
+  simaai::neat::InputOptions ysrc = runtime.model->input_appsrc_options(false);
+  ysrc.media_type = "video/x-raw";
+  ysrc.format = "NV12";
+  ysrc.width = frame_w;
+  ysrc.height = frame_h;
+  ysrc.depth = 1;
+
+  runtime.session.add(simaai::neat::nodes::Input(ysrc));
+  runtime.session.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
+  runtime.session.add(simaai::neat::nodes::groups::Infer(*runtime.model));
+  runtime.session.add(simaai::neat::nodes::SimaBoxDecode(*runtime.model, "yolov8", frame_w, frame_h,
+                                                         runtime.min_score, 0.5f, runtime.topk));
+  runtime.session.add(simaai::neat::nodes::Output());
+
+  simaai::neat::RunOptions det_run_opt;
+  det_run_opt.preset = simaai::neat::RunPreset::Reliable;
+  det_run_opt.enable_metrics = true;
+  det_run_opt.queue_depth = 4;
+  det_run_opt.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
+  det_run_opt.output_memory = simaai::neat::OutputMemory::Owned;
+  simaai::neat::Tensor det_dummy;
+  std::string det_err;
+  sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, det_dummy, det_err), det_err);
+  std::cout << "[init] building YOLO pipeline\n";
+  runtime.run = runtime.session.build(det_dummy, simaai::neat::RunMode::Async, det_run_opt);
+  std::cout << "[init] YOLO pipeline ready\n";
+  return runtime;
+}
+
+std::optional<int> resolve_frame_limit(const Config& cfg) {
+  if (cfg.frames_set) {
+    sima_examples::require(cfg.frames > 0, "--frames must be > 0");
+    return cfg.frames;
+  }
+  return std::nullopt;
+}
+
+std::vector<sima_examples::OptiViewObject> build_optiview_objects(const std::vector<objdet::Box>& boxes,
+                                                                   int frame_w, int frame_h) {
+  std::vector<sima_examples::OptiViewObject> optiview_objects;
+  optiview_objects.reserve(boxes.size());
+  for (const auto& box : boxes) {
+    int x1 = static_cast<int>(box.x1);
+    int y1 = static_cast<int>(box.y1);
+    int w = static_cast<int>(box.x2 - box.x1);
+    int h = static_cast<int>(box.y2 - box.y1);
+    if (x1 < 0)
+      x1 = 0;
+    if (y1 < 0)
+      y1 = 0;
+    if (w < 0)
+      w = 0;
+    if (h < 0)
+      h = 0;
+    if (x1 + w > frame_w)
+      w = frame_w - x1;
+    if (y1 + h > frame_h)
+      h = frame_h - y1;
+    if (w < 0)
+      w = 0;
+    if (h < 0)
+      h = 0;
+    sima_examples::OptiViewObject obj;
+    obj.x = x1;
+    obj.y = y1;
+    obj.w = w;
+    obj.h = h;
+    obj.score = box.score;
+    obj.class_id = box.class_id;
+    optiview_objects.push_back(obj);
+  }
+  return optiview_objects;
+}
+
+void producer_worker(simaai::neat::Run& cam, simaai::neat::Tensor first_frame, double first_pull_ms,
+                     double first_pull_ts, WorkerSharedState& state) {
+  state.producer_start_ms = time_ms();
+  int produced = 0;
+  bool use_first = true;
+  while (!state.stop.load() && (!state.frame_limit || produced < *state.frame_limit)) {
+    simaai::neat::Tensor frame;
+    double pull_ms = 0.0;
+    double pull_ts = 0.0;
+    if (use_first) {
+      frame = std::move(first_frame);
+      use_first = false;
+      pull_ms = first_pull_ms;
+      pull_ts = first_pull_ts;
+    } else {
+      const double t0 = time_ms();
+      auto frame_opt = cam.pull_tensor();
+      if (!frame_opt.has_value())
+        continue;
+      const double t1 = time_ms();
+      frame = std::move(*frame_opt);
+      pull_ms = t1 - t0;
+      pull_ts = t1;
+    }
+    print_time("rtsp_pull_ms", pull_ms, state.cfg.debug);
+    state.producer_stats.add_rtsp_pull(pull_ms);
+
+    FrameItem item;
+    item.index = produced;
+    item.frame = std::move(frame);
+    item.pull_ts_ms = pull_ts;
+
+    const double q0 = time_ms();
+    if (!state.queue.push(std::move(item)))
+      break;
+    const double q1 = time_ms();
+    const double queue_ms = q1 - q0;
+    print_time("queue_push_ms", queue_ms, state.cfg.debug);
+    state.producer_stats.add_queue_push(queue_ms);
+
+    produced += 1;
+    state.producer_stats.count = produced;
+  }
+  state.queue.close();
+  state.producer_end_ms = time_ms();
+}
+
+void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
+                     sima_examples::OptiViewSender& optiview_sender,
+                     const std::vector<std::string>& optiview_labels, int frame_w, int frame_h,
+                     int topk, WorkerSharedState& state) {
+  state.consumer_start_ms = time_ms();
+  int out_pulls = 0;
+  while (!state.stop.load() && (!state.frame_limit || state.published.load() < *state.frame_limit)) {
+    FrameItem item;
+    const double q0 = time_ms();
+    if (!state.queue.pop(item))
+      break;
+    const double q1 = time_ms();
+    const double queue_ms = q1 - q0;
+    print_time("queue_pop_ms", queue_ms, state.cfg.debug);
+    state.consumer_stats.add_queue_pop(queue_ms);
+
+    PendingFrame pending_current;
+    pending_current.index = item.index;
+    pending_current.pull_ts_ms = item.pull_ts_ms;
+    pending_current.frame = std::move(item.frame);
+
+    // NEAT boundary: push current frame into async YOLO run, then pull next output.
+    const double t_push0 = time_ms();
+    const bool pushed = det.push(pending_current.frame);
+    const double t_push1 = time_ms();
+    const double push_ms = t_push1 - t_push0;
+    print_time("yolo_push_ms", push_ms, state.cfg.debug);
+    state.consumer_stats.add_yolo_push(push_ms);
+    if (!pushed) {
+      std::cerr << "[warn] push failed\n";
+      continue;
+    }
+    const double t_pull0 = time_ms();
+    auto out_opt = det.pull();
+    const double t_pull1 = time_ms();
+    const double pull_ms = t_pull1 - t_pull0;
+    print_time("yolo_pull_ms", pull_ms, state.cfg.debug);
+    state.consumer_stats.add_yolo_pull(pull_ms);
+    if (!out_opt.has_value())
+      continue;
+    out_pulls += 1;
+    state.det_outputs.store(out_pulls);
+    if (state.cfg.debug) {
+      std::cout << "[dbg] det pull=" << out_pulls << " kind=" << static_cast<int>(out_opt->kind)
+                << " tag=" << out_opt->payload_tag << " format=" << out_opt->format
+                << " frame_id=" << out_opt->frame_id << " input_seq=" << out_opt->input_seq
+                << "\n";
+    }
+
+    PendingFrame pending = std::move(pending_current);
+
+    const double t_extract0 = time_ms();
+    std::vector<uint8_t> payload;
+    std::string err;
+    if (!sima_examples::extract_bbox_payload(*out_opt, payload, err)) {
+      std::cerr << "[warn] bbox extract failed: " << err << "\n";
+      continue;
+    }
+    const double t_extract1 = time_ms();
+    const double extract_ms = t_extract1 - t_extract0;
+    print_time("bbox_extract_ms", extract_ms, state.cfg.debug);
+    state.consumer_stats.add_bbox_extract(extract_ms);
+
+    const double t_parse0 = time_ms();
+    std::vector<objdet::Box> boxes;
+    try {
+      boxes = objdet::parse_boxes_strict(payload, frame_w, frame_h, topk, state.cfg.debug);
+    } catch (const std::exception& ex) {
+      std::cerr << "[warn] bbox parse failed: " << ex.what() << "\n";
+      continue;
+    }
+    const double t_parse1 = time_ms();
+    const double parse_ms = t_parse1 - t_parse0;
+    print_time("bbox_parse_ms", parse_ms, state.cfg.debug);
+    state.consumer_stats.add_bbox_parse(parse_ms);
+
+    std::vector<sima_examples::OptiViewObject> optiview_objects =
+        build_optiview_objects(boxes, frame_w, frame_h);
+    if (state.cfg.debug) {
+      std::cout << "boxes=" << boxes.size() << "\n";
+    }
+
+    // Contract: publish video first, then publish the matching JSON side-channel payload.
+    double output_ts = 0.0;
+    const double t_udp_conv0 = time_ms();
+    simaai::neat::Tensor nv12_frame;
+    std::string nv12_err;
+    const bool converted = nv12_copy_to_cpu_tensor(pending.frame, nv12_frame, nv12_err);
+    if (!converted) {
+      std::cerr << "[warn] udp convert failed: " << nv12_err << "\n";
+      continue;
+    }
+    const double t_udp_conv1 = time_ms();
+    const double udp_conv_ms = t_udp_conv1 - t_udp_conv0;
+    print_time("nv12_copy_ms", udp_conv_ms, state.cfg.debug);
+    state.consumer_stats.add_udp_convert(udp_conv_ms);
+
+    // NEAT boundary: push frame to OptiView video transport run.
+    const double t_udp_push0 = time_ms();
+    if (!udp_run.push(nv12_frame)) {
+      std::cerr << "[warn] udp push failed\n";
+      continue;
+    }
+    const double t_udp_push1 = time_ms();
+    const double udp_push_ms = t_udp_push1 - t_udp_push0;
+    print_time("udp_push_ms", udp_push_ms, state.cfg.debug);
+    state.consumer_stats.add_udp_push(udp_push_ms);
+    output_ts = t_udp_push1;
+    const int64_t fid = out_opt->frame_id >= 0 ? out_opt->frame_id : static_cast<int64_t>(pending.index);
+    const int64_t ts_ms = static_cast<int64_t>(output_ts);
+    std::string json_payload = sima_examples::optiview_make_json(
+        ts_ms, std::to_string(fid), optiview_objects, optiview_labels);
+    std::string json_err;
+    if (!optiview_sender.send_json(json_payload, &json_err)) {
+      std::cerr << "[warn] optiview json send failed: " << json_err << "\n";
+    }
+
+    const double e2e_ms = output_ts - pending.pull_ts_ms;
+    print_time("e2e_ms", e2e_ms, state.cfg.debug);
+    state.consumer_stats.add_e2e(e2e_ms);
+
+    const int published_now = state.published.fetch_add(1) + 1;
+    state.consumer_stats.count = published_now;
+  }
+  state.stop.store(true);
+  state.queue.close();
+  state.consumer_end_ms = time_ms();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   try {
+    // Lifecycle: setup -> start workers -> join -> summary -> teardown.
     Config cfg = parse_config(argc, argv);
     sima_examples::require(!cfg.url.empty(), "Missing --rtsp <url>");
     sima_examples::require(!cfg.mpk.empty(), "Missing --mpk <path/to/model_mpk.tar.gz>");
 
     enable_optiview_diagnostics(true);
 
-    // Probe once before building the main decode session so decoder fallback
-    // caps can follow the source dimensions and FPS instead of hardcoded values.
-    sima_examples::RtspStreamInfo rtsp_probe;
-    sima_examples::RtspProbeOptions rtsp_probe_opt;
-    rtsp_probe_opt.payload_type = 96;
-    rtsp_probe_opt.latency_ms = 200;
-    rtsp_probe_opt.rtsp_tcp = true;
-    rtsp_probe_opt.debug = cfg.debug;
-    (void)sima_examples::probe_rtsp_stream_info(cfg.url, rtsp_probe_opt, rtsp_probe);
+    RtspRuntime rtsp_runtime = build_rtsp_runtime(cfg);
+    OptiViewRuntime optiview_runtime =
+        build_optiview_runtime(cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h,
+                               rtsp_runtime.output_fps);
+    YoloRuntime yolo_runtime = build_yolo_runtime(cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h);
 
-    // Camera session:
-    // RTSP -> depay/parse -> hardware decode -> NV12 output.
-    simaai::neat::Session camera;
-    simaai::neat::nodes::groups::RtspDecodedInputOptions cam_opt;
-    cam_opt.url = cfg.url;
-    cam_opt.latency_ms = 200;
-    cam_opt.tcp = true;
-    cam_opt.payload_type = 96;
-    cam_opt.insert_queue = true;
-    cam_opt.out_format = "NV12";
-    cam_opt.decoder_name = "decoder";
-    cam_opt.decoder_raw_output = true;
-    cam_opt.auto_caps_from_stream = true;
-    if (rtsp_probe.width > 0 && rtsp_probe.height > 0) {
-      cam_opt.fallback_h264_width = rtsp_probe.width;
-      cam_opt.fallback_h264_height = rtsp_probe.height;
-      std::cout << "[init] probed RTSP decode dims " << rtsp_probe.width << "x" << rtsp_probe.height;
-      if (rtsp_probe.fps > 0)
-        std::cout << " @" << rtsp_probe.fps << " fps";
-      std::cout << "\n";
-    }
-    if (rtsp_probe.fps > 0)
-      cam_opt.fallback_h264_fps = rtsp_probe.fps;
-    camera.add(simaai::neat::nodes::groups::RtspDecodedInput(cam_opt));
-    camera.add(simaai::neat::nodes::Output());
-    simaai::neat::RunOptions cam_run_opt;
-    cam_run_opt.enable_metrics = true;
-    cam_run_opt.queue_depth = 4;
-    cam_run_opt.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
-    auto cam = camera.build(cam_run_opt);
-
-    // Pull a first frame early so the rest of the example can derive the
-    // actual decoded dimensions from live data.
-    const double first_pull_start = time_ms();
-    simaai::neat::Tensor first;
-    try {
-      first = cam.pull_tensor_or_throw(5000);
-    } catch (const std::exception& e) {
-      std::string msg = e.what();
-      if (msg.find("timeout") != std::string::npos) {
-        throw std::runtime_error(
-            "Timed out waiting for first RTSP frame. This is usually upstream connectivity or stream "
-            "delivery, not framerate derivation. If diagnostics show zero buffers at rtspsrc/depay/"
-            "decoder, the device is not receiving RTP from the source.");
-      }
-      throw;
-    }
-    const double first_pull_end = time_ms();
-    const double first_pull_ms = first_pull_end - first_pull_start;
-    const double first_pull_ts = first_pull_end;
-    int frame_w = 0;
-    int frame_h = 0;
-    sima_examples::require(infer_dims(first, frame_w, frame_h), "first frame missing dimensions");
-    if (frame_w == 1280 && frame_h == 720 && cam_opt.h264_width <= 0 && cam_opt.h264_height <= 0 &&
-        cam_opt.fallback_h264_width <= 0 && cam_opt.fallback_h264_height <= 0) {
-      std::fprintf(stderr, "[WARN] deriving width=1280 and height=720 from SDP or timestamp\n");
-    }
-
-    // OptiView transport session:
-    // appsrc(NV12) -> H264 encode -> RTP packetize -> UDP sink.
-    const std::string udp_host = cfg.optiview_host;
-    const int udp_port = cfg.optiview_video_port;
-    const int output_fps = (rtsp_probe.fps > 0) ? rtsp_probe.fps : 30;
-    simaai::neat::Run udp_run;
-    std::unique_ptr<sima_examples::OptiViewSender> optiview_sender;
-    std::vector<std::string> optiview_labels;
-
-    // Final summaries are useful when diagnosing stalls, queue pressure, or
-    // RTSP instability on target hardware.
-    simaai::neat::Session udp;
-    simaai::neat::InputOptions udp_src;
-    udp_src.format = "NV12";
-    udp_src.width = frame_w;
-    udp_src.height = frame_h;
-    udp_src.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
-                            ",height=" + std::to_string(frame_h) + ",framerate=" +
-                            std::to_string(output_fps) + "/1";
-    udp_src.use_simaai_pool = false;
-    udp.add(simaai::neat::nodes::Input(udp_src));
-    udp.add(simaai::neat::nodes::H264EncodeSima(frame_w, frame_h, output_fps, 4000));
-    udp.add(simaai::neat::nodes::H264Parse());
-    udp.add(simaai::neat::nodes::H264Packetize(96, 1));
-    simaai::neat::UdpOutputOptions udp_opt;
-    udp_opt.host = udp_host;
-    udp_opt.port = udp_port;
-    udp.add(simaai::neat::nodes::UdpOutput(udp_opt));
-
-    simaai::neat::Tensor udp_dummy;
-    std::string udp_err;
-    sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, udp_dummy, udp_err), udp_err);
-    simaai::neat::RunOptions udp_run_opt;
-    udp_run_opt.enable_metrics = true;
-    udp_run = udp.build(udp_dummy, simaai::neat::RunMode::Async, udp_run_opt);
-    std::cout << "udp=" << udp_host << ":" << udp_port << "\n";
-
-    sima_examples::OptiViewOptions opt;
-    opt.host = cfg.optiview_host;
-    opt.channel = 0;
-    opt.video_port_base = cfg.optiview_video_port;
-    opt.json_port_base = cfg.optiview_json_port;
-    std::string opt_err;
-    optiview_sender = std::make_unique<sima_examples::OptiViewSender>(opt, &opt_err);
-    sima_examples::require(optiview_sender->ok(), opt_err);
-    optiview_labels = yolo_coco_labels();
-    std::cout << "optiview host=" << optiview_sender->host()
-              << " video_port=" << optiview_sender->video_port()
-              << " json_port=" << optiview_sender->json_port() << " channel=0\n";
-
-    // YOLO session:
-    // Input(NV12) -> Preprocess -> Infer -> BoxDecode -> Output.
-    simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "NV12";
-    model_opt.preproc.input_width = frame_w;
-    model_opt.preproc.input_height = frame_h;
-    model_opt.input_max_width = frame_w;
-    model_opt.input_max_height = frame_h;
-    model_opt.input_max_depth = 1;
-    simaai::neat::Model model(cfg.mpk, model_opt);
-    std::cout << "[init] model configured for " << frame_w << "x" << frame_h << " NV12\n";
-
-    simaai::neat::InputOptions ysrc = model.input_appsrc_options(false);
-    ysrc.media_type = "video/x-raw";
-    ysrc.format = "NV12";
-    ysrc.width = frame_w;
-    ysrc.height = frame_h;
-    ysrc.depth = 1;
-
-    simaai::neat::Session yolo;
-    yolo.add(simaai::neat::nodes::Input(ysrc));
-    yolo.add(simaai::neat::nodes::groups::Preprocess(model));
-    yolo.add(simaai::neat::nodes::groups::Infer(model));
-    const int topk = 100;
-    const float min_score = 0.52f;
-    yolo.add(simaai::neat::nodes::SimaBoxDecode(model, "yolov8", frame_w, frame_h, min_score,
-                                                0.5f, topk));
-    yolo.add(simaai::neat::nodes::Output());
-    simaai::neat::RunOptions det_run_opt;
-    det_run_opt.preset = simaai::neat::RunPreset::Reliable;
-    det_run_opt.enable_metrics = true;
-    det_run_opt.queue_depth = 4;
-    det_run_opt.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
-    det_run_opt.output_memory = simaai::neat::OutputMemory::Owned;
-    simaai::neat::Tensor det_dummy;
-    std::string det_err;
-    sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, det_dummy, det_err), det_err);
-    std::cout << "[init] building YOLO pipeline\n";
-    auto det = yolo.build(det_dummy, simaai::neat::RunMode::Async, det_run_opt);
-    std::cout << "[init] YOLO pipeline ready\n";
-
-    if (cfg.frames_set && cfg.frames <= 0) {
-      sima_examples::require(false, "--frames must be > 0");
-    }
-
-    std::optional<int> frame_limit;
-    if (cfg.frames_set) {
-      frame_limit = cfg.frames;
-    } else {
-      frame_limit = std::nullopt;
-    }
+    std::optional<int> frame_limit = resolve_frame_limit(cfg);
     std::cout << "mode=optiview"
               << " frame_limit=" << (frame_limit ? std::to_string(*frame_limit) : "inf")
               << " frames_set=" << (cfg.frames_set ? "1" : "0") << "\n";
 
+    // Contract: bounded queue preserves backpressure and producer closes it on exit.
     FrameQueue queue(300);
     ProducerTiming producer_stats;
     ConsumerTiming consumer_stats;
@@ -561,237 +823,53 @@ int main(int argc, char** argv) {
     double consumer_start_ms = 0.0;
     double consumer_end_ms = 0.0;
 
-    // Producer thread:
-    // read decoded frames from the RTSP session and queue them for inference.
-    std::thread producer([&]() {
-      producer_start_ms = time_ms();
-      int produced = 0;
-      bool use_first = true;
-      while (!stop.load() && (!frame_limit || produced < *frame_limit)) {
-        simaai::neat::Tensor frame;
-        double pull_ms = 0.0;
-        double pull_ts = 0.0;
-        if (use_first) {
-          frame = std::move(first);
-          use_first = false;
-          pull_ms = first_pull_ms;
-          pull_ts = first_pull_ts;
-        } else {
-          const double t0 = time_ms();
-          auto frame_opt = cam.pull_tensor();
-          if (!frame_opt.has_value())
-            continue;
-          const double t1 = time_ms();
-          frame = std::move(*frame_opt);
-          pull_ms = t1 - t0;
-          pull_ts = t1;
-        }
-        print_time("rtsp_pull_ms", pull_ms, cfg.debug);
-        producer_stats.add_rtsp_pull(pull_ms);
+    WorkerSharedState worker_state{
+        cfg,
+        frame_limit,
+        queue,
+        producer_stats,
+        consumer_stats,
+        stop,
+        published,
+        det_outputs,
+        producer_start_ms,
+        producer_end_ms,
+        consumer_start_ms,
+        consumer_end_ms,
+    };
 
-        FrameItem item;
-        item.index = produced;
-        item.frame = std::move(frame);
-        item.pull_ts_ms = pull_ts;
+    // Contract: start producer first, then consumer; both terminate when queue closes or stop is set.
+    std::thread producer_thread(producer_worker, std::ref(rtsp_runtime.run),
+                                std::move(rtsp_runtime.first_frame), rtsp_runtime.first_pull_ms,
+                                rtsp_runtime.first_pull_ts, std::ref(worker_state));
+    std::thread consumer_thread(
+        consumer_worker, std::ref(yolo_runtime.run), std::ref(optiview_runtime.video_run),
+        std::ref(*optiview_runtime.sender), std::cref(optiview_runtime.labels), rtsp_runtime.frame_w,
+        rtsp_runtime.frame_h, yolo_runtime.topk, std::ref(worker_state));
 
-        const double q0 = time_ms();
-        if (!queue.push(std::move(item)))
-          break;
-        const double q1 = time_ms();
-        const double queue_ms = q1 - q0;
-        print_time("queue_push_ms", queue_ms, cfg.debug);
-        producer_stats.add_queue_push(queue_ms);
+    if (producer_thread.joinable())
+      producer_thread.join();
+    if (consumer_thread.joinable())
+      consumer_thread.join();
 
-        produced += 1;
-        producer_stats.count = produced;
-      }
-      queue.close();
-      producer_end_ms = time_ms();
-    });
-
-    // Consumer thread:
-    // push frames into YOLO, decode boxes, convert them into OptiView objects,
-    // and forward the original frame to the OptiView video transport path.
-    std::thread consumer([&]() {
-      consumer_start_ms = time_ms();
-      int out_pulls = 0;
-      while (!stop.load() && (!frame_limit || published.load() < *frame_limit)) {
-        FrameItem item;
-        const double q0 = time_ms();
-        if (!queue.pop(item))
-          break;
-        const double q1 = time_ms();
-        const double queue_ms = q1 - q0;
-        print_time("queue_pop_ms", queue_ms, cfg.debug);
-        consumer_stats.add_queue_pop(queue_ms);
-
-        PendingFrame pending_current;
-        pending_current.index = item.index;
-        pending_current.pull_ts_ms = item.pull_ts_ms;
-        pending_current.frame = std::move(item.frame);
-
-        // Detection runs asynchronously: push the current frame first, then
-        // pull the next available YOLO result.
-        const double t_push0 = time_ms();
-        const bool pushed = det.push(pending_current.frame);
-        const double t_push1 = time_ms();
-        const double push_ms = t_push1 - t_push0;
-        print_time("yolo_push_ms", push_ms, cfg.debug);
-        consumer_stats.add_yolo_push(push_ms);
-        if (!pushed) {
-          std::cerr << "[warn] push failed\n";
-          continue;
-        }
-        const double t_pull0 = time_ms();
-        auto out_opt = det.pull();
-        const double t_pull1 = time_ms();
-        const double pull_ms = t_pull1 - t_pull0;
-        print_time("yolo_pull_ms", pull_ms, cfg.debug);
-        consumer_stats.add_yolo_pull(pull_ms);
-        if (!out_opt.has_value())
-          continue;
-        out_pulls += 1;
-        det_outputs.store(out_pulls);
-        if (cfg.debug) {
-          std::cout << "[dbg] det pull=" << out_pulls << " kind=" << static_cast<int>(out_opt->kind)
-                    << " tag=" << out_opt->payload_tag << " format=" << out_opt->format
-                    << " frame_id=" << out_opt->frame_id << " input_seq=" << out_opt->input_seq
-                    << "\n";
-        }
-
-        PendingFrame pending = std::move(pending_current);
-
-        const double t_extract0 = time_ms();
-        std::vector<uint8_t> payload;
-        std::string err;
-        if (!sima_examples::extract_bbox_payload(*out_opt, payload, err)) {
-          std::cerr << "[warn] bbox extract failed: " << err << "\n";
-          continue;
-        }
-        const double t_extract1 = time_ms();
-        const double extract_ms = t_extract1 - t_extract0;
-        print_time("bbox_extract_ms", extract_ms, cfg.debug);
-        consumer_stats.add_bbox_extract(extract_ms);
-
-        const double t_parse0 = time_ms();
-        std::vector<objdet::Box> boxes;
-        try {
-          boxes = objdet::parse_boxes_strict(payload, frame_w, frame_h, topk, cfg.debug);
-        } catch (const std::exception& ex) {
-          std::cerr << "[warn] bbox parse failed: " << ex.what() << "\n";
-          continue;
-        }
-        const double t_parse1 = time_ms();
-        const double parse_ms = t_parse1 - t_parse0;
-        print_time("bbox_parse_ms", parse_ms, cfg.debug);
-        consumer_stats.add_bbox_parse(parse_ms);
-
-        // Translate generic detection boxes into the OptiView wire format.
-        std::vector<sima_examples::OptiViewObject> optiview_objects;
-        optiview_objects.reserve(boxes.size());
-        for (const auto& box : boxes) {
-          int x1 = static_cast<int>(box.x1);
-          int y1 = static_cast<int>(box.y1);
-          int w = static_cast<int>(box.x2 - box.x1);
-          int h = static_cast<int>(box.y2 - box.y1);
-          if (x1 < 0)
-            x1 = 0;
-          if (y1 < 0)
-            y1 = 0;
-          if (w < 0)
-            w = 0;
-          if (h < 0)
-            h = 0;
-          if (x1 + w > frame_w)
-            w = frame_w - x1;
-          if (y1 + h > frame_h)
-            h = frame_h - y1;
-          if (w < 0)
-            w = 0;
-          if (h < 0)
-            h = 0;
-          sima_examples::OptiViewObject obj;
-          obj.x = x1;
-          obj.y = y1;
-          obj.w = w;
-          obj.h = h;
-          obj.score = box.score;
-          obj.class_id = box.class_id;
-          optiview_objects.push_back(obj);
-        }
-        if (cfg.debug) {
-          std::cout << "boxes=" << boxes.size() << "\n";
-        }
-
-        // Send the original decoded frame to OptiView video and the matching
-        // detections as JSON on the side channel.
-        double output_ts = 0.0;
-        const double t_udp_conv0 = time_ms();
-        simaai::neat::Tensor nv12_frame;
-        std::string nv12_err;
-        const bool converted = nv12_copy_to_cpu_tensor(pending.frame, nv12_frame, nv12_err);
-        if (!converted) {
-          std::cerr << "[warn] udp convert failed: " << nv12_err << "\n";
-          continue;
-        }
-        const double t_udp_conv1 = time_ms();
-        const double udp_conv_ms = t_udp_conv1 - t_udp_conv0;
-        print_time("nv12_copy_ms", udp_conv_ms, cfg.debug);
-        consumer_stats.add_udp_convert(udp_conv_ms);
-
-        const double t_udp_push0 = time_ms();
-        if (!udp_run.push(nv12_frame)) {
-          std::cerr << "[warn] udp push failed\n";
-          continue;
-        }
-        const double t_udp_push1 = time_ms();
-        const double udp_push_ms = t_udp_push1 - t_udp_push0;
-        print_time("udp_push_ms", udp_push_ms, cfg.debug);
-        consumer_stats.add_udp_push(udp_push_ms);
-        output_ts = t_udp_push1;
-        const int64_t fid =
-            out_opt->frame_id >= 0 ? out_opt->frame_id : static_cast<int64_t>(pending.index);
-        const int64_t ts_ms = static_cast<int64_t>(output_ts);
-        std::string json_payload = sima_examples::optiview_make_json(
-            ts_ms, std::to_string(fid), optiview_objects, optiview_labels);
-        std::string json_err;
-        if (!optiview_sender->send_json(json_payload, &json_err)) {
-          std::cerr << "[warn] optiview json send failed: " << json_err << "\n";
-        }
-
-        const double e2e_ms = output_ts - pending.pull_ts_ms;
-        print_time("e2e_ms", e2e_ms, cfg.debug);
-        consumer_stats.add_e2e(e2e_ms);
-
-        const int published_now = published.fetch_add(1) + 1;
-        consumer_stats.count = published_now;
-      }
-      stop.store(true);
-      queue.close();
-      consumer_end_ms = time_ms();
-    });
-
-    if (producer.joinable())
-      producer.join();
-    if (consumer.joinable())
-      consumer.join();
-
-    std::cout << "published=" << published.load() << " udp=" << udp_host << ":" << udp_port
-              << "\n";
+    std::cout << "published=" << published.load() << " udp=" << optiview_runtime.host << ":"
+              << optiview_runtime.video_port << "\n";
     print_throughput_summary(producer_stats.count, det_outputs.load(), published.load(),
                              producer_start_ms, producer_end_ms, consumer_start_ms,
                              consumer_end_ms);
-    print_stream_summary("rtsp", cam, true);
-    print_stream_summary("yolo", det, true);
-    print_pipeline_report("yolo", det, true);
-    print_stream_summary("udp", udp_run, true);
-    print_pipeline_report("udp", udp_run, true);
+    print_stream_summary("rtsp", rtsp_runtime.run, true);
+    print_stream_summary("yolo", yolo_runtime.run, true);
+    print_pipeline_report("yolo", yolo_runtime.run, true);
+    print_stream_summary("udp", optiview_runtime.video_run, true);
+    print_pipeline_report("udp", optiview_runtime.video_run, true);
     producer_stats.print();
     consumer_stats.print();
+
+    // Contract: join workers before dropping NEAT runs, then release pipelines in deterministic order.
     std::cerr << "[HOLD] pid=" << getpid() << " (sleeping 20s)\n";
-    udp_run = simaai::neat::Run{};
-    cam = simaai::neat::Run{};
-    det = simaai::neat::Run{}; // drop pipelines/plugins
+    optiview_runtime.video_run = simaai::neat::Run{};
+    rtsp_runtime.run = simaai::neat::Run{};
+    yolo_runtime.run = simaai::neat::Run{};
     std::this_thread::sleep_for(std::chrono::seconds(20));
     return 0;
 
