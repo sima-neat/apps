@@ -68,7 +68,6 @@ int main(int argc, char** argv) {
     "--model", model_path,
     "--output", out_dir,
     "--frames", "10",
-    "--fps", "30",
     "--width", "1280",
     "--height", "720",
     "--save-every", "1",
@@ -96,6 +95,12 @@ int main(int argc, char** argv) {
     }
     if (total == 0) {
       std::cerr << "[FAIL] no output files in any stream subdirectory\n";
+      if (!r.stdout_text.empty()) {
+        std::cerr << "stdout:\n" << r.stdout_text << "\n";
+      }
+      if (!r.stderr_text.empty()) {
+        std::cerr << "stderr:\n" << r.stderr_text << "\n";
+      }
       rc = 1;
     } else {
       std::cout << "[OK] multistream detection produced " << total

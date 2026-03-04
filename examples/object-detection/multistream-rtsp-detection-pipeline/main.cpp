@@ -1,4 +1,5 @@
 #include "support/object_detection/obj_detection_utils.h"
+#include "support/runtime/example_utils.h"
 
 #include "neat/models.h"
 #include "neat/node_groups.h"
@@ -652,7 +653,8 @@ cv::Mat tensor_to_bgr_mat(const simaai::neat::Tensor& t) {
   return bgr;
 }
 
-RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int sima_allocator_type) {
+RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int sima_allocator_type,
+                               const sima_examples::RtspStreamInfo& probe) {
   simaai::neat::nodes::groups::RtspDecodedInputOptions ro;
   ro.url = url;
   ro.latency_ms = cfg.latency_ms;
@@ -666,9 +668,9 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int si
   ro.sima_allocator_type = sima_allocator_type;
   ro.output_caps.enable = true;
   ro.output_caps.format = "BGR";
-  ro.output_caps.width = cfg.width;
-  ro.output_caps.height = cfg.height;
-  ro.output_caps.fps = cfg.fps;
+  ro.output_caps.width = (probe.width > 0) ? probe.width : cfg.width;
+  ro.output_caps.height = (probe.height > 0) ? probe.height : cfg.height;
+  ro.output_caps.fps = (probe.fps > 0) ? probe.fps : cfg.fps;
   ro.output_caps.memory = simaai::neat::CapsMemory::SystemMemory;
 
   simaai::neat::Session session;
@@ -687,11 +689,18 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int si
 RtspRuntime build_rtsp_runtime_with_fallback(const Config& cfg, const std::string& url,
                                              bool& used_fallback_allocator) {
   used_fallback_allocator = false;
+  sima_examples::RtspProbeOptions probe_opt;
+  probe_opt.payload_type = 96;
+  probe_opt.latency_ms = cfg.latency_ms;
+  probe_opt.rtsp_tcp = cfg.tcp;
+  probe_opt.debug = cfg.debug;
+  sima_examples::RtspStreamInfo probe;
+  (void)sima_examples::probe_rtsp_stream_info(url, probe_opt, probe);
   try {
-    return build_rtsp_runtime(cfg, url, /*sima_allocator_type=*/2);
+    return build_rtsp_runtime(cfg, url, /*sima_allocator_type=*/2, probe);
   } catch (const std::exception& first_ex) {
     try {
-      RtspRuntime rtsp = build_rtsp_runtime(cfg, url, /*sima_allocator_type=*/1);
+      RtspRuntime rtsp = build_rtsp_runtime(cfg, url, /*sima_allocator_type=*/1, probe);
       used_fallback_allocator = true;
       return rtsp;
     } catch (const std::exception& second_ex) {
