@@ -1,12 +1,60 @@
 """Unit tests for simple-detess-segmentation-mask-overlay (Python)."""
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
+import pyneat
 import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
+SPEC = importlib.util.spec_from_file_location("detess_seg_main", MAIN_PY)
+APP = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(APP)
+
+
+class FakeTensor:
+    def __init__(self, arr: np.ndarray):
+        self._arr = np.ascontiguousarray(arr.astype(np.float32, copy=False))
+        self.dtype = pyneat.TensorDType.Float32
+        self.shape = list(self._arr.shape)
+
+    def copy_dense_bytes_tight(self):
+        return self._arr.tobytes()
+
+
+def make_detess_seg_tensors(objectness: float = 0.9, class_score: float = 0.8):
+    proto = np.zeros((160, 160, 32), dtype=np.float32)
+    xy80 = np.zeros((80, 80, 6), dtype=np.float32)
+    wh80 = np.zeros((80, 80, 6), dtype=np.float32)
+    co80 = np.zeros((80, 80, 243), dtype=np.float32)
+    mk80 = np.zeros((80, 80, 96), dtype=np.float32)
+    xy40 = np.zeros((40, 40, 6), dtype=np.float32)
+    wh40 = np.zeros((40, 40, 6), dtype=np.float32)
+    co40 = np.zeros((40, 40, 243), dtype=np.float32)
+    mk40 = np.zeros((40, 40, 96), dtype=np.float32)
+    xy20 = np.zeros((20, 20, 6), dtype=np.float32)
+    wh20 = np.zeros((20, 20, 6), dtype=np.float32)
+    co20 = np.zeros((20, 20, 243), dtype=np.float32)
+    mk20 = np.zeros((20, 20, 96), dtype=np.float32)
+
+    xy80[10, 20, 0] = 100.0
+    xy80[10, 20, 1] = 120.0
+    wh80[10, 20, 0] = 40.0
+    wh80[10, 20, 1] = 60.0
+    co80[10, 20, 0] = objectness
+    co80[10, 20, 1] = class_score
+
+    arrays = [
+        proto,
+        xy80, wh80, co80, mk80,
+        xy40, wh40, co40, mk40,
+        xy20, wh20, co20, mk20,
+    ]
+    return [FakeTensor(arr) for arr in arrays]
 
 
 @pytest.mark.unit
@@ -57,3 +105,28 @@ class TestArgParsing:
         )
         assert r.returncode == 2
         assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
+
+
+@pytest.mark.unit
+class TestDecodeRegression:
+    def test_decode_uses_detess_values_directly(self):
+        dets, proto = APP.decode_yolov5_seg(make_detess_seg_tensors(), infer_size=640)
+
+        assert proto.shape == (160, 160, 32)
+        assert len(dets) == 1
+
+        det = dets[0]
+        assert det["class_id"] == 0
+        assert det["score"] == pytest.approx(0.72, rel=1e-4)
+        assert det["x1"] == pytest.approx(80.0, rel=1e-4)
+        assert det["y1"] == pytest.approx(90.0, rel=1e-4)
+        assert det["x2"] == pytest.approx(120.0, rel=1e-4)
+        assert det["y2"] == pytest.approx(150.0, rel=1e-4)
+
+    def test_decode_keeps_detections_above_new_threshold(self):
+        dets, _ = APP.decode_yolov5_seg(
+            make_detess_seg_tensors(objectness=0.5, class_score=0.8), infer_size=640
+        )
+
+        assert len(dets) == 1
+        assert dets[0]["score"] == pytest.approx(0.4, rel=1e-4)

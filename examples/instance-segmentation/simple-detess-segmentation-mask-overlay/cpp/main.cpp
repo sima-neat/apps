@@ -174,14 +174,7 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
     return false;
   }
 
-  const std::array<std::array<float, 6>, 3> anchors = {{
-      {10.0f, 13.0f, 16.0f, 30.0f, 33.0f, 23.0f},
-      {30.0f, 61.0f, 62.0f, 45.0f, 59.0f, 119.0f},
-      {116.0f, 90.0f, 156.0f, 198.0f, 373.0f, 326.0f},
-  }};
-  const std::array<int, 3> strides = {8, 16, 32};
-
-  constexpr float kConfThr = 0.45f;
+  constexpr float kConfThr = 0.35f;
   for (int lvl = 0; lvl < 3; ++lvl) {
     DenseTensor txy, twh, tco, tmk;
     if (!tensor_to_hwc(tensors[1 + lvl * 4], txy, err) ||
@@ -212,11 +205,12 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
           const float th = at_hwc(twh, y, x, a * 2 + 1);
 
           const int cls_base = a * 81;
-          const float obj = sigmoid(at_hwc(tco, y, x, cls_base + 0));
+          // DetessDequant already emits dequantized box values and scores.
+          const float obj = std::clamp(at_hwc(tco, y, x, cls_base + 0), 0.0f, 1.0f);
           int best_cls = 0;
           float best_cls_score = 0.0f;
           for (int c = 0; c < 80; ++c) {
-            const float p = sigmoid(at_hwc(tco, y, x, cls_base + 1 + c));
+            const float p = std::clamp(at_hwc(tco, y, x, cls_base + 1 + c), 0.0f, 1.0f);
             if (p > best_cls_score) {
               best_cls_score = p;
               best_cls = c;
@@ -227,12 +221,10 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
           if (score < kConfThr)
             continue;
 
-          const float cx = (sigmoid(tx) * 2.0f - 0.5f + static_cast<float>(x)) * strides[lvl];
-          const float cy = (sigmoid(ty) * 2.0f - 0.5f + static_cast<float>(y)) * strides[lvl];
-          const float aw = anchors[lvl][a * 2 + 0];
-          const float ah = anchors[lvl][a * 2 + 1];
-          const float bw = std::pow(sigmoid(tw) * 2.0f, 2.0f) * aw;
-          const float bh = std::pow(sigmoid(th) * 2.0f, 2.0f) * ah;
+          const float cx = tx;
+          const float cy = ty;
+          const float bw = std::max(0.0f, tw);
+          const float bh = std::max(0.0f, th);
 
           Detection d;
           d.x1 = std::max(0.0f, cx - bw * 0.5f);

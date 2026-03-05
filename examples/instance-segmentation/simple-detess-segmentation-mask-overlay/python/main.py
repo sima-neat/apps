@@ -137,13 +137,7 @@ def decode_yolov5_seg(tensors, infer_size):
     if proto.shape != (160, 160, 32):
         raise ValueError(f"unexpected proto shape: {proto.shape}")
 
-    anchors = [
-        [10.0, 13.0, 16.0, 30.0, 33.0, 23.0],
-        [30.0, 61.0, 62.0, 45.0, 59.0, 119.0],
-        [116.0, 90.0, 156.0, 198.0, 373.0, 326.0],
-    ]
-    strides = [8, 16, 32]
-    conf_thr = 0.45
+    conf_thr = 0.35
 
     dets = []
     for lvl in range(3):
@@ -162,10 +156,9 @@ def decode_yolov5_seg(tensors, infer_size):
                     th = twh[y, x, a * 2 + 1]
 
                     cls_base = a * 81
-                    obj = sigmoid(tco[y, x, cls_base])
-                    cls_scores = np.array(
-                        [sigmoid(tco[y, x, cls_base + 1 + c]) for c in range(80)]
-                    )
+                    # DetessDequant already emits dequantized box values and scores.
+                    obj = float(np.clip(tco[y, x, cls_base], 0.0, 1.0))
+                    cls_scores = np.clip(tco[y, x, cls_base + 1: cls_base + 81], 0.0, 1.0)
                     best_cls = int(np.argmax(cls_scores))
                     best_cls_score = cls_scores[best_cls]
 
@@ -173,12 +166,10 @@ def decode_yolov5_seg(tensors, infer_size):
                     if score < conf_thr:
                         continue
 
-                    cx = (sigmoid(tx) * 2.0 - 0.5 + x) * strides[lvl]
-                    cy = (sigmoid(ty) * 2.0 - 0.5 + y) * strides[lvl]
-                    aw = anchors[lvl][a * 2]
-                    ah = anchors[lvl][a * 2 + 1]
-                    bw = (sigmoid(tw) * 2.0) ** 2 * aw
-                    bh = (sigmoid(th) * 2.0) ** 2 * ah
+                    cx = float(tx)
+                    cy = float(ty)
+                    bw = max(0.0, float(tw))
+                    bh = max(0.0, float(th))
 
                     x1 = max(0.0, cx - bw * 0.5)
                     y1 = max(0.0, cy - bh * 0.5)
