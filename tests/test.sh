@@ -103,6 +103,11 @@ format_env_status() {
   fi
 }
 
+is_absolute_path() {
+  local value="${1:-}"
+  [[ -z "${value}" || "${value}" == /* ]]
+}
+
 preflight_e2e_env() {
   local strict="${SIMANEAT_APPS_TEST_REQUIRE_E2E:-0}"
   local models_dir_raw="${SIMANEAT_APPS_TEST_MODELS_DIR:-}"
@@ -146,6 +151,22 @@ preflight_e2e_env() {
   fi
   if [[ "${keep_output_raw}" != "0" && "${keep_output_raw}" != "1" ]]; then
     echo "  [FAIL] SIMANEAT_APPS_TEST_KEEP_OUTPUT must be 0 or 1."
+    preflight_fail=1
+  fi
+  if ! is_absolute_path "${models_dir_raw}"; then
+    echo "  [FAIL] SIMANEAT_APPS_TEST_MODELS_DIR must be an absolute path."
+    preflight_fail=1
+  fi
+  if ! is_absolute_path "${input_dir_raw}"; then
+    echo "  [FAIL] SIMANEAT_APPS_TEST_INPUT_DIR must be an absolute path."
+    preflight_fail=1
+  fi
+  if ! is_absolute_path "${output_dir_raw}"; then
+    echo "  [FAIL] SIMANEAT_APPS_TEST_OUTPUT_DIR must be an absolute path."
+    preflight_fail=1
+  fi
+  if ! is_absolute_path "${class_image_raw}"; then
+    echo "  [FAIL] SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE must be an absolute path."
     preflight_fail=1
   fi
   if [[ ! -d "${models_dir}" ]]; then
