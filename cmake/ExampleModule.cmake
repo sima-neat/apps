@@ -130,8 +130,8 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
 endfunction()
 
 function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_target)
-  get_filename_component(_apps_root "${module_dir}/../../.." ABSOLUTE)
-  set(_e2e_source "${module_dir}/tests/cpp/e2e_test.cpp")
+  get_filename_component(_apps_root "${module_dir}/../../../.." ABSOLUTE)
+  set(_e2e_source "${module_dir}/tests/e2e_test.cpp")
   if (NOT EXISTS "${_e2e_source}")
     message(FATAL_ERROR
       "Example ${example_name} requested standard e2e testing but ${_e2e_source} does not exist.")
@@ -145,7 +145,7 @@ function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_t
   )
   target_include_directories("${_e2e_target}"
     PRIVATE
-      "${module_dir}/../../.."
+      "${_apps_root}"
   )
 
   add_test(
@@ -163,8 +163,8 @@ endfunction()
 # Generic unit test: compile tests/unit_test.cpp, register with label "unit".
 # ---------------------------------------------------------------------------
 function(_sima_neat_apps_add_unit_test example_name module_dir example_target)
-  get_filename_component(_apps_root "${module_dir}/../../.." ABSOLUTE)
-  set(_unit_source "${module_dir}/tests/cpp/unit_test.cpp")
+  get_filename_component(_apps_root "${module_dir}/../../../.." ABSOLUTE)
+  set(_unit_source "${module_dir}/tests/unit_test.cpp")
   if (NOT EXISTS "${_unit_source}")
     message(FATAL_ERROR
       "Example ${example_name} requested UNIT_TEST but ${_unit_source} does not exist.")
@@ -178,7 +178,7 @@ function(_sima_neat_apps_add_unit_test example_name module_dir example_target)
   )
   target_include_directories("${_unit_target}"
     PRIVATE
-      "${module_dir}/../../.."
+      "${_apps_root}"
   )
 
   add_test(
@@ -196,8 +196,8 @@ endfunction()
 # Generic e2e test: compile tests/e2e_test.cpp, register with label "e2e".
 # ---------------------------------------------------------------------------
 function(_sima_neat_apps_add_generic_e2e_test example_name module_dir example_target)
-  get_filename_component(_apps_root "${module_dir}/../../.." ABSOLUTE)
-  set(_e2e_source "${module_dir}/tests/cpp/e2e_test.cpp")
+  get_filename_component(_apps_root "${module_dir}/../../../.." ABSOLUTE)
+  set(_e2e_source "${module_dir}/tests/e2e_test.cpp")
   if (NOT EXISTS "${_e2e_source}")
     message(FATAL_ERROR
       "Example ${example_name} requested E2E_TEST but ${_e2e_source} does not exist.")
@@ -211,7 +211,7 @@ function(_sima_neat_apps_add_generic_e2e_test example_name module_dir example_ta
   )
   target_include_directories("${_e2e_target}"
     PRIVATE
-      "${module_dir}/../../.."
+      "${_apps_root}"
   )
 
   add_test(
@@ -256,7 +256,7 @@ function(sima_neat_apps_module example_name)
   endif()
 
   get_filename_component(_module_dir "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
-  get_filename_component(_apps_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+  get_filename_component(_apps_root "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
 
   if (APP_SOURCES)
     set(_sources "${APP_SOURCES}")

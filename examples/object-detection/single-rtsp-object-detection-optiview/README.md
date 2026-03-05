@@ -122,7 +122,7 @@ Configure and build only this example from its own directory:
 
 ```bash
 cd <apps-repo-root>/examples/object-detection/single-rtsp-object-detection-optiview
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -167,7 +167,8 @@ Run the Python sample directly from the example folder:
 
 ```bash
 cd <apps-repo-root>/examples/object-detection/single-rtsp-object-detection-optiview
-python3 main.py --model <path-to-yolo_v8s-mpk.tar.gz> --rtsp <rtsp_url>
+pip install -r python/requirements.txt
+python3 python/main.py --model <path-to-yolo_v8s-mpk.tar.gz> --rtsp <rtsp_url>
 ```
 
 Example workflow:
@@ -182,7 +183,8 @@ Then start the Python app:
 
 ```bash
 source ~/pyneat/bin/activate
-python3 main.py --rtsp rtsp://127.0.0.1:8554/src5 --model yolo_v8s_mpk.tar.gz
+pip install -r python/requirements.txt
+python3 python/main.py --rtsp rtsp://127.0.0.1:8554/src5 --model yolo_v8s_mpk.tar.gz
 ```
 
 Python-specific notes:
@@ -197,5 +199,9 @@ Python-specific notes:
 - If detections are missing but video is flowing, focus on the YOLO session and bbox extraction/parse path.
 - If video and detections are both missing in OptiView, verify the host and UDP ports first.
 
-## Reference
+## Source Files
+- C++ source: `cpp/main.cpp`
+- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- Python source: `python/main.py`
+- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
 - OptiView documentation: <https://docs.sima.ai/pages/optiview/main.html>

@@ -6,6 +6,7 @@
 | Category | <classification / object-detection / semantic-segmentation / instance-segmentation / depth-estimation / throughput> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
+| Languages | C++, Python |
 | Status | <experimental / stable> |
 | Binary Name | <cmake_target_name> |
 | Model | <default_model_name> |
@@ -40,7 +41,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python3 examples/<category>/<name>/main.py <args>`
+  `python3 examples/<category>/<name>/python/main.py <args>`
 - Required arguments:
   `<required_arg_1> <required_arg_2>`
 - Optional arguments:
@@ -60,14 +61,14 @@ Binary output:
 
 ### Build This Example Directly With CMake
 ```bash
-cd <apps-repo-root>/examples/<category>/<name>
-cmake -S . -B build
-cmake --build build -j
+cd <apps-repo-root>
+cmake -S examples/<category>/<name>/cpp -B build/<name>
+cmake --build build/<name> -j
 ```
 
 Binary output:
 ```bash
-./build/<binary>
+./build/<name>/<binary>
 ```
 
 ## Run
@@ -79,8 +80,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/<category>/<name>/requirements.txt
-python3 examples/<category>/<name>/main.py <args>
+pip install -r examples/<category>/<name>/python/requirements.txt
+python3 examples/<category>/<name>/python/main.py <args>
 ```
 
 ## Debugging Notes
@@ -88,6 +89,9 @@ python3 examples/<category>/<name>/main.py <args>
 - Confirm input paths exist and are readable.
 - Confirm output directories are writable.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- Python source: `python/main.py`
+- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
+- Shared assets: `common/`

@@ -40,7 +40,7 @@ Download into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/classification/simple-image-classification-pipeline/main.py --model <path> [--image <path>] [--min-prob <float>]`
+  `python examples/classification/simple-image-classification-pipeline/python/main.py --model <path> [--image <path>] [--min-prob <float>]`
 - Required arguments:
   `--model <path>`
 - Optional arguments:
@@ -61,7 +61,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/classification/simple-image-classification-pipeline
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -80,8 +80,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/classification/simple-image-classification-pipeline/requirements.txt
-python examples/classification/simple-image-classification-pipeline/main.py \
+pip install -r examples/classification/simple-image-classification-pipeline/python/requirements.txt
+python examples/classification/simple-image-classification-pipeline/python/main.py \
   --model assets/models/resnet_50_mpk.tar.gz
 ```
 
@@ -90,6 +90,6 @@ python examples/classification/simple-image-classification-pipeline/main.py \
 - If image decode fails, pass an explicit `--image` path.
 - If top-1 validation fails, try lowering `--min-prob` for debug runs.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- Python source: `python/main.py`
