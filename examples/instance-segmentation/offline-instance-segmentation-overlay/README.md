@@ -27,7 +27,9 @@ Download any variant into `assets/models/`:
 ## Important Behavior
 - Model path is positional and required.
 - Input directory is scanned for common image extensions.
-- Output images include segmentation overlays and per-object visualization.
+- Output images include per-instance mask overlays plus bounding boxes/class labels.
+- Uses YOLOv8-seg tensors for box regression/class scores, mask coefficients, and prototype masks.
+- Masks, mask contours, and bounding boxes share the same vivid class-color palette.
 
 ## Command-Line Options
 ### C++

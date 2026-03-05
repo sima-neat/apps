@@ -10,7 +10,9 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstring>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -58,6 +60,7 @@ struct Box {
   float y2 = 0.0f;
   float score = 0.0f;
   int class_id = -1;
+  std::array<float, 32> coeff{};
 };
 
 struct TensorHWC {
@@ -107,6 +110,27 @@ std::string class_name_for_id(int class_id) {
   return "class_" + std::to_string(class_id);
 }
 
+cv::Scalar class_color(int class_id) {
+  static const std::array<cv::Scalar, 12> kPalette = {
+      cv::Scalar(56, 56, 255),
+      cv::Scalar(151, 157, 255),
+      cv::Scalar(31, 112, 255),
+      cv::Scalar(29, 178, 255),
+      cv::Scalar(49, 210, 207),
+      cv::Scalar(10, 249, 72),
+      cv::Scalar(23, 204, 146),
+      cv::Scalar(134, 219, 61),
+      cv::Scalar(52, 147, 26),
+      cv::Scalar(187, 212, 0),
+      cv::Scalar(255, 194, 0),
+      cv::Scalar(168, 153, 44),
+  };
+  if (class_id < 0) {
+    class_id = 0;
+  }
+  return kPalette[static_cast<size_t>(class_id) % kPalette.size()];
+}
+
 float sigmoid(float x) {
   return 1.0f / (1.0f + std::exp(-x));
 }
@@ -123,6 +147,13 @@ float iou_xyxy(const Box& a, const Box& b) {
   const float area_b = std::max(0.0f, b.x2 - b.x1) * std::max(0.0f, b.y2 - b.y1);
   const float uni = area_a + area_b - inter;
   return (uni > 0.0f) ? (inter / uni) : 0.0f;
+}
+
+inline float at_hwc(const TensorHWC& t, int y, int x, int c) {
+  const size_t idx = (static_cast<size_t>(y) * static_cast<size_t>(t.w) + static_cast<size_t>(x)) *
+                         static_cast<size_t>(t.c) +
+                     static_cast<size_t>(c);
+  return t.data[idx];
 }
 
 TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
@@ -176,11 +207,11 @@ float dfl_distance_16(const float* logits) {
   return numer / denom;
 }
 
-std::vector<Box> decode_yolov8_boxes_from_detess(const std::vector<simaai::neat::Tensor>& tensors,
-                                                 int infer_size, float conf_thr, float nms_iou,
-                                                 int max_det) {
-  if (tensors.size() < 6) {
-    throw std::runtime_error("expected at least 6 tensors for box decode");
+std::vector<Box> decode_yolov8_instances_from_detess(const std::vector<simaai::neat::Tensor>& tensors,
+                                                     int infer_size, float conf_thr, float nms_iou,
+                                                     int max_det, TensorHWC& proto) {
+  if (tensors.size() < 10) {
+    throw std::runtime_error("expected at least 10 tensors for instance-seg decode");
   }
 
   const TensorHWC reg80 = tensor_to_hwc_f32(tensors[0]);
@@ -189,21 +220,37 @@ std::vector<Box> decode_yolov8_boxes_from_detess(const std::vector<simaai::neat:
   const TensorHWC cls80 = tensor_to_hwc_f32(tensors[3]);
   const TensorHWC cls40 = tensor_to_hwc_f32(tensors[4]);
   const TensorHWC cls20 = tensor_to_hwc_f32(tensors[5]);
+  const TensorHWC mk80 = tensor_to_hwc_f32(tensors[6]);
+  const TensorHWC mk40 = tensor_to_hwc_f32(tensors[7]);
+  const TensorHWC mk20 = tensor_to_hwc_f32(tensors[8]);
+  proto = tensor_to_hwc_f32(tensors[9]);
+  if (proto.c != 32) {
+    throw std::runtime_error("unexpected prototype channels");
+  }
 
-  const std::array<std::pair<TensorHWC, TensorHWC>, 3> levels = {
-      std::make_pair(reg80, cls80),
-      std::make_pair(reg40, cls40),
-      std::make_pair(reg20, cls20),
+  struct Level {
+    const TensorHWC* reg;
+    const TensorHWC* cls;
+    const TensorHWC* mk;
+  };
+  const std::array<Level, 3> levels = {
+      Level{&reg80, &cls80, &mk80},
+      Level{&reg40, &cls40, &mk40},
+      Level{&reg20, &cls20, &mk20},
   };
 
   std::vector<Box> cand;
   cand.reserve(2000);
 
   for (const auto& level : levels) {
-    const TensorHWC& reg = level.first;
-    const TensorHWC& cls = level.second;
+    const TensorHWC& reg = *level.reg;
+    const TensorHWC& cls = *level.cls;
+    const TensorHWC& mk = *level.mk;
     if (reg.h != cls.h || reg.w != cls.w || reg.c != 64 || cls.c <= 0) {
-      throw std::runtime_error("unexpected tensor shapes for YOLOv8 detess decode");
+      throw std::runtime_error("unexpected reg/cls tensor shapes for YOLOv8 decode");
+    }
+    if (reg.h != mk.h || reg.w != mk.w || mk.c != 32) {
+      throw std::runtime_error("unexpected mask-coeff tensor shapes for YOLOv8 decode");
     }
 
     const float stride = static_cast<float>(infer_size) / static_cast<float>(reg.h);
@@ -242,6 +289,11 @@ std::vector<Box> decode_yolov8_boxes_from_detess(const std::vector<simaai::neat:
         box.y2 = std::min(static_cast<float>(infer_size), cy + b);
         box.score = best_score;
         box.class_id = best_cls;
+        const size_t mk_base =
+            (static_cast<size_t>(y) * static_cast<size_t>(mk.w) + static_cast<size_t>(x)) * 32U;
+        for (int k = 0; k < 32; ++k) {
+          box.coeff[static_cast<size_t>(k)] = mk.data[mk_base + static_cast<size_t>(k)];
+        }
         if (box.x2 > box.x1 && box.y2 > box.y1) {
           cand.push_back(box);
         }
@@ -269,6 +321,67 @@ std::vector<Box> decode_yolov8_boxes_from_detess(const std::vector<simaai::neat:
   return keep;
 }
 
+void apply_mask_overlay(cv::Mat& bgr, const std::vector<Box>& dets, const TensorHWC& proto,
+                        int infer_size, float alpha = 0.65f) {
+  if (proto.c != 32) {
+    throw std::runtime_error("unexpected prototype channels");
+  }
+
+  for (const auto& d : dets) {
+    cv::Mat mask_small(proto.h, proto.w, CV_32FC1, cv::Scalar(0));
+    for (int y = 0; y < proto.h; ++y) {
+      float* row = mask_small.ptr<float>(y);
+      for (int x = 0; x < proto.w; ++x) {
+        float v = 0.0f;
+        for (int k = 0; k < 32; ++k) {
+          v += at_hwc(proto, y, x, k) * d.coeff[static_cast<size_t>(k)];
+        }
+        row[x] = sigmoid(v);
+      }
+    }
+
+    const float sx = static_cast<float>(proto.w) / static_cast<float>(infer_size);
+    const float sy = static_cast<float>(proto.h) / static_cast<float>(infer_size);
+    const int bx1 = std::max(0, static_cast<int>(std::floor(d.x1 * sx)));
+    const int by1 = std::max(0, static_cast<int>(std::floor(d.y1 * sy)));
+    const int bx2 = std::min(proto.w - 1, static_cast<int>(std::ceil(d.x2 * sx)));
+    const int by2 = std::min(proto.h - 1, static_cast<int>(std::ceil(d.y2 * sy)));
+
+    cv::Mat mask_crop(proto.h, proto.w, CV_32FC1, cv::Scalar(0));
+    if (bx2 >= bx1 && by2 >= by1) {
+      const cv::Rect roi(bx1, by1, bx2 - bx1 + 1, by2 - by1 + 1);
+      mask_small(roi).copyTo(mask_crop(roi));
+    }
+
+    cv::Mat mask;
+    cv::resize(mask_crop, mask, bgr.size(), 0, 0, cv::INTER_LINEAR);
+    const cv::Scalar color = class_color(d.class_id);
+    cv::Mat contour_mask(bgr.rows, bgr.cols, CV_8UC1, cv::Scalar(0));
+    for (int y = 0; y < bgr.rows; ++y) {
+      const float* m = mask.ptr<float>(y);
+      cv::Vec3b* pix = bgr.ptr<cv::Vec3b>(y);
+      uint8_t* contour_row = contour_mask.ptr<uint8_t>(y);
+      for (int x = 0; x < bgr.cols; ++x) {
+        if (m[x] <= 0.5f) {
+          continue;
+        }
+        contour_row[x] = 255;
+        for (int c = 0; c < 3; ++c) {
+          pix[x][c] = static_cast<uint8_t>(
+              std::round((1.0f - alpha) * static_cast<float>(pix[x][c]) +
+                         alpha * static_cast<float>(color[c])));
+        }
+      }
+    }
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(contour_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    if (!contours.empty()) {
+      cv::drawContours(bgr, contours, -1, color, 2, cv::LINE_8);
+    }
+  }
+}
+
 void draw_boxes_on_image(cv::Mat& bgr, const std::vector<Box>& boxes, int infer_size) {
   const float sx = static_cast<float>(bgr.cols) / static_cast<float>(infer_size);
   const float sy = static_cast<float>(bgr.rows) / static_cast<float>(infer_size);
@@ -279,11 +392,12 @@ void draw_boxes_on_image(cv::Mat& bgr, const std::vector<Box>& boxes, int infer_
     const int y2 = std::min(bgr.rows - 1, static_cast<int>(std::round(b.y2 * sy)));
     if (x2 <= x1 || y2 <= y1)
       continue;
-    cv::rectangle(bgr, cv::Point(x1, y1), cv::Point(x2, y2), cv::Scalar(0, 255, 0), 2);
+    const cv::Scalar color = class_color(b.class_id);
+    cv::rectangle(bgr, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
     const std::string label =
         class_name_for_id(b.class_id) + " s=" + std::to_string(b.score).substr(0, 4);
     cv::putText(bgr, label, cv::Point(x1, std::max(0, y1 - 6)), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+                color, 1, cv::LINE_AA);
   }
 }
 
@@ -384,14 +498,17 @@ int main(int argc, char** argv) {
 
       const std::vector<simaai::neat::Tensor> tensors = tensors_from_sample(*out);
       std::vector<Box> boxes;
+      TensorHWC proto;
       try {
-        boxes = decode_yolov8_boxes_from_detess(tensors, kInferSize, kScoreThr, kNmsIou, kMaxDet);
+        boxes = decode_yolov8_instances_from_detess(
+            tensors, kInferSize, kScoreThr, kNmsIou, kMaxDet, proto);
       } catch (const std::exception& e) {
         std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
         continue;
       }
 
       cv::Mat overlay = bgr.clone();
+      apply_mask_overlay(overlay, boxes, proto, kInferSize);
       draw_boxes_on_image(overlay, boxes, kInferSize);
       const fs::path out_file = output_dir / (image_path.stem().string() + "_overlay.jpg");
       if (!cv::imwrite(out_file.string(), overlay)) {

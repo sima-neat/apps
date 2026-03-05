@@ -13,6 +13,22 @@ INFER_SIZE = 640
 SCORE_THR = 0.6
 NMS_IOU = 0.45
 MAX_DET = 200
+MASK_ALPHA = 0.65
+
+MASK_COLOR_PALETTE = [
+    (56, 56, 255),
+    (151, 157, 255),
+    (31, 112, 255),
+    (29, 178, 255),
+    (49, 210, 207),
+    (10, 249, 72),
+    (23, 204, 146),
+    (134, 219, 61),
+    (52, 147, 26),
+    (187, 212, 0),
+    (255, 194, 0),
+    (168, 153, 44),
+]
 
 COCO80_NAMES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus",
@@ -38,6 +54,12 @@ def is_image(path: Path) -> bool:
 
 def sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-x))
+
+
+def class_color(class_id: int):
+    if class_id < 0:
+        class_id = 0
+    return MASK_COLOR_PALETTE[class_id % len(MASK_COLOR_PALETTE)]
 
 
 def iou_xyxy(a, b) -> float:
@@ -106,10 +128,10 @@ def dfl_distance_16(logits: np.ndarray) -> float:
     return float(numer / denom)
 
 
-def decode_yolov8_boxes(tensors, infer_size, conf_thr, nms_iou, max_det):
-    """Decode YOLOv8 boxes from DetessDequant outputs."""
-    if len(tensors) < 6:
-        raise ValueError("expected at least 6 tensors for box decode")
+def decode_yolov8_instances(tensors, infer_size, conf_thr, nms_iou, max_det):
+    """Decode YOLOv8 boxes and mask coefficients from DetessDequant outputs."""
+    if len(tensors) < 10:
+        raise ValueError("expected at least 10 tensors for instance-seg decode")
 
     reg80 = tensor_to_hwc_f32(tensors[0])
     reg40 = tensor_to_hwc_f32(tensors[1])
@@ -117,13 +139,22 @@ def decode_yolov8_boxes(tensors, infer_size, conf_thr, nms_iou, max_det):
     cls80 = tensor_to_hwc_f32(tensors[3])
     cls40 = tensor_to_hwc_f32(tensors[4])
     cls20 = tensor_to_hwc_f32(tensors[5])
+    mk80 = tensor_to_hwc_f32(tensors[6])
+    mk40 = tensor_to_hwc_f32(tensors[7])
+    mk20 = tensor_to_hwc_f32(tensors[8])
+    proto = tensor_to_hwc_f32(tensors[9])
+    if proto.shape[2] != 32:
+        raise ValueError(f"unexpected proto channels: {proto.shape}")
 
-    levels = [(reg80, cls80), (reg40, cls40), (reg20, cls20)]
+    levels = [(reg80, cls80, mk80), (reg40, cls40, mk40), (reg20, cls20, mk20)]
     candidates = []
 
-    for reg, cls in levels:
+    for reg, cls, mk in levels:
         h, w, _ = reg.shape
-        num_classes = cls.shape[2]
+        if cls.shape[0] != h or cls.shape[1] != w or reg.shape[2] != 64:
+            raise ValueError("unexpected reg/cls shape")
+        if mk.shape[0] != h or mk.shape[1] != w or mk.shape[2] != 32:
+            raise ValueError("unexpected mask coeff shape")
         stride = infer_size / h
 
         for y in range(h):
@@ -152,6 +183,7 @@ def decode_yolov8_boxes(tensors, infer_size, conf_thr, nms_iou, max_det):
                     candidates.append({
                         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                         "score": best_score, "class_id": best_cls,
+                        "coeff": mk[y, x, :].copy(),
                     })
 
     candidates.sort(key=lambda b: b["score"], reverse=True)
@@ -169,7 +201,45 @@ def decode_yolov8_boxes(tensors, infer_size, conf_thr, nms_iou, max_det):
             keep.append(b)
             if len(keep) >= max_det:
                 break
-    return keep
+    return keep, proto
+
+
+def apply_mask_overlay(bgr, dets, proto, infer_size, alpha=MASK_ALPHA):
+    ph, pw, pc = proto.shape
+    if pc != 32:
+        raise ValueError(f"unexpected proto channels: {proto.shape}")
+    for d in dets:
+        coeff = d.get("coeff")
+        if coeff is None or coeff.shape[0] != pc:
+            continue
+        mask_small = np.tensordot(proto, coeff, axes=([2], [0]))
+        mask_small = 1.0 / (1.0 + np.exp(-mask_small))
+
+        sx = pw / infer_size
+        sy = ph / infer_size
+        bx1 = max(0, int(math.floor(d["x1"] * sx)))
+        by1 = max(0, int(math.floor(d["y1"] * sy)))
+        bx2 = min(pw - 1, int(math.ceil(d["x2"] * sx)))
+        by2 = min(ph - 1, int(math.ceil(d["y2"] * sy)))
+
+        mask_crop = np.zeros_like(mask_small)
+        mask_crop[by1:by2 + 1, bx1:bx2 + 1] = mask_small[by1:by2 + 1, bx1:bx2 + 1]
+        mask = cv2.resize(mask_crop, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+        where = mask > 0.5
+        if not np.any(where):
+            continue
+        class_col = class_color(d["class_id"])
+        color = np.array(class_col, dtype=np.float32)
+        bgr[where] = (
+            (1.0 - alpha) * bgr[where].astype(np.float32) + alpha * color
+        ).astype(np.uint8)
+
+        # Draw crisp contour with the same class color used by the mask fill and bbox.
+        contour_mask = (mask > 0.5).astype(np.uint8)
+        contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            cv2.drawContours(bgr, contours, -1, class_col, 2, cv2.LINE_8)
 
 
 def draw_boxes(bgr, boxes, infer_size):
@@ -182,15 +252,16 @@ def draw_boxes(bgr, boxes, infer_size):
         y2 = min(bgr.shape[0] - 1, int(round(b["y2"] * sy)))
         if x2 <= x1 or y2 <= y1:
             continue
-        cv2.rectangle(bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        col = class_color(b["class_id"])
+        cv2.rectangle(bgr, (x1, y1), (x2, y2), col, 2)
         name = COCO80_NAMES[b["class_id"]] if b["class_id"] < 80 else f"class_{b['class_id']}"
         label = f"{name} s={b['score']:.2f}"
         cv2.putText(bgr, label, (x1, max(0, y1 - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="YOLOv8n instance segmentation (DetessDequant)")
+    parser = argparse.ArgumentParser(description="YOLOv8n instance segmentation overlay")
     parser.add_argument("model", type=str, help="Path to model MPK tarball")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
@@ -236,12 +307,13 @@ def main() -> int:
             tensors = tensors_from_sample(out)
 
             try:
-                boxes = decode_yolov8_boxes(tensors, INFER_SIZE, SCORE_THR, NMS_IOU, MAX_DET)
+                boxes, proto = decode_yolov8_instances(tensors, INFER_SIZE, SCORE_THR, NMS_IOU, MAX_DET)
             except Exception as e:
                 print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
                 continue
 
             overlay = bgr.copy()
+            apply_mask_overlay(overlay, boxes, proto, INFER_SIZE)
             draw_boxes(overlay, boxes, INFER_SIZE)
             out_file = output_dir / (image_path.stem + "_overlay.jpg")
             cv2.imwrite(str(out_file), overlay)
