@@ -27,7 +27,7 @@ Each RTSP stream gets its own set of producer, infer, and overlay worker threads
 
 ### Code Structure (Single-File Entrypoints)
 
-Both implementations are intentionally kept in one file (`main.py`, `main.cpp`) but now follow the same high-level structure:
+Both implementations are intentionally kept in one file (`python/main.py`, `cpp/main.cpp`) but now follow the same high-level structure:
 
 1. CLI/config parsing and validation
 2. NEAT runtime builders (RTSP and model/infer)
@@ -38,7 +38,7 @@ Both implementations are intentionally kept in one file (`main.py`, `main.cpp`) 
 ## NEAT API Usage
 
 **Python (`pyneat`)**
-- RTSP session build (`build_rtsp_run` in `main.py`):
+- RTSP session build (`build_rtsp_run` in `python/main.py`):
   - `pyneat.RtspDecodedInputOptions`
   - `pyneat.Session` + `add(pyneat.groups.rtsp_decoded_input(...))` + `add(pyneat.nodes.output(...))`
   - `session.build(run_opt)` returns `run`; producer thread uses `run.pull_tensor(...)`
@@ -53,7 +53,7 @@ Both implementations are intentionally kept in one file (`main.py`, `main.cpp`) 
   - No Python `SimaBoxDecode` node is used
 
 **C++ (`simaai::neat`)**
-- RTSP session build (`build_rtsp_runtime` / `build_rtsp_runtime_with_fallback` in `main.cpp`):
+- RTSP session build (`build_rtsp_runtime` / `build_rtsp_runtime_with_fallback` in `cpp/main.cpp`):
   - `simaai::neat::nodes::groups::RtspDecodedInputOptions`
   - `simaai::neat::Session` + `add(RtspDecodedInput)` + `add(Output)`
   - `session.build(run_opt)` returns `run`; producer thread uses `run.pull_tensor(...)`
@@ -102,7 +102,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/object-detection/multistream-rtsp-detection-pipeline/main.py --model <path> --output <dir> --rtsp <url0> [--rtsp <url1> ...] [options]`
+  `python examples/object-detection/multistream-rtsp-detection-pipeline/python/main.py --model <path> --output <dir> --rtsp <url0> [--rtsp <url1> ...] [options]`
 - Required arguments:
   `--model`, `--output`, one or more `--rtsp`
 - Optional arguments:
@@ -123,7 +123,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/object-detection/multistream-rtsp-detection-pipeline
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -150,7 +150,7 @@ Streams are mounted at `rtsp://127.0.0.1:8554/stream0`, `rtsp://127.0.0.1:8554/s
 ./build/examples/object-detection/multistream-rtsp-detection-pipeline/multistream-rtsp-detection-pipeline \
   --model assets/models/yolo_v8m_mpk.tar.gz \
   --output <output_dir> \
-  --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
+  --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt \
   --frames 100 --tcp --fps 10 --save-every 10 \
   --rtsp rtsp://127.0.0.1:8554/stream0 \
   --rtsp rtsp://127.0.0.1:8554/stream1 \
@@ -161,11 +161,11 @@ Streams are mounted at `rtsp://127.0.0.1:8554/stream0`, `rtsp://127.0.0.1:8554/s
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/multistream-rtsp-detection-pipeline/requirements.txt
-python examples/object-detection/multistream-rtsp-detection-pipeline/main.py \
+pip install -r examples/object-detection/multistream-rtsp-detection-pipeline/python/requirements.txt
+python examples/object-detection/multistream-rtsp-detection-pipeline/python/main.py \
   --model assets/models/yolo_v8m_mpk.tar.gz \
   --output <output_dir> \
-  --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/coco_label.txt \
+  --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt \
   --frames 100 --tcp --fps 10 --save-every 10 \
   --rtsp rtsp://127.0.0.1:8554/stream0 \
   --rtsp rtsp://127.0.0.1:8554/stream1 \
@@ -178,7 +178,7 @@ python examples/object-detection/multistream-rtsp-detection-pipeline/main.py \
 - If streams stall, check pull timeout, queue sizes, and RTSP source health.
 - If no detections appear, verify model path and labels file.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- Python source: `python/main.py`
 - RTSP helper: `utils/rtsp/rtsp_multi_file_server.py`

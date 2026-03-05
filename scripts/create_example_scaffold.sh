@@ -51,7 +51,7 @@ ensure_dir() {
 
 render_cpp_main() {
   local example_name="$1"
-  cat <<EOF
+  cat <<EOF_CPP
 // Copyright 2026 SiMa Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -71,15 +71,15 @@ render_cpp_main() {
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
-  std::cout << "${example_name}\n";
+  std::cout << "${example_name}\\n";
   return 0;
 }
-EOF
+EOF_CPP
 }
 
 render_cpp_cmakelists() {
   local example_name="$1"
-  cat <<EOF
+  cat <<EOF_CMAKE
 cmake_minimum_required(VERSION 3.16)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -90,19 +90,104 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(CTest)
 endif()
 
-include("\${CMAKE_CURRENT_LIST_DIR}/../../../cmake/ExampleModule.cmake")
-sima_neat_apps_module("${example_name}")
-
-if (BUILD_TESTING)
-  # Register example-specific smoke or e2e tests here.
-endif()
-EOF
+include("\${CMAKE_CURRENT_LIST_DIR}/../../../../cmake/ExampleModule.cmake")
+sima_neat_apps_module("${example_name}" UNIT_TEST E2E_TEST)
+EOF_CMAKE
 }
 
-render_cpp_readme() {
+render_cpp_test_cmakelists() {
+  cat <<'EOF_CMAKE'
+# Test sources are registered by ../../../../cmake/ExampleModule.cmake.
+# Keep this file to make the expected test layout explicit per example.
+EOF_CMAKE
+}
+
+render_cpp_unit_test() {
+  cat <<'EOF_CPP'
+#include <iostream>
+
+int main() {
+  std::cerr << "[SKIP] TODO: implement example unit test\\n";
+  return 77;
+}
+EOF_CPP
+}
+
+render_cpp_e2e_test() {
+  cat <<'EOF_CPP'
+#include <iostream>
+
+int main() {
+  std::cerr << "[SKIP] TODO: implement example e2e test\\n";
+  return 77;
+}
+EOF_CPP
+}
+
+render_python_main() {
+  local example_name="$1"
+  cat <<EOF_PY
+#!/usr/bin/env python3
+
+def main() -> int:
+    print("${example_name}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+EOF_PY
+}
+
+render_python_requirements() {
+  cat <<'EOF_REQ'
+numpy
+opencv-python
+EOF_REQ
+}
+
+render_python_unit_test() {
+  cat <<'EOF_PY'
+#!/usr/bin/env python3
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
+
+
+@pytest.mark.unit
+def test_help_runs() -> None:
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        cwd=str(EXAMPLE_DIR),
+    )
+    assert result.returncode == 0
+EOF_PY
+}
+
+render_python_e2e_test() {
+  cat <<'EOF_PY'
+#!/usr/bin/env python3
+import pytest
+
+
+@pytest.mark.e2e
+def test_e2e_placeholder() -> None:
+    pytest.skip("TODO: implement example e2e test")
+EOF_PY
+}
+
+render_readme() {
   local example_name="$1"
   local category="$2"
-  cat <<EOF
+  cat <<EOF_MD
 # ${example_name}
 
 ## Metadata
@@ -111,6 +196,7 @@ render_cpp_readme() {
 | Category | ${category} |
 | Difficulty | Intermediate |
 | Tags | ${category} |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | ${example_name} |
 | Model | TODO |
@@ -127,139 +213,79 @@ cd <apps-repo-root>
 
 ### Build This Example Directly With CMake
 \`\`\`bash
-cd <apps-repo-root>/examples/${category}/${example_name}
-cmake -S . -B build
-cmake --build build -j
+cd <apps-repo-root>
+cmake -S examples/${category}/${example_name}/cpp -B build/${example_name}
+cmake --build build/${example_name} -j
 \`\`\`
 
 ## Run
+### C++
 \`\`\`bash
-./build/${example_name}
+./build/examples/${category}/${example_name}/${example_name}
+\`\`\`
+
+### Python
+\`\`\`bash
+source ~/pyneat/bin/activate
+pip install -r examples/${category}/${example_name}/python/requirements.txt
+python3 examples/${category}/${example_name}/python/main.py
 \`\`\`
 
 ## Source Files
-- C++: \`main.cpp\`
-- Tests: \`tests/cpp/e2e_test.cpp\`
-EOF
-}
-
-render_cpp_e2e_test() {
-  cat <<'EOF'
-#include <iostream>
-
-int main() {
-  std::cerr << "[SKIP] TODO: implement example e2e test\n";
-  return 77;
-}
-EOF
-}
-
-render_python_main() {
-  local example_name="$1"
-  cat <<EOF
-#!/usr/bin/env python3
-
-def main() -> int:
-    print("${example_name}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-EOF
-}
-
-render_python_readme() {
-  local example_name="$1"
-  local category="$2"
-  cat <<EOF
-# ${example_name}
-
-## Metadata
-| Field | Value |
-| --- | --- |
-| Category | ${category} |
-| Difficulty | Intermediate |
-| Tags | ${category}, python |
-| Status | experimental |
-| Binary Name | ${example_name} |
-| Model | TODO |
-
-## Concept
-TODO: describe what this Python example demonstrates.
-
-## Run
-\`\`\`bash
-python3 main.py
-\`\`\`
-
-## Source Files
-- Python: \`main.py\`
-- Tests: \`tests/python/test_e2e.py\`
-EOF
-}
-
-render_python_e2e_test() {
-  cat <<'EOF'
-#!/usr/bin/env python3
-import sys
-
-
-def main() -> int:
-    print("[SKIP] TODO: implement example e2e test", file=sys.stderr)
-    return 77
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-EOF
+- C++: \`cpp/main.cpp\`
+- C++ tests: \`cpp/tests/unit_test.cpp\`, \`cpp/tests/e2e_test.cpp\`
+- Python: \`python/main.py\`
+- Python tests: \`python/tests/test_unit.py\`, \`python/tests/test_e2e.py\`
+- Shared assets: \`common/\`
+EOF_MD
 }
 
 register_cpp_example() {
   local category_file="$1"
   local example_name="$2"
+  local line="add_subdirectory(${example_name}/cpp ${example_name})"
 
-  grep -Fqx "add_subdirectory(${example_name})" "${category_file}" && return 0
-  printf 'add_subdirectory(%s)\n' "${example_name}" >> "${category_file}"
+  grep -Fqx "${line}" "${category_file}" && return 0
+  printf '%s\n' "${line}" >> "${category_file}"
 }
 
-create_cpp_example() {
+create_example() {
   local category="$1"
   local example_name="$2"
   local module_dir="${EXAMPLES_DIR}/${category}/${example_name}"
   local category_cmake="${EXAMPLES_DIR}/${category}/CMakeLists.txt"
 
-  [[ -d "${EXAMPLES_DIR}/${category}" ]] || die "Unknown C++ category: ${category}"
+  [[ -d "${EXAMPLES_DIR}/${category}" ]] || die "Unknown category: ${category}"
   [[ -f "${category_cmake}" ]] || die "Missing category CMakeLists: ${category_cmake}"
   [[ ! -e "${module_dir}" ]] || die "Example already exists: ${module_dir}"
 
-  ensure_dir "${module_dir}/tests/cpp"
-  ensure_dir "${module_dir}/tests/python"
-  render_cpp_main "${example_name}" > "${module_dir}/main.cpp"
-  render_cpp_cmakelists "${example_name}" > "${module_dir}/CMakeLists.txt"
-  render_cpp_readme "${example_name}" "${category}" > "${module_dir}/README.md"
-  render_cpp_e2e_test > "${module_dir}/tests/cpp/e2e_test.cpp"
+  ensure_dir "${module_dir}/cpp/tests"
+  ensure_dir "${module_dir}/python/tests"
+  ensure_dir "${module_dir}/common"
+  : > "${module_dir}/common/.gitkeep"
+
+  render_cpp_main "${example_name}" > "${module_dir}/cpp/main.cpp"
+  render_cpp_cmakelists "${example_name}" > "${module_dir}/cpp/CMakeLists.txt"
+  render_cpp_test_cmakelists > "${module_dir}/cpp/tests/CMakeLists.txt"
+  render_cpp_unit_test > "${module_dir}/cpp/tests/unit_test.cpp"
+  render_cpp_e2e_test > "${module_dir}/cpp/tests/e2e_test.cpp"
+
+  render_python_main "${example_name}" > "${module_dir}/python/main.py"
+  render_python_requirements > "${module_dir}/python/requirements.txt"
+  render_python_unit_test > "${module_dir}/python/tests/test_unit.py"
+  render_python_e2e_test > "${module_dir}/python/tests/test_e2e.py"
+
+  render_readme "${example_name}" "${category}" > "${module_dir}/README.md"
+
+  chmod +x \
+    "${module_dir}/python/main.py" \
+    "${module_dir}/python/tests/test_unit.py" \
+    "${module_dir}/python/tests/test_e2e.py"
+
   register_cpp_example "${category_cmake}" "${example_name}"
 }
 
-create_python_example() {
-  local category="$1"
-  local example_name="$2"
-  local module_dir="${EXAMPLES_DIR}/${category}/${example_name}"
-
-  [[ ! -e "${module_dir}" ]] || die "Example already exists: ${module_dir}"
-
-  ensure_dir "${module_dir}/tests/python"
-  render_python_main "${example_name}" > "${module_dir}/main.py"
-  render_python_readme "${example_name}" "${category}" > "${module_dir}/README.md"
-  render_python_e2e_test > "${module_dir}/tests/python/test_e2e.py"
-  chmod +x "${module_dir}/main.py" "${module_dir}/tests/python/test_e2e.py"
-}
-
 main() {
-  local language
-  language="$(prompt_choice "Select example language" "C++" "Python")"
-
   local category
   local example_name
 
@@ -269,13 +295,8 @@ main() {
   example_name="$(prompt_nonempty "Enter example name")"
   validate_name "${example_name}" || die "Example name must match [A-Za-z0-9._-]+"
 
-  if [[ "${language}" == "C++" ]]; then
-    create_cpp_example "${category}" "${example_name}"
-    echo "Created C++ example: ${EXAMPLES_DIR}/${category}/${example_name}"
-  else
-    create_python_example "${category}" "${example_name}"
-    echo "Created Python example: ${EXAMPLES_DIR}/${category}/${example_name}"
-  fi
+  create_example "${category}" "${example_name}"
+  echo "Created example: ${EXAMPLES_DIR}/${category}/${example_name}"
 }
 
 main "$@"

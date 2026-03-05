@@ -40,7 +40,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python3 examples/instance-segmentation/offline-instance-segmentation-overlay/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python3 examples/instance-segmentation/offline-instance-segmentation-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -61,7 +61,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/instance-segmentation/offline-instance-segmentation-overlay
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -80,8 +80,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/instance-segmentation/offline-instance-segmentation-overlay/requirements.txt
-python3 examples/instance-segmentation/offline-instance-segmentation-overlay/main.py \
+pip install -r examples/instance-segmentation/offline-instance-segmentation-overlay/python/requirements.txt
+python3 examples/instance-segmentation/offline-instance-segmentation-overlay/python/main.py \
   assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
 ```
 
@@ -90,6 +90,6 @@ python3 examples/instance-segmentation/offline-instance-segmentation-overlay/mai
 - If output is empty, check score thresholds in code and input image resolution.
 - Ensure output directory is writable.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- Python source: `python/main.py`

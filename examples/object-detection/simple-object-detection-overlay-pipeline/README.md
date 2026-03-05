@@ -24,7 +24,7 @@ Download any variant into `assets/models/`:
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8n && cd ../..`
-- Labels file: `examples/object-detection/simple-object-detection-overlay-pipeline/coco_label.txt`
+- Labels file: `examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt`
 
 ## Important Behavior
 - C++ and Python both use positional arguments.
@@ -42,7 +42,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/object-detection/simple-object-detection-overlay-pipeline/main.py <model.tar.gz> <labels.txt> <input_dir> <output_dir> [--min-score 0.55]`
+  `python examples/object-detection/simple-object-detection-overlay-pipeline/python/main.py <model.tar.gz> <labels.txt> <input_dir> <output_dir> [--min-score 0.55]`
 - Required arguments:
   `<model.tar.gz> <labels.txt> <input_dir> <output_dir>`
 - Optional arguments:
@@ -63,7 +63,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/object-detection/simple-object-detection-overlay-pipeline
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -77,17 +77,17 @@ Binary output:
 ```bash
 ./build/examples/object-detection/simple-object-detection-overlay-pipeline/simple-object-detection-overlay-pipeline \
   assets/models/yolo_v8n_mpk.tar.gz \
-  examples/object-detection/simple-object-detection-overlay-pipeline/coco_label.txt \
+  examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt \
   <input_dir> <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/simple-object-detection-overlay-pipeline/requirements.txt
-python examples/object-detection/simple-object-detection-overlay-pipeline/main.py \
+pip install -r examples/object-detection/simple-object-detection-overlay-pipeline/python/requirements.txt
+python examples/object-detection/simple-object-detection-overlay-pipeline/python/main.py \
   assets/models/yolo_v8n_mpk.tar.gz \
-  examples/object-detection/simple-object-detection-overlay-pipeline/coco_label.txt \
+  examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt \
   <input_dir> <output_dir>
 ```
 
@@ -96,6 +96,6 @@ python examples/object-detection/simple-object-detection-overlay-pipeline/main.p
 - If model load fails, verify `assets/models/yolo_v8n_mpk.tar.gz` exists.
 - Ensure input folder contains supported image extensions.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- Python source: `python/main.py`

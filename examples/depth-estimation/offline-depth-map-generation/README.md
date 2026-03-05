@@ -40,7 +40,7 @@ Download into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/depth-estimation/offline-depth-map-generation/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python examples/depth-estimation/offline-depth-map-generation/python/main.py <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -61,7 +61,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/depth-estimation/offline-depth-map-generation
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -80,8 +80,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/depth-estimation/offline-depth-map-generation/requirements.txt
-python examples/depth-estimation/offline-depth-map-generation/main.py \
+pip install -r examples/depth-estimation/offline-depth-map-generation/python/requirements.txt
+python examples/depth-estimation/offline-depth-map-generation/python/main.py \
   assets/models/depth_anything_v2_vits_mpk.tar.gz <input_dir> <output_dir>
 ```
 
@@ -90,6 +90,6 @@ python examples/depth-estimation/offline-depth-map-generation/main.py \
 - If no outputs are produced, verify `input_dir` has valid images.
 - Check write permissions on `output_dir`.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- Python source: `python/main.py`

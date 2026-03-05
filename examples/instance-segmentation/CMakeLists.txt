@@ -1,1 +1,1 @@
-add_subdirectory(offline-instance-segmentation-overlay)
+add_subdirectory(offline-instance-segmentation-overlay/cpp offline-instance-segmentation-overlay)

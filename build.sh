@@ -133,7 +133,7 @@ PY
     rel="${exe#${build_path}/}"
     target_dir="${stage_dir}/$(dirname "${rel}")"
     if [[ "${exe}" == *_unit_test || "${exe}" == *_e2e_test ]]; then
-      target_dir="${target_dir}/tests/cpp"
+      target_dir="${target_dir}/cpp/tests"
     fi
     mkdir -p "${target_dir}"
     cp "${exe}" "${target_dir}/"
@@ -154,10 +154,10 @@ PY
     cp "${src_file}" "${target_dir}/"
   done < <(
     find "${ROOT_DIR}/examples" -type f \
-      \( -name 'main.py' \
+      \( -path '*/python/main.py' \
          -o -name 'README.md' \
-         -o -path '*/tests/python/test_*.py' \
-         -o -name 'requirements.txt' \
+         -o -path '*/python/tests/test_*.py' \
+         -o -path '*/python/requirements.txt' \
          -o -name 'coco_label.txt' \
          -o -name '*.json' \
       \) 2>/dev/null | sort
@@ -407,6 +407,7 @@ echo "  Toolchain file         : ${TOOLCHAIN_FILE:-"(none)"}"
 
 cmake -S . -B "${BUILD_DIR}" \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+  -DBUILD_TESTING=ON \
   -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}" \
   -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}" \
   "${TOOLCHAIN_ARG[@]}"
