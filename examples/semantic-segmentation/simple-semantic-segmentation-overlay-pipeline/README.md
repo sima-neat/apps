@@ -28,6 +28,7 @@ Download any variant into `assets/models/`:
 - Model path is positional and required.
 - Input directory is scanned for image files.
 - Output files are segmentation overlays.
+- Every pixel receives a class label via per-pixel argmax, but the overlay intentionally leaves class `0`/background untinted so the original image remains visible in background regions.
 
 ## Command-Line Options
 ### C++

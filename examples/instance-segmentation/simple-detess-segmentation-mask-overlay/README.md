@@ -1,17 +1,17 @@
-# Simple DetessDequant Segmentation Mask Overlay
+# Simple DetessDequant Instance Segmentation Mask Overlay
 
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | semantic-segmentation |
+| Category | instance-segmentation |
 | Difficulty | Intermediate |
-| Tags | semantic-segmentation |
+| Tags | instance-segmentation |
 | Status | experimental |
 | Binary Name | simple-detess-segmentation-mask-overlay |
 | Model | yolov5n |
 
 ## Concept
-Semantic segmentation mask overlay for image folders using YOLOv5 DetessDequant outputs.
+Instance segmentation mask overlay for image folders using YOLOv5 DetessDequant outputs.
 
 ## Supported Models
 Also works with: `yolov5s`, `yolov5m`, `yolov5l`
@@ -28,11 +28,12 @@ Download any variant into `assets/models/`:
 - Model path is positional and required.
 - Input directory is scanned for image files.
 - Output files are mask overlays.
+- Masks are reconstructed only for detected objects. This example does not produce a dense semantic label for every pixel.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay <model.tar.gz> <input_dir> <output_dir>`
+  `./build/examples/instance-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -40,7 +41,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python examples/instance-segmentation/simple-detess-segmentation-mask-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -55,12 +56,12 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay
+./build/examples/instance-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay
 ```
 
 ### Build This Example Directly With CMake
 ```bash
-cd <apps-repo-root>/examples/semantic-segmentation/simple-detess-segmentation-mask-overlay
+cd <apps-repo-root>/examples/instance-segmentation/simple-detess-segmentation-mask-overlay
 cmake -S cpp -B build
 cmake --build build -j
 ```
@@ -73,16 +74,16 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay \
+./build/examples/instance-segmentation/simple-detess-segmentation-mask-overlay/simple-detess-segmentation-mask-overlay \
   assets/models/yolov5n_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/python/requirements.txt
-python examples/semantic-segmentation/simple-detess-segmentation-mask-overlay/python/main.py \
-  assets/models/yolov5_seg_overlay_mpk.tar.gz <input_dir> <output_dir>
+pip install -r examples/instance-segmentation/simple-detess-segmentation-mask-overlay/python/requirements.txt
+python examples/instance-segmentation/simple-detess-segmentation-mask-overlay/python/main.py \
+  assets/models/yolov5n_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ## Debugging Notes
