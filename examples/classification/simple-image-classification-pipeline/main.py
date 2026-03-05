@@ -27,12 +27,15 @@ def download_image(url: str, dest: Path) -> Path:
 
 
 def load_rgb_resized(path: str, width: int, height: int) -> np.ndarray:
-    """Load an image, resize to (height, width), return RGB uint8 HWC array."""
-    from PIL import Image
+    """Load an image with OpenCV and return an RGB uint8 HWC array."""
+    import cv2
 
-    img = Image.open(path).convert("RGB").resize((width, height))
-    # NumPy may expose PIL-backed arrays as read-only; pyneat's DLPack path requires writable input.
-    return np.array(img, dtype=np.uint8, copy=True)
+    bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise ValueError(f"failed to read image: {path}")
+    bgr = cv2.resize(bgr, (width, height), interpolation=cv2.INTER_LINEAR)
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return np.array(rgb, dtype=np.uint8, copy=True)
 
 
 def softmax(x: np.ndarray) -> np.ndarray:
