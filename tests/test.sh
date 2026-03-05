@@ -260,7 +260,7 @@ run_packaged_cpp_tests() {
   suffix="_${label}_test"
 
   mapfile -t cpp_test_bins < <(
-    find "${ROOT_DIR}/examples" -type f -path '*/tests/cpp/*' -name "*${suffix}" | sort
+    find "${ROOT_DIR}/examples" -type f -path '*/cpp/tests/*' -name "*${suffix}" | sort
   )
 
   if [[ "${#cpp_test_bins[@]}" -eq 0 ]]; then
@@ -279,7 +279,7 @@ run_packaged_cpp_tests() {
     example_name="${example_name%${suffix}}"
     test_dir="$(dirname "${test_bin}")"
     # Packaged layout:
-    # examples/<category>/<example>/tests/cpp/<example>_{unit,e2e}_test
+    # examples/<category>/<example>/cpp/tests/<example>_{unit,e2e}_test
     # examples/<category>/<example>/<example>
     example_bin="${test_dir}/../../${example_name}"
 

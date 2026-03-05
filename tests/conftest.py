@@ -61,7 +61,7 @@ def tmp_output_dir(request) -> Path:
     keep_output = os.environ.get("SIMANEAT_APPS_TEST_KEEP_OUTPUT", "").strip() == "1"
     out: Path
     cleanup_needed = not keep_output
-    # tests/python/test_e2e.py -> example directory is parents[2]
+    # python/tests/test_e2e.py -> example directory is parents[2]
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
     base = Path(base_raw) / "python"

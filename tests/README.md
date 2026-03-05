@@ -92,7 +92,7 @@ cd "${APPS_ROOT}"
 
 # Run one Python test node
 python3 -m pytest \
-  examples/object-detection/multistream-rtsp-detection-pipeline/tests/python/test_unit.py::TestArgParsing::test_missing_model \
+  examples/object-detection/multistream-rtsp-detection-pipeline/python/tests/test_unit.py::TestArgParsing::test_missing_model \
   -v
 ```
 

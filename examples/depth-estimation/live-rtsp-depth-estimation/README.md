@@ -81,7 +81,7 @@ Download into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py --model <path> --rtsp <rtsp_url> [options]`
+  `python3 examples/depth-estimation/live-rtsp-depth-estimation/python/main.py --model <path> --rtsp <rtsp_url> [options]`
 - Required arguments:
   `--model`, `--rtsp`
 - Optional arguments:
@@ -102,7 +102,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/depth-estimation/live-rtsp-depth-estimation
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -126,8 +126,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/depth-estimation/live-rtsp-depth-estimation/requirements.txt
-python3 examples/depth-estimation/live-rtsp-depth-estimation/main.py \
+pip install -r examples/depth-estimation/live-rtsp-depth-estimation/python/requirements.txt
+python3 examples/depth-estimation/live-rtsp-depth-estimation/python/main.py \
   --model assets/models/midas_v21_small_256_mpk.tar.gz \
   --rtsp <rtsp_url> \
   --tcp \
@@ -146,6 +146,6 @@ python3 utils/rtsp/rtsp_file_server.py assets/videos/neat-video.mp4 --width 1280
 - If output looks wrong, check the model family inferred from the model filename.
 - If recording fails, validate output path permissions.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- Python source: `python/main.py`

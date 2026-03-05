@@ -40,7 +40,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/python/main.py <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -61,7 +61,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline
-cmake -S . -B build
+cmake -S cpp -B build
 cmake --build build -j
 ```
 
@@ -80,8 +80,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/requirements.txt
-python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/main.py \
+pip install -r examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/python/requirements.txt
+python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/python/main.py \
   assets/models/fcn_hrnet48_mpk.tar.gz <input_dir> <output_dir>
 ```
 
@@ -90,6 +90,6 @@ python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipel
 - Validate image decode for all files in input folder.
 - Ensure output directory is writable.
 
-## Reference
-- C++ source: `main.cpp`
-- Python source: `main.py`
+## Source Files
+- C++ source: `cpp/main.cpp`
+- Python source: `python/main.py`
