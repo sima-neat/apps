@@ -1,0 +1,15 @@
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+IndentWidth: 2
+ContinuationIndentWidth: 4
+UseTab: Never
+ColumnLimit: 100
+SortIncludes: false
+IncludeBlocks: Preserve
+PointerAlignment: Left
+SpaceBeforeParens: ControlStatements
+AllowShortFunctionsOnASingleLine: Empty
+BreakBeforeBraces: Attach
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
