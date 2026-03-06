@@ -18,9 +18,13 @@ This repo is intentionally separate from `core`:
 
 1. Clone this repo.
 
+2. `sima-cli` is used by some examples and tools in this repo. Install it by following the official guide: https://docs.sima.ai/pages/sima_cli/main.html
+
 2. For first-time setup, run:
 
    ```bash
+   sudo apt update
+   sudo apt install nlohmann-json3-dev
    ./build.sh --all --clean
    ```
 
@@ -40,13 +44,6 @@ This keeps examples editable and easy to customize.
 - `neat-core.json`: NEAT core SDK dependency declaration (branch and version)
 
 ## Build (`build.sh`)
-
-Install `nlohmann-json3-dev` before building:
-
-```bash
-sudo apt update
-sudo apt install nlohmann-json3-dev
-```
 
 `build.sh` has three main modes:
 
@@ -129,11 +126,6 @@ Summary:
 - `build.sh` does not run tests.
 - `tests/test.sh` is test-only.
 - For RTSP e2e tests, make sure RTSP stream source(s) are running before invoking `tests/test.sh`.
-
-## Install sima-cli
-
-`sima-cli` is used by some examples and tools in this repo. Install it by following the official guide:
-https://docs.sima.ai/pages/sima_cli/main.html
 
 ## RTSP Streams
 
