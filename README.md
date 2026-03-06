@@ -30,6 +30,8 @@ This repo is intentionally separate from `core`:
 
    This installs the NEAT core version declared in `neat-core.json`, configures and builds the apps, builds the portal, and creates a packaged `neat-apps-runtime/` bundle plus a `neat-apps-<branch>-<sha>.tar.gz` archive.
 
+   **Note:** After the initial setup completes, the default `pyneat` virtual environment is available at `~/pyneat`. Activate it with `source ~/pyneat/bin/activate` to run Python examples.
+
 3. For broader NEAT framework concepts and platform documentation, see:
    https://neat.modalix.info/
 
