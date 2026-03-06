@@ -54,13 +54,29 @@ int main(int argc, char** argv) {
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
   } else if (count_files(out_dir) == 0) {
-    std::cerr << "[FAIL] no mask overlay output files produced\n";
+    std::cerr << "[FAIL] no overlay output files produced\n";
     rc = 1;
   } else if (!all_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] detess segmentation mask overlay produced "
+    bool bad_name = false;
+    for (const auto& entry : fs::directory_iterator(out_dir)) {
+      const auto name = entry.path().filename().string();
+      if (name.size() < std::string("_overlay.jpg").size() ||
+          name.rfind("_overlay.jpg") != name.size() - std::string("_overlay.jpg").size()) {
+        bad_name = true;
+        std::cerr << "[FAIL] unexpected output file name: " << name << "\n";
+        break;
+      }
+    }
+    if (bad_name) {
+      rc = 1;
+    }
+  }
+
+  if (rc == 0) {
+    std::cout << "[OK] detess instance segmentation overlay produced "
               << count_files(out_dir) << " output files\n";
   }
 

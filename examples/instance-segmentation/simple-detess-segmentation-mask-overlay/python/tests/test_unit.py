@@ -130,3 +130,26 @@ class TestDecodeRegression:
 
         assert len(dets) == 1
         assert dets[0]["score"] == pytest.approx(0.4, rel=1e-4)
+
+
+@pytest.mark.unit
+class TestVisualizationBehavior:
+    def test_class_color_uses_vivid_palette(self):
+        assert APP.class_color(0) == (56, 56, 255)
+        assert APP.class_color(1) == (151, 157, 255)
+        assert APP.class_color(2) == (31, 112, 255)
+
+    def test_apply_mask_overlay_draws_class_colored_contour(self):
+        bgr = np.zeros((64, 64, 3), dtype=np.uint8)
+        proto = np.zeros((16, 16, 32), dtype=np.float32)
+        proto[:, :, 0] = 10.0
+        dets = [{
+            "x1": 16.0, "y1": 16.0, "x2": 48.0, "y2": 48.0,
+            "score": 0.9, "class_id": 2,
+            "coeff": np.array([1.0] + [0.0] * 31, dtype=np.float32),
+        }]
+
+        APP.apply_mask_overlay(bgr, dets, proto, infer_size=64, alpha=0.5)
+
+        expected = np.array(APP.class_color(2), dtype=np.uint8)
+        assert np.array_equal(bgr[16, 16], expected)

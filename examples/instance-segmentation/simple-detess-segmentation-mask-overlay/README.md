@@ -27,8 +27,10 @@ Download any variant into `assets/models/`:
 ## Important Behavior
 - Model path is positional and required.
 - Input directory is scanned for image files.
-- Output files are mask overlays.
+- Output files are combined instance-segmentation overlays named `*_overlay.jpg`.
+- Each overlay image contains class-colored mask fills, mask contours, bounding boxes, and labels.
 - Masks are reconstructed only for detected objects. This example does not produce a dense semantic label for every pixel.
+- Masks, contours, and boxes share the same class-color palette as the YOLOv8 offline instance-segmentation example.
 
 ## Command-Line Options
 ### C++

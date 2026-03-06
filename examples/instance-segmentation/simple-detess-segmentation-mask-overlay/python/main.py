@@ -11,6 +11,22 @@ import pyneat
 
 INPUT_W = 640
 INPUT_H = 640
+MASK_ALPHA = 0.65
+
+MASK_COLOR_PALETTE = [
+    (56, 56, 255),
+    (151, 157, 255),
+    (31, 112, 255),
+    (29, 178, 255),
+    (49, 210, 207),
+    (10, 249, 72),
+    (23, 204, 146),
+    (134, 219, 61),
+    (52, 147, 26),
+    (187, 212, 0),
+    (255, 194, 0),
+    (168, 153, 44),
+]
 
 COCO80_NAMES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus",
@@ -39,12 +55,9 @@ def sigmoid(x):
 
 
 def class_color(cid: int):
-    if cid == 0:
-        return (0, 0, 255)  # person -> red (BGR)
-    b = (37 * (cid + 1)) % 255
-    g = (71 * (cid + 1)) % 255
-    r = (103 * (cid + 1)) % 255
-    return (int(b), int(g), int(r))
+    if cid < 0:
+        cid = 0
+    return MASK_COLOR_PALETTE[cid % len(MASK_COLOR_PALETTE)]
 
 
 def class_name(cid: int) -> str:
@@ -188,13 +201,10 @@ def decode_yolov5_seg(tensors, infer_size):
     return dets, proto
 
 
-def apply_mask_overlay(bgr, dets, proto, infer_size, alpha=0.45):
+def apply_mask_overlay(bgr, dets, proto, infer_size, alpha=MASK_ALPHA):
     for d in dets:
-        mask_small = np.zeros((proto.shape[0], proto.shape[1]), dtype=np.float32)
-        for y in range(proto.shape[0]):
-            for x in range(proto.shape[1]):
-                v = np.dot(proto[y, x, :], d["coeff"])
-                mask_small[y, x] = sigmoid(v)
+        mask_small = np.tensordot(proto, d["coeff"], axes=([2], [0]))
+        mask_small = sigmoid(mask_small)
 
         scale = proto.shape[1] / infer_size
         bx1 = max(0, int(math.floor(d["x1"] * scale)))
@@ -208,9 +218,17 @@ def apply_mask_overlay(bgr, dets, proto, infer_size, alpha=0.45):
         mask = cv2.resize(mask_crop, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_LINEAR)
         color = np.array(class_color(d["class_id"]), dtype=np.float32)
         where = mask > 0.5
+        if not np.any(where):
+            continue
+
         bgr[where] = (
             (1.0 - alpha) * bgr[where].astype(np.float32) + alpha * color
         ).astype(np.uint8)
+
+        contour_mask = (mask > 0.5).astype(np.uint8)
+        contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            cv2.drawContours(bgr, contours, -1, tuple(int(c) for c in color), 2, cv2.LINE_8)
 
 
 def draw_bboxes(bgr, dets, infer_size):
@@ -225,6 +243,17 @@ def draw_bboxes(bgr, dets, infer_size):
             continue
         col = class_color(d["class_id"])
         cv2.rectangle(bgr, (x1, y1), (x2, y2), col, 2)
+        label = f"{class_name(d['class_id'])} s={d['score']:.2f}"
+        cv2.putText(
+            bgr,
+            label,
+            (x1, max(0, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            col,
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def main() -> int:
@@ -284,17 +313,13 @@ def main() -> int:
                 print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
                 continue
 
-            mask_overlay = resized_bgr.copy()
-            apply_mask_overlay(mask_overlay, dets, proto, INPUT_W)
-            mask_path = output_dir / (image_path.stem + "_mask_overlay.png")
-            cv2.imwrite(str(mask_path), mask_overlay)
+            overlay = resized_bgr.copy()
+            apply_mask_overlay(overlay, dets, proto, INPUT_W)
+            draw_bboxes(overlay, dets, INPUT_W)
+            overlay_path = output_dir / (image_path.stem + "_overlay.jpg")
+            cv2.imwrite(str(overlay_path), overlay)
 
-            bbox_overlay = resized_bgr.copy()
-            draw_bboxes(bbox_overlay, dets, INPUT_W)
-            bbox_path = output_dir / (image_path.stem + "_bbox_overlay.png")
-            cv2.imwrite(str(bbox_path), bbox_overlay)
-
-            print(f"Wrote: {mask_path} and {bbox_path} detections={len(dets)}")
+            print(f"Wrote: {overlay_path} detections={len(dets)}")
             ok += 1
 
         print(f"Processed {ok} / {len(images)} images")

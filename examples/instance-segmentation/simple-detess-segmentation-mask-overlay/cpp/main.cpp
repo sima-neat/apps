@@ -250,15 +250,25 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
   return true;
 }
 
-cv::Vec3b class_color(int cid) {
-  // COCO class 0 = person -> red
-  if (cid == 0) {
-    return cv::Vec3b(0, 0, 255);
+cv::Scalar class_color(int cid) {
+  static const std::array<cv::Scalar, 12> kPalette = {
+      cv::Scalar(56, 56, 255),
+      cv::Scalar(151, 157, 255),
+      cv::Scalar(31, 112, 255),
+      cv::Scalar(29, 178, 255),
+      cv::Scalar(49, 210, 207),
+      cv::Scalar(10, 249, 72),
+      cv::Scalar(23, 204, 146),
+      cv::Scalar(134, 219, 61),
+      cv::Scalar(52, 147, 26),
+      cv::Scalar(187, 212, 0),
+      cv::Scalar(255, 194, 0),
+      cv::Scalar(168, 153, 44),
+  };
+  if (cid < 0) {
+    cid = 0;
   }
-  const uint8_t b = static_cast<uint8_t>((37 * (cid + 1)) % 255);
-  const uint8_t g = static_cast<uint8_t>((71 * (cid + 1)) % 255);
-  const uint8_t r = static_cast<uint8_t>((103 * (cid + 1)) % 255);
-  return cv::Vec3b(b, g, r);
+  return kPalette[static_cast<size_t>(cid) % kPalette.size()];
 }
 
 std::string class_name(int cid) {
@@ -297,58 +307,9 @@ std::string class_name(int cid) {
   return "class_" + std::to_string(cid);
 }
 
-void draw_legend_top_right(cv::Mat& image, const std::vector<Detection>& dets) {
-  std::vector<int> class_ids;
-  class_ids.reserve(dets.size());
-  for (const auto& d : dets) {
-    class_ids.push_back(d.class_id);
-  }
-  std::sort(class_ids.begin(), class_ids.end());
-  class_ids.erase(std::unique(class_ids.begin(), class_ids.end()), class_ids.end());
-  if (class_ids.empty()) {
-    return;
-  }
-
-  const int margin = 10;
-  const int row_h = 20;
-  const int swatch = 12;
-  const int pad = 8;
-  const double font_scale = 0.45;
-  const int thickness = 1;
-  int baseline = 0;
-
-  int max_text_w = 0;
-  for (int cid : class_ids) {
-    const std::string txt = class_name(cid);
-    const cv::Size ts =
-        cv::getTextSize(txt, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
-    max_text_w = std::max(max_text_w, ts.width);
-  }
-
-  const int panel_w = pad + swatch + 6 + max_text_w + pad;
-  const int panel_h = pad + static_cast<int>(class_ids.size()) * row_h + pad;
-  const int x0 = std::max(0, image.cols - panel_w - margin);
-  const int y0 = margin;
-  const int x1 = std::min(image.cols - 1, x0 + panel_w);
-  const int y1 = std::min(image.rows - 1, y0 + panel_h);
-
-  cv::rectangle(image, cv::Point(x0, y0), cv::Point(x1, y1), cv::Scalar(20, 20, 20), cv::FILLED);
-  cv::rectangle(image, cv::Point(x0, y0), cv::Point(x1, y1), cv::Scalar(180, 180, 180), 1);
-
-  for (size_t i = 0; i < class_ids.size(); ++i) {
-    const int cid = class_ids[i];
-    const int y = y0 + pad + static_cast<int>(i) * row_h + 4;
-    const cv::Vec3b col = class_color(cid);
-    cv::rectangle(image, cv::Point(x0 + pad, y), cv::Point(x0 + pad + swatch, y + swatch),
-                  cv::Scalar(col[0], col[1], col[2]), cv::FILLED);
-    cv::putText(image, class_name(cid), cv::Point(x0 + pad + swatch + 6, y + swatch - 1),
-                cv::FONT_HERSHEY_SIMPLEX, font_scale, cv::Scalar(235, 235, 235), thickness,
-                cv::LINE_AA);
-  }
-}
-
 void apply_mask_overlay(cv::Mat& bgr, const std::vector<Detection>& dets, const DenseTensor& proto,
                         int infer_size) {
+  constexpr float kMaskAlpha = 0.65f;
   for (const auto& d : dets) {
     cv::Mat mask_small(proto.h, proto.w, CV_32FC1, cv::Scalar(0));
     for (int y = 0; y < proto.h; ++y) {
@@ -378,18 +339,32 @@ void apply_mask_overlay(cv::Mat& bgr, const std::vector<Detection>& dets, const 
 
     cv::Mat mask;
     cv::resize(mask_small, mask, cv::Size(bgr.cols, bgr.rows), 0, 0, cv::INTER_LINEAR);
-    const cv::Vec3b col = class_color(d.class_id);
-    constexpr float alpha = 0.45f;
+    const cv::Scalar col = class_color(d.class_id);
+    bool any_mask = false;
     for (int y = 0; y < bgr.rows; ++y) {
       cv::Vec3b* pix = bgr.ptr<cv::Vec3b>(y);
       const float* mrow = mask.ptr<float>(y);
       for (int x = 0; x < bgr.cols; ++x) {
         if (mrow[x] > 0.5f) {
-          pix[x][0] = static_cast<uint8_t>((1.0f - alpha) * pix[x][0] + alpha * col[0]);
-          pix[x][1] = static_cast<uint8_t>((1.0f - alpha) * pix[x][1] + alpha * col[1]);
-          pix[x][2] = static_cast<uint8_t>((1.0f - alpha) * pix[x][2] + alpha * col[2]);
+          any_mask = true;
+          pix[x][0] = static_cast<uint8_t>((1.0f - kMaskAlpha) * pix[x][0] + kMaskAlpha * col[0]);
+          pix[x][1] = static_cast<uint8_t>((1.0f - kMaskAlpha) * pix[x][1] + kMaskAlpha * col[1]);
+          pix[x][2] = static_cast<uint8_t>((1.0f - kMaskAlpha) * pix[x][2] + kMaskAlpha * col[2]);
         }
       }
+    }
+
+    if (!any_mask) {
+      continue;
+    }
+
+    cv::Mat contour_mask;
+    cv::threshold(mask, contour_mask, 0.5, 255.0, cv::THRESH_BINARY);
+    contour_mask.convertTo(contour_mask, CV_8UC1);
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(contour_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    if (!contours.empty()) {
+      cv::drawContours(bgr, contours, -1, col, 2, cv::LINE_8);
     }
   }
 }
@@ -404,8 +379,11 @@ void draw_bboxes(cv::Mat& bgr, const std::vector<Detection>& dets, int infer_siz
     const int y2 = std::min(bgr.rows - 1, static_cast<int>(std::round(d.y2 * sy)));
     if (x2 <= x1 || y2 <= y1)
       continue;
-    const cv::Vec3b col = class_color(d.class_id);
+    const cv::Scalar col = class_color(d.class_id);
     cv::rectangle(bgr, cv::Point(x1, y1), cv::Point(x2, y2), col, 2);
+    const std::string label = class_name(d.class_id) + " s=" + cv::format("%.2f", d.score);
+    cv::putText(bgr, label, cv::Point(x1, std::max(0, y1 - 6)), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                col, 1, cv::LINE_AA);
   }
 }
 
@@ -500,26 +478,16 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      cv::Mat mask_overlay = resized_bgr.clone();
-      apply_mask_overlay(mask_overlay, dets, proto, kInputW);
-      draw_legend_top_right(mask_overlay, dets);
-      const fs::path mask_path = output_dir / (image_path.stem().string() + "_mask_overlay.png");
-      if (!cv::imwrite(mask_path.string(), mask_overlay)) {
-        std::cerr << "Failed to write " << mask_path << "\n";
+      cv::Mat overlay = resized_bgr.clone();
+      apply_mask_overlay(overlay, dets, proto, kInputW);
+      draw_bboxes(overlay, dets, kInputW);
+      const fs::path overlay_path = output_dir / (image_path.stem().string() + "_overlay.jpg");
+      if (!cv::imwrite(overlay_path.string(), overlay)) {
+        std::cerr << "Failed to write " << overlay_path << "\n";
         continue;
       }
 
-      cv::Mat bbox_overlay = resized_bgr.clone();
-      draw_bboxes(bbox_overlay, dets, kInputW);
-      draw_legend_top_right(bbox_overlay, dets);
-      const fs::path bbox_path = output_dir / (image_path.stem().string() + "_bbox_overlay.png");
-      if (!cv::imwrite(bbox_path.string(), bbox_overlay)) {
-        std::cerr << "Failed to write " << bbox_path << "\n";
-        continue;
-      }
-
-      std::cout << "Wrote: " << mask_path << " and " << bbox_path << " detections=" << dets.size()
-                << "\n";
+      std::cout << "Wrote: " << overlay_path << " detections=" << dets.size() << "\n";
       ++ok;
     }
 

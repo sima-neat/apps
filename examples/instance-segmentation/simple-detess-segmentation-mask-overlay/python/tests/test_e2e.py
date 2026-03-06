@@ -50,5 +50,6 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        output_files = list(tmp_output_dir.iterdir())
+        output_files = sorted(tmp_output_dir.iterdir())
         assert len(output_files) > 0, "Expected output files but output directory is empty"
+        assert all(f.name.endswith("_overlay.jpg") for f in output_files)
