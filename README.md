@@ -6,7 +6,9 @@
 ![SDK](https://img.shields.io/badge/SDK-2.0-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
-Source-first example applications for SiMa NEAT.
+NEAT Apps contains editable NEAT applications and reference examples built around real workflows such as detection, segmentation, and streaming pipelines. The goal is to make the apps easy to run, easy to modify, and easy to learn from.
+
+The core idea is simple: `core` installs the NEAT SDK, runtime, and tooling, while `apps` shows how to use them in customer-facing C++ and Python examples where the important NEAT API calls stay visible in the source.
 
 This repo is intentionally separate from `core`:
 - `core` installs the NEAT SDK/runtime/tooling
@@ -14,10 +16,18 @@ This repo is intentionally separate from `core`:
 
 ## Customer Workflow (Early Release)
 
-1. Install NEAT/core dependencies by following the official guide:
-   https://neat.modalix.info/getting-started/install
+1. Clone this repo.
 
-2. Clone this repo and build/run examples.
+2. For first-time setup, run:
+
+   ```bash
+   ./build.sh --all --clean
+   ```
+
+   This installs the NEAT core version declared in `neat-core.json`, configures and builds the apps, builds the portal, and creates a packaged `neat-apps-runtime/` bundle plus a `neat-apps-<branch>-<sha>.tar.gz` archive.
+
+3. For broader NEAT framework concepts and platform documentation, see:
+   https://neat.modalix.info/
 
 This keeps examples editable and easy to customize.
 
@@ -29,7 +39,7 @@ This keeps examples editable and easy to customize.
 - `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
 - `neat-core.json`: NEAT core SDK dependency declaration (branch and version)
 
-## Build (`build.sh` only)
+## Build (`build.sh`)
 
 Install `nlohmann-json3-dev` before building:
 
@@ -38,18 +48,27 @@ sudo apt update
 sudo apt install nlohmann-json3-dev
 ```
 
-`build.sh` is only for configure/build (and optional NEAT SDK install). It does not run tests.
+`build.sh` has three main modes:
+
+- build/configure the apps locally
+- install the NEAT core SDK only
+- run the full first-time or release flow with `--all`, which installs NEAT core, builds the apps, builds the portal, and packages `neat-apps-runtime`
+
+It does not run tests.
 
 Common commands:
 
 ```bash
+# First-time setup or full release-style flow
+./build.sh --all --clean
+
 # Build only (default)
 ./build.sh
 
 # Clean build directory then build
 ./build.sh --clean
 
-# Install NEAT core from neat-core.json, then build
+# Install NEAT core, build apps, build portal, then package
 ./build.sh --all
 
 # Install NEAT core only, no build
@@ -67,14 +86,21 @@ Common commands:
 
 Main `build.sh` args:
 
-- `--all`: install NEAT core then build
-- `--only-install-neat-core`: install NEAT core and exit
+- `--all`: install NEAT core SDK, build apps, build portal, then package
+- `--only-install-neat-core`: install NEAT core SDK and exit
 - `--neat-core-version <branch:version>`: override `neat-core.json`
 - `--clean`: remove build dir before configure
 - `--debug` / `--release`: build type
 - `--build-dir <dir>`: build directory
-- `--no-cpp`: skip C++ build
+- `--no-cpp`: skip C++ example build (layout/metadata only)
 - `--python`: enable Python tooling placeholder flag in CMake config
+
+When `--all` is used, the script also:
+
+- builds `portal/` with `npm` for local testing
+- stages a distributable `neat-apps-runtime/` tree
+- writes a packaged `neat-core.json` into that staged runtime
+- creates `neat-apps-<branch>-<sha>.tar.gz` at the repo root
 
 If NEAT is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH`:
 
@@ -86,6 +112,7 @@ CMAKE_PREFIX_PATH=/opt/sima-neat ./build.sh
 
 `build.sh` auto-selects `cmake/toolchains/aarch64-modalix.cmake` when cross
 environment variables are present (`SYSROOT`, `CROSS_COMPILE`, `CC`, `CXX`).
+Set `CMAKE_TOOLCHAIN_FILE` explicitly if you want to override that default.
 
 Typical usage:
 
@@ -99,7 +126,7 @@ Testing is documented in [tests/README.md](./tests/README.md).
 
 Summary:
 
-- `build.sh` is build-only.
+- `build.sh` does not run tests.
 - `tests/test.sh` is test-only.
 - For RTSP e2e tests, make sure RTSP stream source(s) are running before invoking `tests/test.sh`.
 
@@ -129,7 +156,7 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 
 `neat-core.json` declares which NEAT core SDK branch and version this repo depends on.
 `./build.sh --all` reads this file and uses the hosted `install-neat-from-a-branch.sh`
-installer to install the correct SDK before building.
+installer to install the correct SDK before building, packaging, and writing the staged runtime metadata.
 
 ## Support
 
