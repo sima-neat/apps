@@ -499,7 +499,7 @@ void usage(const char* prog) {
             << "  " << prog << " --self-test [options]\n"
             << "\n"
             << "Options:\n"
-            << "  --model <tar.gz>     Path to supported depth model MPK tar.gz "
+            << "  --model <tar.gz>     Path to supported depth compiled model package "
                "(midas_v21_small_256, depth_anything_v2_vits)\n"
             << "  --output-file <file.mp4>\n"
             << "                     Output mp4 path (alias: --out, default: midas_depth.mp4)\n"

@@ -17,7 +17,7 @@ namespace sima_examples::graphpipes_optiview {
 
 struct Config {
   std::string rtsp_list;
-  std::string mpk;
+  std::string model_path;
 
   int frames = 3000;
   int streams = 4;

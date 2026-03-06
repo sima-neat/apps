@@ -564,7 +564,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="YOLOv8 multi-RTSP demo (pyneat)")
     parser.add_argument("--rtsp", type=str, action="append", required=True,
                         help="RTSP URL (repeat for multiple streams)")
-    parser.add_argument("--model", type=str, required=True, help="Path to yolo_v8s MPK tarball")
+    parser.add_argument("--model", type=str, required=True, help="Path to yolo_v8s compiled model package")
     parser.add_argument(
         "--labels-file",
         type=str,

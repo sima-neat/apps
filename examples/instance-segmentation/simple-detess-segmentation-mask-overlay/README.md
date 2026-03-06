@@ -91,7 +91,7 @@ python examples/instance-segmentation/simple-detess-segmentation-mask-overlay/py
 
 ## Debugging Notes
 - If masks look misaligned, check resize path and input dimensions.
-- If startup fails, validate model path and tarball integrity.
+- If startup fails, validate the model package path and file integrity.
 - Ensure output directory is writable.
 
 ## Source Files

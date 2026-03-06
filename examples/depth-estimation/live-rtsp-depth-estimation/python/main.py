@@ -450,7 +450,7 @@ def main() -> int:
     p.add_argument(
         "--model",
         required=True,
-        help="Path to supported depth model MPK tarball (e.g. midas_v21_small_256 or depth_anything_v2_vits)",
+        help="Path to supported depth compiled model package (e.g. midas_v21_small_256 or depth_anything_v2_vits)",
     )
     p.add_argument("--rtsp", required=True, help="RTSP URL")
     p.add_argument("--frames", type=int, default=300, help="Number of frames to process")

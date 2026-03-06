@@ -1,4 +1,4 @@
-"""Minimal Model usage with a ResNet50 MPK."""
+"""Minimal Model usage with a ResNet50 compiled model package."""
 
 import argparse
 import sys
@@ -80,7 +80,7 @@ def print_topk(scores: np.ndarray, k: int = 5) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="ResNet50 classification example")
-    parser.add_argument("--model", type=str, required=True, help="Path to ResNet50 MPK tarball")
+    parser.add_argument("--model", type=str, required=True, help="Path to ResNet50 compiled model package")
     parser.add_argument("--image", type=str, default="", help="Path to input image")
     parser.add_argument("--min-prob", type=float, default=0.2, help="Minimum probability threshold")
     args = parser.parse_args()

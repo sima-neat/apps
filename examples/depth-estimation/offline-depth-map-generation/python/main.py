@@ -75,7 +75,7 @@ def depth_tensor_to_colormap(t: pyneat.Tensor) -> np.ndarray:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Depth Anything V2 folder inference")
-    parser.add_argument("model", type=str, help="Path to depth_anything_v2_vits MPK tarball")
+    parser.add_argument("model", type=str, help="Path to depth_anything_v2_vits compiled model package")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
     args = parser.parse_args()

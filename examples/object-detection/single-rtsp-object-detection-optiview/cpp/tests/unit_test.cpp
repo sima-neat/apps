@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
   int failures = 0;
 
   {
-    auto r = spawn_and_wait(binary, {"--mpk", "dummy.tar.gz"}, 10000);
+    auto r = spawn_and_wait(binary, {"--model", "dummy.tar.gz"}, 10000);
     if (r.exit_code == 0 || r.stderr_text.find("--rtsp") == std::string::npos) {
       std::cerr << "[FAIL] missing --rtsp should fail and mention --rtsp\n";
       ++failures;
@@ -24,8 +24,8 @@ int main(int argc, char** argv) {
 
   {
     auto r = spawn_and_wait(binary, {"--rtsp", "rtsp://127.0.0.1:8554/stream"}, 10000);
-    if (r.exit_code == 0 || r.stderr_text.find("--mpk") == std::string::npos) {
-      std::cerr << "[FAIL] missing --mpk should fail and mention --mpk\n";
+    if (r.exit_code == 0 || r.stderr_text.find("--model") == std::string::npos) {
+      std::cerr << "[FAIL] missing --model should fail and mention --model\n";
       ++failures;
     }
   }

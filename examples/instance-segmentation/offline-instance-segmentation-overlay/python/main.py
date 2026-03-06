@@ -262,7 +262,7 @@ def draw_boxes(bgr, boxes, infer_size):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="YOLOv8n instance segmentation overlay")
-    parser.add_argument("model", type=str, help="Path to model MPK tarball")
+    parser.add_argument("model", type=str, help="Path to compiled model package")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
     args = parser.parse_args()

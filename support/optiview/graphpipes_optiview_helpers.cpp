@@ -166,7 +166,7 @@ Config parse_config(int argc, char** argv) {
   std::string raw;
 
   sima_examples::get_arg(argc, argv, "--rtsp-list", cfg.rtsp_list);
-  sima_examples::get_arg(argc, argv, "--mpk", cfg.mpk);
+  sima_examples::get_arg(argc, argv, "--model", cfg.model_path);
 
   if (sima_examples::get_arg(argc, argv, "--frames", raw))
     cfg.frames = std::stoi(raw);

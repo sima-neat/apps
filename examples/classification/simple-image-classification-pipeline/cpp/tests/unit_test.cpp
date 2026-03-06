@@ -23,8 +23,8 @@ int main(int argc, char** argv) {
       ++failures;
     } else if (r.stderr_text.find("model") == std::string::npos &&
                r.stderr_text.find("Model") == std::string::npos &&
-               r.stderr_text.find("MPK") == std::string::npos) {
-      std::cerr << "[FAIL] missing --model: stderr does not mention model/MPK\n";
+               r.stderr_text.find("compiled model package") == std::string::npos) {
+      std::cerr << "[FAIL] missing --model: stderr does not mention compiled model package\n";
       ++failures;
     } else {
       std::cout << "[OK] missing --model correctly rejected\n";

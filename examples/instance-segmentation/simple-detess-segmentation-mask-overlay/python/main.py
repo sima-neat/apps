@@ -258,7 +258,7 @@ def draw_bboxes(bgr, dets, infer_size):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="YOLOv5 segmentation overlay")
-    parser.add_argument("model", type=str, help="Path to model MPK tarball")
+    parser.add_argument("model", type=str, help="Path to compiled model package")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
     args = parser.parse_args()

@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
   arg_storage.push_back(std::to_string(json_port));
   arg_storage.push_back("--frames");
   arg_storage.push_back("300");
-  arg_storage.push_back("--mpk");
+  arg_storage.push_back("--model");
   arg_storage.push_back(mpk_path);
 
   std::vector<char*> child_argv;

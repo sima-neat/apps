@@ -142,7 +142,7 @@ def print_histogram(labels: np.ndarray, image_name: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="FCN-HRNet semantic segmentation overlay")
-    parser.add_argument("model", type=str, help="Path to model MPK tarball")
+    parser.add_argument("model", type=str, help="Path to compiled model package")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
     args = parser.parse_args()

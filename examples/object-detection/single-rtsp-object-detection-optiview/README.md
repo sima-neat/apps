@@ -76,13 +76,13 @@ This separation keeps the RTSP session from being tightly coupled to the inferen
 - The sample always publishes to OptiView.
 - Video is sent to the OptiView video UDP port 9000.
 - Detection metadata is sent to the OptiView JSON UDP port 9100.
-- `--mpk` is required and must point to a valid YOLO MPK tarball.
+- `--model` is required and must point to a valid YOLO compiled model package file.
 - If `--frames` is omitted, the sample runs continuously.
 
 ## Command-Line Options
 - `--rtsp <url>`
   Required. RTSP source URL.
-- `--mpk <path>`
+- `--model <path>`
   Required. Path to the YOLO model pack.
 - `--frames <n>`
   Optional. Number of frames to process before exiting.
@@ -156,14 +156,14 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview \
   --rtsp <rtsp_url> \
-  --mpk assets/models/yolo_v8s_mpk.tar.gz
+  --model assets/models/yolo_v8s_mpk.tar.gz
 ```
 
 ### Binary Built Directly In The Example Folder
 ```bash
 ./build/single-rtsp-object-detection-optiview \
   --rtsp <rtsp_url> \
-  --mpk assets/models/yolo_v8s_mpk.tar.gz
+  --model assets/models/yolo_v8s_mpk.tar.gz
 ```
 
 Example with explicit OptiView host:
@@ -171,7 +171,7 @@ Example with explicit OptiView host:
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview \
   --rtsp <rtsp-url> \
-  --mpk assets/models/yolo_v8s_mpk.tar.gz
+  --model assets/models/yolo_v8s_mpk.tar.gz
 ```
 
 ### Python Implementation
@@ -201,7 +201,7 @@ python3 python/main.py --rtsp <rtsp-url> --model yolo_v8s_mpk.tar.gz
 
 Python-specific notes:
 
-- if `--model` / `--mpk` is omitted, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo get yolo_v8s`
+- if `--model` is omitted, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo get yolo_v8s`
 - it sends OptiView JSON directly over UDP and streams video to the OptiView UDP video port
 - it expects OpenCV to be built with GStreamer support for the UDP H.264 video path
 

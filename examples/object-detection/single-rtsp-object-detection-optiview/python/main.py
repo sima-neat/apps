@@ -512,7 +512,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Expose only the small set of controls needed for this reference flow."""
     parser = argparse.ArgumentParser(description="Single-camera RTSP YOLOv8 OptiView example")
     parser.add_argument("--rtsp", required=True, help="RTSP URL")
-    parser.add_argument("--model", "--mpk", dest="model", default="", help="Path to YOLOv8 MPK tarball")
+    parser.add_argument("--model", dest="model", default="", help="Path to YOLOv8 compiled model package")
     parser.add_argument("--frames", type=int, default=0, help="Number of frames to process (0 = run forever)")
     parser.add_argument("--optiview-host", default="127.0.0.1", help="OptiView host")
     parser.add_argument("--optiview-video-port", type=int, default=9000, help="OptiView UDP video port")
@@ -602,8 +602,8 @@ def main() -> int:
     cfg = parse_config()
     model_path = cfg.model or resolve_yolov8s_model(Path.cwd())
     if not model_path or not Path(model_path).is_file():
-        print("Failed to locate yolo_v8s MPK tarball.", file=sys.stderr)
-        print("Set --model/--mpk or run 'sima-cli modelzoo get yolo_v8s'.", file=sys.stderr)
+        print("Failed to locate yolo_v8s compiled model package.", file=sys.stderr)
+        print("Set --model or run 'sima-cli modelzoo get yolo_v8s'.", file=sys.stderr)
         return 2
 
     rtsp_session = None
@@ -616,7 +616,7 @@ def main() -> int:
         frame_w, frame_h, fps = probe_rtsp(cfg.rtsp)
         print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
 
-        # NEAT boundary: build YOLO model runtime from the resolved MPK.
+        # NEAT boundary: build YOLO model runtime from the resolved compiled model package.
         model = build_model(model_path, frame_w, frame_h)
         # NEAT boundary: build RTSP decode runtime used by pull_tensor().
         rtsp_session, rtsp_run = build_rtsp_run(

@@ -203,7 +203,7 @@ def scale_boxes(boxes: list[dict], from_size: int, to_w: int, to_h: int) -> list
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="YOLOv8n simple folder detection pipeline")
-    parser.add_argument("model", type=str, help="Path to yolov8n MPK tarball")
+    parser.add_argument("model", type=str, help="Path to yolov8n compiled model package")
     parser.add_argument("labels_file", type=str, help="Path to labels txt file (one label per line)")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")

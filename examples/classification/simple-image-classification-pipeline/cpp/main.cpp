@@ -1,6 +1,6 @@
 /**
  * @example simple-image-classification-pipeline.cpp
- * Minimal Model usage with a ResNet50 MPK.
+ * Minimal Model usage with a ResNet50 compiled model package.
  */
 #include "neat.h"
 #include "support/runtime/example_utils.h"
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
     min_prob = std::stof(tmp);
 
   if (model_path.empty()) {
-    std::cerr << "Missing ResNet50 MPK tarball.\n";
+    std::cerr << "Missing ResNet50 compiled model package.\n";
     std::cerr << "Pass it explicitly with --model <path/to/resnet_50_mpk.tar.gz>.\n";
     return 2;
   }

@@ -53,7 +53,7 @@ namespace {
 
 struct Config {
   std::string url;
-  std::string mpk;
+  std::string model_path;
   int frames = 300;
   bool frames_set = false;
   bool debug = false;
@@ -67,7 +67,7 @@ struct Config {
 Config parse_config(int argc, char** argv) {
   Config cfg;
   sima_examples::get_arg(argc, argv, "--rtsp", cfg.url);
-  sima_examples::get_arg(argc, argv, "--mpk", cfg.mpk);
+  sima_examples::get_arg(argc, argv, "--model", cfg.model_path);
   cfg.frames_set = parse_int_arg(argc, argv, "--frames", cfg.frames);
   cfg.debug = sima_examples::has_flag(argc, argv, "--debug");
   sima_examples::get_arg(argc, argv, "--optiview-host", cfg.optiview_host);
@@ -536,7 +536,7 @@ YoloRuntime build_yolo_runtime(const Config& cfg, int frame_w, int frame_h) {
   model_opt.input_max_width = frame_w;
   model_opt.input_max_height = frame_h;
   model_opt.input_max_depth = 1;
-  runtime.model = std::make_unique<simaai::neat::Model>(cfg.mpk, model_opt);
+  runtime.model = std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
   std::cout << "[init] model configured for " << frame_w << "x" << frame_h << " NV12\n";
 
   simaai::neat::InputOptions ysrc = runtime.model->input_appsrc_options(false);
@@ -796,7 +796,7 @@ int main(int argc, char** argv) {
     // Lifecycle: setup -> start workers -> join -> summary -> teardown.
     Config cfg = parse_config(argc, argv);
     sima_examples::require(!cfg.url.empty(), "Missing --rtsp <url>");
-    sima_examples::require(!cfg.mpk.empty(), "Missing --mpk <path/to/model_mpk.tar.gz>");
+    sima_examples::require(!cfg.model_path.empty(), "Missing --model <path/to/model_mpk.tar.gz>");
 
     enable_optiview_diagnostics(true);
 
