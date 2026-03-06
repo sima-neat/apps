@@ -24,7 +24,7 @@ This repo is intentionally separate from `core`:
 
    ```bash
    sudo apt update
-   sudo apt install nlohmann-json3-dev
+   sudo apt-get install -y nlohmann-json3-dev nodejs npm
    ./build.sh --all --clean
    ```
 
