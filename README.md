@@ -43,6 +43,33 @@ This keeps examples editable and easy to customize.
 - `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
 - `neat-core.json`: NEAT core SDK dependency declaration (branch and version)
 
+## Example Structure
+
+Examples are organized under `examples/<category>/<example>`. Each example is source-first and meant to be readable from the entrypoints, with the main application flow visible in both `cpp/main.cpp` and `python/main.py`.
+
+Typical layout:
+
+```text
+examples/<category>/<example>/
+  README.md
+  cpp/
+    CMakeLists.txt
+    main.cpp
+    tests/
+      CMakeLists.txt
+      unit_test.cpp
+      e2e_test.cpp
+  python/
+    main.py
+    requirements.txt
+    tests/
+      test_unit.py
+      test_e2e.py
+  common/
+```
+
+Use this structure when reading, extending, or adding examples. For the full contributor rules, required layout, and authoring expectations, see [guidelines.md](./guidelines.md). Please follow the instructions inside each example `README.md`, or visit the SiMa NEAT Apps Portal: <https://apps.sima-neat.com/portal/index.html>.
+
 ## Build (`build.sh`)
 
 `build.sh` has three main modes:
