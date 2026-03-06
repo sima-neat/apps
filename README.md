@@ -99,10 +99,10 @@ When `--all` is used, the script also:
 - writes a packaged `neat-core.json` into that staged runtime
 - creates `neat-apps-<branch>-<sha>.tar.gz` at the repo root
 
-If NEAT is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH`:
+If NEAT is installed in a custom location and CMake cannot find it automatically, set `CMAKE_PREFIX_PATH`:
 
 ```bash
-CMAKE_PREFIX_PATH=/opt/sima-neat ./build.sh
+CMAKE_PREFIX_PATH=/path/to/neat/install ./build.sh
 ```
 
 ### Cross Compilation
