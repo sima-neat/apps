@@ -68,7 +68,12 @@ examples/<category>/<example>/
   common/
 ```
 
-Use this structure when reading, extending, or adding examples. For the full contributor rules, required layout, and authoring expectations, see [guidelines.md](./guidelines.md). Please follow the instructions inside each example `README.md`, or visit the SiMa NEAT Apps Portal: <https://apps.sima-neat.com/portal/index.html>.
+> **IMPORTANT:** Use this structure when reading, extending, or adding examples.
+> Follow the instructions inside each example `README.md`, or visit the [SiMa NEAT Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
+
+### Contributor Guidelines
+
+For the full contributor rules, required layout, and authoring expectations, see [guidelines.md](./guidelines.md).
 
 ## Build (`build.sh`)
 
