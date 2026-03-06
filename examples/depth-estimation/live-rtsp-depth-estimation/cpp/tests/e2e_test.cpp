@@ -33,8 +33,7 @@ int main(int argc, char** argv) {
     }
   }
   if (model_path.empty()) {
-    model_path = env_or_skip("SIMANEAT_APPS_TEST_MPK",
-        "depth model (.tar.gz) in SIMANEAT_APPS_TEST_MODELS_DIR or SIMANEAT_APPS_TEST_MPK");
+    return skip_or_fail("depth model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   auto out_dir = create_temp_dir("live-rtsp-depth-estimation_e2e_");

@@ -34,7 +34,6 @@ Environment:
   SIMANEAT_APPS_TEST_OUTPUT_DIR     E2E output temp root (default: /tmp)
   SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE  Classification goldfish image path
   SIMANEAT_APPS_TEST_KEEP_OUTPUT    Keep e2e output dirs (1=yes, default: 0)
-  SIMANEAT_APPS_TEST_MPK            Explicit model .tar.gz path override
   SIMANEAT_APPS_TEST_RTSP_URL       Single RTSP stream URL
   SIMANEAT_APPS_TEST_RTSP_URLS      Comma-separated RTSP URLs (multistream)
   SIMANEAT_APPS_TEST_TIMEOUT_MS     Timeout in ms (default: 180000)
@@ -118,8 +117,6 @@ preflight_e2e_env() {
   local keep_output_raw="${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-0}"
   local rtsp_url="${SIMANEAT_APPS_TEST_RTSP_URL:-}"
   local rtsp_urls="${SIMANEAT_APPS_TEST_RTSP_URLS:-}"
-  local mpk="${SIMANEAT_APPS_TEST_MPK:-}"
-
   local models_dir="${models_dir_raw:-${ROOT_DIR}/assets/models}"
   local input_dir="${input_dir_raw:-${ROOT_DIR}/assets/test_images}"
   local output_dir="${output_dir_raw:-/tmp}"
@@ -140,7 +137,6 @@ preflight_e2e_env() {
   echo "  SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE : $(format_env_status "${class_image_raw}") -> ${class_image}"
   echo "  SIMANEAT_APPS_TEST_KEEP_OUTPUT : $(format_env_status "${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-}") -> ${keep_output_raw}"
   echo "  SIMANEAT_APPS_TEST_TIMEOUT_MS  : $(format_env_status "${SIMANEAT_APPS_TEST_TIMEOUT_MS:-}") -> ${timeout_raw}"
-  echo "  SIMANEAT_APPS_TEST_MPK         : $(format_env_status "${mpk}") -> $(format_env_value "${mpk}")"
   echo "  SIMANEAT_APPS_TEST_RTSP_URL    : $(format_env_status "${rtsp_url}") -> $(format_env_value "${rtsp_url}")"
   echo "  SIMANEAT_APPS_TEST_RTSP_URLS   : $(format_env_status "${rtsp_urls}") -> $(format_env_value "${rtsp_urls}")"
 
@@ -216,8 +212,8 @@ preflight_e2e_env() {
     echo "  [WARN] SIMANEAT_APPS_TEST_RTSP_URL is unset; single-stream RTSP tests may skip."
     echo "  [WARN] set SIMANEAT_APPS_TEST_RTSP_URL for full single-stream RTSP coverage."
   fi
-  if [[ "${model_count}" == "0" && -z "${mpk}" ]]; then
-    echo "  [WARN] no models discovered and SIMANEAT_APPS_TEST_MPK is unset; e2e tests may skip/fail."
+  if [[ "${model_count}" == "0" ]]; then
+    echo "  [WARN] no models discovered under SIMANEAT_APPS_TEST_MODELS_DIR; e2e tests may skip/fail."
     if [[ "${strict}" == "1" ]]; then
       preflight_fail=1
     fi

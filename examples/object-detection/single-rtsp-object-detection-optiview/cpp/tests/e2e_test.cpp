@@ -24,6 +24,16 @@ const char* env_or_null(const char* key) {
   return (value && *value) ? value : nullptr;
 }
 
+int skip_or_fail(const std::string& reason) {
+  const char* require = env_or_null("SIMANEAT_APPS_TEST_REQUIRE_E2E");
+  if (require && std::string(require) == "1") {
+    std::cerr << "[FAIL] " << reason << "\n";
+    return 1;
+  }
+  std::cerr << "[SKIP] " << reason << "\n";
+  return kSkipCode;
+}
+
 int env_int_or_default(const char* key, int default_value) {
   const char* raw = env_or_null(key);
   if (!raw)
@@ -84,19 +94,7 @@ int main(int argc, char** argv) {
     }
   }
   if (mpk_path.empty()) {
-    const char* mpk_env = env_or_null("SIMANEAT_APPS_TEST_MPK");
-    if (!mpk_env) {
-      const char* require = env_or_null("SIMANEAT_APPS_TEST_REQUIRE_E2E");
-      if (require && std::string(require) == "1") {
-        std::cerr
-            << "[FAIL] Missing model: set SIMANEAT_APPS_TEST_MPK or place YOLO model under SIMANEAT_APPS_TEST_MODELS_DIR\n";
-        return 1;
-      }
-      std::cerr << "[SKIP] Missing model: set SIMANEAT_APPS_TEST_MPK or place YOLO model under "
-                   "SIMANEAT_APPS_TEST_MODELS_DIR\n";
-      return kSkipCode;
-    }
-    mpk_path = mpk_env;
+    return skip_or_fail("YOLO model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   const int json_port = env_int_or_default("SIMANEAT_APPS_TEST_OPTIVIEW_JSON_PORT", kDefaultJsonPort);

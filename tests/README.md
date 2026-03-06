@@ -107,7 +107,6 @@ python3 -m pytest \
   - Python e2e output root: `${SIMANEAT_APPS_TEST_OUTPUT_DIR}/python`
 - `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg`)
 - `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `0`)
-- `SIMANEAT_APPS_TEST_MPK` (optional explicit model `.tar.gz` path)
 - `SIMANEAT_APPS_TEST_RTSP_URL` (single RTSP stream URL)
 - `SIMANEAT_APPS_TEST_RTSP_URLS` (comma-separated RTSP URLs for multistream tests)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)

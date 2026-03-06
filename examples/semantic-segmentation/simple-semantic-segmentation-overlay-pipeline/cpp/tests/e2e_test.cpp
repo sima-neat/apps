@@ -30,8 +30,7 @@ int main(int argc, char** argv) {
     }
   }
   if (model_path.empty()) {
-    model_path = env_or_skip("SIMANEAT_APPS_TEST_MPK",
-        "FCN-HRNet model (.tar.gz) in SIMANEAT_APPS_TEST_MODELS_DIR or SIMANEAT_APPS_TEST_MPK");
+    return skip_or_fail("FCN-HRNet model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
