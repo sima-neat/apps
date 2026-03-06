@@ -19,8 +19,8 @@ classification_image="${apps_root}/assets/test_images_classification/goldfish.jp
 timeout_ms="180000"
 require_e2e="0"
 keep_output="0"
-rtsp_url="rtsp://127.0.0.1:8554/stream0"
-rtsp_urls="rtsp://127.0.0.1:8554/stream0,rtsp://127.0.0.1:8554/stream1"
+rtsp_url="<active-rtsp-url>" # for e2e tests
+rtsp_urls="<active-rtsp-url-1>,<active-rtsp-url-2>" # for e2e tests
 
 # export resolved values
 export APPS_ROOT="${apps_root}"
