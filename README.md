@@ -103,6 +103,11 @@ Summary:
 - `tests/test.sh` is test-only.
 - For RTSP e2e tests, make sure RTSP stream source(s) are running before invoking `tests/test.sh`.
 
+## Install sima-cli
+
+`sima-cli` is used by some examples and tools in this repo. Install it by following the official guide:
+https://docs.sima.ai/pages/sima_cli/main.html
+
 ## RTSP Streams
 
 If you want a quick RTSP source for testing, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
