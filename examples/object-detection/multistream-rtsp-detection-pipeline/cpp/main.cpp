@@ -663,9 +663,19 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int si
   ro.insert_queue = true;
   ro.out_format = "BGR";
   ro.decoder_raw_output = false;
+  ro.auto_caps_from_stream = true;
   ro.use_videoconvert = false;
   ro.use_videoscale = true;
   ro.sima_allocator_type = sima_allocator_type;
+  if (probe.width > 0) {
+    ro.fallback_h264_width = probe.width;
+  }
+  if (probe.height > 0) {
+    ro.fallback_h264_height = probe.height;
+  }
+  if (probe.fps > 0) {
+    ro.fallback_h264_fps = probe.fps;
+  }
   ro.output_caps.enable = true;
   ro.output_caps.format = "BGR";
   ro.output_caps.width = (probe.width > 0) ? probe.width : cfg.width;
