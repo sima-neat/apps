@@ -11,7 +11,7 @@
 | Model | resnet_50 |
 
 ## Concept
-Minimal Model API usage with a ResNet50 compiled model package. The example loads the package, runs single-image inference, and prints top-1/top-5 classification output.
+Minimal Model API usage with a compiled ResNet50 model package. The example loads the package, runs single-image inference, and prints top-1/top-5 classification output.
 
 ## Supported Models
 Primary model: `resnet_50`

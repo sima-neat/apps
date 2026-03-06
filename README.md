@@ -47,26 +47,21 @@ This keeps examples editable and easy to customize.
 
 Examples are organized under `examples/<category>/<example>`. Each example is source-first and meant to be readable from the entrypoints, with the main application flow visible in both `cpp/main.cpp` and `python/main.py`.
 
-Typical layout:
+### Required Layout
 
-```text
-examples/<category>/<example>/
-  README.md
-  cpp/
-    CMakeLists.txt
-    main.cpp
-    tests/
-      CMakeLists.txt
-      unit_test.cpp
-      e2e_test.cpp
-  python/
-    main.py
-    requirements.txt
-    tests/
-      test_unit.py
-      test_e2e.py
-  common/
-```
+| Path | Purpose |
+| --- | --- |
+| `examples/<category>/<example>/README.md` | Example-specific usage and setup instructions |
+| `examples/<category>/<example>/cpp/CMakeLists.txt` | C++ example build configuration |
+| `examples/<category>/<example>/cpp/main.cpp` | C++ entrypoint with visible NEAT API flow |
+| `examples/<category>/<example>/cpp/tests/CMakeLists.txt` | C++ test build configuration |
+| `examples/<category>/<example>/cpp/tests/unit_test.cpp` | C++ unit tests |
+| `examples/<category>/<example>/cpp/tests/e2e_test.cpp` | C++ end-to-end tests |
+| `examples/<category>/<example>/python/main.py` | Python entrypoint with visible NEAT API flow |
+| `examples/<category>/<example>/python/requirements.txt` | Python example dependencies |
+| `examples/<category>/<example>/python/tests/test_unit.py` | Python unit tests |
+| `examples/<category>/<example>/python/tests/test_e2e.py` | Python end-to-end tests |
+| `examples/<category>/<example>/common/` | Files shared by the C++ and Python implementations |
 
 > **IMPORTANT:** Use this structure when reading, extending, or adding examples.
 > Follow the instructions inside each example `README.md`, or visit the [SiMa NEAT Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
