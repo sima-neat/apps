@@ -163,7 +163,6 @@ void force_runtime_defaults() {
 
 Config parse_config(int argc, char** argv) {
   Config cfg;
-  cfg.rtsp_list = sima_examples::default_rtsp_list_path().string();
   std::string raw;
 
   sima_examples::get_arg(argc, argv, "--rtsp-list", cfg.rtsp_list);

@@ -1,5 +1,0 @@
-# Sample RTSP endpoints for apps examples
-# One URL per line. Lines starting with '#' are ignored.
-#
-# rtsp://127.0.0.1:8555/cam1
-# rtsp://127.0.0.1:8555/cam2

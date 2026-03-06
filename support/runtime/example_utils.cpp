@@ -166,10 +166,6 @@ int64_t time_ms_i64() {
   return static_cast<int64_t>(time_ms());
 }
 
-fs::path default_rtsp_list_path() {
-  return fs::path("utils") / "rtsp" / "rtsp_list.sample.txt";
-}
-
 std::vector<std::string> read_rtsp_list(const fs::path& path) {
   std::ifstream in(path);
   if (!in.is_open()) {

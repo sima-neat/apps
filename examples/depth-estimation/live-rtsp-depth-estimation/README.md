@@ -136,10 +136,17 @@ python3 examples/depth-estimation/live-rtsp-depth-estimation/python/main.py \
   --output-file <output_video_path.mp4>
 ```
 
-Local RTSP test source:
+## RTSP Source
+
+If you want a quick RTSP source for testing, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
+
 ```bash
-python3 utils/rtsp/rtsp_file_server.py assets/videos/neat-video.mp4 --width 1280 --height 720 --fps 25
+sima-cli install gh:sima-ai/tool-mediasources
+./mediasrc.sh <video-dir>
+open preview.html
 ```
+
+If you use host-streamed sources from a board/devkit, use the host IP in the RTSP URL instead of `127.0.0.1`. Any other RTSP source also works.
 
 ## Debugging Notes
 - If no frames arrive, verify RTSP connectivity and transport settings (`--tcp`/`--udp`).

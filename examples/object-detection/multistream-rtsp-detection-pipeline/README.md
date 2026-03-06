@@ -134,16 +134,16 @@ Binary output:
 
 ## Run
 
-### Start an RTSP test source
-If you don't have live RTSP cameras, use the bundled test server to serve a local video file as multiple RTSP streams:
-```bash
-# In a separate terminal — start 4 looping RTSP streams on port 8554
-python utils/rtsp/rtsp_multi_file_server.py /path/to/video.mp4 --streams 4
+### RTSP Source
+If you want quick RTSP streams for testing, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
 
-# With transcoding to match the pipeline's expected resolution
-python utils/rtsp/rtsp_multi_file_server.py /path/to/video.mp4 --streams 4 --width 1280 --height 720 --fps 30
+```bash
+sima-cli install gh:sima-ai/tool-mediasources
+./mediasrc.sh <video-dir>
+open preview.html
 ```
-Streams are mounted at `rtsp://127.0.0.1:8554/stream0`, `rtsp://127.0.0.1:8554/stream1`, `rtsp://127.0.0.1:8554/stream2`, `rtsp://127.0.0.1:8554/stream3`, etc.
+
+If you use host-streamed sources from a board/devkit, use the host IP in the RTSP URLs instead of `127.0.0.1`. Any other RTSP source also works.
 
 ### C++
 ```bash
@@ -152,10 +152,10 @@ Streams are mounted at `rtsp://127.0.0.1:8554/stream0`, `rtsp://127.0.0.1:8554/s
   --output <output_dir> \
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt \
   --frames 100 --tcp --fps 10 --save-every 10 \
-  --rtsp rtsp://127.0.0.1:8554/stream0 \
-  --rtsp rtsp://127.0.0.1:8554/stream1 \
-  --rtsp rtsp://127.0.0.1:8554/stream2 \
-  --rtsp rtsp://127.0.0.1:8554/stream3
+  --rtsp <rtsp-url-0> \
+  --rtsp <rtsp-url-1> \
+  --rtsp <rtsp-url-2> \
+  --rtsp <rtsp-url-3>
 ```
 
 ### Python
@@ -167,10 +167,10 @@ python examples/object-detection/multistream-rtsp-detection-pipeline/python/main
   --output <output_dir> \
   --labels-file examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt \
   --frames 100 --tcp --fps 10 --save-every 10 \
-  --rtsp rtsp://127.0.0.1:8554/stream0 \
-  --rtsp rtsp://127.0.0.1:8554/stream1 \
-  --rtsp rtsp://127.0.0.1:8554/stream2 \
-  --rtsp rtsp://127.0.0.1:8554/stream3
+  --rtsp <rtsp-url-0> \
+  --rtsp <rtsp-url-1> \
+  --rtsp <rtsp-url-2> \
+  --rtsp <rtsp-url-3>
 ```
 
 ## Debugging Notes
@@ -181,4 +181,3 @@ python examples/object-detection/multistream-rtsp-detection-pipeline/python/main
 ## Source Files
 - C++ source: `cpp/main.cpp`
 - Python source: `python/main.py`
-- RTSP helper: `utils/rtsp/rtsp_multi_file_server.py`

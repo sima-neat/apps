@@ -201,13 +201,11 @@ preflight_e2e_env() {
   if [[ -z "${rtsp_url}" && -z "${rtsp_urls}" ]]; then
     echo "  [WARN] no RTSP env configured; RTSP e2e tests will skip."
     echo "  [WARN] RTSP e2e tests: single-rtsp-object-detection-optiview, multistream-rtsp-detection-pipeline, live-rtsp-depth-estimation."
-    echo "  [WARN] make sure you run RTSP source(s) in another terminal before e2e:"
-    echo "         ./utils/rtsp/run_rtsp_server.sh --host-port 8555 --detach"
-    echo "         ./utils/rtsp/stream_cam.sh --video-path assets/videos/neat-video-1.mp4 --rtsp-host 127.0.0.1 --rtsp-port 8555 --rtsp-path stream0"
-    echo "         # optional second stream for multistream tests"
-    echo "         ./utils/rtsp/stream_cam.sh --video-path assets/videos/neat-video-2.mp4 --rtsp-host 127.0.0.1 --rtsp-port 8555 --rtsp-path stream1"
-    echo "         export SIMANEAT_APPS_TEST_RTSP_URL=rtsp://127.0.0.1:8555/stream0"
-    echo "         export SIMANEAT_APPS_TEST_RTSP_URLS=rtsp://127.0.0.1:8555/stream0,rtsp://127.0.0.1:8555/stream1"
+    echo "  [WARN] make sure RTSP source(s) are running before e2e. If you want a quick setup, tool-mediasources on the host is one option:"
+    echo "         sima-cli install gh:sima-ai/tool-mediasources"
+    echo "         open preview.html"
+    echo "         export SIMANEAT_APPS_TEST_RTSP_URL=<rtsp-url>"
+    echo "         export SIMANEAT_APPS_TEST_RTSP_URLS=<rtsp-url-0>,<rtsp-url-1>"
     if [[ "${strict}" == "1" ]]; then
       preflight_fail=1
     fi

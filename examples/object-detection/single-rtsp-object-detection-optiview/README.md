@@ -139,6 +139,18 @@ In practice:
 - on `eLxr SDK`, this is typically done after sourcing the SDK environment and then building from the repo or the example folder
 - on `DevKit`, this can be done directly on the target device as long as the required NEAT dependencies are installed
 
+## RTSP Source
+
+If you want a quick RTSP source for testing, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
+
+```bash
+sima-cli install gh:sima-ai/tool-mediasources
+./mediasrc.sh <video-dir>
+open preview.html
+```
+
+If you use host-streamed sources from a board/devkit, use the host IP in the RTSP URL instead of `127.0.0.1`. Any other RTSP source also works.
+
 ## Run
 ### Binary Built From The Apps Repo
 ```bash
@@ -158,7 +170,7 @@ Example with explicit OptiView host:
 
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-optiview/single-rtsp-object-detection-optiview \
-  --rtsp rtsp://192.168.1.10:8554/src1 \
+  --rtsp <rtsp-url> \
   --mpk assets/models/yolo_v8s_mpk.tar.gz
 ```
 
@@ -184,7 +196,7 @@ Then start the Python app:
 ```bash
 source ~/pyneat/bin/activate
 pip install -r python/requirements.txt
-python3 python/main.py --rtsp rtsp://127.0.0.1:8554/src5 --model yolo_v8s_mpk.tar.gz
+python3 python/main.py --rtsp <rtsp-url> --model yolo_v8s_mpk.tar.gz
 ```
 
 Python-specific notes:

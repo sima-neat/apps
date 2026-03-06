@@ -26,7 +26,6 @@ This keeps examples editable and easy to customize.
 - `examples/`: examples organized by task/category (each example has C++ and Python implementations)
 - `support/`: shared C++ helper code used by multiple examples
 - `assets/`: user-managed runtime assets (models under `assets/models/`, test media under `assets/test_images/`)
-- `utils/rtsp/`: RTSP helper scripts used by streaming demos
 - `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
 - `neat-core.json`: NEAT core SDK dependency declaration (branch and version)
 
@@ -102,7 +101,24 @@ Summary:
 
 - `build.sh` is build-only.
 - `tests/test.sh` is test-only.
-- For RTSP e2e tests, run RTSP stream source(s) before invoking `tests/test.sh`.
+- For RTSP e2e tests, make sure RTSP stream source(s) are running before invoking `tests/test.sh`.
+
+## RTSP Streams
+
+If you want a quick RTSP source for testing, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
+
+```bash
+sima-cli install gh:sima-ai/tool-mediasources
+./mediasrc.sh <video-dir>
+```
+
+If you use [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources), you can check the streams with:
+
+```bash
+open preview.html
+```
+
+If you use host-streamed sources from a board/devkit, use the host IP in the RTSP URL instead of `127.0.0.1`. Any other RTSP source also works.
 
 ## NEAT Core Dependency
 

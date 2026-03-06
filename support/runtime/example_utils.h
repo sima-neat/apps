@@ -25,7 +25,6 @@ void require(bool cond, const std::string& msg);
 double time_ms();
 int64_t time_ms_i64();
 
-std::filesystem::path default_rtsp_list_path();
 std::vector<std::string> read_rtsp_list(const std::filesystem::path& path);
 
 struct RtspProbeOptions {

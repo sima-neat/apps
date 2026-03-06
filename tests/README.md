@@ -37,8 +37,8 @@ Then override only what you need:
 export SIMANEAT_APPS_TEST_OUTPUT_DIR="${APPS_ROOT}/sandbox/test-output"
 export SIMANEAT_APPS_TEST_KEEP_OUTPUT=1
 export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg"
-export SIMANEAT_APPS_TEST_RTSP_URL="rtsp://127.0.0.1:8555/stream0"
-export SIMANEAT_APPS_TEST_RTSP_URLS="rtsp://127.0.0.1:8555/stream0,rtsp://127.0.0.1:8555/stream1"
+export SIMANEAT_APPS_TEST_RTSP_URL="<rtsp-url>"
+export SIMANEAT_APPS_TEST_RTSP_URLS="<rtsp-url-0>,<rtsp-url-1>"
 export SIMANEAT_APPS_TEST_OPTIVIEW_VIDEO_PORT=19000
 export SIMANEAT_APPS_TEST_OPTIVIEW_JSON_PORT=19100
 ```
@@ -136,68 +136,32 @@ RTSP e2e tests require live reachable RTSP streams at test time:
 - `multistream-rtsp-detection-pipeline` (C++/Python)
 - `live-rtsp-depth-estimation` (C++/Python)
 
-Use one of the following setups.
-
-### Option A (Recommended): One process serving multiple streams
-
-Terminal 1:
+You can use any RTSP source for these tests. If you want a quick setup, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
 
 ```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-python3 utils/rtsp/rtsp_multi_file_server.py assets/videos/neat-video-1.mp4 --streams 2 --port 8554 --width 1280 --height 720 --fps 30
+sima-cli install gh:sima-ai/tool-mediasources
+./mediasrc.sh <video-dir>
 ```
 
-Terminal 2:
+If you use [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources), you can check the streams with:
 
 ```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-
-export SIMANEAT_APPS_TEST_RTSP_URL="rtsp://127.0.0.1:8554/stream0"
-export SIMANEAT_APPS_TEST_RTSP_URLS="rtsp://127.0.0.1:8554/stream0,rtsp://127.0.0.1:8554/stream1"
-
-# Optional reachability check
-ffprobe rtsp://127.0.0.1:8554/stream0
-ffprobe rtsp://127.0.0.1:8554/stream1
-
-./tests/test.sh --all
+open preview.html
 ```
 
-### Option B: Docker RTSP server + ffmpeg publishers
-
-Terminal 1:
-
-```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-./utils/rtsp/run_rtsp_server.sh --host-port 8555 --detach
-```
-
-Terminal 2:
-
-```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-./utils/rtsp/stream_cam.sh --video-path assets/videos/neat-video-1.mp4 --rtsp-host 127.0.0.1 --rtsp-port 8555 --rtsp-path stream0
-```
-
-Terminal 3:
-
-```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-./utils/rtsp/stream_cam.sh --video-path assets/videos/neat-video-2.mp4 --rtsp-host 127.0.0.1 --rtsp-port 8555 --rtsp-path stream1
-```
-
-Terminal 4:
+If you use host-streamed sources, use the host IP in the RTSP URLs instead of `127.0.0.1`. Any other RTSP source also works:
 
 ```bash
 export APPS_ROOT=/path/to/sima-neat/apps
 cd "${APPS_ROOT}"
 
-export SIMANEAT_APPS_TEST_RTSP_URL="rtsp://127.0.0.1:8555/stream0"
-export SIMANEAT_APPS_TEST_RTSP_URLS="rtsp://127.0.0.1:8555/stream0,rtsp://127.0.0.1:8555/stream1"
+export SIMANEAT_APPS_TEST_RTSP_URL="<rtsp-url>"
+export SIMANEAT_APPS_TEST_RTSP_URLS="<rtsp-url-0>,<rtsp-url-1>"
+
+# Optional reachability check from the board
+ffprobe <rtsp-url-0>
+ffprobe <rtsp-url-1>
+
 ./tests/test.sh --all
 ```
 
