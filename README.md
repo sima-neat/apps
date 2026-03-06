@@ -125,3 +125,25 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 `neat-core.json` declares which NEAT core SDK branch and version this repo depends on.
 `./build.sh --all` reads this file and uses the hosted `install-neat-from-a-branch.sh`
 installer to install the correct SDK before building.
+
+## Support
+
+Use the GitHub issue templates on the repo's `New issue` page and keep reports detailed.
+
+For bug reports, include:
+
+- a clear explanation of the bug
+- the exact example, script, or command that was run
+- steps to reproduce
+- expected behavior and actual behavior
+- the full error message, traceback, or relevant logs
+- environment details such as platform, OS, SDK version, and input assets
+
+For feature requests, include:
+
+- exactly what needs to be added, removed, or changed
+- why the change is necessary
+- the examples, docs, scripts, or workflows that should change
+- the expected outcome or acceptance criteria
+
+If you are blocked or need help triaging an issue, contact us at `support@sima.ai`.
