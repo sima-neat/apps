@@ -313,7 +313,7 @@ def main() -> int:
                 print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
                 continue
 
-            overlay = resized_bgr.copy()
+            overlay = src_bgr.copy()
             apply_mask_overlay(overlay, dets, proto, INPUT_W)
             draw_bboxes(overlay, dets, INPUT_W)
             overlay_path = output_dir / (image_path.stem + "_overlay.jpg")

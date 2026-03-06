@@ -28,6 +28,7 @@ Download any variant into `assets/models/`:
 - Model path is positional and required.
 - Input directory is scanned for common image extensions.
 - Output images include per-instance mask overlays plus bounding boxes/class labels.
+- Inference runs on a resized model input, but saved overlays preserve the original image resolution.
 - Uses YOLOv8-seg tensors for box regression/class scores, mask coefficients, and prototype masks.
 - Masks, mask contours, and bounding boxes share the same vivid class-color palette.
 

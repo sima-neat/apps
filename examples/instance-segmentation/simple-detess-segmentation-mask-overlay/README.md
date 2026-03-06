@@ -28,6 +28,7 @@ Download any variant into `assets/models/`:
 - Model path is positional and required.
 - Input directory is scanned for image files.
 - Output files are combined instance-segmentation overlays named `*_overlay.jpg`.
+- Inference runs on a resized model input, but saved overlays preserve the original image resolution.
 - Each overlay image contains class-colored mask fills, mask contours, bounding boxes, and labels.
 - Masks are reconstructed only for detected objects. This example does not produce a dense semantic label for every pixel.
 - Masks, contours, and boxes share the same class-color palette as the YOLOv8 offline instance-segmentation example.

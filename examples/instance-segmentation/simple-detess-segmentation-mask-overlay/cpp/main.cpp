@@ -478,7 +478,7 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      cv::Mat overlay = resized_bgr.clone();
+      cv::Mat overlay = src_bgr.clone();
       apply_mask_overlay(overlay, dets, proto, kInputW);
       draw_bboxes(overlay, dets, kInputW);
       const fs::path overlay_path = output_dir / (image_path.stem().string() + "_overlay.jpg");
