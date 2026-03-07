@@ -364,7 +364,7 @@ resolve_neat_core_target() {
     if core_branch_exists "${snap_branch}"; then
       branch="${snap_branch}"
     else
-      branch="develop"
+      branch="main"
     fi
     version="latest"
   fi
