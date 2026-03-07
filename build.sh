@@ -221,6 +221,59 @@ extract_json_field() {
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['neat_core'][sys.argv[2]])" "$1" "$2"
 }
 
+extract_neat_core_config() {
+  python3 - <<'PY' "$1"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    neat_core = json.load(fh).get("neat_core", {})
+
+print(neat_core.get("policy", ""))
+print(neat_core.get("branch", ""))
+print(neat_core.get("version", ""))
+PY
+}
+
+current_apps_branch() {
+  if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+    printf '%s\n' "${GITHUB_HEAD_REF}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+    printf '%s\n' "${GITHUB_REF_NAME}"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null
+    return 0
+  fi
+  echo ""
+}
+
+core_branch_exists() {
+  local branch="$1"
+  local core_repo="${ROOT_DIR}/../core"
+
+  if [[ -z "${branch}" || "${branch}" == "HEAD" ]]; then
+    return 1
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! git -C "${core_repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if git -C "${core_repo}" show-ref --verify --quiet "refs/heads/${branch}"; then
+    return 0
+  fi
+  if git -C "${core_repo}" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+    return 0
+  fi
+  return 1
+}
+
 neat_core_available() {
   # Prefer an actual package/config probe over the repo-local marker file so a
   # reused checkout does not incorrectly skip install in a fresh container.
@@ -284,9 +337,21 @@ download_text() {
 }
 
 resolve_neat_core_target() {
-  local branch version
-  branch="$(extract_json_field "${NEAT_CORE_JSON}" "branch")"
-  version="$(extract_json_field "${NEAT_CORE_JSON}" "version")"
+  local policy branch version snap_branch
+  mapfile -t neat_core_config < <(extract_neat_core_config "${NEAT_CORE_JSON}")
+  policy="${neat_core_config[0]:-}"
+  branch="${neat_core_config[1]:-}"
+  version="${neat_core_config[2]:-}"
+
+  if [[ "${policy}" == "snap" ]]; then
+    snap_branch="$(current_apps_branch)"
+    if core_branch_exists "${snap_branch}"; then
+      branch="${snap_branch}"
+    else
+      branch="develop"
+    fi
+    version="latest"
+  fi
 
   if [[ -n "${NEAT_CORE_OVERRIDE}" ]]; then
     if [[ "${NEAT_CORE_OVERRIDE}" != *:* ]]; then
@@ -299,6 +364,11 @@ resolve_neat_core_target() {
       echo "ERROR: --neat-core-version must provide both branch and version." >&2
       exit 1
     fi
+  fi
+
+  if [[ -z "${branch}" || -z "${version}" ]]; then
+    echo "ERROR: neat-core.json must define either neat_core.branch + neat_core.version or neat_core.policy=snap." >&2
+    exit 1
   fi
 
   printf '%s\n%s\n' "${branch}" "${version}"
