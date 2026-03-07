@@ -1,6 +1,5 @@
 {
   "neat_core": {
-    "branch": "main",
-    "version": "latest"
+    "policy": "snap"
   }
 }
