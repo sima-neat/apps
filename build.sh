@@ -104,11 +104,7 @@ package_distribution() {
   neat_core_branch="${neat_core_target[0]}"
   neat_core_version="${neat_core_target[1]}"
   if [[ "${neat_core_version}" == "latest" ]]; then
-    neat_core_version="$(download_text "${NEAT_ARTIFACTS_BASE_URL}/${neat_core_branch}/latest.tag" | tr -d '[:space:]')"
-    if [[ -z "${neat_core_version}" ]]; then
-      echo "ERROR: latest.tag is empty for branch: ${neat_core_branch}" >&2
-      exit 1
-    fi
+    neat_core_version="$(resolve_latest_version "${neat_core_branch}")"
   fi
   python3 - <<'PY' "${stage_dir}/neat-core.json" "${neat_core_branch}" "${neat_core_version}"
 import json
@@ -336,6 +332,26 @@ download_text() {
   return 1
 }
 
+resolve_latest_version() {
+  local branch="$1"
+  local latest_url="${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag"
+  local resolved=""
+
+  if resolved="$(download_text "${latest_url}" 2>/dev/null)"; then
+    resolved="$(printf '%s' "${resolved}" | tr -d '[:space:]')"
+  else
+    resolved=""
+  fi
+
+  if [[ -n "${resolved}" ]]; then
+    printf '%s\n' "${resolved}"
+    return 0
+  fi
+
+  echo "WARN: Could not fetch ${latest_url}; using literal version 'latest'." >&2
+  printf '%s\n' "latest"
+}
+
 resolve_neat_core_target() {
   local policy branch version snap_branch
   mapfile -t neat_core_config < <(extract_neat_core_config "${NEAT_CORE_JSON}")
@@ -387,11 +403,7 @@ ensure_neat_core() {
 
   # Resolve "latest" to the actual commit tag so the marker is precise.
   if [[ "${version}" == "latest" ]]; then
-    version="$(download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag" | tr -d '[:space:]')"
-    if [[ -z "${version}" ]]; then
-      echo "ERROR: latest.tag is empty for branch: ${branch}" >&2
-      exit 1
-    fi
+    version="$(resolve_latest_version "${branch}")"
   fi
 
   # Check marker file — but only trust it if the current environment can also
@@ -441,6 +453,17 @@ fi
 # Build
 # ---------------------------------------------------------------------------
 
+NEAT_CORE_DISPLAY_BRANCH="(unresolved)"
+NEAT_CORE_DISPLAY_VERSION="(unresolved)"
+if [[ -f "${NEAT_CORE_JSON}" ]]; then
+  mapfile -t neat_core_target < <(resolve_neat_core_target)
+  NEAT_CORE_DISPLAY_BRANCH="${neat_core_target[0]}"
+  NEAT_CORE_DISPLAY_VERSION="${neat_core_target[1]}"
+  if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
+    NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"
+  fi
+fi
+
 echo ""
 echo "  NEAT Apps Build"
 echo "  ==============="
@@ -449,6 +472,7 @@ echo "  Build type            : ${BUILD_TYPE}"
 echo "  Build C++ examples    : ${BUILD_CPP}"
 echo "  Build portal          : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF"; fi)"
 echo "  Install NEAT core     : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF (use --all to enable)"; fi)"
+echo "  NEAT core target      : ${NEAT_CORE_DISPLAY_BRANCH}:${NEAT_CORE_DISPLAY_VERSION}"
 echo "  NEAT core override    : ${NEAT_CORE_OVERRIDE:-"(from neat-core.json)"}"
 echo ""
 
