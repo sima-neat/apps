@@ -1,6 +1,11 @@
 name: Apps Issue to Jira Sync
 
 on:
+  push:
+    branches:
+      - issue21
+    paths:
+      - .github/workflows/issues-jira-sync.yml
   issues:
     types: [opened, edited, reopened, closed, assigned, unassigned]
   issue_comment:
