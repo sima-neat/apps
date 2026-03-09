@@ -1,0 +1,578 @@
+name: Apps Issue to Jira Sync
+
+on:
+  issues:
+    types: [opened, edited, reopened, closed, assigned, unassigned]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "GitHub issue number (for manual test)"
+        required: false
+        default: "1"
+        type: string
+      issue_title:
+        description: "GitHub issue title (for manual test)"
+        required: false
+        default: "Manual test: Apps Jira sync"
+        type: string
+      issue_body:
+        description: "GitHub issue body (for manual test)"
+        required: false
+        default: "Testing apps issue->Jira sync from workflow_dispatch"
+        type: string
+      issue_url:
+        description: "GitHub issue URL override (optional)"
+        required: false
+        default: ""
+        type: string
+      action:
+        description: "Simulated issue action"
+        required: false
+        default: opened
+        type: choice
+        options:
+          - opened
+          - edited
+          - reopened
+          - closed
+          - assigned
+          - unassigned
+          - commented
+      jira_key:
+        description: "Existing Jira key override (optional, e.g. AUTO-123)"
+        required: false
+        default: ""
+        type: string
+      assignees_json:
+        description: "GitHub assignees JSON array (optional, e.g. [\"octocat\"])"
+        required: false
+        default: "[]"
+        type: string
+      comment_body:
+        description: "GitHub comment body (only for action=commented)"
+        required: false
+        default: ""
+        type: string
+      comment_url:
+        description: "GitHub comment URL (only for action=commented)"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Print payloads only; do not call Jira or mutate GitHub issues"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_PROJECT_KEY: ${{ vars.JIRA_PROJECT_KEY || 'AUTO' }}
+      JIRA_ISSUE_TYPE_NAME: ${{ vars.JIRA_ISSUE_TYPE_NAME || 'Task' }}
+      JIRA_EPIC_KEY: ${{ vars.JIRA_NEAT_APPS_EPIC_KEY || 'AUTO-1881' }}
+      JIRA_EPIC_LINK_FIELD_ID: ${{ vars.JIRA_EPIC_LINK_FIELD_ID || '' }}
+      JIRA_GH_USER_MAP_JSON: ${{ vars.JIRA_GH_USER_MAP_JSON || '{}' }}
+      JIRA_BACKLOG_ENFORCE: ${{ vars.JIRA_BACKLOG_ENFORCE || 'false' }}
+    steps:
+      - name: Validate Jira configuration
+        run: |
+          for v in JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN; do
+            if [[ -z "${!v:-}" ]]; then
+              echo "Missing required secret: ${v}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Resolve workflow context
+        id: ctx
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_ACTION_EVENT: ${{ github.event.action || '' }}
+          GH_ISSUE_NUMBER_EVENT: ${{ github.event.issue.number || '' }}
+          GH_ISSUE_TITLE_EVENT: ${{ github.event.issue.title || '' }}
+          GH_ISSUE_BODY_EVENT: ${{ github.event.issue.body || '' }}
+          GH_ISSUE_URL_EVENT: ${{ github.event.issue.html_url || '' }}
+          GH_ISSUE_ASSIGNEES_EVENT: ${{ toJson(github.event.issue.assignees.*.login) || '[]' }}
+          GH_COMMENT_BODY_EVENT: ${{ github.event.comment.body || '' }}
+          GH_COMMENT_URL_EVENT: ${{ github.event.comment.html_url || '' }}
+          IN_ACTION: ${{ inputs.action || '' }}
+          IN_ISSUE_NUMBER: ${{ inputs.issue_number || '' }}
+          IN_ISSUE_TITLE: ${{ inputs.issue_title || '' }}
+          IN_ISSUE_BODY: ${{ inputs.issue_body || '' }}
+          IN_ISSUE_URL: ${{ inputs.issue_url || '' }}
+          IN_JIRA_KEY: ${{ inputs.jira_key || '' }}
+          IN_ASSIGNEES_JSON: ${{ inputs.assignees_json || '[]' }}
+          IN_COMMENT_BODY: ${{ inputs.comment_body || '' }}
+          IN_COMMENT_URL: ${{ inputs.comment_url || '' }}
+          IN_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            action="${IN_ACTION:-opened}"
+            issue_number="${IN_ISSUE_NUMBER:-1}"
+            issue_title="${IN_ISSUE_TITLE:-Manual test: Apps Jira sync}"
+            issue_body="${IN_ISSUE_BODY:-Testing apps issue->Jira sync from workflow_dispatch}"
+            issue_url="${IN_ISSUE_URL}"
+            assignees_json="${IN_ASSIGNEES_JSON:-[]}"
+            comment_body="${IN_COMMENT_BODY}"
+            comment_url="${IN_COMMENT_URL}"
+            dry_run="${IN_DRY_RUN:-true}"
+            jira_key_override="${IN_JIRA_KEY}"
+          else
+            action="${GH_ACTION_EVENT:-opened}"
+            if [[ "${EVENT_NAME}" == "issue_comment" ]]; then
+              action="commented"
+            fi
+            issue_number="${GH_ISSUE_NUMBER_EVENT}"
+            issue_title="${GH_ISSUE_TITLE_EVENT}"
+            issue_body="${GH_ISSUE_BODY_EVENT}"
+            issue_url="${GH_ISSUE_URL_EVENT}"
+            assignees_json="${GH_ISSUE_ASSIGNEES_EVENT:-[]}"
+            comment_body="${GH_COMMENT_BODY_EVENT}"
+            comment_url="${GH_COMMENT_URL_EVENT}"
+            dry_run="false"
+            jira_key_override=""
+          fi
+
+          if [[ -z "${issue_url}" && -n "${issue_number}" ]]; then
+            issue_url="https://github.com/${GH_REPO}/issues/${issue_number}"
+          fi
+
+          if ! printf '%s' "${assignees_json}" | jq -e . >/dev/null 2>&1; then
+            assignees_json='[]'
+          fi
+
+          echo "action=${action}" >> "${GITHUB_OUTPUT}"
+          echo "issue_number=${issue_number}" >> "${GITHUB_OUTPUT}"
+          echo "issue_title=${issue_title}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "issue_body<<__BODY__"
+            printf '%s\n' "${issue_body}"
+            echo "__BODY__"
+          } >> "${GITHUB_OUTPUT}"
+          echo "issue_url=${issue_url}" >> "${GITHUB_OUTPUT}"
+          echo "assignees_json=${assignees_json}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "comment_body<<__COMMENT__"
+            printf '%s\n' "${comment_body}"
+            echo "__COMMENT__"
+          } >> "${GITHUB_OUTPUT}"
+          echo "comment_url=${comment_url}" >> "${GITHUB_OUTPUT}"
+          echo "dry_run=${dry_run}" >> "${GITHUB_OUTPUT}"
+          echo "jira_key_override=${jira_key_override}" >> "${GITHUB_OUTPUT}"
+
+      - name: Show resolved context
+        run: |
+          echo "event=${{ github.event_name }}"
+          echo "action=${{ steps.ctx.outputs.action }}"
+          echo "issue_number=${{ steps.ctx.outputs.issue_number }}"
+          echo "issue_title=${{ steps.ctx.outputs.issue_title }}"
+          echo "issue_url=${{ steps.ctx.outputs.issue_url }}"
+          echo "dry_run=${{ steps.ctx.outputs.dry_run }}"
+          echo "jira_key_override=${{ steps.ctx.outputs.jira_key_override }}"
+
+      - name: Resolve existing Jira key from issue body
+        id: resolve-key
+        env:
+          ISSUE_BODY: ${{ steps.ctx.outputs.issue_body }}
+          JIRA_KEY_OVERRIDE: ${{ steps.ctx.outputs.jira_key_override }}
+        run: |
+          key="${JIRA_KEY_OVERRIDE}"
+          if [[ -z "${key}" ]]; then
+            key="$(printf '%s\n' "${ISSUE_BODY}" | sed -n 's/.*<!-- jira-key:\s*\([A-Z][A-Z0-9]*-[0-9][0-9]*\)\s*-->.*/\1/p' | head -n1)"
+          fi
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      - name: Lookup existing Jira by GitHub issue label
+        id: lookup-jira
+        if: steps.resolve-key.outputs.key == ''
+        env:
+          GH_ISSUE_NUMBER: ${{ steps.ctx.outputs.issue_number }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          label="gh-issue-${GH_ISSUE_NUMBER}"
+          jql="project=${JIRA_PROJECT_KEY} AND labels = ${label} ORDER BY created DESC"
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] would search Jira with JQL: ${jql}"
+            echo "key=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          resp="$(curl -fsS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            --get \
+            --data-urlencode "jql=${jql}" \
+            --data-urlencode "maxResults=1" \
+            --data-urlencode "fields=key" \
+            "${JIRA_BASE_URL}/rest/api/3/search")"
+
+          key="$(printf '%s' "${resp}" | jq -r '.issues[0].key // empty')"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create Jira issue if missing
+        id: create-jira
+        if: steps.resolve-key.outputs.key == '' && steps.lookup-jira.outputs.key == '' && (steps.ctx.outputs.action == 'opened' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_ISSUE_NUMBER: ${{ steps.ctx.outputs.issue_number }}
+          GH_ISSUE_TITLE: ${{ steps.ctx.outputs.issue_title }}
+          GH_ISSUE_BODY: ${{ steps.ctx.outputs.issue_body }}
+          GH_ISSUE_URL: ${{ steps.ctx.outputs.issue_url }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          issue_label="gh-issue-${GH_ISSUE_NUMBER}"
+          repo_label="github-sync"
+
+          adf_desc="$(jq -n \
+            --arg repo "${GH_REPO}" \
+            --arg issue_url "${GH_ISSUE_URL}" \
+            --arg body "${GH_ISSUE_BODY}" \
+            '{
+              type: "doc",
+              version: 1,
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    {type: "text", text: "GitHub issue: "},
+                    {type: "text", text: $issue_url, marks: [{type: "link", attrs: {href: $issue_url}}]}
+                  ]
+                },
+                {
+                  type: "paragraph",
+                  content: [
+                    {type: "text", text: "Repository: "},
+                    {type: "text", text: $repo}
+                  ]
+                },
+                {
+                  type: "paragraph",
+                  content: [
+                    {type: "text", text: "Issue body:"}
+                  ]
+                },
+                {
+                  type: "codeBlock",
+                  attrs: {language: "markdown"},
+                  content: [{type: "text", text: ($body // "")}]
+                }
+              ]
+            }')"
+
+          payload="$(jq -n \
+            --arg project "${JIRA_PROJECT_KEY}" \
+            --arg issue_type "${JIRA_ISSUE_TYPE_NAME}" \
+            --arg summary "[GH#${GH_ISSUE_NUMBER}] ${GH_ISSUE_TITLE}" \
+            --argjson description "${adf_desc}" \
+            --arg l1 "${repo_label}" \
+            --arg l2 "${issue_label}" \
+            '{
+              fields: {
+                project: { key: $project },
+                issuetype: { name: $issue_type },
+                summary: $summary,
+                description: $description,
+                labels: [$l1, $l2]
+              }
+            }')"
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] create payload:"
+            printf '%s\n' "${payload}" | jq .
+            echo "key=${JIRA_PROJECT_KEY}-DRYRUN" >> "${GITHUB_OUTPUT}"
+            echo "created=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          resp="$(curl -fsS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            --data "${payload}" \
+            "${JIRA_BASE_URL}/rest/api/3/issue")"
+
+          key="$(printf '%s' "${resp}" | jq -r '.key // empty')"
+          if [[ -z "${key}" ]]; then
+            echo "Failed to create Jira issue. Response: ${resp}" >&2
+            exit 1
+          fi
+
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+          echo "created=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Select Jira key
+        id: jira-key
+        run: |
+          key="${{ steps.resolve-key.outputs.key }}"
+          if [[ -z "${key}" ]]; then
+            key="${{ steps.lookup-jira.outputs.key }}"
+          fi
+          if [[ -z "${key}" ]]; then
+            key="${{ steps.create-jira.outputs.key }}"
+          fi
+          if [[ -z "${key}" ]]; then
+            echo "key=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      - name: Ensure Jira issue resolved for sync events
+        if: steps.jira-key.outputs.key == '' && steps.ctx.outputs.action != 'opened'
+        run: |
+          echo "No Jira key found; skipping non-create sync action '${{ steps.ctx.outputs.action }}'."
+
+      - name: Persist Jira key marker on GitHub issue
+        if: steps.resolve-key.outputs.key == '' && steps.jira-key.outputs.key != '' && github.event_name == 'issues' && steps.ctx.outputs.dry_run != 'true'
+        uses: actions/github-script@v7
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const marker = `<!-- jira-key: ${process.env.JIRA_KEY} -->`;
+            const body = (issue.body || "").trim();
+            const nextBody = body.includes("<!-- jira-key:") ? body : [body, "", marker].join("\n");
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: nextBody
+            });
+
+      - name: Link Jira ticket to NEAT-Apps epic
+        if: steps.create-jira.outputs.created == 'true' && steps.jira-key.outputs.key != '' && env.JIRA_EPIC_KEY != ''
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          if [[ -n "${JIRA_EPIC_LINK_FIELD_ID}" ]]; then
+            payload="$(jq -n --arg f "${JIRA_EPIC_LINK_FIELD_ID}" --arg epic "${JIRA_EPIC_KEY}" '{fields: {($f): $epic}}')"
+          else
+            payload="$(jq -n --arg epic "${JIRA_EPIC_KEY}" '{fields: {parent: {key: $epic}}}')"
+          fi
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] epic-link payload for ${JIRA_KEY}:"
+            printf '%s\n' "${payload}" | jq .
+            exit 0
+          fi
+
+          set +e
+          resp="$(curl -sS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X PUT \
+            --data "${payload}" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_KEY}" 2>&1)"
+          rc=$?
+          set -e
+
+          if [[ ${rc} -ne 0 ]]; then
+            echo "Warning: failed to link ${JIRA_KEY} to epic ${JIRA_EPIC_KEY}." >&2
+            echo "Details: ${resp}" >&2
+            exit 1
+          fi
+
+      - name: Move Jira ticket to backlog
+        if: steps.create-jira.outputs.created == 'true' && steps.jira-key.outputs.key != ''
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          payload="$(jq -n --arg k "${JIRA_KEY}" '{issues: [$k]}')"
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] backlog payload for ${JIRA_KEY}:"
+            printf '%s\n' "${payload}" | jq .
+            exit 0
+          fi
+
+          set +e
+          resp="$(curl -sS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            --data "${payload}" \
+            "${JIRA_BASE_URL}/rest/agile/1.0/backlog/issue" 2>&1)"
+          rc=$?
+          set -e
+
+          if [[ ${rc} -ne 0 ]]; then
+            if [[ "${JIRA_BACKLOG_ENFORCE}" == "true" ]]; then
+              echo "Failed to move ${JIRA_KEY} to backlog and JIRA_BACKLOG_ENFORCE=true" >&2
+              echo "Details: ${resp}" >&2
+              exit 1
+            fi
+            echo "Warning: unable to move ${JIRA_KEY} to backlog (non-blocking)." >&2
+            echo "Details: ${resp}" >&2
+          fi
+
+      - name: Update Jira issue summary/description
+        if: steps.jira-key.outputs.key != '' && (steps.ctx.outputs.action == 'opened' || steps.ctx.outputs.action == 'edited' || steps.ctx.outputs.action == 'reopened')
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+          GH_ISSUE_NUMBER: ${{ steps.ctx.outputs.issue_number }}
+          GH_ISSUE_TITLE: ${{ steps.ctx.outputs.issue_title }}
+          GH_ISSUE_BODY: ${{ steps.ctx.outputs.issue_body }}
+          GH_ISSUE_URL: ${{ steps.ctx.outputs.issue_url }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          adf_desc="$(jq -n \
+            --arg repo "${GH_REPO}" \
+            --arg issue_url "${GH_ISSUE_URL}" \
+            --arg body "${GH_ISSUE_BODY}" \
+            '{
+              type: "doc",
+              version: 1,
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    {type: "text", text: "GitHub issue: "},
+                    {type: "text", text: $issue_url, marks: [{type: "link", attrs: {href: $issue_url}}]}
+                  ]
+                },
+                {
+                  type: "paragraph",
+                  content: [
+                    {type: "text", text: "Repository: "},
+                    {type: "text", text: $repo}
+                  ]
+                },
+                {
+                  type: "paragraph",
+                  content: [
+                    {type: "text", text: "Issue body:"}
+                  ]
+                },
+                {
+                  type: "codeBlock",
+                  attrs: {language: "markdown"},
+                  content: [{type: "text", text: ($body // "")}]
+                }
+              ]
+            }')"
+
+          payload="$(jq -n \
+            --arg summary "[GH#${GH_ISSUE_NUMBER}] ${GH_ISSUE_TITLE}" \
+            --argjson description "${adf_desc}" \
+            '{fields: {summary: $summary, description: $description}}')"
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] update payload for ${JIRA_KEY}:"
+            printf '%s\n' "${payload}" | jq .
+            exit 0
+          fi
+
+          curl -fsS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X PUT \
+            --data "${payload}" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_KEY}"
+
+      - name: Sync GitHub assignee to Jira assignee (nice-to-have)
+        if: steps.jira-key.outputs.key != '' && (steps.ctx.outputs.action == 'assigned' || steps.ctx.outputs.action == 'unassigned')
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+          GH_ASSIGNEES_JSON: ${{ steps.ctx.outputs.assignees_json }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          first_gh_user="$(printf '%s' "${GH_ASSIGNEES_JSON}" | jq -r 'if type=="array" then .[0] // "" else "" end')"
+          jira_account_id=""
+          if [[ -n "${first_gh_user}" ]]; then
+            jira_account_id="$(printf '%s' "${JIRA_GH_USER_MAP_JSON}" | jq -r --arg u "${first_gh_user}" '.[$u] // empty')"
+          fi
+
+          if [[ -n "${jira_account_id}" ]]; then
+            payload="$(jq -n --arg id "${jira_account_id}" '{fields: {assignee: {id: $id}}}')"
+          else
+            payload='{"fields":{"assignee":null}}'
+          fi
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] assignee payload for ${JIRA_KEY}:"
+            printf '%s\n' "${payload}" | jq .
+            exit 0
+          fi
+
+          curl -fsS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X PUT \
+            --data "${payload}" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_KEY}"
+
+      - name: Sync GitHub comment to Jira (nice-to-have)
+        if: steps.jira-key.outputs.key != '' && steps.ctx.outputs.action == 'commented'
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+          GH_COMMENT_BODY: ${{ steps.ctx.outputs.comment_body }}
+          GH_COMMENT_URL: ${{ steps.ctx.outputs.comment_url }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          text="GitHub comment"
+          if [[ -n "${GH_COMMENT_URL}" ]]; then
+            text="GitHub comment: ${GH_COMMENT_URL}"
+          fi
+
+          payload="$(jq -n --arg t "${text}" --arg b "${GH_COMMENT_BODY}" '{
+            body: {
+              type: "doc",
+              version: 1,
+              content: [
+                {type: "paragraph", content: [{type: "text", text: $t}]},
+                {type: "paragraph", content: [{type: "text", text: "Comment body:"}]},
+                {type: "codeBlock", attrs: {language: "markdown"}, content: [{type: "text", text: ($b // "")}]} 
+              ]
+            }
+          }')"
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] comment payload for ${JIRA_KEY}:"
+            printf '%s\n' "${payload}" | jq .
+            exit 0
+          fi
+
+          curl -fsS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            --data "${payload}" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_KEY}/comment"
+
+      - name: Add Jira comment for issue state transitions
+        if: steps.jira-key.outputs.key != '' && (steps.ctx.outputs.action == 'closed' || steps.ctx.outputs.action == 'reopened')
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+          GH_ACTION: ${{ steps.ctx.outputs.action }}
+          GH_ISSUE_URL: ${{ steps.ctx.outputs.issue_url }}
+          DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
+        run: |
+          text="GitHub issue ${GH_ACTION}: ${GH_ISSUE_URL}"
+          payload="$(jq -n --arg t "${text}" '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$t}]}]}}')"
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[dry-run] state comment payload for ${JIRA_KEY}:"
+            printf '%s\n' "${payload}" | jq .
+            exit 0
+          fi
+
+          curl -fsS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            --data "${payload}" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_KEY}/comment"
