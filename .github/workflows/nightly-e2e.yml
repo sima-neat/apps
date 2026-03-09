@@ -20,7 +20,7 @@ jobs:
       matrix:
         branch:
           - main
-          - feat/cicd
+          - develop
 
     steps:
       - name: Install apps runtime for latest branch build
