@@ -102,6 +102,8 @@ jobs:
         id: ctx
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_SHA: ${{ github.sha }}
           GH_ACTION_EVENT: ${{ github.event.action || '' }}
           GH_ISSUE_NUMBER_EVENT: ${{ github.event.issue.number || '' }}
           GH_ISSUE_TITLE_EVENT: ${{ github.event.issue.title || '' }}
@@ -133,6 +135,18 @@ jobs:
             comment_url="${IN_COMMENT_URL}"
             dry_run="${IN_DRY_RUN:-true}"
             jira_key_override="${IN_JIRA_KEY}"
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            # Branch push trigger is only for safe validation while workflow is not on default branch.
+            action="opened"
+            issue_number="0"
+            issue_title="Push-trigger dry run: apps Jira sync"
+            issue_body="Automatic dry-run validation from push event. SHA: ${GH_SHA}"
+            issue_url="https://github.com/${GH_REPO}/actions/runs/${GH_RUN_ID}"
+            assignees_json='[]'
+            comment_body=""
+            comment_url=""
+            dry_run="true"
+            jira_key_override=""
           else
             action="${GH_ACTION_EVENT:-opened}"
             if [[ "${EVENT_NAME}" == "issue_comment" ]]; then
@@ -214,13 +228,38 @@ jobs:
             exit 0
           fi
 
-          resp="$(curl -fsS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+          payload="$(jq -n --arg jql "${jql}" '{jql:$jql,maxResults:1,fields:["key"]}')"
+          tmp_resp="$(mktemp)"
+
+          status="$(curl -sS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
             -H "Accept: application/json" \
-            --get \
-            --data-urlencode "jql=${jql}" \
-            --data-urlencode "maxResults=1" \
-            --data-urlencode "fields=key" \
+            -H "Content-Type: application/json" \
+            -o "${tmp_resp}" \
+            -w "%{http_code}" \
+            -X POST \
+            --data "${payload}" \
             "${JIRA_BASE_URL}/rest/api/3/search")"
+
+          if [[ "${status}" == "410" ]]; then
+            status="$(curl -sS -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+              -H "Accept: application/json" \
+              -H "Content-Type: application/json" \
+              -o "${tmp_resp}" \
+              -w "%{http_code}" \
+              -X POST \
+              --data "${payload}" \
+              "${JIRA_BASE_URL}/rest/api/3/search/jql")"
+          fi
+
+          if [[ "${status}" -lt 200 || "${status}" -ge 300 ]]; then
+            echo "Jira search failed with HTTP ${status}" >&2
+            cat "${tmp_resp}" >&2
+            rm -f "${tmp_resp}"
+            exit 1
+          fi
+
+          resp="$(cat "${tmp_resp}")"
+          rm -f "${tmp_resp}"
 
           key="$(printf '%s' "${resp}" | jq -r '.issues[0].key // empty')"
           echo "key=${key}" >> "${GITHUB_OUTPUT}"
