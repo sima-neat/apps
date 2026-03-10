@@ -78,6 +78,9 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    concurrency:
+      group: jira-sync-${{ github.event.issue.number || inputs.issue_number || github.run_id }}
+      cancel-in-progress: false
     env:
       JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
       JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
@@ -171,24 +174,24 @@ jobs:
             assignees_json='[]'
           fi
 
-          echo "action=${action}" >> "${GITHUB_OUTPUT}"
-          echo "issue_number=${issue_number}" >> "${GITHUB_OUTPUT}"
-          echo "issue_title=${issue_title}" >> "${GITHUB_OUTPUT}"
           {
+            echo "action=${action}"
+            echo "issue_number=${issue_number}"
+            echo "issue_title=${issue_title}"
             echo "issue_body<<__BODY__"
             printf '%s\n' "${issue_body}"
             echo "__BODY__"
-          } >> "${GITHUB_OUTPUT}"
-          echo "issue_url=${issue_url}" >> "${GITHUB_OUTPUT}"
-          echo "assignees_json=${assignees_json}" >> "${GITHUB_OUTPUT}"
-          {
+            echo "issue_url=${issue_url}"
+            echo "assignees_json<<__ASSIGNEES__"
+            printf '%s\n' "${assignees_json}"
+            echo "__ASSIGNEES__"
             echo "comment_body<<__COMMENT__"
             printf '%s\n' "${comment_body}"
             echo "__COMMENT__"
+            echo "comment_url=${comment_url}"
+            echo "dry_run=${dry_run}"
+            echo "jira_key_override=${jira_key_override}"
           } >> "${GITHUB_OUTPUT}"
-          echo "comment_url=${comment_url}" >> "${GITHUB_OUTPUT}"
-          echo "dry_run=${dry_run}" >> "${GITHUB_OUTPUT}"
-          echo "jira_key_override=${jira_key_override}" >> "${GITHUB_OUTPUT}"
 
       - name: Show resolved context
         run: |
@@ -220,7 +223,7 @@ jobs:
           DRY_RUN: ${{ steps.ctx.outputs.dry_run }}
         run: |
           label="gh-issue-${GH_ISSUE_NUMBER}"
-          jql="project=${JIRA_PROJECT_KEY} AND labels = ${label} ORDER BY created DESC"
+          jql="project=${JIRA_PROJECT_KEY} AND labels = \"${label}\" ORDER BY created DESC"
 
           if [[ "${DRY_RUN}" == "true" ]]; then
             echo "[dry-run] would search Jira with JQL: ${jql}"
@@ -376,8 +379,8 @@ jobs:
         run: |
           echo "No Jira key found; skipping non-create sync action '${{ steps.ctx.outputs.action }}'."
 
-      - name: Persist Jira key marker on GitHub issue
-        if: steps.resolve-key.outputs.key == '' && steps.jira-key.outputs.key != '' && github.event_name == 'issues' && steps.ctx.outputs.dry_run != 'true'
+      - name: Persist Jira metadata on GitHub issue
+        if: steps.jira-key.outputs.key != '' && github.event_name == 'issues' && steps.ctx.outputs.dry_run != 'true'
         uses: actions/github-script@v7
         env:
           JIRA_KEY: ${{ steps.jira-key.outputs.key }}
@@ -385,14 +388,29 @@ jobs:
           script: |
             const issue = context.payload.issue;
             const marker = `<!-- jira-key: ${process.env.JIRA_KEY} -->`;
+            const jiraLabel = process.env.JIRA_KEY;
             const body = (issue.body || "").trim();
             const nextBody = body.includes("<!-- jira-key:") ? body : [body, "", marker].join("\n");
-            await github.rest.issues.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              body: nextBody
-            });
+            if (nextBody !== (issue.body || "").trim()) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: nextBody
+              });
+            }
+
+            const labels = (issue.labels || []).map((label) =>
+              typeof label === "string" ? label : label.name
+            );
+            if (!labels.includes(jiraLabel)) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: [jiraLabel]
+              });
+            }
 
       - name: Link Jira ticket to NEAT-Apps epic
         if: steps.create-jira.outputs.created == 'true' && steps.jira-key.outputs.key != '' && env.JIRA_EPIC_KEY != ''

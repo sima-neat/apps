@@ -70,6 +70,11 @@ jobs:
     needs: cpp-build
 
     steps:
+      - name: Checkout apps repo
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
       - name: Install apps runtime for this branch and commit
         run: |
           BRANCH_RAW="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
