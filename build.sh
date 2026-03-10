@@ -104,11 +104,7 @@ package_distribution() {
   neat_core_branch="${neat_core_target[0]}"
   neat_core_version="${neat_core_target[1]}"
   if [[ "${neat_core_version}" == "latest" ]]; then
-    neat_core_version="$(download_text "${NEAT_ARTIFACTS_BASE_URL}/${neat_core_branch}/latest.tag" | tr -d '[:space:]')"
-    if [[ -z "${neat_core_version}" ]]; then
-      echo "ERROR: latest.tag is empty for branch: ${neat_core_branch}" >&2
-      exit 1
-    fi
+    neat_core_version="$(resolve_latest_version "${neat_core_branch}")"
   fi
   python3 - <<'PY' "${stage_dir}/neat-core.json" "${neat_core_branch}" "${neat_core_version}"
 import json
@@ -221,6 +217,59 @@ extract_json_field() {
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['neat_core'][sys.argv[2]])" "$1" "$2"
 }
 
+extract_neat_core_config() {
+  python3 - <<'PY' "$1"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    neat_core = json.load(fh).get("neat_core", {})
+
+print(neat_core.get("policy", ""))
+print(neat_core.get("branch", ""))
+print(neat_core.get("version", ""))
+PY
+}
+
+current_apps_branch() {
+  if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+    printf '%s\n' "${GITHUB_HEAD_REF}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+    printf '%s\n' "${GITHUB_REF_NAME}"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null
+    return 0
+  fi
+  echo ""
+}
+
+core_branch_exists() {
+  local branch="$1"
+  local core_repo="${ROOT_DIR}/../core"
+
+  if [[ -z "${branch}" || "${branch}" == "HEAD" ]]; then
+    return 1
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! git -C "${core_repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if git -C "${core_repo}" show-ref --verify --quiet "refs/heads/${branch}"; then
+    return 0
+  fi
+  if git -C "${core_repo}" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+    return 0
+  fi
+  return 1
+}
+
 neat_core_available() {
   # Prefer an actual package/config probe over the repo-local marker file so a
   # reused checkout does not incorrectly skip install in a fresh container.
@@ -283,10 +332,42 @@ download_text() {
   return 1
 }
 
+resolve_latest_version() {
+  local branch="$1"
+  local latest_url="${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag"
+  local resolved=""
+
+  if resolved="$(download_text "${latest_url}" 2>/dev/null)"; then
+    resolved="$(printf '%s' "${resolved}" | tr -d '[:space:]')"
+  else
+    resolved=""
+  fi
+
+  if [[ -n "${resolved}" ]]; then
+    printf '%s\n' "${resolved}"
+    return 0
+  fi
+
+  echo "WARN: Could not fetch ${latest_url}; using literal version 'latest'." >&2
+  printf '%s\n' "latest"
+}
+
 resolve_neat_core_target() {
-  local branch version
-  branch="$(extract_json_field "${NEAT_CORE_JSON}" "branch")"
-  version="$(extract_json_field "${NEAT_CORE_JSON}" "version")"
+  local policy branch version snap_branch
+  mapfile -t neat_core_config < <(extract_neat_core_config "${NEAT_CORE_JSON}")
+  policy="${neat_core_config[0]:-}"
+  branch="${neat_core_config[1]:-}"
+  version="${neat_core_config[2]:-}"
+
+  if [[ "${policy}" == "snap" ]]; then
+    snap_branch="$(current_apps_branch)"
+    if core_branch_exists "${snap_branch}"; then
+      branch="${snap_branch}"
+    else
+      branch="main"
+    fi
+    version="latest"
+  fi
 
   if [[ -n "${NEAT_CORE_OVERRIDE}" ]]; then
     if [[ "${NEAT_CORE_OVERRIDE}" != *:* ]]; then
@@ -299,6 +380,11 @@ resolve_neat_core_target() {
       echo "ERROR: --neat-core-version must provide both branch and version." >&2
       exit 1
     fi
+  fi
+
+  if [[ -z "${branch}" || -z "${version}" ]]; then
+    echo "ERROR: neat-core.json must define either neat_core.branch + neat_core.version or neat_core.policy=snap." >&2
+    exit 1
   fi
 
   printf '%s\n%s\n' "${branch}" "${version}"
@@ -317,11 +403,7 @@ ensure_neat_core() {
 
   # Resolve "latest" to the actual commit tag so the marker is precise.
   if [[ "${version}" == "latest" ]]; then
-    version="$(download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag" | tr -d '[:space:]')"
-    if [[ -z "${version}" ]]; then
-      echo "ERROR: latest.tag is empty for branch: ${branch}" >&2
-      exit 1
-    fi
+    version="$(resolve_latest_version "${branch}")"
   fi
 
   # Check marker file — but only trust it if the current environment can also
@@ -371,6 +453,17 @@ fi
 # Build
 # ---------------------------------------------------------------------------
 
+NEAT_CORE_DISPLAY_BRANCH="(unresolved)"
+NEAT_CORE_DISPLAY_VERSION="(unresolved)"
+if [[ -f "${NEAT_CORE_JSON}" ]]; then
+  mapfile -t neat_core_target < <(resolve_neat_core_target)
+  NEAT_CORE_DISPLAY_BRANCH="${neat_core_target[0]}"
+  NEAT_CORE_DISPLAY_VERSION="${neat_core_target[1]}"
+  if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
+    NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"
+  fi
+fi
+
 echo ""
 echo "  NEAT Apps Build"
 echo "  ==============="
@@ -379,6 +472,7 @@ echo "  Build type            : ${BUILD_TYPE}"
 echo "  Build C++ examples    : ${BUILD_CPP}"
 echo "  Build portal          : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF"; fi)"
 echo "  Install NEAT core     : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF (use --all to enable)"; fi)"
+echo "  NEAT core target      : ${NEAT_CORE_DISPLAY_BRANCH}:${NEAT_CORE_DISPLAY_VERSION}"
 echo "  NEAT core override    : ${NEAT_CORE_OVERRIDE:-"(from neat-core.json)"}"
 echo ""
 

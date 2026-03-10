@@ -24,52 +24,141 @@ jobs:
           aws s3api list-objects-v2 \
             --endpoint-url "${R2_ENDPOINT_URL}" \
             --bucket neat-artifacts \
-            --prefix apps/ \
+            --prefix download/ \
             > /tmp/apps-r2-objects.json
+
+      - name: Download branch and latest metadata
+        run: |
+          mkdir -p /tmp/apps-r2-index /tmp/apps-r2-latest
+
+          if aws s3 cp \
+            --endpoint-url "${R2_ENDPOINT_URL}" \
+            s3://neat-artifacts/download/branches.json \
+            /tmp/apps-r2-index/branches.json >/dev/null 2>&1; then
+            echo "Downloaded branches.json"
+          else
+            echo "branches.json not found; treating all branches as inactive."
+            printf '{"branches":[]}\n' > /tmp/apps-r2-index/branches.json
+          fi
+
+          jq -r '
+            (.Contents // [])
+            | map(.Key)
+            | map(select(test("^download/.+/latest\\.tag$")))
+            | .[]
+          ' /tmp/apps-r2-objects.json > /tmp/apps-r2-latest-keys.txt
+
+          while IFS= read -r key; do
+            [[ -z "${key}" ]] && continue
+            branch_key="${key#download/}"
+            branch_key="${branch_key%/latest.tag}"
+            aws s3 cp \
+              --endpoint-url "${R2_ENDPOINT_URL}" \
+              "s3://neat-artifacts/${key}" \
+              "/tmp/apps-r2-latest/${branch_key}.latest.tag" >/dev/null 2>&1 || true
+          done < /tmp/apps-r2-latest-keys.txt
 
       - name: Decide which artifacts to delete
         run: |
           python3 - <<'PY'
           import json
-          from collections import defaultdict
           from datetime import datetime, timedelta, timezone
           from pathlib import Path
+          import re
 
           objects_path = Path("/tmp/apps-r2-objects.json")
           payload = json.loads(objects_path.read_text(encoding="utf-8"))
           contents = payload.get("Contents", [])
 
-          groups = defaultdict(list)
-          for item in contents:
-            key = item.get("Key", "")
-            if not key or key.endswith("/"):
-              continue
-            name = key.rsplit("/", 1)[-1]
-            if "main-" in name or "-v" in name:
-              groups["stable"].append(item)
-            else:
-              groups["ephemeral"].append(item)
-
-          now = datetime.now(timezone.utc)
-          retention = {
-            "stable": timedelta(days=30),
-            "ephemeral": timedelta(hours=48),
+          branches_payload = json.loads(
+            Path("/tmp/apps-r2-index/branches.json").read_text(encoding="utf-8")
+          )
+          active_branch_keys = {
+            str(branch).strip().replace("/", "--").replace(" ", "--")
+            for branch in branches_payload.get("branches", [])
+            if str(branch).strip()
           }
 
+          latest_sha_by_branch_key = {}
+          latest_dir = Path("/tmp/apps-r2-latest")
+          for latest_path in latest_dir.glob("*.latest.tag"):
+            branch_key = latest_path.name[: -len(".latest.tag")]
+            short_sha = latest_path.read_text(encoding="utf-8").strip()
+            if short_sha:
+              latest_sha_by_branch_key[branch_key] = short_sha
+
+          now = datetime.now(timezone.utc)
+          artifact_retention = timedelta(days=7)
+
+          artifacts = []
+          for item in contents:
+            key = item.get("Key", "")
+            if not key.startswith("download/neat-apps-") or not key.endswith(".tar.gz"):
+              continue
+            archive_name = key.rsplit("/", 1)[-1]
+            archive_stem = archive_name[: -len(".tar.gz")]
+            stem = archive_stem[len("neat-apps-") :]
+            if "-" not in stem:
+              continue
+            branch_key, short_sha = stem.rsplit("-", 1)
+            last_modified = datetime.fromisoformat(
+              item["LastModified"].replace("Z", "+00:00")
+            )
+            artifacts.append(
+              {
+                "key": key,
+                "branch_key": branch_key,
+                "short_sha": short_sha,
+                "last_modified": last_modified,
+              }
+            )
+
+          newest_sha_by_branch_key = {}
+          for artifact in artifacts:
+            branch_key = artifact["branch_key"]
+            current = newest_sha_by_branch_key.get(branch_key)
+            if current is None or artifact["last_modified"] > current["last_modified"]:
+              newest_sha_by_branch_key[branch_key] = artifact
+
           to_delete = []
-          for group_name, items in groups.items():
-            items.sort(key=lambda item: item["LastModified"], reverse=True)
-            keep_key = items[0]["Key"]
-            cutoff = now - retention[group_name]
+          kept_release = 0
+          kept_recent = 0
+          kept_latest = 0
+          scanned = len(artifacts)
 
-            for item in items[1:]:
-              last_modified = datetime.fromisoformat(
-                item["LastModified"].replace("Z", "+00:00")
-              )
-              if last_modified < cutoff:
-                to_delete.append(item["Key"])
+          for artifact in artifacts:
+            key = artifact["key"]
+            branch_key = artifact["branch_key"]
+            short_sha = artifact["short_sha"]
 
-            print(f"[cleanup] group={group_name} keep={keep_key} total={len(items)}")
+            is_release = branch_key == "main" or bool(re.match(r"^v\d", branch_key))
+            if is_release:
+              kept_release += 1
+              continue
+
+            last_modified = artifact["last_modified"]
+            if last_modified >= now - artifact_retention:
+              kept_recent += 1
+              continue
+
+            branch_is_active = branch_key in active_branch_keys
+            latest_sha = latest_sha_by_branch_key.get(branch_key)
+            if latest_sha is None and branch_is_active:
+              latest_sha = newest_sha_by_branch_key[branch_key]["short_sha"]
+
+            if branch_is_active and latest_sha == short_sha:
+              kept_latest += 1
+              continue
+
+            to_delete.append(key)
+
+          print(
+            "[cleanup] "
+            f"scanned={scanned} "
+            f"kept_release={kept_release} "
+            f"kept_recent={kept_recent} "
+            f"kept_latest_for_active_branch={kept_latest}"
+          )
 
           out_path = Path("/tmp/apps-r2-delete.txt")
           out_path.write_text("\n".join(to_delete) + ("\n" if to_delete else ""), encoding="utf-8")

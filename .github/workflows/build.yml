@@ -125,7 +125,7 @@ jobs:
     steps:
       - name: Checkout apps repo
         uses: actions/checkout@v4
-
+            
       - name: Write latest.tag for branch
         run: |
           BRANCH_RAW="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
