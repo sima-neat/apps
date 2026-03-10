@@ -389,9 +389,19 @@ jobs:
             const issue = context.payload.issue;
             const marker = `<!-- jira-key: ${process.env.JIRA_KEY} -->`;
             const jiraLabel = process.env.JIRA_KEY;
+            const trackingLine = `Internal tracking ticket [${process.env.JIRA_KEY}](https://sima-ai.atlassian.net/browse/${process.env.JIRA_KEY})`;
             const body = (issue.body || "").trim();
-            const nextBody = body.includes("<!-- jira-key:") ? body : [body, "", marker].join("\n");
-            if (nextBody !== (issue.body || "").trim()) {
+            const bodyWithoutTrackingLine = body.replace(
+              /^Internal tracking ticket \[[A-Z][A-Z0-9]*-\d+\]\([^)]+\)$|^Internal tracking ticket [A-Z][A-Z0-9]*-\d+$/m,
+              ""
+            ).trim();
+            const bodyWithTrackingLine = bodyWithoutTrackingLine.includes(trackingLine)
+              ? bodyWithoutTrackingLine
+              : [bodyWithoutTrackingLine, trackingLine].filter(Boolean).join("\n\n");
+            const nextBody = bodyWithTrackingLine.includes("<!-- jira-key:")
+              ? bodyWithTrackingLine
+              : [bodyWithTrackingLine, marker].filter(Boolean).join("\n\n");
+            if (nextBody !== body) {
               await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -638,3 +648,23 @@ jobs:
             -X POST \
             --data "${payload}" \
             "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_KEY}/comment"
+
+      - name: Remove Jira key label from closed GitHub issue
+        if: steps.jira-key.outputs.key != '' && steps.ctx.outputs.action == 'closed' && github.event_name == 'issues' && steps.ctx.outputs.dry_run != 'true'
+        uses: actions/github-script@v7
+        env:
+          JIRA_KEY: ${{ steps.jira-key.outputs.key }}
+        with:
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                name: process.env.JIRA_KEY
+              });
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
