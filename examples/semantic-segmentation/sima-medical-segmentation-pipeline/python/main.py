@@ -49,8 +49,8 @@ def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
     return arr
 
 
-model_path = 'assets/models/nnunet2d_final_optimized_mpk.tar.gz'
-image_path = "assets/images/word_0018/slice_159.png"
+model_path = '/data/workspace-aleksander/apps/assets/models/nnunet2d_final_optimized_mpk.tar.gz'
+image_path = "/data/workspace-aleksander/apps/assets/images/word_0018/slice_159.png"
 output_path = "tmp_output_folder/output_159.png"
 
 
