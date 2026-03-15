@@ -69,7 +69,8 @@ python examples/object-detection/multi-camera-people-detection-and-tracking/pyth
 
 Notes:
 
-- `--udp-port-base` maps streams to `port_base + stream_index`
+- `--udp-port-base` must be even and maps streams to `port_base + (2 * stream_index)`,
+  leaving the odd port beside each stream available for RTCP
 - the default run is unlimited and does not save frames
 - add `--frames 100` if you want a bounded smoke run
 - add `--output sandbox/people-tracking --save-every 10` if you want sampled

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import queue
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,6 +89,26 @@ class TestArgParsing:
         assert result.returncode != 0
         assert "udp" in result.stderr.lower() or "port" in result.stderr.lower()
 
+    def test_odd_udp_port_base_is_rejected(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MAIN_PY),
+                "--model",
+                "model.tar.gz",
+                "--rtsp",
+                "rtsp://camera-0",
+                "--udp-port-base",
+                "5601",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(EXAMPLE_DIR),
+        )
+        assert result.returncode != 0
+        assert "even" in result.stderr.lower()
+
     def test_invalid_save_every(self):
         result = subprocess.run(
             [
@@ -169,7 +191,7 @@ class TestHelpers:
         import main as app_main
 
         assert app_main.udp_port_for_stream(5600, 0) == 5600
-        assert app_main.udp_port_for_stream(5600, 3) == 5603
+        assert app_main.udp_port_for_stream(5600, 3) == 5606
 
     def test_filter_person_detections_keeps_only_requested_class(self):
         import main as app_main
@@ -187,6 +209,99 @@ class TestHelpers:
 
         out = app_main.sample_output_path(tmp_path, stream_index=2, frame_index=17)
         assert out == tmp_path / "stream_2" / "frame_000017.jpg"
+
+    def test_producer_thread_uses_longer_timeout_for_first_frame(self, monkeypatch):
+        import main as app_main
+
+        class FakeRun:
+            def __init__(self):
+                self.timeouts = []
+
+            def pull(self, timeout_ms):
+                self.timeouts.append(timeout_ms)
+                return "sample"
+
+        cfg = app_main.AppConfig(
+            model="model.tar.gz",
+            rtsp_urls=["rtsp://camera-0"],
+            output_dir=None,
+            frames=1,
+            udp_host="127.0.0.1",
+            udp_port_base=5600,
+            fps=0,
+            bitrate_kbps=2500,
+            save_every=30,
+            profile=False,
+            person_class_id=0,
+            detection_threshold=None,
+            nms_iou_threshold=None,
+            top_k=None,
+            tracker_iou_threshold=0.3,
+            tracker_max_missing=15,
+            latency_ms=200,
+            tcp=False,
+        )
+        stream = SimpleNamespace(
+            source_run=FakeRun(),
+            runtime=SimpleNamespace(),
+            metrics=app_main.StreamMetrics(),
+            error=None,
+            index=0,
+        )
+        frame_q: queue.Queue = queue.Queue(maxsize=1)
+        stop_event = threading.Event()
+        startup_ready = threading.Event()
+
+        monkeypatch.setattr(app_main, "tensor_bgr_from_sample", lambda runtime, sample: "frame")
+
+        app_main.producer_thread(stream, cfg, frame_q, stop_event, startup_ready)
+
+        assert stream.source_run.timeouts == [app_main._SOURCE_STARTUP_PULL_TIMEOUT_MS]
+        assert startup_ready.is_set()
+        pkt = frame_q.get_nowait()
+        assert pkt.frame == "frame"
+        assert pkt.frame_index == 0
+
+    def test_start_producer_threads_sequentially_waits_for_ready_signal(self, monkeypatch):
+        import main as app_main
+
+        started = []
+        slept = []
+
+        class FakeThread:
+            def __init__(self, name):
+                self.name = name
+
+            def start(self):
+                started.append(self.name)
+
+        class FakeEvent:
+            def __init__(self):
+                self.wait_calls = []
+
+            def wait(self, timeout):
+                self.wait_calls.append(timeout)
+                return True
+
+        stop_event = threading.Event()
+        startup_events = [FakeEvent(), FakeEvent()]
+        producer_threads = [FakeThread("producer-0"), FakeThread("producer-1")]
+
+        monkeypatch.setattr(app_main.time, "sleep", lambda seconds: slept.append(seconds))
+
+        started_threads = app_main.start_producer_threads_sequentially(
+            producer_threads,
+            startup_events,
+            stop_event,
+            startup_timeout_ms=1234,
+            startup_stagger_s=0.25,
+        )
+
+        assert started_threads == producer_threads
+        assert started == ["producer-0", "producer-1"]
+        assert startup_events[0].wait_calls == [1.234]
+        assert startup_events[1].wait_calls == [1.234]
+        assert slept == [0.25]
 
     def test_build_model_uses_tensor_input_quanttess_contract(self):
         import main as app_main
@@ -710,7 +825,7 @@ class TestHelpers:
 
         udp_opt = runtime.pyneat.last_session.added[3][1]
         assert udp_opt.udp_host == cfg.udp_host
-        assert udp_opt.udp_port == 5601
+        assert udp_opt.udp_port == 5602
 
         (build_args, build_kwargs) = runtime.pyneat.last_session.build_calls[0]
         assert build_kwargs == {}

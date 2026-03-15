@@ -134,7 +134,7 @@ _RUNTIME_MODULES: RuntimeModules | None = None
 
 
 def udp_port_for_stream(port_base: int, stream_index: int) -> int:
-    return int(port_base) + int(stream_index)
+    return int(port_base) + (2 * int(stream_index))
 
 
 def filter_person_detections(boxes: list[dict], person_class_id: int = 0) -> list[dict]:
@@ -196,7 +196,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--udp-port-base",
         type=int,
         default=5600,
-        help="Base UDP port for overlayed RTP/H264 outputs.",
+        help="Even base UDP port for overlayed RTP/H264 outputs; each stream uses an RTP/RTCP port pair.",
     )
     parser.add_argument(
         "--fps",
@@ -264,6 +264,8 @@ def parse_config(argv: list[str] | None = None) -> AppConfig:
 
     if args.udp_port_base <= 0:
         parser.error("--udp-port-base must be > 0")
+    if args.udp_port_base % 2 != 0:
+        parser.error("--udp-port-base must be even so each stream keeps an RTP/RTCP port pair")
     if args.output and args.save_every <= 0:
         parser.error("--save-every must be > 0 when --output is set")
     if args.frames < 0:
@@ -717,6 +719,10 @@ _YOLOV8_BOXDECODE_DEFAULTS = {
     "topk": 24,
 }
 
+_SOURCE_STARTUP_PULL_TIMEOUT_MS = 50000
+_SOURCE_PULL_TIMEOUT_MS = 10000
+_SOURCE_STARTUP_STAGGER_S = 0.5
+
 
 def build_detect_run(
     runtime: RuntimeModules,
@@ -863,6 +869,7 @@ def producer_thread(
     cfg: AppConfig,
     frame_q: queue.Queue,
     stop_event: threading.Event,
+    startup_ready: threading.Event | None = None,
 ) -> None:
     """Pulls decoded BGR frames from RTSP source and enqueues them."""
     frame_index = 0
@@ -872,7 +879,10 @@ def producer_thread(
             if cfg.frames > 0 and frame_index >= cfg.frames:
                 return
             t0 = time.perf_counter()
-            sample = stream.source_run.pull(timeout_ms=10000)
+            pull_timeout_ms = (
+                _SOURCE_STARTUP_PULL_TIMEOUT_MS if frame_index == 0 else _SOURCE_PULL_TIMEOUT_MS
+            )
+            sample = stream.source_run.pull(timeout_ms=pull_timeout_ms)
             elapsed = time.perf_counter() - t0
             if sample is None:
                 empty_pulls += 1
@@ -882,10 +892,41 @@ def producer_thread(
             empty_pulls = 0
             frame = tensor_bgr_from_sample(stream.runtime, sample)
             put_keep_latest(frame_q, FramePacket(frame=frame, frame_index=frame_index, source_time_s=elapsed))
+            if startup_ready is not None and frame_index == 0:
+                startup_ready.set()
             frame_index += 1
     except Exception as exc:
         stream.error = exc
         stop_event.set()
+        if startup_ready is not None:
+            startup_ready.set()
+
+
+def start_producer_threads_sequentially(
+    producer_threads: list[threading.Thread],
+    startup_events: list[threading.Event],
+    stop_event: threading.Event,
+    startup_timeout_ms: int = _SOURCE_STARTUP_PULL_TIMEOUT_MS,
+    startup_stagger_s: float = _SOURCE_STARTUP_STAGGER_S,
+) -> list[threading.Thread]:
+    started_threads: list[threading.Thread] = []
+    timeout_s = startup_timeout_ms / 1000.0
+
+    for index, thread in enumerate(producer_threads):
+        if stop_event.is_set():
+            break
+        thread.start()
+        started_threads.append(thread)
+
+        if not startup_events[index].wait(timeout_s):
+            stop_event.set()
+            break
+        if stop_event.is_set():
+            break
+        if index + 1 < len(producer_threads) and startup_stagger_s > 0:
+            time.sleep(startup_stagger_s)
+
+    return started_threads
 
 
 def infer_thread(
@@ -915,7 +956,7 @@ def infer_thread(
 
             # Run.run() releases GIL for the entire round-trip.
             roundtrip_t0 = time.perf_counter()
-            det_sample = detect_run.run(quant_input, timeout_ms=10000)
+            det_sample = detect_run.run(quant_input, timeout_ms=50000)
             roundtrip_elapsed = time.perf_counter() - roundtrip_t0
 
             if det_sample is None:
@@ -1114,21 +1155,26 @@ def main(argv: list[str] | None = None) -> int:
             f"{stream.url} -> udp://{cfg.udp_host}:{udp_port_for_stream(cfg.udp_port_base, stream.index)}"
         )
 
-    # Launch 3 threads per stream: producer, infer, overlay.
+    # Launch infer/overlay threads first, then bring producer threads up one by one
+    # so RTSP startup does not stampede all cameras at once.
     stop_event = threading.Event()
-    all_threads: list[threading.Thread] = []
+    worker_threads: list[threading.Thread] = []
+    producer_threads: list[threading.Thread] = []
+    producer_ready_events: list[threading.Event] = []
     for stream in streams:
         frame_q: queue.Queue[FramePacket] = queue.Queue(maxsize=4)
         result_q: queue.Queue[ResultPacket] = queue.Queue(maxsize=4)
-        all_threads.append(
+        producer_ready = threading.Event()
+        producer_ready_events.append(producer_ready)
+        producer_threads.append(
             threading.Thread(
                 target=producer_thread,
-                args=(stream, cfg, frame_q, stop_event),
+                args=(stream, cfg, frame_q, stop_event, producer_ready),
                 name=f"producer-{stream.index}",
                 daemon=True,
             )
         )
-        all_threads.append(
+        worker_threads.append(
             threading.Thread(
                 target=infer_thread,
                 args=(stream, cfg, frame_q, result_q, stop_event),
@@ -1136,7 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
                 daemon=True,
             )
         )
-        all_threads.append(
+        worker_threads.append(
             threading.Thread(
                 target=overlay_thread,
                 args=(stream, cfg, result_q, stop_event),
@@ -1146,13 +1192,21 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        for thread in all_threads:
+        for thread in worker_threads:
             thread.start()
-        for thread in all_threads:
+        started_threads = list(worker_threads)
+        started_threads.extend(
+            start_producer_threads_sequentially(
+                producer_threads,
+                producer_ready_events,
+                stop_event,
+            )
+        )
+        for thread in started_threads:
             thread.join()
     except KeyboardInterrupt:
         stop_event.set()
-        for thread in all_threads:
+        for thread in worker_threads + producer_threads:
             thread.join(timeout=5)
     finally:
         for stream in streams:
