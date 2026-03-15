@@ -210,6 +210,50 @@ class TestHelpers:
         out = app_main.sample_output_path(tmp_path, stream_index=2, frame_index=17)
         assert out == tmp_path / "stream_2" / "frame_000017.jpg"
 
+    def test_print_interval_profile_reports_latency_and_wall_clock_throughput(self, capsys):
+        import main as app_main
+
+        metrics = app_main.StreamMetrics(
+            processed=10,
+            _interval_preproc_s=0.12,
+            _interval_pull_s=0.11,
+            _interval_output_s=0.03,
+            _interval_loop_s=0.66,
+            _interval_frames=10,
+            _interval_wall_started_at_s=100.0,
+            wall_last_processed_at_s=100.33,
+        )
+        stream = SimpleNamespace(index=2, metrics=metrics)
+
+        app_main.print_interval_profile(stream, profile_every=10)
+
+        out = capsys.readouterr().out
+        assert "throughput_fps=30.3" in out
+        assert "latency_fps=" not in out
+
+    def test_print_profile_summary_reports_latency_and_wall_clock_throughput(self, capsys):
+        import main as app_main
+
+        metrics = app_main.StreamMetrics(
+            processed=30,
+            source_time_s=0.99,
+            preproc_time_s=0.42,
+            pull_wait_s=0.39,
+            track_time_s=0.03,
+            overlay_time_s=0.03,
+            write_time_s=0.03,
+            total_loop_time_s=1.98,
+            wall_started_at_s=200.0,
+            wall_last_processed_at_s=200.99,
+        )
+        stream = SimpleNamespace(index=1, metrics=metrics)
+
+        app_main.print_profile_summary([stream])
+
+        out = capsys.readouterr().out
+        assert "throughput_fps=30.3" in out
+        assert "latency_fps=" not in out
+
     def test_producer_thread_uses_longer_timeout_for_first_frame(self, monkeypatch):
         import main as app_main
 

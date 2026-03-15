@@ -82,6 +82,8 @@ class StreamMetrics:
     overlay_time_s: float = 0.0
     write_time_s: float = 0.0
     total_loop_time_s: float = 0.0
+    wall_started_at_s: float | None = None
+    wall_last_processed_at_s: float | None = None
     _interval_source_s: float = 0.0
     _interval_preproc_s: float = 0.0
     _interval_push_s: float = 0.0
@@ -89,6 +91,7 @@ class StreamMetrics:
     _interval_output_s: float = 0.0
     _interval_loop_s: float = 0.0
     _interval_frames: int = 0
+    _interval_wall_started_at_s: float | None = None
 
 
 @dataclass
@@ -1003,6 +1006,10 @@ def overlay_thread(
                 continue
 
             loop_start = time.perf_counter()
+            if stream.metrics.wall_started_at_s is None:
+                stream.metrics.wall_started_at_s = loop_start
+            if stream.metrics._interval_wall_started_at_s is None:
+                stream.metrics._interval_wall_started_at_s = loop_start
 
             # Accumulate timing from upstream threads.
             stream.metrics.source_time_s += pkt.source_time_s
@@ -1038,13 +1045,15 @@ def overlay_thread(
                 stream.metrics.saved += 1
             stream.metrics.write_time_s += time.perf_counter() - write_t0
 
-            output_elapsed = time.perf_counter() - loop_start
+            completed_at = time.perf_counter()
+            output_elapsed = completed_at - loop_start
             stream.metrics._interval_output_s += output_elapsed
             stream.metrics.processed += 1
             per_frame = pkt.source_time_s + pkt.preproc_time_s + pkt.push_time_s + pkt.pull_wait_s + output_elapsed
             stream.metrics.total_loop_time_s += per_frame
             stream.metrics._interval_loop_s += per_frame
             stream.metrics._interval_frames += 1
+            stream.metrics.wall_last_processed_at_s = completed_at
 
             if cfg.profile and stream.metrics._interval_frames >= profile_every:
                 print_interval_profile(stream, profile_every)
@@ -1070,12 +1079,16 @@ def print_interval_profile(stream: StreamRuntime, profile_every: int) -> None:
     pull_ms = m._interval_pull_s * 1000.0 / n
     out_ms = m._interval_output_s * 1000.0 / n
     loop_ms = m._interval_loop_s * 1000.0 / n
-    fps = n / m._interval_loop_s if m._interval_loop_s > 0 else 0.0
+    throughput_fps = wall_clock_fps(
+        n,
+        m._interval_wall_started_at_s,
+        m.wall_last_processed_at_s,
+    )
     print(
         f"  [stream {stream.index}] frames {m.processed - n}-{m.processed - 1} | "
         f"src={src_ms:.1f}ms  preproc={pre_ms:.1f}ms  push={push_ms:.1f}ms  "
         f"pull_wait={pull_ms:.1f}ms  output={out_ms:.1f}ms  "
-        f"loop={loop_ms:.1f}ms  fps={fps:.1f}"
+        f"loop={loop_ms:.1f}ms  throughput_fps={throughput_fps:.1f}"
     )
     m._interval_source_s = 0.0
     m._interval_preproc_s = 0.0
@@ -1084,6 +1097,7 @@ def print_interval_profile(stream: StreamRuntime, profile_every: int) -> None:
     m._interval_output_s = 0.0
     m._interval_loop_s = 0.0
     m._interval_frames = 0
+    m._interval_wall_started_at_s = m.wall_last_processed_at_s
 
 
 def print_profile_summary(streams: list[StreamRuntime]) -> None:
@@ -1100,14 +1114,27 @@ def print_profile_summary(streams: list[StreamRuntime]) -> None:
         wrt = m.write_time_s * 1000.0 / n
         out = trk + ovl + wrt
         loop = m.total_loop_time_s * 1000.0 / n
-        fps = m.processed / m.total_loop_time_s if m.total_loop_time_s > 0 else 0.0
+        throughput_fps = wall_clock_fps(
+            m.processed,
+            m.wall_started_at_s,
+            m.wall_last_processed_at_s,
+        )
         print(
             f"  [stream {stream.index}] {m.processed} frames | "
             f"src={src:.1f}ms  preproc={pre:.1f}ms  push={psh:.1f}ms  "
             f"pull_wait={pll:.1f}ms  output={out:.1f}ms "
             f"(track={trk:.1f} overlay={ovl:.1f} write={wrt:.1f})  "
-            f"loop={loop:.1f}ms  fps={fps:.1f}"
+            f"loop={loop:.1f}ms  throughput_fps={throughput_fps:.1f}"
         )
+
+
+def wall_clock_fps(frame_count: int, started_at_s: float | None, ended_at_s: float | None) -> float:
+    if frame_count <= 0 or started_at_s is None or ended_at_s is None:
+        return 0.0
+    elapsed_s = ended_at_s - started_at_s
+    if elapsed_s <= 0:
+        return 0.0
+    return frame_count / elapsed_s
 
 
 # ---------------------------------------------------------------------------
