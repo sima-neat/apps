@@ -712,7 +712,7 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
 
 
 _YOLOV8_BOXDECODE_DEFAULTS = {
-    "detection_threshold": 0.5,
+    "detection_threshold": 0.6,
     "nms_iou_threshold": 0.5,
     "topk": 24,
 }
