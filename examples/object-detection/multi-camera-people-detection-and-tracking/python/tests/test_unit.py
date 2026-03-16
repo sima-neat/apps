@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import queue
@@ -78,7 +79,7 @@ class TestArgParsing:
                 "model.tar.gz",
                 "--rtsp",
                 "rtsp://camera-0",
-                "--udp-port-base",
+                "--optiview-video-port-base",
                 "0",
             ],
             capture_output=True,
@@ -87,9 +88,9 @@ class TestArgParsing:
             cwd=str(EXAMPLE_DIR),
         )
         assert result.returncode != 0
-        assert "udp" in result.stderr.lower() or "port" in result.stderr.lower()
+        assert "optiview" in result.stderr.lower() or "port" in result.stderr.lower()
 
-    def test_odd_udp_port_base_is_rejected(self):
+    def test_invalid_optiview_json_port_base(self):
         result = subprocess.run(
             [
                 sys.executable,
@@ -98,8 +99,8 @@ class TestArgParsing:
                 "model.tar.gz",
                 "--rtsp",
                 "rtsp://camera-0",
-                "--udp-port-base",
-                "5601",
+                "--optiview-json-port-base",
+                "0",
             ],
             capture_output=True,
             text=True,
@@ -107,7 +108,7 @@ class TestArgParsing:
             cwd=str(EXAMPLE_DIR),
         )
         assert result.returncode != 0
-        assert "even" in result.stderr.lower()
+        assert "optiview" in result.stderr.lower() or "port" in result.stderr.lower()
 
     def test_invalid_save_every(self):
         result = subprocess.run(
@@ -187,11 +188,17 @@ class TestTracker:
 
 @pytest.mark.unit
 class TestHelpers:
-    def test_udp_port_for_stream_offsets_from_base(self):
+    def test_optiview_video_port_for_stream_offsets_from_base(self):
         import main as app_main
 
-        assert app_main.udp_port_for_stream(5600, 0) == 5600
-        assert app_main.udp_port_for_stream(5600, 3) == 5606
+        assert app_main.optiview_video_port_for_stream(9000, 0) == 9000
+        assert app_main.optiview_video_port_for_stream(9000, 3) == 9003
+
+    def test_optiview_json_port_for_stream_offsets_from_base(self):
+        import main as app_main
+
+        assert app_main.optiview_json_port_for_stream(9100, 0) == 9100
+        assert app_main.optiview_json_port_for_stream(9100, 3) == 9103
 
     def test_filter_person_detections_keeps_only_requested_class(self):
         import main as app_main
@@ -270,8 +277,9 @@ class TestHelpers:
             rtsp_urls=["rtsp://camera-0"],
             output_dir=None,
             frames=1,
-            udp_host="127.0.0.1",
-            udp_port_base=5600,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
             fps=0,
             bitrate_kbps=2500,
             save_every=30,
@@ -375,8 +383,9 @@ class TestHelpers:
             rtsp_urls=["rtsp://camera-0"],
             output_dir=None,
             frames=0,
-            udp_host="127.0.0.1",
-            udp_port_base=5600,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
             fps=0,
             bitrate_kbps=2500,
             save_every=30,
@@ -592,8 +601,9 @@ class TestHelpers:
             rtsp_urls=["rtsp://camera-0"],
             output_dir=None,
             frames=0,
-            udp_host="127.0.0.1",
-            udp_port_base=5600,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
             fps=0,
             bitrate_kbps=2500,
             save_every=30,
@@ -629,15 +639,13 @@ class TestHelpers:
         boxdecode_kwargs = runtime.pyneat.last_session.added[3][2]
         assert boxdecode_kwargs["original_width"] == probe.width
         assert boxdecode_kwargs["original_height"] == probe.height
-        assert boxdecode_kwargs["detection_threshold"] == 0.0
-        assert boxdecode_kwargs["nms_iou_threshold"] == 0.0
-        assert boxdecode_kwargs["top_k"] == 0
+        assert boxdecode_kwargs["detection_threshold"] == app_main._YOLOV8_BOXDECODE_DEFAULTS["detection_threshold"]
+        assert boxdecode_kwargs["nms_iou_threshold"] == app_main._YOLOV8_BOXDECODE_DEFAULTS["nms_iou_threshold"]
+        assert boxdecode_kwargs["top_k"] == app_main._YOLOV8_BOXDECODE_DEFAULTS["topk"]
 
         (build_args, build_kwargs) = runtime.pyneat.last_session.build_calls[0]
         assert build_kwargs == {}
-        assert build_args[0][0] == "tensor_from_numpy"
-        assert build_args[0][1] == {"shape": (640, 640, 3), "dtype": runtime.np.float32}
-        assert build_args[0][3] is None
+        assert build_args[0] == {"shape": (640, 640, 3), "dtype": runtime.np.float32}
 
     def test_build_source_run_uses_probed_resolution_and_explicit_run_options(self):
         import main as app_main
@@ -691,7 +699,7 @@ class TestHelpers:
                 SystemMemory = "system"
 
             class OverflowPolicy:
-                Block = "block"
+                KeepLatest = "keep-latest"
 
             class OutputMemory:
                 Owned = "owned"
@@ -729,8 +737,9 @@ class TestHelpers:
             rtsp_urls=["rtsp://camera-0"],
             output_dir=None,
             frames=0,
-            udp_host="127.0.0.1",
-            udp_port_base=5600,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
             fps=0,
             bitrate_kbps=2500,
             save_every=30,
@@ -760,10 +769,34 @@ class TestHelpers:
         assert build_kwargs == {}
         (run_opt,) = build_args
         assert run_opt.queue_depth == 4
-        assert run_opt.overflow_policy == runtime.pyneat.OverflowPolicy.Block
+        assert run_opt.overflow_policy == runtime.pyneat.OverflowPolicy.KeepLatest
         assert run_opt.output_memory == runtime.pyneat.OutputMemory.Owned
 
-    def test_build_udp_writer_run_inserts_video_convert_before_encoder(self):
+    def test_make_optiview_tracking_json_uses_track_ids(self):
+        import main as app_main
+
+        tracked = [
+            app_main.TrackedDetection(
+                track_id=7,
+                x1=10.0,
+                y1=20.0,
+                x2=40.0,
+                y2=60.0,
+                score=0.95,
+                class_id=0,
+            )
+        ]
+
+        payload = app_main.make_optiview_tracking_json(1234, "frame-9", tracked)
+        parsed = json.loads(payload)
+
+        assert parsed["type"] == "object-detection"
+        assert parsed["timestamp"] == 1234
+        assert parsed["frame_id"] == "frame-9"
+        assert parsed["data"]["objects"][0]["id"] == "track_7"
+        assert parsed["data"]["objects"][0]["bbox"] == [10.0, 20.0, 30.0, 40.0]
+
+    def test_build_optiview_video_run_inserts_video_convert_before_encoder(self):
         import main as app_main
 
         class FakeSession:
@@ -776,7 +809,7 @@ class TestHelpers:
 
             def build(self, *args, **kwargs):
                 self.build_calls.append((args, kwargs))
-                return "fake-writer-run"
+                return "fake-video-run"
 
         class FakeRunOptions:
             def __init__(self):
@@ -801,9 +834,10 @@ class TestHelpers:
 
             def __init__(self):
                 self.last_session = None
+                self.last_input_options = None
                 self.last_seed_tensor = None
                 self.nodes = SimpleNamespace(
-                    input=lambda opt=None: ("input", opt),
+                    input=self._input,
                     video_convert=lambda: ("video_convert",),
                     h264_encode_sima=lambda *args, **kwargs: ("h264_encode_sima", args, kwargs),
                 )
@@ -817,6 +851,10 @@ class TestHelpers:
                 self.last_session = FakeSession()
                 return self.last_session
 
+            def _input(self, opt=None):
+                self.last_input_options = opt
+                return ("input", opt)
+
             def _from_numpy(self, arr, copy=False, image_format=None):
                 self.last_seed_tensor = {
                     "array": arr,
@@ -824,6 +862,9 @@ class TestHelpers:
                     "image_format": image_format,
                 }
                 return ("tensor_from_numpy", arr, copy, image_format)
+
+            def InputOptions(self):
+                return SimpleNamespace(media_type="", format="", use_simaai_pool=True)
 
             def UdpH264OutputGroupOptions(self):
                 return FakeUdpOptions()
@@ -843,8 +884,9 @@ class TestHelpers:
             rtsp_urls=["rtsp://camera-0"],
             output_dir=None,
             frames=0,
-            udp_host="192.168.0.107",
-            udp_port_base=5600,
+            optiview_host="192.168.0.107",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
             fps=0,
             bitrate_kbps=2500,
             save_every=30,
@@ -861,17 +903,160 @@ class TestHelpers:
         probe = app_main.RtspProbe(width=1920, height=1080, fps=25)
         runtime = app_main.RuntimeModules(cv2=None, np=FakeNp(), pyneat=FakePyneat())
 
-        _, run = app_main.build_udp_writer_run(runtime, cfg, probe, stream_index=1)
+        _, run = app_main.build_optiview_video_run(runtime, cfg, probe, stream_index=1)
 
-        assert run == "fake-writer-run"
+        assert run == "fake-video-run"
         added_kinds = [node[0] for node in runtime.pyneat.last_session.added]
         assert added_kinds == ["input", "video_convert", "h264_encode_sima", "udp_h264_output_group"]
+        assert runtime.pyneat.last_input_options.media_type == "video/x-raw"
+        assert runtime.pyneat.last_input_options.format == "BGR"
+        assert runtime.pyneat.last_input_options.use_simaai_pool is False
 
         udp_opt = runtime.pyneat.last_session.added[3][1]
-        assert udp_opt.udp_host == cfg.udp_host
-        assert udp_opt.udp_port == 5602
+        assert udp_opt.udp_host == cfg.optiview_host
+        assert udp_opt.udp_port == 9001
 
         (build_args, build_kwargs) = runtime.pyneat.last_session.build_calls[0]
         assert build_kwargs == {}
         assert build_args[0][0] == "tensor_from_numpy"
         assert build_args[0][3] == runtime.pyneat.PixelFormat.BGR
+
+    def test_build_optiview_json_output_uses_per_stream_ports(self):
+        import main as app_main
+
+        class FakeChannelOptions:
+            def __init__(self):
+                self.host = ""
+                self.channel = 0
+                self.video_port_base = 0
+                self.json_port_base = 0
+
+        class FakeJsonOutput:
+            def __init__(self, opt):
+                self.opt = opt
+
+        class FakePyneat:
+            def OptiViewChannelOptions(self):
+                return FakeChannelOptions()
+
+            def OptiViewJsonOutput(self, opt):
+                return FakeJsonOutput(opt)
+
+        cfg = app_main.AppConfig(
+            model="model.tar.gz",
+            rtsp_urls=["rtsp://camera-0"],
+            output_dir=None,
+            frames=0,
+            optiview_host="192.168.0.107",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
+            fps=0,
+            bitrate_kbps=2500,
+            save_every=30,
+            profile=False,
+            person_class_id=0,
+            detection_threshold=0.25,
+            nms_iou_threshold=0.55,
+            top_k=120,
+            tracker_iou_threshold=0.3,
+            tracker_max_missing=15,
+            latency_ms=120,
+            tcp=True,
+        )
+        probe = app_main.RtspProbe(width=1920, height=1080, fps=25)
+        runtime = app_main.RuntimeModules(cv2=None, np=None, pyneat=FakePyneat())
+
+        sender = app_main.build_optiview_json_output(runtime, cfg, stream_index=2)
+
+        assert sender.opt.host == cfg.optiview_host
+        assert sender.opt.channel == 2
+        assert sender.opt.video_port_base == cfg.optiview_video_port_base
+        assert sender.opt.json_port_base == cfg.optiview_json_port_base
+
+    def test_publish_thread_skips_overlay_when_not_saving_debug_frame(self, monkeypatch):
+        import main as app_main
+
+        class FakeVideoRun:
+            def __init__(self):
+                self.calls = []
+
+            def push(self, frame, copy=False, image_format=None):
+                self.calls.append((frame, copy, image_format))
+                return True
+
+        class FakeJsonSender:
+            def __init__(self):
+                self.payloads = []
+
+            def send_json(self, payload):
+                self.payloads.append(payload)
+                return True
+
+        cfg = app_main.AppConfig(
+            model="model.tar.gz",
+            rtsp_urls=["rtsp://camera-0"],
+            output_dir=None,
+            frames=1,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
+            fps=0,
+            bitrate_kbps=2500,
+            save_every=30,
+            profile=False,
+            person_class_id=0,
+            detection_threshold=None,
+            nms_iou_threshold=None,
+            top_k=None,
+            tracker_iou_threshold=0.3,
+            tracker_max_missing=15,
+            latency_ms=200,
+            tcp=False,
+        )
+        video_run = FakeVideoRun()
+        sender = FakeJsonSender()
+        frame = SimpleNamespace(shape=(24, 32, 3), label="clean-frame")
+        stream = SimpleNamespace(
+            index=0,
+            runtime=SimpleNamespace(pyneat=SimpleNamespace(PixelFormat=SimpleNamespace(BGR="bgr"))),
+            tracker=SimpleNamespace(
+                update=lambda boxes, frame_index: [
+                    app_main.TrackedDetection(
+                        track_id=5,
+                        x1=1.0,
+                        y1=2.0,
+                        x2=11.0,
+                        y2=22.0,
+                        score=0.9,
+                        class_id=0,
+                    )
+                ]
+            ),
+            video_run=video_run,
+            json_sender=sender,
+            metrics=app_main.StreamMetrics(),
+            error=None,
+        )
+        result_q: queue.Queue = queue.Queue()
+        result_q.put(
+            app_main.ResultPacket(
+                frame=frame,
+                frame_index=0,
+                bbox_payload=b"bbox",
+                source_time_s=0.01,
+                preproc_time_s=0.02,
+                push_time_s=0.0,
+                pull_wait_s=0.03,
+            )
+        )
+        stop_event = threading.Event()
+
+        monkeypatch.setattr(app_main, "parse_bbox_payload", lambda payload, w, h: [{"class_id": 0, "x1": 1.0, "y1": 2.0, "x2": 11.0, "y2": 22.0, "score": 0.9}])
+        monkeypatch.setattr(app_main, "make_optiview_tracking_json", lambda timestamp_ms, frame_id, tracked: "json-payload")
+        monkeypatch.setattr(app_main, "save_overlay_frame", lambda *args, **kwargs: False)
+        monkeypatch.setattr(app_main, "draw_tracked_people", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("overlay should not be rendered")))
+
+        app_main.publish_thread(stream, cfg, result_q, stop_event)
+
+        assert video_run.calls == [(frame, True, "bgr")]
+        assert sender.payloads == ["json-payload"]

@@ -4,7 +4,7 @@
 Architecture (per stream):
   [producer thread]  source_run.pull() -> frame_queue
   [infer thread]     frame_queue -> cpu_preproc -> detect_run.push/pull (pipelined) -> result_queue
-  [overlay thread]   result_queue -> parse_bbox -> filter -> tracker -> draw -> writer_run.push + save
+  [publish thread]   result_queue -> parse_bbox -> filter -> tracker -> OptiView video/json + optional save
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import argparse
 from collections import deque
 from dataclasses import dataclass, field
 import glob
+import json
 from pathlib import Path
 import queue
 import struct
@@ -30,8 +31,9 @@ class AppConfig:
     rtsp_urls: list[str]
     output_dir: str | None
     frames: int
-    udp_host: str
-    udp_port_base: int
+    optiview_host: str
+    optiview_video_port_base: int
+    optiview_json_port_base: int
     fps: int
     bitrate_kbps: int
     save_every: int
@@ -126,8 +128,9 @@ class StreamRuntime:
     source_run: Any
     detect_session: Any
     detect_run: Any
-    writer_session: Any
-    writer_run: Any
+    video_session: Any
+    video_run: Any
+    json_sender: Any
     tracker: PeopleTracker
     metrics: StreamMetrics = field(default_factory=StreamMetrics)
     error: Exception | None = None
@@ -136,8 +139,12 @@ class StreamRuntime:
 _RUNTIME_MODULES: RuntimeModules | None = None
 
 
-def udp_port_for_stream(port_base: int, stream_index: int) -> int:
-    return int(port_base) + (2 * int(stream_index))
+def optiview_video_port_for_stream(port_base: int, stream_index: int) -> int:
+    return int(port_base) + int(stream_index)
+
+
+def optiview_json_port_for_stream(port_base: int, stream_index: int) -> int:
+    return int(port_base) + int(stream_index)
 
 
 def filter_person_detections(boxes: list[dict], person_class_id: int = 0) -> list[dict]:
@@ -146,6 +153,37 @@ def filter_person_detections(boxes: list[dict], person_class_id: int = 0) -> lis
 
 def sample_output_path(output_dir: Path, stream_index: int, frame_index: int) -> Path:
     return output_dir / f"stream_{stream_index}" / f"frame_{frame_index:06d}.jpg"
+
+
+def make_optiview_tracking_json(
+    timestamp_ms: int,
+    frame_id: str,
+    tracked: list[TrackedDetection],
+) -> str:
+    objects = []
+    for det in tracked:
+        objects.append(
+            {
+                "id": f"track_{det.track_id}",
+                "track_id": int(det.track_id),
+                "label": "person",
+                "confidence": float(det.score),
+                "bbox": [
+                    float(det.x1),
+                    float(det.y1),
+                    float(max(0.0, det.x2 - det.x1)),
+                    float(max(0.0, det.y2 - det.y1)),
+                ],
+            }
+        )
+    return json.dumps(
+        {
+            "type": "object-detection",
+            "timestamp": int(timestamp_ms),
+            "frame_id": str(frame_id),
+            "data": {"objects": objects},
+        }
+    )
 
 
 def effective_writer_fps(cfg: AppConfig, probe: RtspProbe) -> int:
@@ -194,12 +232,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0,
         help="Frames to process per stream. Default 0 means unlimited.",
     )
-    parser.add_argument("--udp-host", default="127.0.0.1", help="UDP preview destination host.")
     parser.add_argument(
-        "--udp-port-base",
+        "--optiview-host",
+        default="127.0.0.1",
+        help="OptiView host for live video and JSON metadata.",
+    )
+    parser.add_argument(
+        "--optiview-video-port-base",
         type=int,
-        default=5600,
-        help="Even base UDP port for overlayed RTP/H264 outputs; each stream uses an RTP/RTCP port pair.",
+        default=9000,
+        help="OptiView UDP video port base; stream i uses video_port_base + i.",
+    )
+    parser.add_argument(
+        "--optiview-json-port-base",
+        type=int,
+        default=9100,
+        help="OptiView UDP JSON port base; stream i uses json_port_base + i.",
     )
     parser.add_argument(
         "--fps",
@@ -211,7 +259,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--bitrate-kbps",
         type=int,
         default=2500,
-        help="H264 encoder bitrate for UDP preview output.",
+        help="H264 encoder bitrate for OptiView live video output.",
     )
     parser.add_argument(
         "--save-every",
@@ -265,10 +313,10 @@ def parse_config(argv: list[str] | None = None) -> AppConfig:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    if args.udp_port_base <= 0:
-        parser.error("--udp-port-base must be > 0")
-    if args.udp_port_base % 2 != 0:
-        parser.error("--udp-port-base must be even so each stream keeps an RTP/RTCP port pair")
+    if args.optiview_video_port_base <= 0:
+        parser.error("--optiview-video-port-base must be > 0")
+    if args.optiview_json_port_base <= 0:
+        parser.error("--optiview-json-port-base must be > 0")
     if args.output and args.save_every <= 0:
         parser.error("--save-every must be > 0 when --output is set")
     if args.frames < 0:
@@ -296,8 +344,9 @@ def parse_config(argv: list[str] | None = None) -> AppConfig:
         rtsp_urls=list(args.rtsp),
         output_dir=output_dir,
         frames=args.frames,
-        udp_host=args.udp_host,
-        udp_port_base=args.udp_port_base,
+        optiview_host=args.optiview_host,
+        optiview_video_port_base=args.optiview_video_port_base,
+        optiview_json_port_base=args.optiview_json_port_base,
         fps=args.fps,
         bitrate_kbps=args.bitrate_kbps,
         save_every=args.save_every,
@@ -746,12 +795,20 @@ def build_detect_run(
     session.add(
         pyneat.nodes.sima_box_decode(
             model,
-            "yolov8",
-            probe.width,
-            probe.height,
-            cfg.detection_threshold if cfg.detection_threshold is not None else _YOLOV8_BOXDECODE_DEFAULTS["detection_threshold"],
-            cfg.nms_iou_threshold if cfg.nms_iou_threshold is not None else _YOLOV8_BOXDECODE_DEFAULTS["nms_iou_threshold"],
-            cfg.top_k if cfg.top_k is not None else _YOLOV8_BOXDECODE_DEFAULTS["topk"],
+            decode_type="yolov8",
+            original_width=probe.width,
+            original_height=probe.height,
+            detection_threshold=(
+                cfg.detection_threshold
+                if cfg.detection_threshold is not None
+                else _YOLOV8_BOXDECODE_DEFAULTS["detection_threshold"]
+            ),
+            nms_iou_threshold=(
+                cfg.nms_iou_threshold
+                if cfg.nms_iou_threshold is not None
+                else _YOLOV8_BOXDECODE_DEFAULTS["nms_iou_threshold"]
+            ),
+            top_k=cfg.top_k if cfg.top_k is not None else _YOLOV8_BOXDECODE_DEFAULTS["topk"],
         )
     )
     session.add(pyneat.nodes.output())
@@ -761,20 +818,22 @@ def build_detect_run(
     return session, run
 
 
-def build_udp_writer_run(runtime: RuntimeModules, cfg: AppConfig, probe: RtspProbe, stream_index: int):
+def build_optiview_video_run(
+    runtime: RuntimeModules,
+    cfg: AppConfig,
+    probe: RtspProbe,
+    stream_index: int,
+):
     pyneat = runtime.pyneat
     np = runtime.np
 
-    udp = pyneat.UdpH264OutputGroupOptions()
-    udp.udp_host = cfg.udp_host
-    udp.udp_port = udp_port_for_stream(cfg.udp_port_base, stream_index)
-    udp.config_interval = 1
-    udp.payload_type = 96
-    udp.udp_sync = False
-    udp.udp_async = False
+    input_opt = pyneat.InputOptions()
+    input_opt.media_type = "video/x-raw"
+    input_opt.format = "BGR"
+    input_opt.use_simaai_pool = False
 
     session = pyneat.Session()
-    session.add(pyneat.nodes.input())
+    session.add(pyneat.nodes.input(input_opt))
     session.add(pyneat.nodes.video_convert())
     session.add(
         pyneat.nodes.h264_encode_sima(
@@ -786,15 +845,40 @@ def build_udp_writer_run(runtime: RuntimeModules, cfg: AppConfig, probe: RtspPro
             level="4.1",
         )
     )
-    session.add(pyneat.groups.udp_h264_output_group(udp))
+    udp_opt = pyneat.UdpH264OutputGroupOptions()
+    udp_opt.payload_type = 96
+    udp_opt.config_interval = 1
+    udp_opt.udp_host = cfg.optiview_host
+    udp_opt.udp_port = optiview_video_port_for_stream(cfg.optiview_video_port_base, stream_index)
+    udp_opt.udp_sync = False
+    udp_opt.udp_async = False
+    session.add(pyneat.groups.udp_h264_output_group(udp_opt))
 
-    dummy = np.zeros((probe.height, probe.width, 3), dtype=np.uint8)
-    seed = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.BGR)
+    seed = pyneat.Tensor.from_numpy(
+        np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.BGR,
+    )
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 2
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run = session.build(seed, pyneat.RunMode.Async, run_opt)
     return session, run
+
+
+def build_optiview_json_output(
+    runtime: RuntimeModules,
+    cfg: AppConfig,
+    stream_index: int,
+):
+    pyneat = runtime.pyneat
+
+    channel = pyneat.OptiViewChannelOptions()
+    channel.host = cfg.optiview_host
+    channel.channel = stream_index
+    channel.video_port_base = cfg.optiview_video_port_base
+    channel.json_port_base = cfg.optiview_json_port_base
+    return pyneat.OptiViewJsonOutput(channel)
 
 
 # ---------------------------------------------------------------------------
@@ -813,7 +897,8 @@ def create_stream_runtime(
     probe = probe_rtsp(url)
     source_session, source_run = build_source_run(runtime, cfg, url, probe)
     detect_session, detect_run = build_detect_run(runtime, cfg, model, probe, quant_preproc)
-    writer_session, writer_run = build_udp_writer_run(runtime, cfg, probe, index)
+    video_session, video_run = build_optiview_video_run(runtime, cfg, probe, index)
+    json_sender = build_optiview_json_output(runtime, cfg, index)
     tracker = PeopleTracker(
         iou_threshold=cfg.tracker_iou_threshold,
         max_missing_frames=cfg.tracker_max_missing,
@@ -829,14 +914,15 @@ def create_stream_runtime(
         source_run=source_run,
         detect_session=detect_session,
         detect_run=detect_run,
-        writer_session=writer_session,
-        writer_run=writer_run,
+        video_session=video_session,
+        video_run=video_run,
+        json_sender=json_sender,
         tracker=tracker,
     )
 
 
 def close_stream_runtime(stream: StreamRuntime) -> None:
-    for run in (stream.writer_run, stream.detect_run, stream.source_run):
+    for run in (stream.video_run, stream.detect_run, stream.source_run):
         try:
             if run is not None:
                 run.close()
@@ -984,15 +1070,14 @@ def infer_thread(
         stop_event.set()
 
 
-def overlay_thread(
+def publish_thread(
     stream: StreamRuntime,
     cfg: AppConfig,
     result_q: queue.Queue,
     stop_event: threading.Event,
 ) -> None:
-    """Track + draw + UDP write + optional save."""
+    """Track + OptiView publish + optional overlay save."""
     runtime = stream.runtime
-    pyneat = runtime.pyneat
     output_dir = Path(cfg.output_dir) if cfg.output_dir else None
     profile_every = cfg.save_every if cfg.save_every > 0 else 10
 
@@ -1032,17 +1117,39 @@ def overlay_thread(
             stream.metrics.track_time_s += time.perf_counter() - track_t0
             stream.metrics.detections += len(tracked)
 
-            # Overlay.
-            overlay_t0 = time.perf_counter()
-            overlay = draw_tracked_people(runtime, pkt.frame.copy(), tracked)
-            stream.metrics.overlay_time_s += time.perf_counter() - overlay_t0
-
-            # Write to UDP + save.
+            # Publish clean video first, then matching OptiView JSON.
             write_t0 = time.perf_counter()
-            if not stream.writer_run.push(overlay, copy=True, image_format=pyneat.PixelFormat.BGR):
-                raise RuntimeError(f"stream {stream.index} UDP writer push failed")
-            if save_overlay_frame(runtime, output_dir, stream.index, pkt.frame_index, overlay, cfg.save_every):
-                stream.metrics.saved += 1
+            pyneat = runtime.pyneat
+            if not stream.video_run.push(pkt.frame, copy=True, image_format=pyneat.PixelFormat.BGR):
+                raise RuntimeError(f"stream {stream.index} OptiView video push failed")
+
+            frame_id = str(stream.metrics.processed)
+            payload_json = make_optiview_tracking_json(
+                int(time.time() * 1000),
+                frame_id,
+                tracked,
+            )
+            if not stream.json_sender.send_json(payload_json):
+                raise RuntimeError(f"stream {stream.index} OptiView JSON send failed")
+
+            # Render overlay only when a saved debug frame is actually needed.
+            if (
+                output_dir is not None
+                and cfg.save_every > 0
+                and pkt.frame_index % cfg.save_every == 0
+            ):
+                overlay_t0 = time.perf_counter()
+                overlay = draw_tracked_people(runtime, pkt.frame.copy(), tracked)
+                stream.metrics.overlay_time_s += time.perf_counter() - overlay_t0
+                if save_overlay_frame(
+                    runtime,
+                    output_dir,
+                    stream.index,
+                    pkt.frame_index,
+                    overlay,
+                    cfg.save_every,
+                ):
+                    stream.metrics.saved += 1
             stream.metrics.write_time_s += time.perf_counter() - write_t0
 
             completed_at = time.perf_counter()
@@ -1179,10 +1286,12 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"[stream {stream.index}] {stream.probe.width}x{stream.probe.height} "
             f"@{effective_writer_fps(cfg, stream.probe)}fps "
-            f"{stream.url} -> udp://{cfg.udp_host}:{udp_port_for_stream(cfg.udp_port_base, stream.index)}"
+            f"{stream.url} -> optiview://{cfg.optiview_host} "
+            f"video={optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index)} "
+            f"json={optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index)}"
         )
 
-    # Launch infer/overlay threads first, then bring producer threads up one by one
+    # Launch infer/publish threads first, then bring producer threads up one by one
     # so RTSP startup does not stampede all cameras at once.
     stop_event = threading.Event()
     worker_threads: list[threading.Thread] = []
@@ -1211,9 +1320,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         worker_threads.append(
             threading.Thread(
-                target=overlay_thread,
+                target=publish_thread,
                 args=(stream, cfg, result_q, stop_event),
-                name=f"overlay-{stream.index}",
+                name=f"publish-{stream.index}",
                 daemon=True,
             )
         )

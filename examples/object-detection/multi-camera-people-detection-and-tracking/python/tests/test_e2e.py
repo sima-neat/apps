@@ -29,7 +29,7 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
 
 @pytest.mark.e2e
 class TestE2E:
-    def test_multi_stream_udp_and_save_pipeline(
+    def test_multi_stream_optiview_and_save_pipeline(
         self, models_dir, tmp_output_dir, rtsp_urls, test_timeout_ms, skip_unless_e2e_ready
     ):
         skip_unless_e2e_ready(
@@ -51,10 +51,12 @@ class TestE2E:
             "10",
             "--save-every",
             "2",
-            "--udp-host",
+            "--optiview-host",
             "127.0.0.1",
-            "--udp-port-base",
-            "5600",
+            "--optiview-video-port-base",
+            "9000",
+            "--optiview-json-port-base",
+            "9100",
         ]
         for url in rtsp_urls[:2]:
             cmd.extend(["--rtsp", url])
