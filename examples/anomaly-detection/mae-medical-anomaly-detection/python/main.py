@@ -66,11 +66,16 @@ def tensor_to_numpy_dense(tensor: neat.Tensor) -> np.ndarray:
     return arr
 
 
-def load_npy_as_rgb(path: Path) -> np.ndarray:
-    """Load a single-channel .npy, resize in float space, duplicate to 3 channels.
+def load_npy_normalized(path: Path, dataset: str = "brats") -> tuple[np.ndarray, np.ndarray]:
+    """Load a single-channel .npy, resize and normalize to match ONNX preprocessing.
+    
+    Then duplicate to 3 channels for NEAT models.
 
-    This preserves the original intensity scale (no per-slice min–max). The only
-    change is interpolation from the original size to (INFER_HEIGHT, INFER_WIDTH).
+    Matches the preprocessing in infer_single_onnx.py:
+    - Takes first channel if multi-channel
+    - Resizes to (224, 224) for brats
+    - Normalizes: (image - mean) / std
+    - Returns both (H, W, 1) single-channel and (H, W, 3) duplicated versions
     """
     npy_image = np.load(path).astype(np.float32)  # (H, W, C) or (H, W)
     # Debug: inspect original NPY slice statistics before any processing.
@@ -81,25 +86,40 @@ def load_npy_as_rgb(path: Path) -> np.ndarray:
         "min", float(npy_image.min()),
         "max", float(npy_image.max()),
     )
+    
+    # Take first channel if multi-channel (matches ONNX: image[:, :, 0])
     if npy_image.ndim == 3:
         npy_image = npy_image[:, :, 0]
 
     # (H, W) -> (H, W, 1)
     npy_image = np.expand_dims(npy_image, axis=2)
 
-    # Resize to model resolution in float space, preserving the numeric range.
+    # Resize to model resolution (matches ONNX resize)
+    if dataset == "brats":
+        target_size = (224, 224)
+    else:  # luna16_unnorm
+        target_size = (64, 64)
+    
     npy_resized = resize(
         npy_image,
-        (INFER_HEIGHT, INFER_WIDTH, 1),
+        target_size,
         order=3,
         preserve_range=True,
         anti_aliasing=True,
     ).astype(np.float32)
 
-    npy_resized = npy_resized[:, :, 0]  # back to (H, W)
+    # Normalize (matches ONNX: image = (image - mean) / std)
+    if dataset == "brats":
+        mean, std = 0.0, 1.0
+    else:  # luna16_unnorm
+        mean, std = 0.0, 100.0
+    
+    npy_normalized = (npy_resized - mean) / std
 
-    # Duplicate to 3 channels: (H, W, 3) float32 in the original intensity scale.
-    return np.stack([npy_resized, npy_resized, npy_resized], axis=-1)
+    # Return both single-channel (for SSIM/comparison) and 3-channel (for NEAT models)
+    npy_3ch = np.stack([npy_normalized[:, :, 0], npy_normalized[:, :, 0], npy_normalized[:, :, 0]], axis=-1)
+    
+    return npy_normalized, npy_3ch  # (H, W, 1), (H, W, 3) float32
 
 
 def stable_softmax(logits: np.ndarray) -> np.ndarray:
@@ -114,6 +134,7 @@ def run_pipeline(
     cls_model_path: Path,
     inputs: list[Path],
     output_dir: Path,
+    dataset: str = "brats",
 ) -> int:
     """Run the MAE + classifier anomaly detection pipeline on a list of .npy inputs.
 
@@ -126,28 +147,50 @@ def run_pipeline(
 
     H, W = INFER_HEIGHT, INFER_WIDTH
 
+    # Model options for single-channel input (matching ONNX preprocessing)
     mae_opt = neat.ModelOptions()
-    mae_opt.media_type = "video/x-raw"
-    # mae_opt.format = "RGB"
+    mae_opt.media_type = "application/vnd.simaai.tensor"
+    mae_opt.format = ""
     mae_opt.input_max_width = W
     mae_opt.input_max_height = H
-    mae_opt.input_max_depth = 3
-    mae_opt.media_type ="application/vnd.simaai.tensor"
-    mae_opt.format = ""
+    mae_opt.input_max_depth = 3  # 3 channels for NEAT models (duplicated from normalized single channel)
 
     cls_opt = neat.ModelOptions()
-    cls_opt.media_type = "video/x-raw"
-    # cls_opt.format = "RGB"
+    cls_opt.media_type = "application/vnd.simaai.tensor"
+    cls_opt.format = ""
     cls_opt.input_max_width = W
     cls_opt.input_max_height = H
-    cls_opt.input_max_depth = 3
-    cls_opt.media_type ="application/vnd.simaai.tensor"
-    cls_opt.format = ""
+    cls_opt.input_max_depth = 3  # 3 channels for NEAT models (duplicated from normalized single channel)
 
     print(f"[LOAD] MAE model: {mae_model_path}")
     print(f"[LOAD] Classifier model: {cls_model_path}")
     mae_model = neat.Model(str(mae_model_path), mae_opt)
     cls_model = neat.Model(str(cls_model_path), cls_opt)
+
+    # Build MAE session: Input -> QuantTess -> MLA -> DetessDequant -> Output
+    mae_sess = neat.Session()
+    mae_sess.add(neat.nodes.input(mae_model.input_appsrc_options(True)))
+    mae_sess.add(neat.nodes.quant_tess(neat.QuantTessOptions(mae_model)))
+    mae_sess.add(neat.groups.mla(mae_model))
+    mae_sess.add(neat.nodes.detess_dequant(neat.DetessDequantOptions(mae_model)))
+    mae_sess.add(neat.nodes.output())
+    print(f"[BUILD] MAE Pipeline:\n{mae_sess.describe_backend()}")
+
+    # Build Classifier session: Input -> QuantTess -> MLA -> DetessDequant -> Output
+    cls_sess = neat.Session()
+    cls_sess.add(neat.nodes.input(cls_model.input_appsrc_options(True)))
+    cls_sess.add(neat.nodes.quant_tess(neat.QuantTessOptions(cls_model)))
+    cls_sess.add(neat.groups.mla(cls_model))
+    cls_sess.add(neat.nodes.detess_dequant(neat.DetessDequantOptions(cls_model)))
+    cls_sess.add(neat.nodes.output())
+    print(f"[BUILD] Classifier Pipeline:\n{cls_sess.describe_backend()}")
+
+    # Build runs with dummy tensors (3 channels for NEAT models)
+    dummy_mae = np.zeros((H, W, 3), dtype=np.float32)
+    mae_run = mae_sess.build(dummy_mae)
+
+    dummy_cls = np.zeros((H, W, 3), dtype=np.float32)
+    cls_run = cls_sess.build(dummy_cls)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -162,76 +205,120 @@ def run_pipeline(
         print(f"\n--- Processing: {npy_path} ---")
 
         try:
-            rgb = load_npy_as_rgb(npy_path)
+            img_1ch, img_3ch = load_npy_normalized(npy_path, dataset)
         except Exception as e:
             print(f"Failed to load {npy_path}: {e}", file=sys.stderr)
             continue
 
-        # # NEAT video models require UInt8 input; quantize at the model boundary.
-        # rgb_uint8 = np.clip(rgb, 0, 255).astype(np.uint8)
-        # # Debug: inspect the quantized input range and a few sample pixels.
-        # print(
-        #     "rgb_uint8 stats:",
-        #     "shape", rgb_uint8.shape,
-        #     "dtype", rgb_uint8.dtype,
-        #     "min", int(rgb_uint8.min()),
-        #     "max", int(rgb_uint8.max()),
-        # )
-        # print("rgb_uint8[0,0,:]:", rgb_uint8[0, 0, :])
-        # Create MAE input tensor directly from the resized float image.
-        img_tensor = neat.Tensor.from_numpy(rgb, copy=True)
-        # Debug: inspect the numeric range and tensor metadata going into the MAE model.
-        print(
-            "img_np_for_mae stats:",
-            "shape", rgb.shape,
-            "dtype", rgb.dtype,
-            "min", float(rgb.min()),
-            "max", float(rgb.max()),
-        )
-        print(
-            "img_tensor meta:",
-            "shape", tuple(int(x) for x in img_tensor.shape),
-            "dtype", img_tensor.dtype,
-        )
+        # Debug: Compare preprocessing with ONNX
+        print("\n[DEBUG] === Preprocessing Comparison ===")
+        print(f"[NEAT] img_1ch shape: {img_1ch.shape}, dtype: {img_1ch.dtype}")
+        print(f"[NEAT] img_1ch stats: min={img_1ch.min():.6f}, max={img_1ch.max():.6f}, mean={img_1ch.mean():.6f}, std={img_1ch.std():.6f}")
+        print(f"[NEAT] img_1ch sample[0:3, 0:3, 0]:\n{img_1ch[0:3, 0:3, 0]}")
+        print(f"[NEAT] img_3ch shape: {img_3ch.shape}, dtype: {img_3ch.dtype}")
+        print(f"[NEAT] img_3ch stats: min={img_3ch.min():.6f}, max={img_3ch.max():.6f}, mean={img_3ch.mean():.6f}, std={img_3ch.std():.6f}")
+        print(f"[ONNX] Expected: (1, 224, 224, 1) normalized with mean=0.0, std=1.0")
+        print(f"[ONNX] Expected sample values should match img_1ch above")
 
-        mae_out = mae_model.run(img_tensor, timeout_ms=5000)
-        recon_raw = tensor_to_numpy_dense(mae_out.tensor).astype(np.float32)
-        print(
-            f"MAE recon raw shape: {recon_raw.shape}  dtype: {mae_out.tensor.dtype}"
-        )
+        # Run MAE through session pipeline (3-channel input for NEAT models)
+        if not mae_run.push(img_3ch):
+            print(f"MAE push failed for {npy_path}", file=sys.stderr)
+            continue
+        mae_sample = mae_run.pull(timeout_ms=5000)
+        if mae_sample is None:
+            print(f"MAE pull failed for {npy_path}", file=sys.stderr)
+            continue
+        if mae_sample.tensor is None:
+            print(f"MAE output tensor is None for {npy_path}", file=sys.stderr)
+            continue
+        recon_raw = tensor_to_numpy_dense(mae_sample.tensor).astype(np.float32)
+        print("\n[DEBUG] === MAE Reconstruction Comparison ===")
+        print(f"[NEAT] recon_raw shape: {recon_raw.shape}, dtype: {recon_raw.dtype}")
+        print(f"[NEAT] recon_raw stats: min={recon_raw.min():.6f}, max={recon_raw.max():.6f}, mean={recon_raw.mean():.6f}, std={recon_raw.std():.6f}")
+        if recon_raw.size > 0:
+            print(f"[NEAT] recon_raw sample (first few values): {recon_raw.flatten()[:9]}")
 
-        # Work in float space without forcing values into [0, 1].
-        img_np = rgb.astype(np.float32)
-
+        # Process reconstruction to match ONNX pipeline
+        # NEAT model outputs may be (B, C, H, W) or (H, W, C), convert to (H, W, 1)
         recon_np = recon_raw.squeeze()
-        if recon_np.ndim == 3:
-            if recon_np.shape[0] < recon_np.shape[1]:
-                recon_np = recon_np.transpose(1, 2, 0)
+        if recon_np.ndim == 4:  # (B, C, H, W) or (B, 1, H, W)
+            recon_np = recon_np[0]  # Remove batch dim
+            if recon_np.ndim == 3:  # (C, H, W) or (1, H, W)
+                recon_np = recon_np.transpose(1, 2, 0)  # (H, W, C)
+        elif recon_np.ndim == 3:
+            if recon_np.shape[0] < recon_np.shape[1]:  # (C, H, W)
+                recon_np = recon_np.transpose(1, 2, 0)  # (H, W, C)
         elif recon_np.ndim == 2:
-            recon_np = recon_np[:, :, np.newaxis]
+            recon_np = recon_np[:, :, np.newaxis]  # (H, W, 1)
+        
+        # Ensure single channel (take first channel if multi-channel)
+        if recon_np.ndim == 3 and recon_np.shape[2] > 1:
+            recon_np = recon_np[:, :, 0:1]  # Take first channel, keep dims
+        
+        print(f"[NEAT] recon_np (after processing) shape: {recon_np.shape}")
+        print(f"[NEAT] recon_np stats: min={recon_np.min():.6f}, max={recon_np.max():.6f}, mean={recon_np.mean():.6f}, std={recon_np.std():.6f}")
+        print(f"[NEAT] recon_np sample[0:3, 0:3, 0]:\n{recon_np[0:3, 0:3, 0]}")
+        print(f"[ONNX] Expected: (1, 224, 224, 1) reconstruction output")
+        print(f"[ONNX] Expected sample values should match recon_np above")
 
-        im_paste = img_np * (1 - mask_px) + recon_np * mask_px
+        # Match ONNX mask application: im_paste = x * (1 - mask_px) + reconstruction * mask_px
+        # Use single-channel normalized image for mask application (matching ONNX)
+        img_np_1ch = img_1ch  # (H, W, 1) normalized single channel
+        
+        # Debug mask
+        print(f"\n[DEBUG] === Mask Comparison ===")
+        print(f"[NEAT] mask_px shape: {mask_px.shape}, dtype: {mask_px.dtype}")
+        print(f"[NEAT] mask_px stats: min={mask_px.min():.6f}, max={mask_px.max():.6f}, mean={mask_px.mean():.6f}")
+        print(f"[NEAT] mask_px sample[0:3, 0:3, 0]:\n{mask_px[0:3, 0:3, 0]}")
+        print(f"[ONNX] Expected: (1, 1, 224, 224) mask in NCHW format")
+        
+        im_paste_1ch = img_np_1ch * (1 - mask_px) + recon_np * mask_px
+        
+        print(f"\n[DEBUG] === Mask Application Comparison ===")
+        print(f"[NEAT] im_paste_1ch shape: {im_paste_1ch.shape}")
+        print(f"[NEAT] im_paste_1ch stats: min={im_paste_1ch.min():.6f}, max={im_paste_1ch.max():.6f}, mean={im_paste_1ch.mean():.6f}, std={im_paste_1ch.std():.6f}")
+        print(f"[NEAT] im_paste_1ch sample[0:3, 0:3, 0]:\n{im_paste_1ch[0:3, 0:3, 0]}")
+        print(f"[ONNX] Expected: (1, 224, 224, 1) im_paste in NHWC format")
+        print(f"[ONNX] Expected sample values should match im_paste_1ch above")
 
-        diff = np.abs(img_np - im_paste)
-        diff_tensor = neat.Tensor.from_numpy(diff, copy=True)
-        # Debug: inspect the numeric range and tensor metadata going into the classifier model.
-        print(
-            "diff_for_cls stats:",
-            "shape", diff.shape,
-            "dtype", diff.dtype,
-            "min", float(diff.min()),
-            "max", float(diff.max()),
-        )
-        print(
-            "diff_tensor meta:",
-            "shape", tuple(int(x) for x in diff_tensor.shape),
-            "dtype", diff_tensor.dtype,
-        )
+        # Compute diff matching ONNX: diff = abs(img_batch - recon)
+        diff_1ch = np.abs(img_np_1ch - im_paste_1ch)
+        
+        print(f"\n[DEBUG] === Diff Computation Comparison ===")
+        print(f"[NEAT] diff_1ch shape: {diff_1ch.shape}")
+        print(f"[NEAT] diff_1ch stats: min={diff_1ch.min():.6f}, max={diff_1ch.max():.6f}, mean={diff_1ch.mean():.6f}, std={diff_1ch.std():.6f}")
+        print(f"[NEAT] diff_1ch sample[0:3, 0:3, 0]:\n{diff_1ch[0:3, 0:3, 0]}")
+        print(f"[ONNX] Expected: (1, 224, 224, 1) diff = abs(img_batch - recon)")
+        print(f"[ONNX] Expected sample values should match diff_1ch above")
+        
+        # Duplicate diff to 3 channels for NEAT classifier model
+        diff_3ch = np.stack([diff_1ch[:, :, 0], diff_1ch[:, :, 0], diff_1ch[:, :, 0]], axis=-1)
+        print(f"[NEAT] diff_3ch (for classifier) shape: {diff_3ch.shape}, stats: min={diff_3ch.min():.6f}, max={diff_3ch.max():.6f}")
 
-        cls_out = cls_model.run(diff_tensor, timeout_ms=5000)
-        logits = tensor_to_numpy_dense(cls_out.tensor).flatten().astype(np.float32)
+        # Run Classifier through session pipeline (3-channel input for NEAT model)
+        if not cls_run.push(diff_3ch):
+            print(f"Classifier push failed for {npy_path}", file=sys.stderr)
+            continue
+        cls_sample = cls_run.pull(timeout_ms=5000)
+        if cls_sample is None:
+            print(f"Classifier pull failed for {npy_path}", file=sys.stderr)
+            continue
+        if cls_sample.tensor is None:
+            print(f"Classifier output tensor is None for {npy_path}", file=sys.stderr)
+            continue
+        logits = tensor_to_numpy_dense(cls_sample.tensor).flatten().astype(np.float32)
+        
+        print(f"\n[DEBUG] === Classifier Output Comparison ===")
+        print(f"[NEAT] logits shape: {logits.shape}, dtype: {logits.dtype}")
+        print(f"[NEAT] logits values: {logits}")
+        print(f"[ONNX] Expected: (2,) logits array")
+        print(f"[ONNX] Expected logits values should match above")
 
         probs = stable_softmax(logits)
+        
+        print(f"[NEAT] probs values: {probs}")
+        print(f"[ONNX] Expected: (2,) probs array from softmax(logits)")
+        print(f"[ONNX] Expected probs values should match above")
         if probs.size < 2:
             print(
                 f"Unexpected classifier output size {probs.size} (expected at least 2)",
@@ -243,10 +330,10 @@ def run_pipeline(
         anomalous_prob = float(probs[1])
         label = "normal" if normal_prob > anomalous_prob else "anomalous"
 
-        # Compute SSIM on a single channel to mirror ONNX reference script behavior.
-        gray_orig = img_np[:, :, 0]
-        gray_recon = im_paste[:, :, 0]
-        data_range = float(gray_orig.max() - gray_orig.min()) or 1.0
+        # Compute SSIM matching ONNX: ssim(img_batch[0, :, :, 0], recon[0, :, :, 0], data_range=1.0)
+        gray_orig = img_np_1ch[:, :, 0]
+        gray_recon = im_paste_1ch[:, :, 0]
+        data_range = 1.0  # Match ONNX data_range=1.0 for normalized brats data
         ssim_val = ssim(gray_orig, gray_recon, data_range=data_range)
 
         print("===== Inference Result =====")
@@ -273,6 +360,13 @@ def run_pipeline(
         fig.savefig(out_path, dpi=150)
         plt.close(fig)
         print(f"[SAVE] Visualization written to: {out_path}")
+
+    # Clean up runs
+    try:
+        mae_run.close()
+        cls_run.close()
+    except Exception:
+        pass
 
     return 0
 
@@ -302,6 +396,13 @@ def main() -> int:
         default="outputs_mae_ad",
         help="Directory to save visualization images (default: outputs_mae_ad)",
     )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="brats",
+        choices=["brats", "luna16_unnorm"],
+        help="Dataset type (affects resize & normalization, default: brats)",
+    )
     args = parser.parse_args()
 
     mae_model_path = Path(args.mae_model)
@@ -309,7 +410,7 @@ def main() -> int:
     input_paths = [Path(p) for p in args.inputs]
     output_dir = Path(args.output_dir)
 
-    return run_pipeline(mae_model_path, cls_model_path, input_paths, output_dir)
+    return run_pipeline(mae_model_path, cls_model_path, input_paths, output_dir, args.dataset)
 
 
 if __name__ == "__main__":
