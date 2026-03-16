@@ -16,7 +16,8 @@ Python-first multi-camera people detection and tracking example with RTSP inputs
 mixed-resolution support, per-stream worker threads, OptiView live video plus
 JSON metadata output, and optional sampled overlay saves.
 
-The Python pipeline keeps the important NEAT stages visible:
+The Python entrypoint keeps the detector graph explicit rather than hiding it
+behind a single `model.run(...)` call:
 
 `RTSP decode -> CPU letterbox/normalize -> QuantTess -> MLA -> SimaBoxDecode -> tracker -> clean H264/OptiView + tracked JSON`
 
@@ -75,6 +76,9 @@ Notes:
   overlay frames written under `stream_<index>/`; the live OptiView video stays clean
 - if the app runs on a DevKit, set `--optiview-host` to the OptiView host IP,
   not `127.0.0.1`
+- `pyneat.Model(...)` is still used, but as the model-pack contract source for
+  the explicit `QuantTess -> MLA -> SimaBoxDecode` session, not as a black-box
+  one-call inference path
 - the example uses CPU-side OpenCV letterbox + normalize on A65 and feeds the
   detector through the model's tensor-input `QuantTess` contract
 - live metadata is emitted separately from video in OptiView JSON format, with

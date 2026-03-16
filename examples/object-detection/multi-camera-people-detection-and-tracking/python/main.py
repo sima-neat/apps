@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Python-first multi-camera people detection and tracking example.
 
-Architecture (per stream):
-  [producer thread]  source_run.pull() -> frame_queue
-  [infer thread]     frame_queue -> cpu_preproc -> detect_run.push/pull (pipelined) -> result_queue
-  [publish thread]   result_queue -> parse_bbox -> filter -> tracker -> OptiView video/json + optional save
+Runtime flow (per stream):
+  [producer thread]  RTSP decode -> frame queue
+  [infer thread]     CPU preproc -> QuantTess -> MLA -> BoxDecode -> result queue
+  [publish thread]   tracker -> OptiView video/json + optional saved debug overlay
 """
 
 from __future__ import annotations
 
 import argparse
-from collections import deque
 from dataclasses import dataclass, field
 import glob
 import json
@@ -78,7 +77,6 @@ class StreamMetrics:
     saved: int = 0
     source_time_s: float = 0.0
     preproc_time_s: float = 0.0
-    push_time_s: float = 0.0
     pull_wait_s: float = 0.0
     track_time_s: float = 0.0
     overlay_time_s: float = 0.0
@@ -88,7 +86,6 @@ class StreamMetrics:
     wall_last_processed_at_s: float | None = None
     _interval_source_s: float = 0.0
     _interval_preproc_s: float = 0.0
-    _interval_push_s: float = 0.0
     _interval_pull_s: float = 0.0
     _interval_output_s: float = 0.0
     _interval_loop_s: float = 0.0
@@ -106,13 +103,12 @@ class FramePacket:
 
 @dataclass
 class ResultPacket:
-    """Carries infer results + original frame between infer and overlay threads."""
+    """Carries detector output and the original frame into the publish stage."""
     frame: Any
     frame_index: int
     bbox_payload: bytes | None
     source_time_s: float
     preproc_time_s: float
-    push_time_s: float
     pull_wait_s: float
 
 
@@ -438,153 +434,6 @@ def parse_bbox_payload(payload: bytes | None, img_w: int, img_h: int) -> list[di
     return boxes
 
 
-_DFL_BINS_16 = None
-
-
-def _get_dfl_bins():
-    global _DFL_BINS_16
-    if _DFL_BINS_16 is None:
-        _DFL_BINS_16 = load_runtime_modules().np.arange(16, dtype=load_runtime_modules().np.float32)
-    return _DFL_BINS_16
-
-
-def _tensor_to_hwc_f32(tensor: Any) -> Any:
-    np = load_runtime_modules().np
-    arr = np.asarray(tensor.to_numpy(copy=True)).astype(np.float32)
-    if arr.ndim == 4 and arr.shape[0] == 1:
-        arr = arr[0]
-    if arr.ndim != 3:
-        raise ValueError(f"unexpected tensor rank {arr.ndim}")
-    return arr
-
-
-def _iou_xyxy(a, b) -> float:
-    xx1 = max(a[0], b[0])
-    yy1 = max(a[1], b[1])
-    xx2 = min(a[2], b[2])
-    yy2 = min(a[3], b[3])
-    w = max(0.0, xx2 - xx1)
-    h = max(0.0, yy2 - yy1)
-    inter = w * h
-    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
-    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
-    den = area_a + area_b - inter
-    return inter / den if den > 0 else 0.0
-
-
-def decode_yolov8_boxes(
-    sample: Any,
-    infer_size: int,
-    img_w: int,
-    img_h: int,
-    min_score: float = 0.5,
-    nms_iou: float = 0.5,
-    max_det: int = 100,
-) -> list[dict]:
-    """Decode YOLOv8 bounding boxes from DetessDequant output (6 tensors)."""
-    np = load_runtime_modules().np
-    dfl_bins = _get_dfl_bins()
-
-    tensors = list(iter_tensors(sample))
-    if len(tensors) < 6:
-        return []
-    regs = [_tensor_to_hwc_f32(tensors[i]) for i in range(3)]
-    clss = [_tensor_to_hwc_f32(tensors[i]) for i in range(3, 6)]
-
-    # Letterbox scale and padding.
-    scale = min(infer_size / img_w, infer_size / img_h)
-    pad_x = (infer_size - img_w * scale) / 2.0
-    pad_y = (infer_size - img_h * scale) / 2.0
-
-    # Sigmoid threshold in logit domain.
-    min_logit = -np.log(max(1.0 / min_score - 1.0, 1e-9)) if min_score > 0 else -60.0
-
-    boxes_all: list = []
-    scores_all: list = []
-    class_all: list = []
-    for reg, cls in zip(regs, clss):
-        h, w, c = reg.shape
-        if c < 64:
-            continue
-        stride = infer_size / float(h)
-
-        cls_flat = cls.reshape(-1, cls.shape[2])
-        best_class = np.argmax(cls_flat, axis=1).astype(np.int32)
-        flat_idx = np.arange(cls_flat.shape[0], dtype=np.int32)
-        best_logit = cls_flat[flat_idx, best_class]
-
-        keep = best_logit >= min_logit
-        if not np.any(keep):
-            continue
-
-        kept_idx = flat_idx[keep]
-        kept_class = best_class[keep]
-        kept_logit = best_logit[keep]
-        kept_score = 1.0 / (1.0 + np.exp(-np.clip(kept_logit, -60.0, 60.0)))
-
-        reg_flat = reg.reshape(-1, 4, 16)[kept_idx]
-        reg_flat = reg_flat - np.max(reg_flat, axis=2, keepdims=True)
-        reg_exp = np.exp(reg_flat)
-        reg_prob = reg_exp / np.sum(reg_exp, axis=2, keepdims=True)
-        dists = np.sum(reg_prob * dfl_bins[None, None, :], axis=2) * stride
-
-        ys = kept_idx // w
-        xs = kept_idx % w
-        cx = (xs.astype(np.float32) + 0.5) * stride
-        cy = (ys.astype(np.float32) + 0.5) * stride
-
-        x1 = np.clip((cx - dists[:, 0] - pad_x) / scale, 0.0, float(img_w))
-        y1 = np.clip((cy - dists[:, 1] - pad_y) / scale, 0.0, float(img_h))
-        x2 = np.clip((cx + dists[:, 2] - pad_x) / scale, 0.0, float(img_w))
-        y2 = np.clip((cy + dists[:, 3] - pad_y) / scale, 0.0, float(img_h))
-
-        valid = (x2 > x1) & (y2 > y1)
-        if not np.any(valid):
-            continue
-
-        boxes_all.append(np.stack((x1[valid], y1[valid], x2[valid], y2[valid]), axis=1))
-        scores_all.append(kept_score[valid].astype(np.float32))
-        class_all.append(kept_class[valid].astype(np.int32))
-
-    if not boxes_all:
-        return []
-
-    boxes = np.concatenate(boxes_all, axis=0)
-    scores = np.concatenate(scores_all, axis=0)
-    class_ids = np.concatenate(class_all, axis=0)
-
-    # NMS per class.
-    order = np.argsort(-scores, kind="stable")
-    keep_idx: list[int] = []
-    keep_by_class: dict[int, list[int]] = {}
-    for i in order:
-        ci = int(class_ids[i])
-        suppressed = False
-        for k in keep_by_class.get(ci, []):
-            if _iou_xyxy(boxes[k], boxes[i]) > nms_iou:
-                suppressed = True
-                break
-        if suppressed:
-            continue
-        ii = int(i)
-        keep_idx.append(ii)
-        keep_by_class.setdefault(ci, []).append(ii)
-        if len(keep_idx) >= max_det:
-            break
-
-    return [
-        dict(
-            x1=float(boxes[i, 0]),
-            y1=float(boxes[i, 1]),
-            x2=float(boxes[i, 2]),
-            y2=float(boxes[i, 3]),
-            score=float(scores[i]),
-            class_id=int(class_ids[i]),
-        )
-        for i in keep_idx
-    ]
-
-
 def tensor_bgr_from_sample(runtime: RuntimeModules, sample: Any):
     tensor = first_tensor(sample)
     if tensor is None:
@@ -674,7 +523,9 @@ def probe_rtsp(url: str) -> RtspProbe:
 # ---------------------------------------------------------------------------
 
 
-def build_model(runtime: RuntimeModules, cfg: AppConfig):
+def load_detector_model(runtime: RuntimeModules, cfg: AppConfig):
+    # Load the model pack in tensor mode because CPU preproc produces the
+    # FP32 image tensor consumed by QuantTess in the explicit detector graph.
     pyneat = runtime.pyneat
     opt = pyneat.ModelOptions()
     opt.media_type = "application/vnd.simaai.tensor"
@@ -682,7 +533,8 @@ def build_model(runtime: RuntimeModules, cfg: AppConfig):
     return pyneat.Model(cfg.model, opt)
 
 
-def build_quanttess_cpu_preproc(runtime: RuntimeModules, model: Any) -> QuantTessCpuPreproc:
+def read_preproc_contract(runtime: RuntimeModules, model: Any) -> QuantTessCpuPreproc:
+    # Reuse the packaged preproc geometry even though preprocessing happens on CPU.
     pyneat = runtime.pyneat
     pre = pyneat.PreprocOptions(model)
     cfg_json = dict(getattr(pre, "config_json", None) or {})
@@ -776,7 +628,7 @@ _SOURCE_PULL_TIMEOUT_MS = 10000
 _SOURCE_STARTUP_STAGGER_S = 0.5
 
 
-def build_detect_run(
+def build_detection_run(
     runtime: RuntimeModules,
     cfg: AppConfig,
     model: Any,
@@ -786,8 +638,8 @@ def build_detect_run(
     pyneat = runtime.pyneat
     np = runtime.np
 
-    # QuantTess + MLA + BoxDecode (hardware box decode on CVU).
-    # SimaBoxDecode now emits num-buffers matching the model's CVU config.
+    # Keep the detector graph explicit in the example:
+    # tensor input -> QuantTess -> MLA -> BoxDecode.
     session = pyneat.Session()
     session.add(pyneat.nodes.input(model.input_appsrc_options(True)))
     session.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
@@ -896,7 +748,7 @@ def create_stream_runtime(
     runtime = load_runtime_modules()
     probe = probe_rtsp(url)
     source_session, source_run = build_source_run(runtime, cfg, url, probe)
-    detect_session, detect_run = build_detect_run(runtime, cfg, model, probe, quant_preproc)
+    detect_session, detect_run = build_detection_run(runtime, cfg, model, probe, quant_preproc)
     video_session, video_run = build_optiview_video_run(runtime, cfg, probe, index)
     json_sender = build_optiview_json_output(runtime, cfg, index)
     tracker = PeopleTracker(
@@ -1025,7 +877,7 @@ def infer_thread(
     result_q: queue.Queue,
     stop_event: threading.Event,
 ) -> None:
-    """CPU preproc + push_and_pull on the detect session (GIL-released)."""
+    """CPU preproc + detector run on the explicit QuantTess -> MLA -> BoxDecode graph."""
     runtime = stream.runtime
     detect_run = stream.detect_run
 
@@ -1060,7 +912,6 @@ def infer_thread(
                     bbox_payload=bbox_payload,
                     source_time_s=pkt.source_time_s,
                     preproc_time_s=preproc_elapsed,
-                    push_time_s=0.0,
                     pull_wait_s=roundtrip_elapsed,
                 ),
             )
@@ -1096,28 +947,22 @@ def publish_thread(
             if stream.metrics._interval_wall_started_at_s is None:
                 stream.metrics._interval_wall_started_at_s = loop_start
 
-            # Accumulate timing from upstream threads.
             stream.metrics.source_time_s += pkt.source_time_s
             stream.metrics._interval_source_s += pkt.source_time_s
             stream.metrics.preproc_time_s += pkt.preproc_time_s
-            stream.metrics.push_time_s += pkt.push_time_s
             stream.metrics.pull_wait_s += pkt.pull_wait_s
             stream.metrics._interval_preproc_s += pkt.preproc_time_s
-            stream.metrics._interval_push_s += pkt.push_time_s
             stream.metrics._interval_pull_s += pkt.pull_wait_s
             stream.metrics.pulled += 1
 
-            # Parse bboxes from hardware BoxDecode output.
             boxes = parse_bbox_payload(pkt.bbox_payload, pkt.frame.shape[1], pkt.frame.shape[0])
             boxes = filter_person_detections(boxes, cfg.person_class_id)
 
-            # Track.
             track_t0 = time.perf_counter()
             tracked = stream.tracker.update(boxes, frame_index=pkt.frame_index)
             stream.metrics.track_time_s += time.perf_counter() - track_t0
             stream.metrics.detections += len(tracked)
 
-            # Publish clean video first, then matching OptiView JSON.
             write_t0 = time.perf_counter()
             pyneat = runtime.pyneat
             if not stream.video_run.push(pkt.frame, copy=True, image_format=pyneat.PixelFormat.BGR):
@@ -1132,7 +977,6 @@ def publish_thread(
             if not stream.json_sender.send_json(payload_json):
                 raise RuntimeError(f"stream {stream.index} OptiView JSON send failed")
 
-            # Render overlay only when a saved debug frame is actually needed.
             if (
                 output_dir is not None
                 and cfg.save_every > 0
@@ -1156,7 +1000,7 @@ def publish_thread(
             output_elapsed = completed_at - loop_start
             stream.metrics._interval_output_s += output_elapsed
             stream.metrics.processed += 1
-            per_frame = pkt.source_time_s + pkt.preproc_time_s + pkt.push_time_s + pkt.pull_wait_s + output_elapsed
+            per_frame = pkt.source_time_s + pkt.preproc_time_s + pkt.pull_wait_s + output_elapsed
             stream.metrics.total_loop_time_s += per_frame
             stream.metrics._interval_loop_s += per_frame
             stream.metrics._interval_frames += 1
@@ -1182,7 +1026,6 @@ def print_interval_profile(stream: StreamRuntime, profile_every: int) -> None:
         return
     src_ms = m._interval_source_s * 1000.0 / n
     pre_ms = m._interval_preproc_s * 1000.0 / n
-    push_ms = m._interval_push_s * 1000.0 / n
     pull_ms = m._interval_pull_s * 1000.0 / n
     out_ms = m._interval_output_s * 1000.0 / n
     loop_ms = m._interval_loop_s * 1000.0 / n
@@ -1193,13 +1036,12 @@ def print_interval_profile(stream: StreamRuntime, profile_every: int) -> None:
     )
     print(
         f"  [stream {stream.index}] frames {m.processed - n}-{m.processed - 1} | "
-        f"src={src_ms:.1f}ms  preproc={pre_ms:.1f}ms  push={push_ms:.1f}ms  "
+        f"src={src_ms:.1f}ms  preproc={pre_ms:.1f}ms  "
         f"pull_wait={pull_ms:.1f}ms  output={out_ms:.1f}ms  "
         f"loop={loop_ms:.1f}ms  throughput_fps={throughput_fps:.1f}"
     )
     m._interval_source_s = 0.0
     m._interval_preproc_s = 0.0
-    m._interval_push_s = 0.0
     m._interval_pull_s = 0.0
     m._interval_output_s = 0.0
     m._interval_loop_s = 0.0
@@ -1214,7 +1056,6 @@ def print_profile_summary(streams: list[StreamRuntime]) -> None:
         n = max(m.processed, 1)
         src = m.source_time_s * 1000.0 / n
         pre = m.preproc_time_s * 1000.0 / n
-        psh = m.push_time_s * 1000.0 / n
         pll = m.pull_wait_s * 1000.0 / n
         trk = m.track_time_s * 1000.0 / n
         ovl = m.overlay_time_s * 1000.0 / n
@@ -1228,7 +1069,7 @@ def print_profile_summary(streams: list[StreamRuntime]) -> None:
         )
         print(
             f"  [stream {stream.index}] {m.processed} frames | "
-            f"src={src:.1f}ms  preproc={pre:.1f}ms  push={psh:.1f}ms  "
+            f"src={src:.1f}ms  preproc={pre:.1f}ms  "
             f"pull_wait={pll:.1f}ms  output={out:.1f}ms "
             f"(track={trk:.1f} overlay={ovl:.1f} write={wrt:.1f})  "
             f"loop={loop:.1f}ms  throughput_fps={throughput_fps:.1f}"
@@ -1261,16 +1102,14 @@ def main(argv: list[str] | None = None) -> int:
     if cfg.output_dir:
         Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Build model once, shared across all streams.
     runtime = load_runtime_modules()
     try:
-        model = build_model(runtime, cfg)
-        quant_preproc = build_quanttess_cpu_preproc(runtime, model)
+        model = load_detector_model(runtime, cfg)
+        quant_preproc = read_preproc_contract(runtime, model)
     except Exception as exc:
         print(f"Error: failed to build model: {exc}", file=sys.stderr)
         return 3
 
-    # Build sessions sequentially, one stream at a time.
     streams: list[StreamRuntime] = []
     try:
         for index, url in enumerate(cfg.rtsp_urls):

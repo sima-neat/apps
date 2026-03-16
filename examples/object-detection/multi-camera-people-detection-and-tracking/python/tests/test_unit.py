@@ -355,7 +355,7 @@ class TestHelpers:
         assert startup_events[1].wait_calls == [1.234]
         assert slept == [0.25]
 
-    def test_build_model_uses_tensor_input_quanttess_contract(self):
+    def test_load_detector_model_uses_tensor_input_contract(self):
         import main as app_main
 
         class FakeModelOptions:
@@ -400,7 +400,7 @@ class TestHelpers:
             tcp=False,
         )
 
-        model = app_main.build_model(runtime, cfg)
+        model = app_main.load_detector_model(runtime, cfg)
 
         assert model[0] == "model"
         opt = runtime.pyneat.last_model_options
@@ -626,7 +626,7 @@ class TestHelpers:
         )
         runtime = app_main.RuntimeModules(cv2=None, np=FakeNp(), pyneat=FakePyneat())
 
-        _, run = app_main.build_detect_run(runtime, cfg, FakeModel(), probe, preproc)
+        _, run = app_main.build_detection_run(runtime, cfg, FakeModel(), probe, preproc)
 
         added_kinds = [node[0] for node in runtime.pyneat.last_session.added]
         assert run == "fake-run"
@@ -963,7 +963,6 @@ class TestHelpers:
             latency_ms=120,
             tcp=True,
         )
-        probe = app_main.RtspProbe(width=1920, height=1080, fps=25)
         runtime = app_main.RuntimeModules(cv2=None, np=None, pyneat=FakePyneat())
 
         sender = app_main.build_optiview_json_output(runtime, cfg, stream_index=2)
@@ -1045,7 +1044,6 @@ class TestHelpers:
                 bbox_payload=b"bbox",
                 source_time_s=0.01,
                 preproc_time_s=0.02,
-                push_time_s=0.0,
                 pull_wait_s=0.03,
             )
         )
