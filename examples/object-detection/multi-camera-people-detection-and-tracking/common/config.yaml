@@ -1,16 +1,16 @@
 model: assets/models/yolo_v8m_mpk.tar.gz  # Path to the detector model pack.
 
 streams:  # RTSP inputs, one entry per camera.
-  - rtsp://192.168.0.235:8554/src1
-  - rtsp://192.168.0.235:8554/src2
-  - rtsp://192.168.0.235:8554/src3
-  - rtsp://192.168.0.235:8554/src6
-  - rtsp://192.168.0.235:8554/src7
-  - rtsp://192.168.0.235:8554/src8
+  - rtsp://192.168.2.1:8554/src1
+  - rtsp://192.168.2.1:8554/src2
+  - rtsp://192.168.2.1:8554/src3
+  - rtsp://192.168.2.1:8554/src6
+  - rtsp://192.168.2.1:8554/src7
+  - rtsp://192.168.2.1:8554/src8
 
 input:  # RTSP input transport settings.
   tcp: true        # Use TCP for RTSP transport.
-  latency_ms: 200  # RTSP receive latency in milliseconds.
+  latency_ms: 100  # RTSP receive latency in milliseconds.
 
 inference:  # Detector and runtime settings.
   frames: 0                   # Frame limit per stream. 0 means unlimited.
@@ -18,9 +18,9 @@ inference:  # Detector and runtime settings.
   bitrate_kbps: 2500          # H.264 bitrate for OptiView video output.
   profile: true               # Print per-stream profiling information.
   person_class_id: 0          # Class id to keep from detector output.
-  detection_threshold: null   # Optional score threshold override.
-  nms_iou_threshold: null     # Optional NMS IoU override.
-  top_k: null                 # Optional top-k override.
+  detection_threshold: 0.65   # Optional score threshold override.
+  nms_iou_threshold: 0.5      # Optional NMS IoU override.
+  top_k: 24                   # Optional top-k override.
 
 tracking:  # Tracker settings.
   iou_threshold: 0.3      # Minimum IoU to match an existing track.
@@ -28,7 +28,7 @@ tracking:  # Tracker settings.
 
 output:  # Live output plus optional debug saves.
   optiview:  # Live video and JSON destination.
-    host: 192.168.0.235      # Host running the OptiView receiver/viewer.
+    host: 192.168.2.1      # Host running the OptiView receiver/viewer.
     video_port_base: 9000    # Base UDP port for video channels.
     json_port_base: 9100     # Base UDP port for JSON channels.
   debug_dir: null            # Optional debug overlay directory. Null disables saved frames.
