@@ -25,7 +25,7 @@ def _log(msg: str) -> None:
     print(f"[retinaface-debug] {msg}", flush=True)
 
 
-DEFAULT_MODEL_PATH = "/mnt/Bitbucket/apps/assets/models/mobilenet0.25_QAT_Final_mod_4_mpk.tar.gz"
+DEFAULT_MODEL_PATH = "/mnt/Bitbucket/sima-neat/apps/assets/models/mobilenet0.25_QAT_Final_mod_4_mpk.tar.gz"
 # RetinaFace compiled model expects 1280x720 BGR input with specific mean subtraction
 INFER_WIDTH = 1280
 INFER_HEIGHT = 720
@@ -112,15 +112,13 @@ def run_retinaface_inference(
     _log("Resizing padded image to model input size (1280x720)")
     img = cv2.resize(img, (INFER_WIDTH, INFER_HEIGHT), interpolation=cv2.INTER_LINEAR)
 
-    # Convert back to uint8 if the compiled model expects uint8 inputs;
-    # if your model is truly float-input, you can adjust this later together
-    # with ModelOptions.preproc instead.
-    resized = np.ascontiguousarray(img, dtype=np.uint8)
+    # Keep as float32 tensor, matching Session caps (application/vnd.simaai.tensor, format=FP32)
+    resized = np.ascontiguousarray(img, dtype=np.float32)
 
-    _log("Configuring pyneat.ModelOptions")
+    _log("Configuring pyneat.ModelOptions for tensor input (FP32)")
     opt = pyneat.ModelOptions()
-    opt.media_type = "video/x-raw"
-    opt.format = "BGR"
+    opt.media_type = "application/vnd.simaai.tensor"
+    opt.format = ""
     opt.input_max_width = INFER_WIDTH
     opt.input_max_height = INFER_HEIGHT
     opt.input_max_depth = 3
@@ -128,21 +126,36 @@ def run_retinaface_inference(
     _log("Creating pyneat.Model")
     model = pyneat.Model(str(model_path), opt)
 
-    _log("Creating input tensor and running model directly (no Session pipeline)")
-    t_in = pyneat.Tensor.from_numpy(
-        resized,
-        copy=True,
-        image_format=pyneat.PixelFormat.BGR,
-    )
+    _log("Building Session pipeline: input -> quant_tess -> infer(MLA) -> detess_dequant -> output")
+    sess = pyneat.Session()
+    sess.add(pyneat.nodes.input(model.input_appsrc_options(True)))
+    sess.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
+    sess.add(pyneat.groups.mla(model))
+    sess.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
+    sess.add(pyneat.nodes.output())
+    _log(f"Session backend description:\n{sess.describe_backend()}")
 
-    # Use the simple Model.run API, like the classification example,
-    # to avoid building a GStreamer pipeline and any box-decode elements.
-    out = model.run(t_in, timeout_ms=5000)
-    if out is None:
-        raise RuntimeError("Model.run() returned None")
+    _log("Building run with dummy frame")
+    dummy = np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32)
+    run = sess.build(dummy)
+
+    _log("Pushing preprocessed frame into Session")
+    if not run.push(resized):
+        raise RuntimeError("Failed to push frame into Session pipeline")
+
+    _log("Pulling output sample from Session")
+    sample = run.pull(timeout_ms=5000)
+    if sample is None:
+        raise RuntimeError("Session.pull() returned None")
 
     _log(f"Inference complete. Original image size: {orig_w}x{orig_h}")
-    return out
+
+    try:
+        run.close()
+    except Exception:
+        pass
+
+    return sample
 
 
 def main() -> int:
