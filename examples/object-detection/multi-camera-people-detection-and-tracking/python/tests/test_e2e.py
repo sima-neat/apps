@@ -6,6 +6,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+import textwrap
 
 import pytest
 
@@ -40,26 +41,53 @@ class TestE2E:
         skip_unless_e2e_ready(model is not None, "yolo detector model not found in models_dir")
         skip_unless_e2e_ready(len(rtsp_urls) >= 2, "need at least two RTSP URLs for multistream e2e")
 
+        config_path = tmp_output_dir / "config.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                f"""
+                model: {model}
+
+                input:
+                  tcp: false
+                  latency_ms: 200
+
+                inference:
+                  frames: 10
+                  fps: 0
+                  bitrate_kbps: 2500
+                  profile: false
+                  person_class_id: 0
+                  detection_threshold: null
+                  nms_iou_threshold: null
+                  top_k: null
+
+                tracking:
+                  iou_threshold: 0.3
+                  max_missing_frames: 15
+
+                output:
+                  optiview:
+                    host: 127.0.0.1
+                    video_port_base: 9000
+                    json_port_base: 9100
+                  debug_dir: {tmp_output_dir}
+                  save_every: 2
+
+                streams:
+                """
+            ).lstrip(),
+            encoding="utf-8",
+        )
+        with config_path.open("a", encoding="utf-8") as handle:
+            for url in rtsp_urls[:2]:
+                handle.write(f"  - {url}\n")
+
         cmd = [
             sys.executable,
             str(MAIN_PY),
-            "--model",
-            str(model),
-            "--output",
-            str(tmp_output_dir),
-            "--frames",
-            "10",
-            "--save-every",
-            "2",
-            "--optiview-host",
-            "127.0.0.1",
-            "--optiview-video-port-base",
-            "9000",
-            "--optiview-json-port-base",
-            "9100",
+            "--config",
+            str(config_path),
         ]
-        for url in rtsp_urls[:2]:
-            cmd.extend(["--rtsp", url])
 
         result = subprocess.run(
             cmd,

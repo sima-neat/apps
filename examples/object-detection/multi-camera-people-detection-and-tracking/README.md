@@ -53,28 +53,31 @@ source ~/pyneat/bin/activate
 pip install -r examples/object-detection/multi-camera-people-detection-and-tracking/python/requirements.txt
 ```
 
-Run the Python example with one `--rtsp` per stream:
+Edit the example config in `common/config.yaml`, especially:
+
+- `model`
+- `streams`
+- `output.optiview.host`
+
+The `streams:` list controls the number of cameras dynamically.
+
+Run the Python example with that config:
 
 ```bash
 python examples/object-detection/multi-camera-people-detection-and-tracking/python/main.py \
-  --model assets/models/yolo_v8m_mpk.tar.gz \
-  --optiview-host <host> \
-  --optiview-video-port-base 9000 \
-  --optiview-json-port-base 9100 \
-  --profile \
-  --rtsp <rtsp-url-src-0> \
-  --rtsp <rtsp-url-src-1>
+  --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
 ```
 
 Notes:
 
-- stream `i` publishes clean video to `video_port_base + i` and tracked JSON to
-  `json_port_base + i`
-- the default run is unlimited and does not save frames
-- add `--frames 100` if you want a bounded smoke run
-- add `--output sandbox/people-tracking --save-every 10` if you want sampled
-  overlay frames written under `stream_<index>/`; the live OptiView video stays clean
-- if the app runs on a DevKit, set `--optiview-host` to the OptiView host IP,
+- stream `i` publishes clean video to `output.optiview.video_port_base + i` and tracked JSON to
+  `output.optiview.json_port_base + i`
+- the default config runs indefinitely and does not save frames because
+  `output.debug_dir` is `null` and `output.save_every` is `0`
+- set `inference.frames` for a bounded smoke run
+- set `output.debug_dir` and `output.save_every` if you want sampled overlay frames
+  written under `stream_<index>/`; the live OptiView video stays clean
+- if the app runs on a DevKit, set `output.optiview.host` to the OptiView host IP,
   not `127.0.0.1`
 - `pyneat.Model(...)` is still used, but as the model-pack contract source for
   the explicit `QuantTess -> MLA -> SimaBoxDecode` session, not as a black-box
@@ -83,17 +86,21 @@ Notes:
   detector through the model's tensor-input `QuantTess` contract
 - live metadata is emitted separately from video in OptiView JSON format, with
   one channel per stream
-- `--detection-threshold`, `--nms-iou-threshold`, and `--top-k` are optional;
-  if omitted, `SimaBoxDecode` keeps the model-pack defaults
+- `inference.detection_threshold`, `inference.nms_iou_threshold`, and
+  `inference.top_k` are optional; if omitted, `SimaBoxDecode` keeps the model-pack defaults
 - the example defaults to person class id `0`, and tracker behavior remains
-  configurable from the CLI
+  configurable from the config
 - C++ parity is tracked in a follow-up ticket; the C++ entrypoint currently exists
   only as a placeholder scaffold
 
 ## Source Files
 - Python entrypoint: `python/main.py`
-- Python tracker: `python/tracker.py`
-- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
+- Python utilities: `python/utils/`
+- Example config: `common/config.yaml`
+- Python tests: `python/tests/test_config.py`, `python/tests/test_tracker.py`,
+  `python/tests/test_pipeline.py`, `python/tests/test_image_utils.py`,
+  `python/tests/test_workers.py`, `python/tests/test_main.py`,
+  `python/tests/test_e2e.py`
 - C++ scaffold: `cpp/main.cpp`
 - C++ scaffold tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
 - Shared example data: `common/`
