@@ -19,6 +19,7 @@ VALID_CATEGORIES = {
     "semantic-segmentation",
     "instance-segmentation",
     "depth-estimation",
+    "face-detection",
     "throughput",
 }
 
