@@ -287,6 +287,13 @@ function DetailPage({ catalog }) {
   }, [decodedId, sections]);
 
   useEffect(() => {
+    window.scrollTo(0, 0);
+    if (docPanelRef.current) {
+      docPanelRef.current.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [decodedId]);
+
+  useEffect(() => {
     if (!sections.length) {
       return undefined;
     }
