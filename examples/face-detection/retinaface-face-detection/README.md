@@ -8,7 +8,7 @@
 | Tags | retinaface, face-detection |
 | Status | experimental |
 | Binary Name | retinaface-face-detection |
-| Model | retinaface_mobilenet25 |
+| Model | retinaface_mobilenet25 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz] |
 
 ## Concept
 Minimal RetinaFace face detection example. It runs the compiled RetinaFace model on an input image, decodes outputs, applies confidence filtering + NMS, and writes an annotated image.
@@ -17,6 +17,8 @@ Minimal RetinaFace face detection example. It runs the compiled RetinaFace model
 - Installed NEAT SDK + built apps artifacts.
 - Model package available on disk. By default this example uses:
   - `apps/assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz`
+- To fetch it directly into `assets/models/`, run:
+  - `./scripts/download_models.sh retinaface_mobilenet25`
 
 ## Run
 ### C++
@@ -40,4 +42,3 @@ python apps/examples/face-detection/retinaface-face-detection/python/main.py \
 ## Source Files
 - C++ source: `cpp/main.cpp`
 - Python source: `python/main.py`
-

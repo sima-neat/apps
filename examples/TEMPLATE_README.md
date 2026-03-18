@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | <experimental / stable> |
 | Binary Name | <cmake_target_name> |
-| Model | <default_model_name> |
+| Model | <default_model_name> [https://example.com/path/to/<default_model_name>_mpk.tar.gz] |
 
 ## Concept
 <1-2 paragraphs: what this example demonstrates and which NEAT capabilities it exercises.>
@@ -23,6 +23,7 @@ Download any variant into `assets/models/`:
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get <default_model_name> && cd ../..`
 
 ## Important Behavior
