@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -364,11 +365,12 @@ def draw_detections(image_bgr: np.ndarray, detections: list[dict[str, Any]]) -> 
     return out
 
 
-def run_retinaface_inference(
+def prepare_session_and_frame(
     model_path: Path,
     image_path: Path,
-) -> tuple[pyneat.Sample, np.ndarray, PreprocMeta]:
-    _log(f"Starting inference. model_path={model_path}, image_path={image_path}")
+) -> tuple[Any, np.ndarray, np.ndarray, PreprocMeta]:
+    """Prepare a reusable Session run object and preprocessed frame for repeated inference."""
+    _log(f"Preparing session and frame. model_path={model_path}, image_path={image_path}")
     if not image_path.is_file():
         raise FileNotFoundError(f"Input image does not exist: {image_path}")
 
@@ -379,10 +381,6 @@ def run_retinaface_inference(
 
     orig_h, orig_w = bgr.shape[:2]
 
-    # Custom preprocessing to match RetinaFace pipeline:
-    # 1) BGR mean subtraction [104, 117, 123]
-    # 2) Pad to maintain aspect ratio for 640x640
-    # 3) Resize to model input dimensions (640x640)
     _log("Applying BGR mean subtraction")
     img = bgr.astype(np.float32) - np.array([104.0, 117.0, 123.0], dtype=np.float32)
 
@@ -392,7 +390,6 @@ def run_retinaface_inference(
     _log("Resizing padded image to model input size (640x640)")
     img = cv2.resize(padded, (INFER_WIDTH, INFER_HEIGHT), interpolation=cv2.INTER_LINEAR)
 
-    # Keep as float32 tensor, matching Session caps (application/vnd.simaai.tensor, format=FP32)
     resized = np.ascontiguousarray(img, dtype=np.float32)
 
     _log("Configuring pyneat.ModelOptions for tensor input (FP32)")
@@ -419,6 +416,16 @@ def run_retinaface_inference(
     dummy = np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32)
     run = sess.build(dummy)
 
+    return run, resized, bgr, meta
+
+
+def run_retinaface_inference(
+    model_path: Path,
+    image_path: Path,
+) -> tuple[pyneat.Sample, np.ndarray, PreprocMeta]:
+    _log(f"Starting inference. model_path={model_path}, image_path={image_path}")
+    run, resized, bgr, meta = prepare_session_and_frame(model_path, image_path)
+
     _log("Pushing preprocessed frame into Session")
     if not run.push(resized):
         raise RuntimeError("Failed to push frame into Session pipeline")
@@ -428,7 +435,7 @@ def run_retinaface_inference(
     if sample is None:
         raise RuntimeError("Session.pull() returned None")
 
-    _log(f"Inference complete. Original image size: {orig_w}x{orig_h}")
+    _log(f"Inference complete. Original image size: {meta.orig_w}x{meta.orig_h}")
 
     try:
         run.close()
@@ -491,6 +498,17 @@ def main() -> int:
         action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Run profiling loop (no output image) over repeated inferences",
+    )
+    parser.add_argument(
+        "--num-runs",
+        type=int,
+        default=100,
+        help="Number of inferences to run when --profile is enabled",
+    )
     args = parser.parse_args()
     global VERBOSE
     VERBOSE = bool(args.verbose)
@@ -501,6 +519,103 @@ def main() -> int:
     if not model_path.is_file():
         print(f"Model file does not exist: {model_path}", file=sys.stderr)
         return 2
+
+    # Profiling mode: reuse a single session/run and frame, and profile session vs postprocessing.
+    if args.profile:
+        try:
+            run, resized, orig_bgr, meta = prepare_session_and_frame(model_path, Path(args.image))
+        except Exception as e:
+            print(f"Error during session preparation: {e}", file=sys.stderr)
+            return 3
+
+        session_times: list[float] = []
+        post_times: list[float] = []
+        total_runs = int(args.num_runs)
+        last_detections: list[dict[str, Any]] = []
+
+        for i in range(total_runs):
+            t0 = time.perf_counter()
+            if not run.push(resized):
+                print(f"Run {i}: failed to push frame into Session pipeline", file=sys.stderr)
+                break
+            sample = run.pull(timeout_ms=5000)
+            t1 = time.perf_counter()
+            if sample is None:
+                print(f"Run {i}: Session.pull() returned None", file=sys.stderr)
+                break
+
+            tensors = list(iter_tensors(sample))
+            np_outs = [tensor_to_numpy(t) for t in tensors]
+            bboxes, scores, landmarks = parse_retinaface_outputs(np_outs)
+            t2 = time.perf_counter()
+
+            detections = postprocess_retinaface(
+                bboxes,
+                scores,
+                landmarks,
+                meta,
+                confidence_threshold=float(args.conf),
+                nms_threshold=float(args.nms),
+                top_k=int(args.top_k),
+                keep_top_k=int(args.keep_top_k),
+                with_landmarks=not bool(args.no_landmarks),
+            )
+            t3 = time.perf_counter()
+
+            session_times.append(t1 - t0)
+            post_times.append(t3 - t2)
+            last_detections = detections
+
+        try:
+            run.close()
+        except Exception:
+            pass
+
+        if not session_times:
+            print("Profiling aborted: no successful runs", file=sys.stderr)
+            return 4
+
+        session_arr = np.array(session_times, dtype=np.float64)
+        post_arr = np.array(post_times, dtype=np.float64)
+        total_arr = session_arr + post_arr
+
+        runs = float(len(session_times))
+        session_fps = runs / session_arr.sum()
+        post_fps = runs / post_arr.sum()
+        overall_fps = runs / total_arr.sum()
+
+        print(f"Profiling over {len(session_times)} runs (image='{args.image}'):")
+        print(
+            f"  Session (push+pull): "
+            f"mean={session_arr.mean():.6f}s, "
+            f"min={session_arr.min():.6f}s, "
+            f"max={session_arr.max():.6f}s, "
+            f"FPS={session_fps:.2f}"
+        )
+        print(
+            f"  Postprocessing (parse+decode+NMS): "
+            f"mean={post_arr.mean():.6f}s, "
+            f"min={post_arr.min():.6f}s, "
+            f"max={post_arr.max():.6f}s, "
+            f"FPS={post_fps:.2f}"
+        )
+        print(
+            f"  Overall (session + post): "
+            f"mean={total_arr.mean():.6f}s, "
+            f"min={total_arr.min():.6f}s, "
+            f"max={total_arr.max():.6f}s, "
+            f"FPS={overall_fps:.2f}"
+        )
+
+        print(f"Last run detections: {len(last_detections)}")
+        for i, det in enumerate(last_detections[:20]):
+            box = det["box"]
+            print(
+                f"  [{i}] score={det['score']:.4f} "
+                f"box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]"
+            )
+        # Intentionally do NOT write an output image in profiling mode.
+        return 0
 
     try:
         _log("Invoking run_retinaface_inference()")

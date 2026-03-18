@@ -414,6 +414,8 @@ struct Args {
   int keep_top_k = 750;
   int max_draw = 50;
   bool landmarks = true;
+  bool profile = false;
+  int num_runs = 100;
 };
 
 static Args parse_args(int argc, char** argv) {
@@ -446,6 +448,10 @@ static Args parse_args(int argc, char** argv) {
       a.keep_top_k = std::stoi(need("--keep-top-k"));
     } else if (arg == "--max-draw") {
       a.max_draw = std::stoi(need("--max-draw"));
+    } else if (arg == "--profile") {
+      a.profile = true;
+    } else if (arg == "--num-runs") {
+      a.num_runs = std::stoi(need("--num-runs"));
     } else if (arg == "--no-landmarks") {
       a.landmarks = false;
     } else {
@@ -505,43 +511,118 @@ int main(int argc, char** argv) {
     auto run = session.build(dummy_t, simaai::neat::RunMode::Sync);
 
     simaai::neat::Tensor input_t = tensor_from_hwc_f32(resized);
-    if (!run.push(input_t)) {
-      throw std::runtime_error("run.push failed");
-    }
-
-    auto out_sample = run.pull(/*timeout_ms=*/5000);
-    if (!out_sample.has_value()) {
-      throw std::runtime_error("run.pull returned no sample");
-    }
-
-    const std::vector<simaai::neat::Tensor> out_tensors = tensors_from_sample(*out_sample);
-    std::cout << "Model produced " << out_tensors.size() << " tensor(s)\n";
-    for (size_t i = 0; i < out_tensors.size(); ++i) {
-      const auto& t = out_tensors[i];
-      std::cout << "  [" << i << "] dtype=" << static_cast<int>(t.dtype) << " shape=[";
-      for (size_t d = 0; d < t.shape.size(); ++d) {
-        std::cout << t.shape[d] << (d + 1 < t.shape.size() ? "," : "");
-      }
-      std::cout << "]\n";
-    }
-
     std::vector<Detection> dets;
-    decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k, args.landmarks);
 
-    std::cout << "Detections: " << dets.size() << "\n";
-    for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
-      const auto& d = dets[i];
-      std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
-                << d.y2 << "]\n";
-    }
+    if (args.profile) {
+      const int runs = std::max(1, args.num_runs);
+      std::vector<double> session_times;
+      std::vector<double> post_times;
+      session_times.reserve(runs);
+      post_times.reserve(runs);
 
-    if (!args.output.empty()) {
-      cv::Mat overlay = bgr_u8.clone();
-      draw_detections(overlay, dets, args.max_draw);
-      if (!cv::imwrite(args.output.string(), overlay)) {
-        throw std::runtime_error("failed to write: " + args.output.string());
+      for (int i = 0; i < runs; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!run.push(input_t)) {
+          throw std::runtime_error("run.push failed during profiling");
+        }
+        auto out_sample = run.pull(/*timeout_ms=*/5000);
+        const auto t1 = std::chrono::steady_clock::now();
+        if (!out_sample.has_value()) {
+          throw std::runtime_error("run.pull returned no sample during profiling");
+        }
+
+        const auto t2 = std::chrono::steady_clock::now();
+        const std::vector<simaai::neat::Tensor> out_tensors = tensors_from_sample(*out_sample);
+        dets.clear();
+        decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k, args.landmarks);
+        const auto t3 = std::chrono::steady_clock::now();
+
+        const std::chrono::duration<double> dt_session = t1 - t0;
+        const std::chrono::duration<double> dt_post = t3 - t2;
+        session_times.push_back(dt_session.count());
+        post_times.push_back(dt_post.count());
       }
-      std::cout << "Wrote annotated image: " << args.output << "\n";
+
+      const auto stats = [](const std::vector<double>& v) {
+        struct S {
+          double mean;
+          double min;
+          double max;
+          double sum;
+        };
+        S s{0.0, v.empty() ? 0.0 : v[0], v.empty() ? 0.0 : v[0], 0.0};
+        for (double x : v) {
+          s.sum += x;
+          s.min = std::min(s.min, x);
+          s.max = std::max(s.max, x);
+        }
+        if (!v.empty()) {
+          s.mean = s.sum / static_cast<double>(v.size());
+        }
+        return s;
+      };
+
+      const auto sess = stats(session_times);
+      const auto post = stats(post_times);
+
+      const double runs_d = static_cast<double>(session_times.size());
+      const double fps_session = runs_d / sess.sum;
+      const double fps_post = runs_d / post.sum;
+      const double total_sum = sess.sum + post.sum;
+      const double fps_overall = runs_d / total_sum;
+
+      std::cout << "Profiling over " << session_times.size() << " runs (image='" << args.image.string() << "'):\n";
+      std::cout << "  Session (push+pull): mean=" << sess.mean << "s, min=" << sess.min << "s, max=" << sess.max
+                << "s, FPS=" << fps_session << "\n";
+      std::cout << "  Postprocessing (decode+NMS): mean=" << post.mean << "s, min=" << post.min
+                << "s, max=" << post.max << "s, FPS=" << fps_post << "\n";
+      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d) << "s, min="
+                << (sess.min + post.min) << "s, max=" << (sess.max + post.max) << "s, FPS=" << fps_overall << "\n";
+
+      std::cout << "Last run detections: " << dets.size() << "\n";
+      for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
+        const auto& d = dets[i];
+        std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
+                  << d.y2 << "]\n";
+      }
+    } else {
+      if (!run.push(input_t)) {
+        throw std::runtime_error("run.push failed");
+      }
+
+      auto out_sample = run.pull(/*timeout_ms=*/5000);
+      if (!out_sample.has_value()) {
+        throw std::runtime_error("run.pull returned no sample");
+      }
+
+      const std::vector<simaai::neat::Tensor> out_tensors = tensors_from_sample(*out_sample);
+      std::cout << "Model produced " << out_tensors.size() << " tensor(s)\n";
+      for (size_t i = 0; i < out_tensors.size(); ++i) {
+        const auto& t = out_tensors[i];
+        std::cout << "  [" << i << "] dtype=" << static_cast<int>(t.dtype) << " shape=[";
+        for (size_t d = 0; d < t.shape.size(); ++d) {
+          std::cout << t.shape[d] << (d + 1 < t.shape.size() ? "," : "");
+        }
+        std::cout << "]\n";
+      }
+
+      decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k, args.landmarks);
+
+      std::cout << "Detections: " << dets.size() << "\n";
+      for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
+        const auto& d = dets[i];
+        std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
+                  << d.y2 << "]\n";
+      }
+
+      if (!args.output.empty()) {
+        cv::Mat overlay = bgr_u8.clone();
+        draw_detections(overlay, dets, args.max_draw);
+        if (!cv::imwrite(args.output.string(), overlay)) {
+          throw std::runtime_error("failed to write: " + args.output.string());
+        }
+        std::cout << "Wrote annotated image: " << args.output << "\n";
+      }
     }
 
     run.close();
