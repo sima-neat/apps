@@ -55,6 +55,10 @@ class StreamMetrics:
     processed: int = 0
     detections: int = 0
     saved: int = 0
+    frame_q_drops: int = 0
+    result_q_drops: int = 0
+    frame_q_peak: int = 0
+    result_q_peak: int = 0
     source_time_s: float = 0.0
     preproc_time_s: float = 0.0
     pull_wait_s: float = 0.0
@@ -70,6 +74,8 @@ class StreamMetrics:
     _interval_output_s: float = 0.0
     _interval_loop_s: float = 0.0
     _interval_frames: int = 0
+    _interval_frame_q_drops: int = 0
+    _interval_result_q_drops: int = 0
     _interval_wall_started_at_s: float | None = None
 
 
@@ -161,12 +167,28 @@ def close_stream_runtime(stream: StreamRuntime) -> None:
             pass
 
 
-def put_keep_latest(q: queue.Queue, item: Any) -> None:
+def record_queue_depth(stream: StreamRuntime, queue_name: str, q: queue.Queue) -> None:
+    size = q.qsize()
+    if queue_name == "frame":
+        stream.metrics.frame_q_peak = max(stream.metrics.frame_q_peak, size)
+    else:
+        stream.metrics.result_q_peak = max(stream.metrics.result_q_peak, size)
+
+
+def put_keep_latest(q: queue.Queue, item: Any, stream: StreamRuntime, queue_name: str) -> None:
+    record_queue_depth(stream, queue_name, q)
     while True:
         try:
             q.put_nowait(item)
+            record_queue_depth(stream, queue_name, q)
             return
         except queue.Full:
+            if queue_name == "frame":
+                stream.metrics.frame_q_drops += 1
+                stream.metrics._interval_frame_q_drops += 1
+            else:
+                stream.metrics.result_q_drops += 1
+                stream.metrics._interval_result_q_drops += 1
             try:
                 q.get_nowait()
             except queue.Empty:
@@ -202,6 +224,8 @@ def producer_thread(
             put_keep_latest(
                 frame_q,
                 FramePacket(frame=frame, frame_index=frame_index, source_time_s=elapsed),
+                stream,
+                "frame",
             )
             if startup_ready is not None and frame_index == 0:
                 startup_ready.set()
@@ -286,6 +310,8 @@ def infer_thread(
                     preproc_time_s=preproc_elapsed,
                     pull_wait_s=roundtrip_elapsed,
                 ),
+                stream,
+                "result",
             )
 
     except Exception as exc:
@@ -401,7 +427,9 @@ def print_interval_profile(stream: StreamRuntime) -> None:
         f"  [stream {stream.index}] frames {m.processed - n}-{m.processed - 1} | "
         f"src={src_ms:.1f}ms  preproc={pre_ms:.1f}ms  "
         f"pull_wait={pull_ms:.1f}ms  output={out_ms:.1f}ms  "
-        f"loop={loop_ms:.1f}ms  throughput_fps={throughput_fps:.1f}"
+        f"loop={loop_ms:.1f}ms  throughput_fps={throughput_fps:.1f}  "
+        f"frame_q(drops={m._interval_frame_q_drops},peak={m.frame_q_peak})  "
+        f"result_q(drops={m._interval_result_q_drops},peak={m.result_q_peak})"
     )
     m._interval_source_s = 0.0
     m._interval_preproc_s = 0.0
@@ -409,6 +437,8 @@ def print_interval_profile(stream: StreamRuntime) -> None:
     m._interval_output_s = 0.0
     m._interval_loop_s = 0.0
     m._interval_frames = 0
+    m._interval_frame_q_drops = 0
+    m._interval_result_q_drops = 0
     m._interval_wall_started_at_s = m.wall_last_processed_at_s
 
 
@@ -431,7 +461,9 @@ def print_profile_summary(streams: list[StreamRuntime]) -> None:
             f"src={src:.1f}ms  preproc={pre:.1f}ms  "
             f"pull_wait={pll:.1f}ms  output={out:.1f}ms "
             f"(track={trk:.1f} overlay={ovl:.1f} write={wrt:.1f})  "
-            f"loop={loop:.1f}ms  throughput_fps={throughput_fps:.1f}"
+            f"loop={loop:.1f}ms  throughput_fps={throughput_fps:.1f}  "
+            f"frame_q(total_drops={m.frame_q_drops},peak={m.frame_q_peak})  "
+            f"result_q(total_drops={m.result_q_drops},peak={m.result_q_peak})"
         )
 
 
