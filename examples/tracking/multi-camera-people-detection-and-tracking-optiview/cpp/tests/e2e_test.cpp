@@ -34,10 +34,8 @@ std::string find_model(const fs::path& models_dir) {
   }
   for (const auto& entry : fs::directory_iterator(models_dir)) {
     const std::string name = entry.path().filename().string();
-    if (name.find("yolo_v8") != std::string::npos &&
-        name.find("seg") == std::string::npos &&
-        name.size() >= 7 &&
-        name.substr(name.size() - 7) == ".tar.gz") {
+    if (name.find("yolo_v8") != std::string::npos && name.find("seg") == std::string::npos &&
+        name.size() >= 7 && name.substr(name.size() - 7) == ".tar.gz") {
       return entry.path().string();
     }
   }
@@ -96,7 +94,8 @@ int main(int argc, char** argv) {
   const fs::path config_path = fs::path(output_dir) / "config.yaml";
   {
     std::ofstream out(config_path);
-    out << "model: " << model_path << "\n"
+    out << "model: " << model_path
+        << "\n"
            "\n"
            "input:\n"
            "  tcp: true\n"
@@ -121,7 +120,9 @@ int main(int argc, char** argv) {
            "    host: 127.0.0.1\n"
            "    video_port_base: 9000\n"
            "    json_port_base: 9100\n"
-           "  debug_dir: " << output_dir << "\n"
+           "  debug_dir: "
+        << output_dir
+        << "\n"
            "  save_every: 2\n"
            "\n"
            "streams:\n";

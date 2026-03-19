@@ -29,9 +29,8 @@ std::string trim_copy(const std::string& value) {
 }
 
 std::string lower_copy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return value;
 }
 
@@ -55,9 +54,8 @@ std::string strip_inline_comment(const std::string& line) {
 
 std::string unquote(std::string value) {
   value = trim_copy(value);
-  if (value.size() >= 2 &&
-      ((value.front() == '"' && value.back() == '"') ||
-       (value.front() == '\'' && value.back() == '\''))) {
+  if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
+                            (value.front() == '\'' && value.back() == '\''))) {
     return value.substr(1, value.size() - 2);
   }
   return value;
@@ -244,31 +242,28 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   AppConfig cfg;
   cfg.model = require_non_empty_string(raw, "model", "model");
   cfg.rtsp_urls = raw.streams;
-  cfg.optiview_host =
-      require_non_empty_string(raw, "output.optiview.host", "output.optiview.host");
+  cfg.optiview_host = require_non_empty_string(raw, "output.optiview.host", "output.optiview.host");
   cfg.optiview_video_port_base =
       optional_int(raw, "output.optiview.video_port_base", 9000, "optiview.video_port_base");
   cfg.optiview_json_port_base =
       optional_int(raw, "output.optiview.json_port_base", 9100, "optiview.json_port_base");
   cfg.frames = optional_int(raw, "inference.frames", 0, "inference.frames");
   cfg.fps = optional_int(raw, "inference.fps", 0, "inference.fps");
-  cfg.bitrate_kbps =
-      optional_int(raw, "inference.bitrate_kbps", 2500, "inference.bitrate_kbps");
+  cfg.bitrate_kbps = optional_int(raw, "inference.bitrate_kbps", 2500, "inference.bitrate_kbps");
   cfg.save_every = optional_int(raw, "output.save_every", 0, "output.save_every");
   cfg.profile = optional_bool(raw, "inference.profile", false, "inference.profile");
   cfg.person_class_id =
       optional_int(raw, "inference.person_class_id", 0, "inference.person_class_id");
-  cfg.detection_threshold = optional_double_or_none(
-      raw, "inference.detection_threshold", "inference.detection_threshold");
-  cfg.nms_iou_threshold = optional_double_or_none(
-      raw, "inference.nms_iou_threshold", "inference.nms_iou_threshold");
+  cfg.detection_threshold = optional_double_or_none(raw, "inference.detection_threshold",
+                                                    "inference.detection_threshold");
+  cfg.nms_iou_threshold =
+      optional_double_or_none(raw, "inference.nms_iou_threshold", "inference.nms_iou_threshold");
   cfg.top_k = optional_positive_int_or_none(raw, "inference.top_k", "inference.top_k");
-  cfg.tracker_iou_threshold = static_cast<float>(optional_double_or_none(
-                                                     raw, "tracking.iou_threshold",
-                                                     "tracking.iou_threshold")
-                                                     .value_or(0.3));
-  cfg.tracker_max_missing = optional_int(
-      raw, "tracking.max_missing_frames", 15, "tracking.max_missing_frames");
+  cfg.tracker_iou_threshold = static_cast<float>(
+      optional_double_or_none(raw, "tracking.iou_threshold", "tracking.iou_threshold")
+          .value_or(0.3));
+  cfg.tracker_max_missing =
+      optional_int(raw, "tracking.max_missing_frames", 15, "tracking.max_missing_frames");
   cfg.latency_ms = optional_int(raw, "input.latency_ms", 200, "input.latency_ms");
   cfg.tcp = optional_bool(raw, "input.tcp", false, "input.tcp");
 

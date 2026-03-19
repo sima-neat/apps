@@ -37,10 +37,9 @@ struct SessionRun {
   simaai::neat::Run run;
 };
 
-simaai::neat::Run build_tensor_input_run(
-    simaai::neat::Session& session, const cv::Mat& seed,
-    simaai::neat::RunMode mode = simaai::neat::RunMode::Async,
-    const simaai::neat::RunOptions& options = {});
+simaai::neat::Run build_tensor_input_run(simaai::neat::Session& session, const cv::Mat& seed,
+                                         simaai::neat::RunMode mode = simaai::neat::RunMode::Async,
+                                         const simaai::neat::RunOptions& options = {});
 simaai::neat::Sample run_tensor_input_once(simaai::neat::Run& run, const cv::Mat& input,
                                            int timeout_ms);
 int optiview_video_port_for_stream(int port_base, int stream_index);
@@ -52,8 +51,7 @@ QuantTessCpuPreproc read_preproc_contract(const simaai::neat::Model& model);
 SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe);
 SessionRun build_detection_run(const AppConfig& cfg, const simaai::neat::Model& model,
                                const RtspProbe& probe, const QuantTessCpuPreproc& quant_preproc);
-SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe,
-                                    int stream_index);
+SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index);
 sima_examples::OptiViewSender build_optiview_json_output(const AppConfig& cfg, int stream_index);
 
 } // namespace multi_camera_people_tracking

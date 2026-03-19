@@ -375,15 +375,15 @@ void print_interval_profile(const StreamRuntime& stream) {
   const double pull_ms = metrics.interval_pull_s * 1000.0 / n;
   const double out_ms = metrics.interval_output_s * 1000.0 / n;
   const double loop_ms = metrics.interval_loop_s * 1000.0 / n;
-  const double throughput_fps = wall_clock_fps(
-      n, metrics.interval_wall_started_at_s, metrics.wall_last_processed_at_s);
+  const double throughput_fps =
+      wall_clock_fps(n, metrics.interval_wall_started_at_s, metrics.wall_last_processed_at_s);
 
-  std::cout << "  [stream " << stream.index << "] frames "
-            << (metrics.processed - n) << "-" << (metrics.processed - 1) << " | src=" << src_ms
-            << "ms  preproc=" << pre_ms << "ms  pull_wait=" << pull_ms
-            << "ms  output=" << out_ms << "ms  loop=" << loop_ms
-            << "ms  throughput_fps=" << throughput_fps << "  frame_q(drops="
-            << metrics.interval_frame_q_drops << ",peak=" << metrics.frame_q_peak
+  std::cout << "  [stream " << stream.index << "] frames " << (metrics.processed - n) << "-"
+            << (metrics.processed - 1) << " | src=" << src_ms << "ms  preproc=" << pre_ms
+            << "ms  pull_wait=" << pull_ms << "ms  output=" << out_ms << "ms  loop=" << loop_ms
+            << "ms  throughput_fps=" << throughput_fps
+            << "  frame_q(drops=" << metrics.interval_frame_q_drops
+            << ",peak=" << metrics.frame_q_peak
             << ")  result_q(drops=" << metrics.interval_result_q_drops
             << ",peak=" << metrics.result_q_peak << ")\n";
 }
@@ -401,25 +401,26 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
     const double write = metrics.write_time_s * 1000.0 / n;
     const double out = track + overlay + write;
     const double loop = metrics.total_loop_time_s * 1000.0 / n;
-    const double throughput_fps =
-        wall_clock_fps(metrics.processed, metrics.wall_started_at_s, metrics.wall_last_processed_at_s);
+    const double throughput_fps = wall_clock_fps(metrics.processed, metrics.wall_started_at_s,
+                                                 metrics.wall_last_processed_at_s);
 
     std::cout << "  [stream " << stream.index << "] " << metrics.processed
               << " frames | src=" << src << "ms  preproc=" << pre << "ms  pull_wait=" << pull
               << "ms  output=" << out << "ms (track=" << track << " overlay=" << overlay
-              << " write=" << write << ")  loop=" << loop << "ms  throughput_fps="
-              << throughput_fps << "  frame_q(total_drops=" << metrics.frame_q_drops
-              << ",peak=" << metrics.frame_q_peak << ")  result_q(total_drops="
-              << metrics.result_q_drops << ",peak=" << metrics.result_q_peak << ")\n";
+              << " write=" << write << ")  loop=" << loop << "ms  throughput_fps=" << throughput_fps
+              << "  frame_q(total_drops=" << metrics.frame_q_drops
+              << ",peak=" << metrics.frame_q_peak
+              << ")  result_q(total_drops=" << metrics.result_q_drops
+              << ",peak=" << metrics.result_q_peak << ")\n";
   }
 }
 
 void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
                     KeepLatestQueue<ResultPacket>& result_queue, std::atomic<bool>& stop_event) {
   const std::optional<fs::path> output_dir =
-      cfg.output_dir.has_value() ? std::optional<fs::path>(fs::path(*cfg.output_dir)) : std::nullopt;
-  const int profile_every =
-      cfg.save_every > 0 ? cfg.save_every : kDefaultProfileIntervalFrames;
+      cfg.output_dir.has_value() ? std::optional<fs::path>(fs::path(*cfg.output_dir))
+                                 : std::nullopt;
+  const int profile_every = cfg.save_every > 0 ? cfg.save_every : kDefaultProfileIntervalFrames;
 
   try {
     while (!stop_event.load()) {
@@ -546,9 +547,8 @@ int run_app(const AppConfig& cfg) {
 
   for (const auto& stream : streams) {
     std::cout << "[stream " << stream.index << "] " << stream.probe.width << "x"
-              << stream.probe.height << " @" << effective_writer_fps(cfg, stream.probe)
-              << "fps " << stream.url << " -> optiview://" << cfg.optiview_host
-              << " video="
+              << stream.probe.height << " @" << effective_writer_fps(cfg, stream.probe) << "fps "
+              << stream.url << " -> optiview://" << cfg.optiview_host << " video="
               << optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index)
               << " json="
               << optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index) << "\n";
@@ -600,8 +600,7 @@ int run_app(const AppConfig& cfg) {
       break;
     }
     if (index + 1 < producer_jobs.size()) {
-      std::this_thread::sleep_for(
-          std::chrono::duration<double>(kSourceStartupStaggerS));
+      std::this_thread::sleep_for(std::chrono::duration<double>(kSourceStartupStaggerS));
     }
   }
 

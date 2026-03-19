@@ -16,16 +16,15 @@ std::filesystem::path sample_output_path(const std::filesystem::path& output_dir
          ("frame_" + cv::format("%06d", frame_index) + ".jpg");
 }
 
-QuantTessCpuPreprocState build_cpu_quanttess_preproc_state(
-    const QuantTessCpuPreproc& contract, int src_width, int src_height) {
+QuantTessCpuPreprocState build_cpu_quanttess_preproc_state(const QuantTessCpuPreproc& contract,
+                                                           int src_width, int src_height) {
   QuantTessCpuPreprocState state;
   state.src_width = src_width;
   state.src_height = src_height;
 
   if (contract.aspect_ratio) {
-    const double scale =
-        std::min(static_cast<double>(contract.width) / src_width,
-                 static_cast<double>(contract.height) / src_height);
+    const double scale = std::min(static_cast<double>(contract.width) / src_width,
+                                  static_cast<double>(contract.height) / src_height);
     state.scaled_w = std::max(1, static_cast<int>(std::lround(src_width * scale)));
     state.scaled_h = std::max(1, static_cast<int>(std::lround(src_height * scale)));
   } else {
@@ -77,8 +76,7 @@ cv::Mat draw_tracked_people(cv::Mat frame, const std::vector<TrackedDetection>& 
     cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
 
     int baseline = 0;
-    const cv::Size text_size =
-        cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+    const cv::Size text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
     cv::rectangle(frame, cv::Point(x1, std::max(0, y1 - text_size.height - 4)),
                   cv::Point(x1 + text_size.width, y1), color, cv::FILLED);
     cv::putText(frame, text, cv::Point(x1, std::max(0, y1 - 2)), cv::FONT_HERSHEY_SIMPLEX, 0.5,

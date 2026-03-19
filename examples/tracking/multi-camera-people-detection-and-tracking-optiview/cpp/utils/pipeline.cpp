@@ -76,10 +76,8 @@ QuantTessCpuPreproc read_preproc_contract(const simaai::neat::Model& model) {
   const simaai::neat::PreprocOptions preproc(model);
   const nlohmann::json config = preproc.config_json.value_or(nlohmann::json::object());
 
-  const int width =
-      config.value("output_width", config.value("input_width", 640));
-  const int height =
-      config.value("output_height", config.value("input_height", 640));
+  const int width = config.value("output_width", config.value("input_width", 640));
+  const int height = config.value("output_height", config.value("input_height", 640));
   return QuantTessCpuPreproc{
       width,
       height,
@@ -157,9 +155,9 @@ SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe
   SessionRun runtime;
   runtime.session.add(simaai::neat::nodes::Input(input_options));
   runtime.session.add(simaai::neat::nodes::VideoConvert());
-  runtime.session.add(simaai::neat::nodes::H264EncodeSima(
-      probe.width, probe.height, effective_writer_fps(cfg, probe), cfg.bitrate_kbps, "baseline",
-      "4.1"));
+  runtime.session.add(simaai::neat::nodes::H264EncodeSima(probe.width, probe.height,
+                                                          effective_writer_fps(cfg, probe),
+                                                          cfg.bitrate_kbps, "baseline", "4.1"));
 
   simaai::neat::nodes::groups::UdpH264OutputGroupOptions udp_options;
   udp_options.payload_type = 96;

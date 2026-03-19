@@ -24,8 +24,8 @@ struct QuantTessCpuPreprocState {
 
 std::filesystem::path sample_output_path(const std::filesystem::path& output_dir, int stream_index,
                                          int frame_index);
-QuantTessCpuPreprocState build_cpu_quanttess_preproc_state(
-    const QuantTessCpuPreproc& contract, int src_width, int src_height);
+QuantTessCpuPreprocState build_cpu_quanttess_preproc_state(const QuantTessCpuPreproc& contract,
+                                                           int src_width, int src_height);
 cv::Mat cpu_quanttess_input(const cv::Mat& frame_rgb, QuantTessCpuPreprocState& state);
 cv::Scalar class_color(int track_id);
 cv::Mat draw_tracked_people(cv::Mat frame, const std::vector<TrackedDetection>& tracked);

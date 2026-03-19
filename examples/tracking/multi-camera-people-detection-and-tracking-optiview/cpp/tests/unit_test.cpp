@@ -18,8 +18,8 @@
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::ProcessResult;
 using sima_examples::testing::create_temp_dir;
+using sima_examples::testing::ProcessResult;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
@@ -51,8 +51,7 @@ bool test_help_runs(const std::string& binary) {
 }
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
-  const ProcessResult result =
-      spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 10000);
+  const ProcessResult result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 10000);
   return expect_true(result.exit_code != 0, "missing config exits nonzero") &&
          expect_contains(result.stderr_text, "config", "missing config error mentions config");
 }
@@ -99,22 +98,18 @@ bool test_load_app_config_parses_dynamic_stream_list() {
     const AppConfig cfg = load_app_config(config_path);
     ok &= expect_true(cfg.model == "assets/models/yolo_v8m_mpk.tar.gz",
                       "config parser keeps model path");
-    ok &= expect_true(cfg.optiview_host == "192.168.0.107",
-                      "config parser keeps OptiView host");
-    ok &= expect_true(cfg.optiview_video_port_base == 9000,
-                      "config parser keeps video port base");
-    ok &= expect_true(cfg.optiview_json_port_base == 9100,
-                      "config parser keeps json port base");
+    ok &= expect_true(cfg.optiview_host == "192.168.0.107", "config parser keeps OptiView host");
+    ok &= expect_true(cfg.optiview_video_port_base == 9000, "config parser keeps video port base");
+    ok &= expect_true(cfg.optiview_json_port_base == 9100, "config parser keeps json port base");
     ok &= expect_true(cfg.tcp, "config parser keeps tcp=true");
     ok &= expect_true(cfg.save_every == 0, "config parser keeps save_every");
-    ok &= expect_true(
-        cfg.rtsp_urls ==
-            std::vector<std::string>{
-                "rtsp://192.168.0.235:8554/src1",
-                "rtsp://192.168.0.235:8554/src2",
-                "rtsp://192.168.0.235:8554/src3",
-            },
-        "config parser keeps all RTSP URLs");
+    ok &= expect_true(cfg.rtsp_urls ==
+                          std::vector<std::string>{
+                              "rtsp://192.168.0.235:8554/src1",
+                              "rtsp://192.168.0.235:8554/src2",
+                              "rtsp://192.168.0.235:8554/src3",
+                          },
+                      "config parser keeps all RTSP URLs");
   } catch (const std::exception& ex) {
     ok &= expect_true(false, std::string("config parser should load valid config: ") + ex.what());
   }
@@ -162,7 +157,8 @@ bool test_common_config_yaml_uses_supported_shape() {
     const AppConfig cfg = load_app_config(config_path);
     bool ok = true;
     ok &= expect_true(!cfg.model.empty(), "common config contains model");
-    ok &= expect_true(cfg.optiview_video_port_base > 0, "common config video port base is positive");
+    ok &=
+        expect_true(cfg.optiview_video_port_base > 0, "common config video port base is positive");
     ok &= expect_true(cfg.optiview_json_port_base > 0, "common config json port base is positive");
     ok &= expect_true(cfg.save_every >= 0, "common config save_every is nonnegative");
     ok &= expect_true(!cfg.rtsp_urls.empty(), "common config has streams");
@@ -284,10 +280,10 @@ int main(int argc, char** argv) {
   failures += !multi_camera_people_tracking::test_common_config_yaml_uses_supported_shape();
   failures += !multi_camera_people_tracking::test_tracker_reuses_track_id_for_nearby_detection();
   failures += !multi_camera_people_tracking::test_tracker_drops_track_after_missing_budget();
-  failures +=
-      !multi_camera_people_tracking::test_make_optiview_tracking_detection_uses_track_id_label_text();
-  failures +=
-      !multi_camera_people_tracking::test_tensor_mode_session_accepts_fp32_cv_mat_through_session_api();
+  failures += !multi_camera_people_tracking::
+                  test_make_optiview_tracking_detection_uses_track_id_label_text();
+  failures += !multi_camera_people_tracking::
+                  test_tensor_mode_session_accepts_fp32_cv_mat_through_session_api();
   failures += !multi_camera_people_tracking::test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg();
 
   return failures == 0 ? 0 : 1;
