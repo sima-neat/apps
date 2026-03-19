@@ -5,8 +5,8 @@ streams:  # RTSP inputs, one entry per camera.
   - rtsp://192.168.0.39:8554/src2
   - rtsp://192.168.0.39:8554/src3
   - rtsp://192.168.0.39:8554/src4
-  - rtsp://192.168.0.39:8554/src7
-  - rtsp://192.168.0.39:8554/src8
+  # - rtsp://192.168.0.39:8554/src7
+  # - rtsp://192.168.0.39:8554/src8
   # - rtsp://192.168.0.39:8554/src1
   # - rtsp://192.168.0.39:8554/src2
   # - rtsp://192.168.0.39:8554/src3
@@ -17,7 +17,7 @@ input:  # RTSP input transport settings.
 
 inference:  # Detector and runtime settings.
   frames: 0                   # Frame limit per stream. 0 means unlimited.
-  fps: 10                     # Output video FPS. 0 means use source FPS.
+  fps: 0                      # Output video FPS. 0 means use source FPS.
   bitrate_kbps: 1000          # H.264 bitrate for OptiView video output.
   profile: true               # Print per-stream profiling information.
   person_class_id: 0          # Class id to keep from detector output.
