@@ -153,9 +153,11 @@ PY
   done < <(
     find "${ROOT_DIR}/examples" -type f \
       \( -path '*/python/main.py' \
+         -o -path '*/python/utils/*.py' \
          -o -name 'README.md' \
          -o -path '*/python/tests/test_*.py' \
          -o -path '*/python/requirements.txt' \
+         -o -path '*/common/*' \
          -o -name 'coco_label.txt' \
          -o -name '*.json' \
       \) 2>/dev/null | sort
