@@ -12,12 +12,12 @@
 | Model | yolo_v8m |
 
 ## Concept
-Python-first multi-camera people detection and tracking example with RTSP inputs,
+Multi-camera people detection and tracking example with RTSP inputs,
 mixed-resolution support, per-stream worker threads, OptiView live video plus
 JSON metadata output, and optional sampled overlay saves.
 
-The Python entrypoint keeps the detector graph explicit rather than hiding it
-behind a single `model.run(...)` call:
+Both the Python and C++ entrypoints keep the detector graph explicit rather than
+hiding it behind a single `model.run(...)` call:
 
 `RTSP decode -> CPU letterbox/normalize -> QuantTess -> MLA -> SimaBoxDecode -> tracker -> clean H264/OptiView + tracked JSON`
 
@@ -48,7 +48,7 @@ cd ../..
 - An OptiView viewer instance reachable from the board/host running this example.
 
 ## Important Behavior
-- The Python implementation is the functional path today; the C++ binary is still a placeholder scaffold.
+- The Python and C++ implementations follow the same config-driven structure: config loading, pipeline builders, tracker helpers, image helpers, sample helpers, and worker orchestration.
 - The `streams:` list in `common/config.yaml` controls the number of cameras dynamically.
 - Stream `i` publishes clean video to `output.optiview.video_port_base + i` and tracked JSON to `output.optiview.json_port_base + i`.
 - `inference.frames: 0` runs indefinitely.
@@ -60,12 +60,13 @@ cd ../..
 ### C++
 - Invocation:
   ```bash
-  ./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+  ./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking \
+    --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
   ```
 - Required arguments:
   None.
 - Optional arguments:
-  None. The current C++ entrypoint is a placeholder scaffold.
+  `--config <path>` to load a different YAML configuration file.
 
 ### Python
 - Invocation:
@@ -105,10 +106,11 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking \
+  --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
 ```
 
-The current C++ binary prints a placeholder message while parity work is tracked separately.
+The C++ binary follows the same config contract and worker topology as the Python example.
 
 ### Python
 Install the small Python-side dependencies:
@@ -161,6 +163,12 @@ Notes:
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
+- C++ config loader: `cpp/config.h`, `cpp/config.cpp`
+- C++ tracker helpers: `cpp/tracker.h`, `cpp/tracker.cpp`
+- C++ sample helpers: `cpp/sample_utils.h`, `cpp/sample_utils.cpp`
+- C++ pipeline builders: `cpp/pipeline.h`, `cpp/pipeline.cpp`
+- C++ image helpers: `cpp/image_utils.h`, `cpp/image_utils.cpp`
+- C++ worker orchestration: `cpp/workers.h`, `cpp/workers.cpp`
 - C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
 - Python source: `python/main.py`
 - Example config: `common/config.yaml`
