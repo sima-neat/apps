@@ -14,6 +14,7 @@ BUILD_CPP=ON
 BUILD_PYTHON=OFF
 INSTALL_CORE=0
 ONLY_INSTALL=0
+PORTAL_ONLY=0
 CLI_BIN="${SIMA_CLI_BIN:-sima-cli}"
 NEAT_CORE_OVERRIDE=""
 
@@ -29,6 +30,7 @@ Options:
   --no-cpp                  Skip C++ example build (layout/metadata only)
   --python                  Enable Python tooling (placeholder)
   --all                     Install NEAT core SDK, build apps, build portal, then package
+  --portal-only             Build portal only and exit
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
   --neat-core-version <b:v> Override neat-core.json with branch:version (example: main:latest)
   -h, --help                Show help
@@ -204,6 +206,7 @@ while [[ $# -gt 0 ]]; do
     --no-cpp) BUILD_CPP=OFF; shift ;;
     --python) BUILD_PYTHON=ON; shift ;;
     --all) INSTALL_CORE=1; shift ;;
+    --portal-only) PORTAL_ONLY=1; shift ;;
     --only-install-neat-core) INSTALL_CORE=1; ONLY_INSTALL=1; shift ;;
     --neat-core-version) NEAT_CORE_OVERRIDE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -448,6 +451,14 @@ if [[ "${INSTALL_CORE}" -eq 1 ]]; then
 fi
 
 if [[ "${ONLY_INSTALL}" -eq 1 ]]; then
+  exit 0
+fi
+
+if [[ "${PORTAL_ONLY}" -eq 1 ]]; then
+  echo ""
+  echo "  NEAT Apps Portal Build"
+  echo "  ======================"
+  build_portal
   exit 0
 fi
 

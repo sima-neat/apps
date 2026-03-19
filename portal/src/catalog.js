@@ -1,4 +1,4 @@
-const GITHUB_REPO_ROOT = "https://github.com/sima-neat/apps/tree/feat/decouple-neat-apps";
+const GITHUB_REPO_ROOT = "https://github.com/sima-neat/apps/tree/main";
 
 export async function loadCatalog() {
   const response = await fetch("./catalog.json");
