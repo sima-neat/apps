@@ -39,7 +39,7 @@ from .pipeline import (
 from .sample_utils import (
     extract_bbox_payload,
     filter_person_detections,
-    make_optiview_tracking_json,
+    make_optiview_tracking_detection,
     parse_bbox_payload,
     tensor_bgr_from_sample,
 )
@@ -204,6 +204,8 @@ def producer_thread(
 ) -> None:
     frame_index = 0
     empty_pulls = 0
+    emit_period_s = 1.0 / cfg.fps if cfg.fps > 0 else 0.0
+    next_allowed_emit_s: float | None = None
     try:
         while not stop_event.is_set():
             if cfg.frames > 0 and frame_index >= cfg.frames:
@@ -220,6 +222,11 @@ def producer_thread(
                     raise RuntimeError(f"stream {stream.index} timed out waiting for RTSP frames")
                 continue
             empty_pulls = 0
+            if emit_period_s > 0.0:
+                now = time.perf_counter()
+                if next_allowed_emit_s is not None and now < next_allowed_emit_s:
+                    continue
+                next_allowed_emit_s = now + emit_period_s
             frame = tensor_bgr_from_sample(stream.runtime, sample)
             put_keep_latest(
                 frame_q,
@@ -366,8 +373,13 @@ def publish_thread(
                 raise RuntimeError(f"stream {stream.index} OptiView video push failed")
 
             frame_id = str(stream.metrics.processed)
-            payload_json = make_optiview_tracking_json(int(time.time() * 1000), frame_id, tracked)
-            if not stream.json_sender.send_json(payload_json):
+            objects, labels = make_optiview_tracking_detection(pyneat, tracked)
+            if not stream.json_sender.send_detection(
+                int(time.time() * 1000),
+                frame_id,
+                objects,
+                labels,
+            ):
                 raise RuntimeError(f"stream {stream.index} OptiView JSON send failed")
 
             if output_dir is not None and cfg.save_every > 0 and pkt.frame_index % cfg.save_every == 0:

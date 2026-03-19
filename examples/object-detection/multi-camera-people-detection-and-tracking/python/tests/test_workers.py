@@ -56,10 +56,10 @@ class TestWorkers:
 
         class FakeJsonSender:
             def __init__(self):
-                self.payloads = []
+                self.calls = []
 
-            def send_json(self, payload):
-                self.payloads.append(payload)
+            def send_detection(self, timestamp_ms, frame_id, objects, labels):
+                self.calls.append((timestamp_ms, frame_id, objects, labels))
                 return True
 
         cfg = AppConfig(
@@ -122,11 +122,91 @@ class TestWorkers:
 
         monkeypatch.setattr("utils.workers.parse_bbox_payload", lambda payload, w, h: [{"class_id": 0, "x1": 1.0, "y1": 2.0, "x2": 11.0, "y2": 22.0, "score": 0.9}])
         monkeypatch.setattr("utils.workers.filter_person_detections", lambda boxes, person_class_id: boxes)
-        monkeypatch.setattr("utils.workers.make_optiview_tracking_json", lambda timestamp_ms, frame_id, tracked: "json-payload")
+        sentinel_objects = ["objects"]
+        sentinel_labels = ["Track ID: 5"]
+        monkeypatch.setattr(
+            "utils.workers.make_optiview_tracking_detection",
+            lambda pyneat, tracked: (sentinel_objects, sentinel_labels),
+        )
         monkeypatch.setattr("utils.workers.save_overlay_frame", lambda *args, **kwargs: False)
         monkeypatch.setattr("utils.workers.draw_tracked_people", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("overlay should not be rendered")))
 
         publish_thread(stream, cfg, result_q, stop_event)
 
         assert video_run.calls == [(frame, True, "rgb")]
-        assert sender.payloads == ["json-payload"]
+        assert len(sender.calls) == 1
+        _, frame_id, objects, labels = sender.calls[0]
+        assert frame_id == "0"
+        assert objects is sentinel_objects
+        assert labels is sentinel_labels
+
+    def test_producer_thread_throttles_to_cfg_fps(self, monkeypatch):
+        from utils.config import AppConfig
+        from utils.workers import StreamMetrics, producer_thread
+
+        class FakeSourceRun:
+            def __init__(self):
+                self.calls = 0
+
+            def pull(self, timeout_ms=None):
+                self.calls += 1
+                return f"sample-{self.calls}"
+
+        perf_values = iter([
+            0.0,
+            0.001,
+            0.001,
+            0.002,
+            0.003,
+            0.003,
+            0.102,
+            0.103,
+            0.103,
+        ])
+        monkeypatch.setattr("utils.workers.time.perf_counter", lambda: next(perf_values))
+        monkeypatch.setattr(
+            "utils.workers.tensor_bgr_from_sample",
+            lambda runtime, sample: {"frame": sample},
+        )
+
+        cfg = AppConfig(
+            model="model.tar.gz",
+            rtsp_urls=["rtsp://camera-0"],
+            output_dir=None,
+            frames=2,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
+            fps=10,
+            bitrate_kbps=2500,
+            save_every=0,
+            profile=False,
+            person_class_id=0,
+            detection_threshold=None,
+            nms_iou_threshold=None,
+            top_k=None,
+            tracker_iou_threshold=0.3,
+            tracker_max_missing=15,
+            latency_ms=200,
+            tcp=False,
+        )
+        stream = SimpleNamespace(
+            index=0,
+            source_run=FakeSourceRun(),
+            runtime=SimpleNamespace(),
+            metrics=StreamMetrics(),
+            error=None,
+        )
+        frame_q: queue.Queue = queue.Queue(maxsize=4)
+        stop_event = threading.Event()
+
+        producer_thread(stream, cfg, frame_q, stop_event)
+
+        assert stream.source_run.calls == 3
+        assert frame_q.qsize() == 2
+        first = frame_q.get_nowait()
+        second = frame_q.get_nowait()
+        assert first.frame == {"frame": "sample-1"}
+        assert second.frame == {"frame": "sample-3"}
+        assert first.frame_index == 0
+        assert second.frame_index == 1

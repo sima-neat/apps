@@ -17,7 +17,7 @@ input:  # RTSP input transport settings.
 
 inference:  # Detector and runtime settings.
   frames: 0                   # Frame limit per stream. 0 means unlimited.
-  fps: 0                      # Output video FPS. 0 means use source FPS.
+  fps: 0                      # Max per-stream processing and output FPS. 0 means use source FPS.
   bitrate_kbps: 1000          # H.264 bitrate for OptiView video output.
   profile: true               # Print per-stream profiling information.
   person_class_id: 0          # Class id to keep from detector output.

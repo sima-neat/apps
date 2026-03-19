@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import struct
 from typing import Any
 
@@ -13,35 +12,23 @@ def filter_person_detections(boxes: list[dict], person_class_id: int = 0) -> lis
     return [box for box in boxes if int(box.get("class_id", -1)) == int(person_class_id)]
 
 
-def make_optiview_tracking_json(
-    timestamp_ms: int,
-    frame_id: str,
+def make_optiview_tracking_detection(
+    pyneat: Any,
     tracked: list[TrackedDetection],
-) -> str:
-    objects = []
-    for det in tracked:
-        objects.append(
-            {
-                "id": f"track_{det.track_id}",
-                "track_id": int(det.track_id),
-                "label": f"Track ID: {det.track_id}",
-                "confidence": float(det.score),
-                "bbox": [
-                    float(det.x1),
-                    float(det.y1),
-                    float(max(0.0, det.x2 - det.x1)),
-                    float(max(0.0, det.y2 - det.y1)),
-                ],
-            }
-        )
-    return json.dumps(
-        {
-            "type": "object-detection",
-            "timestamp": int(timestamp_ms),
-            "frame_id": str(frame_id),
-            "data": {"objects": objects},
-        }
-    )
+) -> tuple[list[Any], list[str]]:
+    objects: list[Any] = []
+    labels: list[str] = []
+    for index, det in enumerate(tracked):
+        obj = pyneat.OptiViewObject()
+        obj.x = int(det.x1)
+        obj.y = int(det.y1)
+        obj.w = int(max(0.0, det.x2 - det.x1))
+        obj.h = int(max(0.0, det.y2 - det.y1))
+        obj.score = float(det.score)
+        obj.class_id = index
+        objects.append(obj)
+        labels.append(f"Track ID: {det.track_id}")
+    return objects, labels
 
 
 def iter_tensors(pyneat: Any, sample: Any):
