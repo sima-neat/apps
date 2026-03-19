@@ -20,6 +20,12 @@ IMAGE_CANDIDATES = (
     "assets/hero.jpeg",
     "assets/hero.webp",
 )
+PORTAL_IMAGE_CANDIDATES = (
+    "image.png",
+    "image.jpg",
+    "image.jpeg",
+    "image.webp",
+)
 
 
 def readme_title(content: str) -> str:
@@ -93,6 +99,15 @@ def normalize_tags(raw: str) -> list[str]:
 
 
 def find_image_path(app_dir: Path) -> str | None:
+    category = app_dir.parent.name
+    app_name = app_dir.name
+
+    portal_asset_dir = REPO_ROOT / "assets" / "portal" / category / app_name
+    for rel in PORTAL_IMAGE_CANDIDATES:
+        path = portal_asset_dir / rel
+        if path.exists():
+            return str(path.relative_to(REPO_ROOT))
+
     for rel in IMAGE_CANDIDATES:
         path = app_dir / rel
         if path.exists():
