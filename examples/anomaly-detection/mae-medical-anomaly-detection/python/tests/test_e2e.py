@@ -31,7 +31,7 @@ def test_mae_anomaly_detection_end_to_end(
 ) -> None:
     """Run the full MAE + classifier pipeline on bundled .npy slices if available."""
     mae_model = _find_model(
-        models_dir, "mae_brats_deterministic_grid_masking_simplified_3channels_mpk"
+        models_dir, "mae_brats_deterministic_grid_masking_simplified_mpk"
     )
     cls_model = _find_model(models_dir, "mae_classifier_brats_split_3channels_mpk")
 

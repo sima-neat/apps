@@ -3,7 +3,7 @@
 
 This example:
 - loads 2D medical slices from .npy files,
-- normalizes and resizes them, duplicating to 3 channels (H, W, 3),
+- normalizes and resizes them as a single-channel tensor (H, W, 1),
 - runs a MAE reconstruction model with a deterministic grid mask,
 - pastes reconstructed patches back into the original image,
 - computes the absolute difference image, and
@@ -66,16 +66,14 @@ def tensor_to_numpy_dense(tensor: neat.Tensor) -> np.ndarray:
     return arr
 
 
-def load_npy_normalized(path: Path, dataset: str = "brats") -> tuple[np.ndarray, np.ndarray]:
-    """Load a single-channel .npy, resize and normalize to match ONNX preprocessing.
-    
-    Then duplicate to 3 channels for NEAT models.
+def load_npy_normalized(path: Path, dataset: str = "brats") -> np.ndarray:
+    """Load a (potentially) multi-channel .npy slice, resize and normalize.
 
     Matches the preprocessing in infer_single_onnx.py:
     - Takes first channel if multi-channel
     - Resizes to (224, 224) for brats
     - Normalizes: (image - mean) / std
-    - Returns both (H, W, 1) single-channel and (H, W, 3) duplicated versions
+    - Returns a single-channel tensor shaped (H, W, 1)
     """
     npy_image = np.load(path).astype(np.float32)  # (H, W, C) or (H, W)
     # Debug: inspect original NPY slice statistics before any processing.
@@ -116,10 +114,7 @@ def load_npy_normalized(path: Path, dataset: str = "brats") -> tuple[np.ndarray,
     
     npy_normalized = (npy_resized - mean) / std
 
-    # Return both single-channel (for SSIM/comparison) and 3-channel (for NEAT models)
-    npy_3ch = np.stack([npy_normalized[:, :, 0], npy_normalized[:, :, 0], npy_normalized[:, :, 0]], axis=-1)
-    
-    return npy_normalized, npy_3ch  # (H, W, 1), (H, W, 3) float32
+    return npy_normalized  # (H, W, 1) float32
 
 
 def stable_softmax(logits: np.ndarray) -> np.ndarray:
@@ -153,14 +148,14 @@ def run_pipeline(
     mae_opt.format = ""
     mae_opt.input_max_width = W
     mae_opt.input_max_height = H
-    mae_opt.input_max_depth = 3  # 3 channels for NEAT models (duplicated from normalized single channel)
+    mae_opt.input_max_depth = 1  # single-channel MAE input
 
     cls_opt = neat.ModelOptions()
     cls_opt.media_type = "application/vnd.simaai.tensor"
     cls_opt.format = ""
     cls_opt.input_max_width = W
     cls_opt.input_max_height = H
-    cls_opt.input_max_depth = 3  # 3 channels for NEAT models (duplicated from normalized single channel)
+    cls_opt.input_max_depth = 3  # 3-channel classifier input (duplicated from 1-channel diff)
 
     print(f"[LOAD] MAE model: {mae_model_path}")
     print(f"[LOAD] Classifier model: {cls_model_path}")
@@ -185,8 +180,8 @@ def run_pipeline(
     cls_sess.add(neat.nodes.output())
     print(f"[BUILD] Classifier Pipeline:\n{cls_sess.describe_backend()}")
 
-    # Build runs with dummy tensors (3 channels for NEAT models)
-    dummy_mae = np.zeros((H, W, 3), dtype=np.float32)
+    # Build runs with dummy tensors (single channel for MAE, 3 channels for classifier)
+    dummy_mae = np.zeros((H, W, 1), dtype=np.float32)
     mae_run = mae_sess.build(dummy_mae)
 
     dummy_cls = np.zeros((H, W, 3), dtype=np.float32)
@@ -205,7 +200,7 @@ def run_pipeline(
         print(f"\n--- Processing: {npy_path} ---")
 
         try:
-            img_1ch, img_3ch = load_npy_normalized(npy_path, dataset)
+            img_1ch = load_npy_normalized(npy_path, dataset)
         except Exception as e:
             print(f"Failed to load {npy_path}: {e}", file=sys.stderr)
             continue
@@ -215,13 +210,11 @@ def run_pipeline(
         print(f"[NEAT] img_1ch shape: {img_1ch.shape}, dtype: {img_1ch.dtype}")
         print(f"[NEAT] img_1ch stats: min={img_1ch.min():.6f}, max={img_1ch.max():.6f}, mean={img_1ch.mean():.6f}, std={img_1ch.std():.6f}")
         print(f"[NEAT] img_1ch sample[0:3, 0:3, 0]:\n{img_1ch[0:3, 0:3, 0]}")
-        print(f"[NEAT] img_3ch shape: {img_3ch.shape}, dtype: {img_3ch.dtype}")
-        print(f"[NEAT] img_3ch stats: min={img_3ch.min():.6f}, max={img_3ch.max():.6f}, mean={img_3ch.mean():.6f}, std={img_3ch.std():.6f}")
         print(f"[ONNX] Expected: (1, 224, 224, 1) normalized with mean=0.0, std=1.0")
         print(f"[ONNX] Expected sample values should match img_1ch above")
 
-        # Run MAE through session pipeline (3-channel input for NEAT models)
-        if not mae_run.push(img_3ch):
+        # Run MAE through session pipeline (single-channel input)
+        if not mae_run.push(img_1ch):
             print(f"MAE push failed for {npy_path}", file=sys.stderr)
             continue
         mae_sample = mae_run.pull(timeout_ms=5000)
@@ -375,10 +368,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="MAE-based medical anomaly detection with NEAT"
     )
+    default_mae_model = (
+        Path(__file__).resolve().parents[4]
+        / "assets"
+        / "models"
+        / "mae_brats_deterministic_grid_masking_simplified_mpk.tar.gz"
+    )
     parser.add_argument(
         "mae_model",
         type=str,
-        help="Path to MAE reconstruction compiled model package",
+        nargs="?",
+        default=str(default_mae_model),
+        help="Path to MAE reconstruction compiled model package "
+        "(default: apps/assets/models/mae_brats_deterministic_grid_masking_simplified_mpk.tar.gz)",
     )
     parser.add_argument(
         "cls_model",
