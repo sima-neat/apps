@@ -1,15 +1,10 @@
 model: assets/models/yolo_v8m_mpk.tar.gz  # Path to the detector model pack.
 
 streams:  # RTSP inputs, one entry per camera.
-  - rtsp://192.168.0.39:8554/src1
-  - rtsp://192.168.0.39:8554/src2
-  - rtsp://192.168.0.39:8554/src3
-  - rtsp://192.168.0.39:8554/src4
-  # - rtsp://192.168.0.39:8554/src7
-  # - rtsp://192.168.0.39:8554/src8
-  # - rtsp://192.168.0.39:8554/src1
-  # - rtsp://192.168.0.39:8554/src2
-  # - rtsp://192.168.0.39:8554/src3
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  # - <rtsp-url-3>
+  # - <rtsp-url-4>
 
 input:  # RTSP input transport settings.
   tcp: true        # Use TCP for RTSP transport.
@@ -31,7 +26,7 @@ tracking:  # Tracker settings.
 
 output:  # Live output plus optional debug saves.
   optiview:  # Live video and JSON destination.
-    host: 192.168.2.1      # Host running the OptiView receiver/viewer.
+    host: <optiview-host>    # Host running the OptiView receiver/viewer.
     video_port_base: 9000    # Base UDP port for video channels.
     json_port_base: 9100     # Base UDP port for JSON channels.
   debug_dir: null            # Optional debug overlay directory. Null disables saved frames.

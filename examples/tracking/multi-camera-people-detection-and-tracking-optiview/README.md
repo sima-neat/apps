@@ -50,6 +50,7 @@ cd ../..
 ## Important Behavior
 - The Python and C++ implementations follow the same config-driven structure: config loading, pipeline builders, tracker helpers, image helpers, sample helpers, and worker orchestration.
 - The `streams:` list in `common/config.yaml` controls the number of cameras dynamically.
+- The checked-in `common/config.yaml` uses placeholder RTSP and OptiView values; fill them with your own camera URLs and receiver host before running.
 - Stream `i` publishes clean video to `output.optiview.video_port_base + i` and tracked JSON to `output.optiview.json_port_base + i`.
 - `inference.frames: 0` runs indefinitely.
 - `output.debug_dir: null` and `output.save_every: 0` disable saved overlay frames while keeping live OptiView output enabled.
@@ -104,6 +105,11 @@ Binary output:
 ```
 
 ## Run
+Before running either entrypoint, edit `examples/tracking/multi-camera-people-detection-and-tracking-optiview/common/config.yaml` and replace the placeholder values in:
+
+- `streams`
+- `output.optiview.host`
+
 ### C++
 ```bash
 ./build/examples/tracking/multi-camera-people-detection-and-tracking-optiview/multi-camera-people-detection-and-tracking-optiview \
@@ -120,9 +126,8 @@ source ~/pyneat/bin/activate
 pip install -r examples/tracking/multi-camera-people-detection-and-tracking-optiview/python/requirements.txt
 ```
 
-Edit the example config in `common/config.yaml`, especially:
+Edit the example config in `common/config.yaml`, especially the placeholder values in:
 
-- `model`
 - `streams`
 - `output.optiview.host`
 
