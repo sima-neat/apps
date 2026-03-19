@@ -5,8 +5,6 @@
 #include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/sample_utils_api.cpp"
 #include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/tracker_api.cpp"
 
-#include "pipeline/TensorOpenCV.h"
-
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>

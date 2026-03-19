@@ -1,7 +1,5 @@
 #include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/pipeline_api.cpp"
 
-#include "pipeline/TensorOpenCV.h"
-
 #include <nlohmann/json.hpp>
 #include <opencv2/videoio.hpp>
 
