@@ -1,4 +1,4 @@
-#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/image_utils_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/image_utils_api.cpp"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>

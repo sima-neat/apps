@@ -163,12 +163,12 @@ Notes:
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
-- C++ config loader: `cpp/config_api.cpp`, `cpp/config.cpp`
-- C++ tracker helpers: `cpp/tracker_api.cpp`, `cpp/tracker.cpp`
-- C++ sample helpers: `cpp/sample_utils_api.cpp`, `cpp/sample_utils.cpp`
-- C++ pipeline builders: `cpp/pipeline_api.cpp`, `cpp/pipeline.cpp`
-- C++ image helpers: `cpp/image_utils_api.cpp`, `cpp/image_utils.cpp`
-- C++ worker orchestration: `cpp/workers_api.cpp`, `cpp/workers.cpp`
+- C++ config loader: `cpp/utils/config_api.cpp`, `cpp/utils/config.cpp`
+- C++ tracker helpers: `cpp/utils/tracker_api.cpp`, `cpp/utils/tracker.cpp`
+- C++ sample helpers: `cpp/utils/sample_utils_api.cpp`, `cpp/utils/sample_utils.cpp`
+- C++ pipeline builders: `cpp/utils/pipeline_api.cpp`, `cpp/utils/pipeline.cpp`
+- C++ image helpers: `cpp/utils/image_utils_api.cpp`, `cpp/utils/image_utils.cpp`
+- C++ worker orchestration: `cpp/utils/workers_api.cpp`, `cpp/utils/workers.cpp`
 - C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
 - Python source: `python/main.py`
 - Example config: `common/config.yaml`

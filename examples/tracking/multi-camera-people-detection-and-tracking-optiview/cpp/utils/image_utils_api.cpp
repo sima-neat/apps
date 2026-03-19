@@ -1,7 +1,7 @@
 #pragma once
 
-#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/pipeline_api.cpp"
-#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/tracker_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/pipeline_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/tracker_api.cpp"
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>

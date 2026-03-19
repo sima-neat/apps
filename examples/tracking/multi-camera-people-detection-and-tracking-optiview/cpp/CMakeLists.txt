@@ -25,12 +25,12 @@ if (NOT TARGET SimaNeatApps::support_runtime)
 endif()
 
 add_library(multi_camera_people_tracking_lib STATIC
-  "${CMAKE_CURRENT_LIST_DIR}/config.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/tracker.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/sample_utils.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/pipeline.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/image_utils.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/workers.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/utils/config.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/utils/tracker.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/utils/sample_utils.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/utils/pipeline.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/utils/image_utils.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/utils/workers.cpp"
 )
 target_link_libraries(multi_camera_people_tracking_lib
   PUBLIC

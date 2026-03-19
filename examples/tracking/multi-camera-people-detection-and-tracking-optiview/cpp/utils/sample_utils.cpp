@@ -1,4 +1,4 @@
-#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/sample_utils_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/sample_utils_api.cpp"
 
 #include "support/object_detection/obj_detection_utils.h"
 

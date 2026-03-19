@@ -1,7 +1,7 @@
 // Copyright 2026 SiMa Technologies, Inc.
 
-#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/config_api.cpp"
-#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/workers_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/config_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/workers_api.cpp"
 
 #include <filesystem>
 #include <iostream>
