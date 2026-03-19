@@ -199,7 +199,7 @@ render_readme() {
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | ${example_name} |
-| Model | TODO |
+| Model | TODO or TODO [https://host/path/model_mpk.tar.gz] |
 
 ## Concept
 TODO: describe what this example demonstrates.

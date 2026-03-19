@@ -558,6 +558,11 @@ select {
   font-weight: 700;
 }
 
+.chip-link {
+  text-decoration: none;
+  transition: transform 160ms ease, background 160ms ease, color 160ms ease;
+}
+
 .chip-difficulty {
   background: rgba(214, 120, 42, 0.14);
   color: #92511a;
@@ -598,6 +603,12 @@ select {
   background: rgba(14, 122, 109, 0.12);
 }
 
+.chip-link:hover {
+  transform: translateY(-1px);
+  background: rgba(14, 122, 109, 0.12);
+  color: #0d675d;
+}
+
 :root[data-theme="dark"] .chip-model,
 :root[data-theme="dark"] .chip-binary,
 :root[data-theme="dark"] .tag-pill {
@@ -613,6 +624,11 @@ select {
 :root[data-theme="dark"] .chip-github {
   background: rgba(243, 234, 220, 0.1);
   color: #d8ccbd;
+}
+
+:root[data-theme="dark"] .chip-link:hover {
+  background: rgba(14, 122, 109, 0.22);
+  color: #eef8f5;
 }
 
 .filter-panel,
