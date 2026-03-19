@@ -2,25 +2,39 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .pipeline import QuantTessCpuPreproc
+
+
+@dataclass
+class QuantTessCpuPreprocState:
+    src_width: int
+    src_height: int
+    scaled_w: int
+    scaled_h: int
+    pad_x: int
+    pad_y: int
+    quant_input: Any
 
 
 def sample_output_path(output_dir: Path, stream_index: int, frame_index: int) -> Path:
     return output_dir / f"stream_{stream_index}" / f"frame_{frame_index:06d}.jpg"
 
 
-def cpu_quanttess_input(runtime, frame_bgr, contract: QuantTessCpuPreproc):
-    cv2 = runtime.cv2
+def build_cpu_quanttess_preproc_state(
+    runtime,
+    contract: QuantTessCpuPreproc,
+    src_width: int,
+    src_height: int,
+) -> QuantTessCpuPreprocState:
     np = runtime.np
-    src_h, src_w = frame_bgr.shape[:2]
-    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-
     if contract.aspect_ratio:
-        scale = min(contract.width / src_w, contract.height / src_h)
-        scaled_w = max(1, int(round(src_w * scale)))
-        scaled_h = max(1, int(round(src_h * scale)))
+        scale = min(contract.width / src_width, contract.height / src_height)
+        scaled_w = max(1, int(round(src_width * scale)))
+        scaled_h = max(1, int(round(src_height * scale)))
     else:
         scaled_w = contract.width
         scaled_h = contract.height
@@ -31,12 +45,44 @@ def cpu_quanttess_input(runtime, frame_bgr, contract: QuantTessCpuPreproc):
         pad_x = (contract.width - scaled_w) // 2
         pad_y = (contract.height - scaled_h) // 2
 
-    resized = cv2.resize(rgb, (scaled_w, scaled_h), interpolation=cv2.INTER_LINEAR)
     quant_input = np.zeros((contract.height, contract.width, 3), dtype=np.float32)
-    quant_input[pad_y : pad_y + scaled_h, pad_x : pad_x + scaled_w] = (
-        resized.astype(np.float32) / 255.0
+    return QuantTessCpuPreprocState(
+        src_width=src_width,
+        src_height=src_height,
+        scaled_w=scaled_w,
+        scaled_h=scaled_h,
+        pad_x=pad_x,
+        pad_y=pad_y,
+        quant_input=quant_input,
     )
-    return np.ascontiguousarray(quant_input)
+
+
+def cpu_quanttess_input(
+    runtime,
+    frame_rgb,
+    state: QuantTessCpuPreprocState,
+):
+    cv2 = runtime.cv2
+    np = runtime.np
+    src_h, src_w = frame_rgb.shape[:2]
+    if src_w != state.src_width or src_h != state.src_height:
+        raise RuntimeError(
+            "unexpected frame size for cached QuantTess preproc state: "
+            f"got {src_w}x{src_h}, expected {state.src_width}x{state.src_height}"
+        )
+
+    resized = cv2.resize(
+        frame_rgb,
+        (state.scaled_w, state.scaled_h),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    state.quant_input.fill(0.0)
+    roi = state.quant_input[
+        state.pad_y : state.pad_y + state.scaled_h,
+        state.pad_x : state.pad_x + state.scaled_w,
+    ]
+    np.multiply(resized, 1.0 / 255.0, out=roi, casting="unsafe")
+    return state.quant_input
 
 
 def class_color(track_id: int) -> tuple[int, int, int]:

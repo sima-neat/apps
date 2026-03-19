@@ -127,7 +127,7 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
     ro.tcp = cfg.tcp
     ro.payload_type = 96
     ro.insert_queue = True
-    ro.out_format = "BGR"
+    ro.out_format = "RGB"
     ro.decoder_raw_output = False
     ro.auto_caps_from_stream = True
     ro.use_videoconvert = False
@@ -137,7 +137,7 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
     if probe.fps > 0:
         ro.fallback_h264_fps = probe.fps
     ro.output_caps.enable = True
-    ro.output_caps.format = "BGR"
+    ro.output_caps.format = "RGB"
     ro.output_caps.width = probe.width
     ro.output_caps.height = probe.height
     if probe.fps > 0:
@@ -208,7 +208,7 @@ def build_optiview_video_run(
 
     input_opt = pyneat.InputOptions()
     input_opt.media_type = "video/x-raw"
-    input_opt.format = "BGR"
+    input_opt.format = "RGB"
     input_opt.use_simaai_pool = False
 
     session = pyneat.Session()
@@ -236,7 +236,7 @@ def build_optiview_video_run(
     seed = pyneat.Tensor.from_numpy(
         np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
         copy=True,
-        image_format=pyneat.PixelFormat.BGR,
+        image_format=pyneat.PixelFormat.RGB,
     )
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 2

@@ -10,7 +10,13 @@ import time
 from typing import Any
 
 from .config import AppConfig
-from .image_utils import cpu_quanttess_input, draw_tracked_people, save_overlay_frame
+from .image_utils import (
+    QuantTessCpuPreprocState,
+    build_cpu_quanttess_preproc_state,
+    cpu_quanttess_input,
+    draw_tracked_people,
+    save_overlay_frame,
+)
 from .pipeline import (
     _SOURCE_PULL_TIMEOUT_MS,
     _SOURCE_STARTUP_PULL_TIMEOUT_MS,
@@ -38,6 +44,9 @@ from .sample_utils import (
     tensor_bgr_from_sample,
 )
 from .tracker import PeopleTracker
+
+
+_DEFAULT_PROFILE_INTERVAL_FRAMES = 200
 
 
 @dataclass
@@ -88,7 +97,7 @@ class StreamRuntime:
     probe: RtspProbe
     runtime: RuntimeModules
     model: Any
-    quant_preproc: QuantTessCpuPreproc
+    quant_preproc_state: QuantTessCpuPreprocState
     # Keep sessions alive for as long as the runs built from them are in use.
     source_session: Any
     source_run: Any
@@ -111,6 +120,12 @@ def create_stream_runtime(
 ) -> StreamRuntime:
     runtime = load_runtime_modules()
     probe = probe_rtsp(url)
+    quant_preproc_state = build_cpu_quanttess_preproc_state(
+        runtime,
+        quant_preproc,
+        probe.width,
+        probe.height,
+    )
     source_session, source_run = build_source_run(runtime, cfg, url, probe)
     detect_session, detect_run = build_detection_run(runtime, cfg, model, probe, quant_preproc)
     video_session, video_run = build_optiview_video_run(runtime, cfg, probe, index)
@@ -125,7 +140,7 @@ def create_stream_runtime(
         probe=probe,
         runtime=runtime,
         model=model,
-        quant_preproc=quant_preproc,
+        quant_preproc_state=quant_preproc_state,
         source_session=source_session,
         source_run=source_run,
         detect_session=detect_session,
@@ -246,7 +261,11 @@ def infer_thread(
                 continue
 
             preproc_t0 = time.perf_counter()
-            quant_input = cpu_quanttess_input(runtime, pkt.frame, stream.quant_preproc)
+            quant_input = cpu_quanttess_input(
+                runtime,
+                pkt.frame,
+                stream.quant_preproc_state,
+            )
             preproc_elapsed = time.perf_counter() - preproc_t0
 
             roundtrip_t0 = time.perf_counter()
@@ -282,7 +301,7 @@ def publish_thread(
 ) -> None:
     runtime = stream.runtime
     output_dir = Path(cfg.output_dir) if cfg.output_dir else None
-    profile_every = cfg.save_every if cfg.save_every > 0 else 10
+    profile_every = cfg.save_every if cfg.save_every > 0 else _DEFAULT_PROFILE_INTERVAL_FRAMES
 
     try:
         while not stop_event.is_set():
@@ -317,7 +336,7 @@ def publish_thread(
 
             write_t0 = time.perf_counter()
             pyneat = runtime.pyneat
-            if not stream.video_run.push(pkt.frame, copy=True, image_format=pyneat.PixelFormat.BGR):
+            if not stream.video_run.push(pkt.frame, copy=True, image_format=pyneat.PixelFormat.RGB):
                 raise RuntimeError(f"stream {stream.index} OptiView video push failed")
 
             frame_id = str(stream.metrics.processed)

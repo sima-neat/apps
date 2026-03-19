@@ -88,7 +88,7 @@ class TestWorkers:
         frame = SimpleNamespace(shape=(24, 32, 3), label="clean-frame")
         stream = SimpleNamespace(
             index=0,
-            runtime=SimpleNamespace(pyneat=SimpleNamespace(PixelFormat=SimpleNamespace(BGR="bgr"))),
+            runtime=SimpleNamespace(pyneat=SimpleNamespace(PixelFormat=SimpleNamespace(RGB="rgb"))),
             tracker=SimpleNamespace(
                 update=lambda boxes, frame_index: [
                     TrackedDetection(
@@ -128,5 +128,5 @@ class TestWorkers:
 
         publish_thread(stream, cfg, result_q, stop_event)
 
-        assert video_run.calls == [(frame, True, "bgr")]
+        assert video_run.calls == [(frame, True, "rgb")]
         assert sender.payloads == ["json-payload"]

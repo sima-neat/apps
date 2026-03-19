@@ -24,7 +24,7 @@ def make_optiview_tracking_json(
             {
                 "id": f"track_{det.track_id}",
                 "track_id": int(det.track_id),
-                "label": "person",
+                "label": f"Track ID: {det.track_id}",
                 "confidence": float(det.score),
                 "bbox": [
                     float(det.x1),
