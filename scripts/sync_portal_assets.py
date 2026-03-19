@@ -11,6 +11,14 @@ CATALOG_PATH = PORTAL_PUBLIC / "catalog.json"
 ASSET_ROOT = PORTAL_PUBLIC / "example-assets"
 
 
+def portal_asset_destination(rel: Path) -> Path:
+    if rel.parts[:2] == ("assets", "portal"):
+        return ASSET_ROOT / Path(*rel.parts[2:])
+    if rel.parts and rel.parts[0] == "examples":
+        return ASSET_ROOT / rel.parent.relative_to("examples") / rel.name
+    raise ValueError(f"Unsupported portal asset path: {rel}")
+
+
 def main() -> int:
     if not CATALOG_PATH.exists():
         raise SystemExit(f"Missing catalog file: {CATALOG_PATH}")
@@ -32,7 +40,7 @@ def main() -> int:
             continue
 
         rel = Path(image_path)
-        dst = ASSET_ROOT / rel.parent.relative_to("examples") / rel.name
+        dst = portal_asset_destination(rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         example["image_path"] = str(dst.relative_to(PORTAL_PUBLIC))
