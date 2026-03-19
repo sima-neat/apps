@@ -224,9 +224,12 @@ def producer_thread(
             empty_pulls = 0
             if emit_period_s > 0.0:
                 now = time.perf_counter()
-                if next_allowed_emit_s is not None and now < next_allowed_emit_s:
+                if next_allowed_emit_s is None:
+                    next_allowed_emit_s = now
+                if now < next_allowed_emit_s:
                     continue
-                next_allowed_emit_s = now + emit_period_s
+                while next_allowed_emit_s <= now:
+                    next_allowed_emit_s += emit_period_s
             frame = tensor_bgr_from_sample(stream.runtime, sample)
             put_keep_latest(
                 frame_q,

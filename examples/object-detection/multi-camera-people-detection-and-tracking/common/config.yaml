@@ -1,4 +1,4 @@
-model: assets/models/yolo_v8m_mpk.tar.gz  # Path to the detector model pack.
+model: assets/models/yolo_v8n_mpk.tar.gz  # Path to the detector model pack.
 
 streams:  # RTSP inputs, one entry per camera.
   - rtsp://192.168.0.39:8554/src1
@@ -13,17 +13,17 @@ streams:  # RTSP inputs, one entry per camera.
 
 input:  # RTSP input transport settings.
   tcp: true        # Use TCP for RTSP transport.
-  latency_ms: 300  # RTSP receive latency in milliseconds.
+  latency_ms: 100  # RTSP receive latency in milliseconds.
 
 inference:  # Detector and runtime settings.
   frames: 0                   # Frame limit per stream. 0 means unlimited.
-  fps: 0                      # Max per-stream processing and output FPS. 0 means use source FPS.
-  bitrate_kbps: 1000          # H.264 bitrate for OptiView video output.
+  fps: 25                      # Max per-stream processing and output FPS. 0 means use source FPS.
+  bitrate_kbps: 2500          # H.264 bitrate for OptiView video output.
   profile: true               # Print per-stream profiling information.
   person_class_id: 0          # Class id to keep from detector output.
   detection_threshold: 0.65   # Optional score threshold override.
   nms_iou_threshold: 0.5      # Optional NMS IoU override.
-  top_k: 24                   # Optional top-k override.
+  top_k: 12                   # Optional top-k override.
 
 tracking:  # Tracker settings.
   iou_threshold: 0.3      # Minimum IoU to match an existing track.
