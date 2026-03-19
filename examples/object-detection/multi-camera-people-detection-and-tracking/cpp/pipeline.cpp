@@ -1,4 +1,4 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/pipeline.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/pipeline_api.cpp"
 
 #include "pipeline/TensorOpenCV.h"
 

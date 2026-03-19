@@ -1,4 +1,4 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/sample_utils.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/sample_utils_api.cpp"
 
 #include "support/object_detection/obj_detection_utils.h"
 

@@ -1,10 +1,12 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config.h"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/pipeline.h"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/sample_utils.h"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/image_utils_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/pipeline_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/sample_utils_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker_api.cpp"
 #include "support/testing/test_process.h"
 
 #include <opencv2/core/mat.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -240,6 +242,29 @@ bool test_tensor_mode_session_accepts_fp32_cv_mat_through_session_api() {
   return ok;
 }
 
+bool test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg() {
+  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_overlay_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory for overlay save test");
+  }
+
+  const cv::Mat frame_rgb(32, 32, CV_8UC3, cv::Scalar(255, 0, 0));
+  bool ok = save_overlay_frame(fs::path(temp_dir), 0, 0, frame_rgb, 1);
+  ok &= expect_true(ok, "overlay save writes sampled frame");
+
+  const fs::path out_path = sample_output_path(fs::path(temp_dir), 0, 0);
+  const cv::Mat saved = cv::imread(out_path.string(), cv::IMREAD_COLOR);
+  ok &= expect_true(!saved.empty(), "overlay save writes readable image");
+  if (!saved.empty()) {
+    const cv::Vec3b pixel = saved.at<cv::Vec3b>(0, 0);
+    ok &= expect_true(pixel[2] > pixel[0],
+                      "overlay save preserves red-dominant RGB content after reload");
+  }
+
+  remove_dir(temp_dir);
+  return ok;
+}
+
 } // namespace
 } // namespace multi_camera_people_tracking
 
@@ -263,6 +288,7 @@ int main(int argc, char** argv) {
       !multi_camera_people_tracking::test_make_optiview_tracking_detection_uses_track_id_label_text();
   failures +=
       !multi_camera_people_tracking::test_tensor_mode_session_accepts_fp32_cv_mat_through_session_api();
+  failures += !multi_camera_people_tracking::test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg();
 
   return failures == 0 ? 0 : 1;
 }

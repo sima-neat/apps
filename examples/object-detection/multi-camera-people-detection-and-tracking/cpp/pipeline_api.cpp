@@ -1,6 +1,6 @@
 #pragma once
 
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config_api.cpp"
 #include "support/runtime/example_utils.h"
 
 #include "neat/models.h"

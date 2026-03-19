@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -208,3 +209,44 @@ class TestImageUtils:
         assert second is state.quant_input
         assert state.quant_input.fill_calls == [0.0, 0.0]
         assert len(state.quant_input.assignments) == 2
+
+    def test_save_overlay_frame_converts_rgb_frame_to_bgr_before_imwrite(self, tmp_path: Path):
+        from utils.image_utils import save_overlay_frame
+
+        class FakeFrame:
+            def __init__(self, channels):
+                self.channels = channels
+
+        class FakeCV2:
+            COLOR_RGB2BGR = "rgb2bgr"
+
+            def __init__(self):
+                self.calls = []
+
+            def cvtColor(self, frame, code):
+                assert code == self.COLOR_RGB2BGR
+                converted = FakeFrame("bgr")
+                self.calls.append(("cvtColor", frame.channels, code, converted.channels))
+                return converted
+
+            def imwrite(self, path, frame):
+                self.calls.append(("imwrite", Path(path).name, frame.channels))
+                return True
+
+        cv2 = FakeCV2()
+        runtime = SimpleNamespace(cv2=cv2)
+
+        saved = save_overlay_frame(
+            runtime,
+            tmp_path / "debug",
+            stream_index=1,
+            frame_index=2,
+            frame=FakeFrame("rgb"),
+            save_every=1,
+        )
+
+        assert saved is True
+        assert cv2.calls == [
+            ("cvtColor", "rgb", "rgb2bgr", "bgr"),
+            ("imwrite", "frame_000002.jpg", "bgr"),
+        ]

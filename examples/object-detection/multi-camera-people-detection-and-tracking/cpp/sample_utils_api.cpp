@@ -1,6 +1,6 @@
 #pragma once
 
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker_api.cpp"
 #include "support/runtime/example_utils.h"
 
 #include <opencv2/core/mat.hpp>

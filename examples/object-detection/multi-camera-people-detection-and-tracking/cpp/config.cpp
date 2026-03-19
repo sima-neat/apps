@@ -1,4 +1,4 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config_api.cpp"
 
 #include <algorithm>
 #include <cctype>

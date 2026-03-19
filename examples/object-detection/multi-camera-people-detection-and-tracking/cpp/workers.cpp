@@ -1,9 +1,9 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/workers.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/workers_api.cpp"
 
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/image_utils.h"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/pipeline.h"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/sample_utils.h"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/image_utils_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/pipeline_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/sample_utils_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker_api.cpp"
 
 #include "pipeline/TensorOpenCV.h"
 

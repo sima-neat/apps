@@ -1,4 +1,4 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/image_utils.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/image_utils_api.cpp"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -98,7 +98,10 @@ bool save_overlay_frame(const std::optional<fs::path>& output_dir, int stream_in
 
   const fs::path out_path = sample_output_path(*output_dir, stream_index, frame_index);
   fs::create_directories(out_path.parent_path());
-  return cv::imwrite(out_path.string(), frame);
+  cv::Mat frame_bgr;
+  // Worker frames are carried in RGB, but OpenCV image codecs expect BGR channel order.
+  cv::cvtColor(frame, frame_bgr, cv::COLOR_RGB2BGR);
+  return cv::imwrite(out_path.string(), frame_bgr);
 }
 
 } // namespace multi_camera_people_tracking

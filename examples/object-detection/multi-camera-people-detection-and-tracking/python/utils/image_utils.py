@@ -128,4 +128,6 @@ def save_overlay_frame(
         return False
     out_path = sample_output_path(output_dir, stream_index, frame_index)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    return bool(runtime.cv2.imwrite(str(out_path), frame))
+    # Worker frames are carried in RGB, but OpenCV codecs expect BGR channel order.
+    frame_bgr = runtime.cv2.cvtColor(frame, runtime.cv2.COLOR_RGB2BGR)
+    return bool(runtime.cv2.imwrite(str(out_path), frame_bgr))

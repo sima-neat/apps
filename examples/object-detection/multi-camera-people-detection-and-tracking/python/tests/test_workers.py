@@ -210,3 +210,89 @@ class TestWorkers:
         assert second.frame == {"frame": "sample-3"}
         assert first.frame_index == 0
         assert second.frame_index == 1
+
+    def test_infer_thread_exits_when_frame_queue_is_closed_and_drained(self):
+        from utils.config import AppConfig
+        from utils.workers import KeepLatestQueue, StreamMetrics, infer_thread
+
+        cfg = AppConfig(
+            model="model.tar.gz",
+            rtsp_urls=["rtsp://camera-0"],
+            output_dir=None,
+            frames=10,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
+            fps=0,
+            bitrate_kbps=2500,
+            save_every=0,
+            profile=False,
+            person_class_id=0,
+            detection_threshold=None,
+            nms_iou_threshold=None,
+            top_k=None,
+            tracker_iou_threshold=0.3,
+            tracker_max_missing=15,
+            latency_ms=200,
+            tcp=False,
+        )
+        frame_q = KeepLatestQueue(maxsize=4)
+        result_q = KeepLatestQueue(maxsize=4)
+        frame_q.close()
+        stream = SimpleNamespace(
+            index=0,
+            runtime=SimpleNamespace(),
+            detect_run=SimpleNamespace(),
+            quant_preproc_state=SimpleNamespace(),
+            metrics=StreamMetrics(),
+            error=None,
+        )
+        stop_event = threading.Event()
+
+        infer_thread(stream, cfg, frame_q, result_q, stop_event)
+
+        assert stream.error is None
+        assert result_q.is_closed()
+        assert result_q.empty()
+
+    def test_publish_thread_exits_when_result_queue_is_closed_and_drained(self):
+        from utils.config import AppConfig
+        from utils.workers import KeepLatestQueue, StreamMetrics, publish_thread
+
+        cfg = AppConfig(
+            model="model.tar.gz",
+            rtsp_urls=["rtsp://camera-0"],
+            output_dir=None,
+            frames=10,
+            optiview_host="127.0.0.1",
+            optiview_video_port_base=9000,
+            optiview_json_port_base=9100,
+            fps=0,
+            bitrate_kbps=2500,
+            save_every=0,
+            profile=False,
+            person_class_id=0,
+            detection_threshold=None,
+            nms_iou_threshold=None,
+            top_k=None,
+            tracker_iou_threshold=0.3,
+            tracker_max_missing=15,
+            latency_ms=200,
+            tcp=False,
+        )
+        result_q = KeepLatestQueue(maxsize=4)
+        result_q.close()
+        stream = SimpleNamespace(
+            index=0,
+            runtime=SimpleNamespace(),
+            tracker=SimpleNamespace(),
+            video_run=SimpleNamespace(),
+            json_sender=SimpleNamespace(),
+            metrics=StreamMetrics(),
+            error=None,
+        )
+        stop_event = threading.Event()
+
+        publish_thread(stream, cfg, result_q, stop_event)
+
+        assert stream.error is None

@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
     out << "model: " << model_path << "\n"
            "\n"
            "input:\n"
-           "  tcp: false\n"
+           "  tcp: true\n"
            "  latency_ms: 200\n"
            "\n"
            "inference:\n"

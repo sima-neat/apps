@@ -1,7 +1,7 @@
 // Copyright 2026 SiMa Technologies, Inc.
 
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config.h"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/workers.h"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config_api.cpp"
+#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/workers_api.cpp"
 
 #include <filesystem>
 #include <iostream>

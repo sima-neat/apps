@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 import queue
@@ -96,6 +97,59 @@ class ResultPacket:
     pull_wait_s: float
 
 
+class KeepLatestQueue:
+    def __init__(self, maxsize: int):
+        self._capacity = max(1, int(maxsize))
+        self._items: deque[Any] = deque()
+        self._closed = False
+        self._cv = threading.Condition()
+
+    def push_keep_latest(self, item: Any) -> int:
+        with self._cv:
+            if self._closed:
+                return 0
+            dropped = 0
+            while len(self._items) >= self._capacity:
+                self._items.popleft()
+                dropped += 1
+            self._items.append(item)
+            self._cv.notify()
+            return dropped
+
+    def pop_wait(self, timeout_s: float | None) -> Any | None:
+        with self._cv:
+            if timeout_s is None:
+                while not self._closed and not self._items:
+                    self._cv.wait()
+            else:
+                end_time = time.monotonic() + timeout_s
+                while not self._closed and not self._items:
+                    remaining = end_time - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    self._cv.wait(remaining)
+            if not self._items:
+                return None
+            return self._items.popleft()
+
+    def size(self) -> int:
+        with self._cv:
+            return len(self._items)
+
+    def empty(self) -> bool:
+        with self._cv:
+            return not self._items
+
+    def is_closed(self) -> bool:
+        with self._cv:
+            return self._closed
+
+    def close(self) -> None:
+        with self._cv:
+            self._closed = True
+            self._cv.notify_all()
+
+
 @dataclass
 class StreamRuntime:
     index: int
@@ -115,6 +169,36 @@ class StreamRuntime:
     tracker: PeopleTracker
     metrics: StreamMetrics = field(default_factory=StreamMetrics)
     error: Exception | None = None
+
+
+def queue_size(q: Any) -> int:
+    if hasattr(q, "size"):
+        return int(q.size())
+    return int(q.qsize())
+
+
+def queue_empty(q: Any) -> bool:
+    return bool(q.empty())
+
+
+def queue_is_closed(q: Any) -> bool:
+    is_closed = getattr(q, "is_closed", None)
+    return bool(is_closed()) if callable(is_closed) else False
+
+
+def close_queue(q: Any) -> None:
+    close = getattr(q, "close", None)
+    if callable(close):
+        close()
+
+
+def pop_wait(q: Any, timeout_s: float) -> Any | None:
+    if hasattr(q, "pop_wait"):
+        return q.pop_wait(timeout_s)
+    try:
+        return q.get(timeout=timeout_s)
+    except queue.Empty:
+        return None
 
 
 def create_stream_runtime(
@@ -168,7 +252,7 @@ def close_stream_runtime(stream: StreamRuntime) -> None:
 
 
 def record_queue_depth(stream: StreamRuntime, queue_name: str, q: queue.Queue) -> None:
-    size = q.qsize()
+    size = queue_size(q)
     if queue_name == "frame":
         stream.metrics.frame_q_peak = max(stream.metrics.frame_q_peak, size)
     else:
@@ -177,6 +261,16 @@ def record_queue_depth(stream: StreamRuntime, queue_name: str, q: queue.Queue) -
 
 def put_keep_latest(q: queue.Queue, item: Any, stream: StreamRuntime, queue_name: str) -> None:
     record_queue_depth(stream, queue_name, q)
+    if hasattr(q, "push_keep_latest"):
+        dropped = q.push_keep_latest(item)
+        if queue_name == "frame":
+            stream.metrics.frame_q_drops += dropped
+            stream.metrics._interval_frame_q_drops += dropped
+        else:
+            stream.metrics.result_q_drops += dropped
+            stream.metrics._interval_result_q_drops += dropped
+        record_queue_depth(stream, queue_name, q)
+        return
     while True:
         try:
             q.put_nowait(item)
@@ -209,7 +303,7 @@ def producer_thread(
     try:
         while not stop_event.is_set():
             if cfg.frames > 0 and frame_index >= cfg.frames:
-                return
+                break
             t0 = time.perf_counter()
             pull_timeout_ms = (
                 _SOURCE_STARTUP_PULL_TIMEOUT_MS if frame_index == 0 else _SOURCE_PULL_TIMEOUT_MS
@@ -245,6 +339,8 @@ def producer_thread(
         stop_event.set()
         if startup_ready is not None:
             startup_ready.set()
+    finally:
+        close_queue(frame_q)
 
 
 def start_producer_threads_sequentially(
@@ -289,9 +385,10 @@ def infer_thread(
             if cfg.frames > 0 and stream.metrics.processed >= cfg.frames:
                 return
 
-            try:
-                pkt = frame_q.get(timeout=0.1)
-            except queue.Empty:
+            pkt = pop_wait(frame_q, 0.1)
+            if pkt is None:
+                if queue_is_closed(frame_q) and queue_empty(frame_q):
+                    return
                 continue
 
             preproc_t0 = time.perf_counter()
@@ -327,6 +424,8 @@ def infer_thread(
     except Exception as exc:
         stream.error = exc
         stop_event.set()
+    finally:
+        close_queue(result_q)
 
 
 def publish_thread(
@@ -343,9 +442,10 @@ def publish_thread(
         while not stop_event.is_set():
             if cfg.frames > 0 and stream.metrics.processed >= cfg.frames:
                 return
-            try:
-                pkt = result_q.get(timeout=0.1)
-            except queue.Empty:
+            pkt = pop_wait(result_q, 0.1)
+            if pkt is None:
+                if queue_is_closed(result_q) and queue_empty(result_q):
+                    return
                 continue
 
             loop_start = time.perf_counter()
@@ -519,8 +619,8 @@ def run_app(cfg: AppConfig) -> int:
     producer_threads: list[threading.Thread] = []
     producer_ready_events: list[threading.Event] = []
     for stream in streams:
-        frame_q: queue.Queue[FramePacket] = queue.Queue(maxsize=4)
-        result_q: queue.Queue[ResultPacket] = queue.Queue(maxsize=4)
+        frame_q = KeepLatestQueue(maxsize=4)
+        result_q = KeepLatestQueue(maxsize=4)
         producer_ready = threading.Event()
         producer_ready_events.append(producer_ready)
         producer_threads.append(

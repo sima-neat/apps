@@ -48,7 +48,7 @@ class TestE2E:
                 model: {model}
 
                 input:
-                  tcp: false
+                  tcp: true
                   latency_ms: 200
 
                 inference:
