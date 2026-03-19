@@ -12,6 +12,7 @@ to decode bounding boxes and landmarks and visualize them.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ import pyneat
 
 
 VERBOSE = False
+logger = logging.getLogger(__name__)
 
 
 def _log(msg: str) -> None:
@@ -30,7 +32,7 @@ def _log(msg: str) -> None:
         print(f"[retinaface-debug] {msg}", flush=True)
 
 
-DEFAULT_MODEL_PATH = "/mnt/Bitbucket/sima-neat/apps/assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz"
+DEFAULT_MODEL_PATH = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz"
 # RetinaFaceSpy postprocessing assumes 640x640 input space (80/40/20 feature maps).
 INFER_WIDTH = 640
 INFER_HEIGHT = 640
@@ -439,8 +441,9 @@ def run_retinaface_inference(
 
     try:
         run.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort cleanup: log and continue, do not mask inference result.
+        logger.debug("Failed to close RetinaFace session cleanly", exc_info=exc)
 
     return sample, bgr, meta
 
@@ -568,8 +571,8 @@ def main() -> int:
 
         try:
             run.close()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error while closing session: {e}", file=sys.stderr)
 
         if not session_times:
             print("Profiling aborted: no successful runs", file=sys.stderr)

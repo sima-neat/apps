@@ -406,7 +406,7 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
 
 struct Args {
   fs::path image;
-  std::string model = "/mnt/Bitbucket/sima-neat/apps/assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz";
+  std::string model = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz";
   fs::path output;
   float conf = 0.4f;
   float nms = 0.9f;
