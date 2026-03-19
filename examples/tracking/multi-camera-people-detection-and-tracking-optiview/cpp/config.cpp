@@ -1,4 +1,4 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/config_api.cpp"
 
 #include <algorithm>
 #include <cctype>
@@ -229,7 +229,8 @@ std::filesystem::path default_config_path() {
 #ifdef MULTI_CAMERA_PEOPLE_TRACKING_SOURCE_DIR
   return fs::path(MULTI_CAMERA_PEOPLE_TRACKING_SOURCE_DIR).parent_path() / "common" / "config.yaml";
 #else
-  return fs::path("examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml");
+  return fs::path(
+      "examples/tracking/multi-camera-people-detection-and-tracking-optiview/common/config.yaml");
 #endif
 }
 

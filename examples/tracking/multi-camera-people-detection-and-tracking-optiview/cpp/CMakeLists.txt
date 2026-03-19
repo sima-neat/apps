@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  project(multi-camera-people-detection-and-tracking LANGUAGES CXX)
+  project(multi-camera-people-detection-and-tracking-optiview LANGUAGES CXX)
   set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
   set(CMAKE_CXX_EXTENSIONS OFF)
@@ -47,7 +47,7 @@ target_compile_definitions(multi_camera_people_tracking_lib
 )
 
 sima_neat_apps_module(
-  "multi-camera-people-detection-and-tracking"
+  "multi-camera-people-detection-and-tracking-optiview"
   UNIT_TEST
   E2E_TEST
   OUTPUT_TARGET_VAR MULTI_CAMERA_PEOPLE_TRACKING_TARGET
@@ -60,8 +60,8 @@ target_link_libraries("${MULTI_CAMERA_PEOPLE_TRACKING_TARGET}"
     multi_camera_people_tracking_lib
 )
 
-if (TARGET multi-camera-people-detection-and-tracking_unit_test)
-  target_link_libraries(multi-camera-people-detection-and-tracking_unit_test
+if (TARGET multi-camera-people-detection-and-tracking-optiview_unit_test)
+  target_link_libraries(multi-camera-people-detection-and-tracking-optiview_unit_test
     PRIVATE
       multi_camera_people_tracking_lib
   )
@@ -70,8 +70,8 @@ endif()
 foreach(target_name
     multi_camera_people_tracking_lib
     "${MULTI_CAMERA_PEOPLE_TRACKING_TARGET}"
-    multi-camera-people-detection-and-tracking_unit_test
-    multi-camera-people-detection-and-tracking_e2e_test)
+    multi-camera-people-detection-and-tracking-optiview_unit_test
+    multi-camera-people-detection-and-tracking-optiview_e2e_test)
   if (TARGET "${target_name}" AND EXISTS "${MODALIX_TOOLCHAIN_LIB_DIR}")
     set_target_properties("${target_name}" PROPERTIES
       BUILD_RPATH "${MODALIX_TOOLCHAIN_LIB_DIR}"
@@ -97,13 +97,13 @@ if (BUILD_TESTING AND EXISTS "${MODALIX_TOOLCHAIN_LIB_DIR}")
   if (EXISTS "${MODALIX_NEAT_PLUGIN_DIR}")
     list(APPEND MODALIX_TEST_ENV "SIMA_GST_PLUGIN_DIR=${MODALIX_NEAT_PLUGIN_DIR}")
   endif()
-  if (TEST multi-camera-people-detection-and-tracking.unit)
-    set_tests_properties(multi-camera-people-detection-and-tracking.unit PROPERTIES
+  if (TEST multi-camera-people-detection-and-tracking-optiview.unit)
+    set_tests_properties(multi-camera-people-detection-and-tracking-optiview.unit PROPERTIES
       ENVIRONMENT "${MODALIX_TEST_ENV}"
     )
   endif()
-  if (TEST multi-camera-people-detection-and-tracking.e2e)
-    set_tests_properties(multi-camera-people-detection-and-tracking.e2e PROPERTIES
+  if (TEST multi-camera-people-detection-and-tracking-optiview.e2e)
+    set_tests_properties(multi-camera-people-detection-and-tracking-optiview.e2e PROPERTIES
       ENVIRONMENT "${MODALIX_TEST_ENV}"
     )
   endif()

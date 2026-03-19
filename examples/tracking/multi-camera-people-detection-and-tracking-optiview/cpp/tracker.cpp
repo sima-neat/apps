@@ -1,4 +1,4 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/tracker_api.cpp"
 
 #include <algorithm>
 #include <tuple>

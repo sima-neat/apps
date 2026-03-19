@@ -1,6 +1,6 @@
 #pragma once
 
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/config_api.cpp"
 
 namespace multi_camera_people_tracking {
 

@@ -1,14 +1,14 @@
-# Multi-Camera People Detection And Tracking
+# Performant Multi-Camera People Detection, Tracking, and OptiView Rendering
 
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | object-detection |
+| Category | tracking |
 | Difficulty | Intermediate |
 | Tags | object-detection, rtsp, tracking, optiview |
 | Languages | C++, Python |
 | Status | experimental |
-| Binary Name | multi-camera-people-detection-and-tracking |
+| Binary Name | multi-camera-people-detection-and-tracking-optiview |
 | Model | yolo_v8m |
 
 ## Concept
@@ -60,8 +60,8 @@ cd ../..
 ### C++
 - Invocation:
   ```bash
-  ./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking \
-    --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
+  ./build/examples/tracking/multi-camera-people-detection-and-tracking-optiview/multi-camera-people-detection-and-tracking-optiview \
+    --config examples/tracking/multi-camera-people-detection-and-tracking-optiview/common/config.yaml
   ```
 - Required arguments:
   None.
@@ -71,8 +71,8 @@ cd ../..
 ### Python
 - Invocation:
   ```bash
-  python3 examples/object-detection/multi-camera-people-detection-and-tracking/python/main.py \
-    --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
+  python3 examples/tracking/multi-camera-people-detection-and-tracking-optiview/python/main.py \
+    --config examples/tracking/multi-camera-people-detection-and-tracking-optiview/common/config.yaml
   ```
 - Required arguments:
   None.
@@ -88,26 +88,26 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+./build/examples/tracking/multi-camera-people-detection-and-tracking-optiview/multi-camera-people-detection-and-tracking-optiview
 ```
 
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>
-cmake -S examples/object-detection/multi-camera-people-detection-and-tracking/cpp -B build/multi-camera-people-detection-and-tracking
-cmake --build build/multi-camera-people-detection-and-tracking -j
+cmake -S examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp -B build/multi-camera-people-detection-and-tracking-optiview
+cmake --build build/multi-camera-people-detection-and-tracking-optiview -j
 ```
 
 Binary output:
 ```bash
-./build/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+./build/multi-camera-people-detection-and-tracking-optiview/multi-camera-people-detection-and-tracking-optiview
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking \
-  --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
+./build/examples/tracking/multi-camera-people-detection-and-tracking-optiview/multi-camera-people-detection-and-tracking-optiview \
+  --config examples/tracking/multi-camera-people-detection-and-tracking-optiview/common/config.yaml
 ```
 
 The C++ binary follows the same config contract and worker topology as the Python example.
@@ -117,7 +117,7 @@ Install the small Python-side dependencies:
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/multi-camera-people-detection-and-tracking/python/requirements.txt
+pip install -r examples/tracking/multi-camera-people-detection-and-tracking-optiview/python/requirements.txt
 ```
 
 Edit the example config in `common/config.yaml`, especially:
@@ -131,8 +131,8 @@ The `streams:` list controls the number of cameras dynamically.
 Run the Python example with that config:
 
 ```bash
-python3 examples/object-detection/multi-camera-people-detection-and-tracking/python/main.py \
-  --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
+python3 examples/tracking/multi-camera-people-detection-and-tracking-optiview/python/main.py \
+  --config examples/tracking/multi-camera-people-detection-and-tracking-optiview/common/config.yaml
 ```
 
 Notes:
@@ -163,12 +163,12 @@ Notes:
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
-- C++ config loader: `cpp/config.h`, `cpp/config.cpp`
-- C++ tracker helpers: `cpp/tracker.h`, `cpp/tracker.cpp`
-- C++ sample helpers: `cpp/sample_utils.h`, `cpp/sample_utils.cpp`
-- C++ pipeline builders: `cpp/pipeline.h`, `cpp/pipeline.cpp`
-- C++ image helpers: `cpp/image_utils.h`, `cpp/image_utils.cpp`
-- C++ worker orchestration: `cpp/workers.h`, `cpp/workers.cpp`
+- C++ config loader: `cpp/config_api.cpp`, `cpp/config.cpp`
+- C++ tracker helpers: `cpp/tracker_api.cpp`, `cpp/tracker.cpp`
+- C++ sample helpers: `cpp/sample_utils_api.cpp`, `cpp/sample_utils.cpp`
+- C++ pipeline builders: `cpp/pipeline_api.cpp`, `cpp/pipeline.cpp`
+- C++ image helpers: `cpp/image_utils_api.cpp`, `cpp/image_utils.cpp`
+- C++ worker orchestration: `cpp/workers_api.cpp`, `cpp/workers.cpp`
 - C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
 - Python source: `python/main.py`
 - Example config: `common/config.yaml`

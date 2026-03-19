@@ -1,8 +1,8 @@
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/config_api.cpp"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/image_utils_api.cpp"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/pipeline_api.cpp"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/sample_utils_api.cpp"
-#include "examples/object-detection/multi-camera-people-detection-and-tracking/cpp/tracker_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/config_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/image_utils_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/pipeline_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/sample_utils_api.cpp"
+#include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/tracker_api.cpp"
 #include "support/testing/test_process.h"
 
 #include <opencv2/core/mat.hpp>
@@ -157,7 +157,7 @@ bool test_load_app_config_rejects_missing_streams() {
 
 bool test_common_config_yaml_uses_supported_shape() {
   const fs::path config_path =
-      "examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml";
+      "examples/tracking/multi-camera-people-detection-and-tracking-optiview/common/config.yaml";
   try {
     const AppConfig cfg = load_app_config(config_path);
     bool ok = true;

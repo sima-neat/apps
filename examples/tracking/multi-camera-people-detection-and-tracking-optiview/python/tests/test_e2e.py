@@ -1,4 +1,4 @@
-"""E2E tests for multi-camera-people-detection-and-tracking (Python)."""
+"""E2E tests for multi-camera-people-detection-and-tracking-optiview (Python)."""
 
 from __future__ import annotations
 
