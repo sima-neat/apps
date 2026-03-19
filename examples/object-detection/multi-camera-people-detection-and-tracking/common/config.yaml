@@ -1,4 +1,4 @@
-model: assets/models/yolo_v8n_mpk.tar.gz  # Path to the detector model pack.
+model: assets/models/yolo_v8m_mpk.tar.gz  # Path to the detector model pack.
 
 streams:  # RTSP inputs, one entry per camera.
   - rtsp://192.168.0.39:8554/src1
