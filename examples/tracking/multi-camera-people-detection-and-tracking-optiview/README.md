@@ -25,6 +25,10 @@ Each RTSP stream gets its own source, detection, tracker, encoder, and OptiView
 publisher runtime so
 native stream resolution can be preserved per camera.
 
+Demo screenshot from a live run:
+
+![Multi-camera OptiView tracking demo](../../../assets/portal/tracking/multi-camera-people-detection-and-tracking-optiview/image.png)
+
 ## Supported Models
 Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`, `yolo_v8x`
 
