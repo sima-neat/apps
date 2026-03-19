@@ -182,6 +182,5 @@ Notes:
 - Python source: `python/main.py`
 - Example config: `common/config.yaml`
 - Python utilities: `python/utils/`
-- Python tests: `python/tests/test_config.py`, `python/tests/test_main.py`, `python/tests/test_e2e.py`
-- Python pipeline tests: `python/tests/test_pipeline.py`, `python/tests/test_workers.py`, `python/tests/test_tracker.py`, `python/tests/test_sample_utils.py`, `python/tests/test_image_utils.py`
+- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
 - Shared example data: `common/`
