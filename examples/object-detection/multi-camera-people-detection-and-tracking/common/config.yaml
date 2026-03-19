@@ -17,13 +17,13 @@ input:  # RTSP input transport settings.
 
 inference:  # Detector and runtime settings.
   frames: 0                   # Frame limit per stream. 0 means unlimited.
-  fps: 25                      # Max per-stream processing and output FPS. 0 means use source FPS.
+  fps: 0                      # Max per-stream processing and output FPS. 0 means use source FPS.
   bitrate_kbps: 2500          # H.264 bitrate for OptiView video output.
   profile: true               # Print per-stream profiling information.
-  person_class_id: 0          # Class id to keep from detector output.
+  person_class_id: 0          # Class id to keep from detector output (ID: 0 -> person).
   detection_threshold: 0.65   # Optional score threshold override.
   nms_iou_threshold: 0.5      # Optional NMS IoU override.
-  top_k: 12                   # Optional top-k override.
+  top_k: 24                   # Optional top-k override.
 
 tracking:  # Tracker settings.
   iou_threshold: 0.3      # Minimum IoU to match an existing track.

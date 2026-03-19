@@ -1,4 +1,4 @@
-# multi-camera-people-detection-and-tracking
+# Multi-Camera People Detection And Tracking
 
 ## Metadata
 | Field | Value |
@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-camera-people-detection-and-tracking |
-| Model | YOLOv8 person detection |
+| Model | yolo_v8m |
 
 ## Concept
 Python-first multi-camera people detection and tracking example with RTSP inputs,
@@ -25,12 +25,10 @@ Each RTSP stream gets its own source, detection, tracker, encoder, and OptiView
 publisher runtime so
 native stream resolution can be preserved per camera.
 
-## Prerequisites
-- A NEAT Python environment with `pyneat`, `numpy`, and OpenCV available.
-- One or more reachable RTSP camera URLs.
-- A YOLOv8 detector model pack downloaded into `assets/models/`.
+## Supported Models
+Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`, `yolo_v8x`
 
-Representative model download commands:
+Download any variant into `assets/models/`:
 
 ```bash
 mkdir -p assets/models
@@ -43,9 +41,76 @@ sima-cli modelzoo get object_detection/yolo_v8x
 cd ../..
 ```
 
+## Prerequisites
+- A NEAT Python environment with `pyneat`, `numpy`, and OpenCV available.
+- One or more reachable RTSP camera URLs.
+- A YOLOv8 detector model pack downloaded into `assets/models/`.
 - An OptiView viewer instance reachable from the board/host running this example.
 
+## Important Behavior
+- The Python implementation is the functional path today; the C++ binary is still a placeholder scaffold.
+- The `streams:` list in `common/config.yaml` controls the number of cameras dynamically.
+- Stream `i` publishes clean video to `output.optiview.video_port_base + i` and tracked JSON to `output.optiview.json_port_base + i`.
+- `inference.frames: 0` runs indefinitely.
+- `output.debug_dir: null` and `output.save_every: 0` disable saved overlay frames while keeping live OptiView output enabled.
+- `inference.detection_threshold`, `inference.nms_iou_threshold`, and `inference.top_k` are optional; if omitted, `SimaBoxDecode` keeps the model-pack defaults.
+- The example defaults to person class id `0`, and tracker behavior is configurable from the config file.
+
+## Command-Line Options
+### C++
+- Invocation:
+  ```bash
+  ./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+  ```
+- Required arguments:
+  None.
+- Optional arguments:
+  None. The current C++ entrypoint is a placeholder scaffold.
+
+### Python
+- Invocation:
+  ```bash
+  python3 examples/object-detection/multi-camera-people-detection-and-tracking/python/main.py \
+    --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
+  ```
+- Required arguments:
+  None.
+- Optional arguments:
+  `--config <path>` to load a different YAML configuration file.
+
+## Build
+### Build From The Apps Repo
+```bash
+cd <apps-repo-root>
+./build.sh
+```
+
+Binary output:
+```bash
+./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+```
+
+### Build This Example Directly With CMake
+```bash
+cd <apps-repo-root>
+cmake -S examples/object-detection/multi-camera-people-detection-and-tracking/cpp -B build/multi-camera-people-detection-and-tracking
+cmake --build build/multi-camera-people-detection-and-tracking -j
+```
+
+Binary output:
+```bash
+./build/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+```
+
 ## Run
+### C++
+```bash
+./build/examples/object-detection/multi-camera-people-detection-and-tracking/multi-camera-people-detection-and-tracking
+```
+
+The current C++ binary prints a placeholder message while parity work is tracked separately.
+
+### Python
 Install the small Python-side dependencies:
 
 ```bash
@@ -64,7 +129,7 @@ The `streams:` list controls the number of cameras dynamically.
 Run the Python example with that config:
 
 ```bash
-python examples/object-detection/multi-camera-people-detection-and-tracking/python/main.py \
+python3 examples/object-detection/multi-camera-people-detection-and-tracking/python/main.py \
   --config examples/object-detection/multi-camera-people-detection-and-tracking/common/config.yaml
 ```
 
@@ -86,21 +151,20 @@ Notes:
   detector through the model's tensor-input `QuantTess` contract
 - live metadata is emitted separately from video in OptiView JSON format, with
   one channel per stream
-- `inference.detection_threshold`, `inference.nms_iou_threshold`, and
-  `inference.top_k` are optional; if omitted, `SimaBoxDecode` keeps the model-pack defaults
-- the example defaults to person class id `0`, and tracker behavior remains
-  configurable from the config
-- C++ parity is tracked in a follow-up ticket; the C++ entrypoint currently exists
-  only as a placeholder scaffold
+
+## Debugging Notes
+- Start with one RTSP stream and confirm the config before scaling to multiple cameras.
+- Confirm the model file exists under `assets/models/`.
+- Confirm each RTSP URL is reachable from the board or host running the example.
+- If OptiView appears idle, verify `output.optiview.host`, `video_port_base`, and `json_port_base`.
+- If you want saved overlay frames, set both `output.debug_dir` and `output.save_every`.
 
 ## Source Files
-- Python entrypoint: `python/main.py`
-- Python utilities: `python/utils/`
+- C++ source: `cpp/main.cpp`
+- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- Python source: `python/main.py`
 - Example config: `common/config.yaml`
-- Python tests: `python/tests/test_config.py`, `python/tests/test_tracker.py`,
-  `python/tests/test_pipeline.py`, `python/tests/test_image_utils.py`,
-  `python/tests/test_workers.py`, `python/tests/test_main.py`,
-  `python/tests/test_e2e.py`
-- C++ scaffold: `cpp/main.cpp`
-- C++ scaffold tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- Python utilities: `python/utils/`
+- Python tests: `python/tests/test_config.py`, `python/tests/test_main.py`, `python/tests/test_e2e.py`
+- Python pipeline tests: `python/tests/test_pipeline.py`, `python/tests/test_workers.py`, `python/tests/test_tracker.py`, `python/tests/test_sample_utils.py`, `python/tests/test_image_utils.py`
 - Shared example data: `common/`
