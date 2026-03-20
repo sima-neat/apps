@@ -13,6 +13,11 @@
 ## Concept
 Minimal Model API usage with a compiled ResNet50 model package. The example loads the package, runs single-image inference, and prints top-1/top-5 classification output.
 
+## Preview
+The pipeline is trying to classify this goldfish image.
+
+![Simple image classification goldfish input](../../../assets/portal/classification/simple-image-classification-pipeline/image.jpeg)
+
 ## Supported Models
 Primary model: `resnet_50`
 
