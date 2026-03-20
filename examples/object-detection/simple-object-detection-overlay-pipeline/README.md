@@ -14,6 +14,11 @@
 ## Concept
 Minimal image-folder object detection pipeline. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder.
 
+## Preview
+Snippet from a pipeline run:
+
+![Simple object detection overlay preview](../../../assets/portal/object-detection/simple-object-detection-overlay-pipeline/image.png)
+
 ## Supported Models
 Also works with: `yolo_v8s`, `yolo_v8m`, `yolo_v8l`
 

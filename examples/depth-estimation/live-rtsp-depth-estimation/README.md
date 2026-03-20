@@ -14,6 +14,11 @@
 ## Concept
 Depth estimation from an RTSP stream with optional depth-overlay recording. The example supports MiDaS v2.1 and Depth Anything V2 with auto profile selection based on model filename.
 
+## Preview
+Snippet from a pipeline run:
+
+![Live RTSP depth estimation preview](../../../assets/portal/depth-estimation/live-rtsp-depth-estimation/image.png)
+
 ## Architecture
 
 Pipeline:

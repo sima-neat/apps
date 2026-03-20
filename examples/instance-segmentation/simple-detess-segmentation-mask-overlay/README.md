@@ -13,6 +13,11 @@
 ## Concept
 Instance segmentation mask overlay for image folders using YOLOv5 DetessDequant outputs.
 
+## Preview
+Snippet from a pipeline run:
+
+![DetessDequant instance segmentation overlay preview](../../../assets/portal/instance-segmentation/simple-detess-segmentation-mask-overlay/image.jpg)
+
 ## Supported Models
 Also works with: `yolov5s`, `yolov5m`, `yolov5l`
 

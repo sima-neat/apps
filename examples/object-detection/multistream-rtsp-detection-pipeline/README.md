@@ -14,6 +14,11 @@
 ## Concept
 Multi-camera RTSP object detection pipeline using YOLOv8. The sample demonstrates concurrent stream ingestion, batched runtime behavior, and per-stream annotated output writing.
 
+## Preview
+Snippet from a pipeline run:
+
+![Multistream RTSP detection preview](../../../assets/portal/object-detection/multistream-rtsp-detection-pipeline/image.png)
+
 ## Architecture
 
 ### Pipeline
