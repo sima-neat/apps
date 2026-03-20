@@ -784,6 +784,14 @@ select {
   line-height: 1.72;
 }
 
+.markdown-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 18px 0;
+  border-radius: 18px;
+}
+
 .markdown-body pre {
   overflow-x: auto;
   padding: 16px;

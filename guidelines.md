@@ -83,6 +83,7 @@ Each example README must be updated when paths or behavior-relevant commands cha
 At minimum, include:
 - Metadata
 - Concept
+- Preview (optional, immediately after Concept when present)
 - Prerequisites
 - Command-line options
 - Build
@@ -94,6 +95,8 @@ Path examples in README must use current layout:
 - `examples/<category>/<example>/python/main.py`
 - `examples/<category>/<example>/python/requirements.txt`
 - CMake direct build from `.../<example>/cpp`
+- Optional portal demo screenshots should live at `assets/portal/<category>/<example>/image.*`
+- When a screenshot is present, keep it in `## Preview` immediately after `## Concept`
 
 ## CMake and CI/CD Notes
 - Category CMake files must register examples via `<example>/cpp`.

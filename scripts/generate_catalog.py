@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
 FIELD_RE = re.compile(r"^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$")
 H2_RE = re.compile(r"^##\s+(.+?)\s*$")
+IMAGE_LINK_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 IMAGE_CANDIDATES = (
     "assets/card.png",
     "assets/card.jpg",
@@ -54,8 +55,52 @@ def parse_metadata(content: str) -> dict[str, str] | None:
     return fields or None
 
 
-def parse_sections(content: str) -> list[dict[str, str]]:
+def portal_asset_relative_path(rel: Path) -> str | None:
+    if rel.parts[:2] == ("assets", "portal"):
+        return str(Path("example-assets") / Path(*rel.parts[2:]))
+    if rel.parts and rel.parts[0] == "examples":
+        return str(Path("example-assets") / rel.parent.relative_to("examples") / rel.name)
+    return None
+
+
+def rewrite_markdown_images(markdown: str, readme_path: Path) -> tuple[str, list[str]]:
+    repo_root_resolved = REPO_ROOT.resolve()
+    asset_paths: list[str] = []
+    seen_paths: set[str] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        alt_text, raw_path = match.groups()
+        path_text = raw_path.strip().strip("<>")
+
+        if "://" in path_text or path_text.startswith(("data:", "#")):
+            return match.group(0)
+
+        resolved = (readme_path.parent / path_text).resolve()
+        try:
+            repo_relative = resolved.relative_to(repo_root_resolved)
+        except ValueError:
+            return match.group(0)
+
+        if not resolved.exists():
+            return match.group(0)
+
+        public_path = portal_asset_relative_path(repo_relative)
+        if public_path is None:
+            return match.group(0)
+
+        repo_relative_str = str(repo_relative)
+        if repo_relative_str not in seen_paths:
+            asset_paths.append(repo_relative_str)
+            seen_paths.add(repo_relative_str)
+
+        return f"![{alt_text}](./{public_path})"
+
+    return IMAGE_LINK_RE.sub(replace, markdown), asset_paths
+
+
+def parse_sections(content: str, readme_path: Path) -> tuple[list[dict[str, str]], list[str]]:
     sections: list[dict[str, str]] = []
+    asset_paths: list[str] = []
     current_title: str | None = None
     current_lines: list[str] = []
 
@@ -64,6 +109,10 @@ def parse_sections(content: str) -> list[dict[str, str]]:
         if current_title is None:
           return
         body = "\n".join(current_lines).strip()
+        body, section_asset_paths = rewrite_markdown_images(body, readme_path)
+        for asset_path in section_asset_paths:
+            if asset_path not in asset_paths:
+                asset_paths.append(asset_path)
         sections.append({
             "title": current_title,
             "slug": slugify(current_title),
@@ -82,7 +131,7 @@ def parse_sections(content: str) -> list[dict[str, str]]:
         if current_title is not None:
             current_lines.append(line)
     flush()
-    return sections
+    return sections, asset_paths
 
 
 def slugify(value: str) -> str:
@@ -129,7 +178,7 @@ def parse_example(readme: Path) -> dict | None:
     app_dir = readme.parent
     category = app_dir.parent.name
     app_name = app_dir.name
-    sections = parse_sections(content)
+    sections, asset_paths = parse_sections(content, readme)
     sections_by_slug = section_map(sections)
     concept = sections_by_slug.get("concept", {"markdown": ""})["markdown"]
 
@@ -146,6 +195,7 @@ def parse_example(readme: Path) -> dict | None:
         "source_path": str(app_dir.relative_to(REPO_ROOT)),
         "readme_path": str(readme.relative_to(REPO_ROOT)),
         "image_path": find_image_path(app_dir),
+        "asset_paths": asset_paths,
         "summary": first_nonempty_paragraph(concept),
         "metadata": metadata,
         "sections": sections,

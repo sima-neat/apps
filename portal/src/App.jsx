@@ -252,7 +252,7 @@ function ExampleCard({ example }) {
     <Link className="app-card" to={`/app/${encodeURIComponent(example.id)}`}>
       <div className="card-image">
         <img
-          src={example.image_path ? `./${example.image_path}` : fallbackImage}
+          src={fallbackImage}
           alt={displayName}
         />
       </div>

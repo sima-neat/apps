@@ -14,6 +14,13 @@
 ## Concept
 <1-2 paragraphs: what this example demonstrates and which NEAT capabilities it exercises.>
 
+## Preview
+Optional. If you have a demo screenshot for the portal detail page, place it here immediately after `Concept`.
+
+```md
+![Demo screenshot](../../../assets/portal/<category>/<example>/image.png)
+```
+
 ## Supported Models
 Also works with: `<model_variant_1>`, `<model_variant_2>`
 
