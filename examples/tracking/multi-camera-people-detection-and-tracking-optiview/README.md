@@ -12,19 +12,15 @@
 | Model | yolo_v8m |
 
 ## Concept
-Multi-camera people detection and tracking example with RTSP inputs,
-mixed-resolution support, per-stream worker threads, OptiView live video plus
-JSON metadata output, and optional sampled overlay saves.
+Multi-camera people detection and tracking example with RTSP inputs, mixed-resolution support, per-stream worker threads, OptiView live video plus JSON metadata output, and optional sampled overlay saves.
 
-Both the Python and C++ entrypoints keep the detector graph explicit rather than
-hiding it behind a single `model.run(...)` call:
+Both the Python and C++ entrypoints keep the detector graph explicit rather than hiding it behind a single `model.run(...)` call:
 
 `RTSP decode -> CPU letterbox/normalize -> QuantTess -> MLA -> SimaBoxDecode -> tracker -> clean H264/OptiView + tracked JSON`
 
-Each RTSP stream gets its own source, detection, tracker, encoder, and OptiView
-publisher runtime so
-native stream resolution can be preserved per camera.
+Each RTSP stream gets its own source, detection, tracker, encoder, and OptiView publisher runtime so native stream resolution can be preserved per camera.
 
+## Preview
 Demo screenshot from a live run:
 
 ![Multi-camera OptiView tracking demo](../../../assets/portal/tracking/multi-camera-people-detection-and-tracking-optiview/image.png)
