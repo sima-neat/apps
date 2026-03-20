@@ -89,6 +89,7 @@ Download any variant into `assets/models/`:
 ## Important Behavior
 - `--model`, `--output`, and at least one `--rtsp` are required.
 - Use repeated `--rtsp` flags for multistream input.
+- The C++ implementation does not accept `--width` or `--height`; it probes each RTSP stream during setup and uses that per-stream geometry for decode, infer-session input sizing, and `SimaBoxDecode` box coordinates.
 - Output images are written per stream under the output directory.
 
 ## Command-Line Options
@@ -175,6 +176,7 @@ python examples/object-detection/multistream-rtsp-detection-pipeline/python/main
 
 ## Debugging Notes
 - Start with one stream first, then scale to multiple URLs.
+- If boxes look shifted or stretched, confirm the stream is being probed at the expected runtime resolution in the startup log and avoid assuming `1280x720` geometry for smaller RTSP sources.
 - If streams stall, check pull timeout, queue sizes, and RTSP source health.
 - If no detections appear, verify model path and labels file.
 
