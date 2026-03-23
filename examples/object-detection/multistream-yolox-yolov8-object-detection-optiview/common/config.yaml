@@ -1,0 +1,34 @@
+model:
+  path: assets/models/yolo_v8m_mpk.tar.gz
+  family: auto
+
+streams:
+  - rtsp://192.168.0.56:8554/src1
+  - rtsp://192.168.0.56:8554/src2
+  - rtsp://192.168.0.56:8554/src5
+  - rtsp://192.168.0.56:8554/src6
+
+input:
+  tcp: true
+  latency_ms: 100
+
+runtime:
+  worker_count: 9
+  mailbox_depth: 1
+  profile: true
+
+inference:
+  frames: 0
+  fps: 0
+  min_score: 0.60
+  nms_iou: 0.45
+  max_detections: 100
+
+output:
+  optiview:
+    host: 192.168.0.56
+    video_port_base: 9000
+    json_port_base: 9100
+  video_mode: clean
+  debug_dir: null
+  save_every: 0
