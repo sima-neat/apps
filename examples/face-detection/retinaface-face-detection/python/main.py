@@ -1,12 +1,11 @@
 """RetinaFace face detection example using a compiled NEAT model.
 
-This script is intentionally minimal. It:
-  - Loads the compiled RetinaFace model from a fixed path
-  - Runs inference on a single input image
-  - Prints basic information about the output tensors
-
-You can later extend this with proper RetinaFace post-processing
-to decode bounding boxes and landmarks and visualize them.
+This script performs an end-to-end single-image RetinaFace pipeline:
+  - Preprocesses the input image for the model (mean subtraction + pad + resize)
+  - Runs inference through a NEAT Session
+  - Decodes RetinaFace outputs into face boxes, confidence scores, and landmarks
+  - Applies confidence filtering and NMS
+  - Optionally writes an annotated output image
 """
 
 from __future__ import annotations
@@ -668,5 +667,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 

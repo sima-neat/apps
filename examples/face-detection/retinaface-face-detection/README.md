@@ -6,6 +6,7 @@
 | Category | face-detection |
 | Difficulty | Beginner |
 | Tags | retinaface, face-detection |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | retinaface-face-detection |
 | Model | retinaface_mobilenet25 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz] |
@@ -24,36 +25,90 @@ In this app, the compiled `retinaface_mobilenet25` package is run on an input im
 
 ## Preview
 <p align="center">
-  <img src="./retina-face.png" alt="RetinaFace output before" width="49%" />
-  <img src="./retina-face-after.png" alt="RetinaFace output after" width="49%" />
+  <img src="./assets/portal/retina-face.png" alt="RetinaFace output before" width="49%" />
+  <img src="./assets/portal/retina-face-after.png" alt="RetinaFace output after" width="49%" />
 </p>
 
 ## Prerequisites
-- Installed NEAT SDK + built apps artifacts.
-- Model package available on disk. By default this example uses:
-  - `apps/assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz`
-- To fetch it directly into `assets/models/`, run:
-  - `./scripts/download_models.sh retinaface_mobilenet25`
+- Installed NEAT SDK.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get retinaface_mobilenet25 && cd ../..`
+
+## Important Behavior
+- Input and output paths are user-provided.
+- Detection confidence (`--conf`) and NMS IoU (`--nms`) control final detection count.
+- By default, detections include 5-point facial landmarks unless `--no-landmarks` is set.
+
+## Command-Line Options
+### C++
+- Invocation:
+  `./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--max-draw <count>] [--profile] [--num-runs <count>] [--no-landmarks]`
+- Required arguments:
+  `<input_image_path>`
+- Optional arguments:
+  `--model`, `--output`, `--conf`, `--nms`, `--top-k`, `--keep-top-k`, `--max-draw`, `--profile`, `--num-runs`, `--no-landmarks`
+
+### Python
+- Invocation:
+  `python3 examples/face-detection/retinaface-face-detection/python/main.py <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--profile] [--num-runs <count>] [--no-landmarks] [--verbose]`
+- Required arguments:
+  `<input_image_path>`
+- Optional arguments:
+  `--model`, `--output`, `--conf`, `--nms`, `--top-k`, `--keep-top-k`, `--profile`, `--num-runs`, `--no-landmarks`, `--verbose`
+
+## Build
+### Build From The Apps Repo
+```bash
+cd <apps-repo-root>
+./build.sh
+```
+
+Binary output:
+```bash
+./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection
+```
+
+### Build This Example Directly With CMake
+```bash
+cd <apps-repo-root>/examples/face-detection/retinaface-face-detection
+cmake -S cpp -B build
+cmake --build build -j
+```
+
+Binary output:
+```bash
+./build/retinaface-face-detection
+```
 
 ## Run
 ### C++
 ```bash
-./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection \
-  apps/assets/test_images/image.png \
-  --model apps/assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
-  --output /tmp/retinaface_out.png \
+./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection \
+  <input_image_path> \
+  --model assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
+  --output <output_image_path> \
   --conf 0.4 --nms 0.9
 ```
 
 ### Python
 ```bash
-python apps/examples/face-detection/retinaface-face-detection/python/main.py \
-  apps/assets/test_images/image.png \
-  --model apps/assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
-  --output /tmp/retinaface_out.png \
+source ~/pyneat/bin/activate
+pip install -r examples/face-detection/retinaface-face-detection/python/requirements.txt
+python3 examples/face-detection/retinaface-face-detection/python/main.py \
+  <input_image_path> \
+  --model assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
+  --output <output_image_path> \
   --conf 0.4 --nms 0.9
 ```
 
+## Debugging Notes
+- If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.
+- If no detections appear, lower `--conf` (for example `0.25`) and confirm the input actually contains faces.
+- If too many duplicate boxes appear, reduce `--nms` and/or lower `--top-k`.
+- If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.
+
 ## Source Files
 - C++ source: `cpp/main.cpp`
+- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
 - Python source: `python/main.py`
+- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
