@@ -12,6 +12,8 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -173,33 +175,91 @@ static std::vector<Prior> make_priors(int image_h, int image_w) {
   return priors;
 }
 
-static inline float sigmoid(float x) {
-  return 1.0f / (1.0f + std::exp(-x));
+struct TensorDims4 {
+  int64_t batch = 0;
+  int64_t d1 = 0;
+  int64_t d2 = 0;
+  int64_t d3 = 0;
+};
+
+static TensorDims4 get_tensor_dims_4d_batch1(const simaai::neat::Tensor& t, const char* tensor_name) {
+  if (t.shape.size() != 4) {
+    throw std::runtime_error(std::string(tensor_name) + ": expected rank-4 tensor");
+  }
+  TensorDims4 dims;
+  dims.batch = t.shape[0];
+  dims.d1 = t.shape[1];
+  dims.d2 = t.shape[2];
+  dims.d3 = t.shape[3];
+  if (dims.batch != 1) {
+    throw std::runtime_error(std::string(tensor_name) + ": expected batch size 1");
+  }
+  if (dims.d1 <= 0 || dims.d2 <= 0 || dims.d3 <= 0) {
+    throw std::runtime_error(std::string(tensor_name) + ": invalid tensor shape");
+  }
+  return dims;
 }
 
-// Transpose from (W, C, H) to (H, W, C) into a contiguous vector.
-// Your tensors print as [1, W, C, H] (e.g. [1,40,4,40]). Python does transpose(0,3,1,2),
-// i.e. [1,W,C,H] -> [1,H,W,C]. This helper drops batch and produces (H,W,C).
-static std::vector<float> transpose_wch_to_hwc(const std::vector<float>& in, int W, int C, int H) {
-  const size_t N = static_cast<size_t>(W) * static_cast<size_t>(C) * static_cast<size_t>(H);
-  if (in.size() != N) {
-    throw std::runtime_error("transpose_wch_to_hwc: unexpected input size");
+// Match Python exactly:
+// arr = arr.transpose(0, 3, 1, 2)
+// Input is [1, d1, d2, d3], output is [1, d3, d1, d2], batch dropped.
+static std::vector<float> transpose_0312_drop_batch(const std::vector<float>& in, const TensorDims4& dims,
+                                                     const char* tensor_name) {
+  const size_t elems =
+      static_cast<size_t>(dims.d1) * static_cast<size_t>(dims.d2) * static_cast<size_t>(dims.d3);
+  if (in.size() != elems) {
+    throw std::runtime_error(std::string(tensor_name) + ": unexpected raw tensor size");
   }
-  std::vector<float> out(static_cast<size_t>(H) * static_cast<size_t>(W) * static_cast<size_t>(C));
-  for (int w = 0; w < W; ++w) {
-    for (int c = 0; c < C; ++c) {
-      for (int h = 0; h < H; ++h) {
-        const size_t src = (static_cast<size_t>(w) * static_cast<size_t>(C) + static_cast<size_t>(c)) *
-                               static_cast<size_t>(H) +
-                           static_cast<size_t>(h);
-        const size_t dst = (static_cast<size_t>(h) * static_cast<size_t>(W) + static_cast<size_t>(w)) *
-                               static_cast<size_t>(C) +
+  std::vector<float> out(elems);
+  for (int64_t a = 0; a < dims.d3; ++a) {
+    for (int64_t b = 0; b < dims.d1; ++b) {
+      for (int64_t c = 0; c < dims.d2; ++c) {
+        const size_t src = (static_cast<size_t>(b) * static_cast<size_t>(dims.d2) + static_cast<size_t>(c)) *
+                               static_cast<size_t>(dims.d3) +
+                           static_cast<size_t>(a);
+        const size_t dst = (static_cast<size_t>(a) * static_cast<size_t>(dims.d1) + static_cast<size_t>(b)) *
+                               static_cast<size_t>(dims.d2) +
                            static_cast<size_t>(c);
         out[dst] = in[src];
       }
     }
   }
   return out;
+}
+
+// Match Python exactly:
+// transposed.reshape(1, -1, group_size)
+static std::vector<float> reshape_rows_grouped(const std::vector<float>& transposed, int64_t channels,
+                                               int group_size, const char* tensor_name) {
+  if (channels <= 0 || channels % group_size != 0) {
+    throw std::runtime_error(std::string(tensor_name) + ": channels not divisible by group size");
+  }
+  if (transposed.size() % static_cast<size_t>(channels) != 0) {
+    throw std::runtime_error(std::string(tensor_name) + ": transposed size is not channel-aligned");
+  }
+
+  const size_t cells = transposed.size() / static_cast<size_t>(channels);
+  std::vector<float> rows;
+  rows.reserve((transposed.size() / static_cast<size_t>(group_size)) * static_cast<size_t>(group_size));
+
+  for (size_t cell = 0; cell < cells; ++cell) {
+    const size_t base = cell * static_cast<size_t>(channels);
+    for (int64_t off = 0; off < channels; off += group_size) {
+      for (int g = 0; g < group_size; ++g) {
+        rows.push_back(transposed[base + static_cast<size_t>(off) + static_cast<size_t>(g)]);
+      }
+    }
+  }
+  return rows;
+}
+
+static void append_rows_python_style(const simaai::neat::Tensor& tensor, int group_size, const char* tensor_name,
+                                     std::vector<float>& out_rows) {
+  const TensorDims4 dims = get_tensor_dims_4d_batch1(tensor, tensor_name);
+  const std::vector<float> raw = tensor_to_f32(tensor);
+  const std::vector<float> transposed = transpose_0312_drop_batch(raw, dims, tensor_name);
+  const std::vector<float> rows = reshape_rows_grouped(transposed, dims.d2, group_size, tensor_name);
+  out_rows.insert(out_rows.end(), rows.begin(), rows.end());
 }
 
 static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors, std::vector<Detection>& out,
@@ -209,38 +269,38 @@ static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors, std
     throw std::runtime_error("expected exactly 9 tensors for RetinaFace (got " + std::to_string(tensors.size()) + ")");
   }
 
-  // Follow the Python example exactly:
-  // - treat raw outputs as (1, H, C, W) based on printed shapes
-  // - apply transpose(0,3,1,2) => (1, W, H, C)
-  // - flatten in width-major order
+  // Match Python parse_retinaface_outputs exactly:
+  // tensors order = [land2, land1, land0, box2, box1, box0, cls2, cls1, cls0]
+  // then concatenate as [level0(80), level1(40), level2(20)] after transpose+reshape.
+  std::vector<float> land_rows; // flattened rows of 10
+  std::vector<float> box_rows;  // flattened rows of 4
+  std::vector<float> cls_rows;  // flattened rows of 2 (logits)
 
-  // Order matches Python example: [land2, land1, land0, box2, box1, box0, cls2, cls1, cls0]
-  const auto land2_raw = tensor_to_f32(tensors[0]); // [1,20,20,20]
-  const auto land1_raw = tensor_to_f32(tensors[1]); // [1,40,20,40]
-  const auto land0_raw = tensor_to_f32(tensors[2]); // [1,80,20,80]
-  const auto box2_raw = tensor_to_f32(tensors[3]);  // [1,20,8,20]
-  const auto box1_raw = tensor_to_f32(tensors[4]);  // [1,40,8,40]
-  const auto box0_raw = tensor_to_f32(tensors[5]);  // [1,80,8,80]
-  const auto cls2_raw = tensor_to_f32(tensors[6]);  // [1,20,4,20]
-  const auto cls1_raw = tensor_to_f32(tensors[7]);  // [1,40,4,40]
-  const auto cls0_raw = tensor_to_f32(tensors[8]);  // [1,80,4,80]
+  append_rows_python_style(tensors[2], /*group_size=*/10, "land0", land_rows);
+  append_rows_python_style(tensors[1], /*group_size=*/10, "land1", land_rows);
+  append_rows_python_style(tensors[0], /*group_size=*/10, "land2", land_rows);
 
-  // Convert W,C,H -> H,W,C (drop batch=1)
-  const auto land0 = transpose_wch_to_hwc(land0_raw, /*W=*/80, /*C=*/20, /*H=*/80);
-  const auto land1 = transpose_wch_to_hwc(land1_raw, /*W=*/40, /*C=*/20, /*H=*/40);
-  const auto land2 = transpose_wch_to_hwc(land2_raw, /*W=*/20, /*C=*/20, /*H=*/20);
+  append_rows_python_style(tensors[5], /*group_size=*/4, "box0", box_rows);
+  append_rows_python_style(tensors[4], /*group_size=*/4, "box1", box_rows);
+  append_rows_python_style(tensors[3], /*group_size=*/4, "box2", box_rows);
 
-  const auto box0 = transpose_wch_to_hwc(box0_raw, /*W=*/80, /*C=*/8, /*H=*/80);
-  const auto box1 = transpose_wch_to_hwc(box1_raw, /*W=*/40, /*C=*/8, /*H=*/40);
-  const auto box2 = transpose_wch_to_hwc(box2_raw, /*W=*/20, /*C=*/8, /*H=*/20);
-
-  const auto cls0 = transpose_wch_to_hwc(cls0_raw, /*W=*/80, /*C=*/4, /*H=*/80);
-  const auto cls1 = transpose_wch_to_hwc(cls1_raw, /*W=*/40, /*C=*/4, /*H=*/40);
-  const auto cls2 = transpose_wch_to_hwc(cls2_raw, /*W=*/20, /*C=*/4, /*H=*/20);
+  append_rows_python_style(tensors[8], /*group_size=*/2, "cls0", cls_rows);
+  append_rows_python_style(tensors[7], /*group_size=*/2, "cls1", cls_rows);
+  append_rows_python_style(tensors[6], /*group_size=*/2, "cls2", cls_rows);
 
   const std::vector<Prior> priors = make_priors(kInferH, kInferW);
   if (priors.size() != 16800) {
     throw std::runtime_error("unexpected priors count: " + std::to_string(priors.size()));
+  }
+  const size_t num_rows = priors.size();
+  if (box_rows.size() != num_rows * 4) {
+    throw std::runtime_error("box rows size mismatch vs priors");
+  }
+  if (cls_rows.size() != num_rows * 2) {
+    throw std::runtime_error("class rows size mismatch vs priors");
+  }
+  if (land_rows.size() != num_rows * 10) {
+    throw std::runtime_error("landmark rows size mismatch vs priors");
   }
 
   struct Cand {
@@ -249,74 +309,48 @@ static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors, std
   };
 
   std::vector<Cand> cands;
-  cands.reserve(2000);
-
-  size_t prior_idx = 0;
-  auto process_level = [&](int H, int W, const std::vector<float>& box_whc, const std::vector<float>& cls_whc,
-                           const std::vector<float>& land_whc, int boxC, int clsC, int landC) {
-    // Iterate H-major then W-major to match RetinaFaceSpy + HWC flattening.
-    for (int y = 0; y < H; ++y) {
-      for (int x = 0; x < W; ++x) {
-        const size_t cell = (static_cast<size_t>(y) * static_cast<size_t>(W) + static_cast<size_t>(x));
-        const size_t box_base = cell * static_cast<size_t>(boxC);
-        const size_t cls_base = cell * static_cast<size_t>(clsC);
-        const size_t land_base = cell * static_cast<size_t>(landC);
-
-        for (int a = 0; a < 2; ++a) {
-          const Prior& p = priors[prior_idx++];
-
-          // class logits are [bg, face]
-          const float bg = cls_whc[cls_base + static_cast<size_t>(a * 2 + 0)];
-          const float fg = cls_whc[cls_base + static_cast<size_t>(a * 2 + 1)];
-          // softmax for 2-class
-          const float m = std::max(bg, fg);
-          const float e0 = std::exp(bg - m);
-          const float e1 = std::exp(fg - m);
-          const float prob = e1 / (e0 + e1);
-          if (prob < conf_thr) {
-            continue;
-          }
-
-          // bbox loc: [dx, dy, dw, dh]
-          const float dx = box_whc[box_base + static_cast<size_t>(a * 4 + 0)];
-          const float dy = box_whc[box_base + static_cast<size_t>(a * 4 + 1)];
-          const float dw = box_whc[box_base + static_cast<size_t>(a * 4 + 2)];
-          const float dh = box_whc[box_base + static_cast<size_t>(a * 4 + 3)];
-
-          const float cx = p.cx + dx * kVariance[0] * p.sx;
-          const float cy = p.cy + dy * kVariance[0] * p.sy;
-          const float w = p.sx * std::exp(dw * kVariance[1]);
-          const float h = p.sy * std::exp(dh * kVariance[1]);
-          float x1 = cx - w / 2.0f;
-          float y1 = cy - h / 2.0f;
-          float x2 = cx + w / 2.0f;
-          float y2 = cy + h / 2.0f;
-
-          std::optional<std::array<float, 10>> landm;
-          if (with_landmarks) {
-            std::array<float, 10> lm{};
-            for (int i = 0; i < 10; ++i) {
-              const float v = land_whc[land_base + static_cast<size_t>(a * 10 + i)];
-              // decode_landm uses: priors_xy + pre * var0 * priors_wh
-              if (i % 2 == 0) {
-                lm[static_cast<size_t>(i)] = p.cx + v * kVariance[0] * p.sx;
-              } else {
-                lm[static_cast<size_t>(i)] = p.cy + v * kVariance[0] * p.sy;
-              }
-            }
-            landm = lm;
-          }
-
-          cands.push_back(Cand{x1, y1, x2, y2, prob, landm});
-        }
-      }
+  cands.reserve(2048);
+  for (size_t i = 0; i < num_rows; ++i) {
+    const float bg = cls_rows[i * 2 + 0];
+    const float fg = cls_rows[i * 2 + 1];
+    const float m = std::max(bg, fg);
+    const float e0 = std::exp(bg - m);
+    const float e1 = std::exp(fg - m);
+    const float prob = e1 / (e0 + e1);
+    if (!(prob > conf_thr)) {
+      continue;
     }
-  };
 
-  // Levels correspond to 80x80 (step 8), 40x40 (step 16), 20x20 (step 32)
-  process_level(80, 80, box0, cls0, land0, /*boxC=*/8, /*clsC=*/4, /*landC=*/20);
-  process_level(40, 40, box1, cls1, land1, /*boxC=*/8, /*clsC=*/4, /*landC=*/20);
-  process_level(20, 20, box2, cls2, land2, /*boxC=*/8, /*clsC=*/4, /*landC=*/20);
+    const Prior& p = priors[i];
+    const float dx = box_rows[i * 4 + 0];
+    const float dy = box_rows[i * 4 + 1];
+    const float dw = box_rows[i * 4 + 2];
+    const float dh = box_rows[i * 4 + 3];
+
+    const float cx = p.cx + dx * kVariance[0] * p.sx;
+    const float cy = p.cy + dy * kVariance[0] * p.sy;
+    const float w = p.sx * std::exp(dw * kVariance[1]);
+    const float h = p.sy * std::exp(dh * kVariance[1]);
+
+    Cand cand;
+    cand.x1 = cx - w / 2.0f;
+    cand.y1 = cy - h / 2.0f;
+    cand.x2 = cx + w / 2.0f;
+    cand.y2 = cy + h / 2.0f;
+    cand.score = prob;
+
+    if (with_landmarks) {
+      std::array<float, 10> lm{};
+      for (int j = 0; j < 10; j += 2) {
+        const float lx = land_rows[i * 10 + static_cast<size_t>(j)];
+        const float ly = land_rows[i * 10 + static_cast<size_t>(j + 1)];
+        lm[static_cast<size_t>(j)] = p.cx + lx * kVariance[0] * p.sx;
+        lm[static_cast<size_t>(j + 1)] = p.cy + ly * kVariance[0] * p.sy;
+      }
+      cand.landm = lm;
+    }
+    cands.push_back(cand);
+  }
 
   // Sort by score desc and keep top-k before NMS (like RetinaFaceSpy).
   std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.score > b.score; });
@@ -324,33 +358,43 @@ static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors, std
     cands.resize(static_cast<size_t>(top_k));
   }
 
-  auto iou = [](const Cand& a, const Cand& b) -> float {
-    const float xx1 = std::max(a.x1, b.x1);
-    const float yy1 = std::max(a.y1, b.y1);
-    const float xx2 = std::min(a.x2, b.x2);
-    const float yy2 = std::min(a.y2, b.y2);
-    const float w = std::max(0.0f, xx2 - xx1);
-    const float h = std::max(0.0f, yy2 - yy1);
-    const float inter = w * h;
-    const float area_a = std::max(0.0f, a.x2 - a.x1) * std::max(0.0f, a.y2 - a.y1);
-    const float area_b = std::max(0.0f, b.x2 - b.x1) * std::max(0.0f, b.y2 - b.y1);
-    const float den = area_a + area_b - inter;
-    return den > 0.0f ? inter / den : 0.0f;
-  };
+  // Match Python py_cpu_nms (+1 convention for area/intersection).
+  std::vector<size_t> order(cands.size());
+  for (size_t i = 0; i < cands.size(); ++i) {
+    order[i] = i;
+  }
+  std::vector<size_t> keep_idx;
+  keep_idx.reserve(cands.size());
+  while (!order.empty()) {
+    const size_t i = order.front();
+    keep_idx.push_back(i);
 
-  std::vector<Cand> kept;
-  kept.reserve(cands.size());
-  for (const auto& cand : cands) {
-    bool suppress = false;
-    for (const auto& k : kept) {
-      if (iou(cand, k) > nms_iou) {
-        suppress = true;
-        break;
+    std::vector<size_t> next;
+    next.reserve(order.size() > 0 ? order.size() - 1 : 0);
+    const float area_i = (cands[i].x2 - cands[i].x1 + 1.0f) * (cands[i].y2 - cands[i].y1 + 1.0f);
+    for (size_t p = 1; p < order.size(); ++p) {
+      const size_t j = order[p];
+      const float xx1 = std::max(cands[i].x1, cands[j].x1);
+      const float yy1 = std::max(cands[i].y1, cands[j].y1);
+      const float xx2 = std::min(cands[i].x2, cands[j].x2);
+      const float yy2 = std::min(cands[i].y2, cands[j].y2);
+      const float w = std::max(0.0f, xx2 - xx1 + 1.0f);
+      const float h = std::max(0.0f, yy2 - yy1 + 1.0f);
+      const float inter = w * h;
+      const float area_j = (cands[j].x2 - cands[j].x1 + 1.0f) * (cands[j].y2 - cands[j].y1 + 1.0f);
+      const float den = area_i + area_j - inter;
+      const float ovr = den > 0.0f ? (inter / den) : 0.0f;
+      if (ovr <= nms_iou) {
+        next.push_back(j);
       }
     }
-    if (!suppress) {
-      kept.push_back(cand);
-    }
+    order.swap(next);
+  }
+
+  std::vector<Cand> kept;
+  kept.reserve(keep_idx.size());
+  for (const size_t i : keep_idx) {
+    kept.push_back(cands[i]);
   }
 
   // Keep top-k after NMS (like RetinaFaceSpy).
@@ -632,4 +676,3 @@ int main(int argc, char** argv) {
     return 2;
   }
 }
-
