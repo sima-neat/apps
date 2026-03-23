@@ -85,6 +85,7 @@ struct StreamRuntime {
   QuantTessCpuPreprocState quant_preproc_state;
   SessionRun source;
   SessionRun video;
+  bool video_enabled = true;
   sima_examples::OptiViewSender json_sender;
   std::vector<std::string> class_labels;
   StreamMetrics metrics;
@@ -157,6 +158,10 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
                                     const QuantTessCpuPreproc& quant_preproc,
                                     const std::vector<std::string>& class_labels) {
   const RtspProbe probe = probe_rtsp(url);
+  SessionRun video_run;
+  if (cfg.video_enabled) {
+    video_run = build_optiview_video_run(cfg, probe, index);
+  }
   return StreamRuntime{
       index,
       url,
@@ -164,7 +169,8 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
       probe,
       build_cpu_quanttess_preproc_state(quant_preproc, probe.width, probe.height),
       build_source_run(cfg, url, probe),
-      build_optiview_video_run(cfg, probe, index),
+      std::move(video_run),
+      cfg.video_enabled,
       build_optiview_json_output(cfg, index),
       class_labels,
   };
@@ -198,11 +204,15 @@ std::vector<WorkerContext> build_worker_contexts(
 }
 
 void close_stream_runtime(StreamRuntime& stream) {
-  for (auto* run : {&stream.video.run, &stream.source.run}) {
+  if (stream.video_enabled) {
     try {
-      run->close();
+      stream.video.run.close();
     } catch (...) {
     }
+  }
+  try {
+    stream.source.run.close();
+  } catch (...) {
   }
 }
 
@@ -239,6 +249,19 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
       if (cfg.frames > 0 && frame_index >= cfg.frames) {
         break;
       }
+      if (emit_period_s > 0.0) {
+        const double now = now_steady_s();
+        if (!next_allowed_emit_s.has_value()) {
+          next_allowed_emit_s = now;
+        }
+        if (now < *next_allowed_emit_s) {
+          std::this_thread::sleep_for(std::chrono::duration<double>(*next_allowed_emit_s - now));
+          continue;
+        }
+        while (*next_allowed_emit_s <= now) {
+          *next_allowed_emit_s += emit_period_s;
+        }
+      }
       const double t0 = now_steady_s();
       const int pull_timeout_ms =
           frame_index == 0 ? kSourceStartupPullTimeoutMs : kSourcePullTimeoutMs;
@@ -254,18 +277,6 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
       }
 
       empty_pulls = 0;
-      if (emit_period_s > 0.0) {
-        const double now = now_steady_s();
-        if (!next_allowed_emit_s.has_value()) {
-          next_allowed_emit_s = now;
-        }
-        if (now < *next_allowed_emit_s) {
-          continue;
-        }
-        while (*next_allowed_emit_s <= now) {
-          *next_allowed_emit_s += emit_period_s;
-        }
-      }
 
       FramePacket packet;
       packet.frame = tensor_rgb_from_sample(*sample);
@@ -317,11 +328,14 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
 
   const auto detections =
       detections_from_detector_sample(stream.family, det_sample, stream.probe.width, stream.probe.height);
-  const cv::Mat frame_out = render_frame(stream, cfg, packet.frame, detections);
+  const bool needs_output_frame =
+      stream.video_enabled || (cfg.output_dir.has_value() && cfg.save_every > 0);
+  const cv::Mat frame_out = needs_output_frame ? render_frame(stream, cfg, packet.frame, detections)
+                                               : packet.frame;
 
   const double publish_t0 = now_steady_s();
   const double video_t0 = now_steady_s();
-  if (!stream.video.run.push(frame_out)) {
+  if (stream.video_enabled && !stream.video.run.push(frame_out)) {
     throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView video push failed");
   }
   const double video_elapsed = now_steady_s() - video_t0;
@@ -556,7 +570,13 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
     std::cout << "[stream " << stream.index << "] " << stream.probe.width << "x" << stream.probe.height
               << " @" << effective_writer_fps(cfg, stream.probe) << "fps " << stream.url
               << " -> optiview://" << cfg.optiview_host
-              << " video=" << optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index)
+              << " video=";
+    if (stream.video_enabled) {
+      std::cout << optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index);
+    } else {
+      std::cout << "disabled";
+    }
+    std::cout
               << " json=" << optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index)
               << "\n";
   }

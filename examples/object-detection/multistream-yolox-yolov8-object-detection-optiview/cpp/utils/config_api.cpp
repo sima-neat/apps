@@ -36,6 +36,7 @@ struct AppConfig {
   int optiview_video_port_base = 9000;
   int optiview_json_port_base = 9100;
   double optiview_json_offset_ms = 0.0;
+  bool video_enabled = true;
   VideoMode video_mode = VideoMode::Clean;
   std::optional<std::string> output_dir;
   int save_every = 0;

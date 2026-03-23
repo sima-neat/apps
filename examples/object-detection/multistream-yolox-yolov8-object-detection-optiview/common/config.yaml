@@ -7,6 +7,18 @@ streams:
   - rtsp://192.168.0.56:8554/src2
   - rtsp://192.168.0.56:8554/src5
   - rtsp://192.168.0.56:8554/src6
+  - rtsp://192.168.0.56:8554/src1
+  - rtsp://192.168.0.56:8554/src2
+  - rtsp://192.168.0.56:8554/src5
+  - rtsp://192.168.0.56:8554/src6
+  - rtsp://192.168.0.56:8554/src1
+  - rtsp://192.168.0.56:8554/src2
+  - rtsp://192.168.0.56:8554/src5
+  - rtsp://192.168.0.56:8554/src6
+  - rtsp://192.168.0.56:8554/src1
+  - rtsp://192.168.0.56:8554/src2
+  - rtsp://192.168.0.56:8554/src5
+  - rtsp://192.168.0.56:8554/src6
 
 input:
   tcp: true
@@ -29,6 +41,7 @@ output:
     host: 192.168.0.56
     video_port_base: 9000
     json_port_base: 9100
+  video_enabled: true
   video_mode: clean
   debug_dir: null
   save_every: 0

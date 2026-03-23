@@ -35,6 +35,7 @@ from .pipeline import (
     optiview_video_port_for_stream,
     probe_rtsp,
     read_preproc_contract,
+    source_output_every_n,
 )
 from .sample_utils import (
     detections_from_detector_sample,
@@ -201,7 +202,10 @@ def create_stream_runtime(
     probe = probe_rtsp(url)
     quant_preproc_state = build_cpu_quanttess_preproc_state(runtime, quant_preproc, probe.width, probe.height)
     source_session, source_run = build_source_run(runtime, cfg, url, probe)
-    video_session, video_run = build_optiview_video_run(runtime, cfg, probe, index)
+    if cfg.video_enabled:
+        video_session, video_run = build_optiview_video_run(runtime, cfg, probe, index)
+    else:
+        video_session, video_run = None, None
     json_sender = build_optiview_json_output(runtime, cfg, index)
     return StreamRuntime(
         index=index,
@@ -299,6 +303,15 @@ def producer_thread(
         while not stop_event.is_set():
             if cfg.frames > 0 and frame_index >= cfg.frames:
                 break
+            if emit_period_s > 0.0:
+                now = time.perf_counter()
+                if next_allowed_emit_s is None:
+                    next_allowed_emit_s = now
+                if now < next_allowed_emit_s:
+                    time.sleep(next_allowed_emit_s - now)
+                    continue
+                while next_allowed_emit_s <= now:
+                    next_allowed_emit_s += emit_period_s
             t0 = time.perf_counter()
             pull_timeout_ms = _SOURCE_STARTUP_PULL_TIMEOUT_MS if frame_index == 0 else _SOURCE_PULL_TIMEOUT_MS
             sample = stream.source_run.pull(timeout_ms=pull_timeout_ms)
@@ -310,14 +323,6 @@ def producer_thread(
                 continue
 
             empty_pulls = 0
-            if emit_period_s > 0.0:
-                now = time.perf_counter()
-                if next_allowed_emit_s is None:
-                    next_allowed_emit_s = now
-                if now < next_allowed_emit_s:
-                    continue
-                while next_allowed_emit_s <= now:
-                    next_allowed_emit_s += emit_period_s
 
             frame = tensor_rgb_from_sample(stream.runtime, sample)
             stream.metrics.mailbox_drops += mailbox.push(
@@ -375,13 +380,17 @@ def process_frame(
     )
 
     publish_t0 = time.perf_counter()
-    frame_out = render_frame(stream, cfg, packet.frame, detections)
+    needs_output_frame = (stream.video_run is not None) or bool(cfg.output_dir and cfg.save_every > 0)
+    frame_out = render_frame(stream, cfg, packet.frame, detections) if needs_output_frame else packet.frame
     pyneat = stream.runtime.pyneat
     video_t0 = time.perf_counter()
-    if not stream.video_run.push(frame_out, copy=True, image_format=pyneat.PixelFormat.RGB):
-        raise RuntimeError(f"stream {stream.index} OptiView video push failed")
+    if stream.video_run is not None:
+        if not stream.video_run.push(frame_out, copy=True, image_format=pyneat.PixelFormat.RGB):
+            raise RuntimeError(f"stream {stream.index} OptiView video push failed")
+        publish_wall_time_s = time.time()
+    else:
+        publish_wall_time_s = time.time()
     video_elapsed = time.perf_counter() - video_t0
-    publish_wall_time_s = time.time()
 
     objects, labels = make_optiview_detection_payload(
         pyneat,
@@ -578,7 +587,8 @@ def run_app(cfg: AppConfig, family: str) -> int:
         print(
             f"[stream {stream.index}] {stream.probe.width}x{stream.probe.height} "
             f"@{effective_writer_fps(cfg, stream.probe)}fps {stream.url} -> optiview://{cfg.optiview_host} "
-            f"video={optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index)} "
+            f"video="
+            f"{optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index) if cfg.video_enabled else 'disabled'} "
             f"json={optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index)}"
         )
 

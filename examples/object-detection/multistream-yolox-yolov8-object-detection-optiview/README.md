@@ -91,7 +91,9 @@ python3 examples/object-detection/multistream-yolox-yolov8-object-detection-opti
 
 ## Notes
 - `output.video_mode: clean` sends the original frame to OptiView. `annotated` draws detection boxes and labels before publishing.
+- `output.video_enabled: false` keeps JSON detections enabled while disabling per-stream H264 video output so you can isolate video encode/output cost during scaling tests.
 - `runtime.mailbox_depth` defaults to `1` and should usually stay small for dense multistream runs.
+- when `inference.fps` is lower than the source FPS, the source runtime now applies `EveryFrame(n)` decimation when it can reduce app-side work without obviously undershooting the requested rate.
 - `output.optiview.json_offset_ms` lets you shift JSON timestamps to better align OptiView boxes with the published video stream when transport latency makes boxes appear early or late.
 - profiling now prints `source`, `preproc`, `detect`, `video`, `json`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
 - `output.debug_dir` and `output.save_every` let you save periodic RGB debug frames locally without changing the OptiView output contract.

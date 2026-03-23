@@ -274,6 +274,7 @@ AppConfig load_app_config(const std::filesystem::path& path) {
       optional_int(raw, "output.optiview.json_port_base", 9100, "output.optiview.json_port_base");
   cfg.optiview_json_offset_ms =
       optional_double(raw, "output.optiview.json_offset_ms", 0.0, "output.optiview.json_offset_ms");
+  cfg.video_enabled = optional_bool(raw, "output.video_enabled", true, "output.video_enabled");
   cfg.video_mode =
       parse_video_mode(lookup_scalar(raw, "output.video_mode").value_or(std::string("clean")));
   if (const auto out_dir = lookup_scalar(raw, "output.debug_dir");

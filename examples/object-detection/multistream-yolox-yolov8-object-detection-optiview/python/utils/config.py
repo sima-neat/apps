@@ -38,6 +38,7 @@ class AppConfig:
     optiview_video_port_base: int
     optiview_json_port_base: int
     optiview_json_offset_ms: float
+    video_enabled: bool
     video_mode: str
     output_dir: str | None
     save_every: int
@@ -120,6 +121,7 @@ def load_app_config(path: str | Path) -> AppConfig:
         optiview_video_port_base=_optional_int(optiview_cfg, "video_port_base", 9000),
         optiview_json_port_base=_optional_int(optiview_cfg, "json_port_base", 9100),
         optiview_json_offset_ms=_optional_float(optiview_cfg, "json_offset_ms", 0.0),
+        video_enabled=bool(output_cfg.get("video_enabled", True)),
         video_mode=video_mode,
         output_dir=output_cfg.get("debug_dir"),
         save_every=_optional_int(output_cfg, "save_every", 0),

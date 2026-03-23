@@ -52,6 +52,12 @@ def effective_writer_fps(cfg: AppConfig, probe: RtspProbe) -> int:
     return cfg.fps if cfg.fps > 0 else max(probe.fps, 10)
 
 
+def source_output_every_n(cfg: AppConfig, probe: RtspProbe) -> int:
+    if cfg.fps <= 0 or probe.fps <= 0 or cfg.fps >= probe.fps:
+        return 1
+    return max(1, probe.fps // cfg.fps)
+
+
 def detector_stage_names(family: str) -> tuple[str, ...]:
     lowered = str(family).strip().lower()
     if lowered == "yolov8":
@@ -145,7 +151,7 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
 
     session = pyneat.Session()
     session.add(pyneat.groups.rtsp_decoded_input(ro))
-    session.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
+    session.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(source_output_every_n(cfg, probe))))
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 4
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest

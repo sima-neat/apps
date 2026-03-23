@@ -92,6 +92,7 @@ output:
     video_port_base: 9000
     json_port_base: 9100
     json_offset_ms: 12.5
+  video_enabled: false
   video_mode: clean
   debug_dir: null
   save_every: 0
@@ -107,6 +108,7 @@ output:
         assert cfg.mailbox_depth == 1
         assert cfg.profile is True
         assert cfg.optiview_json_offset_ms == pytest.approx(12.5)
+        assert cfg.video_enabled is False
         assert cfg.rtsp_urls == [
             "rtsp://127.0.0.1:8554/src1",
             "rtsp://127.0.0.1:8554/src2",
@@ -371,6 +373,14 @@ class TestSampleUtils:
 
 @pytest.mark.unit
 class TestPipelineBuilders:
+    def test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower(self) -> None:
+        from utils.pipeline import source_output_every_n
+
+        assert source_output_every_n(SimpleNamespace(fps=0), SimpleNamespace(fps=30)) == 1
+        assert source_output_every_n(SimpleNamespace(fps=20), SimpleNamespace(fps=30)) == 1
+        assert source_output_every_n(SimpleNamespace(fps=12), SimpleNamespace(fps=30)) == 2
+        assert source_output_every_n(SimpleNamespace(fps=10), SimpleNamespace(fps=30)) == 3
+
     def test_detector_stage_names_for_yolov8(self) -> None:
         from utils.pipeline import detector_stage_names
 

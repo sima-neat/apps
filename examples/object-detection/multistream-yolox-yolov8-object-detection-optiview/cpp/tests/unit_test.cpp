@@ -86,6 +86,7 @@ bool test_load_app_config_parses_runtime_worker_count() {
          "    video_port_base: 9000\n"
          "    json_port_base: 9100\n"
          "    json_offset_ms: 12.5\n"
+         "  video_enabled: false\n"
          "  video_mode: clean\n"
          "  debug_dir: null\n"
          "  save_every: 0\n";
@@ -101,6 +102,7 @@ bool test_load_app_config_parses_runtime_worker_count() {
     ok &= expect_true(cfg.mailbox_depth == 1, "config keeps mailbox_depth");
     ok &= expect_true(cfg.profile, "config keeps profile=true");
     ok &= expect_true(cfg.optiview_json_offset_ms == 12.5, "config keeps json_offset_ms");
+    ok &= expect_true(!cfg.video_enabled, "config keeps video_enabled=false");
     ok &= expect_true(cfg.video_mode == VideoMode::Clean, "config keeps clean video_mode");
     ok &= expect_true(cfg.rtsp_urls.size() == 2, "config keeps all streams");
   } catch (const std::exception& ex) {
@@ -372,6 +374,25 @@ bool test_detector_stage_names_cover_both_graphs() {
   return ok;
 }
 
+bool test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower() {
+  AppConfig cfg;
+  RtspProbe probe{640, 480, 30};
+
+  bool ok = true;
+  cfg.fps = 0;
+  ok &= expect_true(source_output_every_n(cfg, probe) == 1, "source every_n stays 1 when fps is uncapped");
+  cfg.fps = 20;
+  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
+                    "source every_n stays 1 when target fps is near source fps");
+  cfg.fps = 12;
+  ok &= expect_true(source_output_every_n(cfg, probe) == 2,
+                    "source every_n becomes 2 for 30fps source and 12fps target");
+  cfg.fps = 10;
+  ok &= expect_true(source_output_every_n(cfg, probe) == 3,
+                    "source every_n becomes 3 for 30fps source and 10fps target");
+  return ok;
+}
+
 } // namespace
 } // namespace multistream_yolox_yolov8_optiview
 
@@ -404,5 +425,6 @@ int main(int argc, char** argv) {
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
   ok &= test_detector_stage_names_cover_both_graphs();
+  ok &= test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower();
   return ok ? 0 : 1;
 }

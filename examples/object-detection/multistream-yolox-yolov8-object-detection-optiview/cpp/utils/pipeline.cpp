@@ -32,6 +32,13 @@ int effective_writer_fps(const AppConfig& cfg, const RtspProbe& probe) {
   return cfg.fps > 0 ? cfg.fps : std::max(probe.fps, 10);
 }
 
+int source_output_every_n(const AppConfig& cfg, const RtspProbe& probe) {
+  if (cfg.fps <= 0 || probe.fps <= 0 || cfg.fps >= probe.fps) {
+    return 1;
+  }
+  return std::max(1, probe.fps / cfg.fps);
+}
+
 RtspProbe probe_rtsp(const std::string& url) {
   cv::VideoCapture capture(url);
   if (!capture.isOpened()) {
@@ -106,7 +113,8 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
 
   SessionRun runtime;
   runtime.session.add(simaai::neat::nodes::groups::RtspDecodedInput(options));
-  runtime.session.add(simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(1)));
+  runtime.session.add(
+      simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(source_output_every_n(cfg, probe))));
 
   simaai::neat::RunOptions run_options;
   run_options.queue_depth = 4;
