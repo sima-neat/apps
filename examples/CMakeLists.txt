@@ -45,6 +45,7 @@ endfunction()
 
 add_subdirectory(classification)
 add_subdirectory(object-detection)
+add_subdirectory(tracking)
 add_subdirectory(semantic-segmentation)
 add_subdirectory(instance-segmentation)
 add_subdirectory(depth-estimation)

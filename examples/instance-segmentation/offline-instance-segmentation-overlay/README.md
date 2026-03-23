@@ -13,6 +13,11 @@
 ## Concept
 Offline instance segmentation over image folders using YOLOv8 segmentation outputs and DetessDequant post-processing.
 
+## Preview
+Snippet from a pipeline run:
+
+![Offline instance segmentation overlay preview](../../../assets/portal/instance-segmentation/offline-instance-segmentation-overlay/image.jpg)
+
 ## Supported Models
 Also works with: `yolo_v8s_seg`, `yolo_v8m_seg`, `yolo_v8l_seg`
 

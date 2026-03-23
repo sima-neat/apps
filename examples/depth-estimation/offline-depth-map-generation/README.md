@@ -13,6 +13,11 @@
 ## Concept
 Offline depth-map generation for image folders. The example runs inference per image and writes visual depth outputs.
 
+## Preview
+Snippet from a pipeline run:
+
+![Offline depth map generation preview](../../../assets/portal/depth-estimation/offline-depth-map-generation/image.png)
+
 ## Supported Models
 Primary model: `depth_anything_v2_vits`
 

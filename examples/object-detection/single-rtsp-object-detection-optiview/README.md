@@ -21,6 +21,11 @@
 
 The example is intentionally narrow in scope. It is not a generic output-mode demo and it does not try to support multiple unrelated workflows in one binary. The code is structured to show the intended OptiView path clearly.
 
+## Preview
+Snippet from a pipeline run:
+
+![Single RTSP object detection OptiView preview](../../../assets/portal/object-detection/single-rtsp-object-detection-optiview/image.png)
+
 ## What Is OptiView?
 OptiView is SiMa.ai's lightweight, cross-platform development and visualization tool for vision pipelines on DevKits:
 

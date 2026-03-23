@@ -39,6 +39,8 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 using TimePoint = std::chrono::time_point<Clock>;
+constexpr int kFallbackFrameWidth = 1280;
+constexpr int kFallbackFrameHeight = 720;
 
 struct Config {
   std::vector<std::string> rtsp_urls;
@@ -53,8 +55,6 @@ struct Config {
 
   bool tcp = false;
   int latency_ms = 200;
-  int width = 1280;
-  int height = 720;
   int fps = 30;
   int sample_every = 1;
   int save_every = 10;
@@ -81,6 +81,8 @@ struct StreamState {
   fs::path out_dir;
   simaai::neat::Session session;
   simaai::neat::Run run;
+  int frame_width = 0;
+  int frame_height = 0;
   int processed = 0;
   int pulled = 0;
   int frame_q_dropped = 0;
@@ -390,7 +392,7 @@ void usage() {
   std::cerr << "  multistream-rtsp-detection-pipeline --model <mpk.tar.gz> --output <dir>\n";
   std::cerr << "    --rtsp <url0> [--rtsp <url1> ...]\n";
   std::cerr << "    [--labels-file examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt]\n";
-  std::cerr << "    [--frames 100] [--fps 30] [--width 1280] [--height 720]\n";
+  std::cerr << "    [--frames 100] [--fps 30]\n";
   std::cerr << "    [--frame-queue 128] [--result-queue 128]\n";
   std::cerr << "    [--pull-timeout-ms 50] [--max-idle-ms 15000] [--reconnect-miss 3]\n";
   std::cerr << "    [--min-score 0.52] [--nms-iou 0.50] [--max-det 100]\n";
@@ -439,14 +441,6 @@ Config parse_config(int argc, char** argv) {
     }
     if (arg == "--fps") {
       cfg.fps = std::stoi(need_value(i, arg));
-      continue;
-    }
-    if (arg == "--width") {
-      cfg.width = std::stoi(need_value(i, arg));
-      continue;
-    }
-    if (arg == "--height") {
-      cfg.height = std::stoi(need_value(i, arg));
       continue;
     }
     if (arg == "--sample-every") {
@@ -540,9 +534,6 @@ Config parse_config(int argc, char** argv) {
   if (cfg.frames <= 0) {
     die("--frames must be > 0");
   }
-  if (cfg.width <= 0 || cfg.height <= 0) {
-    die("--width/--height must be > 0");
-  }
   if (cfg.fps <= 0) {
     die("--fps must be > 0");
   }
@@ -583,6 +574,14 @@ Config parse_config(int argc, char** argv) {
     die("--profile-every must be > 0");
   }
   return cfg;
+}
+
+int resolved_frame_width(const sima_examples::RtspStreamInfo& probe) {
+  return (probe.width > 0) ? probe.width : kFallbackFrameWidth;
+}
+
+int resolved_frame_height(const sima_examples::RtspStreamInfo& probe) {
+  return (probe.height > 0) ? probe.height : kFallbackFrameHeight;
 }
 
 std::vector<std::string> load_labels(const std::string& path) {
@@ -655,6 +654,8 @@ cv::Mat tensor_to_bgr_mat(const simaai::neat::Tensor& t) {
 
 RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int sima_allocator_type,
                                const sima_examples::RtspStreamInfo& probe) {
+  const int out_w = resolved_frame_width(probe);
+  const int out_h = resolved_frame_height(probe);
   simaai::neat::nodes::groups::RtspDecodedInputOptions ro;
   ro.url = url;
   ro.latency_ms = cfg.latency_ms;
@@ -678,8 +679,8 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int si
   }
   ro.output_caps.enable = true;
   ro.output_caps.format = "BGR";
-  ro.output_caps.width = (probe.width > 0) ? probe.width : cfg.width;
-  ro.output_caps.height = (probe.height > 0) ? probe.height : cfg.height;
+  ro.output_caps.width = out_w;
+  ro.output_caps.height = out_h;
   ro.output_caps.fps = (probe.fps > 0) ? probe.fps : cfg.fps;
   ro.output_caps.memory = simaai::neat::CapsMemory::SystemMemory;
 
@@ -697,15 +698,9 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int si
 }
 
 RtspRuntime build_rtsp_runtime_with_fallback(const Config& cfg, const std::string& url,
+                                             const sima_examples::RtspStreamInfo& probe,
                                              bool& used_fallback_allocator) {
   used_fallback_allocator = false;
-  sima_examples::RtspProbeOptions probe_opt;
-  probe_opt.payload_type = 96;
-  probe_opt.latency_ms = cfg.latency_ms;
-  probe_opt.rtsp_tcp = cfg.tcp;
-  probe_opt.debug = cfg.debug;
-  sima_examples::RtspStreamInfo probe;
-  (void)sima_examples::probe_rtsp_stream_info(url, probe_opt, probe);
   try {
     return build_rtsp_runtime(cfg, url, /*sima_allocator_type=*/2, probe);
   } catch (const std::exception& first_ex) {
@@ -720,24 +715,35 @@ RtspRuntime build_rtsp_runtime_with_fallback(const Config& cfg, const std::strin
   }
 }
 
-InferRuntime build_infer_runtime(const Config& cfg) {
+sima_examples::RtspStreamInfo probe_stream_info(const Config& cfg, const std::string& url) {
+  sima_examples::RtspProbeOptions probe_opt;
+  probe_opt.payload_type = 96;
+  probe_opt.latency_ms = cfg.latency_ms;
+  probe_opt.rtsp_tcp = cfg.tcp;
+  probe_opt.debug = cfg.debug;
+  sima_examples::RtspStreamInfo probe;
+  (void)sima_examples::probe_rtsp_stream_info(url, probe_opt, probe);
+  return probe;
+}
+
+InferRuntime build_infer_runtime(const Config& cfg, int frame_width, int frame_height) {
   simaai::neat::Model::Options mopt;
   mopt.media_type = "video/x-raw";
   mopt.format = "BGR";
-  mopt.input_max_width = cfg.width;
-  mopt.input_max_height = cfg.height;
+  mopt.input_max_width = frame_width;
+  mopt.input_max_height = frame_height;
   mopt.input_max_depth = 3;
   simaai::neat::Model model(cfg.model_path, mopt);
 
   simaai::neat::Session yolo;
   simaai::neat::InputOptions in_opt = model.input_appsrc_options(false);
   in_opt.format = "BGR";
-  in_opt.width = cfg.width;
-  in_opt.height = cfg.height;
+  in_opt.width = frame_width;
+  in_opt.height = frame_height;
   yolo.add(simaai::neat::nodes::Input(in_opt));
   yolo.add(simaai::neat::nodes::groups::Preprocess(model));
   yolo.add(simaai::neat::nodes::groups::Infer(model));
-  yolo.add(simaai::neat::nodes::SimaBoxDecode(model, "yolov8", cfg.width, cfg.height, cfg.min_score,
+  yolo.add(simaai::neat::nodes::SimaBoxDecode(model, "yolov8", frame_width, frame_height, cfg.min_score,
                                                cfg.nms_iou, cfg.max_det));
   yolo.add(simaai::neat::nodes::Output());
 
@@ -745,7 +751,7 @@ InferRuntime build_infer_runtime(const Config& cfg) {
   run_opt.queue_depth = std::max(1, cfg.run_queue_depth);
   run_opt.overflow_policy = cfg.overflow_policy;
   run_opt.output_memory = cfg.output_memory;
-  cv::Mat dummy(cfg.height, cfg.width, CV_8UC3, cv::Scalar(0, 0, 0));
+  cv::Mat dummy(frame_height, frame_width, CV_8UC3, cv::Scalar(0, 0, 0));
   simaai::neat::Run run = yolo.build(dummy, simaai::neat::RunMode::Async, run_opt);
   const std::string pipeline = yolo.last_pipeline();
   return InferRuntime(std::move(model), std::move(yolo), std::move(run), pipeline);
@@ -797,14 +803,17 @@ private:
 
     for (std::size_t i = 0; i < cfg_.rtsp_urls.size(); ++i) {
       const std::string& url = cfg_.rtsp_urls[i];
+      const auto probe = probe_stream_info(cfg_, url);
       bool used_fallback_allocator = false;
-      RtspRuntime rtsp = build_rtsp_runtime_with_fallback(cfg_, url, used_fallback_allocator);
+      RtspRuntime rtsp = build_rtsp_runtime_with_fallback(cfg_, url, probe, used_fallback_allocator);
 
       auto st = std::make_shared<StreamState>();
       st->idx = static_cast<int>(i);
       st->url = url;
       st->session = std::move(rtsp.session);
       st->run = std::move(rtsp.run);
+      st->frame_width = resolved_frame_width(probe);
+      st->frame_height = resolved_frame_height(probe);
       st->out_dir = out_root_ / ("stream_" + std::to_string(i));
       fs::create_directories(st->out_dir);
 
@@ -815,7 +824,8 @@ private:
       streams_.push_back(st);
 
       std::lock_guard<std::mutex> log_lock(log_mu_);
-      std::cout << "[stream " << i << "] started: " << url << " -> " << st->out_dir.string() << "/\n";
+      std::cout << "[stream " << i << "] started: " << url << " -> " << st->out_dir.string()
+                << "/ (runtime geometry=" << st->frame_width << "x" << st->frame_height << ")\n";
       if (used_fallback_allocator) {
         std::cout << "[stream " << i << "] decoder allocator fallback: using sima_allocator_type=1\n";
       }
@@ -830,7 +840,8 @@ private:
     // Build infer runtimes sequentially to avoid shared model-config race during startup.
     for (const auto& st : streams_) {
       try {
-        auto infer = std::make_unique<InferRuntime>(build_infer_runtime(cfg_));
+        auto infer =
+            std::make_unique<InferRuntime>(build_infer_runtime(cfg_, st->frame_width, st->frame_height));
         if (cfg_.debug) {
           std::lock_guard<std::mutex> log_lock(log_mu_);
           std::cout << "[PIPE][infer " << st->idx << "] " << infer->pipeline << "\n";
@@ -916,9 +927,10 @@ private:
             } catch (...) {
             }
             try {
+              const auto probe = probe_stream_info(cfg_, st->url);
               bool used_fallback_allocator = false;
-              RtspRuntime rtsp_new =
-                  build_rtsp_runtime_with_fallback(cfg_, st->url, used_fallback_allocator);
+              RtspRuntime rtsp_new = build_rtsp_runtime_with_fallback(cfg_, st->url, probe,
+                                                                      used_fallback_allocator);
               st->session = std::move(rtsp_new.session);
               st->run = std::move(rtsp_new.run);
               miss_count = 0;

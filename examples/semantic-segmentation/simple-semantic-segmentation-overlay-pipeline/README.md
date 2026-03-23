@@ -13,6 +13,11 @@
 ## Concept
 Semantic segmentation overlay for image folders using FCN-HRNet output tensors.
 
+## Preview
+Snippet from a pipeline run:
+
+![Semantic segmentation overlay preview](../../../assets/portal/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/image.png)
+
 ## Supported Models
 Also works with: `fcn_hrnet18`
 

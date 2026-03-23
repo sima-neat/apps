@@ -252,7 +252,7 @@ function ExampleCard({ example }) {
     <Link className="app-card" to={`/app/${encodeURIComponent(example.id)}`}>
       <div className="card-image">
         <img
-          src={example.image_path ? `./${example.image_path}` : fallbackImage}
+          src={fallbackImage}
           alt={displayName}
         />
       </div>
@@ -286,6 +286,13 @@ function DetailPage({ catalog }) {
   useEffect(() => {
     setActiveSection(sections[0]?.slug || "");
   }, [decodedId, sections]);
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    if (docPanelRef.current) {
+      docPanelRef.current.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [decodedId]);
 
   useEffect(() => {
     if (!sections.length) {
