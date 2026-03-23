@@ -32,7 +32,9 @@ In this app, the compiled `retinaface_mobilenet25` package is run on an input im
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get retinaface_mobilenet25 && cd ../..`
+- Preferred download command: `./scripts/download_models.sh retinaface_mobilenet25`
+- Direct URL fallback:
+  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
 
 ## Important Behavior
 - Input and output paths are user-provided.
