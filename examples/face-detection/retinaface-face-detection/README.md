@@ -42,7 +42,7 @@ In this app, the compiled `retinaface_mobilenet25` package is run on an input im
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--max-draw <count>] [--profile] [--num-runs <count>] [--no-landmarks]`
+  `./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--max-draw <count>] [--profile] [--num-runs <count>] [--no-landmarks]`
 - Required arguments:
   `<input_image_path>`
 - Optional arguments:
@@ -65,7 +65,7 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection
+./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection
 ```
 
 ### Build This Example Directly With CMake
@@ -83,7 +83,7 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection \
+./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection \
   <input_image_path> \
   --model assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
   --output <output_image_path> \
@@ -100,6 +100,59 @@ python3 examples/face-detection/retinaface-face-detection/python/main.py \
   --output <output_image_path> \
   --conf 0.4 --nms 0.9
 ```
+
+## Testing
+Run from the apps repository root:
+
+```bash
+cd <apps-repo-root>
+```
+
+### C++
+Unit test:
+```bash
+ctest --test-dir build/examples/face-detection/retinaface-face-detection_cpp \
+  -R 'retinaface-face-detection.unit' --output-on-failure -V
+```
+
+E2E test:
+```bash
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/examples/face-detection/retinaface-face-detection/assets/portal" \
+SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp \
+SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
+ctest --test-dir build/examples/face-detection/retinaface-face-detection_cpp \
+  -R 'retinaface-face-detection.e2e' --output-on-failure -V
+```
+
+### Python
+Unit test:
+```bash
+source ~/pyneat/bin/activate
+pip install -r examples/face-detection/retinaface-face-detection/python/requirements.txt
+pip install pytest
+export PYTHONPATH="$PWD"
+pytest -c tests/pytest.ini --rootdir="$PWD" -m unit \
+  examples/face-detection/retinaface-face-detection/python/tests/test_unit.py -v
+```
+
+E2E test:
+```bash
+# Current e2e image fixture looks for a file name containing "face"
+cp -f examples/face-detection/retinaface-face-detection/assets/portal/retina-face.png \
+  assets/test_images/face.png
+
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
+SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp/retinaface-python-e2e \
+SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
+SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
+pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
+  examples/face-detection/retinaface-face-detection/python/tests/test_e2e.py -v
+```
+
+Notes:
+- Use an absolute path for `SIMANEAT_APPS_TEST_MODELS_DIR` in Python e2e. The test runs `main.py` with `cwd` set to the example directory.
+- `SIMANEAT_APPS_TEST_INPUT_DIR` is used by C++ e2e. Python e2e currently resolves images from `assets/test_images` and selects by filename pattern (`"face"`).
 
 ## Debugging Notes
 - If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.
