@@ -29,6 +29,12 @@ In this app, the compiled `retinaface_mobilenet25` package is run on an input im
   <img src="./assets/portal/retina-face-after.png" alt="RetinaFace output after" width="49%" />
 </p>
 
+## Supported Models
+Validated with: `retinaface_mobilenet25`
+
+Download into `assets/models/`:
+- `./scripts/download_models.sh retinaface_mobilenet25`
+
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
@@ -120,7 +126,7 @@ ctest --test-dir build/examples/face-detection/retinaface-face-detection_cpp \
 E2E test:
 ```bash
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/examples/face-detection/retinaface-face-detection/assets/portal" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 ctest --test-dir build/examples/face-detection/retinaface-face-detection_cpp \
@@ -140,11 +146,12 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m unit \
 
 E2E test:
 ```bash
-# Current e2e image fixture looks for a file name containing "face"
-cp -f examples/face-detection/retinaface-face-detection/assets/portal/retina-face.png \
-  assets/test_images/face.png
-
+source ~/pyneat/bin/activate
+pip install -r examples/face-detection/retinaface-face-detection/python/requirements.txt
+pip install pytest
+export PYTHONPATH="$PWD"
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp/retinaface-python-e2e \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
@@ -154,7 +161,9 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 
 Notes:
 - Use an absolute path for `SIMANEAT_APPS_TEST_MODELS_DIR` in Python e2e. The test runs `main.py` with `cwd` set to the example directory.
-- `SIMANEAT_APPS_TEST_INPUT_DIR` is used by C++ e2e. Python e2e currently resolves images from `assets/test_images` and selects by filename pattern (`"face"`).
+- `SIMANEAT_APPS_TEST_INPUT_DIR` is supported by both C++ and Python e2e tests.
+- If `SIMANEAT_APPS_TEST_INPUT_DIR` is not set, both e2e tests fall back to `assets/test_images`.
+- RetinaFace e2e prefers an image filename containing `face` when present, then falls back to the first available image in the input directory.
 
 ## Debugging Notes
 - If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.

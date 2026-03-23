@@ -1,5 +1,6 @@
 """E2E tests for retinaface-face-detection (Python)."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,10 +23,20 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
 def _find_image(input_dir: Path, pattern: str) -> Path | None:
     if not input_dir.exists():
         return None
-    for f in input_dir.iterdir():
-        if pattern in f.name and f.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+    images = sorted(f for f in input_dir.iterdir() if f.suffix.lower() in {".png", ".jpg", ".jpeg"})
+    for f in images:
+        if pattern in f.name.lower():
             return f
+    if images:
+        return images[0]
     return None
+
+
+def _resolve_input_dir(default_dir: Path) -> Path:
+    raw = os.environ.get("SIMANEAT_APPS_TEST_INPUT_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    return default_dir
 
 
 @pytest.mark.e2e
@@ -41,8 +52,12 @@ class TestE2E:
         model = _find_model(models_dir, "retinaface_mobilenet25")
         skip_unless_e2e_ready(model is not None, "retinaface model not found in models_dir")
 
-        image = _find_image(test_images_dir, "face")
-        skip_unless_e2e_ready(image is not None, "no suitable face test image found in test_images_dir")
+        input_dir = _resolve_input_dir(test_images_dir)
+        image = _find_image(input_dir, "face")
+        skip_unless_e2e_ready(
+            image is not None,
+            f"no suitable test image found in input_dir={input_dir}",
+        )
 
         out_path = tmp_output_dir / "retinaface_output.png"
 
@@ -72,4 +87,3 @@ class TestE2E:
         )
 
         assert out_path.exists(), "Expected an annotated output image to be written"
-

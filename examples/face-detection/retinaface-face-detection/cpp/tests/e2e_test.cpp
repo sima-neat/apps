@@ -3,9 +3,12 @@
 // and produces an annotated output image.
 #include "support/testing/test_process.h"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
@@ -38,27 +41,44 @@ int main(int argc, char** argv) {
     return skip_or_fail("RetinaFace model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  // Use test images directory for input (faces image if available).
+  // Follow the shared e2e convention: default to assets/test_images.
   const char* input_dir_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
   const std::string input_dir = input_dir_raw ? input_dir_raw : "assets/test_images";
 
   std::string image_path;
   if (fs::exists(input_dir)) {
+    std::vector<fs::path> image_candidates;
     for (auto& entry : fs::directory_iterator(input_dir)) {
-      const auto name = entry.path().filename().string();
-      if (name.find("face") != std::string::npos &&
-          (entry.path().extension() == ".png" || entry.path().extension() == ".jpg" ||
-           entry.path().extension() == ".jpeg")) {
-        image_path = entry.path().string();
+      const auto ext = entry.path().extension().string();
+      if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
+        image_candidates.push_back(entry.path());
+      }
+    }
+
+    std::sort(image_candidates.begin(), image_candidates.end());
+
+    for (const auto& candidate : image_candidates) {
+      std::string name = candidate.filename().string();
+      std::transform(
+          name.begin(),
+          name.end(),
+          name.begin(),
+          [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      if (name.find("face") != std::string::npos) {
+        image_path = candidate.string();
         break;
       }
+    }
+
+    if (image_path.empty() && !image_candidates.empty()) {
+      image_path = image_candidates.front().string();
     }
   }
 
   if (image_path.empty()) {
     env_or_skip(
         "SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory containing a face test image (e.g. assets/test_images/faces.png)");
+        "directory containing test images (defaults to assets/test_images)");
     return kSkipCode; // not reached if env_or_skip exits, but keeps compiler happy
   }
 
@@ -106,4 +126,3 @@ int main(int argc, char** argv) {
   std::cout << "[OK] retinaface-face-detection pipeline completed successfully: " << out_image << "\n";
   return 0;
 }
-
