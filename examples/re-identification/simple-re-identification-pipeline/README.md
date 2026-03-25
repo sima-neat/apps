@@ -80,23 +80,24 @@ Binary output:
 ### C++
 ```bash
 ./build/examples/re-identification/simple-re-identification-pipeline/simple-re-identification-pipeline \
-  assets/images/neat_reid_examples/id2/744__1.jpg \
-  assets/images/neat_reid_examples/id3/795__4.jpg \
+  <input_image_path_1> \
+  <input_image_path_2> \
   --metric euclidean \
   --threshold 0.75 \
-  --output-dir examples/re-identification/simple-re-identification-pipeline/output_dir \
+  --output-dir <output_dir_path> \
   --profile
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
+pip install -r examples/re-identification/simple-re-identification-pipeline/python/requirements.txt
 python3 examples/re-identification/simple-re-identification-pipeline/python/main.py \
-  assets/images/neat_reid_examples/id2/744__1.jpg \
-  assets/images/neat_reid_examples/id3/795__4.jpg \
+  <input_image_path_1> \
+  <input_image_path_2> \
   --metric euclidean \
   --threshold 0.75 \
-  --output-dir examples/re-identification/simple-re-identification-pipeline/output_dir \
+  --output-dir <output_dir_path> \
   --profile
 ```
 

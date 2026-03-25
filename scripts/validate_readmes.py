@@ -21,6 +21,7 @@ VALID_CATEGORIES = {
     "instance-segmentation",
     "depth-estimation",
     "face-detection",
+    "re-identification",
     "throughput",
 }
 
