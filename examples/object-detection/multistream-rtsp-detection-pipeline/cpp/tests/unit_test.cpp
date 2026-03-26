@@ -63,5 +63,23 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Test 4: legacy fixed-size CLI args should be rejected now that stream size is runtime-driven.
+  {
+    auto r = spawn_and_wait(
+        binary,
+        {"--model", "dummy.tar.gz", "--output", "/tmp/out", "--rtsp", "rtsp://example",
+         "--width", "1280", "--height", "720"},
+        10000);
+    if (r.exit_code == 0) {
+      std::cerr << "[FAIL] --width/--height: expected nonzero exit, got 0\n";
+      ++failures;
+    } else if (r.stderr_text.find("unknown argument: --width") == std::string::npos) {
+      std::cerr << "[FAIL] --width/--height: stderr does not mention unknown --width\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] legacy width/height args correctly rejected\n";
+    }
+  }
+
   return failures > 0 ? 1 : 0;
 }

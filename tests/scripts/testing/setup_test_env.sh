@@ -14,13 +14,29 @@ DEFAULT_APPS_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 apps_root="${APPS_ROOT:-${DEFAULT_APPS_ROOT}}"
 models_dir="${apps_root}/assets/models"
 input_dir="${apps_root}/assets/test_images"
-output_dir="/tmp"
+output_dir="${apps_root}/sandbox/tests"
 classification_image="${apps_root}/assets/test_images_classification/goldfish.jpeg"
 timeout_ms="180000"
-require_e2e="0"
-keep_output="0"
-rtsp_url="<active-rtsp-url>" # for e2e tests
-rtsp_urls="<active-rtsp-url-1>,<active-rtsp-url-2>" # for e2e tests
+require_e2e="1"
+keep_output="1"
+rtsp_url="rtsp://192.168.0.39:8554/src1" # for e2e tests
+rtsp_urls="rtsp://192.168.0.39:8554/src1,rtsp://192.168.0.39:8554/src2" # for e2e tests
+
+python_test_bin="${PYTHON_TEST_BIN:-}"
+if [[ -z "${python_test_bin}" ]]; then
+  for cand in \
+    "${HOME}/pyneat/bin/python3" \
+    "/media/nvme/pyneat/bin/python3" \
+    "${HOME}/.pyneat/bin/python3" \
+    "/opt/pyneat/bin/python3" \
+    "/opt/sima/pyneat/bin/python3" \
+    "/opt/sima.ai/pyneat/bin/python3"; do
+    if [[ -x "${cand}" ]]; then
+      python_test_bin="${cand}"
+      break
+    fi
+  done
+fi
 
 # export resolved values
 export APPS_ROOT="${apps_root}"
@@ -33,6 +49,9 @@ export SIMANEAT_APPS_TEST_REQUIRE_E2E="${SIMANEAT_APPS_TEST_REQUIRE_E2E:-${requi
 export SIMANEAT_APPS_TEST_KEEP_OUTPUT="${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-${keep_output}}"
 export SIMANEAT_APPS_TEST_RTSP_URL="${SIMANEAT_APPS_TEST_RTSP_URL:-${rtsp_url}}"
 export SIMANEAT_APPS_TEST_RTSP_URLS="${SIMANEAT_APPS_TEST_RTSP_URLS:-${rtsp_urls}}"
+if [[ -n "${python_test_bin}" ]]; then
+  export PYTHON_TEST_BIN="${python_test_bin}"
+fi
 
 echo "[INFO] test environment configured:"
 echo "  APPS_ROOT=${APPS_ROOT}"
@@ -45,6 +64,9 @@ echo "  SIMANEAT_APPS_TEST_REQUIRE_E2E=${SIMANEAT_APPS_TEST_REQUIRE_E2E}"
 echo "  SIMANEAT_APPS_TEST_KEEP_OUTPUT=${SIMANEAT_APPS_TEST_KEEP_OUTPUT}"
 echo "  SIMANEAT_APPS_TEST_RTSP_URL=${SIMANEAT_APPS_TEST_RTSP_URL}"
 echo "  SIMANEAT_APPS_TEST_RTSP_URLS=${SIMANEAT_APPS_TEST_RTSP_URLS}"
+if [[ -n "${PYTHON_TEST_BIN:-}" ]]; then
+  echo "  PYTHON_TEST_BIN=${PYTHON_TEST_BIN}"
+fi
 if [[ -n "${SIMANEAT_APPS_TEST_OPTIVIEW_VIDEO_PORT:-}" ]]; then
   echo "  SIMANEAT_APPS_TEST_OPTIVIEW_VIDEO_PORT=${SIMANEAT_APPS_TEST_OPTIVIEW_VIDEO_PORT}"
 fi

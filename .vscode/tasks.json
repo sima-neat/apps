@@ -1,0 +1,119 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Apps: Test Unit C++",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--unit",
+        "--cpp"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test Unit Python",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--unit",
+        "--python"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test E2E C++",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--e2e",
+        "--cpp"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test E2E Python",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--e2e",
+        "--python"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test All",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--all"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

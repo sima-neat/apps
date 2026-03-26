@@ -67,8 +67,6 @@ int main(int argc, char** argv) {
     "--model", model_path,
     "--output", out_dir,
     "--frames", "10",
-    "--width", "1280",
-    "--height", "720",
     "--save-every", "1",
     "--tcp"
   };
