@@ -228,7 +228,7 @@ jobs:
       AWS_EC2_METADATA_DISABLED: "true"
       R2_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
       PORTAL_R2_PATH: ${{ github.ref_name == 'develop' && 's3://neat-artifacts/dev-portal/' || 's3://neat-artifacts/portal/' }}
-      PORTAL_BASE_URL: ${{ github.ref_name == 'develop' && vars.DEV_PORTAL_BASE_URL || 'https://apps.sima-neat.com/portal' }}
+      PORTAL_BASE_URL: ${{ github.ref_name == 'develop' && 'https://apps.sima-neat.com/dev-portal' || 'https://apps.sima-neat.com/portal' }}
 
     steps:
       - name: Checkout apps repo
