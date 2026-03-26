@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -86,7 +87,8 @@ struct StreamRuntime {
   SessionRun source;
   SessionRun video;
   bool video_enabled = true;
-  sima_examples::OptiViewSender json_sender;
+  std::optional<sima_examples::OptiViewSender> json_sender;
+  bool json_enabled = true;
   std::vector<std::string> class_labels;
   StreamMetrics metrics;
   std::string error_message;
@@ -162,6 +164,7 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
   if (cfg.video_enabled) {
     video_run = build_optiview_video_run(cfg, probe, index);
   }
+  const bool json_enabled = json_output_enabled(cfg);
   return StreamRuntime{
       index,
       url,
@@ -171,7 +174,9 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
       build_source_run(cfg, url, probe),
       std::move(video_run),
       cfg.video_enabled,
-      build_optiview_json_output(cfg, index),
+      json_enabled ? std::optional<sima_examples::OptiViewSender>(build_optiview_json_output(cfg, index))
+                   : std::nullopt,
+      json_enabled,
       class_labels,
   };
 }
@@ -241,7 +246,7 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
                      std::atomic<bool>& stop_event, Event* startup_ready) {
   int frame_index = 0;
   int empty_pulls = 0;
-  const double emit_period_s = cfg.fps > 0 ? (1.0 / cfg.fps) : 0.0;
+  const double emit_period_s = producer_emit_period_s(cfg, stream.probe);
   std::optional<double> next_allowed_emit_s;
 
   try {
@@ -252,7 +257,10 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
       if (emit_period_s > 0.0) {
         const double now = now_steady_s();
         if (!next_allowed_emit_s.has_value()) {
-          next_allowed_emit_s = now;
+          const int num_streams = static_cast<int>(cfg.rtsp_urls.size());
+          const double phase =
+              (num_streams > 1) ? emit_period_s * stream.index / num_streams : 0.0;
+          next_allowed_emit_s = std::ceil(now / emit_period_s) * emit_period_s + phase;
         }
         if (now < *next_allowed_emit_s) {
           std::this_thread::sleep_for(std::chrono::duration<double>(*next_allowed_emit_s - now));
@@ -342,17 +350,20 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
   const double publish_wall_time_s =
       std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-  const auto payload =
-      build_optiview_detection_payload(detections, stream.probe.width, stream.probe.height,
-                                       stream.class_labels);
-  const double json_t0 = now_steady_s();
-  if (!stream.json_sender.send_detection(
-          optiview_timestamp_ms(publish_wall_time_s, cfg.optiview_json_offset_ms),
-          optiview_frame_id(det_sample, packet.frame_index),
-                                         payload.objects, payload.labels)) {
-    throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView JSON send failed");
+  double json_elapsed = 0.0;
+  if (stream.json_enabled) {
+    const auto payload =
+        build_optiview_detection_payload(detections, stream.probe.width, stream.probe.height,
+                                         stream.class_labels);
+    const double json_t0 = now_steady_s();
+    if (!stream.json_sender->send_detection(
+            optiview_timestamp_ms(publish_wall_time_s, cfg.optiview_json_offset_ms),
+            optiview_frame_id(det_sample, packet.frame_index),
+            payload.objects, payload.labels)) {
+      throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView JSON send failed");
+    }
+    json_elapsed = now_steady_s() - json_t0;
   }
-  const double json_elapsed = now_steady_s() - json_t0;
 
   if (save_debug_frame(cfg.output_dir, stream.index, packet.frame_index, frame_out, cfg.save_every)) {
     stream.metrics.saved += 1;
@@ -576,9 +587,13 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
     } else {
       std::cout << "disabled";
     }
-    std::cout
-              << " json=" << optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index)
-              << "\n";
+    std::cout << " json=";
+    if (stream.json_enabled) {
+      std::cout << optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index);
+    } else {
+      std::cout << "disabled";
+    }
+    std::cout << "\n";
   }
 
   std::atomic<bool> stop_event{false};

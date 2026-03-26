@@ -244,6 +244,10 @@ std::string to_string(VideoMode mode) {
   return "clean";
 }
 
+bool json_output_enabled(const AppConfig& cfg) {
+  return cfg.video_mode == VideoMode::Clean;
+}
+
 AppConfig load_app_config(const std::filesystem::path& path) {
   const RawConfig raw = parse_raw_config(path);
 

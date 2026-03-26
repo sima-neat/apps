@@ -15,7 +15,6 @@ namespace multistream_yolox_yolov8_optiview {
 
 enum class DetectorOutputKind {
   BBox,
-  DetessDequant,
 };
 
 struct Detection {

@@ -1,18 +1,25 @@
-# Multistream YOLOX/YOLOv8 Object Detection OptiView
+# Multistream YOLOv8 Object Detection OptiView
 
 ## Metadata
 | Field | Value |
 | --- | --- |
 | Category | object-detection |
 | Difficulty | Intermediate |
-| Tags | object-detection, rtsp, multistream, optiview, yolox, yolov8 |
+| Tags | object-detection, rtsp, multistream, optiview, yolov8 |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multistream-yolox-yolov8-object-detection-optiview |
-| Model | yolox_s / yolo_v8m |
+| Model | yolo_v8m |
 
 ## Concept
-This example runs a config-driven multistream RTSP detection pipeline that supports both YOLOX and YOLOv8 model packs and publishes per-stream video plus detection metadata to OptiView.
+This example runs a config-driven multistream RTSP detection pipeline for YOLOv8 model packs and publishes per-stream video plus detection metadata to OptiView.
+
+The folder and binary keep their original `multistream-yolox-yolov8-...` names for compatibility, but the implementation is currently YOLOv8-only.
+
+## Preview
+Snippet from a pipeline run:
+
+![Multistream YOLOv8 OptiView preview](../../../assets/portal/object-detection/multistream-yolox-yolov8-object-detection-optiview/image.png)
 
 Architecture:
 - one RTSP source runtime per stream
@@ -20,29 +27,21 @@ Architecture:
 - a shared detector worker pool sized by `runtime.worker_count`
 - one keep-latest mailbox per stream so the example can scale to many cameras without building large per-stream backlogs
 
-Detector graphs:
+Detector graph:
 - YOLOv8: `QuantTess -> MLA -> SimaBoxDecode`
-- YOLOX: `QuantTess -> MLA -> DetessDequant`
 
-If a current YOLOX model pack fails during runtime construction with a schema/dependency error, switch `model.path` to a YOLOv8 pack until updated YOLOX packs are available.
+YOLOX model packs are not supported yet by this example. Future support is planned, but the current implementation and tests only cover YOLOv8.
 
 ## Prerequisites
 - Installed NEAT SDK.
 - One or more reachable RTSP camera URLs.
-- YOLOX or YOLOv8 model packs downloaded into `assets/models/`.
+- A YOLOv8 model pack downloaded into `assets/models/`.
 - Edit `common/config.yaml` before running with real streams.
 
 ## Download Models
 ```bash
 mkdir -p assets/models
 cd assets/models
-
-sima-cli modelzoo get yolox_nano
-sima-cli modelzoo get yolox_tiny
-sima-cli modelzoo get yolox_s
-sima-cli modelzoo get yolox_m
-sima-cli modelzoo get yolox_l
-sima-cli modelzoo get yolox_x
 
 sima-cli modelzoo get object_detection/yolo_v8n
 sima-cli modelzoo get object_detection/yolo_v8s
@@ -90,11 +89,14 @@ python3 examples/object-detection/multistream-yolox-yolov8-object-detection-opti
 ```
 
 ## Notes
-- `output.video_mode: clean` sends the original frame to OptiView. `annotated` draws detection boxes and labels before publishing.
-- `output.video_enabled: false` keeps JSON detections enabled while disabling per-stream H264 video output so you can isolate video encode/output cost during scaling tests.
+- Set `model.family: yolov8` and point `model.path` at a YOLOv8 pack. If you try a YOLOX pack, the example now fails fast with a clear "not supported yet" message instead of building a mismatched detector graph.
+- YOLOX support is planned for a future revision of this example, but it is not part of the current runtime or test contract.
+- The checked-in `common/config.yaml` uses placeholder RTSP and OptiView values and includes 16 stream slots. Replace the placeholders with your own camera URLs and receiver host before running.
+- `output.video_mode: clean` sends the original frame to OptiView and keeps the JSON side channel enabled. `annotated` draws detection boxes and labels into the video stream and suppresses JSON output so OptiView does not overlay detections twice.
+- `output.video_enabled: false` disables per-stream H264 video output. In `clean` mode the example still sends JSON detections; in `annotated` mode JSON is suppressed as well.
 - `runtime.mailbox_depth` defaults to `1` and should usually stay small for dense multistream runs.
 - when `inference.fps` is lower than the source FPS, the source runtime now applies `EveryFrame(n)` decimation when it can reduce app-side work without obviously undershooting the requested rate.
-- `output.optiview.json_offset_ms` lets you shift JSON timestamps to better align OptiView boxes with the published video stream when transport latency makes boxes appear early or late.
+- `output.optiview.json_offset_ms` lets you shift JSON timestamps to better align OptiView boxes with the published video stream when transport latency makes boxes appear early or late. It only applies when JSON output is enabled.
 - profiling now prints `source`, `preproc`, `detect`, `video`, `json`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
 - `output.debug_dir` and `output.save_every` let you save periodic RGB debug frames locally without changing the OptiView output contract.
 

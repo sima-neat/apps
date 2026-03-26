@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entrypoint for the multistream YOLOX/YOLOv8 OptiView example."""
+"""Entrypoint for the multistream YOLOv8 OptiView example."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "common" / "confi
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Multistream YOLOX/YOLOv8 object detection with OptiView output."
+        description="Multistream YOLOv8 object detection with OptiView output."
     )
     parser.add_argument(
         "--config",

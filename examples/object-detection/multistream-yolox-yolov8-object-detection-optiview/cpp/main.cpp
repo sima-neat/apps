@@ -22,7 +22,7 @@ namespace multistream_yolox_yolov8_optiview {
 namespace {
 
 void print_help(const char* argv0) {
-  std::cout << "Multistream YOLOX/YOLOv8 object detection with OptiView output.\n\n";
+  std::cout << "Multistream YOLOv8 object detection with OptiView output.\n\n";
   std::cout << "Usage: " << argv0 << " [--config <path>]\n\n";
   std::cout << "Options:\n";
   std::cout << "  --config <path>  Path to YAML configuration. Default: " << default_config_path()

@@ -39,6 +39,14 @@ int source_output_every_n(const AppConfig& cfg, const RtspProbe& probe) {
   return std::max(1, probe.fps / cfg.fps);
 }
 
+double producer_emit_period_s(const AppConfig& cfg, const RtspProbe& probe) {
+  static_cast<void>(probe);
+  if (cfg.fps <= 0) {
+    return 0.0;
+  }
+  return 1.0 / cfg.fps;
+}
+
 RtspProbe probe_rtsp(const std::string& url) {
   cv::VideoCapture capture(url);
   if (!capture.isOpened()) {
@@ -59,7 +67,7 @@ std::vector<std::string> detector_stage_names(ModelFamily family) {
   case ModelFamily::YoloV8:
     return {"input", "quant_tess", "mla", "sima_box_decode", "output"};
   case ModelFamily::YoloX:
-    return {"input", "quant_tess", "mla", "detess_dequant", "output"};
+    throw std::invalid_argument(yolox_not_supported_message());
   case ModelFamily::Auto:
     break;
   }
@@ -117,7 +125,7 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
       simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(source_output_every_n(cfg, probe))));
 
   simaai::neat::RunOptions run_options;
-  run_options.queue_depth = 4;
+  run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
   runtime.run = runtime.session.build(run_options);
@@ -141,9 +149,7 @@ SessionRun build_detection_run(const AppConfig& cfg, const simaai::neat::Model& 
         cfg.max_detections));
     break;
   case ModelFamily::YoloX:
-    runtime.session.add(
-        simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
-    break;
+    throw std::invalid_argument(yolox_not_supported_message());
   case ModelFamily::Auto:
     throw std::invalid_argument("unsupported model family for detector graph");
   }

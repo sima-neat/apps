@@ -62,8 +62,8 @@ bool test_load_app_config_parses_runtime_worker_count() {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolox_s_mpk.tar.gz\n"
-         "  family: auto\n"
+         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  family: yolov8\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "  - rtsp://127.0.0.1:8554/src2\n"
@@ -95,9 +95,9 @@ bool test_load_app_config_parses_runtime_worker_count() {
   bool ok = true;
   try {
     const AppConfig cfg = load_app_config(config_path);
-    ok &= expect_true(cfg.model.path == "assets/models/yolox_s_mpk.tar.gz",
+    ok &= expect_true(cfg.model.path == "assets/models/yolo_v8m_mpk.tar.gz",
                       "config keeps model path");
-    ok &= expect_true(cfg.model.family == ModelFamily::Auto, "config keeps model family");
+    ok &= expect_true(cfg.model.family == ModelFamily::YoloV8, "config keeps model family");
     ok &= expect_true(cfg.worker_count == 4, "config keeps worker_count");
     ok &= expect_true(cfg.mailbox_depth == 1, "config keeps mailbox_depth");
     ok &= expect_true(cfg.profile, "config keeps profile=true");
@@ -107,6 +107,38 @@ bool test_load_app_config_parses_runtime_worker_count() {
     ok &= expect_true(cfg.rtsp_urls.size() == 2, "config keeps all streams");
   } catch (const std::exception& ex) {
     ok &= expect_true(false, std::string("config should load: ") + ex.what());
+  }
+
+  remove_dir(temp_dir);
+  return ok;
+}
+
+bool test_load_app_config_rejects_yolox_family_until_supported() {
+  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_yolox_unsupported_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory");
+  }
+
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  std::ofstream out(config_path);
+  out << "model:\n"
+         "  path: assets/models/yolox_m_mpk.tar.gz\n"
+         "  family: yolox\n"
+         "streams:\n"
+         "  - rtsp://127.0.0.1:8554/src1\n"
+         "runtime:\n"
+         "  worker_count: 2\n"
+         "output:\n"
+         "  optiview:\n"
+         "    host: 127.0.0.1\n";
+  out.close();
+
+  bool ok = false;
+  try {
+    static_cast<void>(load_app_config(config_path));
+  } catch (const std::exception& ex) {
+    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
+                         "unsupported yolox family error mentions future support state");
   }
 
   remove_dir(temp_dir);
@@ -206,11 +238,95 @@ bool test_load_app_config_rejects_empty_streams() {
   return ok;
 }
 
-bool test_resolve_model_family_auto_for_yolox() {
-  return expect_true(
-      resolve_model_family("assets/models/yolox_s_mpk.tar.gz", ModelFamily::Auto) ==
-          ModelFamily::YoloX,
-      "auto resolves yolox model path to YoloX");
+bool test_json_output_enabled_is_disabled_for_annotated_video() {
+  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_annotated_json_off_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory");
+  }
+
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  std::ofstream out(config_path);
+  out << "model:\n"
+         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  family: yolov8\n"
+         "streams:\n"
+         "  - rtsp://127.0.0.1:8554/src1\n"
+         "runtime:\n"
+         "  worker_count: 2\n"
+         "output:\n"
+         "  optiview:\n"
+         "    host: 127.0.0.1\n"
+         "  video_enabled: false\n"
+         "  video_mode: annotated\n";
+  out.close();
+
+  bool ok = true;
+  try {
+    const AppConfig cfg = load_app_config(config_path);
+    ok &= expect_true(!json_output_enabled(cfg),
+                      "annotated video mode suppresses json output");
+  } catch (const std::exception& ex) {
+    ok &= expect_true(false, std::string("config should load: ") + ex.what());
+  }
+
+  remove_dir(temp_dir);
+  return ok;
+}
+
+bool test_json_output_enabled_stays_enabled_for_clean_video() {
+  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_clean_json_on_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory");
+  }
+
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  std::ofstream out(config_path);
+  out << "model:\n"
+         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  family: yolov8\n"
+         "streams:\n"
+         "  - rtsp://127.0.0.1:8554/src1\n"
+         "runtime:\n"
+         "  worker_count: 2\n"
+         "output:\n"
+         "  optiview:\n"
+         "    host: 127.0.0.1\n"
+         "  video_enabled: false\n"
+         "  video_mode: clean\n";
+  out.close();
+
+  bool ok = true;
+  try {
+    const AppConfig cfg = load_app_config(config_path);
+    ok &= expect_true(json_output_enabled(cfg), "clean video mode keeps json output enabled");
+  } catch (const std::exception& ex) {
+    ok &= expect_true(false, std::string("config should load: ") + ex.what());
+  }
+
+  remove_dir(temp_dir);
+  return ok;
+}
+
+bool test_parse_model_family_rejects_yolox_until_supported() {
+  bool ok = false;
+  try {
+    static_cast<void>(parse_model_family("yolox"));
+  } catch (const std::exception& ex) {
+    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
+                         "parse_model_family rejects yolox until support lands");
+  }
+  return ok;
+}
+
+bool test_resolve_model_family_auto_rejects_yolox_until_supported() {
+  bool ok = false;
+  try {
+    static_cast<void>(resolve_model_family("assets/models/yolox_s_mpk.tar.gz", ModelFamily::Auto));
+  } catch (const std::exception& ex) {
+    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
+                         "auto resolve rejects yolox model path until support lands");
+  }
+  return ok;
 }
 
 bool test_resolve_model_family_auto_for_yolov8() {
@@ -245,15 +361,20 @@ bool test_parse_bbox_payload_normalizes_yolov8_boxes() {
   return ok;
 }
 
-bool test_require_detector_output_kind_accepts_yolox_detessdequant_bundle() {
+bool test_require_detector_output_kind_rejects_yolox_until_supported() {
   simaai::neat::Sample sample;
   sample.kind = simaai::neat::SampleKind::Bundle;
-  sample.payload_tag = "DETESSDEQUANT";
-  sample.format = "DETESSDEQUANT";
+  sample.payload_tag = "BBOX";
+  sample.format = "BBOX";
 
-  return expect_true(
-      require_detector_output_kind(ModelFamily::YoloX, sample) == DetectorOutputKind::DetessDequant,
-      "yolox output kind accepts DETESSDEQUANT bundle");
+  bool ok = false;
+  try {
+    static_cast<void>(require_detector_output_kind(ModelFamily::YoloX, sample));
+  } catch (const std::exception& ex) {
+    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
+                         "yolox output kind rejects unsupported family until support lands");
+  }
+  return ok;
 }
 
 bool test_require_detector_output_kind_rejects_unsupported_sample_kind() {
@@ -360,17 +481,20 @@ bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
   return ok;
 }
 
-bool test_detector_stage_names_cover_both_graphs() {
+bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
   const auto yolov8 = detector_stage_names(ModelFamily::YoloV8);
-  const auto yolox = detector_stage_names(ModelFamily::YoloX);
 
   bool ok = true;
   ok &= expect_true(
       yolov8 == std::vector<std::string>{"input", "quant_tess", "mla", "sima_box_decode", "output"},
       "yolov8 stage names match fixed detector graph");
-  ok &= expect_true(
-      yolox == std::vector<std::string>{"input", "quant_tess", "mla", "detess_dequant", "output"},
-      "yolox stage names match fixed detector graph");
+  try {
+    static_cast<void>(detector_stage_names(ModelFamily::YoloX));
+    ok &= expect_true(false, "yolox stage names should be rejected until support lands");
+  } catch (const std::exception& ex) {
+    ok &= expect_contains(ex.what(), "YOLOX model packs are not supported yet",
+                          "yolox stage names reject unsupported family until support lands");
+  }
   return ok;
 }
 
@@ -393,6 +517,27 @@ bool test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower
   return ok;
 }
 
+bool test_producer_emit_period_s_always_paces_when_fps_configured() {
+  AppConfig cfg;
+  RtspProbe probe{640, 480, 30};
+
+  bool ok = true;
+  cfg.fps = 10;
+  ok &= expect_true(producer_emit_period_s(cfg, probe) > 0.0,
+                    "producer pacing active when fps=10 and source is 30fps");
+  cfg.fps = 20;
+  ok &= expect_true(producer_emit_period_s(cfg, probe) > 0.0,
+                    "producer pacing active when fps=20 and source is 30fps");
+  probe.fps = 0;
+  cfg.fps = 10;
+  ok &= expect_true(producer_emit_period_s(cfg, probe) > 0.0,
+                    "producer pacing active when source fps is unknown");
+  cfg.fps = 0;
+  ok &= expect_true(producer_emit_period_s(cfg, probe) == 0.0,
+                    "producer pacing disabled when fps is uncapped");
+  return ok;
+}
+
 } // namespace
 } // namespace multistream_yolox_yolov8_optiview
 
@@ -410,13 +555,17 @@ int main(int argc, char** argv) {
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_smoke_runs(binary);
   ok &= test_load_app_config_parses_runtime_worker_count();
+  ok &= test_load_app_config_rejects_yolox_family_until_supported();
   ok &= test_load_app_config_rejects_invalid_worker_count();
   ok &= test_load_app_config_rejects_invalid_video_mode();
   ok &= test_load_app_config_rejects_empty_streams();
-  ok &= test_resolve_model_family_auto_for_yolox();
+  ok &= test_json_output_enabled_is_disabled_for_annotated_video();
+  ok &= test_json_output_enabled_stays_enabled_for_clean_video();
+  ok &= test_parse_model_family_rejects_yolox_until_supported();
+  ok &= test_resolve_model_family_auto_rejects_yolox_until_supported();
   ok &= test_resolve_model_family_auto_for_yolov8();
   ok &= test_parse_bbox_payload_normalizes_yolov8_boxes();
-  ok &= test_require_detector_output_kind_accepts_yolox_detessdequant_bundle();
+  ok &= test_require_detector_output_kind_rejects_yolox_until_supported();
   ok &= test_require_detector_output_kind_rejects_unsupported_sample_kind();
   ok &= test_build_optiview_detection_payload_builds_objects_and_labels();
   ok &= test_optiview_frame_id_prefers_detector_sample_frame_id();
@@ -424,7 +573,8 @@ int main(int argc, char** argv) {
   ok &= test_optiview_timestamp_ms_applies_publish_offset();
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
-  ok &= test_detector_stage_names_cover_both_graphs();
+  ok &= test_detector_stage_names_cover_yolov8_and_reject_yolox();
   ok &= test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower();
+  ok &= test_producer_emit_period_s_always_paces_when_fps_configured();
   return ok ? 0 : 1;
 }

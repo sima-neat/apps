@@ -1,4 +1,4 @@
-"""YAML-backed configuration for the multistream YOLOX/YOLOv8 example."""
+"""YAML-backed configuration for the multistream YOLOv8 example."""
 
 from __future__ import annotations
 
@@ -42,6 +42,10 @@ class AppConfig:
     video_mode: str
     output_dir: str | None
     save_every: int
+
+
+def json_output_enabled(cfg: AppConfig) -> bool:
+    return cfg.video_mode == "clean"
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:

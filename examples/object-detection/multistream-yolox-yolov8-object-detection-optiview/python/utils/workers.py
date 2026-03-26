@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import math
 import queue
 import threading
 import time
 from typing import Any
 
-from .config import AppConfig
+from .config import AppConfig, json_output_enabled
 from .image_utils import (
     QuantTessCpuPreprocState,
     build_cpu_quanttess_preproc_state,
@@ -149,6 +150,7 @@ class StreamRuntime:
     source_run: Any
     video_session: Any
     video_run: Any
+    json_enabled: bool
     json_sender: Any
     class_labels: list[str]
     metrics: StreamMetrics = field(default_factory=StreamMetrics)
@@ -206,7 +208,8 @@ def create_stream_runtime(
         video_session, video_run = build_optiview_video_run(runtime, cfg, probe, index)
     else:
         video_session, video_run = None, None
-    json_sender = build_optiview_json_output(runtime, cfg, index)
+    json_enabled = json_output_enabled(cfg)
+    json_sender = build_optiview_json_output(runtime, cfg, index) if json_enabled else None
     return StreamRuntime(
         index=index,
         url=url,
@@ -218,6 +221,7 @@ def create_stream_runtime(
         source_run=source_run,
         video_session=video_session,
         video_run=video_run,
+        json_enabled=json_enabled,
         json_sender=json_sender,
         class_labels=class_labels,
     )
@@ -306,7 +310,9 @@ def producer_thread(
             if emit_period_s > 0.0:
                 now = time.perf_counter()
                 if next_allowed_emit_s is None:
-                    next_allowed_emit_s = now
+                    num_streams = len(cfg.rtsp_urls)
+                    phase = emit_period_s * stream.index / num_streams if num_streams > 1 else 0.0
+                    next_allowed_emit_s = math.ceil(now / emit_period_s) * emit_period_s + phase
                 if now < next_allowed_emit_s:
                     time.sleep(next_allowed_emit_s - now)
                     continue
@@ -392,22 +398,24 @@ def process_frame(
         publish_wall_time_s = time.time()
     video_elapsed = time.perf_counter() - video_t0
 
-    objects, labels = make_optiview_detection_payload(
-        pyneat,
-        detections,
-        img_w=stream.probe.width,
-        img_h=stream.probe.height,
-        class_labels=stream.class_labels,
-    )
-    json_t0 = time.perf_counter()
-    if not stream.json_sender.send_detection(
-        optiview_timestamp_ms(publish_wall_time_s, cfg.optiview_json_offset_ms),
-        optiview_frame_id(det_sample, packet.frame_index),
-        objects,
-        labels,
-    ):
-        raise RuntimeError(f"stream {stream.index} OptiView JSON send failed")
-    json_elapsed = time.perf_counter() - json_t0
+    json_elapsed = 0.0
+    if stream.json_enabled:
+        objects, labels = make_optiview_detection_payload(
+            pyneat,
+            detections,
+            img_w=stream.probe.width,
+            img_h=stream.probe.height,
+            class_labels=stream.class_labels,
+        )
+        json_t0 = time.perf_counter()
+        if not stream.json_sender.send_detection(
+            optiview_timestamp_ms(publish_wall_time_s, cfg.optiview_json_offset_ms),
+            optiview_frame_id(det_sample, packet.frame_index),
+            objects,
+            labels,
+        ):
+            raise RuntimeError(f"stream {stream.index} OptiView JSON send failed")
+        json_elapsed = time.perf_counter() - json_t0
 
     output_dir = Path(cfg.output_dir) if cfg.output_dir else None
     if save_debug_frame(stream.runtime, output_dir, stream.index, packet.frame_index, frame_out, cfg.save_every):
@@ -589,7 +597,7 @@ def run_app(cfg: AppConfig, family: str) -> int:
             f"@{effective_writer_fps(cfg, stream.probe)}fps {stream.url} -> optiview://{cfg.optiview_host} "
             f"video="
             f"{optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index) if cfg.video_enabled else 'disabled'} "
-            f"json={optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index)}"
+            f"json={optiview_json_port_for_stream(cfg.optiview_json_port_base, stream.index) if stream.json_enabled else 'disabled'}"
         )
 
     stop_event = threading.Event()

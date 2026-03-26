@@ -11,6 +11,7 @@ enum class ModelFamily {
 };
 
 std::string to_string(ModelFamily family);
+std::string yolox_not_supported_message();
 ModelFamily parse_model_family(const std::string& value);
 ModelFamily resolve_model_family(const std::string& model_path, ModelFamily hint);
 

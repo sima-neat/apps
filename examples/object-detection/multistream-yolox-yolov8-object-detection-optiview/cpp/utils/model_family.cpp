@@ -15,6 +15,10 @@ std::string lower_copy(std::string value) {
 
 } // namespace
 
+std::string yolox_not_supported_message() {
+  return "YOLOX model packs are not supported yet by this example; future support is planned.";
+}
+
 std::string to_string(ModelFamily family) {
   switch (family) {
   case ModelFamily::Auto:
@@ -33,22 +37,25 @@ ModelFamily parse_model_family(const std::string& value) {
     return ModelFamily::Auto;
   }
   if (lowered == "yolox") {
-    return ModelFamily::YoloX;
+    throw std::runtime_error(yolox_not_supported_message());
   }
   if (lowered == "yolov8") {
     return ModelFamily::YoloV8;
   }
-  throw std::runtime_error("model.family must be one of [auto, yolox, yolov8]");
+  throw std::runtime_error("model.family must be one of [auto, yolov8]");
 }
 
 ModelFamily resolve_model_family(const std::string& model_path, ModelFamily hint) {
+  if (hint == ModelFamily::YoloX) {
+    throw std::runtime_error(yolox_not_supported_message());
+  }
   if (hint != ModelFamily::Auto) {
     return hint;
   }
 
   const std::string lowered = lower_copy(model_path);
   if (lowered.find("yolox") != std::string::npos) {
-    return ModelFamily::YoloX;
+    throw std::runtime_error(yolox_not_supported_message());
   }
   if (lowered.find("yolo_v8") != std::string::npos ||
       lowered.find("yolov8") != std::string::npos) {

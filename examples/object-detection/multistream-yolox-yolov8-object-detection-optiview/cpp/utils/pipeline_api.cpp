@@ -42,6 +42,7 @@ int optiview_video_port_for_stream(int port_base, int stream_index);
 int optiview_json_port_for_stream(int port_base, int stream_index);
 int effective_writer_fps(const AppConfig& cfg, const RtspProbe& probe);
 int source_output_every_n(const AppConfig& cfg, const RtspProbe& probe);
+double producer_emit_period_s(const AppConfig& cfg, const RtspProbe& probe);
 RtspProbe probe_rtsp(const std::string& url);
 std::vector<std::string> detector_stage_names(ModelFamily family);
 std::shared_ptr<simaai::neat::Model> load_detector_model(const AppConfig& cfg);

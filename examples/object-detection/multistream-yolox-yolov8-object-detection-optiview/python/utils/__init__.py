@@ -1,1 +1,1 @@
-"""Utilities for the multistream YOLOX/YOLOv8 OptiView example."""
+"""Utilities for the multistream YOLOv8 OptiView example."""

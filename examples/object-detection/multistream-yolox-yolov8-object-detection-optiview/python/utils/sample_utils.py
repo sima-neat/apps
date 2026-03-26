@@ -5,6 +5,8 @@ from __future__ import annotations
 import struct
 from typing import Any
 
+from .model_family import YOLOX_NOT_SUPPORTED_MESSAGE
+
 
 def class_label(class_labels: list[str], class_id: int) -> str:
     if 0 <= int(class_id) < len(class_labels):
@@ -101,7 +103,7 @@ def require_detector_output_kind(pyneat: Any, family: str, sample: Any) -> str:
     if lowered == "yolov8":
         expected = "BBOX"
     elif lowered == "yolox":
-        expected = "DETESSDEQUANT"
+        raise ValueError(YOLOX_NOT_SUPPORTED_MESSAGE)
     else:
         raise ValueError(f"unsupported model family: {family}")
 
@@ -124,11 +126,8 @@ def detections_from_detector_sample(
     payload = extract_bbox_payload(pyneat, sample)
     if payload:
         return parse_bbox_payload(payload, img_w, img_h)
-    if kind == "DETESSDEQUANT":
-        raise RuntimeError(
-            "YOLOX detector output did not expose a BBOX payload; "
-            "DetessDequant output parsing could not be finalized for this model pack"
-        )
+    if kind != "BBOX":
+        raise RuntimeError(f"unsupported detector output kind: {kind}")
     return []
 
 

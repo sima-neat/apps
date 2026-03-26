@@ -68,8 +68,8 @@ class TestConfigLoading:
         config_path.write_text(
             """
 model:
-  path: assets/models/yolox_s_mpk.tar.gz
-  family: auto
+  path: assets/models/yolo_v8m_mpk.tar.gz
+  family: yolov8
 streams:
   - rtsp://127.0.0.1:8554/src1
   - rtsp://127.0.0.1:8554/src2
@@ -102,8 +102,8 @@ output:
 
         cfg = load_app_config(config_path)
 
-        assert cfg.model.path == "assets/models/yolox_s_mpk.tar.gz"
-        assert cfg.model.family == "auto"
+        assert cfg.model.path == "assets/models/yolo_v8m_mpk.tar.gz"
+        assert cfg.model.family == "yolov8"
         assert cfg.worker_count == 4
         assert cfg.mailbox_depth == 1
         assert cfg.profile is True
@@ -184,13 +184,95 @@ output:
         with pytest.raises(ValueError, match="streams"):
             load_app_config(config_path)
 
+    def test_load_app_config_rejects_yolox_family_until_supported(self, tmp_path: Path) -> None:
+        from utils.config import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+model:
+  path: assets/models/yolox_m_mpk.tar.gz
+  family: yolox
+streams:
+  - rtsp://127.0.0.1:8554/src1
+runtime:
+  worker_count: 2
+output:
+  optiview:
+    host: 127.0.0.1
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="YOLOX model packs are not supported yet"):
+            load_app_config(config_path)
+
+    def test_json_output_enabled_is_disabled_for_annotated_video(self, tmp_path: Path) -> None:
+        from utils.config import json_output_enabled, load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+model:
+  path: assets/models/yolo_v8m_mpk.tar.gz
+  family: yolov8
+streams:
+  - rtsp://127.0.0.1:8554/src1
+runtime:
+  worker_count: 2
+output:
+  optiview:
+    host: 127.0.0.1
+  video_enabled: false
+  video_mode: annotated
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_app_config(config_path)
+
+        assert json_output_enabled(cfg) is False
+
+    def test_json_output_enabled_stays_enabled_for_clean_video(self, tmp_path: Path) -> None:
+        from utils.config import json_output_enabled, load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+model:
+  path: assets/models/yolo_v8m_mpk.tar.gz
+  family: yolov8
+streams:
+  - rtsp://127.0.0.1:8554/src1
+runtime:
+  worker_count: 2
+output:
+  optiview:
+    host: 127.0.0.1
+  video_enabled: false
+  video_mode: clean
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_app_config(config_path)
+
+        assert json_output_enabled(cfg) is True
+
 
 @pytest.mark.unit
 class TestModelFamily:
-    def test_resolve_model_family_auto_for_yolox(self) -> None:
+    def test_parse_model_family_rejects_yolox_until_supported(self) -> None:
+        from utils.model_family import parse_model_family
+
+        with pytest.raises(ValueError, match="YOLOX model packs are not supported yet"):
+            parse_model_family("yolox")
+
+    def test_resolve_model_family_auto_rejects_yolox_until_supported(self) -> None:
         from utils.model_family import resolve_model_family
 
-        assert resolve_model_family("assets/models/yolox_s_mpk.tar.gz", family_hint="auto") == "yolox"
+        with pytest.raises(ValueError, match="YOLOX model packs are not supported yet"):
+            resolve_model_family("assets/models/yolox_s_mpk.tar.gz", family_hint="auto")
 
     def test_resolve_model_family_auto_for_yolov8(self) -> None:
         from utils.model_family import resolve_model_family
@@ -227,7 +309,7 @@ class TestSampleUtils:
         assert boxes[0]["score"] == pytest.approx(0.9)
         assert boxes[0]["class_id"] == 3
 
-    def test_require_detector_output_kind_accepts_yolox_detessdequant_bundle(self) -> None:
+    def test_require_detector_output_kind_rejects_yolox_until_supported(self) -> None:
         from utils.sample_utils import require_detector_output_kind
 
         class FakeTensor:
@@ -259,17 +341,18 @@ class TestSampleUtils:
         )
         sample = FakeSample(
             kind=pyneat.SampleKind.Bundle,
-            payload_tag="DETESSDEQUANT",
+            payload_tag="BBOX",
             fields=[
                 FakeSample(
                     kind=pyneat.SampleKind.Tensor,
                     tensor=FakeTensor(),
-                    payload_tag="DETESSDEQUANT",
+                    payload_tag="BBOX",
                 )
             ],
         )
 
-        assert require_detector_output_kind(pyneat, "yolox", sample) == "DETESSDEQUANT"
+        with pytest.raises(ValueError, match="YOLOX model packs are not supported yet"):
+            require_detector_output_kind(pyneat, "yolox", sample)
 
     def test_require_detector_output_kind_rejects_unsupported_sample_kind(self) -> None:
         from utils.sample_utils import require_detector_output_kind
@@ -392,16 +475,11 @@ class TestPipelineBuilders:
             "output",
         )
 
-    def test_detector_stage_names_for_yolox(self) -> None:
+    def test_detector_stage_names_rejects_yolox_until_supported(self) -> None:
         from utils.pipeline import detector_stage_names
 
-        assert detector_stage_names("yolox") == (
-            "input",
-            "quant_tess",
-            "mla",
-            "detess_dequant",
-            "output",
-        )
+        with pytest.raises(ValueError, match="YOLOX model packs are not supported yet"):
+            detector_stage_names("yolox")
 
 
 @pytest.mark.unit

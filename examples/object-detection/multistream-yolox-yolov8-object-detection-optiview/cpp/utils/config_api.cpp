@@ -44,6 +44,7 @@ struct AppConfig {
 
 std::filesystem::path default_config_path();
 std::string to_string(VideoMode mode);
+bool json_output_enabled(const AppConfig& cfg);
 AppConfig load_app_config(const std::filesystem::path& path);
 
 } // namespace multistream_yolox_yolov8_optiview

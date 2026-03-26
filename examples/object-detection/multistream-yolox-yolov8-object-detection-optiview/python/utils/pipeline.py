@@ -1,4 +1,4 @@
-"""Detector pipeline helpers for the multistream YOLOX/YOLOv8 example."""
+"""Detector pipeline helpers for the multistream YOLOv8 example."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 from .config import AppConfig
+from .model_family import YOLOX_NOT_SUPPORTED_MESSAGE
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ def detector_stage_names(family: str) -> tuple[str, ...]:
     if lowered == "yolov8":
         return ("input", "quant_tess", "mla", "sima_box_decode", "output")
     if lowered == "yolox":
-        return ("input", "quant_tess", "mla", "detess_dequant", "output")
+        raise ValueError(YOLOX_NOT_SUPPORTED_MESSAGE)
     raise ValueError(f"unsupported model family for detector graph: {family}")
 
 
@@ -153,7 +154,7 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
     session.add(pyneat.groups.rtsp_decoded_input(ro))
     session.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(source_output_every_n(cfg, probe))))
     run_opt = pyneat.RunOptions()
-    run_opt.queue_depth = 4
+    run_opt.queue_depth = 1
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
     run = session.build(run_opt)
@@ -191,7 +192,7 @@ def build_detection_run(
             )
         )
     elif family == "yolox":
-        session.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
+        raise ValueError(YOLOX_NOT_SUPPORTED_MESSAGE)
     else:
         raise ValueError(f"unsupported model family for detector graph: {family}")
 

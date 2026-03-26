@@ -50,8 +50,6 @@ std::string to_string(DetectorOutputKind kind) {
   switch (kind) {
   case DetectorOutputKind::BBox:
     return "BBOX";
-  case DetectorOutputKind::DetessDequant:
-    return "DETESSDEQUANT";
   }
   return "UNKNOWN";
 }
@@ -86,16 +84,12 @@ std::vector<Detection> parse_bbox_payload(const std::vector<std::uint8_t>& paylo
 DetectorOutputKind require_detector_output_kind(ModelFamily family,
                                                 const simaai::neat::Sample& sample) {
   std::string expected;
-  DetectorOutputKind kind = DetectorOutputKind::BBox;
   switch (family) {
   case ModelFamily::YoloV8:
     expected = "BBOX";
-    kind = DetectorOutputKind::BBox;
     break;
   case ModelFamily::YoloX:
-    expected = "DETESSDEQUANT";
-    kind = DetectorOutputKind::DetessDequant;
-    break;
+    throw std::runtime_error(yolox_not_supported_message());
   case ModelFamily::Auto:
     throw std::invalid_argument("unsupported model family");
   }
@@ -106,7 +100,7 @@ DetectorOutputKind require_detector_output_kind(ModelFamily family,
                              " expected=" + expected + " actual=" +
                              (actual.empty() ? std::string("<empty>") : actual));
   }
-  return kind;
+  return DetectorOutputKind::BBox;
 }
 
 std::vector<Detection> detections_from_detector_sample(ModelFamily family,
@@ -117,10 +111,8 @@ std::vector<Detection> detections_from_detector_sample(ModelFamily family,
   if (!payload.empty()) {
     return parse_bbox_payload(payload, img_w, img_h);
   }
-  if (kind == DetectorOutputKind::DetessDequant) {
-    throw std::runtime_error(
-        "YOLOX detector output did not expose a BBOX payload; "
-        "DetessDequant output parsing could not be finalized for this model pack");
+  if (kind != DetectorOutputKind::BBox) {
+    throw std::runtime_error("unsupported detector output kind: " + to_string(kind));
   }
   return {};
 }
