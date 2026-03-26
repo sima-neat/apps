@@ -30,18 +30,21 @@ namespace fs = std::filesystem;
 namespace {
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants (defaults can be overridden via CLI arguments)
 // ---------------------------------------------------------------------------
-constexpr int kInferSize = 640;
-constexpr float kKeypointScoreThreshold = 0.1f;
-constexpr int kNmsRadius = 6;
-constexpr float kPafScoreThreshold = 0.05f;
-constexpr float kPafSuccessRatio = 0.8f;
-constexpr int kPafNumSamples = 10;
-constexpr int kTimeoutMs = 1000;
+// Default values for configurable parameters
+const int kDefaultInferSize = 640;
+const float kDefaultKeypointScoreThreshold = 0.1f;
+const int kDefaultNmsRadius = 6;
+const float kDefaultPafScoreThreshold = 0.05f;
+const float kDefaultPafSuccessRatio = 0.8f;
+const int kDefaultPafNumSamples = 10;
+const int kDefaultTimeoutMs = 1000;
+const float kDefaultUpsampleFactor = 4.0f;
+
+// Fixed constants
 constexpr int kNumParts = 18;
 constexpr int kNumPairs = 19;
-constexpr float kUpsampleFactor = 4.0f;
 
 // Skeleton limb pairs (part_a, part_b)
 constexpr std::array<std::pair<int, int>, kNumPairs> kPosePairs = {{
@@ -224,31 +227,27 @@ TensorHWC upsample_tensor(const TensorHWC& src, float factor) {
   dst.data.resize(static_cast<size_t>(new_h) * static_cast<size_t>(new_w) *
                    static_cast<size_t>(src.c));
 
-  for (int ch = 0; ch < src.c; ++ch) {
-    cv::Mat channel_src(src.h, src.w, CV_32FC1);
-    for (int y = 0; y < src.h; ++y) {
-      for (int x = 0; x < src.w; ++x) {
-        channel_src.at<float>(y, x) = src.at(y, x, ch);
-      }
-    }
-
-    cv::Mat channel_dst;
-    cv::resize(channel_src, channel_dst, cv::Size(new_w, new_h), 0, 0, cv::INTER_CUBIC);
-
-    for (int y = 0; y < new_h; ++y) {
-      for (int x = 0; x < new_w; ++x) {
-        dst.data[static_cast<size_t>((y * new_w + x) * dst.c + ch)] =
-            channel_dst.at<float>(y, x);
-      }
-    }
-  }
+  // Treat the source tensor as a single multi-channel float image.
+  // Note: const_cast is safe here because we do not modify the source data.
+  cv::Mat src_mat(src.h,
+                  src.w,
+                  CV_32FC(src.c),
+                  const_cast<float*>(src.data.data()));
+  // Destination multi-channel image backed directly by dst.data.
+  cv::Mat dst_mat(new_h,
+                  new_w,
+                  CV_32FC(dst.c),
+                  dst.data.data());
+  // Single bicubic resize over all channels.
+  cv::resize(src_mat, dst_mat, dst_mat.size(), 0, 0, cv::INTER_CUBIC);
   return dst;
 }
 
 // ---------------------------------------------------------------------------
 // Peak extraction with 4-neighbor comparison + spatial NMS
 // ---------------------------------------------------------------------------
-std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size) {
+std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size,
+                                        float keypoint_score_threshold, int nms_radius) {
   const float stride_x = static_cast<float>(infer_size) / static_cast<float>(heatmap.w);
   const float stride_y = static_cast<float>(infer_size) / static_cast<float>(heatmap.h);
 
@@ -265,7 +264,7 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
     for (int y = 0; y < heatmap.h; ++y) {
       for (int x = 0; x < heatmap.w; ++x) {
         float val = heatmap.at(y, x, part_id);
-        if (val < kKeypointScoreThreshold) val = 0.0f;
+        if (val < keypoint_score_threshold) val = 0.0f;
         padded[static_cast<size_t>((y + 2) * pw + (x + 2))] = val;
       }
     }
@@ -300,7 +299,7 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
     std::sort(candidates.begin(), candidates.end(),
               [](const Candidate& a, const Candidate& b) { return a.x < b.x; });
 
-    // Spatial NMS: suppress peaks within kNmsRadius pixels
+    // Spatial NMS: suppress peaks within nms_radius pixels
     std::vector<bool> suppressed(candidates.size(), false);
     for (size_t i = 0; i < candidates.size(); ++i) {
       if (suppressed[i]) continue;
@@ -308,7 +307,7 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
         if (suppressed[j]) continue;
         const float dx = static_cast<float>(candidates[i].x - candidates[j].x);
         const float dy = static_cast<float>(candidates[i].y - candidates[j].y);
-        if (std::hypot(dx, dy) < static_cast<float>(kNmsRadius)) {
+        if (std::hypot(dx, dy) < static_cast<float>(nms_radius)) {
           suppressed[j] = true;
         }
       }
@@ -336,7 +335,8 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
 // PAF score: line integral between two keypoints
 // ---------------------------------------------------------------------------
 float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint& b,
-                        int paf_x_idx, int paf_y_idx) {
+                        int paf_x_idx, int paf_y_idx, float paf_score_threshold,
+                        float paf_success_ratio, int paf_num_samples) {
   const float dx = static_cast<float>(b.grid_x - a.grid_x);
   const float dy = static_cast<float>(b.grid_y - a.grid_y);
   const float distance = std::hypot(dx, dy);
@@ -349,8 +349,8 @@ float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint&
   int valid_points = 0;
   float valid_sum = 0.0f;
 
-  for (int s = 0; s < kPafNumSamples; ++s) {
-    const float t = static_cast<float>(s) / static_cast<float>(kPafNumSamples - 1);
+  for (int s = 0; s < paf_num_samples; ++s) {
+    const float t = static_cast<float>(s) / static_cast<float>(paf_num_samples - 1);
     int sx = static_cast<int>(std::round(
         static_cast<float>(a.grid_x) + t * static_cast<float>(b.grid_x - a.grid_x)));
     int sy = static_cast<int>(std::round(
@@ -363,7 +363,7 @@ float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint&
     const float paf_vy = paf.at(sy, sx, paf_y_idx);
     const float dot = paf_vx * vec_x + paf_vy * vec_y;
 
-    if (dot > kPafScoreThreshold) {
+    if (dot > paf_score_threshold) {
       valid_sum += dot;
       ++valid_points;
     }
@@ -371,7 +371,7 @@ float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint&
 
   float paf_score = (valid_points > 0) ? (valid_sum / static_cast<float>(valid_points)) : 0.0f;
 
-  if (static_cast<float>(valid_points) > kPafSuccessRatio * static_cast<float>(kPafNumSamples) &&
+  if (static_cast<float>(valid_points) > paf_success_ratio * static_cast<float>(paf_num_samples) &&
       paf_score > 0.0f) {
     return paf_score;
   }
@@ -382,7 +382,8 @@ float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint&
 // Group keypoints into people using greedy tree forward-propagation
 // ---------------------------------------------------------------------------
 std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints,
-                                    const TensorHWC& paf) {
+                                    const TensorHWC& paf, float paf_score_threshold,
+                                    float paf_success_ratio, int paf_num_samples) {
   // Bucket keypoints by part_id
   std::array<std::vector<int>, kNumParts> kpts_by_part;
   for (size_t i = 0; i < keypoints.size(); ++i) {
@@ -404,7 +405,8 @@ std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints,
     std::vector<Connection> candidate_conns;
     for (int ai : cands_a) {
       for (int bi : cands_b) {
-        float score = compute_paf_score(paf, keypoints[ai], keypoints[bi], paf_x_idx, paf_y_idx);
+        float score = compute_paf_score(paf, keypoints[ai], keypoints[bi], paf_x_idx, paf_y_idx,
+                                        paf_score_threshold, paf_success_ratio, paf_num_samples);
         if (score > 0.0f) {
           candidate_conns.push_back({ai, bi, score, keypoints[ai].id, keypoints[bi].id});
         }
@@ -535,7 +537,10 @@ int main(int argc, char** argv) {
   std::cerr.setf(std::ios::unitbuf);
 
   if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir> [--profile]\n";
+    std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir>\n";
+    std::cerr << "  [--infer-size SIZE] [--keypoint-score SCORE] [--nms-radius RADIUS]\n";
+    std::cerr << "  [--paf-score SCORE] [--paf-success-ratio RATIO] [--paf-samples N]\n";
+    std::cerr << "  [--upsample-factor FACTOR] [--timeout MS] [--profile]\n";
     return 1;
   }
 
@@ -543,11 +548,47 @@ int main(int argc, char** argv) {
   const fs::path input_dir = argv[2];
   const fs::path output_dir = argv[3];
   
+  // Initialize configurable parameters with defaults
+  int infer_size = kDefaultInferSize;
+  float keypoint_score_threshold = kDefaultKeypointScoreThreshold;
+  int nms_radius = kDefaultNmsRadius;
+  float paf_score_threshold = kDefaultPafScoreThreshold;
+  float paf_success_ratio = kDefaultPafSuccessRatio;
+  int paf_num_samples = kDefaultPafNumSamples;
+  int timeout_ms = kDefaultTimeoutMs;
+  float upsample_factor = kDefaultUpsampleFactor;
   bool enable_profile = false;
-  if (argc > 4 && std::string(argv[4]) == "--profile") {
-    enable_profile = true;
-  }
 
+  // Parse optional arguments
+  for (int i = 4; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--profile") {
+      enable_profile = true;
+    } else if (arg == "--infer-size" && i + 1 < argc) {
+      infer_size = std::stoi(argv[++i]);
+    } else if (arg == "--keypoint-score" && i + 1 < argc) {
+      keypoint_score_threshold = std::stof(argv[++i]);
+    } else if (arg == "--nms-radius" && i + 1 < argc) {
+      nms_radius = std::stoi(argv[++i]);
+    } else if (arg == "--paf-score" && i + 1 < argc) {
+      paf_score_threshold = std::stof(argv[++i]);
+    } else if (arg == "--paf-success-ratio" && i + 1 < argc) {
+      paf_success_ratio = std::stof(argv[++i]);
+    } else if (arg == "--paf-samples" && i + 1 < argc) {
+      paf_num_samples = std::stoi(argv[++i]);
+    } else if (arg == "--upsample-factor" && i + 1 < argc) {
+      upsample_factor = std::stof(argv[++i]);
+    } else if (arg == "--timeout" && i + 1 < argc) {
+      timeout_ms = std::stoi(argv[++i]);
+    } else {
+      std::cerr << "Unknown option: " << arg << "\n";
+      std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir>\n";
+      std::cerr << "  [--infer-size SIZE] [--keypoint-score SCORE] [--nms-radius RADIUS]\n";
+      std::cerr << "  [--paf-score SCORE] [--paf-success-ratio RATIO] [--paf-samples N]\n";
+      std::cerr << "  [--upsample-factor FACTOR] [--timeout MS] [--profile]\n";
+      return 1;
+    }
+  }
   if (!fs::is_directory(input_dir)) {
     std::cerr << "Input directory does not exist: " << input_dir << "\n";
     return 2;
@@ -572,8 +613,8 @@ int main(int argc, char** argv) {
     simaai::neat::Model::Options model_opt;
     model_opt.media_type = "video/x-raw";
     model_opt.format = "BGR";
-    model_opt.input_max_width = kInferSize;
-    model_opt.input_max_height = kInferSize;
+    model_opt.input_max_width = infer_size;
+    model_opt.input_max_height = infer_size;
     model_opt.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
@@ -582,7 +623,7 @@ int main(int argc, char** argv) {
     session.add(model.session());
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
-    cv::Mat dummy_bgr(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat dummy_bgr(infer_size, infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy = simaai::neat::from_cv_mat(
         dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
     auto run = session.build(dummy, simaai::neat::RunMode::Sync);
@@ -600,13 +641,13 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      auto lb = letterbox(bgr, kInferSize);
+      auto lb = letterbox(bgr, infer_size);
 
       simaai::neat::Tensor input = simaai::neat::from_cv_mat(
           lb.img, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
 
       auto infer_start = std::chrono::high_resolution_clock::now();
-      simaai::neat::Sample out = run.push_and_pull(input, kTimeoutMs);
+      simaai::neat::Sample out = run.push_and_pull(input, timeout_ms);
       auto infer_end = std::chrono::high_resolution_clock::now();
 
       const auto tensors = collect_tensors(out);
@@ -618,13 +659,15 @@ int main(int argc, char** argv) {
       TensorHWC heatmap = tensor_to_hwc_f32(tensors[0]);
       TensorHWC paf = tensor_to_hwc_f32(tensors[1]);
 
-      // Upsample by 4x using bicubic interpolation
-      heatmap = upsample_tensor(heatmap, kUpsampleFactor);
-      paf = upsample_tensor(paf, kUpsampleFactor);
+      // Upsample by configured factor using bicubic interpolation
+      heatmap = upsample_tensor(heatmap, upsample_factor);
+      paf = upsample_tensor(paf, upsample_factor);
 
       // Extract keypoints and group into people
-      std::vector<Keypoint> raw_kpts = extract_keypoints(heatmap, kInferSize);
-      std::vector<Person> people = group_keypoints(raw_kpts, paf);
+      std::vector<Keypoint> raw_kpts = extract_keypoints(heatmap, infer_size,
+                                                         keypoint_score_threshold, nms_radius);
+      std::vector<Person> people = group_keypoints(raw_kpts, paf, paf_score_threshold,
+                                                   paf_success_ratio, paf_num_samples);
 
       // Scale keypoints back to original image coordinates
       scale_keypoints(raw_kpts, lb.ratio, lb.pad_left, lb.pad_top);

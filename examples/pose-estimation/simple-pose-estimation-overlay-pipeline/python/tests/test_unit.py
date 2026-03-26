@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-# Point directly to main_pose.py in the workspace
+# Point directly to main.py in the workspace
 MAIN_PY = Path(__file__).resolve().parent.parent / "main.py"
 
 

@@ -1,4 +1,4 @@
-"""YOLOv8n simple folder detection pipeline using pyneat."""
+"""OpenPose pose-estimation overlay pipeline using pyneat."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def letterbox(img: np.ndarray, new_shape=(640, 640), color=(128, 128, 128)):
     return img, r, left, top
 
 
-def get_all_keypoints_without_grouping(heatmap_tensor, infer_size: int, min_score: float = KEYPOINT_MIN_SCORE) -> list[dict]:
+def get_all_keypoints_without_grouping(heatmap_tensor, infer_size: int, min_score: float = KEYPOINT_MIN_SCORE, nms_radius: int = NMS_RADIUS) -> list[dict]:
     h, w, c_hm = heatmap_tensor.shape
     stride_x = infer_size / float(w)
     stride_y = infer_size / float(h)
@@ -114,7 +114,7 @@ def get_all_keypoints_without_grouping(heatmap_tensor, infer_size: int, min_scor
                 continue
             for j in range(i+1, len(candidates)):
                 if math.hypot(candidates[i][0] - candidates[j][0],
-                              candidates[i][1] - candidates[j][1]) < NMS_RADIUS:
+                              candidates[i][1] - candidates[j][1]) < nms_radius:
                     suppressed[j] = 1
         
         for i in range(len(candidates)):
@@ -167,7 +167,9 @@ def draw_keypoints(frame: np.ndarray, keypoints: list[dict], labels: list[str]) 
         cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
         
     return frame
-def compute_paf_score(paf_tensor: np.ndarray, kpt_a: dict, kpt_b: dict, paf_x_idx: int, paf_y_idx: int, num_samples: int = PAF_NUM_SAMPLES) -> float:
+def compute_paf_score(paf_tensor: np.ndarray, kpt_a: dict, kpt_b: dict, paf_x_idx: int, paf_y_idx: int, 
+                      paf_min_score: float = PAF_MIN_SCORE, paf_success_ratio: float = PAF_SUCCESS_RATIO,
+                      num_samples: int = PAF_NUM_SAMPLES) -> float:
     """Calculates the line integral over the PAF vector field between two keypoints."""
     dx = kpt_b["grid_x"] - kpt_a["grid_x"]
     dy = kpt_b["grid_y"] - kpt_a["grid_y"]
@@ -190,7 +192,7 @@ def compute_paf_score(paf_tensor: np.ndarray, kpt_a: dict, kpt_b: dict, paf_x_id
 
     local_scores = paf_vx * vec_x + paf_vy * vec_y
     
-    valid_mask = local_scores > PAF_MIN_SCORE
+    valid_mask = local_scores > paf_min_score
     valid_points = np.sum(valid_mask)
     
     if valid_points > 0:
@@ -199,12 +201,15 @@ def compute_paf_score(paf_tensor: np.ndarray, kpt_a: dict, kpt_b: dict, paf_x_id
         paf_score = 0.0
     
 
-    if valid_points > PAF_SUCCESS_RATIO * num_samples and paf_score > 0.0:
+    if valid_points > paf_success_ratio * num_samples and paf_score > 0.0:
         return float(paf_score)
         
     return 0.0
 
-def group_keypoints_with_pafs(keypoints: list[dict], paf_tensor: np.ndarray) -> list[dict]:
+def group_keypoints_with_pafs(keypoints: list[dict], paf_tensor: np.ndarray, 
+                              paf_min_score: float = PAF_MIN_SCORE,
+                              paf_success_ratio: float = PAF_SUCCESS_RATIO,
+                              paf_num_samples: int = PAF_NUM_SAMPLES) -> list[dict]:
     """Uses greedy bipartite matching and graph merging to assemble people."""
     kpts_by_part = {i: [] for i in range(18)}
     for kpt in keypoints:
@@ -224,7 +229,8 @@ def group_keypoints_with_pafs(keypoints: list[dict], paf_tensor: np.ndarray) -> 
         candidate_connections = []
         for a in cands_a:
             for b in cands_b:
-                score = compute_paf_score(paf_tensor, a, b, paf_x_idx, paf_y_idx)
+                score = compute_paf_score(paf_tensor, a, b, paf_x_idx, paf_y_idx, 
+                                         paf_min_score, paf_success_ratio, paf_num_samples)
                 if score > 0.0:
                     candidate_connections.append({
                         "a": a, "b": b, "score": score, 
@@ -323,7 +329,7 @@ def scale_keypoints(keypoints: list[dict], r: float, left: int, top: int) -> lis
     return scaled
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="OpenPose simple folder detection pipeline")
+    parser = argparse.ArgumentParser(description="OpenPose simple pose estimation pipeline")
     parser.add_argument("model", type=str, help="Path to compiled pose model package")
     parser.add_argument("input_dir", type=str, help="Input image directory")
     parser.add_argument("output_dir", type=str, help="Output directory")
@@ -331,6 +337,54 @@ def main() -> int:
         "--profile",
         action="store_true",
         help="Enable profiling: report end-to-end and model-inference timing",
+    )
+    parser.add_argument(
+        "--infer-size",
+        type=int,
+        default=INFER_SIZE,
+        help=f"Inference input size (default: {INFER_SIZE})",
+    )
+    parser.add_argument(
+        "--keypoint-score",
+        type=float,
+        default=KEYPOINT_MIN_SCORE,
+        help=f"Keypoint confidence threshold (default: {KEYPOINT_MIN_SCORE})",
+    )
+    parser.add_argument(
+        "--nms-radius",
+        type=int,
+        default=NMS_RADIUS,
+        help=f"Non-maximum suppression radius (default: {NMS_RADIUS})",
+    )
+    parser.add_argument(
+        "--paf-score",
+        type=float,
+        default=PAF_MIN_SCORE,
+        help=f"Part Affinity Field score threshold (default: {PAF_MIN_SCORE})",
+    )
+    parser.add_argument(
+        "--paf-success-ratio",
+        type=float,
+        default=PAF_SUCCESS_RATIO,
+        help=f"PAF success ratio for valid connections (default: {PAF_SUCCESS_RATIO})",
+    )
+    parser.add_argument(
+        "--paf-samples",
+        type=int,
+        default=PAF_NUM_SAMPLES,
+        help=f"Number of PAF samples for line integral (default: {PAF_NUM_SAMPLES})",
+    )
+    parser.add_argument(
+        "--upsample-factor",
+        type=float,
+        default=4.0,
+        help="Heatmap/PAF upsample factor (default: 4.0)",
+    )
+    parser.add_argument(
+        "--pull-timeout",
+        type=int,
+        default=PULL_TIMEOUT_MS,
+        help=f"Inference pull timeout in ms (default: {PULL_TIMEOUT_MS})",
     )
     args = parser.parse_args()
 
@@ -351,8 +405,8 @@ def main() -> int:
         opt = pyneat.ModelOptions()
         opt.media_type = "video/x-raw"
         opt.format = "BGR"
-        opt.input_max_width = INFER_SIZE
-        opt.input_max_height = INFER_SIZE
+        opt.input_max_width = args.infer_size
+        opt.input_max_height = args.infer_size
         opt.input_max_depth = 3
 
         model = pyneat.Model(args.model, opt)
@@ -361,7 +415,7 @@ def main() -> int:
         sess.add(model.session())
         print(f"[BUILD] Pipeline:\n{sess.describe_backend()}")
 
-        dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
+        dummy = np.zeros((args.infer_size, args.infer_size, 3), dtype=np.uint8)
         t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.BGR)
         run = sess.build(t_dummy, pyneat.RunMode.Sync)
 
@@ -379,13 +433,13 @@ def main() -> int:
 
             orig_h, orig_w = bgr.shape[:2]
             
-            resized, r, pad_l, pad_t = letterbox(bgr, (INFER_SIZE, INFER_SIZE))
+            resized, r, pad_l, pad_t = letterbox(bgr, (args.infer_size, args.infer_size))
             resized = np.ascontiguousarray(resized, dtype=np.uint8)
 
             t_in = pyneat.Tensor.from_numpy(resized, copy=True, image_format=pyneat.PixelFormat.BGR)
 
             infer_start = time.perf_counter()
-            out_opt = run.run(t_in, timeout_ms=PULL_TIMEOUT_MS)
+            out_opt = run.run(t_in, timeout_ms=args.pull_timeout)
             infer_end = time.perf_counter()
             if out_opt is None:
                 print(f"Inference failed for {img_path.name}", file=sys.stderr)
@@ -393,15 +447,24 @@ def main() -> int:
             
             tensors = list(iter_tensors(out_opt))
             
+            # Validate that the model output contains the expected tensors
+            if len(tensors) < 2:
+                print(
+                    f"Inference output for {img_path.name} does not contain the expected "
+                    f"number of tensors (expected at least 2, got {len(tensors)}). Skipping.",
+                    file=sys.stderr,
+                )
+                continue
             heatmap_tensor = tensor_to_hwc_f32(tensors[0]) 
             paf_tensor = tensor_to_hwc_f32(tensors[1])
 
-            heatmap_tensor = cv2.resize(heatmap_tensor, (0, 0), fx=4.0, fy=4.0, interpolation=cv2.INTER_CUBIC)
-            paf_tensor = cv2.resize(paf_tensor, (0, 0), fx=4.0, fy=4.0, interpolation=cv2.INTER_CUBIC)
+            heatmap_tensor = cv2.resize(heatmap_tensor, (0, 0), fx=args.upsample_factor, fy=args.upsample_factor, interpolation=cv2.INTER_CUBIC)
+            paf_tensor = cv2.resize(paf_tensor, (0, 0), fx=args.upsample_factor, fy=args.upsample_factor, interpolation=cv2.INTER_CUBIC)
 
 
-            raw_kpts = get_all_keypoints_without_grouping(heatmap_tensor, INFER_SIZE, min_score=KEYPOINT_MIN_SCORE)
-            people = group_keypoints_with_pafs(raw_kpts, paf_tensor)
+            raw_kpts = get_all_keypoints_without_grouping(heatmap_tensor, args.infer_size, min_score=args.keypoint_score, nms_radius=args.nms_radius)
+            people = group_keypoints_with_pafs(raw_kpts, paf_tensor, paf_min_score=args.paf_score,
+                                               paf_success_ratio=args.paf_success_ratio, paf_num_samples=args.paf_samples)
 
             for p in people:
                 scaled_kpts = scale_keypoints(list(p["keypoints"].values()), r, pad_l, pad_t)
