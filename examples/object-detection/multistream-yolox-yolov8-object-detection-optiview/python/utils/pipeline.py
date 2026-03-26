@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import glob
+import os
 import sys
 from typing import Any
 
@@ -39,6 +40,8 @@ _SOURCE_STARTUP_PULL_TIMEOUT_MS = 50000
 _SOURCE_PULL_TIMEOUT_MS = 10000
 _SOURCE_STARTUP_STAGGER_S = 0.5
 _OPTIVIEW_BITRATE_KBPS = 2500
+_DEFAULT_MODEL_NUM_BUFFERS = "3"
+_DEFAULT_DECODER_NUM_BUFFERS = "7"
 
 
 def optiview_video_port_for_stream(port_base: int, stream_index: int) -> int:
@@ -66,6 +69,12 @@ def detector_stage_names(family: str) -> tuple[str, ...]:
     if lowered == "yolox":
         raise ValueError(YOLOX_NOT_SUPPORTED_MESSAGE)
     raise ValueError(f"unsupported model family for detector graph: {family}")
+
+
+def apply_graphpipes_runtime_defaults() -> None:
+    os.environ.setdefault("SIMA_FORCE_MODEL_NUM_BUFFERS", _DEFAULT_MODEL_NUM_BUFFERS)
+    os.environ.setdefault("SIMA_FORCE_DECODER_NUM_BUFFERS", _DEFAULT_DECODER_NUM_BUFFERS)
+    os.environ.setdefault("SIMA_FORCE_DECODER_POOL_BUFFERS", _DEFAULT_DECODER_NUM_BUFFERS)
 
 
 def load_runtime_modules() -> RuntimeModules:
@@ -106,6 +115,7 @@ def probe_rtsp(url: str) -> RtspProbe:
 
 
 def load_detector_model(runtime: RuntimeModules, cfg: AppConfig):
+    apply_graphpipes_runtime_defaults()
     pyneat = runtime.pyneat
     opt = pyneat.ModelOptions()
     opt.media_type = "application/vnd.simaai.tensor"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -456,6 +457,35 @@ class TestSampleUtils:
 
 @pytest.mark.unit
 class TestPipelineBuilders:
+    def test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset(self, monkeypatch) -> None:
+        from utils.pipeline import apply_graphpipes_runtime_defaults
+
+        for key in (
+            "SIMA_FORCE_MODEL_NUM_BUFFERS",
+            "SIMA_FORCE_DECODER_NUM_BUFFERS",
+            "SIMA_FORCE_DECODER_POOL_BUFFERS",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        apply_graphpipes_runtime_defaults()
+
+        assert os.environ["SIMA_FORCE_MODEL_NUM_BUFFERS"] == "3"
+        assert os.environ["SIMA_FORCE_DECODER_NUM_BUFFERS"] == "7"
+        assert os.environ["SIMA_FORCE_DECODER_POOL_BUFFERS"] == "7"
+
+    def test_apply_graphpipes_runtime_defaults_preserves_explicit_env(self, monkeypatch) -> None:
+        from utils.pipeline import apply_graphpipes_runtime_defaults
+
+        monkeypatch.setenv("SIMA_FORCE_MODEL_NUM_BUFFERS", "11")
+        monkeypatch.setenv("SIMA_FORCE_DECODER_NUM_BUFFERS", "12")
+        monkeypatch.setenv("SIMA_FORCE_DECODER_POOL_BUFFERS", "13")
+
+        apply_graphpipes_runtime_defaults()
+
+        assert os.environ["SIMA_FORCE_MODEL_NUM_BUFFERS"] == "11"
+        assert os.environ["SIMA_FORCE_DECODER_NUM_BUFFERS"] == "12"
+        assert os.environ["SIMA_FORCE_DECODER_POOL_BUFFERS"] == "13"
+
     def test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower(self) -> None:
         from utils.pipeline import source_output_every_n
 

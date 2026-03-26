@@ -69,6 +69,66 @@ private:
   bool closed_ = false;
 };
 
+template <typename T> class BoundedQueue {
+public:
+  explicit BoundedQueue(std::size_t capacity) : capacity_(capacity) {}
+
+  bool push_drop_oldest(T item, bool keep_latest = false) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (closed_ || capacity_ == 0) {
+      return false;
+    }
+    if (queue_.size() >= capacity_) {
+      if (keep_latest) {
+        return true;
+      }
+      queue_.pop_front();
+    }
+    queue_.push_back(std::move(item));
+    cv_.notify_one();
+    return true;
+  }
+
+  bool pop_wait(T& out, int timeout_ms) {
+    std::unique_lock<std::mutex> lock(mu_);
+    const auto ready = [&] { return closed_ || !queue_.empty(); };
+    if (timeout_ms < 0) {
+      cv_.wait(lock, ready);
+    } else if (!cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), ready)) {
+      return false;
+    }
+    if (queue_.empty()) {
+      return false;
+    }
+    out = std::move(queue_.front());
+    queue_.pop_front();
+    return true;
+  }
+
+  void close() {
+    std::lock_guard<std::mutex> lock(mu_);
+    closed_ = true;
+    cv_.notify_all();
+  }
+
+  bool closed() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return closed_;
+  }
+
+  bool drained() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return closed_ && queue_.empty();
+  }
+
+private:
+  std::size_t capacity_ = 0;
+  mutable std::mutex mu_;
+  std::condition_variable cv_;
+  std::deque<T> queue_;
+  bool closed_ = false;
+};
+
 template <typename T> class LatestFrameMailbox {
 public:
   LatestFrameMailbox(int stream_index, std::size_t capacity)

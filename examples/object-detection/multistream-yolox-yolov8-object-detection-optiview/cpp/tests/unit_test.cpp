@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <cstdlib>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -433,6 +434,32 @@ bool test_optiview_timestamp_ms_applies_publish_offset() {
                      "OptiView timestamp adds json offset to publish time");
 }
 
+bool test_deep_copy_encoded_sample_preserves_metadata_and_accepts_caps_override() {
+  simaai::neat::Sample sample = simaai::neat::make_encoded_sample(
+      std::vector<std::uint8_t>{1, 2, 3, 4},
+      "video/x-h264,stream-format=(string)byte-stream,alignment=(string)au");
+  sample.frame_id = 42;
+  sample.input_seq = 42;
+  sample.orig_input_seq = 42;
+  sample.stream_id = "stream7";
+  sample.port_name = "decoder7";
+  sample.payload_tag = "H264";
+
+  const simaai::neat::Sample copy = deep_copy_encoded_sample(
+      sample, "video/x-h264,width=(int)1280,height=(int)720,alignment=(string)au");
+
+  bool ok = true;
+  ok &= expect_true(copy.frame_id == 42, "encoded sample copy keeps frame_id");
+  ok &= expect_true(copy.stream_id == "stream7", "encoded sample copy keeps stream_id");
+  ok &= expect_true(copy.port_name == "decoder7", "encoded sample copy keeps port_name");
+  ok &= expect_true(copy.caps_string.find("width=(int)1280") != std::string::npos,
+                    "encoded sample copy accepts caps override");
+  ok &= expect_true(copy.tensor.has_value() &&
+                        copy.tensor->copy_payload_bytes() == std::vector<std::uint8_t>({1, 2, 3, 4}),
+                    "encoded sample copy keeps payload bytes");
+  return ok;
+}
+
 bool test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion() {
   ReadyStreamQueue ready_queue;
   LatestFrameMailbox<std::string> mailbox(7, 1);
@@ -461,6 +488,30 @@ bool test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_aft
   return ok;
 }
 
+bool test_bounded_queue_drops_oldest_and_drains_on_close() {
+  BoundedQueue<std::string> queue(2);
+
+  bool ok = true;
+  ok &= expect_true(queue.push_drop_oldest("frame-0"), "bounded queue accepts first item");
+  ok &= expect_true(queue.push_drop_oldest("frame-1"), "bounded queue accepts second item");
+  ok &= expect_true(queue.push_drop_oldest("frame-2"),
+                    "bounded queue accepts third item by dropping oldest");
+
+  std::string item;
+  ok &= expect_true(queue.pop_wait(item, 0), "bounded queue yields first available item");
+  ok &= expect_true(item == "frame-1", "bounded queue dropped the oldest item first");
+  ok &= expect_true(queue.pop_wait(item, 0), "bounded queue yields second available item");
+  ok &= expect_true(item == "frame-2", "bounded queue keeps the newest item");
+
+  queue.close();
+  ok &= expect_true(!queue.push_drop_oldest("frame-3"),
+                    "bounded queue rejects pushes after close");
+  ok &= expect_true(!queue.pop_wait(item, 0),
+                    "bounded queue reports empty once closed and drained");
+  ok &= expect_true(queue.drained(), "bounded queue reports drained after close");
+  return ok;
+}
+
 bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
   StreamProbeSpec a{ModelFamily::YoloV8, RtspProbe{640, 480, 30}};
   StreamProbeSpec b{ModelFamily::YoloV8, RtspProbe{640, 480, 25}};
@@ -486,8 +537,8 @@ bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
 
   bool ok = true;
   ok &= expect_true(
-      yolov8 == std::vector<std::string>{"input", "quant_tess", "mla", "sima_box_decode", "output"},
-      "yolov8 stage names match fixed detector graph");
+      yolov8 == std::vector<std::string>{"input", "preproc", "mla", "sima_box_decode", "output"},
+      "yolov8 stage names match the NV12 preprocess detector graph");
   try {
     static_cast<void>(detector_stage_names(ModelFamily::YoloX));
     ok &= expect_true(false, "yolox stage names should be rejected until support lands");
@@ -498,23 +549,63 @@ bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
   return ok;
 }
 
-bool test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower() {
+bool test_source_output_every_n_never_decimates_encoded_rtsp_output() {
   AppConfig cfg;
   RtspProbe probe{640, 480, 30};
 
   bool ok = true;
   cfg.fps = 0;
-  ok &= expect_true(source_output_every_n(cfg, probe) == 1, "source every_n stays 1 when fps is uncapped");
+  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
+                    "source every_n stays 1 when fps is uncapped");
   cfg.fps = 20;
   ok &= expect_true(source_output_every_n(cfg, probe) == 1,
                     "source every_n stays 1 when target fps is near source fps");
   cfg.fps = 12;
-  ok &= expect_true(source_output_every_n(cfg, probe) == 2,
-                    "source every_n becomes 2 for 30fps source and 12fps target");
+  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
+                    "source every_n stays 1 when target fps is lower because encoded output must stay intact");
   cfg.fps = 10;
-  ok &= expect_true(source_output_every_n(cfg, probe) == 3,
-                    "source every_n becomes 3 for 30fps source and 10fps target");
+  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
+                    "source every_n stays 1 even for 10fps targets because producer pacing handles throttling");
   return ok;
+}
+
+bool test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset() {
+  unsetenv("SIMA_FORCE_MODEL_NUM_BUFFERS");
+  unsetenv("SIMA_FORCE_DECODER_NUM_BUFFERS");
+  unsetenv("SIMA_FORCE_DECODER_POOL_BUFFERS");
+
+  apply_graphpipes_runtime_defaults();
+
+  bool ok = true;
+  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_MODEL_NUM_BUFFERS")) == "3",
+                    "runtime defaults set model buffer count when unset");
+  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_NUM_BUFFERS")) == "7",
+                    "runtime defaults set decoder buffer count when unset");
+  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_POOL_BUFFERS")) == "7",
+                    "runtime defaults set decoder pool buffer count when unset");
+  return ok;
+}
+
+bool test_apply_graphpipes_runtime_defaults_preserves_explicit_env() {
+  setenv("SIMA_FORCE_MODEL_NUM_BUFFERS", "11", 1);
+  setenv("SIMA_FORCE_DECODER_NUM_BUFFERS", "12", 1);
+  setenv("SIMA_FORCE_DECODER_POOL_BUFFERS", "13", 1);
+
+  apply_graphpipes_runtime_defaults();
+
+  bool ok = true;
+  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_MODEL_NUM_BUFFERS")) == "11",
+                    "runtime defaults preserve explicit model buffer count");
+  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_NUM_BUFFERS")) == "12",
+                    "runtime defaults preserve explicit decoder buffer count");
+  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_POOL_BUFFERS")) == "13",
+                    "runtime defaults preserve explicit decoder pool buffer count");
+  return ok;
+}
+
+bool test_graphpipes_decoder_num_buffers_matches_source_tuning() {
+  return expect_true(graphpipes_decoder_num_buffers() == 7,
+                     "graphpipes decoder buffer count matches tuned source decode");
 }
 
 bool test_producer_emit_period_s_always_paces_when_fps_configured() {
@@ -571,10 +662,15 @@ int main(int argc, char** argv) {
   ok &= test_optiview_frame_id_prefers_detector_sample_frame_id();
   ok &= test_optiview_frame_id_falls_back_to_packet_index();
   ok &= test_optiview_timestamp_ms_applies_publish_offset();
+  ok &= test_deep_copy_encoded_sample_preserves_metadata_and_accepts_caps_override();
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
+  ok &= test_bounded_queue_drops_oldest_and_drains_on_close();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
   ok &= test_detector_stage_names_cover_yolov8_and_reject_yolox();
-  ok &= test_source_output_every_n_only_decimates_when_target_is_meaningfully_lower();
+  ok &= test_source_output_every_n_never_decimates_encoded_rtsp_output();
+  ok &= test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset();
+  ok &= test_apply_graphpipes_runtime_defaults_preserves_explicit_env();
+  ok &= test_graphpipes_decoder_num_buffers_matches_source_tuning();
   ok &= test_producer_emit_period_s_always_paces_when_fps_configured();
   return ok ? 0 : 1;
 }

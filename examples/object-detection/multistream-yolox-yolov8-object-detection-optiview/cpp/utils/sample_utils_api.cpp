@@ -3,6 +3,7 @@
 #include "config_api.cpp"
 
 #include "neat/session.h"
+#include "pipeline/EncodedSampleUtil.h"
 #include "support/runtime/example_utils.h"
 
 #include <opencv2/core/mat.hpp>
@@ -44,6 +45,8 @@ std::int64_t optiview_timestamp_ms(double publish_time_s, double offset_ms);
 OptiViewDetectionPayload build_optiview_detection_payload(const std::vector<Detection>& detections,
                                                           int img_w, int img_h,
                                                           const std::vector<std::string>& class_labels);
+simaai::neat::Sample deep_copy_encoded_sample(const simaai::neat::Sample& sample,
+                                              const std::string& caps_override = {});
 cv::Mat tensor_rgb_from_sample(const simaai::neat::Sample& sample);
 
 } // namespace multistream_yolox_yolov8_optiview

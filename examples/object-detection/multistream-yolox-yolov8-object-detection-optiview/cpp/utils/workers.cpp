@@ -54,9 +54,33 @@ struct StreamMetrics {
 };
 
 struct FramePacket {
-  cv::Mat frame;
+  simaai::neat::Sample decoded;
   int frame_index = 0;
   double source_time_s = 0.0;
+  double video_push_time_s = 0.0;
+};
+
+struct EncodedPacket {
+  simaai::neat::Sample encoded;
+  int frame_index = 0;
+  double source_pull_time_s = 0.0;
+  double video_push_time_s = 0.0;
+};
+
+struct AnnexBProbe {
+  bool found = false;
+  bool prefix_ok = false;
+  std::size_t offset = 0;
+  std::size_t start_code_len = 0;
+  std::string prefix_hex;
+};
+
+struct H264NalSummary {
+  bool has_sps = false;
+  bool has_pps = false;
+  bool has_idr = false;
+  bool has_aud = false;
+  int nal_count = 0;
 };
 
 class Event {
@@ -83,9 +107,10 @@ struct StreamRuntime {
   std::string url;
   ModelFamily family = ModelFamily::Auto;
   RtspProbe probe;
-  QuantTessCpuPreprocState quant_preproc_state;
   SessionRun source;
-  SessionRun video;
+  std::optional<SessionRun> decode;
+  std::optional<SessionRun> video;
+  std::shared_ptr<BoundedQueue<EncodedPacket>> encoded_for_decode;
   bool video_enabled = true;
   std::optional<sima_examples::OptiViewSender> json_sender;
   bool json_enabled = true;
@@ -131,6 +156,126 @@ std::vector<std::string> load_class_labels(const fs::path& path = kDefaultLabels
   return labels;
 }
 
+std::string hex_prefix(const std::vector<std::uint8_t>& bytes, std::size_t max_bytes) {
+  static const char kHex[] = "0123456789ABCDEF";
+  const std::size_t n = std::min(bytes.size(), max_bytes);
+  std::string out;
+  out.reserve(n * 3);
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::uint8_t b = bytes[i];
+    out.push_back(kHex[(b >> 4U) & 0x0F]);
+    out.push_back(kHex[b & 0x0F]);
+    if (i + 1 < n) {
+      out.push_back(' ');
+    }
+  }
+  return out;
+}
+
+AnnexBProbe probe_annexb(const simaai::neat::Sample& sample) {
+  AnnexBProbe out;
+  if (!sample.tensor.has_value()) {
+    return out;
+  }
+  const auto bytes = sample.tensor->copy_payload_bytes();
+  if (bytes.empty()) {
+    return out;
+  }
+  out.prefix_hex = hex_prefix(bytes, 12);
+  const std::size_t max_scan = std::min<std::size_t>(bytes.size(), 256);
+  for (std::size_t i = 0; i + 2 < max_scan; ++i) {
+    if (bytes[i] != 0 || bytes[i + 1] != 0) {
+      continue;
+    }
+    if (i + 3 < max_scan && bytes[i + 2] == 0 && bytes[i + 3] == 1) {
+      out.found = true;
+      out.offset = i;
+      out.start_code_len = 4;
+      break;
+    }
+    if (bytes[i + 2] == 1) {
+      out.found = true;
+      out.offset = i;
+      out.start_code_len = 3;
+      break;
+    }
+  }
+  out.prefix_ok = out.found && out.offset == 0;
+  return out;
+}
+
+H264NalSummary scan_h264_annexb_bytes(const std::vector<std::uint8_t>& bytes) {
+  H264NalSummary out;
+  if (bytes.size() < 4) {
+    return out;
+  }
+
+  struct StartCode {
+    std::size_t offset = 0;
+    std::size_t len = 0;
+  };
+
+  std::vector<StartCode> starts;
+  starts.reserve(16);
+  for (std::size_t i = 0; i + 3 < bytes.size(); ++i) {
+    if (bytes[i] != 0 || bytes[i + 1] != 0) {
+      continue;
+    }
+    if (bytes[i + 2] == 1) {
+      starts.push_back(StartCode{i, 3});
+      i += 2;
+      continue;
+    }
+    if (bytes[i + 2] == 0 && bytes[i + 3] == 1) {
+      starts.push_back(StartCode{i, 4});
+      i += 3;
+      continue;
+    }
+  }
+
+  for (const auto& sc : starts) {
+    const std::size_t nal_start = sc.offset + sc.len;
+    if (nal_start >= bytes.size()) {
+      continue;
+    }
+    const std::uint8_t nal_type = bytes[nal_start] & 0x1F;
+    out.nal_count += 1;
+    if (nal_type == 7) {
+      out.has_sps = true;
+    } else if (nal_type == 8) {
+      out.has_pps = true;
+    } else if (nal_type == 5) {
+      out.has_idr = true;
+    } else if (nal_type == 9) {
+      out.has_aud = true;
+    }
+  }
+  return out;
+}
+
+H264NalSummary scan_h264_annexb_sample(const simaai::neat::Sample& sample) {
+  if (!sample.tensor.has_value()) {
+    return H264NalSummary{};
+  }
+  return scan_h264_annexb_bytes(sample.tensor->copy_payload_bytes());
+}
+
+bool is_headers_and_idr(const simaai::neat::Sample& sample) {
+  const H264NalSummary nals = scan_h264_annexb_sample(sample);
+  return nals.has_sps && nals.has_pps && nals.has_idr;
+}
+
+std::string h264_nal_summary_string(const H264NalSummary& summary) {
+  std::string out;
+  out.reserve(64);
+  out += "nals=" + std::to_string(summary.nal_count);
+  out += " sps=" + std::string(summary.has_sps ? "1" : "0");
+  out += " pps=" + std::string(summary.has_pps ? "1" : "0");
+  out += " idr=" + std::string(summary.has_idr ? "1" : "0");
+  out += " aud=" + std::string(summary.has_aud ? "1" : "0");
+  return out;
+}
+
 DetectorRuntimeKey detector_runtime_key(ModelFamily family, const RtspProbe& probe) {
   return DetectorRuntimeKey{family, probe.width, probe.height};
 }
@@ -157,61 +302,67 @@ std::vector<DetectorRuntimeKey> collect_detector_runtime_keys_impl(
 
 StreamRuntime create_stream_runtime(int index, const std::string& url, const AppConfig& cfg,
                                     ModelFamily family,
-                                    const QuantTessCpuPreproc& quant_preproc,
                                     const std::vector<std::string>& class_labels) {
-  const RtspProbe probe = probe_rtsp(url);
-  SessionRun video_run;
-  if (cfg.video_enabled) {
+  const RtspProbe probe = probe_rtsp(cfg, url);
+  std::optional<SessionRun> video_run;
+  if (cfg.video_enabled && cfg.video_mode == VideoMode::Annotated) {
     video_run = build_optiview_video_run(cfg, probe, index);
   }
   const bool json_enabled = json_output_enabled(cfg);
-  return StreamRuntime{
-      index,
-      url,
-      family,
-      probe,
-      build_cpu_quanttess_preproc_state(quant_preproc, probe.width, probe.height),
-      build_source_run(cfg, url, probe),
-      std::move(video_run),
-      cfg.video_enabled,
-      json_enabled ? std::optional<sima_examples::OptiViewSender>(build_optiview_json_output(cfg, index))
-                   : std::nullopt,
-      json_enabled,
-      class_labels,
-  };
+
+  StreamRuntime runtime;
+  runtime.index = index;
+  runtime.url = url;
+  runtime.family = family;
+  runtime.probe = probe;
+  runtime.source = build_source_run(cfg, url, probe);
+  runtime.video = std::move(video_run);
+  runtime.encoded_for_decode =
+      std::make_shared<BoundedQueue<EncodedPacket>>(static_cast<std::size_t>(20));
+  runtime.video_enabled = cfg.video_enabled;
+  runtime.json_sender = json_enabled
+                            ? std::optional<sima_examples::OptiViewSender>(
+                                  build_optiview_json_output(cfg, index))
+                            : std::nullopt;
+  runtime.json_enabled = json_enabled;
+  runtime.class_labels = class_labels;
+  return runtime;
 }
 
 WorkerContext build_worker_context(int worker_index, const AppConfig& cfg,
-                                   const simaai::neat::Model& model,
-                                   const QuantTessCpuPreproc& quant_preproc,
                                    const std::vector<DetectorRuntimeKey>& detector_keys) {
   WorkerContext context;
   context.index = worker_index;
   for (const auto& key : detector_keys) {
     const RtspProbe probe{key.width, key.height, 0};
-    context.detectors.push_back(
-        DetectorRuntime{key, build_detection_run(cfg, model, key.family, probe, quant_preproc)});
+    context.detectors.push_back(DetectorRuntime{key, build_detection_run(cfg, key.family, probe)});
   }
   return context;
 }
 
-std::vector<WorkerContext> build_worker_contexts(
-    const AppConfig& cfg, const simaai::neat::Model& model,
-    const QuantTessCpuPreproc& quant_preproc, int worker_count,
-    const std::vector<DetectorRuntimeKey>& detector_keys) {
+std::vector<WorkerContext> build_worker_contexts(const AppConfig& cfg, int worker_count,
+                                                 const std::vector<DetectorRuntimeKey>& detector_keys) {
   std::vector<WorkerContext> contexts;
   contexts.reserve(static_cast<std::size_t>(std::max(worker_count, 0)));
   for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
-    contexts.push_back(
-        build_worker_context(worker_index, cfg, model, quant_preproc, detector_keys));
+    contexts.push_back(build_worker_context(worker_index, cfg, detector_keys));
   }
   return contexts;
 }
 
 void close_stream_runtime(StreamRuntime& stream) {
-  if (stream.video_enabled) {
+  if (stream.encoded_for_decode != nullptr) {
+    stream.encoded_for_decode->close();
+  }
+  if (stream.video.has_value()) {
     try {
-      stream.video.run.close();
+      stream.video->run.close();
+    } catch (...) {
+    }
+  }
+  if (stream.decode.has_value()) {
+    try {
+      stream.decode->run.close();
     } catch (...) {
     }
   }
@@ -241,40 +392,37 @@ DetectorRuntime& find_detector_runtime(WorkerContext& context, ModelFamily famil
   throw std::runtime_error("missing detector runtime for stream geometry");
 }
 
-void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
-                     LatestFrameMailbox<FramePacket>& mailbox, ReadyStreamQueue& ready_queue,
-                     std::atomic<bool>& stop_event, Event* startup_ready) {
+void normalize_sample_identity(simaai::neat::Sample& sample, int stream_index, int frame_index) {
+  if (sample.frame_id < 0) {
+    sample.frame_id = frame_index;
+  }
+  if (sample.input_seq < 0) {
+    sample.input_seq = sample.frame_id;
+  }
+  if (sample.orig_input_seq < 0) {
+    sample.orig_input_seq = sample.frame_id;
+  }
+  if (sample.stream_id.empty()) {
+    sample.stream_id = "stream" + std::to_string(stream_index);
+  }
+}
+
+void source_thread(StreamRuntime& stream, const AppConfig& cfg, std::atomic<bool>& stop_event,
+                   Event* startup_ready) {
   int frame_index = 0;
   int empty_pulls = 0;
-  const double emit_period_s = producer_emit_period_s(cfg, stream.probe);
-  std::optional<double> next_allowed_emit_s;
 
   try {
     while (!stop_event.load()) {
       if (cfg.frames > 0 && frame_index >= cfg.frames) {
         break;
       }
-      if (emit_period_s > 0.0) {
-        const double now = now_steady_s();
-        if (!next_allowed_emit_s.has_value()) {
-          const int num_streams = static_cast<int>(cfg.rtsp_urls.size());
-          const double phase =
-              (num_streams > 1) ? emit_period_s * stream.index / num_streams : 0.0;
-          next_allowed_emit_s = std::ceil(now / emit_period_s) * emit_period_s + phase;
-        }
-        if (now < *next_allowed_emit_s) {
-          std::this_thread::sleep_for(std::chrono::duration<double>(*next_allowed_emit_s - now));
-          continue;
-        }
-        while (*next_allowed_emit_s <= now) {
-          *next_allowed_emit_s += emit_period_s;
-        }
-      }
-      const double t0 = now_steady_s();
+
+      const double pull_t0 = now_steady_s();
       const int pull_timeout_ms =
           frame_index == 0 ? kSourceStartupPullTimeoutMs : kSourcePullTimeoutMs;
       const auto sample = stream.source.run.pull(pull_timeout_ms);
-      const double elapsed = now_steady_s() - t0;
+      const double pull_elapsed = now_steady_s() - pull_t0;
       if (!sample.has_value()) {
         ++empty_pulls;
         if (cfg.frames > 0 && empty_pulls >= 20) {
@@ -286,15 +434,158 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
 
       empty_pulls = 0;
 
-      FramePacket packet;
-      packet.frame = tensor_rgb_from_sample(*sample);
+      simaai::neat::Sample encoded = *sample;
+      normalize_sample_identity(encoded, stream.index, frame_index);
+      if (!stream.probe.encoded_caps_appsrc.empty()) {
+        encoded.caps_string = stream.probe.encoded_caps_appsrc;
+      }
+
+      double video_push_time_s = 0.0;
+      if (stream.video_enabled && cfg.video_mode == VideoMode::Clean) {
+        const double video_t0 = now_steady_s();
+        if (!stream.video.has_value()) {
+          stream.video = build_optiview_video_run(cfg, stream.probe, stream.index, &encoded);
+        } else if (!stream.video->run.push(
+                       deep_copy_encoded_sample(encoded, stream.probe.encoded_caps_appsrc))) {
+          throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                   " OptiView video push failed");
+        }
+        video_push_time_s = now_steady_s() - video_t0;
+      }
+
+      EncodedPacket packet;
+      packet.encoded = deep_copy_encoded_sample(encoded, stream.probe.encoded_caps_appsrc);
       packet.frame_index = frame_index;
-      packet.source_time_s = elapsed;
-      stream.metrics.mailbox_drops += mailbox.push(std::move(packet), ready_queue);
-      if (startup_ready != nullptr && frame_index == 0) {
-        startup_ready->set();
+      packet.source_pull_time_s = pull_elapsed;
+      packet.video_push_time_s = video_push_time_s;
+      if (!stream.encoded_for_decode->push_drop_oldest(std::move(packet))) {
+        throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                 " decode queue closed unexpectedly");
       }
       ++frame_index;
+    }
+  } catch (const std::exception& ex) {
+    stream.error_message = ex.what();
+    stop_event.store(true);
+    if (startup_ready != nullptr) {
+      startup_ready->set();
+    }
+  }
+
+  if (stream.encoded_for_decode != nullptr) {
+    stream.encoded_for_decode->close();
+  }
+}
+
+void decode_thread(StreamRuntime& stream, const AppConfig& cfg,
+                   LatestFrameMailbox<FramePacket>& mailbox, ReadyStreamQueue& ready_queue,
+                   std::atomic<bool>& stop_event, Event* startup_ready) {
+  constexpr int kDecodePullTimeoutMs = 5;
+  constexpr std::int64_t kHeaderWaitMs = 10'000;
+
+  const double emit_period_s = producer_emit_period_s(cfg, stream.probe);
+  std::optional<double> next_allowed_emit_s;
+  std::optional<EncodedPacket> last_packet_meta;
+  std::int64_t header_wait_started_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch())
+          .count();
+  bool need_headers = true;
+  bool startup_signaled = false;
+
+  try {
+    while (!stop_event.load()) {
+      EncodedPacket packet;
+      const bool have_packet = stream.encoded_for_decode->pop_wait(packet, 50);
+      const bool queue_drained = !have_packet && stream.encoded_for_decode->drained();
+      if (have_packet) {
+        if (need_headers && !is_headers_and_idr(packet.encoded)) {
+          const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  SteadyClock::now().time_since_epoch())
+                                  .count();
+          if ((now_ms - header_wait_started_ms) > kHeaderWaitMs) {
+            const AnnexBProbe prefix = probe_annexb(packet.encoded);
+            const H264NalSummary summary = scan_h264_annexb_sample(packet.encoded);
+            throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                     " timed out waiting for SPS/PPS/IDR: " +
+                                     h264_nal_summary_string(summary) +
+                                     " prefix=" + prefix.prefix_hex);
+          }
+        } else if (need_headers) {
+          need_headers = false;
+          header_wait_started_ms = 0;
+        }
+
+        if (!need_headers) {
+          last_packet_meta = packet;
+          if (!stream.decode.has_value()) {
+            stream.decode = build_decode_run(cfg, stream.probe, packet.encoded);
+          } else {
+            static_cast<void>(stream.decode->run.try_push(packet.encoded));
+          }
+        }
+      }
+
+      if (!stream.decode.has_value()) {
+        if (queue_drained) {
+          break;
+        }
+        continue;
+      }
+
+      for (int drain = 0; drain < 8 && !stop_event.load(); ++drain) {
+        simaai::neat::Sample decoded;
+        simaai::neat::PullError pull_error;
+        const auto status = stream.decode->run.pull(kDecodePullTimeoutMs, decoded, &pull_error);
+        if (status == simaai::neat::PullStatus::Timeout) {
+          break;
+        }
+        if (status == simaai::neat::PullStatus::Closed) {
+          throw std::runtime_error("stream " + std::to_string(stream.index) + " decoder closed");
+        }
+        if (status == simaai::neat::PullStatus::Error) {
+          throw std::runtime_error("stream " + std::to_string(stream.index) + " decoder error: " +
+                                   (pull_error.message.empty() ? "unknown"
+                                                               : pull_error.message));
+        }
+
+        const double decode_completed_at_s = now_steady_s();
+        if (emit_period_s > 0.0) {
+          if (!next_allowed_emit_s.has_value()) {
+            const int num_streams = static_cast<int>(cfg.rtsp_urls.size());
+            const double phase =
+                (num_streams > 1) ? emit_period_s * stream.index / num_streams : 0.0;
+            next_allowed_emit_s =
+                std::ceil(decode_completed_at_s / emit_period_s) * emit_period_s + phase;
+          }
+          if (decode_completed_at_s < *next_allowed_emit_s) {
+            continue;
+          }
+          while (*next_allowed_emit_s <= decode_completed_at_s) {
+            *next_allowed_emit_s += emit_period_s;
+          }
+        }
+
+        normalize_sample_identity(decoded, stream.index,
+                                  decoded.frame_id >= 0 ? decoded.frame_id : 0);
+
+        FramePacket frame;
+        frame.decoded = std::move(decoded);
+        frame.frame_index = frame.decoded.frame_id >= 0 ? frame.decoded.frame_id : 0;
+        if (last_packet_meta.has_value()) {
+          frame.frame_index = last_packet_meta->frame_index;
+          frame.source_time_s = last_packet_meta->source_pull_time_s;
+          frame.video_push_time_s = last_packet_meta->video_push_time_s;
+        }
+        stream.metrics.mailbox_drops += mailbox.push(std::move(frame), ready_queue);
+        if (!startup_signaled && startup_ready != nullptr) {
+          startup_ready->set();
+          startup_signaled = true;
+        }
+      }
+
+      if (queue_drained) {
+        break;
+      }
     }
   } catch (const std::exception& ex) {
     stream.error_message = ex.what();
@@ -325,28 +616,32 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
     stream.metrics.interval_wall_started_at_s = loop_start;
   }
 
-  const double preproc_t0 = now_steady_s();
-  cv::Mat quant_input = cpu_quanttess_input(packet.frame, stream.quant_preproc_state);
-  const double preproc_elapsed = now_steady_s() - preproc_t0;
-
   auto& detector = find_detector_runtime(worker_context, stream.family, stream.probe);
   const double detect_t0 = now_steady_s();
-  const simaai::neat::Sample det_sample = run_tensor_input_once(detector.runtime.run, quant_input, 50000);
+  const simaai::neat::Sample det_sample =
+      run_sample_input_once(detector.runtime.run, packet.decoded, 50000);
   const double detect_elapsed = now_steady_s() - detect_t0;
+  const double preproc_elapsed = 0.0;
 
   const auto detections =
       detections_from_detector_sample(stream.family, det_sample, stream.probe.width, stream.probe.height);
   const bool needs_output_frame =
-      stream.video_enabled || (cfg.output_dir.has_value() && cfg.save_every > 0);
-  const cv::Mat frame_out = needs_output_frame ? render_frame(stream, cfg, packet.frame, detections)
-                                               : packet.frame;
+      (stream.video_enabled && cfg.video_mode == VideoMode::Annotated) ||
+      (cfg.output_dir.has_value() && cfg.save_every > 0);
 
   const double publish_t0 = now_steady_s();
-  const double video_t0 = now_steady_s();
-  if (stream.video_enabled && !stream.video.run.push(frame_out)) {
-    throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView video push failed");
+  double video_elapsed = packet.video_push_time_s;
+  cv::Mat frame_out;
+  if (needs_output_frame) {
+    frame_out = render_frame(stream, cfg, tensor_rgb_from_sample(packet.decoded), detections);
   }
-  const double video_elapsed = now_steady_s() - video_t0;
+  if (stream.video_enabled && cfg.video_mode == VideoMode::Annotated) {
+    const double video_t0 = now_steady_s();
+    if (!stream.video.has_value() || !stream.video->run.push(frame_out)) {
+      throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView video push failed");
+    }
+    video_elapsed += now_steady_s() - video_t0;
+  }
   const double publish_wall_time_s =
       std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -365,10 +660,11 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
     json_elapsed = now_steady_s() - json_t0;
   }
 
-  if (save_debug_frame(cfg.output_dir, stream.index, packet.frame_index, frame_out, cfg.save_every)) {
+  if (!frame_out.empty() &&
+      save_debug_frame(cfg.output_dir, stream.index, packet.frame_index, frame_out, cfg.save_every)) {
     stream.metrics.saved += 1;
   }
-  const double publish_elapsed = now_steady_s() - publish_t0;
+  const double publish_elapsed = (now_steady_s() - publish_t0) + packet.video_push_time_s;
 
   stream.metrics.pulled += 1;
   stream.metrics.processed += 1;
@@ -535,21 +831,12 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
   }
 
   const auto class_labels = load_class_labels();
-  std::shared_ptr<simaai::neat::Model> model;
-  QuantTessCpuPreproc quant_preproc;
-  try {
-    model = load_detector_model(cfg);
-    quant_preproc = read_preproc_contract(*model);
-  } catch (const std::exception& ex) {
-    std::cerr << "Error: failed to build model: " << ex.what() << "\n";
-    return 3;
-  }
 
   std::vector<StreamRuntime> streams;
   try {
     for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
       streams.push_back(create_stream_runtime(static_cast<int>(index), cfg.rtsp_urls[index], cfg,
-                                              family, quant_preproc, class_labels));
+                                              family, class_labels));
     }
   } catch (const std::exception& ex) {
     std::cerr << "Error: failed to set up stream runtimes: " << ex.what() << "\n";
@@ -567,8 +854,8 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
 
   std::vector<WorkerContext> worker_contexts;
   try {
-    worker_contexts = build_worker_contexts(cfg, *model, quant_preproc, cfg.worker_count,
-                                            collect_detector_runtime_keys(stream_specs));
+    worker_contexts =
+        build_worker_contexts(cfg, cfg.worker_count, collect_detector_runtime_keys(stream_specs));
   } catch (const std::exception& ex) {
     std::cerr << "Error: failed to build detector workers: " << ex.what() << "\n";
     for (auto& stream : streams) {
@@ -599,13 +886,14 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
   std::atomic<bool> stop_event{false};
   ReadyStreamQueue ready_queue;
   std::vector<std::shared_ptr<LatestFrameMailbox<FramePacket>>> mailboxes;
-  std::vector<std::thread> producer_threads;
+  std::vector<std::thread> source_threads;
+  std::vector<std::thread> decode_threads;
   std::vector<std::thread> worker_threads;
-  std::vector<std::unique_ptr<Event>> producer_ready_events;
+  std::vector<std::unique_ptr<Event>> startup_ready_events;
 
   for (auto& stream : streams) {
     mailboxes.push_back(std::make_shared<LatestFrameMailbox<FramePacket>>(stream.index, cfg.mailbox_depth));
-    producer_ready_events.push_back(std::make_unique<Event>());
+    startup_ready_events.push_back(std::make_unique<Event>());
   }
 
   for (auto& worker_context : worker_contexts) {
@@ -621,12 +909,16 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
       if (stop_event.load()) {
         break;
       }
-      producer_threads.emplace_back(
+      decode_threads.emplace_back(
           [&streams, &cfg, &mailboxes, &ready_queue, &stop_event,
-           ready = producer_ready_events[index].get(), index]() {
-            producer_thread(streams[index], cfg, *mailboxes[index], ready_queue, stop_event, ready);
+           ready = startup_ready_events[index].get(), index]() {
+            decode_thread(streams[index], cfg, *mailboxes[index], ready_queue, stop_event, ready);
           });
-      if (!producer_ready_events[index]->wait_for(startup_timeout)) {
+      source_threads.emplace_back([&streams, &cfg, &stop_event,
+                                   ready = startup_ready_events[index].get(), index]() {
+        source_thread(streams[index], cfg, stop_event, ready);
+      });
+      if (!startup_ready_events[index]->wait_for(startup_timeout)) {
         stop_event.store(true);
         break;
       }
@@ -642,7 +934,12 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
         thread.join();
       }
     }
-    for (auto& thread : producer_threads) {
+    for (auto& thread : source_threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+    for (auto& thread : decode_threads) {
       if (thread.joinable()) {
         thread.join();
       }
@@ -664,7 +961,12 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
         thread.join();
       }
     }
-    for (auto& thread : producer_threads) {
+    for (auto& thread : source_threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+    for (auto& thread : decode_threads) {
       if (thread.joinable()) {
         thread.join();
       }
