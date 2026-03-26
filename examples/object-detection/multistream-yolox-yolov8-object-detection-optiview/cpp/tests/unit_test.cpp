@@ -488,6 +488,80 @@ bool test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_aft
   return ok;
 }
 
+bool test_pending_frame_store_matches_exact_frame_id_and_enforces_capacity_and_replacement() {
+  bool ok = true;
+
+  // Strict clean-mode sync is validated end-to-end on the board because the
+  // release order spans RTSP source, hot decode, detector runtime, JSON side
+  // channel, and OptiView video transport. The required contract is:
+  // - source/decode path does not publish clean video directly
+  // - detector publish path emits JSON before matched clean video release
+  // - exact-match misses are counted and dropped instead of failing the stream
+  {
+    PendingFrameStore<std::string> store(2);
+    store.put(10, "frame-10");
+    store.put(11, "frame-11");
+    store.put(12, "frame-12");
+
+    auto evicted = store.take(10);
+    ok &= expect_true(!evicted.has_value(), "pending frame store evicts the oldest frame id");
+
+    auto kept_a = store.take(11);
+    ok &= expect_true(kept_a.has_value(), "pending frame store keeps the first non-evicted frame");
+    ok &= expect_true(*kept_a == "frame-11", "pending frame store preserves the surviving payload");
+
+    auto kept_b = store.take(12);
+    ok &= expect_true(kept_b.has_value(), "pending frame store keeps the newest frame");
+    ok &= expect_true(*kept_b == "frame-12", "pending frame store preserves the newest payload");
+  }
+
+  {
+    PendingFrameStore<std::string> store(4);
+    store.put(20, "frame-20-old");
+    store.put(20, "frame-20-new");
+
+    auto replaced = store.take(20);
+    ok &= expect_true(replaced.has_value(), "pending frame store keeps duplicate frame id");
+    ok &= expect_true(*replaced == "frame-20-new",
+                      "pending frame store replaces payload for duplicate frame id");
+    ok &= expect_true(!store.take(20).has_value(), "pending frame store removes item after take");
+  }
+
+  {
+    PendingFrameStore<std::string> store(4);
+    store.put(-1, "ignored");
+    ok &= expect_true(!store.take(-1).has_value(), "pending frame store ignores negative frame ids");
+  }
+
+  return ok;
+}
+
+bool test_take_pending_frame_match_or_oldest_prefers_exact_frame_and_falls_back_to_decode_order() {
+  bool ok = true;
+
+  PendingFrameStore<std::string> store(4);
+  store.put(100, "frame-100");
+  store.put(101, "frame-101");
+  store.put(102, "frame-102");
+
+  auto exact = take_pending_frame_match_or_oldest(store, 101);
+  ok &= expect_true(exact.has_value(), "match-or-oldest finds the requested exact frame id");
+  ok &= expect_true(*exact == "frame-101", "match-or-oldest returns the requested exact payload");
+
+  auto fallback_missing = take_pending_frame_match_or_oldest(store, 999);
+  ok &= expect_true(fallback_missing.has_value(),
+                    "match-or-oldest falls back when the requested frame id is absent");
+  ok &= expect_true(*fallback_missing == "frame-100",
+                    "match-or-oldest falls back to the oldest pending payload");
+
+  auto fallback_unknown = take_pending_frame_match_or_oldest(store, -1);
+  ok &= expect_true(fallback_unknown.has_value(),
+                    "match-or-oldest falls back when decoder metadata is unavailable");
+  ok &= expect_true(*fallback_unknown == "frame-102",
+                    "match-or-oldest keeps decode-order pairing for remaining payloads");
+  return ok;
+}
+
 bool test_bounded_queue_drops_oldest_and_drains_on_close() {
   BoundedQueue<std::string> queue(2);
 
@@ -629,6 +703,11 @@ bool test_producer_emit_period_s_always_paces_when_fps_configured() {
   return ok;
 }
 
+bool test_decode_pull_timeout_ms_uses_less_aggressive_poll_interval() {
+  return expect_true(decode_pull_timeout_ms() == 50,
+                     "decode pull timeout uses 50ms polling to reduce noisy decoder timeouts");
+}
+
 } // namespace
 } // namespace multistream_yolox_yolov8_optiview
 
@@ -664,6 +743,8 @@ int main(int argc, char** argv) {
   ok &= test_optiview_timestamp_ms_applies_publish_offset();
   ok &= test_deep_copy_encoded_sample_preserves_metadata_and_accepts_caps_override();
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
+  ok &= test_pending_frame_store_matches_exact_frame_id_and_enforces_capacity_and_replacement();
+  ok &= test_take_pending_frame_match_or_oldest_prefers_exact_frame_and_falls_back_to_decode_order();
   ok &= test_bounded_queue_drops_oldest_and_drains_on_close();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
   ok &= test_detector_stage_names_cover_yolov8_and_reject_yolox();
@@ -672,5 +753,6 @@ int main(int argc, char** argv) {
   ok &= test_apply_graphpipes_runtime_defaults_preserves_explicit_env();
   ok &= test_graphpipes_decoder_num_buffers_matches_source_tuning();
   ok &= test_producer_emit_period_s_always_paces_when_fps_configured();
+  ok &= test_decode_pull_timeout_ms_uses_less_aggressive_poll_interval();
   return ok ? 0 : 1;
 }

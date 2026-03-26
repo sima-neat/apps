@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -22,6 +23,7 @@ namespace multistream_yolox_yolov8_optiview {
 namespace {
 
 constexpr int kDefaultProfileIntervalFrames = 200;
+constexpr std::size_t kPendingDecodeSyncCapacity = 64;
 const fs::path kDefaultLabelsPath =
     fs::path(MULTISTREAM_YOLOX_YOLOV8_OPTIVIEW_SOURCE_DIR) / ".." / "common" / "coco_label.txt";
 
@@ -33,6 +35,10 @@ struct StreamMetrics {
   int detections = 0;
   int saved = 0;
   int mailbox_drops = 0;
+  int sync_exact_ok = 0;
+  int sync_exact_miss = 0;
+  int sync_release_ok = 0;
+  int sync_release_fail = 0;
   double source_time_s = 0.0;
   double preproc_time_s = 0.0;
   double detect_time_s = 0.0;
@@ -50,19 +56,31 @@ struct StreamMetrics {
   double interval_publish_s = 0.0;
   double interval_loop_s = 0.0;
   int interval_frames = 0;
+  int interval_sync_exact_ok = 0;
+  int interval_sync_exact_miss = 0;
+  int interval_sync_release_ok = 0;
+  int interval_sync_release_fail = 0;
   std::optional<double> interval_wall_started_at_s;
+};
+
+struct FrameSyncMeta {
+  std::int64_t frame_index = -1;
+  double source_time_s = 0.0;
+  double video_push_time_s = 0.0;
+  std::optional<simaai::neat::Sample> matched_encoded;
 };
 
 struct FramePacket {
   simaai::neat::Sample decoded;
-  int frame_index = 0;
+  std::int64_t frame_index = -1;
   double source_time_s = 0.0;
   double video_push_time_s = 0.0;
+  std::optional<simaai::neat::Sample> matched_encoded;
 };
 
 struct EncodedPacket {
   simaai::neat::Sample encoded;
-  int frame_index = 0;
+  std::int64_t frame_index = -1;
   double source_pull_time_s = 0.0;
   double video_push_time_s = 0.0;
 };
@@ -115,6 +133,7 @@ struct StreamRuntime {
   std::optional<sima_examples::OptiViewSender> json_sender;
   bool json_enabled = true;
   std::vector<std::string> class_labels;
+  std::shared_ptr<std::atomic<bool>> clean_video_bootstrapped;
   StreamMetrics metrics;
   std::string error_message;
 };
@@ -326,6 +345,7 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
                             : std::nullopt;
   runtime.json_enabled = json_enabled;
   runtime.class_labels = class_labels;
+  runtime.clean_video_bootstrapped = std::make_shared<std::atomic<bool>>(false);
   return runtime;
 }
 
@@ -392,24 +412,72 @@ DetectorRuntime& find_detector_runtime(WorkerContext& context, ModelFamily famil
   throw std::runtime_error("missing detector runtime for stream geometry");
 }
 
-void normalize_sample_identity(simaai::neat::Sample& sample, int stream_index, int frame_index) {
-  if (sample.frame_id < 0) {
-    sample.frame_id = frame_index;
+bool strict_clean_video_sync_enabled(const StreamRuntime& stream, const AppConfig& cfg) {
+  return stream.video_enabled && cfg.video_mode == VideoMode::Clean;
+}
+
+std::string canonical_stream_id(int stream_index) {
+  return "stream" + std::to_string(stream_index);
+}
+
+void canonicalize_sample_identity(simaai::neat::Sample& sample, int stream_index,
+                                  std::int64_t frame_index) {
+  if (frame_index < 0) {
+    return;
   }
-  if (sample.input_seq < 0) {
-    sample.input_seq = sample.frame_id;
+  sample.frame_id = frame_index;
+  sample.input_seq = frame_index;
+  sample.orig_input_seq = frame_index;
+  sample.stream_id = canonical_stream_id(stream_index);
+}
+
+std::int64_t resolve_sample_frame_index(const simaai::neat::Sample& sample) {
+  if (sample.frame_id >= 0) {
+    return sample.frame_id;
   }
-  if (sample.orig_input_seq < 0) {
-    sample.orig_input_seq = sample.frame_id;
+  if (sample.orig_input_seq >= 0) {
+    return sample.orig_input_seq;
   }
-  if (sample.stream_id.empty()) {
-    sample.stream_id = "stream" + std::to_string(stream_index);
+  if (sample.input_seq >= 0) {
+    return sample.input_seq;
   }
+  return -1;
+}
+
+int narrow_frame_index_for_api(std::int64_t frame_index, int fallback = 0) {
+  if (frame_index < 0 ||
+      frame_index > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+    return fallback;
+  }
+  return static_cast<int>(frame_index);
+}
+
+FrameSyncMeta make_frame_sync_meta(const EncodedPacket& packet, const RtspProbe& probe,
+                                   bool retain_matched_encoded) {
+  FrameSyncMeta meta;
+  meta.frame_index = packet.frame_index;
+  meta.source_time_s = packet.source_pull_time_s;
+  meta.video_push_time_s = packet.video_push_time_s;
+  if (retain_matched_encoded) {
+    meta.matched_encoded =
+        deep_copy_encoded_sample(packet.encoded, probe.encoded_caps_appsrc);
+  }
+  return meta;
+}
+
+bool is_bootstrap_worthy_matched_sample(const std::optional<FrameSyncMeta>& matched_meta) {
+  return matched_meta.has_value() && matched_meta->matched_encoded.has_value() &&
+         is_headers_and_idr(*matched_meta->matched_encoded);
+}
+
+bool clean_video_bootstrapped(const StreamRuntime& stream) {
+  return stream.clean_video_bootstrapped != nullptr &&
+         stream.clean_video_bootstrapped->load(std::memory_order_acquire);
 }
 
 void source_thread(StreamRuntime& stream, const AppConfig& cfg, std::atomic<bool>& stop_event,
                    Event* startup_ready) {
-  int frame_index = 0;
+  std::int64_t frame_index = 0;
   int empty_pulls = 0;
 
   try {
@@ -435,29 +503,15 @@ void source_thread(StreamRuntime& stream, const AppConfig& cfg, std::atomic<bool
       empty_pulls = 0;
 
       simaai::neat::Sample encoded = *sample;
-      normalize_sample_identity(encoded, stream.index, frame_index);
+      canonicalize_sample_identity(encoded, stream.index, frame_index);
       if (!stream.probe.encoded_caps_appsrc.empty()) {
         encoded.caps_string = stream.probe.encoded_caps_appsrc;
-      }
-
-      double video_push_time_s = 0.0;
-      if (stream.video_enabled && cfg.video_mode == VideoMode::Clean) {
-        const double video_t0 = now_steady_s();
-        if (!stream.video.has_value()) {
-          stream.video = build_optiview_video_run(cfg, stream.probe, stream.index, &encoded);
-        } else if (!stream.video->run.push(
-                       deep_copy_encoded_sample(encoded, stream.probe.encoded_caps_appsrc))) {
-          throw std::runtime_error("stream " + std::to_string(stream.index) +
-                                   " OptiView video push failed");
-        }
-        video_push_time_s = now_steady_s() - video_t0;
       }
 
       EncodedPacket packet;
       packet.encoded = deep_copy_encoded_sample(encoded, stream.probe.encoded_caps_appsrc);
       packet.frame_index = frame_index;
       packet.source_pull_time_s = pull_elapsed;
-      packet.video_push_time_s = video_push_time_s;
       if (!stream.encoded_for_decode->push_drop_oldest(std::move(packet))) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " decode queue closed unexpectedly");
@@ -480,23 +534,51 @@ void source_thread(StreamRuntime& stream, const AppConfig& cfg, std::atomic<bool
 void decode_thread(StreamRuntime& stream, const AppConfig& cfg,
                    LatestFrameMailbox<FramePacket>& mailbox, ReadyStreamQueue& ready_queue,
                    std::atomic<bool>& stop_event, Event* startup_ready) {
-  constexpr int kDecodePullTimeoutMs = 5;
   constexpr std::int64_t kHeaderWaitMs = 10'000;
+  // H.264 startup may need substantially more than a handful of access units
+  // before the first decoded frame is emitted. Keep warmup permissive, then
+  // tighten once decode output has started flowing.
+  constexpr int kDecoderWarmupPacketsInFlight = 64;
+  constexpr int kDecoderSteadyPacketsInFlight = 8;
 
   const double emit_period_s = producer_emit_period_s(cfg, stream.probe);
+  const bool retain_matched_encoded = strict_clean_video_sync_enabled(stream, cfg);
   std::optional<double> next_allowed_emit_s;
-  std::optional<EncodedPacket> last_packet_meta;
+  std::optional<EncodedPacket> deferred_packet;
+  PendingFrameStore<FrameSyncMeta> pending_frames(kPendingDecodeSyncCapacity);
   std::int64_t header_wait_started_ms =
       std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch())
           .count();
+  int decoder_packets_inflight = 0;
+  bool decoder_input_closed = false;
+  bool saw_first_decoded_output = false;
   bool need_headers = true;
   bool startup_signaled = false;
 
   try {
     while (!stop_event.load()) {
+      const auto max_decoder_packets_in_flight = [&]() {
+        return saw_first_decoded_output ? kDecoderSteadyPacketsInFlight
+                                        : kDecoderWarmupPacketsInFlight;
+      };
+      auto admit_packet_to_decode = [&](const EncodedPacket& candidate) {
+        if (!stream.decode.has_value()) {
+          stream.decode = build_decode_run(cfg, stream.probe, candidate.encoded);
+        }
+        if (!stream.decode->run.push(candidate.encoded)) {
+          throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                   " decoder input push failed");
+        }
+
+        pending_frames.put(candidate.frame_index,
+                           make_frame_sync_meta(candidate, stream.probe, retain_matched_encoded));
+        decoder_packets_inflight += 1;
+      };
+
       EncodedPacket packet;
       const bool have_packet = stream.encoded_for_decode->pop_wait(packet, 50);
-      const bool queue_drained = !have_packet && stream.encoded_for_decode->drained();
+      const bool source_drained =
+          !have_packet && stream.encoded_for_decode->drained() && !deferred_packet.has_value();
       if (have_packet) {
         if (need_headers && !is_headers_and_idr(packet.encoded)) {
           const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -516,30 +598,43 @@ void decode_thread(StreamRuntime& stream, const AppConfig& cfg,
         }
 
         if (!need_headers) {
-          last_packet_meta = packet;
-          if (!stream.decode.has_value()) {
-            stream.decode = build_decode_run(cfg, stream.probe, packet.encoded);
+          if (decoder_packets_inflight >= max_decoder_packets_in_flight()) {
+            deferred_packet = std::move(packet);
           } else {
-            static_cast<void>(stream.decode->run.try_push(packet.encoded));
+            admit_packet_to_decode(packet);
           }
         }
       }
 
+      if (source_drained && stream.decode.has_value() && !decoder_input_closed) {
+        stream.decode->run.close_input();
+        decoder_input_closed = true;
+      }
+
       if (!stream.decode.has_value()) {
-        if (queue_drained) {
+        if (source_drained) {
           break;
         }
         continue;
       }
 
+      bool decoder_fully_drained = false;
       for (int drain = 0; drain < 8 && !stop_event.load(); ++drain) {
         simaai::neat::Sample decoded;
         simaai::neat::PullError pull_error;
-        const auto status = stream.decode->run.pull(kDecodePullTimeoutMs, decoded, &pull_error);
+        const auto status = stream.decode->run.pull(decode_pull_timeout_ms(), decoded, &pull_error);
         if (status == simaai::neat::PullStatus::Timeout) {
+          if (decoder_input_closed && source_drained && decoder_packets_inflight <= 0) {
+            decoder_fully_drained = true;
+          }
           break;
         }
         if (status == simaai::neat::PullStatus::Closed) {
+          if (decoder_input_closed) {
+            decoder_packets_inflight = 0;
+            decoder_fully_drained = true;
+            break;
+          }
           throw std::runtime_error("stream " + std::to_string(stream.index) + " decoder closed");
         }
         if (status == simaai::neat::PullStatus::Error) {
@@ -547,8 +642,15 @@ void decode_thread(StreamRuntime& stream, const AppConfig& cfg,
                                    (pull_error.message.empty() ? "unknown"
                                                                : pull_error.message));
         }
+        saw_first_decoded_output = true;
+
+        const std::int64_t resolved_frame_index = resolve_sample_frame_index(decoded);
+        if (resolved_frame_index >= 0) {
+          canonicalize_sample_identity(decoded, stream.index, resolved_frame_index);
+        }
 
         const double decode_completed_at_s = now_steady_s();
+        bool should_emit = true;
         if (emit_period_s > 0.0) {
           if (!next_allowed_emit_s.has_value()) {
             const int num_streams = static_cast<int>(cfg.rtsp_urls.size());
@@ -558,32 +660,71 @@ void decode_thread(StreamRuntime& stream, const AppConfig& cfg,
                 std::ceil(decode_completed_at_s / emit_period_s) * emit_period_s + phase;
           }
           if (decode_completed_at_s < *next_allowed_emit_s) {
-            continue;
-          }
-          while (*next_allowed_emit_s <= decode_completed_at_s) {
-            *next_allowed_emit_s += emit_period_s;
+            should_emit = false;
+          } else {
+            while (*next_allowed_emit_s <= decode_completed_at_s) {
+              *next_allowed_emit_s += emit_period_s;
+            }
           }
         }
 
-        normalize_sample_identity(decoded, stream.index,
-                                  decoded.frame_id >= 0 ? decoded.frame_id : 0);
+        // Standalone decoder runs do not reliably preserve frame_id/input_seq on
+        // every output sample at multistream load. Keep exact lookup when the
+        // decoder reports a frame id, but fall back to per-stream decode order
+        // so each decoded frame is still paired with the next admitted source
+        // frame from the same stream.
+        std::optional<FrameSyncMeta> matched_meta =
+            take_pending_frame_match_or_oldest(pending_frames, resolved_frame_index);
+        if (decoder_packets_inflight > 0) {
+          decoder_packets_inflight -= 1;
+        }
+        const std::int64_t canonical_frame_index =
+            matched_meta.has_value() ? matched_meta->frame_index : resolved_frame_index;
+        if (canonical_frame_index >= 0 && canonical_frame_index != resolved_frame_index) {
+          canonicalize_sample_identity(decoded, stream.index, canonical_frame_index);
+        }
+        const bool force_bootstrap_emit =
+            retain_matched_encoded && !clean_video_bootstrapped(stream) &&
+            is_bootstrap_worthy_matched_sample(matched_meta);
+        if (!startup_signaled) {
+          should_emit = true;
+        }
+        if (force_bootstrap_emit) {
+          should_emit = true;
+        }
+        if (!should_emit) {
+          if (deferred_packet.has_value() &&
+              decoder_packets_inflight < max_decoder_packets_in_flight()) {
+            EncodedPacket deferred = std::move(*deferred_packet);
+            deferred_packet.reset();
+            admit_packet_to_decode(deferred);
+          }
+          continue;
+        }
 
         FramePacket frame;
         frame.decoded = std::move(decoded);
-        frame.frame_index = frame.decoded.frame_id >= 0 ? frame.decoded.frame_id : 0;
-        if (last_packet_meta.has_value()) {
-          frame.frame_index = last_packet_meta->frame_index;
-          frame.source_time_s = last_packet_meta->source_pull_time_s;
-          frame.video_push_time_s = last_packet_meta->video_push_time_s;
+        frame.frame_index = canonical_frame_index;
+        if (matched_meta.has_value()) {
+          frame.source_time_s = matched_meta->source_time_s;
+          frame.video_push_time_s = matched_meta->video_push_time_s;
+          frame.matched_encoded = std::move(matched_meta->matched_encoded);
         }
         stream.metrics.mailbox_drops += mailbox.push(std::move(frame), ready_queue);
         if (!startup_signaled && startup_ready != nullptr) {
           startup_ready->set();
           startup_signaled = true;
         }
+        if (deferred_packet.has_value() &&
+            decoder_packets_inflight < max_decoder_packets_in_flight()) {
+          EncodedPacket deferred = std::move(*deferred_packet);
+          deferred_packet.reset();
+          admit_packet_to_decode(deferred);
+        }
       }
 
-      if (queue_drained) {
+      if (decoder_fully_drained || (source_drained && decoder_input_closed &&
+                                    decoder_packets_inflight <= 0)) {
         break;
       }
     }
@@ -625,6 +766,7 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
 
   const auto detections =
       detections_from_detector_sample(stream.family, det_sample, stream.probe.width, stream.probe.height);
+  const bool strict_clean_video_sync = strict_clean_video_sync_enabled(stream, cfg);
   const bool needs_output_frame =
       (stream.video_enabled && cfg.video_mode == VideoMode::Annotated) ||
       (cfg.output_dir.has_value() && cfg.save_every > 0);
@@ -653,15 +795,67 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
     const double json_t0 = now_steady_s();
     if (!stream.json_sender->send_detection(
             optiview_timestamp_ms(publish_wall_time_s, cfg.optiview_json_offset_ms),
-            optiview_frame_id(det_sample, packet.frame_index),
+            optiview_frame_id(det_sample, narrow_frame_index_for_api(packet.frame_index)),
             payload.objects, payload.labels)) {
       throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView JSON send failed");
     }
     json_elapsed = now_steady_s() - json_t0;
   }
+  if (strict_clean_video_sync) {
+    if (!packet.matched_encoded.has_value()) {
+      stream.metrics.sync_exact_miss += 1;
+      stream.metrics.interval_sync_exact_miss += 1;
+    } else {
+      stream.metrics.sync_exact_ok += 1;
+      stream.metrics.interval_sync_exact_ok += 1;
+
+      const double video_t0 = now_steady_s();
+      bool release_ok = false;
+      if (!stream.video.has_value()) {
+        if (!is_headers_and_idr(*packet.matched_encoded)) {
+          release_ok = false;
+        } else {
+          try {
+            stream.video = build_optiview_video_run(cfg, stream.probe, stream.index,
+                                                    &packet.matched_encoded.value());
+            if (stream.clean_video_bootstrapped != nullptr) {
+              stream.clean_video_bootstrapped->store(true, std::memory_order_release);
+            }
+            release_ok = true;
+          } catch (const std::exception& ex) {
+            stream.metrics.sync_release_fail += 1;
+            stream.metrics.interval_sync_release_fail += 1;
+            throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                     " OptiView clean video bootstrap failed: " + ex.what());
+          }
+        }
+      } else {
+        try {
+          release_ok = stream.video->run.push(*packet.matched_encoded);
+        } catch (const std::exception& ex) {
+          stream.metrics.sync_release_fail += 1;
+          stream.metrics.interval_sync_release_fail += 1;
+          throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                   " OptiView clean video push failed: " + ex.what());
+        }
+      }
+      video_elapsed += now_steady_s() - video_t0;
+      if (!release_ok && stream.video.has_value()) {
+        stream.metrics.sync_release_fail += 1;
+        stream.metrics.interval_sync_release_fail += 1;
+        throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                 " OptiView clean video push failed");
+      }
+      if (release_ok) {
+        stream.metrics.sync_release_ok += 1;
+        stream.metrics.interval_sync_release_ok += 1;
+      }
+    }
+  }
 
   if (!frame_out.empty() &&
-      save_debug_frame(cfg.output_dir, stream.index, packet.frame_index, frame_out, cfg.save_every)) {
+      save_debug_frame(cfg.output_dir, stream.index,
+                       narrow_frame_index_for_api(packet.frame_index), frame_out, cfg.save_every)) {
     stream.metrics.saved += 1;
   }
   const double publish_elapsed = (now_steady_s() - publish_t0) + packet.video_push_time_s;
@@ -782,7 +976,11 @@ void print_interval_profile(StreamRuntime& stream) {
             << " | source=" << src << "ms preproc=" << pre << "ms detect=" << det
             << "ms video=" << vid << "ms json=" << jsn << "ms publish=" << pub
             << "ms loop=" << loop << "ms throughput_fps=" << fps
-            << " mailbox_drops=" << stream.metrics.mailbox_drops << "\n";
+            << " mailbox_drops=" << stream.metrics.mailbox_drops
+            << " sync=" << stream.metrics.interval_sync_exact_ok << "/"
+            << stream.metrics.interval_sync_exact_miss
+            << " release=" << stream.metrics.interval_sync_release_ok << "/"
+            << stream.metrics.interval_sync_release_fail << "\n";
 
   stream.metrics.interval_source_s = 0.0;
   stream.metrics.interval_preproc_s = 0.0;
@@ -792,6 +990,10 @@ void print_interval_profile(StreamRuntime& stream) {
   stream.metrics.interval_publish_s = 0.0;
   stream.metrics.interval_loop_s = 0.0;
   stream.metrics.interval_frames = 0;
+  stream.metrics.interval_sync_exact_ok = 0;
+  stream.metrics.interval_sync_exact_miss = 0;
+  stream.metrics.interval_sync_release_ok = 0;
+  stream.metrics.interval_sync_release_fail = 0;
   stream.metrics.interval_wall_started_at_s = stream.metrics.wall_last_processed_at_s;
 }
 
@@ -814,7 +1016,10 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
               << "ms video=" << vid << "ms json=" << jsn << "ms publish=" << pub
               << "ms loop=" << loop << "ms throughput_fps=" << fps
               << " mailbox_drops=" << stream.metrics.mailbox_drops
-              << " detections=" << stream.metrics.detections << "\n";
+              << " detections=" << stream.metrics.detections
+              << " sync=" << stream.metrics.sync_exact_ok << "/" << stream.metrics.sync_exact_miss
+              << " release=" << stream.metrics.sync_release_ok << "/"
+              << stream.metrics.sync_release_fail << "\n";
   }
 }
 
@@ -919,6 +1124,8 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
         source_thread(streams[index], cfg, stop_event, ready);
       });
       if (!startup_ready_events[index]->wait_for(startup_timeout)) {
+        streams[index].error_message =
+            "startup timeout waiting for first decoded frame";
         stop_event.store(true);
         break;
       }

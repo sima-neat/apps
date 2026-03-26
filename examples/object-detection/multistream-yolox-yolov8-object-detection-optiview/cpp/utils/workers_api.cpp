@@ -8,8 +8,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -25,6 +28,8 @@ struct StreamProbeSpec {
   ModelFamily family = ModelFamily::Auto;
   RtspProbe probe;
 };
+
+constexpr int decode_pull_timeout_ms() { return 50; }
 
 std::vector<DetectorRuntimeKey> collect_detector_runtime_keys(
     const std::vector<StreamProbeSpec>& streams);
@@ -128,6 +133,91 @@ private:
   std::deque<T> queue_;
   bool closed_ = false;
 };
+
+template <typename T> class PendingFrameStore {
+public:
+  explicit PendingFrameStore(std::size_t capacity)
+      : capacity_(std::max<std::size_t>(1, capacity)) {}
+
+  void put(std::int64_t frame_id, T item) {
+    if (frame_id < 0) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto key = frame_id;
+    auto existing = pending_.find(key);
+    if (existing != pending_.end()) {
+      existing->second = std::move(item);
+      return;
+    }
+
+    if (pending_.size() >= capacity_) {
+      const auto oldest = order_.front();
+      order_.pop_front();
+      pending_.erase(oldest);
+    }
+
+    order_.push_back(key);
+    pending_.emplace(key, std::move(item));
+  }
+
+  std::optional<T> take(std::int64_t frame_id) {
+    if (frame_id < 0) {
+      return std::nullopt;
+    }
+
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto it = pending_.find(frame_id);
+    if (it == pending_.end()) {
+      return std::nullopt;
+    }
+
+    std::optional<T> item{std::move(it->second)};
+    pending_.erase(it);
+    const auto order_it = std::find(order_.begin(), order_.end(), frame_id);
+    if (order_it != order_.end()) {
+      order_.erase(order_it);
+    }
+    return item;
+  }
+
+  std::optional<T> take_oldest() {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (order_.empty()) {
+      return std::nullopt;
+    }
+
+    const auto frame_id = order_.front();
+    order_.pop_front();
+    const auto it = pending_.find(frame_id);
+    if (it == pending_.end()) {
+      return std::nullopt;
+    }
+
+    std::optional<T> item{std::move(it->second)};
+    pending_.erase(it);
+    return item;
+  }
+
+private:
+  std::size_t capacity_ = 1;
+  mutable std::mutex mu_;
+  std::unordered_map<std::int64_t, T> pending_;
+  std::deque<std::int64_t> order_;
+};
+
+template <typename T>
+std::optional<T> take_pending_frame_match_or_oldest(PendingFrameStore<T>& store,
+                                                    std::int64_t preferred_frame_id) {
+  if (preferred_frame_id >= 0) {
+    auto exact = store.take(preferred_frame_id);
+    if (exact.has_value()) {
+      return exact;
+    }
+  }
+  return store.take_oldest();
+}
 
 template <typename T> class LatestFrameMailbox {
 public:

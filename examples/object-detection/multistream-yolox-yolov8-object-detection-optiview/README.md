@@ -27,7 +27,7 @@ Architecture:
 - one OptiView video runtime and one OptiView JSON sender per stream
 - a shared detector worker pool sized by `runtime.worker_count`
 - one keep-latest mailbox per stream so the example can scale to many cameras without building large per-stream backlogs
-- the C++ clean-video path now mirrors the GraphPipes strategy: forward original H264 to OptiView, decode separately to NV12 for YOLO, and avoid per-stream video re-encode on the scalable path
+- the C++ clean-video path now mirrors the GraphPipes strategy: forward original H264 to OptiView, decode separately to NV12 for YOLO, avoid per-stream video re-encode on the scalable path, and release clean video only after the matching JSON result is ready
 
 Detector graph:
 - YOLOv8: `Input(NV12) -> Preprocess -> Infer -> SimaBoxDecode`
@@ -94,13 +94,13 @@ python3 examples/object-detection/multistream-yolox-yolov8-object-detection-opti
 - Set `model.family: yolov8` and point `model.path` at a YOLOv8 pack. If you try a YOLOX pack, the example now fails fast with a clear "not supported yet" message instead of building a mismatched detector graph.
 - YOLOX support is planned for a future revision of this example, but it is not part of the current runtime or test contract.
 - The checked-in `common/config.yaml` includes 16 stream slots and example RTSP/OptiView values. Replace the stream URLs and receiver host with your own camera and OptiView endpoints before running.
-- `output.video_mode: clean` forwards the original encoded H264 stream to OptiView and keeps the JSON side channel enabled. `annotated` decodes for overlay, draws detection boxes and labels into the video stream, and suppresses JSON output so OptiView does not overlay detections twice.
+- `output.video_mode: clean` keeps the original encoded H264 stream for OptiView and uses strict sync on the C++ path: the example emits JSON first, then releases only the exact matched encoded frame. Unmatched clean-mode frames may be dropped instead of showing boxes on the wrong frame. `annotated` decodes for overlay, draws detection boxes and labels into the video stream, and suppresses JSON output so OptiView does not overlay detections twice.
 - `output.video_enabled: false` disables per-stream H264 video output. In `clean` mode the example still sends JSON detections; in `annotated` mode JSON is suppressed as well.
 - `runtime.mailbox_depth` defaults to `1` and should usually stay small for dense multistream runs.
 - the example now applies GraphPipes-inspired runtime defaults for dense RTSP runs when the environment does not already override them:
   `SIMA_FORCE_MODEL_NUM_BUFFERS=3`, `SIMA_FORCE_DECODER_NUM_BUFFERS=7`, and `SIMA_FORCE_DECODER_POOL_BUFFERS=7`.
 - the C++ path now uses an explicit public-node encoded RTSP source, a separate `H264Decode(..., out_format=\"NV12\", num_buffers=7)` detector branch, and encoded H264 OptiView forwarding in `clean` mode. The Python path applies the same runtime defaults but still uses the high-level `pyneat.groups.rtsp_decoded_input(...)` surface until lower-level binding parity is available.
-- when `inference.fps` is lower than the source FPS, the source runtime now applies `EveryFrame(n)` decimation when it can reduce app-side work without obviously undershooting the requested rate.
+- when `inference.fps` is lower than the source FPS, the encoded RTSP source stays intact. The C++ path throttles after decode so H264 decode state and strict clean-video matching stay stable.
 - `output.optiview.json_offset_ms` lets you shift JSON timestamps to better align OptiView boxes with the published video stream when transport latency makes boxes appear early or late. It only applies when JSON output is enabled.
 - profiling now prints `source`, `preproc`, `detect`, `video`, `json`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
 - `output.debug_dir` and `output.save_every` let you save periodic RGB debug frames locally without changing the OptiView output contract.

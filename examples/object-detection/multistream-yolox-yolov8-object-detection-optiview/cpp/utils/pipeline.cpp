@@ -197,7 +197,7 @@ SessionRun build_decode_run(const AppConfig& cfg, const RtspProbe& probe,
 
   simaai::neat::RunOptions run_options;
   run_options.queue_depth = 1;
-  run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
+  run_options.overflow_policy = simaai::neat::OverflowPolicy::Block;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
   runtime.run = runtime.session.build(
       deep_copy_encoded_sample(bootstrap_encoded, probe.encoded_caps_appsrc),
