@@ -24,10 +24,9 @@ Compared with generic object detectors, RetinaFace is specialized for facial geo
 In this app, the compiled `retinaface_mobilenet25` package is run on an input image, raw outputs are decoded into candidate detections, low-confidence candidates are filtered, overlapping boxes are merged with Non-Maximum Suppression (NMS), and the final boxes/landmarks are rendered to an output image.
 
 ## Preview
-<p align="center">
-  <img src="./assets/portal/retina-face.png" alt="RetinaFace output before" width="49%" />
-  <img src="./assets/portal/retina-face-after.png" alt="RetinaFace output after" width="49%" />
-</p>
+Snippet from a pipeline run:
+
+![RetinaFace face detection preview](../../../assets/portal/face-detection/retinaface-face-detection/image.png)
 
 ## Supported Models
 Validated with: `retinaface_mobilenet25`
