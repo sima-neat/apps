@@ -134,6 +134,7 @@ void apply_graphpipes_runtime_defaults() {
   set_env_if_unset("SIMA_FORCE_MODEL_NUM_BUFFERS", kDefaultModelNumBuffers);
   set_env_if_unset("SIMA_FORCE_DECODER_NUM_BUFFERS", kDefaultDecoderNumBuffers);
   set_env_if_unset("SIMA_FORCE_DECODER_POOL_BUFFERS", kDefaultDecoderNumBuffers);
+  set_env_if_unset("SIMA_PULL_TIMEOUT_DIAG", "0");
 }
 
 int graphpipes_decoder_num_buffers() {

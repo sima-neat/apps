@@ -29,7 +29,16 @@ struct StreamProbeSpec {
   RtspProbe probe;
 };
 
-constexpr int decode_pull_timeout_ms() { return 50; }
+constexpr int decode_pull_timeout_ms() { return 5; }
+constexpr std::size_t encoded_for_decode_queue_capacity() { return 20; }
+constexpr int decoder_warmup_packets_inflight() { return 64; }
+constexpr int decoder_steady_packets_inflight() { return 8; }
+constexpr bool video_output_flows_from_source(bool video_enabled, VideoMode mode) {
+  return video_enabled && mode == VideoMode::Clean;
+}
+constexpr bool video_output_flows_from_detector(bool video_enabled, VideoMode mode) {
+  return video_enabled && mode == VideoMode::Annotated;
+}
 
 std::vector<DetectorRuntimeKey> collect_detector_runtime_keys(
     const std::vector<StreamProbeSpec>& streams);

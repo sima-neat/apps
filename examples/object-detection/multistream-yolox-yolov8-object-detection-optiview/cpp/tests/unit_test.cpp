@@ -20,6 +20,11 @@ using sima_examples::testing::spawn_and_wait;
 namespace multistream_yolox_yolov8_optiview {
 namespace {
 
+std::string env_or_empty(const char* key) {
+  const char* value = std::getenv(key);
+  return value == nullptr ? std::string{} : std::string{value};
+}
+
 bool expect_true(bool condition, const std::string& message) {
   if (!condition) {
     std::cerr << "[FAIL] " << message << "\n";
@@ -491,12 +496,9 @@ bool test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_aft
 bool test_pending_frame_store_matches_exact_frame_id_and_enforces_capacity_and_replacement() {
   bool ok = true;
 
-  // Strict clean-mode sync is validated end-to-end on the board because the
-  // release order spans RTSP source, hot decode, detector runtime, JSON side
-  // channel, and OptiView video transport. The required contract is:
-  // - source/decode path does not publish clean video directly
-  // - detector publish path emits JSON before matched clean video release
-  // - exact-match misses are counted and dropped instead of failing the stream
+  // Decoder output metadata is not reliable on every frame at multistream load,
+  // so the runtime keeps a small per-stream pending store to recover canonical
+  // frame identity and timing from decode order when exact frame ids are absent.
   {
     PendingFrameStore<std::string> store(2);
     store.put(10, "frame-10");
@@ -606,6 +608,23 @@ bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
   return ok;
 }
 
+bool test_video_output_stage_helpers_keep_clean_video_at_source() {
+  bool ok = true;
+  ok &= expect_true(video_output_flows_from_source(true, VideoMode::Clean),
+                    "clean video stays on the source-side forwarding path");
+  ok &= expect_true(!video_output_flows_from_source(true, VideoMode::Annotated),
+                    "annotated video does not flow from the source-side path");
+  ok &= expect_true(!video_output_flows_from_source(false, VideoMode::Clean),
+                    "disabled video stays disabled on the source-side path");
+  ok &= expect_true(video_output_flows_from_detector(true, VideoMode::Annotated),
+                    "annotated video stays on the detector-side path");
+  ok &= expect_true(!video_output_flows_from_detector(true, VideoMode::Clean),
+                    "clean video is not emitted from the detector-side path");
+  ok &= expect_true(!video_output_flows_from_detector(false, VideoMode::Annotated),
+                    "disabled video stays disabled on the detector-side path");
+  return ok;
+}
+
 bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
   const auto yolov8 = detector_stage_names(ModelFamily::YoloV8);
 
@@ -647,16 +666,19 @@ bool test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset() {
   unsetenv("SIMA_FORCE_MODEL_NUM_BUFFERS");
   unsetenv("SIMA_FORCE_DECODER_NUM_BUFFERS");
   unsetenv("SIMA_FORCE_DECODER_POOL_BUFFERS");
+  unsetenv("SIMA_PULL_TIMEOUT_DIAG");
 
   apply_graphpipes_runtime_defaults();
 
   bool ok = true;
-  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_MODEL_NUM_BUFFERS")) == "3",
+  ok &= expect_true(env_or_empty("SIMA_FORCE_MODEL_NUM_BUFFERS") == "3",
                     "runtime defaults set model buffer count when unset");
-  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_NUM_BUFFERS")) == "7",
+  ok &= expect_true(env_or_empty("SIMA_FORCE_DECODER_NUM_BUFFERS") == "7",
                     "runtime defaults set decoder buffer count when unset");
-  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_POOL_BUFFERS")) == "7",
+  ok &= expect_true(env_or_empty("SIMA_FORCE_DECODER_POOL_BUFFERS") == "7",
                     "runtime defaults set decoder pool buffer count when unset");
+  ok &= expect_true(env_or_empty("SIMA_PULL_TIMEOUT_DIAG") == "0",
+                    "runtime defaults disable noisy pull-timeout diagnostics when unset");
   return ok;
 }
 
@@ -664,16 +686,19 @@ bool test_apply_graphpipes_runtime_defaults_preserves_explicit_env() {
   setenv("SIMA_FORCE_MODEL_NUM_BUFFERS", "11", 1);
   setenv("SIMA_FORCE_DECODER_NUM_BUFFERS", "12", 1);
   setenv("SIMA_FORCE_DECODER_POOL_BUFFERS", "13", 1);
+  setenv("SIMA_PULL_TIMEOUT_DIAG", "1", 1);
 
   apply_graphpipes_runtime_defaults();
 
   bool ok = true;
-  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_MODEL_NUM_BUFFERS")) == "11",
+  ok &= expect_true(env_or_empty("SIMA_FORCE_MODEL_NUM_BUFFERS") == "11",
                     "runtime defaults preserve explicit model buffer count");
-  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_NUM_BUFFERS")) == "12",
+  ok &= expect_true(env_or_empty("SIMA_FORCE_DECODER_NUM_BUFFERS") == "12",
                     "runtime defaults preserve explicit decoder buffer count");
-  ok &= expect_true(std::string(std::getenv("SIMA_FORCE_DECODER_POOL_BUFFERS")) == "13",
+  ok &= expect_true(env_or_empty("SIMA_FORCE_DECODER_POOL_BUFFERS") == "13",
                     "runtime defaults preserve explicit decoder pool buffer count");
+  ok &= expect_true(env_or_empty("SIMA_PULL_TIMEOUT_DIAG") == "1",
+                    "runtime defaults preserve explicit pull-timeout diag setting");
   return ok;
 }
 
@@ -703,9 +728,20 @@ bool test_producer_emit_period_s_always_paces_when_fps_configured() {
   return ok;
 }
 
-bool test_decode_pull_timeout_ms_uses_less_aggressive_poll_interval() {
-  return expect_true(decode_pull_timeout_ms() == 50,
-                     "decode pull timeout uses 50ms polling to reduce noisy decoder timeouts");
+bool test_decode_pull_timeout_ms_uses_low_latency_poll_interval() {
+  return expect_true(decode_pull_timeout_ms() == 5,
+                     "decode pull timeout uses 5ms polling to avoid decode backlog growth");
+}
+
+bool test_decode_backlog_limits_preserve_compressed_input_slack() {
+  bool ok = true;
+  ok &= expect_true(encoded_for_decode_queue_capacity() == 20,
+                    "encoded-to-decode queue keeps enough slack to avoid dropping compressed frames under normal load");
+  ok &= expect_true(decoder_warmup_packets_inflight() == 64,
+                    "decoder warmup inflight limit keeps enough startup slack for first output");
+  ok &= expect_true(decoder_steady_packets_inflight() == 8,
+                    "decoder steady inflight limit keeps compressed decode fed while decoded-frame dropping happens later");
+  return ok;
 }
 
 } // namespace
@@ -747,12 +783,14 @@ int main(int argc, char** argv) {
   ok &= test_take_pending_frame_match_or_oldest_prefers_exact_frame_and_falls_back_to_decode_order();
   ok &= test_bounded_queue_drops_oldest_and_drains_on_close();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
+  ok &= test_video_output_stage_helpers_keep_clean_video_at_source();
   ok &= test_detector_stage_names_cover_yolov8_and_reject_yolox();
   ok &= test_source_output_every_n_never_decimates_encoded_rtsp_output();
   ok &= test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset();
   ok &= test_apply_graphpipes_runtime_defaults_preserves_explicit_env();
   ok &= test_graphpipes_decoder_num_buffers_matches_source_tuning();
   ok &= test_producer_emit_period_s_always_paces_when_fps_configured();
-  ok &= test_decode_pull_timeout_ms_uses_less_aggressive_poll_interval();
+  ok &= test_decode_pull_timeout_ms_uses_low_latency_poll_interval();
+  ok &= test_decode_backlog_limits_preserve_compressed_input_slack();
   return ok ? 0 : 1;
 }
