@@ -76,10 +76,18 @@ simaai::neat::nodes::groups::RtspDecodedInputOptions build_source_input_group_op
   options.fallback_h264_width = probe.width;
   options.fallback_h264_height = probe.height;
   options.sima_allocator_type = 2;
-  options.out_format = "NV12";
-  options.decoder_raw_output = true;
+  options.out_format = "RGB";
+  options.decoder_raw_output = false;
   options.use_videoconvert = false;
-  options.use_videoscale = false;
+  options.use_videoscale = true;
+  options.output_caps.enable = true;
+  options.output_caps.format = "RGB";
+  options.output_caps.width = probe.width;
+  options.output_caps.height = probe.height;
+  if (probe.fps > 0) {
+    options.output_caps.fps = probe.fps;
+  }
+  options.output_caps.memory = simaai::neat::CapsMemory::SystemMemory;
   return options;
 }
 
@@ -179,18 +187,18 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
 
   simaai::neat::Model::Options model_options;
   model_options.media_type = "video/x-raw";
-  model_options.format = "NV12";
+  model_options.format = "RGB";
   model_options.input_max_width = probe.width;
   model_options.input_max_height = probe.height;
-  model_options.input_max_depth = 1;
+  model_options.input_max_depth = 3;
   runtime.model = std::make_shared<simaai::neat::Model>(cfg.model.path, model_options);
 
   auto input_options = runtime.model->input_appsrc_options(false);
   input_options.media_type = "video/x-raw";
-  input_options.format = "NV12";
+  input_options.format = "RGB";
   input_options.width = probe.width;
   input_options.height = probe.height;
-  input_options.depth = 1;
+  input_options.depth = 3;
   runtime.session.add(simaai::neat::nodes::Input(input_options));
   runtime.session.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
   runtime.session.add(simaai::neat::nodes::groups::Infer(*runtime.model));
@@ -209,11 +217,9 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
 
   runtime.session.add(simaai::neat::nodes::Output());
 
-  std::string nv12_error;
-  simaai::neat::Tensor seed_tensor;
-  if (!sima_examples::make_blank_nv12_tensor(probe.width, probe.height, seed_tensor, nv12_error)) {
-    throw std::runtime_error("failed to build NV12 detector seed: " + nv12_error);
-  }
+  cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
+  simaai::neat::Tensor seed_tensor =
+      simaai::neat::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::RGB, true);
   simaai::neat::RunOptions run_options;
   run_options.preset = graphpipes_run_preset();
   run_options.queue_depth = 1;
@@ -235,28 +241,20 @@ SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe
 
   simaai::neat::InputOptions input_options;
   input_options.media_type = "video/x-raw";
-  const bool clean_mode = video_mode == VideoMode::Clean;
-  input_options.format = clean_mode ? "NV12" : "RGB";
+  static_cast<void>(video_mode);
+  input_options.format = "RGB";
   input_options.use_simaai_pool = false;
-  input_options.width = probe.width;
-  input_options.height = probe.height;
-  input_options.depth = clean_mode ? 1 : 3;
   input_options.max_width = probe.width;
   input_options.max_height = probe.height;
-  input_options.max_depth = clean_mode ? 1 : 3;
-  input_options.fps_n = writer_fps;
-  input_options.fps_d = 1;
+  input_options.max_depth = 3;
 
   SessionRun runtime;
   runtime.session.add(simaai::neat::nodes::Input(input_options));
-  if (!clean_mode || encoder == OptiViewVideoEncoder::Software) {
-    runtime.session.add(simaai::neat::nodes::VideoConvert());
-  }
+  runtime.session.add(simaai::neat::nodes::VideoConvert());
   if (encoder == OptiViewVideoEncoder::Software) {
     runtime.session.add(simaai::neat::nodes::CapsI420(probe.width, probe.height, writer_fps));
     runtime.session.add(simaai::neat::nodes::H264EncodeSW(2500));
   } else {
-    runtime.session.add(simaai::neat::nodes::CapsNV12SysMem(probe.width, probe.height, writer_fps));
     runtime.session.add(
         simaai::neat::nodes::H264EncodeSima(probe.width, probe.height, writer_fps, 2500, "baseline",
                                             "4.1"));
@@ -275,19 +273,10 @@ SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe
   run_options.preset = graphpipes_run_preset();
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
-  if (clean_mode) {
-    std::string nv12_error;
-    simaai::neat::Tensor seed_tensor;
-    if (!sima_examples::make_blank_nv12_tensor(probe.width, probe.height, seed_tensor, nv12_error)) {
-      throw std::runtime_error("failed to build NV12 video seed: " + nv12_error);
-    }
-    runtime.run = runtime.session.build(seed_tensor, simaai::neat::RunMode::Async, run_options);
-  } else {
-    cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
-    simaai::neat::Tensor seed_tensor =
-        simaai::neat::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::RGB, true);
-    runtime.run = runtime.session.build(seed_tensor, simaai::neat::RunMode::Async, run_options);
-  }
+  cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
+  simaai::neat::Tensor seed_tensor =
+      simaai::neat::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::RGB, true);
+  runtime.run = runtime.session.build(seed_tensor, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 

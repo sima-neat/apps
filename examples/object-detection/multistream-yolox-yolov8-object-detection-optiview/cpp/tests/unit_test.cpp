@@ -558,7 +558,7 @@ bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
   bool ok = true;
   ok &= expect_true(
       yolov8 == std::vector<std::string>{"input", "preproc", "mla", "sima_box_decode", "output"},
-      "yolov8 stage names match the NV12 preprocess detector graph");
+      "yolov8 stage names match the RGB preprocess detector graph");
   try {
     static_cast<void>(detector_stage_names(ModelFamily::YoloX));
     ok &= expect_true(false, "yolox stage names should be rejected until support lands");
@@ -704,12 +704,24 @@ bool test_build_source_input_group_options_match_working_rtsp_group_contract() {
                     "source group options keep fallback height");
   ok &= expect_true(options.fallback_h264_fps == 30,
                     "source group options keep fallback fps");
-  ok &= expect_true(options.out_format == "NV12",
-                    "source group options keep NV12 decode output");
-  ok &= expect_true(options.decoder_raw_output,
-                    "source group options keep the raw NV12 decoder output path");
-  ok &= expect_true(!options.output_caps.enable,
-                    "source group options avoid the broken post-decode SystemMemory caps conversion");
+  ok &= expect_true(options.out_format == "RGB",
+                    "source group options decode directly to RGB");
+  ok &= expect_true(!options.decoder_raw_output,
+                    "source group options use the converted RGB decoder output path");
+  ok &= expect_true(options.use_videoscale,
+                    "source group options enable videoscale like the working tracking example");
+  ok &= expect_true(options.output_caps.enable,
+                    "source group options enable explicit RGB output caps");
+  ok &= expect_true(options.output_caps.format == "RGB",
+                    "source group options keep RGB output caps");
+  ok &= expect_true(options.output_caps.width == 1280,
+                    "source group options keep RGB output width");
+  ok &= expect_true(options.output_caps.height == 720,
+                    "source group options keep RGB output height");
+  ok &= expect_true(options.output_caps.fps == 30,
+                    "source group options keep RGB output fps");
+  ok &= expect_true(options.output_caps.memory == simaai::neat::CapsMemory::SystemMemory,
+                    "source group options keep RGB output in system memory");
   return ok;
 }
 
