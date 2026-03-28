@@ -26,7 +26,7 @@ Architecture:
 - one keep-latest mailbox per stream so the example can scale to many cameras without building large per-stream backlogs
 
 Detector graph:
-- YOLOv8: `Input(RGB) -> Preprocess -> Infer -> SimaBoxDecode`
+- YOLOv8: `Input(RGB) -> Preprocess -> Infer/MLA -> SimaBoxDecode`
 
 Video graph:
 - `Input(RGB) -> VideoConvert -> H264EncodeSima -> UdpH264OutputGroup`
@@ -76,7 +76,7 @@ This is useful for a quick smoke test without opening RTSP streams.
 
 ### C++
 ```bash
-./build/examples/object-detection/multistream-object-detection-optiview/multistream-object-detection-optiview \
+SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 ./build/examples/object-detection/multistream-object-detection-optiview/multistream-object-detection-optiview \
   --config examples/object-detection/multistream-object-detection-optiview/common/config.yaml
 ```
 
@@ -84,20 +84,20 @@ This is useful for a quick smoke test without opening RTSP streams.
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/multistream-object-detection-optiview/python/requirements.txt
-python3 examples/object-detection/multistream-object-detection-optiview/python/main.py \
+SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multistream-object-detection-optiview/python/main.py \
   --config examples/object-detection/multistream-object-detection-optiview/common/config.yaml
 ```
 
 ## Notes
 - Set `model.family: yolov8` and point `model.path` at a YOLOv8 pack.
 - The checked-in `common/config.yaml` includes 16 placeholder stream slots. Replace the RTSP URLs and OptiView host before running.
-- The current C++ path decodes each RTSP stream to RGB in system memory, runs YOLOv8 on those RGB frames, and re-encodes RGB frames for OptiView video output. It does not forward the original encoded H264 bitstream.
+- Both the C++ and Python paths decode each RTSP stream to RGB in system memory, run YOLOv8 on those RGB frames, and re-encode RGB frames for OptiView video output. They do not forward the original encoded H264 bitstream.
 - `output.video_mode: clean` publishes unannotated RGB frames to OptiView and keeps JSON enabled. `annotated` draws detection boxes into the RGB video stream and suppresses JSON so OptiView does not overlay detections twice.
 - `output.video_enabled: false` disables per-stream H264 video output. In `clean` mode the example still sends JSON detections; in `annotated` mode JSON is suppressed.
 - `runtime.mailbox_depth` defaults to `1` and should usually stay small for dense multistream runs.
 - The example applies the following runtime defaults for dense RTSP runs when the environment does not already override them:
   `SIMA_FORCE_MODEL_NUM_BUFFERS=3`, `SIMA_FORCE_DECODER_NUM_BUFFERS=7`, and `SIMA_FORCE_DECODER_POOL_BUFFERS=7`.
-- The Python path already uses the same RGB-style source/video contract, so the shared config behaves consistently across both language implementations.
+- The Python implementation now mirrors the same high-level contract as C++ while staying on public `pyneat`: `RtspDecodedInput`, explicit `nodes.preproc(...)`, `groups.mla(model)`, `nodes.sima_box_decode(...)`, and `groups.udp_h264_output_group(...)`.
 - When `inference.fps` is lower than the source FPS, the example throttles after decode and keeps only the most recent frame per stream in the mailbox.
 - `output.optiview.json_offset_ms` lets you shift JSON timestamps to better align OptiView boxes with the published video stream when transport latency makes boxes appear early or late. It only applies when JSON output is enabled.
 - profiling now prints `source`, `preproc`, `detect`, `video`, `json`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
@@ -105,7 +105,9 @@ python3 examples/object-detection/multistream-object-detection-optiview/python/m
 
 ## Source Files
 - C++: `cpp/main.cpp`
+- C++ runtime helpers: `cpp/utils/config.cpp`, `cpp/utils/pipeline.cpp`, `cpp/utils/sample_utils.cpp`, `cpp/utils/workers.cpp`
 - C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
 - Python: `python/main.py`
+- Python runtime helpers: `python/utils/config.py`, `python/utils/model_family.py`, `python/utils/pipeline.py`, `python/utils/sample_utils.py`, `python/utils/image_utils.py`, `python/utils/workers.py`
 - Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
 - Shared assets: `common/`
