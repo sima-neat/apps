@@ -51,6 +51,9 @@ inline double source_startup_stagger_s() {
   return 0.5;
 }
 
+std::string format_video_build_error(int stream_index, VideoMode video_mode,
+                                     const std::string& detail);
+
 std::vector<DetectorRuntimeKey> collect_detector_runtime_keys(
     const std::vector<StreamProbeSpec>& streams);
 

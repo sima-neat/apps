@@ -128,6 +128,16 @@ double now_steady_s() {
   return std::chrono::duration<double>(SteadyClock::now().time_since_epoch()).count();
 }
 
+const char* video_mode_name(VideoMode video_mode) {
+  switch (video_mode) {
+  case VideoMode::Clean:
+    return "clean";
+  case VideoMode::Annotated:
+    return "annotated";
+  }
+  return "unknown";
+}
+
 std::vector<std::string> load_class_labels(const fs::path& path = kDefaultLabelsPath) {
   std::vector<std::string> labels;
   std::ifstream input(path);
@@ -427,7 +437,11 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
   if (stream.video_enabled) {
     const double video_t0 = now_steady_s();
     if (!stream.video.has_value()) {
-      stream.video = build_optiview_video_run(cfg, stream.probe, stream.index, cfg.video_mode);
+      try {
+        stream.video = build_optiview_video_run(cfg, stream.probe, stream.index, cfg.video_mode);
+      } catch (const std::exception& ex) {
+        throw std::runtime_error(format_video_build_error(stream.index, cfg.video_mode, ex.what()));
+      }
     }
     if (cfg.video_mode == VideoMode::Clean) {
       if (!stream.video->run.push(packet.decoded)) {
@@ -618,6 +632,12 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
 }
 
 } // namespace
+
+std::string format_video_build_error(int stream_index, VideoMode video_mode,
+                                     const std::string& detail) {
+  return "stream " + std::to_string(stream_index) + " failed to build OptiView " +
+         video_mode_name(video_mode) + " video run: " + detail;
+}
 
 std::vector<DetectorRuntimeKey> collect_detector_runtime_keys(
     const std::vector<StreamProbeSpec>& streams) {

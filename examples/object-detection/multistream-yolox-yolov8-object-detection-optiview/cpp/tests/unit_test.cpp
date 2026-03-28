@@ -552,6 +552,21 @@ bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
   return ok;
 }
 
+bool test_format_video_build_error_includes_stream_mode_and_detail() {
+  const std::string annotated =
+      format_video_build_error(6, VideoMode::Annotated, "Allocate output buffers failed");
+  const std::string clean =
+      format_video_build_error(2, VideoMode::Clean, "set_state failure");
+
+  bool ok = true;
+  ok &= expect_contains(annotated, "stream 6", "video build error includes stream index");
+  ok &= expect_contains(annotated, "annotated", "video build error includes annotated mode");
+  ok &= expect_contains(annotated, "Allocate output buffers failed",
+                        "video build error keeps underlying detail");
+  ok &= expect_contains(clean, "clean", "video build error includes clean mode");
+  return ok;
+}
+
 bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
   const auto yolov8 = detector_stage_names(ModelFamily::YoloV8);
 
@@ -781,6 +796,7 @@ int main(int argc, char** argv) {
   ok &= test_optiview_timestamp_ms_applies_publish_offset();
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
+  ok &= test_format_video_build_error_includes_stream_mode_and_detail();
   ok &= test_detector_stage_names_cover_yolov8_and_reject_yolox();
   ok &= test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset();
   ok &= test_apply_graphpipes_runtime_defaults_preserves_explicit_env();
