@@ -9,7 +9,7 @@
 #include <optional>
 #include <vector>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 
 std::filesystem::path sample_output_path(const std::filesystem::path& output_dir, int stream_index,
                                          int frame_index);
@@ -19,4 +19,4 @@ cv::Mat draw_detection_boxes(cv::Mat frame, const std::vector<Detection>& detect
 bool save_debug_frame(const std::optional<std::filesystem::path>& output_dir, int stream_index,
                       int frame_index, const cv::Mat& frame, int save_every);
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

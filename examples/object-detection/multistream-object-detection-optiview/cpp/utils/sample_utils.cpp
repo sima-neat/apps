@@ -9,7 +9,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 namespace {
 
 std::string sample_payload_tag_upper(const simaai::neat::Sample& sample) {
@@ -90,8 +90,6 @@ DetectorOutputKind require_detector_output_kind(ModelFamily family,
   case ModelFamily::YoloV8:
     expected = "BBOX";
     break;
-  case ModelFamily::YoloX:
-    throw std::runtime_error(yolox_not_supported_message());
   case ModelFamily::Auto:
     throw std::invalid_argument("unsupported model family");
   }
@@ -172,4 +170,4 @@ cv::Mat tensor_rgb_from_sample(const simaai::neat::Sample& sample) {
   return tensor->to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::RGB);
 }
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

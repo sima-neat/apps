@@ -1,4 +1,4 @@
-// Starter e2e smoke test for multistream-yolox-yolov8-object-detection-optiview.
+// Starter e2e smoke test for multistream-object-detection-optiview.
 #include "support/testing/test_process.h"
 
 #include <iostream>

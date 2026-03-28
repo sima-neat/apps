@@ -1,4 +1,4 @@
-# Multistream YOLOv8 Object Detection OptiView
+# Multistream Object Detection via OptiView
 
 ## Metadata
 | Field | Value |
@@ -8,18 +8,16 @@
 | Tags | object-detection, rtsp, multistream, optiview, yolov8 |
 | Languages | C++, Python |
 | Status | experimental |
-| Binary Name | multistream-yolox-yolov8-object-detection-optiview |
+| Binary Name | multistream-object-detection-optiview |
 | Model | yolo_v8m |
 
 ## Concept
 This example runs a config-driven multistream RTSP detection pipeline for YOLOv8 model packs and publishes per-stream video plus detection metadata to OptiView.
 
-The folder and binary keep their original `multistream-yolox-yolov8-...` names for compatibility, but the implementation is currently YOLOv8-only.
-
 ## Preview
 Snippet from a pipeline run:
 
-![Multistream YOLOv8 OptiView preview](../../../assets/portal/object-detection/multistream-yolox-yolov8-object-detection-optiview/image.png)
+![Multistream YOLOv8 OptiView preview](../../../assets/portal/object-detection/multistream-object-detection-optiview/image.png)
 
 Architecture:
 - one decoded RGB RTSP source runtime per stream
@@ -33,8 +31,6 @@ Detector graph:
 Video graph:
 - `Input(RGB) -> VideoConvert -> H264EncodeSima -> UdpH264OutputGroup`
 
-YOLOX model packs are not supported yet by this example. Future support is planned, but the current implementation and tests only cover YOLOv8.
-
 ## Prerequisites
 - Installed NEAT SDK.
 - One or more reachable RTSP camera URLs.
@@ -47,11 +43,11 @@ YOLOX model packs are not supported yet by this example. Future support is plann
 mkdir -p assets/models
 cd assets/models
 
-sima-cli modelzoo get object_detection/yolo_v8n
-sima-cli modelzoo get object_detection/yolo_v8s
-sima-cli modelzoo get object_detection/yolo_v8m
-sima-cli modelzoo get object_detection/yolo_v8l
-sima-cli modelzoo get object_detection/yolo_v8x
+sima-cli modelzoo get yolo_v8n
+sima-cli modelzoo get yolo_v8s
+sima-cli modelzoo get yolo_v8m
+sima-cli modelzoo get yolo_v8l
+sima-cli modelzoo get yolo_v8x
 ```
 
 ## Build
@@ -64,8 +60,8 @@ cd <apps-repo-root>
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>
-cmake -S examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/cpp -B build/multistream-yolox-yolov8-object-detection-optiview
-cmake --build build/multistream-yolox-yolov8-object-detection-optiview -j
+cmake -S examples/object-detection/multistream-object-detection-optiview/cpp -B build/multistream-object-detection-optiview
+cmake --build build/multistream-object-detection-optiview -j
 ```
 
 ## Run
@@ -73,28 +69,27 @@ cmake --build build/multistream-yolox-yolov8-object-detection-optiview -j
 This is useful for a quick smoke test without opening RTSP streams.
 
 ```bash
-./build/examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/multistream-yolox-yolov8-object-detection-optiview \
-  --config examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/common/config.yaml \
+./build/examples/object-detection/multistream-object-detection-optiview/multistream-object-detection-optiview \
+  --config examples/object-detection/multistream-object-detection-optiview/common/config.yaml \
   --validate-config-only
 ```
 
 ### C++
 ```bash
-./build/examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/multistream-yolox-yolov8-object-detection-optiview \
-  --config examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/common/config.yaml
+./build/examples/object-detection/multistream-object-detection-optiview/multistream-object-detection-optiview \
+  --config examples/object-detection/multistream-object-detection-optiview/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/python/requirements.txt
-python3 examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/python/main.py \
-  --config examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/common/config.yaml
+pip install -r examples/object-detection/multistream-object-detection-optiview/python/requirements.txt
+python3 examples/object-detection/multistream-object-detection-optiview/python/main.py \
+  --config examples/object-detection/multistream-object-detection-optiview/common/config.yaml
 ```
 
 ## Notes
-- Set `model.family: yolov8` and point `model.path` at a YOLOv8 pack. If you try a YOLOX pack, the example now fails fast with a clear "not supported yet" message instead of building a mismatched detector graph.
-- YOLOX support is planned for a future revision of this example, but it is not part of the current runtime or test contract.
+- Set `model.family: yolov8` and point `model.path` at a YOLOv8 pack.
 - The checked-in `common/config.yaml` includes 16 placeholder stream slots. Replace the RTSP URLs and OptiView host before running.
 - The current C++ path decodes each RTSP stream to RGB in system memory, runs YOLOv8 on those RGB frames, and re-encodes RGB frames for OptiView video output. It does not forward the original encoded H264 bitstream.
 - `output.video_mode: clean` publishes unannotated RGB frames to OptiView and keeps JSON enabled. `annotated` draws detection boxes into the RGB video stream and suppresses JSON so OptiView does not overlay detections twice.

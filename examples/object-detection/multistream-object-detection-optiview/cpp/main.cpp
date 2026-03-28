@@ -18,7 +18,7 @@
 #include <iostream>
 #include <string>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 namespace {
 
 void print_help(const char* argv0) {
@@ -32,10 +32,10 @@ void print_help(const char* argv0) {
 }
 
 } // namespace
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview
 
 int main(int argc, char** argv) {
-  using namespace multistream_yolox_yolov8_optiview;
+  using namespace multistream_object_detection_optiview;
 
   std::filesystem::path config_path = default_config_path();
   bool validate_config_only = false;

@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 
 struct DetectorRuntimeKey {
   ModelFamily family = ModelFamily::Auto;
@@ -164,4 +164,4 @@ private:
 
 int run_app(const AppConfig& cfg, ModelFamily family);
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

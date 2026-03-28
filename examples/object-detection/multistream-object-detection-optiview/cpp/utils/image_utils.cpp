@@ -7,7 +7,7 @@
 
 namespace fs = std::filesystem;
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 namespace {
 
 std::string class_label(const std::vector<std::string>& class_labels, int class_id) {
@@ -70,4 +70,4 @@ bool save_debug_frame(const std::optional<fs::path>& output_dir, int stream_inde
   return cv::imwrite(out_path.string(), frame_bgr);
 }
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

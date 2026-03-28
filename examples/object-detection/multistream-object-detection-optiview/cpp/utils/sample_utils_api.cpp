@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 
 enum class DetectorOutputKind {
   BBox,
@@ -47,4 +47,4 @@ build_optiview_detection_payload(const std::vector<Detection>& detections, int i
                                  const std::vector<std::string>& class_labels);
 cv::Mat tensor_rgb_from_sample(const simaai::neat::Sample& sample);
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

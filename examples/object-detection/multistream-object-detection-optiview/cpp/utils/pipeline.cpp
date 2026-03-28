@@ -5,7 +5,7 @@
 #include <memory>
 #include <stdexcept>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 namespace {
 
 constexpr const char* kDefaultModelNumBuffers = "3";
@@ -120,8 +120,6 @@ std::vector<std::string> detector_stage_names(ModelFamily family) {
   switch (family) {
   case ModelFamily::YoloV8:
     return {"input", "preproc", "mla", "sima_box_decode", "output"};
-  case ModelFamily::YoloX:
-    throw std::invalid_argument(yolox_not_supported_message());
   case ModelFamily::Auto:
     break;
   }
@@ -210,8 +208,6 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
                                                            probe.height, cfg.min_score, cfg.nms_iou,
                                                            cfg.max_detections));
     break;
-  case ModelFamily::YoloX:
-    throw std::invalid_argument(yolox_not_supported_message());
   case ModelFamily::Auto:
     throw std::invalid_argument("unsupported model family for detector graph");
   }
@@ -289,4 +285,4 @@ sima_examples::OptiViewSender build_optiview_json_output(const AppConfig& cfg, i
   return sima_examples::OptiViewSender(options);
 }
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 
 enum class VideoMode {
   Clean,
@@ -47,4 +47,4 @@ std::string to_string(VideoMode mode);
 bool json_output_enabled(const AppConfig& cfg);
 AppConfig load_app_config(const std::filesystem::path& path);
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

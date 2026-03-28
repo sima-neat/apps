@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 
 struct RtspProbe {
   int width = 0;
@@ -58,4 +58,4 @@ SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe
                                     VideoMode video_mode);
 sima_examples::OptiViewSender build_optiview_json_output(const AppConfig& cfg, int stream_index);
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

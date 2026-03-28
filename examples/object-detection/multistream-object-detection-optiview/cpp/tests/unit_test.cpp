@@ -17,7 +17,7 @@ using sima_examples::testing::create_temp_dir;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 namespace {
 
 std::string env_or_empty(const char* key) {
@@ -60,7 +60,7 @@ bool test_validate_config_only_smoke_runs(const std::string& binary) {
 }
 
 bool test_load_app_config_parses_runtime_worker_count() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_cfg_");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_cfg_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -119,8 +119,8 @@ bool test_load_app_config_parses_runtime_worker_count() {
   return ok;
 }
 
-bool test_load_app_config_rejects_yolox_family_until_supported() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_yolox_unsupported_");
+bool test_load_app_config_rejects_unknown_model_family() {
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_bad_family_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -128,8 +128,8 @@ bool test_load_app_config_rejects_yolox_family_until_supported() {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolox_m_mpk.tar.gz\n"
-         "  family: yolox\n"
+         "  path: assets/models/unsupported_mpk.tar.gz\n"
+         "  family: banana\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -143,8 +143,8 @@ bool test_load_app_config_rejects_yolox_family_until_supported() {
   try {
     static_cast<void>(load_app_config(config_path));
   } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
-                         "unsupported yolox family error mentions future support state");
+    ok = expect_contains(ex.what(), "model.family must be one of [auto, yolov8]",
+                         "unsupported model family error mentions accepted values");
   }
 
   remove_dir(temp_dir);
@@ -152,7 +152,7 @@ bool test_load_app_config_rejects_yolox_family_until_supported() {
 }
 
 bool test_load_app_config_rejects_invalid_worker_count() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_bad_worker_");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_bad_worker_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -184,7 +184,7 @@ bool test_load_app_config_rejects_invalid_worker_count() {
 }
 
 bool test_load_app_config_rejects_invalid_video_mode() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_bad_mode_");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_bad_mode_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -216,7 +216,7 @@ bool test_load_app_config_rejects_invalid_video_mode() {
 }
 
 bool test_load_app_config_rejects_empty_streams() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_no_streams_");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_no_streams_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -246,7 +246,7 @@ bool test_load_app_config_rejects_empty_streams() {
 }
 
 bool test_json_output_enabled_follows_video_mode_contract() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_video_json_off_");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_video_json_off_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -285,7 +285,7 @@ bool test_json_output_enabled_follows_video_mode_contract() {
 }
 
 bool test_json_output_enabled_stays_enabled_for_json_only_mode() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_json_only_on_");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_json_only_on_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -319,7 +319,7 @@ bool test_json_output_enabled_stays_enabled_for_json_only_mode() {
 }
 
 bool test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_video_off_json_on_");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_video_off_json_on_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -355,24 +355,13 @@ bool test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode() {
   return ok;
 }
 
-bool test_parse_model_family_rejects_yolox_until_supported() {
+bool test_parse_model_family_rejects_unknown_family() {
   bool ok = false;
   try {
-    static_cast<void>(parse_model_family("yolox"));
+    static_cast<void>(parse_model_family("banana"));
   } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
-                         "parse_model_family rejects yolox until support lands");
-  }
-  return ok;
-}
-
-bool test_resolve_model_family_auto_rejects_yolox_until_supported() {
-  bool ok = false;
-  try {
-    static_cast<void>(resolve_model_family("assets/models/yolox_s_mpk.tar.gz", ModelFamily::Auto));
-  } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
-                         "auto resolve rejects yolox model path until support lands");
+    ok = expect_contains(ex.what(), "model.family must be one of [auto, yolov8]",
+                         "parse_model_family rejects unknown family with accepted values");
   }
   return ok;
 }
@@ -399,22 +388,6 @@ bool test_parse_bbox_payload_normalizes_yolov8_boxes() {
     ok &= expect_true(boxes.front().x2 == 100.0f, "bbox payload clamps x2 to frame");
     ok &= expect_true(boxes.front().y2 == 70.0f, "bbox payload keeps y2");
     ok &= expect_true(boxes.front().class_id == 3, "bbox payload keeps class_id");
-  }
-  return ok;
-}
-
-bool test_require_detector_output_kind_rejects_yolox_until_supported() {
-  simaai::neat::Sample sample;
-  sample.kind = simaai::neat::SampleKind::Bundle;
-  sample.payload_tag = "BBOX";
-  sample.format = "BBOX";
-
-  bool ok = false;
-  try {
-    static_cast<void>(require_detector_output_kind(ModelFamily::YoloX, sample));
-  } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "YOLOX model packs are not supported yet",
-                         "yolox output kind rejects unsupported family until support lands");
   }
   return ok;
 }
@@ -560,21 +533,12 @@ bool test_format_video_build_error_includes_stream_mode_and_detail() {
   return ok;
 }
 
-bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
+bool test_detector_stage_names_cover_yolov8() {
   const auto yolov8 = detector_stage_names(ModelFamily::YoloV8);
 
-  bool ok = true;
-  ok &= expect_true(
+  return expect_true(
       yolov8 == std::vector<std::string>{"input", "preproc", "mla", "sima_box_decode", "output"},
       "yolov8 stage names match the RGB preprocess detector graph");
-  try {
-    static_cast<void>(detector_stage_names(ModelFamily::YoloX));
-    ok &= expect_true(false, "yolox stage names should be rejected until support lands");
-  } catch (const std::exception& ex) {
-    ok &= expect_contains(ex.what(), "YOLOX model packs are not supported yet",
-                          "yolox stage names reject unsupported family until support lands");
-  }
-  return ok;
 }
 
 bool test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset() {
@@ -749,10 +713,10 @@ bool test_source_producer_contract_matches_working_rtsp_pipeline() {
 }
 
 } // namespace
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview
 
 int main(int argc, char** argv) {
-  using namespace multistream_yolox_yolov8_optiview;
+  using namespace multistream_object_detection_optiview;
 
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -765,18 +729,16 @@ int main(int argc, char** argv) {
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_smoke_runs(binary);
   ok &= test_load_app_config_parses_runtime_worker_count();
-  ok &= test_load_app_config_rejects_yolox_family_until_supported();
+  ok &= test_load_app_config_rejects_unknown_model_family();
   ok &= test_load_app_config_rejects_invalid_worker_count();
   ok &= test_load_app_config_rejects_invalid_video_mode();
   ok &= test_load_app_config_rejects_empty_streams();
   ok &= test_json_output_enabled_follows_video_mode_contract();
   ok &= test_json_output_enabled_stays_enabled_for_json_only_mode();
   ok &= test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode();
-  ok &= test_parse_model_family_rejects_yolox_until_supported();
-  ok &= test_resolve_model_family_auto_rejects_yolox_until_supported();
+  ok &= test_parse_model_family_rejects_unknown_family();
   ok &= test_resolve_model_family_auto_for_yolov8();
   ok &= test_parse_bbox_payload_normalizes_yolov8_boxes();
-  ok &= test_require_detector_output_kind_rejects_yolox_until_supported();
   ok &= test_require_detector_output_kind_rejects_unsupported_sample_kind();
   ok &= test_build_optiview_detection_payload_builds_objects_and_labels();
   ok &= test_tensor_rgb_from_sample_converts_nv12_source_frames();
@@ -786,7 +748,7 @@ int main(int argc, char** argv) {
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
   ok &= test_format_video_build_error_includes_stream_mode_and_detail();
-  ok &= test_detector_stage_names_cover_yolov8_and_reject_yolox();
+  ok &= test_detector_stage_names_cover_yolov8();
   ok &= test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset();
   ok &= test_apply_graphpipes_runtime_defaults_preserves_explicit_env();
   ok &= test_optiview_video_encoder_defaults_to_hardware();

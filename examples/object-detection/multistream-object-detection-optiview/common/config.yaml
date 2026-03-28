@@ -1,24 +1,24 @@
 model:  # Detector model selection.
   path: assets/models/yolo_v8m_mpk.tar.gz  # Path to the YOLOv8 model pack.
-  family: yolov8  # Keep this as yolov8. YOLOX support is planned, but not available yet.
+  family: yolov8  # Keep this as yolov8 for this example.
 
 streams:  # RTSP inputs, one entry per camera.
-  - <rtsp-url-1>
-  - <rtsp-url-2>
-  - <rtsp-url-3>
-  - <rtsp-url-4>
-  # - <rtsp-url-5>
-  # - <rtsp-url-6>
-  # - <rtsp-url-7>
-  # - <rtsp-url-8>
-  # - <rtsp-url-9>
-  # - <rtsp-url-10>
-  # - <rtsp-url-11>
-  # - <rtsp-url-12>
-  # - <rtsp-url-13>
-  # - <rtsp-url-14>
-  # - <rtsp-url-15>
-  # - <rtsp-url-16>
+  - rtsp://192.168.0.138:8554/src1
+  - rtsp://192.168.0.138:8554/src2
+  - rtsp://192.168.0.138:8554/src3
+  - rtsp://192.168.0.138:8554/src4
+  # - rtsp://192.168.0.138:8554/src5
+  # - rtsp://192.168.0.138:8554/src6
+  # - rtsp://192.168.0.138:8554/src7
+  # - rtsp://192.168.0.138:8554/src8
+  # - rtsp://192.168.0.138:8554/src1
+  # - rtsp://192.168.0.138:8554/src2
+  # - rtsp://192.168.0.138:8554/src3
+  # - rtsp://192.168.0.138:8554/src4
+  # - rtsp://192.168.0.138:8554/src5
+  # - rtsp://192.168.0.138:8554/src6
+  # - rtsp://192.168.0.138:8554/src7
+  # - rtsp://192.168.0.138:8554/src8
 
 input:  # RTSP input transport settings.
   tcp: true  # Use TCP for RTSP transport.
@@ -38,10 +38,10 @@ inference:  # Detection controls.
 
 output:  # OptiView output plus optional local debug saves.
   optiview:  # Live video and JSON destination.
-    host: <optiview-host>  # Host running the OptiView receiver/viewer.
+    host: 192.168.0.138 # Host running the OptiView receiver/viewer.
     video_port_base: 9000  # Base UDP port for video channels.
     json_port_base: 9100  # Base UDP port for JSON channels.
-  video_enabled: true  # Disable to publish JSON only in clean mode; annotated suppresses JSON.
-  video_mode: annotated  # clean publishes unannotated RGB video; annotated draws detections and disables JSON.
+  video_enabled: true  # Disable to publish JSON only.
+  video_mode: annotated  # clean encodes decoded frames + JSON; annotated draws detections before encode.
   debug_dir: null  # Optional directory for periodic debug frame saves.
   save_every: 0  # Save every Nth debug frame. 0 disables saving.

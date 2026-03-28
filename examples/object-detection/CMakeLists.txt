@@ -7,4 +7,4 @@ foreach(example IN ITEMS
     add_subdirectory(${example}/cpp ${example})
   endif()
 endforeach()
-add_subdirectory(multistream-yolox-yolov8-object-detection-optiview/cpp multistream-yolox-yolov8-object-detection-optiview)
+add_subdirectory(multistream-object-detection-optiview/cpp multistream-object-detection-optiview)

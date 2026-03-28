@@ -19,12 +19,12 @@
 
 namespace fs = std::filesystem;
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 namespace {
 
 constexpr int kDefaultProfileIntervalFrames = 200;
 const fs::path kDefaultLabelsPath =
-    fs::path(MULTISTREAM_YOLOX_YOLOV8_OPTIVIEW_SOURCE_DIR) / ".." / "common" / "coco_label.txt";
+    fs::path(MULTISTREAM_OBJECT_DETECTION_OPTIVIEW_SOURCE_DIR) / ".." / "common" / "coco_label.txt";
 
 using SteadyClock = std::chrono::steady_clock;
 
@@ -826,4 +826,4 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
   return 0;
 }
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview

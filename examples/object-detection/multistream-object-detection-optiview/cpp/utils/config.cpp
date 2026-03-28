@@ -10,7 +10,7 @@
 
 namespace fs = std::filesystem;
 
-namespace multistream_yolox_yolov8_optiview {
+namespace multistream_object_detection_optiview {
 namespace {
 
 struct RawConfig {
@@ -225,11 +225,11 @@ VideoMode parse_video_mode(const std::string& value) {
 } // namespace
 
 std::filesystem::path default_config_path() {
-#ifdef MULTISTREAM_YOLOX_YOLOV8_OPTIVIEW_SOURCE_DIR
-  return fs::path(MULTISTREAM_YOLOX_YOLOV8_OPTIVIEW_SOURCE_DIR).parent_path() / "common" /
+#ifdef MULTISTREAM_OBJECT_DETECTION_OPTIVIEW_SOURCE_DIR
+  return fs::path(MULTISTREAM_OBJECT_DETECTION_OPTIVIEW_SOURCE_DIR).parent_path() / "common" /
          "config.yaml";
 #else
-  return fs::path("examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/"
+  return fs::path("examples/object-detection/multistream-object-detection-optiview/"
                   "common/config.yaml");
 #endif
 }
@@ -324,4 +324,4 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   return cfg;
 }
 
-} // namespace multistream_yolox_yolov8_optiview
+} // namespace multistream_object_detection_optiview
