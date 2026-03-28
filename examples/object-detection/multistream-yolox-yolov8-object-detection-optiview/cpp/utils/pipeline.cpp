@@ -62,8 +62,9 @@ double producer_emit_period_s(const AppConfig& cfg, const RtspProbe& probe) {
   return 1.0 / cfg.fps;
 }
 
-simaai::neat::nodes::groups::RtspDecodedInputOptions build_source_input_group_options(
-    const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
+simaai::neat::nodes::groups::RtspDecodedInputOptions
+build_source_input_group_options(const AppConfig& cfg, const std::string& url,
+                                 const RtspProbe& probe) {
   simaai::neat::nodes::groups::RtspDecodedInputOptions options;
   options.url = url;
   options.latency_ms = cfg.latency_ms;
@@ -163,10 +164,10 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
     apply_graphpipes_runtime_defaults();
   }
   SessionRun runtime;
-  runtime.session.add(
-      simaai::neat::nodes::groups::RtspDecodedInput(build_source_input_group_options(cfg, url, probe)));
-  runtime.session.add(
-      simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(source_output_every_n())));
+  runtime.session.add(simaai::neat::nodes::groups::RtspDecodedInput(
+      build_source_input_group_options(cfg, url, probe)));
+  runtime.session.add(simaai::neat::nodes::Output(
+      simaai::neat::OutputOptions::EveryFrame(source_output_every_n())));
 
   simaai::neat::RunOptions run_options;
   if (source_run_uses_explicit_realtime_preset()) {
@@ -205,9 +206,9 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
 
   switch (family) {
   case ModelFamily::YoloV8:
-    runtime.session.add(simaai::neat::nodes::SimaBoxDecode(
-        *runtime.model, "yolov8", probe.width, probe.height, cfg.min_score, cfg.nms_iou,
-        cfg.max_detections));
+    runtime.session.add(simaai::neat::nodes::SimaBoxDecode(*runtime.model, "yolov8", probe.width,
+                                                           probe.height, cfg.min_score, cfg.nms_iou,
+                                                           cfg.max_detections));
     break;
   case ModelFamily::YoloX:
     throw std::invalid_argument(yolox_not_supported_message());
@@ -255,9 +256,8 @@ SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe
     runtime.session.add(simaai::neat::nodes::CapsI420(probe.width, probe.height, writer_fps));
     runtime.session.add(simaai::neat::nodes::H264EncodeSW(2500));
   } else {
-    runtime.session.add(
-        simaai::neat::nodes::H264EncodeSima(probe.width, probe.height, writer_fps, 2500, "baseline",
-                                            "4.1"));
+    runtime.session.add(simaai::neat::nodes::H264EncodeSima(probe.width, probe.height, writer_fps,
+                                                            2500, "baseline", "4.1"));
   }
 
   simaai::neat::nodes::groups::UdpH264OutputGroupOptions udp_options;

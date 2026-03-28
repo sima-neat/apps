@@ -45,8 +45,9 @@ int source_output_every_n();
 int effective_writer_fps(const AppConfig& cfg, const RtspProbe& probe);
 OptiViewVideoEncoder optiview_video_encoder_from_env();
 double producer_emit_period_s(const AppConfig& cfg, const RtspProbe& probe);
-simaai::neat::nodes::groups::RtspDecodedInputOptions build_source_input_group_options(
-    const AppConfig& cfg, const std::string& url, const RtspProbe& probe);
+simaai::neat::nodes::groups::RtspDecodedInputOptions
+build_source_input_group_options(const AppConfig& cfg, const std::string& url,
+                                 const RtspProbe& probe);
 RtspProbe probe_rtsp(const AppConfig& cfg, const std::string& url);
 std::vector<std::string> detector_stage_names(ModelFamily family);
 SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe);

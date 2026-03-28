@@ -57,8 +57,7 @@ ModelFamily resolve_model_family(const std::string& model_path, ModelFamily hint
   if (lowered.find("yolox") != std::string::npos) {
     throw std::runtime_error(yolox_not_supported_message());
   }
-  if (lowered.find("yolo_v8") != std::string::npos ||
-      lowered.find("yolov8") != std::string::npos) {
+  if (lowered.find("yolo_v8") != std::string::npos || lowered.find("yolov8") != std::string::npos) {
     return ModelFamily::YoloV8;
   }
   throw std::runtime_error("unable to infer model family from model path: " + model_path);

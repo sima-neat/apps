@@ -161,8 +161,8 @@ bool same_detector_runtime_key(const DetectorRuntimeKey& lhs, const DetectorRunt
   return lhs.family == rhs.family && lhs.width == rhs.width && lhs.height == rhs.height;
 }
 
-std::vector<DetectorRuntimeKey> collect_detector_runtime_keys_impl(
-    const std::vector<StreamProbeSpec>& streams) {
+std::vector<DetectorRuntimeKey>
+collect_detector_runtime_keys_impl(const std::vector<StreamProbeSpec>& streams) {
   std::vector<DetectorRuntimeKey> keys;
   for (const auto& stream : streams) {
     const auto key = detector_runtime_key(stream.family, stream.probe);
@@ -203,8 +203,9 @@ WorkerContext build_worker_context(int worker_index, const AppConfig& cfg,
   return context;
 }
 
-std::vector<WorkerContext> build_worker_contexts(const AppConfig& cfg, int worker_count,
-                                                 const std::vector<DetectorRuntimeKey>& detector_keys) {
+std::vector<WorkerContext>
+build_worker_contexts(const AppConfig& cfg, int worker_count,
+                      const std::vector<DetectorRuntimeKey>& detector_keys) {
   std::vector<WorkerContext> contexts;
   contexts.reserve(static_cast<std::size_t>(std::max(worker_count, 0)));
   for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
@@ -262,8 +263,7 @@ void canonicalize_sample_identity(simaai::neat::Sample& sample, int stream_index
 }
 
 int narrow_frame_index_for_api(std::int64_t frame_index, int fallback = 0) {
-  if (frame_index < 0 ||
-      frame_index > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+  if (frame_index < 0 || frame_index > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
     return fallback;
   }
   return static_cast<int>(frame_index);
@@ -293,8 +293,9 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
         break;
       }
 
-      const int pull_timeout_ms =
-          stream.first_mailbox_push_logged ? source_pull_timeout_ms() : source_startup_pull_timeout_ms();
+      const int pull_timeout_ms = stream.first_mailbox_push_logged
+                                      ? source_pull_timeout_ms()
+                                      : source_startup_pull_timeout_ms();
       const double pull_t0 = now_steady_s();
       const auto sample = stream.source.run.pull(pull_timeout_ms);
       const double pull_elapsed = now_steady_s() - pull_t0;
@@ -319,7 +320,8 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
           if (!report.empty()) {
             emit_startup_trace(stream.index, "source report: " + report);
           }
-          throw std::runtime_error(last_error.empty() ? std::string("source run stopped") : last_error);
+          throw std::runtime_error(last_error.empty() ? std::string("source run stopped")
+                                                      : last_error);
         }
         continue;
       }
@@ -420,8 +422,8 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
   const double detect_elapsed = now_steady_s() - detect_t0;
   const double preproc_elapsed = 0.0;
 
-  const auto detections =
-      detections_from_detector_sample(stream.family, det_sample, stream.probe.width, stream.probe.height);
+  const auto detections = detections_from_detector_sample(stream.family, det_sample,
+                                                          stream.probe.width, stream.probe.height);
 
   const bool needs_saved_frame = cfg.output_dir.has_value() && cfg.save_every > 0;
   const bool needs_rendered_frame =
@@ -449,7 +451,8 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
                                  " OptiView clean video push failed");
       }
     } else if (!stream.video->run.push(frame_out)) {
-      throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView video push failed");
+      throw std::runtime_error("stream " + std::to_string(stream.index) +
+                               " OptiView video push failed");
     }
     video_elapsed = now_steady_s() - video_t0;
   }
@@ -458,22 +461,22 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
 
   double json_elapsed = 0.0;
   if (stream.json_enabled) {
-    const auto payload =
-        build_optiview_detection_payload(detections, stream.probe.width, stream.probe.height,
-                                         stream.class_labels);
+    const auto payload = build_optiview_detection_payload(detections, stream.probe.width,
+                                                          stream.probe.height, stream.class_labels);
     const double json_t0 = now_steady_s();
     if (!stream.json_sender->send_detection(
             optiview_timestamp_ms(publish_wall_time_s, cfg.optiview_json_offset_ms),
             optiview_frame_id(det_sample, narrow_frame_index_for_api(packet.frame_index)),
             payload.objects, payload.labels)) {
-      throw std::runtime_error("stream " + std::to_string(stream.index) + " OptiView JSON send failed");
+      throw std::runtime_error("stream " + std::to_string(stream.index) +
+                               " OptiView JSON send failed");
     }
     json_elapsed = now_steady_s() - json_t0;
   }
 
   if (needs_saved_frame &&
-      save_debug_frame(cfg.output_dir, stream.index,
-                       narrow_frame_index_for_api(packet.frame_index), frame_out, cfg.save_every)) {
+      save_debug_frame(cfg.output_dir, stream.index, narrow_frame_index_for_api(packet.frame_index),
+                       frame_out, cfg.save_every)) {
     stream.metrics.saved += 1;
   }
 
@@ -559,19 +562,19 @@ void detector_worker(WorkerContext& worker_context, std::vector<StreamRuntime>& 
           const double jsn = stream.metrics.interval_json_s * 1000.0 / n;
           const double pub = stream.metrics.interval_publish_s * 1000.0 / n;
           const double loop = stream.metrics.interval_loop_s * 1000.0 / n;
-          const double fps =
-              (stream.metrics.interval_wall_started_at_s.has_value() &&
-               stream.metrics.wall_last_processed_at_s.has_value() &&
-               *stream.metrics.wall_last_processed_at_s > *stream.metrics.interval_wall_started_at_s)
-                  ? n / (*stream.metrics.wall_last_processed_at_s -
-                         *stream.metrics.interval_wall_started_at_s)
-                  : 0.0;
+          const double fps = (stream.metrics.interval_wall_started_at_s.has_value() &&
+                              stream.metrics.wall_last_processed_at_s.has_value() &&
+                              *stream.metrics.wall_last_processed_at_s >
+                                  *stream.metrics.interval_wall_started_at_s)
+                                 ? n / (*stream.metrics.wall_last_processed_at_s -
+                                        *stream.metrics.interval_wall_started_at_s)
+                                 : 0.0;
 
-          std::cout << "  [stream " << stream.index << "] frames "
-                    << (stream.metrics.processed - n) << "-" << (stream.metrics.processed - 1)
-                    << " | source=" << src << "ms preproc=" << pre << "ms detect=" << det
-                    << "ms video=" << vid << "ms json=" << jsn << "ms publish=" << pub
-                    << "ms loop=" << loop << "ms throughput_fps=" << fps
+          std::cout << "  [stream " << stream.index << "] frames " << (stream.metrics.processed - n)
+                    << "-" << (stream.metrics.processed - 1) << " | source=" << src
+                    << "ms preproc=" << pre << "ms detect=" << det << "ms video=" << vid
+                    << "ms json=" << jsn << "ms publish=" << pub << "ms loop=" << loop
+                    << "ms throughput_fps=" << fps
                     << " mailbox_drops=" << stream.metrics.mailbox_drops << "\n";
 
           stream.metrics.interval_source_s = 0.0;
@@ -619,9 +622,8 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
     const double jsn = stream.metrics.json_time_s * 1000.0 / n;
     const double pub = stream.metrics.publish_time_s * 1000.0 / n;
     const double loop = stream.metrics.total_loop_time_s * 1000.0 / n;
-    const double fps =
-        wall_clock_fps(stream.metrics.processed, stream.metrics.wall_started_at_s,
-                       stream.metrics.wall_last_processed_at_s);
+    const double fps = wall_clock_fps(stream.metrics.processed, stream.metrics.wall_started_at_s,
+                                      stream.metrics.wall_last_processed_at_s);
     std::cout << "  [stream " << stream.index << "] " << stream.metrics.processed
               << " frames | source=" << src << "ms preproc=" << pre << "ms detect=" << det
               << "ms video=" << vid << "ms json=" << jsn << "ms publish=" << pub
@@ -639,8 +641,8 @@ std::string format_video_build_error(int stream_index, VideoMode video_mode,
          video_mode_name(video_mode) + " video run: " + detail;
 }
 
-std::vector<DetectorRuntimeKey> collect_detector_runtime_keys(
-    const std::vector<StreamProbeSpec>& streams) {
+std::vector<DetectorRuntimeKey>
+collect_detector_runtime_keys(const std::vector<StreamProbeSpec>& streams) {
   return collect_detector_runtime_keys_impl(streams);
 }
 
@@ -673,9 +675,9 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
   const auto detector_runtime_keys = collect_detector_runtime_keys(stream_specs);
 
   for (const auto& stream : streams) {
-    std::cout << "[stream " << stream.index << "] " << stream.probe.width << "x" << stream.probe.height
-              << " @" << effective_writer_fps(cfg, stream.probe) << "fps " << stream.url
-              << " -> optiview://" << cfg.optiview_host << " video=";
+    std::cout << "[stream " << stream.index << "] " << stream.probe.width << "x"
+              << stream.probe.height << " @" << effective_writer_fps(cfg, stream.probe) << "fps "
+              << stream.url << " -> optiview://" << cfg.optiview_host << " video=";
     if (stream.video_enabled) {
       std::cout << optiview_video_port_for_stream(cfg.optiview_video_port_base, stream.index);
     } else {
@@ -708,11 +710,10 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
     for (std::size_t index = 0; index < streams.size(); ++index) {
       auto startup_ready = std::make_shared<Event>();
       startup_events.push_back(startup_ready);
-      producer_threads.emplace_back(
-          [&stream = streams[index], &cfg, mailbox = mailboxes[index], &ready_queue, &stop_event,
-           startup_ready]() {
-            producer_thread(stream, cfg, mailbox, ready_queue, stop_event, startup_ready.get());
-          });
+      producer_threads.emplace_back([&stream = streams[index], &cfg, mailbox = mailboxes[index],
+                                     &ready_queue, &stop_event, startup_ready]() {
+        producer_thread(stream, cfg, mailbox, ready_queue, stop_event, startup_ready.get());
+      });
       if (!startup_ready->wait_for(std::chrono::milliseconds(source_startup_pull_timeout_ms()))) {
         emit_startup_trace(streams[index].index,
                            "startup wait_for timed out waiting for first decoded frame");

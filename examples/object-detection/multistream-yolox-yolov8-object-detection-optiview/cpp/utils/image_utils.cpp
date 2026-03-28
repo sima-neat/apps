@@ -55,8 +55,8 @@ cv::Mat draw_detection_boxes(cv::Mat frame, const std::vector<Detection>& detect
   return frame;
 }
 
-bool save_debug_frame(const std::optional<fs::path>& output_dir, int stream_index,
-                      int frame_index, const cv::Mat& frame, int save_every) {
+bool save_debug_frame(const std::optional<fs::path>& output_dir, int stream_index, int frame_index,
+                      const cv::Mat& frame, int save_every) {
   if (!output_dir.has_value()) {
     return false;
   }

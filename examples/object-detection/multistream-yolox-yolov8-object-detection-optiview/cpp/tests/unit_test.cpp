@@ -175,7 +175,8 @@ bool test_load_app_config_rejects_invalid_worker_count() {
   try {
     static_cast<void>(load_app_config(config_path));
   } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "worker_count", "invalid worker_count error mentions worker_count");
+    ok = expect_contains(ex.what(), "worker_count",
+                         "invalid worker_count error mentions worker_count");
   }
 
   remove_dir(temp_dir);
@@ -271,10 +272,9 @@ bool test_json_output_enabled_follows_video_mode_contract() {
     try {
       const AppConfig cfg = load_app_config(config_path);
       const bool expected = mode == "clean";
-      ok &= expect_true(
-          json_output_enabled(cfg) == expected,
-          mode + (expected ? " keeps sidecar json enabled for clean video"
-                           : " suppresses sidecar json for annotated video"));
+      ok &= expect_true(json_output_enabled(cfg) == expected,
+                        mode + (expected ? " keeps sidecar json enabled for clean video"
+                                         : " suppresses sidecar json for annotated video"));
     } catch (const std::exception& ex) {
       ok &= expect_true(false, std::string("config should load: ") + ex.what());
     }
@@ -302,7 +302,7 @@ bool test_json_output_enabled_stays_enabled_for_json_only_mode() {
          "output:\n"
          "  optiview:\n"
          "    host: 127.0.0.1\n"
-          "  video_enabled: false\n"
+         "  video_enabled: false\n"
          "  video_mode: annotated\n";
   out.close();
 
@@ -378,21 +378,15 @@ bool test_resolve_model_family_auto_rejects_yolox_until_supported() {
 }
 
 bool test_resolve_model_family_auto_for_yolov8() {
-  return expect_true(
-      resolve_model_family("assets/models/yolo_v8m_mpk.tar.gz", ModelFamily::Auto) ==
-          ModelFamily::YoloV8,
-      "auto resolves yolo_v8 model path to YoloV8");
+  return expect_true(resolve_model_family("assets/models/yolo_v8m_mpk.tar.gz", ModelFamily::Auto) ==
+                         ModelFamily::YoloV8,
+                     "auto resolves yolo_v8 model path to YoloV8");
 }
 
 bool test_parse_bbox_payload_normalizes_yolov8_boxes() {
   const std::vector<std::uint8_t> payload = {
-      1, 0, 0, 0,
-      246, 255, 255, 255,
-      20, 0, 0, 0,
-      140, 0, 0, 0,
-      50, 0, 0, 0,
-      102, 102, 102, 63,
-      3, 0, 0, 0,
+      1, 0, 0,  0, 246, 255, 255, 255, 20,  0,  0, 0, 140, 0,
+      0, 0, 50, 0, 0,   0,   102, 102, 102, 63, 3, 0, 0,   0,
   };
 
   const auto boxes = parse_bbox_payload(payload, 100, 80);
@@ -555,8 +549,7 @@ bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
 bool test_format_video_build_error_includes_stream_mode_and_detail() {
   const std::string annotated =
       format_video_build_error(6, VideoMode::Annotated, "Allocate output buffers failed");
-  const std::string clean =
-      format_video_build_error(2, VideoMode::Clean, "set_state failure");
+  const std::string clean = format_video_build_error(2, VideoMode::Clean, "set_state failure");
 
   bool ok = true;
   ok &= expect_contains(annotated, "stream 6", "video build error includes stream index");
@@ -654,11 +647,9 @@ bool test_startup_trace_defaults_to_disabled() {
 bool test_startup_trace_accepts_truthy_aliases() {
   bool ok = true;
   setenv("SIMA_OPTIVIEW_STARTUP_TRACE", "1", 1);
-  ok &= expect_true(startup_trace_enabled_from_env(),
-                    "startup trace accepts numeric truthy alias");
+  ok &= expect_true(startup_trace_enabled_from_env(), "startup trace accepts numeric truthy alias");
   setenv("SIMA_OPTIVIEW_STARTUP_TRACE", "TRUE", 1);
-  ok &= expect_true(startup_trace_enabled_from_env(),
-                    "startup trace accepts uppercase true alias");
+  ok &= expect_true(startup_trace_enabled_from_env(), "startup trace accepts uppercase true alias");
   setenv("SIMA_OPTIVIEW_STARTUP_TRACE", "banana", 1);
   ok &= expect_true(!startup_trace_enabled_from_env(),
                     "startup trace stays disabled for unknown values");
@@ -703,8 +694,7 @@ bool test_build_source_input_group_options_match_working_rtsp_group_contract() {
   cfg.latency_ms = 125;
   RtspProbe probe{1280, 720, 30};
 
-  const auto options =
-      build_source_input_group_options(cfg, "rtsp://127.0.0.1:8554/src1", probe);
+  const auto options = build_source_input_group_options(cfg, "rtsp://127.0.0.1:8554/src1", probe);
 
   bool ok = true;
   ok &= expect_true(options.url == "rtsp://127.0.0.1:8554/src1",
@@ -713,28 +703,25 @@ bool test_build_source_input_group_options_match_working_rtsp_group_contract() {
   ok &= expect_true(options.latency_ms == 125, "source group options keep latency");
   ok &= expect_true(options.insert_queue, "source group options keep the input queue");
   ok &= expect_true(options.auto_caps_from_stream, "source group options use auto caps fixup");
-  ok &= expect_true(options.fallback_h264_width == 1280,
-                    "source group options keep fallback width");
-  ok &= expect_true(options.fallback_h264_height == 720,
-                    "source group options keep fallback height");
-  ok &= expect_true(options.fallback_h264_fps == 30,
-                    "source group options keep fallback fps");
-  ok &= expect_true(options.out_format == "RGB",
-                    "source group options decode directly to RGB");
+  ok &=
+      expect_true(options.fallback_h264_width == 1280, "source group options keep fallback width");
+  ok &=
+      expect_true(options.fallback_h264_height == 720, "source group options keep fallback height");
+  ok &= expect_true(options.fallback_h264_fps == 30, "source group options keep fallback fps");
+  ok &= expect_true(options.out_format == "RGB", "source group options decode directly to RGB");
   ok &= expect_true(!options.decoder_raw_output,
                     "source group options use the converted RGB decoder output path");
   ok &= expect_true(options.use_videoscale,
                     "source group options enable videoscale like the working tracking example");
   ok &= expect_true(options.output_caps.enable,
                     "source group options enable explicit RGB output caps");
-  ok &= expect_true(options.output_caps.format == "RGB",
-                    "source group options keep RGB output caps");
-  ok &= expect_true(options.output_caps.width == 1280,
-                    "source group options keep RGB output width");
-  ok &= expect_true(options.output_caps.height == 720,
-                    "source group options keep RGB output height");
-  ok &= expect_true(options.output_caps.fps == 30,
-                    "source group options keep RGB output fps");
+  ok &=
+      expect_true(options.output_caps.format == "RGB", "source group options keep RGB output caps");
+  ok &=
+      expect_true(options.output_caps.width == 1280, "source group options keep RGB output width");
+  ok &=
+      expect_true(options.output_caps.height == 720, "source group options keep RGB output height");
+  ok &= expect_true(options.output_caps.fps == 30, "source group options keep RGB output fps");
   ok &= expect_true(options.output_caps.memory == simaai::neat::CapsMemory::SystemMemory,
                     "source group options keep RGB output in system memory");
   return ok;
@@ -742,10 +729,12 @@ bool test_build_source_input_group_options_match_working_rtsp_group_contract() {
 
 bool test_source_producer_contract_matches_working_rtsp_pipeline() {
   bool ok = true;
-  ok &= expect_true(source_startup_pull_timeout_ms() == 50000,
-                    "source producer keeps the 50 second startup pull timeout from the working example");
-  ok &= expect_true(source_pull_timeout_ms() == 10000,
-                    "source producer keeps the 10 second steady-state pull timeout from the working example");
+  ok &= expect_true(
+      source_startup_pull_timeout_ms() == 50000,
+      "source producer keeps the 50 second startup pull timeout from the working example");
+  ok &= expect_true(
+      source_pull_timeout_ms() == 10000,
+      "source producer keeps the 10 second steady-state pull timeout from the working example");
   ok &= expect_true(source_startup_stagger_s() == 0.5,
                     "source producer startup keeps the working half-second stream stagger");
   ok &= expect_true(!source_run_uses_explicit_realtime_preset(),

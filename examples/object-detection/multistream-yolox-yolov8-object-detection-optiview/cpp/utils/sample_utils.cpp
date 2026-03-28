@@ -99,8 +99,8 @@ DetectorOutputKind require_detector_output_kind(ModelFamily family,
   const std::string actual = sample_payload_tag_upper(sample);
   if (actual != expected) {
     throw std::runtime_error("unsupported detector output: family=" + to_string(family) +
-                             " expected=" + expected + " actual=" +
-                             (actual.empty() ? std::string("<empty>") : actual));
+                             " expected=" + expected +
+                             " actual=" + (actual.empty() ? std::string("<empty>") : actual));
   }
   return DetectorOutputKind::BBox;
 }
@@ -130,9 +130,9 @@ std::int64_t optiview_timestamp_ms(double publish_time_s, double offset_ms) {
   return static_cast<std::int64_t>(std::llround(publish_time_s * 1000.0 + offset_ms));
 }
 
-OptiViewDetectionPayload build_optiview_detection_payload(const std::vector<Detection>& detections,
-                                                          int img_w, int img_h,
-                                                          const std::vector<std::string>& class_labels) {
+OptiViewDetectionPayload
+build_optiview_detection_payload(const std::vector<Detection>& detections, int img_w, int img_h,
+                                 const std::vector<std::string>& class_labels) {
   OptiViewDetectionPayload payload;
   payload.objects.reserve(detections.size());
   for (const auto& det : detections) {

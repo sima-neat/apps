@@ -72,8 +72,8 @@ int main(int argc, char** argv) {
     const ModelFamily family = resolve_model_family(cfg.model.path, cfg.model.family);
     if (validate_config_only) {
       std::cout << "Config validated: " << config_path << " (family=" << to_string(family)
-                << ", workers=" << cfg.worker_count
-                << ", streams=" << cfg.rtsp_urls.size() << ")\n";
+                << ", workers=" << cfg.worker_count << ", streams=" << cfg.rtsp_urls.size()
+                << ")\n";
       return 0;
     }
     return run_app(cfg, family);

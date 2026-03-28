@@ -35,15 +35,16 @@ std::string to_string(DetectorOutputKind kind);
 std::vector<std::uint8_t> extract_bbox_payload(const simaai::neat::Sample& sample);
 std::vector<Detection> parse_bbox_payload(const std::vector<std::uint8_t>& payload, int img_w,
                                           int img_h);
-DetectorOutputKind require_detector_output_kind(ModelFamily family, const simaai::neat::Sample& sample);
+DetectorOutputKind require_detector_output_kind(ModelFamily family,
+                                                const simaai::neat::Sample& sample);
 std::vector<Detection> detections_from_detector_sample(ModelFamily family,
                                                        const simaai::neat::Sample& sample,
                                                        int img_w, int img_h);
 std::string optiview_frame_id(const simaai::neat::Sample& sample, int fallback_frame_index);
 std::int64_t optiview_timestamp_ms(double publish_time_s, double offset_ms);
-OptiViewDetectionPayload build_optiview_detection_payload(const std::vector<Detection>& detections,
-                                                          int img_w, int img_h,
-                                                          const std::vector<std::string>& class_labels);
+OptiViewDetectionPayload
+build_optiview_detection_payload(const std::vector<Detection>& detections, int img_w, int img_h,
+                                 const std::vector<std::string>& class_labels);
 cv::Mat tensor_rgb_from_sample(const simaai::neat::Sample& sample);
 
 } // namespace multistream_yolox_yolov8_optiview

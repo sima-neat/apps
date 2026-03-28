@@ -229,8 +229,8 @@ std::filesystem::path default_config_path() {
   return fs::path(MULTISTREAM_YOLOX_YOLOV8_OPTIVIEW_SOURCE_DIR).parent_path() / "common" /
          "config.yaml";
 #else
-  return fs::path(
-      "examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/common/config.yaml");
+  return fs::path("examples/object-detection/multistream-yolox-yolov8-object-detection-optiview/"
+                  "common/config.yaml");
 #endif
 }
 
