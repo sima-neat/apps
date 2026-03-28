@@ -462,6 +462,29 @@ bool test_build_optiview_detection_payload_builds_objects_and_labels() {
   return ok;
 }
 
+bool test_tensor_rgb_from_sample_converts_nv12_source_frames() {
+  simaai::neat::Tensor tensor;
+  std::string err;
+  if (!sima_examples::make_blank_nv12_tensor(128, 72, tensor, err)) {
+    return expect_true(false, "created blank NV12 tensor for sample conversion test");
+  }
+
+  simaai::neat::Sample sample;
+  sample.kind = simaai::neat::SampleKind::Tensor;
+  sample.tensor = std::move(tensor);
+
+  bool ok = true;
+  try {
+    const cv::Mat frame = tensor_rgb_from_sample(sample);
+    ok &= expect_true(frame.rows == 72, "NV12 sample converts to image with expected height");
+    ok &= expect_true(frame.cols == 128, "NV12 sample converts to image with expected width");
+    ok &= expect_true(frame.type() == CV_8UC3, "NV12 sample converts to 3-channel uint8 RGB");
+  } catch (const std::exception& ex) {
+    ok &= expect_true(false, std::string("NV12 sample should convert to RGB frame: ") + ex.what());
+  }
+  return ok;
+}
+
 bool test_optiview_frame_id_prefers_detector_sample_frame_id() {
   simaai::neat::Sample sample;
   sample.frame_id = 42;
@@ -659,6 +682,56 @@ bool test_producer_emit_period_s_always_paces_when_fps_configured() {
   return ok;
 }
 
+bool test_build_source_input_group_options_match_working_rtsp_group_contract() {
+  AppConfig cfg;
+  cfg.tcp = true;
+  cfg.latency_ms = 125;
+  RtspProbe probe{1280, 720, 30};
+
+  const auto options =
+      build_source_input_group_options(cfg, "rtsp://127.0.0.1:8554/src1", probe);
+
+  bool ok = true;
+  ok &= expect_true(options.url == "rtsp://127.0.0.1:8554/src1",
+                    "source group options keep the RTSP URL");
+  ok &= expect_true(options.tcp, "source group options keep tcp=true");
+  ok &= expect_true(options.latency_ms == 125, "source group options keep latency");
+  ok &= expect_true(options.insert_queue, "source group options keep the input queue");
+  ok &= expect_true(options.auto_caps_from_stream, "source group options use auto caps fixup");
+  ok &= expect_true(options.fallback_h264_width == 1280,
+                    "source group options keep fallback width");
+  ok &= expect_true(options.fallback_h264_height == 720,
+                    "source group options keep fallback height");
+  ok &= expect_true(options.fallback_h264_fps == 30,
+                    "source group options keep fallback fps");
+  ok &= expect_true(options.out_format == "NV12",
+                    "source group options keep NV12 decode output");
+  ok &= expect_true(options.decoder_raw_output,
+                    "source group options keep the raw NV12 decoder output path");
+  ok &= expect_true(!options.output_caps.enable,
+                    "source group options avoid the broken post-decode SystemMemory caps conversion");
+  return ok;
+}
+
+bool test_source_producer_contract_matches_working_rtsp_pipeline() {
+  bool ok = true;
+  ok &= expect_true(source_startup_pull_timeout_ms() == 50000,
+                    "source producer keeps the 50 second startup pull timeout from the working example");
+  ok &= expect_true(source_pull_timeout_ms() == 10000,
+                    "source producer keeps the 10 second steady-state pull timeout from the working example");
+  ok &= expect_true(source_startup_stagger_s() == 0.5,
+                    "source producer startup keeps the working half-second stream stagger");
+  ok &= expect_true(!source_run_uses_explicit_realtime_preset(),
+                    "source run leaves the preset at the tracking-style default");
+  ok &= expect_true(!source_run_applies_graphpipes_runtime_defaults(),
+                    "source run avoids the graphpipes-specific runtime env overrides");
+  ok &= expect_true(source_run_queue_depth() == 4,
+                    "source run queue depth matches the working RTSP example");
+  ok &= expect_true(source_output_every_n() == 1,
+                    "source run emits every decoded frame into the producer queue");
+  return ok;
+}
+
 } // namespace
 } // namespace multistream_yolox_yolov8_optiview
 
@@ -690,6 +763,7 @@ int main(int argc, char** argv) {
   ok &= test_require_detector_output_kind_rejects_yolox_until_supported();
   ok &= test_require_detector_output_kind_rejects_unsupported_sample_kind();
   ok &= test_build_optiview_detection_payload_builds_objects_and_labels();
+  ok &= test_tensor_rgb_from_sample_converts_nv12_source_frames();
   ok &= test_optiview_frame_id_prefers_detector_sample_frame_id();
   ok &= test_optiview_frame_id_falls_back_to_packet_index();
   ok &= test_optiview_timestamp_ms_applies_publish_offset();
@@ -705,5 +779,7 @@ int main(int argc, char** argv) {
   ok &= test_graphpipes_decoder_num_buffers_matches_source_tuning();
   ok &= test_graphpipes_run_preset_matches_working_sandbox_runtime();
   ok &= test_producer_emit_period_s_always_paces_when_fps_configured();
+  ok &= test_build_source_input_group_options_match_working_rtsp_group_contract();
+  ok &= test_source_producer_contract_matches_working_rtsp_pipeline();
   return ok ? 0 : 1;
 }

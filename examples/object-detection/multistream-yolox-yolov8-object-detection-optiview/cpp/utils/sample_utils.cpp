@@ -3,6 +3,8 @@
 #include "neat/session.h"
 #include "support/object_detection/obj_detection_utils.h"
 
+#include <opencv2/imgproc.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -160,6 +162,12 @@ cv::Mat tensor_rgb_from_sample(const simaai::neat::Sample& sample) {
   const auto* tensor = first_tensor_impl(sample);
   if (tensor == nullptr) {
     throw std::runtime_error("no tensor payload found in decoded RTSP sample");
+  }
+  if (tensor->is_nv12() || tensor->is_i420()) {
+    cv::Mat bgr = tensor->to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::BGR);
+    cv::Mat rgb;
+    cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
+    return rgb;
   }
   return tensor->to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::RGB);
 }

@@ -39,6 +39,18 @@ inline bool startup_trace_enabled_from_env() {
   return lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on";
 }
 
+inline int source_startup_pull_timeout_ms() {
+  return 50000;
+}
+
+inline int source_pull_timeout_ms() {
+  return 10000;
+}
+
+inline double source_startup_stagger_s() {
+  return 0.5;
+}
+
 std::vector<DetectorRuntimeKey> collect_detector_runtime_keys(
     const std::vector<StreamProbeSpec>& streams);
 
@@ -121,7 +133,7 @@ public:
   void complete(ReadyStreamQueue& ready_queue) {
     std::lock_guard<std::mutex> lock(mu_);
     in_flight_ = false;
-    if (!queue_.empty() && !ready_notified_ && !closed_) {
+    if (!queue_.empty() && !ready_notified_) {
       ready_queue.push(stream_index_);
       ready_notified_ = true;
     }

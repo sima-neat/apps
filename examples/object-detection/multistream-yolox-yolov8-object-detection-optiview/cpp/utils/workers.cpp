@@ -23,9 +23,6 @@ namespace multistream_yolox_yolov8_optiview {
 namespace {
 
 constexpr int kDefaultProfileIntervalFrames = 200;
-constexpr int kSourcePullTimeoutMs = 1;
-constexpr auto kSourceStartupTimeout = std::chrono::milliseconds(50000);
-
 const fs::path kDefaultLabelsPath =
     fs::path(MULTISTREAM_YOLOX_YOLOV8_OPTIVIEW_SOURCE_DIR) / ".." / "common" / "coco_label.txt";
 
@@ -83,7 +80,25 @@ struct StreamRuntime {
   int consecutive_source_timeouts = 0;
   std::int64_t next_source_frame_index = 0;
   std::optional<double> next_allowed_emit_s;
-  SteadyClock::time_point startup_deadline = SteadyClock::time_point::min();
+};
+
+class Event {
+public:
+  void set() {
+    std::lock_guard<std::mutex> lock(mu_);
+    signaled_ = true;
+    cv_.notify_all();
+  }
+
+  bool wait_for(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mu_);
+    return cv_.wait_for(lock, timeout, [&] { return signaled_; });
+  }
+
+private:
+  std::mutex mu_;
+  std::condition_variable cv_;
+  bool signaled_ = false;
 };
 
 struct DetectorRuntime {
@@ -162,7 +177,6 @@ void initialize_stream_runtime(StreamRuntime& runtime, int index, const std::str
   runtime.video_enabled = cfg.video_enabled;
   runtime.json_enabled = json_output_enabled(cfg);
   runtime.class_labels = class_labels;
-  runtime.startup_deadline = SteadyClock::now() + kSourceStartupTimeout;
   if (runtime.json_enabled) {
     runtime.json_sender = build_optiview_json_output(cfg, index);
   }
@@ -258,106 +272,117 @@ bool mark_source_failure(StreamRuntime& stream,
   return false;
 }
 
-bool pump_source_stream(StreamRuntime& stream, const AppConfig& cfg,
-                        const std::shared_ptr<LatestFrameMailbox<FramePacket>>& mailbox,
-                        ReadyStreamQueue& ready_queue) {
-  if (stream.source_finished || !stream.error_message.empty()) {
-    return false;
-  }
-
-  if (cfg.frames > 0 && stream.next_source_frame_index >= cfg.frames) {
-    stream.source_finished = true;
-    mailbox->close();
-    try {
-      stream.source.run.close();
-    } catch (...) {
-    }
-    return false;
-  }
-
-  const double pull_t0 = now_steady_s();
-  const auto sample = stream.source.run.pull(kSourcePullTimeoutMs);
-  const double pull_elapsed = now_steady_s() - pull_t0;
-  if (!sample.has_value()) {
-    ++stream.consecutive_source_timeouts;
-    if (!stream.saw_first_source_frame && SteadyClock::now() >= stream.startup_deadline) {
-      const std::string last_error = stream.source.run.last_error();
-      const std::string diag = stream.source.run.diagnostics_summary();
-      const std::string report = stream.source.run.report();
-      emit_startup_trace(stream.index,
-                         "startup timed out before first decoded sample last_error=" +
-                             (last_error.empty() ? std::string("<empty>") : last_error));
-      if (!diag.empty()) {
-        emit_startup_trace(stream.index, "source diagnostics: " + diag);
+void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
+                     const std::shared_ptr<LatestFrameMailbox<FramePacket>>& mailbox,
+                     ReadyStreamQueue& ready_queue, std::atomic<bool>& stop_event,
+                     Event* startup_ready) {
+  try {
+    emit_startup_trace(stream.index, "source thread started");
+    while (!stop_event.load()) {
+      if (cfg.frames > 0 && stream.next_source_frame_index >= cfg.frames) {
+        break;
       }
-      if (!report.empty()) {
-        emit_startup_trace(stream.index, "source report: " + report);
+
+      const int pull_timeout_ms =
+          stream.first_mailbox_push_logged ? source_pull_timeout_ms() : source_startup_pull_timeout_ms();
+      const double pull_t0 = now_steady_s();
+      const auto sample = stream.source.run.pull(pull_timeout_ms);
+      const double pull_elapsed = now_steady_s() - pull_t0;
+      if (!sample.has_value()) {
+        ++stream.consecutive_source_timeouts;
+        const std::string last_error = stream.source.run.last_error();
+        bool source_running = false;
+        try {
+          source_running = stream.source.run.running();
+        } catch (...) {
+          source_running = false;
+        }
+        if (!last_error.empty() || !source_running) {
+          const std::string diag = stream.source.run.diagnostics_summary();
+          const std::string report = stream.source.run.report();
+          emit_startup_trace(stream.index,
+                             "source pull returned empty last_error=" +
+                                 (last_error.empty() ? std::string("<empty>") : last_error));
+          if (!diag.empty()) {
+            emit_startup_trace(stream.index, "source diagnostics: " + diag);
+          }
+          if (!report.empty()) {
+            emit_startup_trace(stream.index, "source report: " + report);
+          }
+          throw std::runtime_error(last_error.empty() ? std::string("source run stopped") : last_error);
+        }
+        continue;
       }
-      return mark_source_failure(stream, mailbox, "startup timeout waiting for first decoded frame");
-    }
-    if (cfg.frames > 0 && stream.consecutive_source_timeouts >= 20) {
-      return mark_source_failure(stream, mailbox, "timed out waiting for decoded RTSP frames");
-    }
-    return false;
-  }
 
-  stream.consecutive_source_timeouts = 0;
-  if (!stream.saw_first_source_frame) {
-    emit_startup_trace(stream.index, "first decoded frame pulled");
-    stream.saw_first_source_frame = true;
-  }
-
-  simaai::neat::Sample decoded = *sample;
-  canonicalize_sample_identity(decoded, stream.index, stream.next_source_frame_index);
-
-  const double source_completed_at_s = now_steady_s();
-  bool should_emit = true;
-  const double emit_period_s = producer_emit_period_s(cfg, stream.probe);
-  if (emit_period_s > 0.0) {
-    if (!stream.next_allowed_emit_s.has_value()) {
-      const int num_streams = static_cast<int>(cfg.rtsp_urls.size());
-      const double phase = num_streams > 1 ? emit_period_s * stream.index / num_streams : 0.0;
-      stream.next_allowed_emit_s =
-          std::ceil(source_completed_at_s / emit_period_s) * emit_period_s + phase;
-    }
-    if (source_completed_at_s < *stream.next_allowed_emit_s) {
-      should_emit = false;
-    } else {
-      while (*stream.next_allowed_emit_s <= source_completed_at_s) {
-        *stream.next_allowed_emit_s += emit_period_s;
+      stream.consecutive_source_timeouts = 0;
+      if (!stream.saw_first_source_frame) {
+        emit_startup_trace(stream.index, "first decoded frame pulled");
+        stream.saw_first_source_frame = true;
       }
+
+      simaai::neat::Sample decoded = *sample;
+      canonicalize_sample_identity(decoded, stream.index, stream.next_source_frame_index);
+
+      const double source_completed_at_s = now_steady_s();
+      bool should_emit = true;
+      const double emit_period_s = producer_emit_period_s(cfg, stream.probe);
+      if (emit_period_s > 0.0) {
+        if (!stream.next_allowed_emit_s.has_value()) {
+          const int num_streams = static_cast<int>(cfg.rtsp_urls.size());
+          const double phase = num_streams > 1 ? emit_period_s * stream.index / num_streams : 0.0;
+          stream.next_allowed_emit_s =
+              std::ceil(source_completed_at_s / emit_period_s) * emit_period_s + phase;
+        }
+        if (source_completed_at_s < *stream.next_allowed_emit_s) {
+          should_emit = false;
+        } else {
+          while (*stream.next_allowed_emit_s <= source_completed_at_s) {
+            *stream.next_allowed_emit_s += emit_period_s;
+          }
+        }
+      }
+
+      if (!stream.first_mailbox_push_logged) {
+        should_emit = true;
+      }
+      if (!should_emit) {
+        ++stream.next_source_frame_index;
+        continue;
+      }
+
+      FramePacket packet;
+      packet.decoded = std::move(decoded);
+      packet.frame_index = stream.next_source_frame_index;
+      packet.source_time_s = pull_elapsed;
+      stream.metrics.mailbox_drops += mailbox->push(std::move(packet), ready_queue);
+      if (!stream.first_mailbox_push_logged) {
+        emit_startup_trace(stream.index, "first mailbox push complete");
+        stream.first_mailbox_push_logged = true;
+        if (startup_ready != nullptr) {
+          startup_ready->set();
+        }
+      }
+      ++stream.next_source_frame_index;
+    }
+  } catch (const std::exception& ex) {
+    stream.error_message = ex.what();
+    stop_event.store(true);
+    if (startup_ready != nullptr) {
+      startup_ready->set();
     }
   }
 
-  if (!stream.first_mailbox_push_logged) {
-    should_emit = true;
+  stream.source_finished = true;
+  mailbox->close();
+  try {
+    stream.source.run.close();
+  } catch (...) {
   }
-  if (!should_emit) {
-    ++stream.next_source_frame_index;
-    return true;
-  }
-
-  FramePacket packet;
-  packet.decoded = std::move(decoded);
-  packet.frame_index = stream.next_source_frame_index;
-  packet.source_time_s = pull_elapsed;
-  stream.metrics.mailbox_drops += mailbox->push(std::move(packet), ready_queue);
-  if (!stream.first_mailbox_push_logged) {
-    emit_startup_trace(stream.index, "first mailbox push complete");
-    stream.first_mailbox_push_logged = true;
-  }
-  ++stream.next_source_frame_index;
-  return true;
 }
 
-bool all_sources_started(const std::vector<StreamRuntime>& streams) {
-  return std::all_of(streams.begin(), streams.end(),
-                     [](const auto& stream) { return stream.first_mailbox_push_logged; });
-}
-
-bool all_sources_finished(const std::vector<StreamRuntime>& streams) {
-  return std::all_of(streams.begin(), streams.end(),
-                     [](const auto& stream) { return stream.source_finished; });
+bool any_stream_failed(const std::vector<StreamRuntime>& streams) {
+  return std::any_of(streams.begin(), streams.end(),
+                     [](const auto& stream) { return !stream.error_message.empty(); });
 }
 
 cv::Mat render_frame(const StreamRuntime& stream, const AppConfig& cfg, const cv::Mat& frame,
@@ -652,82 +677,59 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
         std::make_shared<LatestFrameMailbox<FramePacket>>(stream.index, cfg.mailbox_depth));
   }
 
-  auto fail_from_stream_error = [&]() {
-    for (const auto& stream : streams) {
-      if (!stream.error_message.empty()) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  while (!all_sources_started(streams)) {
-    bool made_progress = false;
-    for (std::size_t index = 0; index < streams.size(); ++index) {
-      made_progress |= pump_source_stream(streams[index], cfg, mailboxes[index], ready_queue);
-    }
-    if (fail_from_stream_error()) {
-      break;
-    }
-    if (!made_progress) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-  }
-
-  if (fail_from_stream_error()) {
-    ready_queue.close();
-    for (auto& stream : streams) {
-      close_stream_runtime(stream);
-    }
-    for (const auto& stream : streams) {
-      if (!stream.error_message.empty()) {
-        std::cerr << "[stream " << stream.index << "] error: " << stream.error_message << "\n";
-      }
-    }
-    return 5;
-  }
-
-  std::vector<WorkerContext> worker_contexts;
-  try {
-    worker_contexts = build_worker_contexts(cfg, cfg.worker_count, detector_runtime_keys);
-  } catch (const std::exception& ex) {
-    std::cerr << "Error: failed to build detector workers: " << ex.what() << "\n";
-    ready_queue.close();
-    for (auto& stream : streams) {
-      close_stream_runtime(stream);
-    }
-    return 4;
-  }
-
   std::atomic<bool> stop_event{false};
+  std::vector<WorkerContext> worker_contexts;
   std::vector<std::thread> worker_threads;
+  std::vector<std::thread> producer_threads;
+  std::vector<std::shared_ptr<Event>> startup_events;
   try {
-    for (auto& worker_context : worker_contexts) {
-      worker_threads.emplace_back(
-          [&worker_context, &streams, &cfg, &mailboxes, &ready_queue, &stop_event]() {
-            detector_worker(worker_context, streams, cfg, mailboxes, ready_queue, stop_event);
+    startup_events.reserve(streams.size());
+    producer_threads.reserve(streams.size());
+    for (std::size_t index = 0; index < streams.size(); ++index) {
+      auto startup_ready = std::make_shared<Event>();
+      startup_events.push_back(startup_ready);
+      producer_threads.emplace_back(
+          [&stream = streams[index], &cfg, mailbox = mailboxes[index], &ready_queue, &stop_event,
+           startup_ready]() {
+            producer_thread(stream, cfg, mailbox, ready_queue, stop_event, startup_ready.get());
           });
-    }
-
-    while (!stop_event.load()) {
-      bool made_progress = false;
-      for (std::size_t index = 0; index < streams.size(); ++index) {
-        made_progress |= pump_source_stream(streams[index], cfg, mailboxes[index], ready_queue);
+      if (!startup_ready->wait_for(std::chrono::milliseconds(source_startup_pull_timeout_ms()))) {
+        emit_startup_trace(streams[index].index,
+                           "startup wait_for timed out waiting for first decoded frame");
+        streams[index].error_message = "startup timeout waiting for first decoded frame";
+        stop_event.store(true);
+        try {
+          streams[index].source.run.close();
+        } catch (...) {
+        }
+        break;
       }
-      if (fail_from_stream_error()) {
+      if (any_stream_failed(streams)) {
         stop_event.store(true);
         break;
       }
-      if (all_sources_finished(streams)) {
-        break;
-      }
-      if (!made_progress) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      if (index + 1 < streams.size()) {
+        std::this_thread::sleep_for(std::chrono::duration<double>(source_startup_stagger_s()));
       }
     }
-  } catch (...) {
+
+    if (!stop_event.load() && !any_stream_failed(streams)) {
+      worker_contexts = build_worker_contexts(cfg, cfg.worker_count, detector_runtime_keys);
+      for (auto& worker_context : worker_contexts) {
+        worker_threads.emplace_back(
+            [&worker_context, &streams, &cfg, &mailboxes, &ready_queue, &stop_event]() {
+              detector_worker(worker_context, streams, cfg, mailboxes, ready_queue, stop_event);
+            });
+      }
+    }
+
+    for (auto& thread : producer_threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+  } catch (const std::exception& ex) {
     stop_event.store(true);
-    ready_queue.close();
     for (auto& mailbox : mailboxes) {
       mailbox->close();
     }
@@ -736,6 +738,34 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
     }
     for (auto& worker_context : worker_contexts) {
       close_worker_context(worker_context);
+    }
+    for (auto& thread : producer_threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+    for (auto& thread : worker_threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+    std::cerr << "Error: runtime setup failed: " << ex.what() << "\n";
+    return 4;
+  } catch (...) {
+    stop_event.store(true);
+    for (auto& mailbox : mailboxes) {
+      mailbox->close();
+    }
+    for (auto& stream : streams) {
+      close_stream_runtime(stream);
+    }
+    for (auto& worker_context : worker_contexts) {
+      close_worker_context(worker_context);
+    }
+    for (auto& thread : producer_threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
     }
     for (auto& thread : worker_threads) {
       if (thread.joinable()) {
@@ -746,15 +776,12 @@ int run_app(const AppConfig& cfg, ModelFamily family) {
   }
 
   stop_event.store(true);
-  ready_queue.close();
-  for (auto& mailbox : mailboxes) {
-    mailbox->close();
-  }
   for (auto& thread : worker_threads) {
     if (thread.joinable()) {
       thread.join();
     }
   }
+  ready_queue.close();
   for (auto& stream : streams) {
     close_stream_runtime(stream);
   }

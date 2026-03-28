@@ -62,6 +62,27 @@ double producer_emit_period_s(const AppConfig& cfg, const RtspProbe& probe) {
   return 1.0 / cfg.fps;
 }
 
+simaai::neat::nodes::groups::RtspDecodedInputOptions build_source_input_group_options(
+    const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
+  simaai::neat::nodes::groups::RtspDecodedInputOptions options;
+  options.url = url;
+  options.latency_ms = cfg.latency_ms;
+  options.tcp = cfg.tcp;
+  options.payload_type = 96;
+  options.insert_queue = true;
+  options.sync_mode = false;
+  options.auto_caps_from_stream = true;
+  options.fallback_h264_fps = probe.fps;
+  options.fallback_h264_width = probe.width;
+  options.fallback_h264_height = probe.height;
+  options.sima_allocator_type = 2;
+  options.out_format = "NV12";
+  options.decoder_raw_output = true;
+  options.use_videoconvert = false;
+  options.use_videoscale = false;
+  return options;
+}
+
 RtspProbe probe_rtsp(const AppConfig& cfg, const std::string& url) {
   apply_graphpipes_runtime_defaults();
 
@@ -113,35 +134,37 @@ simaai::neat::RunPreset graphpipes_run_preset() {
   return simaai::neat::RunPreset::Realtime;
 }
 
+bool source_run_uses_explicit_realtime_preset() {
+  return false;
+}
+
+bool source_run_applies_graphpipes_runtime_defaults() {
+  return false;
+}
+
+int source_run_queue_depth() {
+  return 4;
+}
+
+int source_output_every_n() {
+  return 1;
+}
+
 SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
-  apply_graphpipes_runtime_defaults();
+  if (source_run_applies_graphpipes_runtime_defaults()) {
+    apply_graphpipes_runtime_defaults();
+  }
   SessionRun runtime;
   runtime.session.add(
-      simaai::neat::nodes::RTSPInput(url, cfg.latency_ms, cfg.tcp, /*drop_on_latency=*/true,
-                                     /*buffer_mode=*/"none"));
-  runtime.session.add(simaai::neat::nodes::Queue());
-  runtime.session.add(simaai::neat::nodes::H264Depacketize(
-      /*payload_type=*/96,
-      /*h264_parse_config_interval=*/1,
-      /*h264_fps=*/probe.fps > 0 ? probe.fps : -1,
-      /*h264_width=*/probe.width,
-      /*h264_height=*/probe.height,
-      /*enforce_h264_caps=*/true));
-  runtime.session.add(simaai::neat::nodes::H264Decode(
-      /*sima_allocator_type=*/2,
-      /*out_format=*/"NV12",
-      /*decoder_name=*/"",
-      /*raw_output=*/true,
-      /*next_element=*/"",
-      /*dec_width=*/-1,
-      /*dec_height=*/-1,
-      /*dec_fps=*/-1,
-      /*num_buffers=*/graphpipes_decoder_num_buffers()));
-  runtime.session.add(simaai::neat::nodes::Output());
+      simaai::neat::nodes::groups::RtspDecodedInput(build_source_input_group_options(cfg, url, probe)));
+  runtime.session.add(
+      simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(source_output_every_n())));
 
   simaai::neat::RunOptions run_options;
-  run_options.preset = graphpipes_run_preset();
-  run_options.queue_depth = 1;
+  if (source_run_uses_explicit_realtime_preset()) {
+    run_options.preset = graphpipes_run_preset();
+  }
+  run_options.queue_depth = source_run_queue_depth();
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
   runtime.run = runtime.session.build(run_options);
