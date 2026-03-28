@@ -3,22 +3,22 @@ model:  # Detector model selection.
   family: yolov8  # Keep this as yolov8 for this example.
 
 streams:  # RTSP inputs, one entry per camera.
-  - rtsp://192.168.0.138:8554/src1
-  - rtsp://192.168.0.138:8554/src2
-  - rtsp://192.168.0.138:8554/src3
-  - rtsp://192.168.0.138:8554/src4
-  # - rtsp://192.168.0.138:8554/src5
-  # - rtsp://192.168.0.138:8554/src6
-  # - rtsp://192.168.0.138:8554/src7
-  # - rtsp://192.168.0.138:8554/src8
-  # - rtsp://192.168.0.138:8554/src1
-  # - rtsp://192.168.0.138:8554/src2
-  # - rtsp://192.168.0.138:8554/src3
-  # - rtsp://192.168.0.138:8554/src4
-  # - rtsp://192.168.0.138:8554/src5
-  # - rtsp://192.168.0.138:8554/src6
-  # - rtsp://192.168.0.138:8554/src7
-  # - rtsp://192.168.0.138:8554/src8
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  - <rtsp-url-3>
+  - <rtsp-url-4>
+  # - <rtsp-url-5>
+  # - <rtsp-url-6>
+  # - <rtsp-url-7>
+  # - <rtsp-url-8>
+  # - <rtsp-url-9>
+  # - <rtsp-url-10>
+  # - <rtsp-url-11>
+  # - <rtsp-url-12>
+  # - <rtsp-url-13>
+  # - <rtsp-url-14>
+  # - <rtsp-url-15>
+  # - <rtsp-url-16>
 
 input:  # RTSP input transport settings.
   tcp: true  # Use TCP for RTSP transport.
@@ -38,7 +38,7 @@ inference:  # Detection controls.
 
 output:  # OptiView output plus optional local debug saves.
   optiview:  # Live video and JSON destination.
-    host: 192.168.0.138 # Host running the OptiView receiver/viewer.
+    host: <optiview-host>  # Host running the OptiView receiver/viewer.
     video_port_base: 9000  # Base UDP port for video channels.
     json_port_base: 9100  # Base UDP port for JSON channels.
   video_enabled: true  # Disable to publish JSON only.
