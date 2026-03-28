@@ -244,8 +244,48 @@ bool test_load_app_config_rejects_empty_streams() {
   return ok;
 }
 
-bool test_json_output_enabled_is_disabled_for_annotated_video() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_annotated_json_off_");
+bool test_json_output_enabled_follows_video_mode_contract() {
+  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_video_json_off_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory");
+  }
+
+  bool ok = true;
+  for (const std::string mode : {"clean", "annotated"}) {
+    const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
+    std::ofstream out(config_path);
+    out << "model:\n"
+           "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+           "  family: yolov8\n"
+           "streams:\n"
+           "  - rtsp://127.0.0.1:8554/src1\n"
+           "runtime:\n"
+           "  worker_count: 2\n"
+           "output:\n"
+           "  optiview:\n"
+           "    host: 127.0.0.1\n"
+           "  video_enabled: true\n"
+        << "  video_mode: " << mode << "\n";
+    out.close();
+
+    try {
+      const AppConfig cfg = load_app_config(config_path);
+      const bool expected = mode == "clean";
+      ok &= expect_true(
+          json_output_enabled(cfg) == expected,
+          mode + (expected ? " keeps sidecar json enabled for clean video"
+                           : " suppresses sidecar json for annotated video"));
+    } catch (const std::exception& ex) {
+      ok &= expect_true(false, std::string("config should load: ") + ex.what());
+    }
+  }
+
+  remove_dir(temp_dir);
+  return ok;
+}
+
+bool test_json_output_enabled_stays_enabled_for_json_only_mode() {
+  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_json_only_on_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -262,15 +302,14 @@ bool test_json_output_enabled_is_disabled_for_annotated_video() {
          "output:\n"
          "  optiview:\n"
          "    host: 127.0.0.1\n"
-         "  video_enabled: false\n"
+          "  video_enabled: false\n"
          "  video_mode: annotated\n";
   out.close();
 
   bool ok = true;
   try {
     const AppConfig cfg = load_app_config(config_path);
-    ok &= expect_true(!json_output_enabled(cfg),
-                      "annotated video mode suppresses json output");
+    ok &= expect_true(json_output_enabled(cfg), "json-only mode keeps json output enabled");
   } catch (const std::exception& ex) {
     ok &= expect_true(false, std::string("config should load: ") + ex.what());
   }
@@ -279,34 +318,37 @@ bool test_json_output_enabled_is_disabled_for_annotated_video() {
   return ok;
 }
 
-bool test_json_output_enabled_stays_enabled_for_clean_video() {
-  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_clean_json_on_");
+bool test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode() {
+  const std::string temp_dir = create_temp_dir("multistream_yolox_yolov8_video_off_json_on_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << "model:\n"
-         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-         "  family: yolov8\n"
-         "streams:\n"
-         "  - rtsp://127.0.0.1:8554/src1\n"
-         "runtime:\n"
-         "  worker_count: 2\n"
-         "output:\n"
-         "  optiview:\n"
-         "    host: 127.0.0.1\n"
-         "  video_enabled: false\n"
-         "  video_mode: clean\n";
-  out.close();
-
   bool ok = true;
-  try {
-    const AppConfig cfg = load_app_config(config_path);
-    ok &= expect_true(json_output_enabled(cfg), "clean video mode keeps json output enabled");
-  } catch (const std::exception& ex) {
-    ok &= expect_true(false, std::string("config should load: ") + ex.what());
+  for (const std::string mode : {"clean", "annotated"}) {
+    const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
+    std::ofstream out(config_path);
+    out << "model:\n"
+           "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+           "  family: yolov8\n"
+           "streams:\n"
+           "  - rtsp://127.0.0.1:8554/src1\n"
+           "runtime:\n"
+           "  worker_count: 2\n"
+           "output:\n"
+           "  optiview:\n"
+           "    host: 127.0.0.1\n"
+           "  video_enabled: false\n"
+        << "  video_mode: " << mode << "\n";
+    out.close();
+
+    try {
+      const AppConfig cfg = load_app_config(config_path);
+      ok &= expect_true(json_output_enabled(cfg),
+                        mode + " keeps json enabled when video output is disabled");
+    } catch (const std::exception& ex) {
+      ok &= expect_true(false, std::string("config should load: ") + ex.what());
+    }
   }
 
   remove_dir(temp_dir);
@@ -439,32 +481,6 @@ bool test_optiview_timestamp_ms_applies_publish_offset() {
                      "OptiView timestamp adds json offset to publish time");
 }
 
-bool test_deep_copy_encoded_sample_preserves_metadata_and_accepts_caps_override() {
-  simaai::neat::Sample sample = simaai::neat::make_encoded_sample(
-      std::vector<std::uint8_t>{1, 2, 3, 4},
-      "video/x-h264,stream-format=(string)byte-stream,alignment=(string)au");
-  sample.frame_id = 42;
-  sample.input_seq = 42;
-  sample.orig_input_seq = 42;
-  sample.stream_id = "stream7";
-  sample.port_name = "decoder7";
-  sample.payload_tag = "H264";
-
-  const simaai::neat::Sample copy = deep_copy_encoded_sample(
-      sample, "video/x-h264,width=(int)1280,height=(int)720,alignment=(string)au");
-
-  bool ok = true;
-  ok &= expect_true(copy.frame_id == 42, "encoded sample copy keeps frame_id");
-  ok &= expect_true(copy.stream_id == "stream7", "encoded sample copy keeps stream_id");
-  ok &= expect_true(copy.port_name == "decoder7", "encoded sample copy keeps port_name");
-  ok &= expect_true(copy.caps_string.find("width=(int)1280") != std::string::npos,
-                    "encoded sample copy accepts caps override");
-  ok &= expect_true(copy.tensor.has_value() &&
-                        copy.tensor->copy_payload_bytes() == std::vector<std::uint8_t>({1, 2, 3, 4}),
-                    "encoded sample copy keeps payload bytes");
-  return ok;
-}
-
 bool test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion() {
   ReadyStreamQueue ready_queue;
   LatestFrameMailbox<std::string> mailbox(7, 1);
@@ -493,101 +509,6 @@ bool test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_aft
   return ok;
 }
 
-bool test_pending_frame_store_matches_exact_frame_id_and_enforces_capacity_and_replacement() {
-  bool ok = true;
-
-  // Decoder output metadata is not reliable on every frame at multistream load,
-  // so the runtime keeps a small per-stream pending store to recover canonical
-  // frame identity and timing from decode order when exact frame ids are absent.
-  {
-    PendingFrameStore<std::string> store(2);
-    store.put(10, "frame-10");
-    store.put(11, "frame-11");
-    store.put(12, "frame-12");
-
-    auto evicted = store.take(10);
-    ok &= expect_true(!evicted.has_value(), "pending frame store evicts the oldest frame id");
-
-    auto kept_a = store.take(11);
-    ok &= expect_true(kept_a.has_value(), "pending frame store keeps the first non-evicted frame");
-    ok &= expect_true(*kept_a == "frame-11", "pending frame store preserves the surviving payload");
-
-    auto kept_b = store.take(12);
-    ok &= expect_true(kept_b.has_value(), "pending frame store keeps the newest frame");
-    ok &= expect_true(*kept_b == "frame-12", "pending frame store preserves the newest payload");
-  }
-
-  {
-    PendingFrameStore<std::string> store(4);
-    store.put(20, "frame-20-old");
-    store.put(20, "frame-20-new");
-
-    auto replaced = store.take(20);
-    ok &= expect_true(replaced.has_value(), "pending frame store keeps duplicate frame id");
-    ok &= expect_true(*replaced == "frame-20-new",
-                      "pending frame store replaces payload for duplicate frame id");
-    ok &= expect_true(!store.take(20).has_value(), "pending frame store removes item after take");
-  }
-
-  {
-    PendingFrameStore<std::string> store(4);
-    store.put(-1, "ignored");
-    ok &= expect_true(!store.take(-1).has_value(), "pending frame store ignores negative frame ids");
-  }
-
-  return ok;
-}
-
-bool test_take_pending_frame_match_or_oldest_prefers_exact_frame_and_falls_back_to_decode_order() {
-  bool ok = true;
-
-  PendingFrameStore<std::string> store(4);
-  store.put(100, "frame-100");
-  store.put(101, "frame-101");
-  store.put(102, "frame-102");
-
-  auto exact = take_pending_frame_match_or_oldest(store, 101);
-  ok &= expect_true(exact.has_value(), "match-or-oldest finds the requested exact frame id");
-  ok &= expect_true(*exact == "frame-101", "match-or-oldest returns the requested exact payload");
-
-  auto fallback_missing = take_pending_frame_match_or_oldest(store, 999);
-  ok &= expect_true(fallback_missing.has_value(),
-                    "match-or-oldest falls back when the requested frame id is absent");
-  ok &= expect_true(*fallback_missing == "frame-100",
-                    "match-or-oldest falls back to the oldest pending payload");
-
-  auto fallback_unknown = take_pending_frame_match_or_oldest(store, -1);
-  ok &= expect_true(fallback_unknown.has_value(),
-                    "match-or-oldest falls back when decoder metadata is unavailable");
-  ok &= expect_true(*fallback_unknown == "frame-102",
-                    "match-or-oldest keeps decode-order pairing for remaining payloads");
-  return ok;
-}
-
-bool test_bounded_queue_drops_oldest_and_drains_on_close() {
-  BoundedQueue<std::string> queue(2);
-
-  bool ok = true;
-  ok &= expect_true(queue.push_drop_oldest("frame-0"), "bounded queue accepts first item");
-  ok &= expect_true(queue.push_drop_oldest("frame-1"), "bounded queue accepts second item");
-  ok &= expect_true(queue.push_drop_oldest("frame-2"),
-                    "bounded queue accepts third item by dropping oldest");
-
-  std::string item;
-  ok &= expect_true(queue.pop_wait(item, 0), "bounded queue yields first available item");
-  ok &= expect_true(item == "frame-1", "bounded queue dropped the oldest item first");
-  ok &= expect_true(queue.pop_wait(item, 0), "bounded queue yields second available item");
-  ok &= expect_true(item == "frame-2", "bounded queue keeps the newest item");
-
-  queue.close();
-  ok &= expect_true(!queue.push_drop_oldest("frame-3"),
-                    "bounded queue rejects pushes after close");
-  ok &= expect_true(!queue.pop_wait(item, 0),
-                    "bounded queue reports empty once closed and drained");
-  ok &= expect_true(queue.drained(), "bounded queue reports drained after close");
-  return ok;
-}
-
 bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
   StreamProbeSpec a{ModelFamily::YoloV8, RtspProbe{640, 480, 30}};
   StreamProbeSpec b{ModelFamily::YoloV8, RtspProbe{640, 480, 25}};
@@ -608,23 +529,6 @@ bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
   return ok;
 }
 
-bool test_video_output_stage_helpers_keep_clean_video_at_source() {
-  bool ok = true;
-  ok &= expect_true(video_output_flows_from_source(true, VideoMode::Clean),
-                    "clean video stays on the source-side forwarding path");
-  ok &= expect_true(!video_output_flows_from_source(true, VideoMode::Annotated),
-                    "annotated video does not flow from the source-side path");
-  ok &= expect_true(!video_output_flows_from_source(false, VideoMode::Clean),
-                    "disabled video stays disabled on the source-side path");
-  ok &= expect_true(video_output_flows_from_detector(true, VideoMode::Annotated),
-                    "annotated video stays on the detector-side path");
-  ok &= expect_true(!video_output_flows_from_detector(true, VideoMode::Clean),
-                    "clean video is not emitted from the detector-side path");
-  ok &= expect_true(!video_output_flows_from_detector(false, VideoMode::Annotated),
-                    "disabled video stays disabled on the detector-side path");
-  return ok;
-}
-
 bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
   const auto yolov8 = detector_stage_names(ModelFamily::YoloV8);
 
@@ -639,26 +543,6 @@ bool test_detector_stage_names_cover_yolov8_and_reject_yolox() {
     ok &= expect_contains(ex.what(), "YOLOX model packs are not supported yet",
                           "yolox stage names reject unsupported family until support lands");
   }
-  return ok;
-}
-
-bool test_source_output_every_n_never_decimates_encoded_rtsp_output() {
-  AppConfig cfg;
-  RtspProbe probe{640, 480, 30};
-
-  bool ok = true;
-  cfg.fps = 0;
-  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
-                    "source every_n stays 1 when fps is uncapped");
-  cfg.fps = 20;
-  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
-                    "source every_n stays 1 when target fps is near source fps");
-  cfg.fps = 12;
-  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
-                    "source every_n stays 1 when target fps is lower because encoded output must stay intact");
-  cfg.fps = 10;
-  ok &= expect_true(source_output_every_n(cfg, probe) == 1,
-                    "source every_n stays 1 even for 10fps targets because producer pacing handles throttling");
   return ok;
 }
 
@@ -702,9 +586,56 @@ bool test_apply_graphpipes_runtime_defaults_preserves_explicit_env() {
   return ok;
 }
 
+bool test_optiview_video_encoder_defaults_to_hardware() {
+  unsetenv("SIMA_OPTIVIEW_VIDEO_ENCODER");
+  return expect_true(optiview_video_encoder_from_env() == OptiViewVideoEncoder::Hardware,
+                     "optiView video encoder defaults to hardware when env is unset");
+}
+
+bool test_optiview_video_encoder_accepts_software_aliases_and_falls_back_to_hardware() {
+  bool ok = true;
+  setenv("SIMA_OPTIVIEW_VIDEO_ENCODER", "sw", 1);
+  ok &= expect_true(optiview_video_encoder_from_env() == OptiViewVideoEncoder::Software,
+                    "optiView video encoder accepts sw alias");
+  setenv("SIMA_OPTIVIEW_VIDEO_ENCODER", "SOFTWARE", 1);
+  ok &= expect_true(optiview_video_encoder_from_env() == OptiViewVideoEncoder::Software,
+                    "optiView video encoder accepts software alias case-insensitively");
+  setenv("SIMA_OPTIVIEW_VIDEO_ENCODER", "banana", 1);
+  ok &= expect_true(optiview_video_encoder_from_env() == OptiViewVideoEncoder::Hardware,
+                    "optiView video encoder falls back to hardware for unknown values");
+  unsetenv("SIMA_OPTIVIEW_VIDEO_ENCODER");
+  return ok;
+}
+
+bool test_startup_trace_defaults_to_disabled() {
+  unsetenv("SIMA_OPTIVIEW_STARTUP_TRACE");
+  return expect_true(!startup_trace_enabled_from_env(),
+                     "startup trace defaults to disabled when env is unset");
+}
+
+bool test_startup_trace_accepts_truthy_aliases() {
+  bool ok = true;
+  setenv("SIMA_OPTIVIEW_STARTUP_TRACE", "1", 1);
+  ok &= expect_true(startup_trace_enabled_from_env(),
+                    "startup trace accepts numeric truthy alias");
+  setenv("SIMA_OPTIVIEW_STARTUP_TRACE", "TRUE", 1);
+  ok &= expect_true(startup_trace_enabled_from_env(),
+                    "startup trace accepts uppercase true alias");
+  setenv("SIMA_OPTIVIEW_STARTUP_TRACE", "banana", 1);
+  ok &= expect_true(!startup_trace_enabled_from_env(),
+                    "startup trace stays disabled for unknown values");
+  unsetenv("SIMA_OPTIVIEW_STARTUP_TRACE");
+  return ok;
+}
+
 bool test_graphpipes_decoder_num_buffers_matches_source_tuning() {
   return expect_true(graphpipes_decoder_num_buffers() == 7,
                      "graphpipes decoder buffer count matches tuned source decode");
+}
+
+bool test_graphpipes_run_preset_matches_working_sandbox_runtime() {
+  return expect_true(graphpipes_run_preset() == simaai::neat::RunPreset::Realtime,
+                     "graphpipes run preset uses realtime to match the working sandbox topology");
 }
 
 bool test_producer_emit_period_s_always_paces_when_fps_configured() {
@@ -725,22 +656,6 @@ bool test_producer_emit_period_s_always_paces_when_fps_configured() {
   cfg.fps = 0;
   ok &= expect_true(producer_emit_period_s(cfg, probe) == 0.0,
                     "producer pacing disabled when fps is uncapped");
-  return ok;
-}
-
-bool test_decode_pull_timeout_ms_uses_low_latency_poll_interval() {
-  return expect_true(decode_pull_timeout_ms() == 5,
-                     "decode pull timeout uses 5ms polling to avoid decode backlog growth");
-}
-
-bool test_decode_backlog_limits_preserve_compressed_input_slack() {
-  bool ok = true;
-  ok &= expect_true(encoded_for_decode_queue_capacity() == 20,
-                    "encoded-to-decode queue keeps enough slack to avoid dropping compressed frames under normal load");
-  ok &= expect_true(decoder_warmup_packets_inflight() == 64,
-                    "decoder warmup inflight limit keeps enough startup slack for first output");
-  ok &= expect_true(decoder_steady_packets_inflight() == 8,
-                    "decoder steady inflight limit keeps compressed decode fed while decoded-frame dropping happens later");
   return ok;
 }
 
@@ -765,8 +680,9 @@ int main(int argc, char** argv) {
   ok &= test_load_app_config_rejects_invalid_worker_count();
   ok &= test_load_app_config_rejects_invalid_video_mode();
   ok &= test_load_app_config_rejects_empty_streams();
-  ok &= test_json_output_enabled_is_disabled_for_annotated_video();
-  ok &= test_json_output_enabled_stays_enabled_for_clean_video();
+  ok &= test_json_output_enabled_follows_video_mode_contract();
+  ok &= test_json_output_enabled_stays_enabled_for_json_only_mode();
+  ok &= test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode();
   ok &= test_parse_model_family_rejects_yolox_until_supported();
   ok &= test_resolve_model_family_auto_rejects_yolox_until_supported();
   ok &= test_resolve_model_family_auto_for_yolov8();
@@ -777,20 +693,17 @@ int main(int argc, char** argv) {
   ok &= test_optiview_frame_id_prefers_detector_sample_frame_id();
   ok &= test_optiview_frame_id_falls_back_to_packet_index();
   ok &= test_optiview_timestamp_ms_applies_publish_offset();
-  ok &= test_deep_copy_encoded_sample_preserves_metadata_and_accepts_caps_override();
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
-  ok &= test_pending_frame_store_matches_exact_frame_id_and_enforces_capacity_and_replacement();
-  ok &= test_take_pending_frame_match_or_oldest_prefers_exact_frame_and_falls_back_to_decode_order();
-  ok &= test_bounded_queue_drops_oldest_and_drains_on_close();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
-  ok &= test_video_output_stage_helpers_keep_clean_video_at_source();
   ok &= test_detector_stage_names_cover_yolov8_and_reject_yolox();
-  ok &= test_source_output_every_n_never_decimates_encoded_rtsp_output();
   ok &= test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset();
   ok &= test_apply_graphpipes_runtime_defaults_preserves_explicit_env();
+  ok &= test_optiview_video_encoder_defaults_to_hardware();
+  ok &= test_optiview_video_encoder_accepts_software_aliases_and_falls_back_to_hardware();
+  ok &= test_startup_trace_defaults_to_disabled();
+  ok &= test_startup_trace_accepts_truthy_aliases();
   ok &= test_graphpipes_decoder_num_buffers_matches_source_tuning();
+  ok &= test_graphpipes_run_preset_matches_working_sandbox_runtime();
   ok &= test_producer_emit_period_s_always_paces_when_fps_configured();
-  ok &= test_decode_pull_timeout_ms_uses_low_latency_poll_interval();
-  ok &= test_decode_backlog_limits_preserve_compressed_input_slack();
   return ok ? 0 : 1;
 }

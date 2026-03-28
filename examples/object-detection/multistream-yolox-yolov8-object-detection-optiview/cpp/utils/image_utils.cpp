@@ -4,7 +4,6 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
-#include <cmath>
 
 namespace fs = std::filesystem;
 
@@ -24,46 +23,6 @@ std::filesystem::path sample_output_path(const std::filesystem::path& output_dir
                                          int frame_index) {
   return output_dir / ("stream_" + std::to_string(stream_index)) /
          ("frame_" + cv::format("%06d", frame_index) + ".jpg");
-}
-
-QuantTessCpuPreprocState build_cpu_quanttess_preproc_state(const QuantTessCpuPreproc& contract,
-                                                           int src_width, int src_height) {
-  QuantTessCpuPreprocState state;
-  state.src_width = src_width;
-  state.src_height = src_height;
-
-  if (contract.aspect_ratio) {
-    const double scale = std::min(static_cast<double>(contract.width) / src_width,
-                                  static_cast<double>(contract.height) / src_height);
-    state.scaled_w = std::max(1, static_cast<int>(std::lround(src_width * scale)));
-    state.scaled_h = std::max(1, static_cast<int>(std::lround(src_height * scale)));
-  } else {
-    state.scaled_w = contract.width;
-    state.scaled_h = contract.height;
-  }
-
-  if (contract.padding_type == "CENTER") {
-    state.pad_x = (contract.width - state.scaled_w) / 2;
-    state.pad_y = (contract.height - state.scaled_h) / 2;
-  }
-
-  state.quant_input = cv::Mat::zeros(contract.height, contract.width, CV_32FC3);
-  return state;
-}
-
-cv::Mat cpu_quanttess_input(const cv::Mat& frame_rgb, QuantTessCpuPreprocState& state) {
-  if (frame_rgb.cols != state.src_width || frame_rgb.rows != state.src_height) {
-    throw std::runtime_error("unexpected frame size for cached QuantTess preproc state");
-  }
-
-  cv::Mat resized;
-  cv::resize(frame_rgb, resized, cv::Size(state.scaled_w, state.scaled_h), 0.0, 0.0,
-             cv::INTER_LINEAR);
-  state.quant_input.setTo(cv::Scalar(0.0f, 0.0f, 0.0f));
-  cv::Mat roi =
-      state.quant_input(cv::Rect(state.pad_x, state.pad_y, state.scaled_w, state.scaled_h));
-  resized.convertTo(roi, CV_32FC3, 1.0 / 255.0);
-  return state.quant_input;
 }
 
 cv::Scalar class_color(int class_id) {

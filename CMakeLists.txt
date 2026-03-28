@@ -60,6 +60,7 @@ if (SIMANEAT_APPS_BUILD_CPP)
   find_package(nlohmann_json REQUIRED)
   add_subdirectory(support)
   add_subdirectory(examples)
+  add_subdirectory(sandbox)
 endif()
 
 if (SIMANEAT_APPS_BUILD_PYTHON)

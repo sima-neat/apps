@@ -156,30 +156,6 @@ OptiViewDetectionPayload build_optiview_detection_payload(const std::vector<Dete
   return payload;
 }
 
-simaai::neat::Sample deep_copy_encoded_sample(const simaai::neat::Sample& sample,
-                                              const std::string& caps_override) {
-  if (sample.kind != simaai::neat::SampleKind::Tensor || !sample.tensor.has_value()) {
-    throw std::runtime_error("expected encoded tensor sample for H264 forward path");
-  }
-
-  const std::string caps = caps_override.empty() ? sample.caps_string : caps_override;
-  if (caps.empty()) {
-    throw std::runtime_error("encoded sample is missing caps");
-  }
-
-  simaai::neat::Sample copy = simaai::neat::make_encoded_sample(
-      sample.tensor->copy_payload_bytes(), caps, sample.pts_ns, sample.dts_ns, sample.duration_ns);
-  copy.frame_id = sample.frame_id;
-  copy.stream_id = sample.stream_id;
-  copy.port_name = sample.port_name;
-  copy.input_seq = sample.input_seq;
-  copy.orig_input_seq = sample.orig_input_seq;
-  copy.media_type = sample.media_type;
-  copy.format = sample.format;
-  copy.payload_tag = sample.payload_tag;
-  return copy;
-}
-
 cv::Mat tensor_rgb_from_sample(const simaai::neat::Sample& sample) {
   const auto* tensor = first_tensor_impl(sample);
   if (tensor == nullptr) {
