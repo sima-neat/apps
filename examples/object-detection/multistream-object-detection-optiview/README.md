@@ -4,7 +4,7 @@
 | Field | Value |
 | --- | --- |
 | Category | object-detection |
-| Difficulty | Intermediate |
+| Difficulty | Advanced |
 | Tags | object-detection, rtsp, multistream, optiview, yolov8 |
 | Languages | C++, Python |
 | Status | experimental |
