@@ -4,7 +4,7 @@
 | Field | Value |
 | --- | --- |
 | Category | pose-estimation |
-| Difficulty | Intermediate |
+| Difficulty | Beginner |
 | Tags | pose-estimation, openpose, skeleton-detection |
 | Languages | C++, Python |
 | Status | experimental |
