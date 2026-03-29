@@ -7,3 +7,4 @@ foreach(example IN ITEMS
     add_subdirectory(${example}/cpp ${example})
   endif()
 endforeach()
+add_subdirectory(multistream-object-detection-optiview/cpp multistream-object-detection-optiview)

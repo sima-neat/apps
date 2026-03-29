@@ -351,24 +351,58 @@ fi
 run_pytest() {
   local marker="$1"
   local marker_upper
+  local test_file_name
+  local skipped_count=0
   marker_upper="$(echo "${marker}" | tr '[:lower:]' '[:upper:]')"
 
+  case "${marker}" in
+    unit) test_file_name="test_unit.py" ;;
+    e2e) test_file_name="test_e2e.py" ;;
+    *)
+      echo "  [FAIL] unsupported python test marker: ${marker}"
+      OVERALL_RC=1
+      return
+      ;;
+  esac
+
   echo ""
-  echo "  Python ${marker_upper} tests (pytest -m ${marker})"
+  echo "  Python ${marker_upper} tests (isolated pytest per example)"
   echo "  $(printf '%.0s-' {1..50})"
 
-  local log_file
-  log_file="$(mktemp)"
-  if ! "${PYTHON_TEST_BIN}" -m pytest -c "${ROOT_DIR}/tests/pytest.ini" -m "${marker}" --rootdir="${ROOT_DIR}" -v | tee "${log_file}"; then
-    OVERALL_RC=1
+  mapfile -t python_test_files < <(
+    find "${ROOT_DIR}/examples" -type f -path "*/python/tests/${test_file_name}" | sort
+  )
+
+  if [[ "${#python_test_files[@]}" -eq 0 ]]; then
+    echo "  [SKIP] No Python ${marker} tests found under ${ROOT_DIR}/examples."
+    return 0
   fi
-  if [[ "${STRICT_E2E}" == "1" && "${marker}" == "e2e" ]]; then
-    if rg -q '[0-9]+ skipped' "${log_file}"; then
-      echo "  [FAIL] Strict e2e mode is enabled but Python e2e tests were skipped."
+
+  local test_file
+  for test_file in "${python_test_files[@]}"; do
+    local log_file rc
+    log_file="$(mktemp)"
+
+    echo "  [RUN] ${test_file#${ROOT_DIR}/}"
+    set +e
+    "${PYTHON_TEST_BIN}" -m pytest -c "${ROOT_DIR}/tests/pytest.ini" -m "${marker}" \
+      --rootdir="${ROOT_DIR}" -v "${test_file}" | tee "${log_file}"
+    rc=${PIPESTATUS[0]}
+    set -e
+
+    if [[ "${rc}" -ne 0 ]]; then
       OVERALL_RC=1
     fi
-  fi
-  rm -f "${log_file}"
+
+    if [[ "${STRICT_E2E}" == "1" && "${marker}" == "e2e" ]] && \
+       rg -q '[0-9]+ skipped' "${log_file}"; then
+      echo "  [FAIL] Strict e2e mode is enabled but Python e2e tests were skipped."
+      OVERALL_RC=1
+      skipped_count=$((skipped_count + 1))
+    fi
+
+    rm -f "${log_file}"
+  done
 }
 
 if [[ "${RUN_PYTHON}" -eq 1 ]]; then
