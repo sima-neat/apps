@@ -9,7 +9,7 @@ import os
 import sys
 from typing import Any
 
-from .config import AppConfig, VideoMode
+from .config import AppConfig
 from .model_family import ModelFamily
 
 
@@ -55,15 +55,11 @@ def _set_env_if_unset(key: str, value: str) -> None:
         os.environ[key] = value
 
 
-def apply_graphpipes_runtime_defaults() -> None:
+def apply_runtime_env_defaults() -> None:
     _set_env_if_unset("SIMA_FORCE_MODEL_NUM_BUFFERS", _DEFAULT_MODEL_NUM_BUFFERS)
     _set_env_if_unset("SIMA_FORCE_DECODER_NUM_BUFFERS", _DEFAULT_DECODER_NUM_BUFFERS)
     _set_env_if_unset("SIMA_FORCE_DECODER_POOL_BUFFERS", _DEFAULT_DECODER_NUM_BUFFERS)
     _set_env_if_unset("SIMA_PULL_TIMEOUT_DIAG", "0")
-
-
-def graphpipes_decoder_num_buffers() -> int:
-    return 7
 
 
 def effective_writer_fps(cfg: AppConfig, probe: RtspProbe) -> int:
@@ -116,7 +112,7 @@ def load_runtime_modules() -> RuntimeModules:
 
 
 def probe_rtsp(cfg: AppConfig, url: str) -> RtspProbe:
-    apply_graphpipes_runtime_defaults()
+    apply_runtime_env_defaults()
     runtime = load_runtime_modules()
     cap = runtime.cv2.VideoCapture(url)
     if not cap.isOpened():
@@ -134,6 +130,16 @@ def probe_rtsp(cfg: AppConfig, url: str) -> RtspProbe:
         fps = max(cfg.fps, 0)
 
     return RtspProbe(width=width, height=height, fps=fps)
+
+
+def _set_optional_input_limits(input_opt: Any, width: int, height: int, depth: int) -> None:
+    for attr, value in (
+        ("max_width", width),
+        ("max_height", height),
+        ("max_depth", depth),
+    ):
+        if hasattr(input_opt, attr):
+            setattr(input_opt, attr, value)
 
 
 def build_source_run(
@@ -188,7 +194,7 @@ def build_detection_run(
     if family is not ModelFamily.YOLOV8:
         raise ValueError("unsupported model family for detector graph")
 
-    apply_graphpipes_runtime_defaults()
+    apply_runtime_env_defaults()
 
     pyneat = runtime.pyneat
     np = runtime.np
@@ -207,13 +213,7 @@ def build_detection_run(
     input_opt.width = probe.width
     input_opt.height = probe.height
     input_opt.depth = 3
-    for attr, value in (
-        ("max_width", probe.width),
-        ("max_height", probe.height),
-        ("max_depth", 3),
-    ):
-        if hasattr(input_opt, attr):
-            setattr(input_opt, attr, value)
+    _set_optional_input_limits(input_opt, probe.width, probe.height, 3)
 
     session = pyneat.Session()
     session.add(pyneat.nodes.input(input_opt))
@@ -250,9 +250,7 @@ def build_optiview_video_run(
     cfg: AppConfig,
     probe: RtspProbe,
     stream_index: int,
-    video_mode: VideoMode,
 ) -> SessionRun:
-    _ = video_mode
     pyneat = runtime.pyneat
     np = runtime.np
 
@@ -267,13 +265,7 @@ def build_optiview_video_run(
     input_opt.media_type = "video/x-raw"
     input_opt.format = "RGB"
     input_opt.use_simaai_pool = False
-    for attr, value in (
-        ("max_width", probe.width),
-        ("max_height", probe.height),
-        ("max_depth", 3),
-    ):
-        if hasattr(input_opt, attr):
-            setattr(input_opt, attr, value)
+    _set_optional_input_limits(input_opt, probe.width, probe.height, 3)
 
     session = pyneat.Session()
     session.add(pyneat.nodes.input(input_opt))

@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 import struct
 from typing import Any
 
 from .model_family import ModelFamily, to_string as model_family_to_string
 
-
-class DetectorOutputKind:
-    BBOX = "BBOX"
+_BBOX_PAYLOAD_TAG = "BBOX"
 
 
 @dataclass(frozen=True)
@@ -28,11 +25,6 @@ class Detection:
 class OptiViewDetectionPayload:
     objects: list[dict[str, int | float]]
     labels: list[str]
-
-
-def to_string(kind: str) -> str:
-    return kind
-
 
 def _sample_payload_tag_upper(sample: Any) -> str:
     tag = getattr(sample, "payload_tag", "") or getattr(sample, "format", "")
@@ -102,13 +94,13 @@ def require_detector_output_kind(family: ModelFamily, sample: Any) -> str:
     if family is not ModelFamily.YOLOV8:
         raise ValueError("unsupported model family")
     actual = _sample_payload_tag_upper(sample)
-    if actual != DetectorOutputKind.BBOX:
+    if actual != _BBOX_PAYLOAD_TAG:
         raise RuntimeError(
             "unsupported detector output: "
-            f"family={model_family_to_string(family)} expected=BBOX "
+            f"family={model_family_to_string(family)} expected={_BBOX_PAYLOAD_TAG} "
             f"actual={actual or '<empty>'}"
         )
-    return DetectorOutputKind.BBOX
+    return _BBOX_PAYLOAD_TAG
 
 
 def detections_from_detector_sample(

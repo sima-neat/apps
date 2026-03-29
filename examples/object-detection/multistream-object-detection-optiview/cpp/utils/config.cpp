@@ -254,11 +254,13 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   if (raw.streams.empty()) {
     throw std::runtime_error("streams must be a non-empty list");
   }
+  if (lookup_scalar(raw, "model.family").has_value()) {
+    throw std::runtime_error(
+        "model.family is no longer supported; this example infers YOLOv8 from model.path");
+  }
 
   AppConfig cfg;
   cfg.model.path = require_non_empty_string(raw, "model.path", "model.path");
-  cfg.model.family =
-      parse_model_family(lookup_scalar(raw, "model.family").value_or(std::string("auto")));
   cfg.rtsp_urls = raw.streams;
   cfg.tcp = optional_bool(raw, "input.tcp", false, "input.tcp");
   cfg.latency_ms = optional_int(raw, "input.latency_ms", 100, "input.latency_ms");

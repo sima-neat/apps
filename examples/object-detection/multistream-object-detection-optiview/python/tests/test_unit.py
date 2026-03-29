@@ -63,7 +63,6 @@ class TestMainEntrypoint:
 class TestConfigLoading:
     def test_load_app_config_parses_runtime_worker_count(self, tmp_path: Path):
         from utils.config import VideoMode, load_app_config
-        from utils.model_family import ModelFamily
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
@@ -71,7 +70,6 @@ class TestConfigLoading:
                 """
                 model:
                   path: assets/models/yolo_v8m_mpk.tar.gz
-                  family: yolov8
                 streams:
                   - rtsp://127.0.0.1:8554/src1
                   - rtsp://127.0.0.1:8554/src2
@@ -106,7 +104,6 @@ class TestConfigLoading:
         cfg = load_app_config(config_path)
 
         assert cfg.model.path == "assets/models/yolo_v8m_mpk.tar.gz"
-        assert cfg.model.family == ModelFamily.YOLOV8
         assert cfg.worker_count == 4
         assert cfg.mailbox_depth == 1
         assert cfg.profile is True
@@ -118,7 +115,7 @@ class TestConfigLoading:
             "rtsp://127.0.0.1:8554/src2",
         ]
 
-    def test_load_app_config_rejects_unknown_model_family(self, tmp_path: Path):
+    def test_load_app_config_rejects_removed_model_family_field(self, tmp_path: Path):
         from utils.config import load_app_config
 
         config_path = tmp_path / "config.yaml"
@@ -127,7 +124,7 @@ class TestConfigLoading:
                 """
                 model:
                   path: assets/models/unsupported_mpk.tar.gz
-                  family: banana
+                  family: yolov8
                 streams:
                   - rtsp://127.0.0.1:8554/src1
                 runtime:
@@ -140,7 +137,7 @@ class TestConfigLoading:
             encoding="utf-8",
         )
 
-        with pytest.raises(ValueError, match=r"model\.family must be one of \[auto, yolov8\]"):
+        with pytest.raises(ValueError, match=r"model\.family is no longer supported"):
             load_app_config(config_path)
 
     def test_json_output_enabled_follows_video_mode_contract(self, tmp_path: Path):
@@ -153,7 +150,6 @@ class TestConfigLoading:
                     f"""
                     model:
                       path: assets/models/yolo_v8m_mpk.tar.gz
-                      family: yolov8
                     streams:
                       - rtsp://127.0.0.1:8554/src1
                     runtime:
@@ -180,7 +176,6 @@ class TestConfigLoading:
                 """
                 model:
                   path: assets/models/yolo_v8m_mpk.tar.gz
-                  family: yolov8
                 streams:
                   - rtsp://127.0.0.1:8554/src1
                 runtime:
@@ -200,12 +195,6 @@ class TestConfigLoading:
 
 
 class TestModelFamily:
-    def test_parse_model_family_rejects_unknown_family(self):
-        from utils.model_family import parse_model_family
-
-        with pytest.raises(ValueError, match=r"model\.family must be one of \[auto, yolov8\]"):
-            parse_model_family("banana")
-
     def test_resolve_model_family_auto_for_yolov8(self):
         from utils.model_family import ModelFamily, resolve_model_family
 
@@ -227,7 +216,7 @@ class TestPipelineHelpers:
         )
 
         cfg = AppConfig(
-            model=ModelConfig("assets/models/yolo_v8m_mpk.tar.gz", ModelFamily.YOLOV8),
+            model=ModelConfig("assets/models/yolo_v8m_mpk.tar.gz"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
             optiview_host="127.0.0.1",
             fps=0,
@@ -350,7 +339,7 @@ class TestPipelineHelpers:
                 return {"shape": shape, "dtype": dtype}
 
         cfg = AppConfig(
-            model=ModelConfig("assets/models/yolo_v8m_mpk.tar.gz", ModelFamily.YOLOV8),
+            model=ModelConfig("assets/models/yolo_v8m_mpk.tar.gz"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
             optiview_host="127.0.0.1",
         )

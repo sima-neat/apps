@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         cfg = load_app_config(config_path)
-        family = resolve_model_family(cfg.model.path, cfg.model.family)
+        family = resolve_model_family(cfg.model.path)
     except Exception as exc:
         print(f"Error: failed to load config {config_path}: {exc}", file=sys.stderr, flush=True)
         return 2

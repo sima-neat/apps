@@ -1,7 +1,5 @@
 #pragma once
 
-#include "model_family_api.cpp"
-
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -16,7 +14,6 @@ enum class VideoMode {
 
 struct ModelConfig {
   std::string path;
-  ModelFamily family = ModelFamily::Auto;
 };
 
 struct AppConfig {

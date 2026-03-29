@@ -23,7 +23,6 @@ class TestE2E:
                 """
                 model:
                   path: assets/models/yolo_v8m_mpk.tar.gz
-                  family: yolov8
                 streams:
                   - rtsp://127.0.0.1:8554/src1
                 runtime:

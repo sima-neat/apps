@@ -38,6 +38,11 @@ Video graph:
 - Edit `common/config.yaml` before running with real streams.
 - On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
+## Command-line options
+- `--config <path>`: path to the YAML configuration file
+- `--validate-config-only`: validate the config and exit without opening RTSP streams
+- `--help`: print the CLI help text
+
 ## Download Models
 ```bash
 mkdir -p assets/models
@@ -88,9 +93,16 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multistre
   --config examples/object-detection/multistream-object-detection-optiview/common/config.yaml
 ```
 
-## Notes
-- Set `model.family: yolov8` and point `model.path` at a YOLOv8 pack.
+## Debugging notes
 - The checked-in `common/config.yaml` includes 16 placeholder stream slots. Replace the RTSP URLs and OptiView host before running.
+- On Modalix DevKit, start with `bash /usr/bin/fix_devkit_runtime.sh`. If the runtime still behaves inconsistently, a full board reboot has been a more reliable reset than service restarts alone.
+- `output.debug_dir` and `output.save_every` let you save periodic RGB debug frames locally without changing the OptiView output contract.
+- `output.optiview.json_offset_ms` lets you shift JSON timestamps to better align OptiView boxes with the published video stream when transport latency makes boxes appear early or late. It only applies when JSON output is enabled.
+- When `inference.fps` is lower than the source FPS, the example throttles after decode and keeps only the most recent frame per stream in the mailbox.
+- Profiling prints `source`, `preproc`, `detect`, `video`, `json`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
+
+## Notes
+- Point `model.path` at a YOLOv8 pack. This example infers YOLOv8 from the model path and does not use a `model.family` config key.
 - Both the C++ and Python paths decode each RTSP stream to RGB in system memory, run YOLOv8 on those RGB frames, and re-encode RGB frames for OptiView video output. They do not forward the original encoded H264 bitstream.
 - `output.video_mode: clean` publishes unannotated RGB frames to OptiView and keeps JSON enabled. `annotated` draws detection boxes into the RGB video stream and suppresses JSON so OptiView does not overlay detections twice.
 - `output.video_enabled: false` disables per-stream H264 video output. In `clean` mode the example still sends JSON detections; in `annotated` mode JSON is suppressed.
@@ -98,10 +110,6 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multistre
 - The example applies the following runtime defaults for dense RTSP runs when the environment does not already override them:
   `SIMA_FORCE_MODEL_NUM_BUFFERS=3`, `SIMA_FORCE_DECODER_NUM_BUFFERS=7`, and `SIMA_FORCE_DECODER_POOL_BUFFERS=7`.
 - The Python implementation now mirrors the same high-level contract as C++ while staying on public `pyneat`: `RtspDecodedInput`, explicit `nodes.preproc(...)`, `groups.mla(model)`, `nodes.sima_box_decode(...)`, and `groups.udp_h264_output_group(...)`.
-- When `inference.fps` is lower than the source FPS, the example throttles after decode and keeps only the most recent frame per stream in the mailbox.
-- `output.optiview.json_offset_ms` lets you shift JSON timestamps to better align OptiView boxes with the published video stream when transport latency makes boxes appear early or late. It only applies when JSON output is enabled.
-- profiling now prints `source`, `preproc`, `detect`, `video`, `json`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
-- `output.debug_dir` and `output.save_every` let you save periodic RGB debug frames locally without changing the OptiView output contract.
 
 ## Source Files
 - C++: `cpp/main.cpp`

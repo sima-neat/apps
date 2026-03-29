@@ -1,6 +1,5 @@
 model:  # Detector model selection.
   path: assets/models/yolo_v8m_mpk.tar.gz  # Path to the YOLOv8 model pack.
-  family: yolov8  # Keep this as yolov8 for this example.
 
 streams:  # RTSP inputs, one entry per camera.
   - <rtsp-url-1>
@@ -31,7 +30,7 @@ runtime:  # Shared worker and profiling settings.
 
 inference:  # Detection controls.
   frames: 0  # Frame limit per stream. 0 means unlimited.
-  fps: 0  # Max per-stream processing and output FPS. 0 means use source FPS.
+  fps: 0  # Max per-stream processing and output FPS. 0 means use source FPS and aim for maximum throughput.
   min_score: 0.60  # Detection score threshold.
   nms_iou: 0.50  # NMS IoU threshold.
   max_detections: 24  # Max detections to keep per frame after NMS.

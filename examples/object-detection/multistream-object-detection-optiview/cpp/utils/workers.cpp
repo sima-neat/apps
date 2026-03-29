@@ -29,7 +29,6 @@ const fs::path kDefaultLabelsPath =
 using SteadyClock = std::chrono::steady_clock;
 
 struct StreamMetrics {
-  int pulled = 0;
   int processed = 0;
   int detections = 0;
   int saved = 0;
@@ -76,8 +75,6 @@ struct StreamRuntime {
 
   bool saw_first_source_frame = false;
   bool first_mailbox_push_logged = false;
-  bool source_finished = false;
-  int consecutive_source_timeouts = 0;
   std::int64_t next_source_frame_index = 0;
   std::optional<double> next_allowed_emit_s;
 };
@@ -269,19 +266,6 @@ int narrow_frame_index_for_api(std::int64_t frame_index, int fallback = 0) {
   return static_cast<int>(frame_index);
 }
 
-bool mark_source_failure(StreamRuntime& stream,
-                         const std::shared_ptr<LatestFrameMailbox<FramePacket>>& mailbox,
-                         const std::string& message) {
-  stream.error_message = message;
-  stream.source_finished = true;
-  mailbox->close();
-  try {
-    stream.source.run.close();
-  } catch (...) {
-  }
-  return false;
-}
-
 void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
                      const std::shared_ptr<LatestFrameMailbox<FramePacket>>& mailbox,
                      ReadyStreamQueue& ready_queue, std::atomic<bool>& stop_event,
@@ -300,7 +284,6 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
       const auto sample = stream.source.run.pull(pull_timeout_ms);
       const double pull_elapsed = now_steady_s() - pull_t0;
       if (!sample.has_value()) {
-        ++stream.consecutive_source_timeouts;
         const std::string last_error = stream.source.run.last_error();
         bool source_running = false;
         try {
@@ -326,7 +309,6 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
         continue;
       }
 
-      stream.consecutive_source_timeouts = 0;
       if (!stream.saw_first_source_frame) {
         emit_startup_trace(stream.index, "first decoded frame pulled");
         stream.saw_first_source_frame = true;
@@ -384,7 +366,6 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
     }
   }
 
-  stream.source_finished = true;
   mailbox->close();
   try {
     stream.source.run.close();
@@ -440,7 +421,7 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
     const double video_t0 = now_steady_s();
     if (!stream.video.has_value()) {
       try {
-        stream.video = build_optiview_video_run(cfg, stream.probe, stream.index, cfg.video_mode);
+        stream.video = build_optiview_video_run(cfg, stream.probe, stream.index);
       } catch (const std::exception& ex) {
         throw std::runtime_error(format_video_build_error(stream.index, cfg.video_mode, ex.what()));
       }
@@ -482,7 +463,6 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
 
   const double publish_elapsed = now_steady_s() - publish_t0;
 
-  stream.metrics.pulled += 1;
   stream.metrics.processed += 1;
   stream.metrics.detections += static_cast<int>(detections.size());
   stream.metrics.source_time_s += packet.source_time_s;

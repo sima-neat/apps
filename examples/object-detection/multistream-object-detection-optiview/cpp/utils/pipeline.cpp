@@ -11,6 +11,10 @@ namespace {
 constexpr const char* kDefaultModelNumBuffers = "3";
 constexpr const char* kDefaultDecoderNumBuffers = "7";
 constexpr const char* kOptiViewVideoEncoderEnv = "SIMA_OPTIVIEW_VIDEO_ENCODER";
+constexpr int kSourceProbeDecoderNumBuffers = 7;
+constexpr int kSourceRunQueueDepth = 4;
+constexpr int kSourceOutputEveryN = 1;
+constexpr simaai::neat::RunPreset kRealtimeRunPreset = simaai::neat::RunPreset::Realtime;
 
 void set_env_if_unset(const char* key, const char* value) {
   if (key == nullptr || value == nullptr) {
@@ -93,13 +97,13 @@ build_source_input_group_options(const AppConfig& cfg, const std::string& url,
 }
 
 RtspProbe probe_rtsp(const AppConfig& cfg, const std::string& url) {
-  apply_graphpipes_runtime_defaults();
+  apply_runtime_env_defaults();
 
   sima_examples::RtspProbeOptions probe_options;
   probe_options.payload_type = 96;
   probe_options.latency_ms = cfg.latency_ms;
   probe_options.rtsp_tcp = cfg.tcp;
-  probe_options.decoder_num_buffers = graphpipes_decoder_num_buffers();
+  probe_options.decoder_num_buffers = kSourceProbeDecoderNumBuffers;
 
   sima_examples::RtspStreamInfo info;
   if (!sima_examples::probe_rtsp_stream_info(url, probe_options, info)) {
@@ -126,52 +130,22 @@ std::vector<std::string> detector_stage_names(ModelFamily family) {
   throw std::invalid_argument("unsupported model family for detector graph");
 }
 
-void apply_graphpipes_runtime_defaults() {
+void apply_runtime_env_defaults() {
   set_env_if_unset("SIMA_FORCE_MODEL_NUM_BUFFERS", kDefaultModelNumBuffers);
   set_env_if_unset("SIMA_FORCE_DECODER_NUM_BUFFERS", kDefaultDecoderNumBuffers);
   set_env_if_unset("SIMA_FORCE_DECODER_POOL_BUFFERS", kDefaultDecoderNumBuffers);
   set_env_if_unset("SIMA_PULL_TIMEOUT_DIAG", "0");
 }
 
-int graphpipes_decoder_num_buffers() {
-  return 7;
-}
-
-simaai::neat::RunPreset graphpipes_run_preset() {
-  return simaai::neat::RunPreset::Realtime;
-}
-
-bool source_run_uses_explicit_realtime_preset() {
-  return false;
-}
-
-bool source_run_applies_graphpipes_runtime_defaults() {
-  return false;
-}
-
-int source_run_queue_depth() {
-  return 4;
-}
-
-int source_output_every_n() {
-  return 1;
-}
-
 SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
-  if (source_run_applies_graphpipes_runtime_defaults()) {
-    apply_graphpipes_runtime_defaults();
-  }
   SessionRun runtime;
   runtime.session.add(simaai::neat::nodes::groups::RtspDecodedInput(
       build_source_input_group_options(cfg, url, probe)));
-  runtime.session.add(simaai::neat::nodes::Output(
-      simaai::neat::OutputOptions::EveryFrame(source_output_every_n())));
+  runtime.session.add(
+      simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(kSourceOutputEveryN)));
 
   simaai::neat::RunOptions run_options;
-  if (source_run_uses_explicit_realtime_preset()) {
-    run_options.preset = graphpipes_run_preset();
-  }
-  run_options.queue_depth = source_run_queue_depth();
+  run_options.queue_depth = kSourceRunQueueDepth;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
   runtime.run = runtime.session.build(run_options);
@@ -180,7 +154,7 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
 
 SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const RtspProbe& probe) {
   static_cast<void>(detector_stage_names(family));
-  apply_graphpipes_runtime_defaults();
+  apply_runtime_env_defaults();
 
   SessionRun runtime;
 
@@ -218,7 +192,7 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
   simaai::neat::Tensor seed_tensor =
       simaai::neat::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::RGB, true);
   simaai::neat::RunOptions run_options;
-  run_options.preset = graphpipes_run_preset();
+  run_options.preset = kRealtimeRunPreset;
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
@@ -231,14 +205,13 @@ simaai::neat::Sample run_sample_input_once(simaai::neat::Run& run,
   return run.run(input, timeout_ms);
 }
 
-SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index,
-                                    VideoMode video_mode) {
+SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe,
+                                    int stream_index) {
   const int writer_fps = effective_writer_fps(cfg, probe);
   const OptiViewVideoEncoder encoder = optiview_video_encoder_from_env();
 
   simaai::neat::InputOptions input_options;
   input_options.media_type = "video/x-raw";
-  static_cast<void>(video_mode);
   input_options.format = "RGB";
   input_options.use_simaai_pool = false;
   input_options.max_width = probe.width;
@@ -266,7 +239,7 @@ SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe
   runtime.session.add(simaai::neat::nodes::groups::UdpH264OutputGroup(udp_options));
 
   simaai::neat::RunOptions run_options;
-  run_options.preset = graphpipes_run_preset();
+  run_options.preset = kRealtimeRunPreset;
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);

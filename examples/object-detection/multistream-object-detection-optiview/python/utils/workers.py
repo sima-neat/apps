@@ -62,7 +62,6 @@ class StreamProbeSpec:
 
 @dataclass
 class StreamMetrics:
-    pulled: int = 0
     processed: int = 0
     detections: int = 0
     saved: int = 0
@@ -111,8 +110,6 @@ class StreamRuntime:
     error_message: str = ""
     saw_first_source_frame: bool = False
     first_mailbox_push_logged: bool = False
-    source_finished: bool = False
-    consecutive_source_timeouts: int = 0
     next_source_frame_index: int = 0
     next_allowed_emit_s: float | None = None
 
@@ -230,14 +227,10 @@ def _now_steady_s() -> float:
     return time.perf_counter()
 
 
-def _video_mode_name(video_mode: VideoMode) -> str:
-    return video_mode.value
-
-
 def format_video_build_error(stream_index: int, video_mode: VideoMode, detail: str) -> str:
     return (
         f"stream {stream_index} failed to build OptiView "
-        f"{_video_mode_name(video_mode)} video run: {detail}"
+        f"{video_mode.value} video run: {detail}"
     )
 
 
@@ -270,8 +263,9 @@ def _initialize_stream_runtime(
 ) -> StreamRuntime:
     probe = probe_rtsp(cfg, url)
     source = build_source_run(runtime, cfg, url, probe)
+    json_enabled = json_output_enabled(cfg)
     json_sender = None
-    if json_output_enabled(cfg):
+    if json_enabled:
         json_sender = build_optiview_json_output(runtime, cfg, index)
     return StreamRuntime(
         index=index,
@@ -282,7 +276,7 @@ def _initialize_stream_runtime(
         source=source,
         video_enabled=cfg.video_enabled,
         json_sender=json_sender,
-        json_enabled=json_output_enabled(cfg),
+        json_enabled=json_enabled,
         class_labels=list(class_labels),
     )
 
@@ -430,7 +424,6 @@ def _process_frame(
                     cfg,
                     stream.probe,
                     stream.index,
-                    cfg.video_mode,
                 )
             except Exception as exc:
                 raise RuntimeError(format_video_build_error(stream.index, cfg.video_mode, str(exc)))
@@ -480,7 +473,6 @@ def _process_frame(
 
     publish_elapsed = _now_steady_s() - publish_t0
 
-    stream.metrics.pulled += 1
     stream.metrics.processed += 1
     stream.metrics.detections += len(detections)
     stream.metrics.source_time_s += packet.source_time_s
@@ -532,7 +524,6 @@ def producer_thread(
             sample = stream.source.run.pull(timeout_ms=pull_timeout_ms)
             pull_elapsed = _now_steady_s() - pull_t0
             if sample is None:
-                stream.consecutive_source_timeouts += 1
                 try:
                     if not stream.source.run.running():
                         raise RuntimeError("source run stopped")
@@ -540,7 +531,6 @@ def producer_thread(
                     raise
                 continue
 
-            stream.consecutive_source_timeouts = 0
             if not stream.saw_first_source_frame:
                 _emit_startup_trace(stream.index, "first decoded frame pulled")
                 stream.saw_first_source_frame = True
@@ -586,7 +576,6 @@ def producer_thread(
         if startup_ready is not None:
             startup_ready.set()
     finally:
-        stream.source_finished = True
         mailbox.close()
         try:
             stream.source.run.close()
@@ -712,16 +701,18 @@ def run_app(cfg: AppConfig, family: ModelFamily) -> int:
         Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
 
     class_labels = _load_class_labels()
-    streams = [StreamRuntime() for _ in cfg.rtsp_urls]
+    streams: list[StreamRuntime] = []
     try:
         for index, url in enumerate(cfg.rtsp_urls):
-            streams[index] = _initialize_stream_runtime(
-                runtime,
-                index,
-                url,
-                cfg,
-                family,
-                class_labels,
+            streams.append(
+                _initialize_stream_runtime(
+                    runtime,
+                    index,
+                    url,
+                    cfg,
+                    family,
+                    class_labels,
+                )
             )
     except Exception as exc:
         print(f"Error: failed to set up stream runtimes: {exc}", file=sys.stderr, flush=True)

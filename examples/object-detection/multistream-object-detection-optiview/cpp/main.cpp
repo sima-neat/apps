@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
 
   try {
     const AppConfig cfg = load_app_config(config_path);
-    const ModelFamily family = resolve_model_family(cfg.model.path, cfg.model.family);
+    const ModelFamily family = resolve_model_family(cfg.model.path);
     if (validate_config_only) {
       std::cout << "Config validated: " << config_path << " (family=" << to_string(family)
                 << ", workers=" << cfg.worker_count << ", streams=" << cfg.rtsp_urls.size()

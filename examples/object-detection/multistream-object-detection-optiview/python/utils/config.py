@@ -9,8 +9,6 @@ from typing import Any
 
 import yaml
 
-from .model_family import ModelFamily, parse_model_family
-
 
 class VideoMode(Enum):
     CLEAN = "clean"
@@ -20,7 +18,6 @@ class VideoMode(Enum):
 @dataclass(frozen=True)
 class ModelConfig:
     path: str
-    family: ModelFamily = ModelFamily.AUTO
 
 
 @dataclass(frozen=True)
@@ -120,6 +117,10 @@ def load_app_config(path: str | Path) -> AppConfig:
     streams_raw = raw.get("streams")
     if not isinstance(streams_raw, list) or not streams_raw:
         raise ValueError("streams must be a non-empty list")
+    if "family" in model:
+        raise ValueError(
+            "model.family is no longer supported; this example infers YOLOv8 from model.path"
+        )
     rtsp_urls: list[str] = []
     for index, stream in enumerate(streams_raw):
         if not isinstance(stream, str) or not stream.strip():
@@ -129,7 +130,6 @@ def load_app_config(path: str | Path) -> AppConfig:
     cfg = AppConfig(
         model=ModelConfig(
             path=_required_string(model, "path", "model"),
-            family=parse_model_family(model.get("family", "auto")),
         ),
         rtsp_urls=rtsp_urls,
         tcp=_optional_bool(input_cfg, "tcp", False),

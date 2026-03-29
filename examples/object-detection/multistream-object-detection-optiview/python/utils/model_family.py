@@ -14,16 +14,9 @@ def to_string(family: ModelFamily) -> str:
     return family.value
 
 
-def parse_model_family(value: str) -> ModelFamily:
-    lowered = str(value).strip().lower()
-    if lowered == "auto":
-        return ModelFamily.AUTO
-    if lowered == "yolov8":
-        return ModelFamily.YOLOV8
-    raise ValueError("model.family must be one of [auto, yolov8]")
-
-
-def resolve_model_family(model_path: str, hint: ModelFamily) -> ModelFamily:
+def resolve_model_family(
+    model_path: str, hint: ModelFamily = ModelFamily.AUTO
+) -> ModelFamily:
     if hint is not ModelFamily.AUTO:
         return hint
 

@@ -62,7 +62,6 @@ bool test_validate_config_only_smoke_runs(const std::string& binary) {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-         "  family: yolov8\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -91,7 +90,6 @@ bool test_load_app_config_parses_runtime_worker_count() {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-         "  family: yolov8\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "  - rtsp://127.0.0.1:8554/src2\n"
@@ -125,7 +123,6 @@ bool test_load_app_config_parses_runtime_worker_count() {
     const AppConfig cfg = load_app_config(config_path);
     ok &= expect_true(cfg.model.path == "assets/models/yolo_v8m_mpk.tar.gz",
                       "config keeps model path");
-    ok &= expect_true(cfg.model.family == ModelFamily::YoloV8, "config keeps model family");
     ok &= expect_true(cfg.worker_count == 4, "config keeps worker_count");
     ok &= expect_true(cfg.mailbox_depth == 1, "config keeps mailbox_depth");
     ok &= expect_true(cfg.profile, "config keeps profile=true");
@@ -141,7 +138,7 @@ bool test_load_app_config_parses_runtime_worker_count() {
   return ok;
 }
 
-bool test_load_app_config_rejects_unknown_model_family() {
+bool test_load_app_config_rejects_removed_model_family_field() {
   const std::string temp_dir = create_temp_dir("multistream_object_detection_bad_family_");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
@@ -151,7 +148,7 @@ bool test_load_app_config_rejects_unknown_model_family() {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/unsupported_mpk.tar.gz\n"
-         "  family: banana\n"
+         "  family: yolov8\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -165,8 +162,8 @@ bool test_load_app_config_rejects_unknown_model_family() {
   try {
     static_cast<void>(load_app_config(config_path));
   } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "model.family must be one of [auto, yolov8]",
-                         "unsupported model family error mentions accepted values");
+    ok = expect_contains(ex.what(), "model.family is no longer supported",
+                         "stale model family field error mentions removal");
   }
 
   remove_dir(temp_dir);
@@ -183,7 +180,6 @@ bool test_load_app_config_rejects_invalid_worker_count() {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-         "  family: auto\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -215,7 +211,6 @@ bool test_load_app_config_rejects_invalid_video_mode() {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-         "  family: auto\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -247,7 +242,6 @@ bool test_load_app_config_rejects_empty_streams() {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-         "  family: auto\n"
          "streams: []\n"
          "runtime:\n"
          "  worker_count: 2\n"
@@ -279,7 +273,6 @@ bool test_json_output_enabled_follows_video_mode_contract() {
     std::ofstream out(config_path);
     out << "model:\n"
            "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-           "  family: yolov8\n"
            "streams:\n"
            "  - rtsp://127.0.0.1:8554/src1\n"
            "runtime:\n"
@@ -316,7 +309,6 @@ bool test_json_output_enabled_stays_enabled_for_json_only_mode() {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-         "  family: yolov8\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -352,7 +344,6 @@ bool test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode() {
     std::ofstream out(config_path);
     out << "model:\n"
            "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
-           "  family: yolov8\n"
            "streams:\n"
            "  - rtsp://127.0.0.1:8554/src1\n"
            "runtime:\n"
@@ -374,17 +365,6 @@ bool test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode() {
   }
 
   remove_dir(temp_dir);
-  return ok;
-}
-
-bool test_parse_model_family_rejects_unknown_family() {
-  bool ok = false;
-  try {
-    static_cast<void>(parse_model_family("banana"));
-  } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "model.family must be one of [auto, yolov8]",
-                         "parse_model_family rejects unknown family with accepted values");
-  }
   return ok;
 }
 
@@ -563,13 +543,13 @@ bool test_detector_stage_names_cover_yolov8() {
       "yolov8 stage names match the RGB preprocess detector graph");
 }
 
-bool test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset() {
+bool test_apply_runtime_env_defaults_sets_expected_env_when_unset() {
   unsetenv("SIMA_FORCE_MODEL_NUM_BUFFERS");
   unsetenv("SIMA_FORCE_DECODER_NUM_BUFFERS");
   unsetenv("SIMA_FORCE_DECODER_POOL_BUFFERS");
   unsetenv("SIMA_PULL_TIMEOUT_DIAG");
 
-  apply_graphpipes_runtime_defaults();
+  apply_runtime_env_defaults();
 
   bool ok = true;
   ok &= expect_true(env_or_empty("SIMA_FORCE_MODEL_NUM_BUFFERS") == "3",
@@ -583,13 +563,13 @@ bool test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset() {
   return ok;
 }
 
-bool test_apply_graphpipes_runtime_defaults_preserves_explicit_env() {
+bool test_apply_runtime_env_defaults_preserves_explicit_env() {
   setenv("SIMA_FORCE_MODEL_NUM_BUFFERS", "11", 1);
   setenv("SIMA_FORCE_DECODER_NUM_BUFFERS", "12", 1);
   setenv("SIMA_FORCE_DECODER_POOL_BUFFERS", "13", 1);
   setenv("SIMA_PULL_TIMEOUT_DIAG", "1", 1);
 
-  apply_graphpipes_runtime_defaults();
+  apply_runtime_env_defaults();
 
   bool ok = true;
   ok &= expect_true(env_or_empty("SIMA_FORCE_MODEL_NUM_BUFFERS") == "11",
@@ -641,16 +621,6 @@ bool test_startup_trace_accepts_truthy_aliases() {
                     "startup trace stays disabled for unknown values");
   unsetenv("SIMA_OPTIVIEW_STARTUP_TRACE");
   return ok;
-}
-
-bool test_graphpipes_decoder_num_buffers_matches_source_tuning() {
-  return expect_true(graphpipes_decoder_num_buffers() == 7,
-                     "graphpipes decoder buffer count matches tuned source decode");
-}
-
-bool test_graphpipes_run_preset_matches_working_sandbox_runtime() {
-  return expect_true(graphpipes_run_preset() == simaai::neat::RunPreset::Realtime,
-                     "graphpipes run preset uses realtime to match the working sandbox topology");
 }
 
 bool test_producer_emit_period_s_always_paces_when_fps_configured() {
@@ -723,14 +693,6 @@ bool test_source_producer_contract_matches_working_rtsp_pipeline() {
       "source producer keeps the 10 second steady-state pull timeout from the working example");
   ok &= expect_true(source_startup_stagger_s() == 0.5,
                     "source producer startup keeps the working half-second stream stagger");
-  ok &= expect_true(!source_run_uses_explicit_realtime_preset(),
-                    "source run leaves the preset at the tracking-style default");
-  ok &= expect_true(!source_run_applies_graphpipes_runtime_defaults(),
-                    "source run avoids the graphpipes-specific runtime env overrides");
-  ok &= expect_true(source_run_queue_depth() == 4,
-                    "source run queue depth matches the working RTSP example");
-  ok &= expect_true(source_output_every_n() == 1,
-                    "source run emits every decoded frame into the producer queue");
   return ok;
 }
 
@@ -751,14 +713,13 @@ int main(int argc, char** argv) {
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_smoke_runs(binary);
   ok &= test_load_app_config_parses_runtime_worker_count();
-  ok &= test_load_app_config_rejects_unknown_model_family();
+  ok &= test_load_app_config_rejects_removed_model_family_field();
   ok &= test_load_app_config_rejects_invalid_worker_count();
   ok &= test_load_app_config_rejects_invalid_video_mode();
   ok &= test_load_app_config_rejects_empty_streams();
   ok &= test_json_output_enabled_follows_video_mode_contract();
   ok &= test_json_output_enabled_stays_enabled_for_json_only_mode();
   ok &= test_json_output_enabled_stays_enabled_for_video_disabled_in_any_mode();
-  ok &= test_parse_model_family_rejects_unknown_family();
   ok &= test_resolve_model_family_auto_for_yolov8();
   ok &= test_parse_bbox_payload_normalizes_yolov8_boxes();
   ok &= test_require_detector_output_kind_rejects_unsupported_sample_kind();
@@ -771,14 +732,12 @@ int main(int argc, char** argv) {
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
   ok &= test_format_video_build_error_includes_stream_mode_and_detail();
   ok &= test_detector_stage_names_cover_yolov8();
-  ok &= test_apply_graphpipes_runtime_defaults_sets_expected_env_when_unset();
-  ok &= test_apply_graphpipes_runtime_defaults_preserves_explicit_env();
+  ok &= test_apply_runtime_env_defaults_sets_expected_env_when_unset();
+  ok &= test_apply_runtime_env_defaults_preserves_explicit_env();
   ok &= test_optiview_video_encoder_defaults_to_hardware();
   ok &= test_optiview_video_encoder_accepts_software_aliases_and_falls_back_to_hardware();
   ok &= test_startup_trace_defaults_to_disabled();
   ok &= test_startup_trace_accepts_truthy_aliases();
-  ok &= test_graphpipes_decoder_num_buffers_matches_source_tuning();
-  ok &= test_graphpipes_run_preset_matches_working_sandbox_runtime();
   ok &= test_producer_emit_period_s_always_paces_when_fps_configured();
   ok &= test_build_source_input_group_options_match_working_rtsp_group_contract();
   ok &= test_source_producer_contract_matches_working_rtsp_pipeline();

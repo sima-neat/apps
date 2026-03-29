@@ -1,6 +1,6 @@
 #pragma once
 
-#include "config_api.cpp"
+#include "model_family_api.cpp"
 
 #include "neat/session.h"
 #include "support/runtime/example_utils.h"
@@ -12,10 +12,6 @@
 #include <vector>
 
 namespace multistream_object_detection_optiview {
-
-enum class DetectorOutputKind {
-  BBox,
-};
 
 struct Detection {
   float x1 = 0.0f;
@@ -31,12 +27,10 @@ struct OptiViewDetectionPayload {
   std::vector<std::string> labels;
 };
 
-std::string to_string(DetectorOutputKind kind);
 std::vector<std::uint8_t> extract_bbox_payload(const simaai::neat::Sample& sample);
 std::vector<Detection> parse_bbox_payload(const std::vector<std::uint8_t>& payload, int img_w,
                                           int img_h);
-DetectorOutputKind require_detector_output_kind(ModelFamily family,
-                                                const simaai::neat::Sample& sample);
+void require_detector_output_kind(ModelFamily family, const simaai::neat::Sample& sample);
 std::vector<Detection> detections_from_detector_sample(ModelFamily family,
                                                        const simaai::neat::Sample& sample,
                                                        int img_w, int img_h);

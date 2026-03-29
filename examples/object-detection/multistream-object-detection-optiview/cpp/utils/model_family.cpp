@@ -25,17 +25,6 @@ std::string to_string(ModelFamily family) {
   return "auto";
 }
 
-ModelFamily parse_model_family(const std::string& value) {
-  const std::string lowered = lower_copy(value);
-  if (lowered == "auto") {
-    return ModelFamily::Auto;
-  }
-  if (lowered == "yolov8") {
-    return ModelFamily::YoloV8;
-  }
-  throw std::runtime_error("model.family must be one of [auto, yolov8]");
-}
-
 ModelFamily resolve_model_family(const std::string& model_path, ModelFamily hint) {
   if (hint != ModelFamily::Auto) {
     return hint;
