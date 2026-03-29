@@ -209,17 +209,17 @@ def main() -> int:
         help="Similarity/distance metric to use (default: cosine)",
     )
     parser.add_argument(
-    "--threshold",
-    type=float,
-    default=None,
-    help="Decision threshold (default: 0.65 for cosine, 25.0 for euclidean)",
+        "--threshold",
+        type=float,
+        default=None,
+        help="Decision threshold (default: 0.65 for cosine, 25.0 for euclidean)",
     )
 
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "output_dir",
-        help="Directory to write output artifacts (default: example/output_dir)",
+        help="Directory to write output artifacts",
     )
     parser.add_argument(
         "--output-type",
