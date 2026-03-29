@@ -19,12 +19,13 @@ sima_neat_apps_module(
 
 target_sources(${pose_estimation_example_target}
   PRIVATE
-    "${CMAKE_CURRENT_LIST_DIR}/config.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/utils/config.cpp"
 )
 
 target_include_directories(${pose_estimation_example_target}
   PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/utils"
 )
 
 target_compile_definitions(${pose_estimation_example_target}

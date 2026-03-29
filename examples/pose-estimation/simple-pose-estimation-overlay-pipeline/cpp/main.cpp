@@ -4,7 +4,7 @@
  *
  * Usage: simple-pose-estimation-overlay-pipeline [--config <path>] [--profile]
  */
-#include "config.h"
+#include "utils/config.h"
 #include "neat.h"
 
 #include <opencv2/imgcodecs.hpp>

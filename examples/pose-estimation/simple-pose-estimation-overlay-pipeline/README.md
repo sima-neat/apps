@@ -180,9 +180,9 @@ Use the `--profile` flag to measure performance:
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
-- C++ config loader: `cpp/config.cpp`, `cpp/config.h`
+- C++ config loader: `cpp/utils/config.cpp`, `cpp/utils/config.h`
 - Python source: `python/main.py`
-- Python config loader: `python/config.py`
+- Python config loader: `python/utils/config.py`
 - Shared config: `common/config.yaml`
 - C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
 - Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
