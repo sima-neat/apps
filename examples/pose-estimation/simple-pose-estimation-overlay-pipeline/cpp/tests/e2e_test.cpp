@@ -2,6 +2,7 @@
 // Runs the binary with a real model and test images, verifies outputs.
 #include "support/testing/test_process.h"
 
+#include <fstream>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -44,9 +45,37 @@ int main(int argc, char** argv) {
   auto out_dir = create_temp_dir("simple-pose-estimation-overlay-pipeline_e2e_");
   if (out_dir.empty()) return 1;
 
+  auto config_dir = create_temp_dir("simple-pose-estimation-overlay-pipeline_cfg_");
+  if (config_dir.empty()) {
+    remove_dir(out_dir);
+    return 1;
+  }
+
+  const fs::path config_path = fs::path(config_dir) / "config.yaml";
+  {
+    std::ofstream config_file(config_path);
+    config_file << "model:\n";
+    config_file << "  path: " << model_path << "\n";
+    config_file << "io:\n";
+    config_file << "  input_dir: " << input_dir << "\n";
+    config_file << "  output_dir: " << out_dir << "\n";
+    config_file << "runtime:\n";
+    config_file << "  infer_size: 640\n";
+    config_file << "  timeout_ms: 1000\n";
+    config_file << "  upsample_factor: 4.0\n";
+    config_file << "decode:\n";
+    config_file << "  keypoint_score: 0.1\n";
+    config_file << "  nms_radius: 6\n";
+    config_file << "  paf_score: 0.05\n";
+    config_file << "  paf_success_ratio: 0.8\n";
+    config_file << "  paf_samples: 10\n";
+    config_file << "  min_valid_joints: 3\n";
+    config_file << "  min_avg_person_score: 0.2\n";
+  }
+
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
-  auto r = spawn_and_wait(binary, {model_path, input_dir, out_dir}, timeout);
+  auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
   int rc = 0;
   if (r.exit_code != 0) {
@@ -64,6 +93,7 @@ int main(int argc, char** argv) {
               << count_files(out_dir) << " output files\n";
   }
 
+  remove_dir(config_dir);
   remove_dir(out_dir);
   return rc;
 }

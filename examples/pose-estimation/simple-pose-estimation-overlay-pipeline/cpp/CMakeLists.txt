@@ -9,4 +9,25 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../cmake/ExampleModule.cmake")
-sima_neat_apps_module("simple-pose-estimation-overlay-pipeline" UNIT_TEST E2E_TEST)
+sima_neat_apps_module(
+  "simple-pose-estimation-overlay-pipeline"
+  OUTPUT_TARGET_VAR
+    pose_estimation_example_target
+  UNIT_TEST
+  E2E_TEST
+)
+
+target_sources(${pose_estimation_example_target}
+  PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/config.cpp"
+)
+
+target_include_directories(${pose_estimation_example_target}
+  PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+)
+
+target_compile_definitions(${pose_estimation_example_target}
+  PRIVATE
+    SIMPLE_POSE_ESTIMATION_OVERLAY_PIPELINE_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}/.."
+)

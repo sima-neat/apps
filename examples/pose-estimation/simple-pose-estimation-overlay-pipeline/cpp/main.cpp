@@ -2,8 +2,9 @@
  * @example simple-pose-estimation-overlay-pipeline.cpp
  * Lightweight OpenPose sync pipeline: infer pose keypoints for every image in a folder.
  *
- * Usage: simple-pose-estimation-overlay-pipeline <model.tar.gz> <input_dir> <output_dir>
+ * Usage: simple-pose-estimation-overlay-pipeline [--config <path>] [--profile]
  */
+#include "config.h"
 #include "neat.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -28,19 +29,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-// ---------------------------------------------------------------------------
-// Constants (defaults can be overridden via CLI arguments)
-// ---------------------------------------------------------------------------
-// Default values for configurable parameters
-const int kDefaultInferSize = 640;
-const float kDefaultKeypointScoreThreshold = 0.1f;
-const int kDefaultNmsRadius = 6;
-const float kDefaultPafScoreThreshold = 0.05f;
-const float kDefaultPafSuccessRatio = 0.8f;
-const int kDefaultPafNumSamples = 10;
-const int kDefaultTimeoutMs = 1000;
-const float kDefaultUpsampleFactor = 4.0f;
 
 // Fixed constants
 constexpr int kNumParts = 18;
@@ -383,7 +371,8 @@ float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint&
 // ---------------------------------------------------------------------------
 std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints,
                                     const TensorHWC& paf, float paf_score_threshold,
-                                    float paf_success_ratio, int paf_num_samples) {
+                                    float paf_success_ratio, int paf_num_samples,
+                                    int min_valid_joints, float min_avg_person_score) {
   // Bucket keypoints by part_id
   std::array<std::vector<int>, kNumParts> kpts_by_part;
   for (size_t i = 0; i < keypoints.size(); ++i) {
@@ -480,8 +469,8 @@ std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints,
   // Filter: require >= 3 joints and average score >= 0.2
   std::vector<Person> final_people;
   for (const auto& p : people) {
-    if (p.valid_joints_count < 3) continue;
-    if ((p.total_score / static_cast<float>(p.valid_joints_count)) >= 0.2f) {
+    if (p.valid_joints_count < min_valid_joints) continue;
+    if ((p.total_score / static_cast<float>(p.valid_joints_count)) >= min_avg_person_score) {
       final_people.push_back(p);
     }
   }
@@ -533,72 +522,54 @@ void draw_poses(cv::Mat& frame, const std::vector<Person>& people,
 }  // namespace
 
 int main(int argc, char** argv) {
+  using namespace simple_pose_estimation_overlay_pipeline;
+
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
 
-  if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir>\n";
-    std::cerr << "  [--infer-size SIZE] [--keypoint-score SCORE] [--nms-radius RADIUS]\n";
-    std::cerr << "  [--paf-score SCORE] [--paf-success-ratio RATIO] [--paf-samples N]\n";
-    std::cerr << "  [--upsample-factor FACTOR] [--timeout MS] [--profile]\n";
-    return 1;
-  }
-
-  const std::string model_path = argv[1];
-  const fs::path input_dir = argv[2];
-  const fs::path output_dir = argv[3];
-  
-  // Initialize configurable parameters with defaults
-  int infer_size = kDefaultInferSize;
-  float keypoint_score_threshold = kDefaultKeypointScoreThreshold;
-  int nms_radius = kDefaultNmsRadius;
-  float paf_score_threshold = kDefaultPafScoreThreshold;
-  float paf_success_ratio = kDefaultPafSuccessRatio;
-  int paf_num_samples = kDefaultPafNumSamples;
-  int timeout_ms = kDefaultTimeoutMs;
-  float upsample_factor = kDefaultUpsampleFactor;
+  fs::path config_path = default_config_path();
   bool enable_profile = false;
 
-  // Parse optional arguments
-  for (int i = 4; i < argc; ++i) {
+  for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg == "--profile") {
+    if (arg == "--help" || arg == "-h") {
+      std::cout << "OpenPose simple pose estimation pipeline.\n\n";
+      std::cout << "Usage: " << argv[0] << " [--config <path>] [--profile]\n\n";
+      std::cout << "Options:\n";
+      std::cout << "  --config <path>  Path to YAML configuration. Default: "
+                << default_config_path() << "\n";
+      std::cout << "  --profile        Enable performance profiling.\n";
+      return 0;
+    } else if (arg == "--config") {
+      if (i + 1 >= argc) {
+        std::cerr << "Error: --config requires a path\n";
+        return 2;
+      }
+      config_path = argv[++i];
+    } else if (arg == "--profile") {
       enable_profile = true;
-    } else if (arg == "--infer-size" && i + 1 < argc) {
-      infer_size = std::stoi(argv[++i]);
-    } else if (arg == "--keypoint-score" && i + 1 < argc) {
-      keypoint_score_threshold = std::stof(argv[++i]);
-    } else if (arg == "--nms-radius" && i + 1 < argc) {
-      nms_radius = std::stoi(argv[++i]);
-    } else if (arg == "--paf-score" && i + 1 < argc) {
-      paf_score_threshold = std::stof(argv[++i]);
-    } else if (arg == "--paf-success-ratio" && i + 1 < argc) {
-      paf_success_ratio = std::stof(argv[++i]);
-    } else if (arg == "--paf-samples" && i + 1 < argc) {
-      ++i;
-      try {
-        paf_num_samples = std::stoi(argv[i]);
-      } catch (const std::exception&) {
-        std::cerr << "Error: --paf-samples requires an integer value, got '" << argv[i] << "'\n";
-        return 1;
-      }
-      if (paf_num_samples < 2) {
-        std::cerr << "Error: --paf-samples must be >= 2 (got " << paf_num_samples << ")\n";
-        return 1;
-      }
-    } else if (arg == "--upsample-factor" && i + 1 < argc) {
-      upsample_factor = std::stof(argv[++i]);
-    } else if (arg == "--timeout" && i + 1 < argc) {
-      timeout_ms = std::stoi(argv[++i]);
     } else {
-      std::cerr << "Unknown option: " << arg << "\n";
-      std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir>\n";
-      std::cerr << "  [--infer-size SIZE] [--keypoint-score SCORE] [--nms-radius RADIUS]\n";
-      std::cerr << "  [--paf-score SCORE] [--paf-success-ratio RATIO] [--paf-samples N]\n";
-      std::cerr << "  [--upsample-factor FACTOR] [--timeout MS] [--profile]\n";
-      return 1;
+      std::cerr << "Error: unknown argument: " << arg << "\n";
+      return 2;
     }
   }
+  if (!fs::exists(config_path)) {
+    std::cerr << "Error: config file not found: " << config_path << "\n";
+    return 2;
+  }
+
+  AppConfig cfg;
+  try {
+    cfg = load_app_config(config_path);
+  } catch (const std::exception& e) {
+    std::cerr << "Error: failed to load config " << config_path << ": " << e.what() << "\n";
+    return 2;
+  }
+
+  const std::string model_path = cfg.model.path;
+  const fs::path input_dir = cfg.io.input_dir;
+  const fs::path output_dir = cfg.io.output_dir;
+
   if (!fs::is_directory(input_dir)) {
     std::cerr << "Input directory does not exist: " << input_dir << "\n";
     return 2;
@@ -623,8 +594,8 @@ int main(int argc, char** argv) {
     simaai::neat::Model::Options model_opt;
     model_opt.media_type = "video/x-raw";
     model_opt.format = "BGR";
-    model_opt.input_max_width = infer_size;
-    model_opt.input_max_height = infer_size;
+    model_opt.input_max_width = cfg.runtime.infer_size;
+    model_opt.input_max_height = cfg.runtime.infer_size;
     model_opt.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
@@ -633,7 +604,8 @@ int main(int argc, char** argv) {
     session.add(model.session());
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
-    cv::Mat dummy_bgr(infer_size, infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat dummy_bgr(
+        cfg.runtime.infer_size, cfg.runtime.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy = simaai::neat::from_cv_mat(
         dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
     auto run = session.build(dummy, simaai::neat::RunMode::Sync);
@@ -651,13 +623,13 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      auto lb = letterbox(bgr, infer_size);
+      auto lb = letterbox(bgr, cfg.runtime.infer_size);
 
       simaai::neat::Tensor input = simaai::neat::from_cv_mat(
           lb.img, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
 
       auto infer_start = std::chrono::high_resolution_clock::now();
-      simaai::neat::Sample out = run.push_and_pull(input, timeout_ms);
+      simaai::neat::Sample out = run.push_and_pull(input, cfg.runtime.timeout_ms);
       auto infer_end = std::chrono::high_resolution_clock::now();
 
       const auto tensors = collect_tensors(out);
@@ -670,14 +642,23 @@ int main(int argc, char** argv) {
       TensorHWC paf = tensor_to_hwc_f32(tensors[1]);
 
       // Upsample by configured factor using bicubic interpolation
-      heatmap = upsample_tensor(heatmap, upsample_factor);
-      paf = upsample_tensor(paf, upsample_factor);
+      heatmap = upsample_tensor(heatmap, static_cast<float>(cfg.runtime.upsample_factor));
+      paf = upsample_tensor(paf, static_cast<float>(cfg.runtime.upsample_factor));
 
       // Extract keypoints and group into people
-      std::vector<Keypoint> raw_kpts = extract_keypoints(heatmap, infer_size,
-                                                         keypoint_score_threshold, nms_radius);
-      std::vector<Person> people = group_keypoints(raw_kpts, paf, paf_score_threshold,
-                                                   paf_success_ratio, paf_num_samples);
+      std::vector<Keypoint> raw_kpts =
+          extract_keypoints(heatmap,
+                            cfg.runtime.infer_size,
+                            static_cast<float>(cfg.decode.keypoint_score),
+                            cfg.decode.nms_radius);
+      std::vector<Person> people =
+          group_keypoints(raw_kpts,
+                          paf,
+                          static_cast<float>(cfg.decode.paf_score),
+                          static_cast<float>(cfg.decode.paf_success_ratio),
+                          cfg.decode.paf_samples,
+                          cfg.decode.min_valid_joints,
+                          static_cast<float>(cfg.decode.min_avg_person_score));
 
       // Scale keypoints back to original image coordinates
       scale_keypoints(raw_kpts, lb.ratio, lb.pad_left, lb.pad_top);
