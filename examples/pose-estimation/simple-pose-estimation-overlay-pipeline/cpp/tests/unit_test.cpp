@@ -15,40 +15,39 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   int failures = 0;
 
-  // Test 1: no args → exit 1, prints usage
+  // Test 1: help should exit 0 and mention --config
   {
-    auto r = spawn_and_wait(binary, {}, 10000);
-    if (r.exit_code != 1) {
-      std::cerr << "[FAIL] no args: expected exit 1, got " << r.exit_code << "\n";
+    auto r = spawn_and_wait(binary, {"--help"}, 10000);
+    if (r.exit_code != 0) {
+      std::cerr << "[FAIL] help: expected exit 0, got " << r.exit_code << "\n";
       ++failures;
-    } else if (r.stderr_text.find("Usage") == std::string::npos) {
-      std::cerr << "[FAIL] no args: stderr does not contain Usage\n";
+    } else if (r.stdout_text.find("--config") == std::string::npos) {
+      std::cerr << "[FAIL] help: stdout does not mention --config\n";
       ++failures;
     } else {
-      std::cout << "[OK] no args correctly rejected\n";
+      std::cout << "[OK] help exits with code 0\n";
     }
   }
 
-  // Test 2: only 1 arg → exit 1
+  // Test 2: missing config file should exit 2
   {
-    auto r = spawn_and_wait(binary, {"model.tar.gz"}, 10000);
-    if (r.exit_code != 1) {
-      std::cerr << "[FAIL] 1 arg: expected exit 1, got " << r.exit_code << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] insufficient args correctly rejected\n";
-    }
-  }
-
-  // Test 3: bad input dir → exit 2
-  {
-    auto r = spawn_and_wait(binary,
-        {"model.tar.gz", "/nonexistent_dir_abc", "/tmp/out"}, 10000);
+    auto r = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 10000);
     if (r.exit_code != 2) {
-      std::cerr << "[FAIL] bad input dir: expected exit 2, got " << r.exit_code << "\n";
+      std::cerr << "[FAIL] missing config: expected exit 2, got " << r.exit_code << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] bad input dir correctly rejected\n";
+      std::cout << "[OK] missing config correctly rejected\n";
+    }
+  }
+
+  // Test 3: unknown arg should exit 2
+  {
+    auto r = spawn_and_wait(binary, {"--bogus"}, 10000);
+    if (r.exit_code != 2) {
+      std::cerr << "[FAIL] unknown flag: expected exit 2, got " << r.exit_code << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] unknown flag correctly rejected\n";
     }
   }
 
