@@ -22,7 +22,6 @@ Download variants into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get open_pose && cd ../..`
 
 ## Prerequisites
-- Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get pose_estimation/open_pose && cd ../..`
 
