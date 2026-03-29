@@ -97,7 +97,7 @@ pip install -r examples/pose-estimation/simple-pose-estimation-overlay-pipeline/
 ./build/examples/pose-estimation/simple-pose-estimation-overlay-pipeline/simple-pose-estimation-overlay-pipeline \
   assets/models/open_pose_mpk.tar.gz \
   assets/test_images \
-  output/pose_estimation
+  sandbox/pose_estimation
 ```
 
 ### Python
@@ -107,7 +107,7 @@ pip install -r examples/pose-estimation/simple-pose-estimation-overlay-pipeline/
 python examples/pose-estimation/simple-pose-estimation-overlay-pipeline/python/main.py \
   assets/models/open_pose_mpk.tar.gz \
   assets/test_images \
-  output/pose_estimation
+  sandbox/pose_estimation
 ```
 
 ### Example with Profiling (Both C++ and Python)
