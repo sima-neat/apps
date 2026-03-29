@@ -19,6 +19,7 @@ VALID_CATEGORIES = {
     "tracking",
     "semantic-segmentation",
     "instance-segmentation",
+    "pose-estimation",
     "depth-estimation",
     "face-detection",
     "throughput",

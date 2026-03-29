@@ -3,7 +3,7 @@
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | <classification / object-detection / semantic-segmentation / instance-segmentation / depth-estimation / face-detection / throughput> |
+| Category | <classification / object-detection / pose-estimation / semantic-segmentation / instance-segmentation / depth-estimation / face-detection / throughput> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
