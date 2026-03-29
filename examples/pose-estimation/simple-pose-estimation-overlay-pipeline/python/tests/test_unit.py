@@ -1,6 +1,7 @@
 """Unit tests for simple-pose-estimation-overlay-pipeline (Python)."""
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -39,3 +40,16 @@ class TestArgParsing:
         )
         assert r.returncode == 2
         assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
+
+    def test_help_runs_without_sidecar_config_module(self):
+        """The packaged entrypoint should still show help when config.py is absent."""
+        source = MAIN_PY.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_main = Path(temp_dir) / "main.py"
+            temp_main.write_text(source, encoding="utf-8")
+            r = subprocess.run(
+                [sys.executable, str(temp_main), "--help"],
+                capture_output=True, text=True, timeout=10,
+            )
+        assert r.returncode == 0
+        assert "--config" in r.stdout
