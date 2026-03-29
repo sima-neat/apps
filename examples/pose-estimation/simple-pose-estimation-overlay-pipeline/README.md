@@ -19,7 +19,7 @@ Minimal image-folder pose estimation pipeline. Each image is inferred to extract
 
 ## Supported Models
 Download variants into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get pose_estimation/open_pose && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get open_pose && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
