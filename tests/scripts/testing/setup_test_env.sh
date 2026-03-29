@@ -19,8 +19,8 @@ classification_image="${apps_root}/assets/test_images_classification/goldfish.jp
 timeout_ms="180000"
 require_e2e="1"
 keep_output="1"
-rtsp_url="rtsp://192.168.0.39:8554/src1" # for e2e tests
-rtsp_urls="rtsp://192.168.0.39:8554/src1,rtsp://192.168.0.39:8554/src2" # for e2e tests
+rtsp_url="<rtsp-url-1>" # for e2e tests
+rtsp_urls="r<rtsp-url-1>,<rtsp-url-2>" # for e2e tests
 
 python_test_bin="${PYTHON_TEST_BIN:-}"
 if [[ -z "${python_test_bin}" ]]; then
