@@ -211,7 +211,7 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   cfg.runtime.infer_size =
       optional_int(raw, "runtime.infer_size", 640, "runtime.infer_size");
   cfg.runtime.timeout_ms =
-      optional_int(raw, "runtime.timeout_ms", 1000, "runtime.timeout_ms");
+      optional_int(raw, "runtime.timeout_ms", 5000, "runtime.timeout_ms");
   cfg.runtime.upsample_factor = optional_double(
       raw, "runtime.upsample_factor", 4.0, "runtime.upsample_factor");
   cfg.decode.keypoint_score =

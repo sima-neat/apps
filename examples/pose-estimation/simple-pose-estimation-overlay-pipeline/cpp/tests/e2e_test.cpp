@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     config_file << "  output_dir: " << out_dir << "\n";
     config_file << "runtime:\n";
     config_file << "  infer_size: 640\n";
-    config_file << "  timeout_ms: 1000\n";
+    config_file << "  timeout_ms: 5000\n";
     config_file << "  upsample_factor: 4.0\n";
     config_file << "decode:\n";
     config_file << "  keypoint_score: 0.1\n";

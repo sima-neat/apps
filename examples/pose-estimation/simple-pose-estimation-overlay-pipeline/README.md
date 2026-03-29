@@ -135,7 +135,7 @@ io:
 
 runtime:
   infer_size: 768
-  timeout_ms: 1000
+  timeout_ms: 5000
   upsample_factor: 2.0
 
 decode:

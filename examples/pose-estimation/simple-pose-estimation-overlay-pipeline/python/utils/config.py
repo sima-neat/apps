@@ -23,7 +23,7 @@ class IoConfig:
 @dataclass(frozen=True)
 class RuntimeConfig:
     infer_size: int = 640
-    timeout_ms: int = 1000
+    timeout_ms: int = 5000
     upsample_factor: float = 4.0
 
 
@@ -100,7 +100,7 @@ def load_app_config(path: str | Path) -> AppConfig:
         ),
         runtime=RuntimeConfig(
             infer_size=_optional_int(runtime, "infer_size", 640, "runtime"),
-            timeout_ms=_optional_int(runtime, "timeout_ms", 1000, "runtime"),
+            timeout_ms=_optional_int(runtime, "timeout_ms", 5000, "runtime"),
             upsample_factor=_optional_float(runtime, "upsample_factor", 4.0, "runtime"),
         ),
         decode=DecodeConfig(
