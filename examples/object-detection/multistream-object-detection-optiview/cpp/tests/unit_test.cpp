@@ -53,10 +53,32 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 }
 
 bool test_validate_config_only_smoke_runs(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--validate-config-only"}, 10000);
-  return expect_true(result.exit_code == 0, "validate-config-only exits with code 0") &&
-         expect_contains(result.stdout_text, "Config validated",
-                         "validate-config-only reports validated config");
+  const std::string temp_dir = create_temp_dir("multistream_object_detection_validate_only_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory");
+  }
+
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  std::ofstream out(config_path);
+  out << "model:\n"
+         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  family: yolov8\n"
+         "streams:\n"
+         "  - rtsp://127.0.0.1:8554/src1\n"
+         "runtime:\n"
+         "  worker_count: 2\n"
+         "output:\n"
+         "  optiview:\n"
+         "    host: 127.0.0.1\n";
+  out.close();
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 10000);
+  const bool ok = expect_true(result.exit_code == 0, "validate-config-only exits with code 0") &&
+                  expect_contains(result.stdout_text, "Config validated",
+                                  "validate-config-only reports validated config");
+  remove_dir(temp_dir);
+  return ok;
 }
 
 bool test_load_app_config_parses_runtime_worker_count() {
