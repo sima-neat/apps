@@ -23,7 +23,7 @@ Download variants into `assets/models/`:
 
 ## Prerequisites
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get pose_estimation/open_pose && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get open_pose && cd ../..`
 
 ## Important Behavior
 - C++ and Python both use positional arguments for model path, input directory, and output directory.
