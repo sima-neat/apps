@@ -92,8 +92,6 @@ Binary output:
 ## Run
 ### C++
 ```bash
-source ~/pyneat/bin/activate
-pip install -r examples/pose-estimation/simple-pose-estimation-overlay-pipeline/python/requirements.txt
 ./build/examples/pose-estimation/simple-pose-estimation-overlay-pipeline/simple-pose-estimation-overlay-pipeline \
   --config examples/pose-estimation/simple-pose-estimation-overlay-pipeline/common/config.yaml
 ```
