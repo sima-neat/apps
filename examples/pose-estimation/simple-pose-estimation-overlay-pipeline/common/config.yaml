@@ -1,0 +1,20 @@
+model:
+  path: assets/models/open_pose_mpk.tar.gz
+
+io:
+  input_dir: assets/test_images
+  output_dir: sandbox/pose_estimation
+
+runtime:
+  infer_size: 640
+  timeout_ms: 1000
+  upsample_factor: 4.0
+
+decode:
+  keypoint_score: 0.1
+  nms_radius: 6
+  paf_score: 0.05
+  paf_success_ratio: 0.8
+  paf_samples: 10
+  min_valid_joints: 3
+  min_avg_person_score: 0.2

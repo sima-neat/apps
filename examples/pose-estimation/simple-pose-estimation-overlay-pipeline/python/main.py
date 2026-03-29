@@ -1,25 +1,18 @@
-"""OpenPose pose-estimation overlay pipeline using pyneat."""
+"""Config-driven OpenPose pose-estimation overlay pipeline using pyneat."""
 
 from __future__ import annotations
 
 import argparse
-import struct
 import sys
 import time
 from pathlib import Path
 
-import cv2
-import numpy as np
-import pyneat
 import math
 
-INFER_SIZE = 640
-KEYPOINT_MIN_SCORE = 0.1
-NMS_RADIUS = 6
-PAF_MIN_SCORE = 0.05
-PAF_SUCCESS_RATIO = 0.8
-PAF_NUM_SAMPLES = 10
-PULL_TIMEOUT_MS = 5000
+from config import AppConfig, load_app_config
+
+
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "common" / "config.yaml"
 
 POSE_PAIRS = [
     (1, 2), (1, 5), (2, 3), (3, 4), (5, 6), (6, 7), (1, 8), 
@@ -55,7 +48,7 @@ def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
     return arr
 
 
-def letterbox(img: np.ndarray, new_shape=(640, 640), color=(128, 128, 128)):
+def letterbox(img: np.ndarray, new_shape: tuple[int, int], color=(128, 128, 128)):
     shape = img.shape[:2]  
     
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
@@ -76,7 +69,9 @@ def letterbox(img: np.ndarray, new_shape=(640, 640), color=(128, 128, 128)):
     return img, r, left, top
 
 
-def get_all_keypoints_without_grouping(heatmap_tensor, infer_size: int, min_score: float = KEYPOINT_MIN_SCORE, nms_radius: int = NMS_RADIUS) -> list[dict]:
+def get_all_keypoints_without_grouping(
+    heatmap_tensor, infer_size: int, min_score: float, nms_radius: int
+) -> list[dict]:
     h, w, c_hm = heatmap_tensor.shape
     stride_x = infer_size / float(w)
     stride_y = infer_size / float(h)
@@ -167,9 +162,16 @@ def draw_keypoints(frame: np.ndarray, keypoints: list[dict], labels: list[str]) 
         cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
         
     return frame
-def compute_paf_score(paf_tensor: np.ndarray, kpt_a: dict, kpt_b: dict, paf_x_idx: int, paf_y_idx: int, 
-                      paf_min_score: float = PAF_MIN_SCORE, paf_success_ratio: float = PAF_SUCCESS_RATIO,
-                      num_samples: int = PAF_NUM_SAMPLES) -> float:
+def compute_paf_score(
+    paf_tensor: np.ndarray,
+    kpt_a: dict,
+    kpt_b: dict,
+    paf_x_idx: int,
+    paf_y_idx: int,
+    paf_min_score: float,
+    paf_success_ratio: float,
+    num_samples: int,
+) -> float:
     """Calculates the line integral over the PAF vector field between two keypoints."""
     dx = kpt_b["grid_x"] - kpt_a["grid_x"]
     dy = kpt_b["grid_y"] - kpt_a["grid_y"]
@@ -206,10 +208,15 @@ def compute_paf_score(paf_tensor: np.ndarray, kpt_a: dict, kpt_b: dict, paf_x_id
         
     return 0.0
 
-def group_keypoints_with_pafs(keypoints: list[dict], paf_tensor: np.ndarray, 
-                              paf_min_score: float = PAF_MIN_SCORE,
-                              paf_success_ratio: float = PAF_SUCCESS_RATIO,
-                              paf_num_samples: int = PAF_NUM_SAMPLES) -> list[dict]:
+def group_keypoints_with_pafs(
+    keypoints: list[dict],
+    paf_tensor: np.ndarray,
+    paf_min_score: float,
+    paf_success_ratio: float,
+    paf_num_samples: int,
+    min_valid_joints: int,
+    min_avg_person_score: float,
+) -> list[dict]:
     """Uses greedy bipartite matching and graph merging to assemble people."""
     kpts_by_part = {i: [] for i in range(18)}
     for kpt in keypoints:
@@ -286,10 +293,10 @@ def group_keypoints_with_pafs(keypoints: list[dict], paf_tensor: np.ndarray,
     for p in people:
         kpts = p["keypoints"]
         valid_joints = p.get("valid_joints_count", len(kpts))
-        if valid_joints < 3:
+        if valid_joints < min_valid_joints:
             continue
             
-        if (p["total_score"] / valid_joints) >= 0.2:
+        if (p["total_score"] / valid_joints) >= min_avg_person_score:
             final_people.append(p)
 
     return final_people
@@ -328,71 +335,30 @@ def scale_keypoints(keypoints: list[dict], r: float, left: int, top: int) -> lis
         ))
     return scaled
 
-def main() -> int:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OpenPose simple pose estimation pipeline")
-    parser.add_argument("model", type=str, help="Path to compiled pose model package")
-    parser.add_argument("input_dir", type=str, help="Input image directory")
-    parser.add_argument("output_dir", type=str, help="Output directory")
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help=f"Path to YAML configuration. Default: {DEFAULT_CONFIG_PATH}",
+    )
     parser.add_argument(
         "--profile",
         action="store_true",
         help="Enable profiling: report end-to-end and model-inference timing",
     )
-    parser.add_argument(
-        "--infer-size",
-        type=int,
-        default=INFER_SIZE,
-        help=f"Inference input size (default: {INFER_SIZE})",
-    )
-    parser.add_argument(
-        "--keypoint-score",
-        type=float,
-        default=KEYPOINT_MIN_SCORE,
-        help=f"Keypoint confidence threshold (default: {KEYPOINT_MIN_SCORE})",
-    )
-    parser.add_argument(
-        "--nms-radius",
-        type=int,
-        default=NMS_RADIUS,
-        help=f"Non-maximum suppression radius (default: {NMS_RADIUS})",
-    )
-    parser.add_argument(
-        "--paf-score",
-        type=float,
-        default=PAF_MIN_SCORE,
-        help=f"Part Affinity Field score threshold (default: {PAF_MIN_SCORE})",
-    )
-    parser.add_argument(
-        "--paf-success-ratio",
-        type=float,
-        default=PAF_SUCCESS_RATIO,
-        help=f"PAF success ratio for valid connections (default: {PAF_SUCCESS_RATIO})",
-    )
-    parser.add_argument(
-        "--paf-samples",
-        type=int,
-        default=PAF_NUM_SAMPLES,
-        help=f"Number of PAF samples for line integral (default: {PAF_NUM_SAMPLES})",
-    )
-    parser.add_argument(
-        "--upsample-factor",
-        type=float,
-        default=4.0,
-        help="Heatmap/PAF upsample factor (default: 4.0)",
-    )
-    parser.add_argument(
-        "--pull-timeout",
-        type=int,
-        default=PULL_TIMEOUT_MS,
-        help=f"Inference pull timeout in ms (default: {PULL_TIMEOUT_MS})",
-    )
-    args = parser.parse_args()
+    return parser
 
-    if args.paf_samples < 2:
-        parser.error(f"--paf-samples must be >= 2 (got {args.paf_samples})")
 
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+def run_app(cfg: AppConfig, enable_profile: bool) -> int:
+    global cv2, np, pyneat
+
+    import cv2
+    import numpy as np
+    import pyneat
+
+    input_dir = Path(cfg.io.input_dir)
+    output_dir = Path(cfg.io.output_dir)
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
@@ -408,17 +374,17 @@ def main() -> int:
         opt = pyneat.ModelOptions()
         opt.media_type = "video/x-raw"
         opt.format = "BGR"
-        opt.input_max_width = args.infer_size
-        opt.input_max_height = args.infer_size
+        opt.input_max_width = cfg.runtime.infer_size
+        opt.input_max_height = cfg.runtime.infer_size
         opt.input_max_depth = 3
 
-        model = pyneat.Model(args.model, opt)
+        model = pyneat.Model(cfg.model.path, opt)
 
         sess = pyneat.Session()
         sess.add(model.session())
         print(f"[BUILD] Pipeline:\n{sess.describe_backend()}")
 
-        dummy = np.zeros((args.infer_size, args.infer_size, 3), dtype=np.uint8)
+        dummy = np.zeros((cfg.runtime.infer_size, cfg.runtime.infer_size, 3), dtype=np.uint8)
         t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.BGR)
         run = sess.build(t_dummy, pyneat.RunMode.Sync)
 
@@ -436,13 +402,15 @@ def main() -> int:
 
             orig_h, orig_w = bgr.shape[:2]
             
-            resized, r, pad_l, pad_t = letterbox(bgr, (args.infer_size, args.infer_size))
+            resized, r, pad_l, pad_t = letterbox(
+                bgr, (cfg.runtime.infer_size, cfg.runtime.infer_size)
+            )
             resized = np.ascontiguousarray(resized, dtype=np.uint8)
 
             t_in = pyneat.Tensor.from_numpy(resized, copy=True, image_format=pyneat.PixelFormat.BGR)
 
             infer_start = time.perf_counter()
-            out_opt = run.run(t_in, timeout_ms=args.pull_timeout)
+            out_opt = run.run(t_in, timeout_ms=cfg.runtime.timeout_ms)
             infer_end = time.perf_counter()
             if out_opt is None:
                 print(f"Inference failed for {img_path.name}", file=sys.stderr)
@@ -461,13 +429,37 @@ def main() -> int:
             heatmap_tensor = tensor_to_hwc_f32(tensors[0]) 
             paf_tensor = tensor_to_hwc_f32(tensors[1])
 
-            heatmap_tensor = cv2.resize(heatmap_tensor, (0, 0), fx=args.upsample_factor, fy=args.upsample_factor, interpolation=cv2.INTER_CUBIC)
-            paf_tensor = cv2.resize(paf_tensor, (0, 0), fx=args.upsample_factor, fy=args.upsample_factor, interpolation=cv2.INTER_CUBIC)
+            heatmap_tensor = cv2.resize(
+                heatmap_tensor,
+                (0, 0),
+                fx=cfg.runtime.upsample_factor,
+                fy=cfg.runtime.upsample_factor,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            paf_tensor = cv2.resize(
+                paf_tensor,
+                (0, 0),
+                fx=cfg.runtime.upsample_factor,
+                fy=cfg.runtime.upsample_factor,
+                interpolation=cv2.INTER_CUBIC,
+            )
 
 
-            raw_kpts = get_all_keypoints_without_grouping(heatmap_tensor, args.infer_size, min_score=args.keypoint_score, nms_radius=args.nms_radius)
-            people = group_keypoints_with_pafs(raw_kpts, paf_tensor, paf_min_score=args.paf_score,
-                                               paf_success_ratio=args.paf_success_ratio, paf_num_samples=args.paf_samples)
+            raw_kpts = get_all_keypoints_without_grouping(
+                heatmap_tensor,
+                cfg.runtime.infer_size,
+                min_score=cfg.decode.keypoint_score,
+                nms_radius=cfg.decode.nms_radius,
+            )
+            people = group_keypoints_with_pafs(
+                raw_kpts,
+                paf_tensor,
+                paf_min_score=cfg.decode.paf_score,
+                paf_success_ratio=cfg.decode.paf_success_ratio,
+                paf_num_samples=cfg.decode.paf_samples,
+                min_valid_joints=cfg.decode.min_valid_joints,
+                min_avg_person_score=cfg.decode.min_avg_person_score,
+            )
 
             for p in people:
                 scaled_kpts = scale_keypoints(list(p["keypoints"].values()), r, pad_l, pad_t)
@@ -487,19 +479,35 @@ def main() -> int:
             
             processed += 1
             status = f"[{processed}/{len(images)}] {img_path.name} -> {out_path.name} ({len(people)} detections)"
-            if args.profile:
+            if enable_profile:
                 status += f" | e2e={e2e_time:.2f}ms infer={infer_time:.2f}ms"
             print(status)
 
         run.close()
         print(f"Done: {processed} images processed")
-        if args.profile and processed > 0:
+        if enable_profile and processed > 0:
             print(f"[PROFILE] Average end-to-end: {total_e2e_time/processed:.2f}ms")
             print(f"[PROFILE] Average model inference: {total_infer_time/processed:.2f}ms")
         return 0
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 4
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    config_path = Path(args.config)
+    if not config_path.exists():
+        print(f"Error: config file not found: {config_path}", file=sys.stderr, flush=True)
+        return 2
+
+    try:
+        cfg = load_app_config(config_path)
+    except Exception as exc:
+        print(f"Error: failed to load config {config_path}: {exc}", file=sys.stderr, flush=True)
+        return 2
+
+    return run_app(cfg, args.profile)
 
 
 if __name__ == "__main__":
