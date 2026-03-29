@@ -21,6 +21,7 @@ IMAGE_CANDIDATES = (
     "assets/hero.jpeg",
     "assets/hero.webp",
 )
+MODEL_REFERENCE_RE = re.compile(r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$")
 PORTAL_IMAGE_CANDIDATES = (
     "image.png",
     "image.jpg",
@@ -147,6 +148,18 @@ def normalize_tags(raw: str) -> list[str]:
     return [tag.strip() for tag in raw.split(",") if tag.strip()]
 
 
+def parse_model_reference(raw: str) -> tuple[str, str]:
+    value = raw.strip()
+    if not value:
+        return "", ""
+
+    match = MODEL_REFERENCE_RE.fullmatch(value)
+    if not match:
+        return value, ""
+
+    return match.group("label").strip(), (match.group("url") or "").strip()
+
+
 def find_image_path(app_dir: Path) -> str | None:
     category = app_dir.parent.name
     app_name = app_dir.name
@@ -181,6 +194,7 @@ def parse_example(readme: Path) -> dict | None:
     sections, asset_paths = parse_sections(content, readme)
     sections_by_slug = section_map(sections)
     concept = sections_by_slug.get("concept", {"markdown": ""})["markdown"]
+    model, model_url = parse_model_reference(metadata.get("Model", ""))
 
     return {
         "id": f"{category}/{app_name}",
@@ -191,7 +205,8 @@ def parse_example(readme: Path) -> dict | None:
         "tags": normalize_tags(metadata.get("Tags", "")),
         "status": metadata.get("Status", "experimental"),
         "binary_name": metadata.get("Binary Name", app_name),
-        "model": metadata.get("Model", ""),
+        "model": model,
+        "model_url": model_url,
         "source_path": str(app_dir.relative_to(REPO_ROOT)),
         "readme_path": str(readme.relative_to(REPO_ROOT)),
         "image_path": find_image_path(app_dir),

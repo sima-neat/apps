@@ -275,6 +275,7 @@ function DetailPage({ catalog }) {
   const displayName = example?.name || example?.binary_name || decodedId;
   const binaryLabel = example?.binary_name || "";
   const modelLabel = example?.model || "";
+  const modelUrl = example?.model_url || "";
   const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
   const pathLabel = decodedId
     .split("/")
@@ -372,7 +373,7 @@ function DetailPage({ catalog }) {
             <Chip label={example.difficulty || "Unspecified"} tone="difficulty" />
             <Chip label={example.status || "experimental"} tone="status" />
             {example.languages ? <Chip label={example.languages} tone="languages" /> : null}
-            {example.model ? <Chip label={modelLabel} tone="model" /> : null}
+            {example.model ? <ModelChip label={modelLabel} url={modelUrl} /> : null}
             <Chip label={binaryLabel} tone="binary" />
             {githubUrl ? (
               <a
@@ -482,6 +483,24 @@ function ThemeToggle({ theme, onToggle }) {
 
 function Chip({ label, tone }) {
   return <span className={`chip chip-${tone}`}>{label}</span>;
+}
+
+function ModelChip({ label, url }) {
+  if (!url) {
+    return <Chip label={label} tone="model" />;
+  }
+
+  return (
+    <a
+      className="chip chip-model chip-link"
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      title={`Download ${label}`}
+    >
+      {label}
+    </a>
+  );
 }
 
 function slugTone(category) {
