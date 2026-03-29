@@ -575,7 +575,17 @@ int main(int argc, char** argv) {
     } else if (arg == "--paf-success-ratio" && i + 1 < argc) {
       paf_success_ratio = std::stof(argv[++i]);
     } else if (arg == "--paf-samples" && i + 1 < argc) {
-      paf_num_samples = std::stoi(argv[++i]);
+      ++i;
+      try {
+        paf_num_samples = std::stoi(argv[i]);
+      } catch (const std::exception&) {
+        std::cerr << "Error: --paf-samples requires an integer value, got '" << argv[i] << "'\n";
+        return 1;
+      }
+      if (paf_num_samples < 2) {
+        std::cerr << "Error: --paf-samples must be >= 2 (got " << paf_num_samples << ")\n";
+        return 1;
+      }
     } else if (arg == "--upsample-factor" && i + 1 < argc) {
       upsample_factor = std::stof(argv[++i]);
     } else if (arg == "--timeout" && i + 1 < argc) {

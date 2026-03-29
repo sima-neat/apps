@@ -9,10 +9,13 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | simple-pose-estimation-overlay-pipeline |
-| Model | OpenPose |
+| Model | open_pose |
 
 ## Concept
 Minimal image-folder pose estimation pipeline. Each image is inferred to extract human pose keypoints, annotated with skeleton overlays (joints and limbs), and written to an output folder. Uses heatmap and Part Affinity Field (PAF) outputs to group keypoints into full-body poses.
+
+## Preview
+![Demo screenshot](../../../assets/portal/pose-estimation/simple-pose-estimation-overlay-pipeline/image.png)
 
 ## Supported Models
 Download variants into `assets/models/`:

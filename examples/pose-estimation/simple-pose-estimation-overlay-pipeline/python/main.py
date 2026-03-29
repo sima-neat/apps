@@ -388,6 +388,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.paf_samples < 2:
+        parser.error(f"--paf-samples must be >= 2 (got {args.paf_samples})")
+
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     if not input_dir.is_dir():
