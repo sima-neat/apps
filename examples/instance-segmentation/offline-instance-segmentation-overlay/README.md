@@ -22,12 +22,12 @@ Snippet from a pipeline run:
 Also works with: `yolo_v8s_seg`, `yolo_v8m_seg`, `yolo_v8l_seg`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8n_seg && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8n_seg && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8n_seg && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8n_seg && cd ../..`
 
 ## Important Behavior
 - Model path is positional and required.

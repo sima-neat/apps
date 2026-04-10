@@ -19,11 +19,11 @@ Minimal image-folder pose estimation pipeline. Each image is inferred to extract
 
 ## Supported Models
 Download variants into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get open_pose && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get open_pose && cd ../..`
 
 ## Prerequisites
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get open_pose && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get open_pose && cd ../..`
 - Shared runtime and decode parameters live in `common/config.yaml`.
 
 ## Important Behavior

@@ -22,12 +22,12 @@ Snippet from a pipeline run:
 Also works with: `yolov5s`, `yolov5m`, `yolov5l`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolov5n && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolov5n && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolov5n && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolov5n && cd ../..`
 
 ## Important Behavior
 - Model path is positional and required.

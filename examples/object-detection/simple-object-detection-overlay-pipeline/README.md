@@ -23,12 +23,12 @@ Snippet from a pipeline run:
 Also works with: `yolo_v8s`, `yolo_v8m`, `yolo_v8l`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8n && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8n && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8n && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8n && cd ../..`
 - Labels file: `examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt`
 
 ## Important Behavior

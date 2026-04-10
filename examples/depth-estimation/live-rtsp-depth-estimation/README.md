@@ -59,15 +59,15 @@ Both implementations keep source/session setup, model setup, processing loop, re
 Also works with: `depth_anything_v2_vits`
 
 Download into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get midas_v21_small_256 && cd ../..`
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get depth_anything_v2_vits && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get midas_v21_small_256 && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - RTSP source reachable from runtime environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command (MiDaS): `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get midas_v21_small_256 && cd ../..`
-- Download command (Depth Anything V2): `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get depth_anything_v2_vits && cd ../..`
+- Download command (MiDaS): `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get midas_v21_small_256 && cd ../..`
+- Download command (Depth Anything V2): `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
 
 ## Important Behavior
 - `--model` is required for both C++ and Python.
