@@ -118,7 +118,7 @@ std::string resolve_resnet50_tar(const fs::path& root_in) {
   if (fs::exists(local))
     return local.string();
 
-  const int rc = std::system("sima-cli modelzoo get resnet_50");
+  const int rc = std::system("sima-cli modelzoo -v 2.0.0 get resnet_50");
   if (rc != 0)
     return "";
 
@@ -186,7 +186,7 @@ std::string resolve_yolov8s_tar_local_first(const fs::path& root_in, bool skip_d
   }
 
   if (!skip_download) {
-    const int rc = std::system("sima-cli modelzoo get yolo_v8s");
+    const int rc = std::system("sima-cli modelzoo -v 2.0.0 get yolo_v8s");
     if (rc == 0 && fs::exists(tmp_tar))
       return tmp_tar.string();
   }
@@ -305,7 +305,7 @@ std::string resolve_modelzoo_tar(const std::string& model_name, const fs::path& 
     }
   }
 
-  const std::string cmd = "sima-cli modelzoo get " + shell_quote(model_name);
+  const std::string cmd = "sima-cli modelzoo -v 2.0.0 get " + shell_quote(model_name);
   if (std::system(cmd.c_str()) != 0)
     return "";
 
