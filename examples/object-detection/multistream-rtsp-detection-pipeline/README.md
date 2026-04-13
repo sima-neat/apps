@@ -14,6 +14,11 @@
 ## Concept
 Multi-camera RTSP object detection pipeline using YOLOv8. The sample demonstrates concurrent stream ingestion, batched runtime behavior, and per-stream annotated output writing.
 
+## Preview
+Snippet from a pipeline run:
+
+![Multistream RTSP detection preview](../../../assets/portal/object-detection/multistream-rtsp-detection-pipeline/image.png)
+
 ## Architecture
 
 ### Pipeline
@@ -78,17 +83,18 @@ In C++, producer start is intentionally gated until infer/overlay workers are li
 Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8m && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8m && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - One or more RTSP camera sources.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8m && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8m && cd ../..`
 
 ## Important Behavior
 - `--model`, `--output`, and at least one `--rtsp` are required.
 - Use repeated `--rtsp` flags for multistream input.
+- The C++ implementation does not accept `--width` or `--height`; it probes each RTSP stream during setup and uses that per-stream geometry for decode, infer-session input sizing, and `SimaBoxDecode` box coordinates.
 - Output images are written per stream under the output directory.
 
 ## Command-Line Options
@@ -175,6 +181,7 @@ python examples/object-detection/multistream-rtsp-detection-pipeline/python/main
 
 ## Debugging Notes
 - Start with one stream first, then scale to multiple URLs.
+- If boxes look shifted or stretched, confirm the stream is being probed at the expected runtime resolution in the startup log and avoid assuming `1280x720` geometry for smaller RTSP sources.
 - If streams stall, check pull timeout, queue sizes, and RTSP source health.
 - If no detections appear, verify model path and labels file.
 

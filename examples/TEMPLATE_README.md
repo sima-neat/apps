@@ -3,27 +3,35 @@
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | <classification / object-detection / semantic-segmentation / instance-segmentation / depth-estimation / throughput> |
+| Category | <classification / object-detection / pose-estimation / semantic-segmentation / instance-segmentation / depth-estimation / face-detection / throughput> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
 | Status | <experimental / stable> |
 | Binary Name | <cmake_target_name> |
-| Model | <default_model_name> |
+| Model | <default_model_name> [https://example.com/path/to/<default_model_name>_mpk.tar.gz] |
 
 ## Concept
 <1-2 paragraphs: what this example demonstrates and which NEAT capabilities it exercises.>
+
+## Preview
+Optional. If you have a demo screenshot for the portal detail page, place it here immediately after `Concept`.
+
+```md
+![Demo screenshot](../../../assets/portal/<category>/<example>/image.png)
+```
 
 ## Supported Models
 Also works with: `<model_variant_1>`, `<model_variant_2>`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get <model_variant_1> && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get <model_variant_1> && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get <default_model_name> && cd ../..`
+- If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get <default_model_name> && cd ../..`
 
 ## Important Behavior
 - This example expects the model path to be provided explicitly at runtime.

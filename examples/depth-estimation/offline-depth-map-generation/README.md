@@ -13,16 +13,21 @@
 ## Concept
 Offline depth-map generation for image folders. The example runs inference per image and writes visual depth outputs.
 
+## Preview
+Snippet from a pipeline run:
+
+![Offline depth map generation preview](../../../assets/portal/depth-estimation/offline-depth-map-generation/image.png)
+
 ## Supported Models
 Primary model: `depth_anything_v2_vits`
 
 Download into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get depth_anything_v2_vits && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get depth_anything_v2_vits && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
 
 ## Important Behavior
 - Model path is positional and required.

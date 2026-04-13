@@ -16,9 +16,12 @@ from pathlib import Path
 VALID_CATEGORIES = {
     "classification",
     "object-detection",
+    "tracking",
     "semantic-segmentation",
     "instance-segmentation",
+    "pose-estimation",
     "depth-estimation",
+    "face-detection",
     "throughput",
 }
 
@@ -27,6 +30,7 @@ VALID_DIFFICULTIES = {"Beginner", "Intermediate", "Advanced"}
 VALID_STATUSES = {"experimental", "stable"}
 
 REQUIRED_METADATA_FIELDS = {"Category", "Difficulty", "Tags", "Status", "Binary Name", "Model"}
+MODEL_REFERENCE_RE = re.compile(r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$")
 
 REQUIRED_SECTIONS = {"Metadata", "Concept", "Prerequisites", "Run", "Source Files"}
 
@@ -102,6 +106,13 @@ def validate_readme(readme_path: Path) -> list[str]:
         errors.append(
             f"Invalid Status '{status}'. "
             f"Must be one of: {', '.join(sorted(VALID_STATUSES))}"
+        )
+
+    model = metadata.get("Model", "").strip()
+    if model and not MODEL_REFERENCE_RE.fullmatch(model):
+        errors.append(
+            "Invalid Model metadata. Use either '<model_label>' or "
+            "'<model_label> [https://host/path/model_mpk.tar.gz]'"
         )
 
     # Verify the example directory matches its category

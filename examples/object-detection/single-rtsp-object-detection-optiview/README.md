@@ -21,6 +21,11 @@
 
 The example is intentionally narrow in scope. It is not a generic output-mode demo and it does not try to support multiple unrelated workflows in one binary. The code is structured to show the intended OptiView path clearly.
 
+## Preview
+Snippet from a pipeline run:
+
+![Single RTSP object detection OptiView preview](../../../assets/portal/object-detection/single-rtsp-object-detection-optiview/image.png)
+
 ## What Is OptiView?
 OptiView is SiMa.ai's lightweight, cross-platform development and visualization tool for vision pipelines on DevKits:
 
@@ -69,7 +74,7 @@ This separation keeps the RTSP session from being tightly coupled to the inferen
 - RTSP camera source or use OptiView to start RTSP source
 - SiMa.ai developer portal account so the sample can download the model from modelzoo
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8s && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8s && cd ../..`
 
 
 ## Important Behavior
@@ -188,7 +193,7 @@ Example workflow:
 Download the `yolo_v8s` model using `sima-cli`:
 
 ```bash
-sima-cli modelzoo get yolo_v8s
+sima-cli modelzoo -v 2.0.0 get yolo_v8s
 ```
 
 Then start the Python app:
@@ -201,7 +206,7 @@ python3 python/main.py --rtsp <rtsp-url> --model yolo_v8s_mpk.tar.gz
 
 Python-specific notes:
 
-- if `--model` is omitted, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo get yolo_v8s`
+- if `--model` is omitted, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo -v 2.0.0 get yolo_v8s`
 - it sends OptiView JSON directly over UDP and streams video to the OptiView UDP video port
 - it expects OpenCV to be built with GStreamer support for the UDP H.264 video path
 
