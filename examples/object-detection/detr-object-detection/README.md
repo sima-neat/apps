@@ -34,23 +34,24 @@ Place the model in `assets/models/`:
 - Output boxes are mapped back to the original image resolution before drawing.
 - By default all DETR foreground classes are considered; `--person-only` keeps only the DETR `person` class.
 - Overlay text uses built-in DETR COCO labels and class-colored boxes.
+- `--profile` runs repeated inference and reports session, postprocessing, and overall timing statistics.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/object-detection/detr-object-detection/detr-object-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--max-draw <count>] [--person-only]`
+  `./build/examples/object-detection/detr-object-detection/detr-object-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--max-draw <count>] [--person-only] [--profile] [--num-runs <count>]`
 - Required arguments:
   `<input_image_path>`
 - Optional arguments:
-  `--model`, `--output`, `--conf`, `--max-draw`, `--person-only`
+  `--model`, `--output`, `--conf`, `--max-draw`, `--person-only`, `--profile`, `--num-runs`
 
 ### Python
 - Invocation:
-  `python3 examples/object-detection/detr-object-detection/python/main.py <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--max-draw <count>] [--person-only] [--verbose]`
+  `python3 examples/object-detection/detr-object-detection/python/main.py <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--max-draw <count>] [--person-only] [--profile] [--num-runs <count>] [--verbose]`
 - Required arguments:
   `<input_image_path>`
 - Optional arguments:
-  `--model`, `--output`, `--conf`, `--max-draw`, `--person-only`, `--verbose`
+  `--model`, `--output`, `--conf`, `--max-draw`, `--person-only`, `--profile`, `--num-runs`, `--verbose`
 
 ## Build
 ### Build From The Apps Repo

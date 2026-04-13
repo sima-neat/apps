@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -324,7 +325,7 @@ def visualize_detections(
     return image_copy
 
 
-def run_detr_inference(model_path: Path, image_path: Path) -> tuple[list[np.ndarray], np.ndarray, PreprocMeta]:
+def prepare_input(image_path: Path) -> tuple[np.ndarray, np.ndarray, PreprocMeta]:
     _log(f"Reading image: {image_path}")
     if not image_path.is_file():
         raise FileNotFoundError(f"Input image does not exist: {image_path}")
@@ -334,6 +335,10 @@ def run_detr_inference(model_path: Path, image_path: Path) -> tuple[list[np.ndar
         raise RuntimeError(f"Failed to read image: {image_path}")
 
     preprocessed, meta = preprocess_image_bgr(bgr)
+    return bgr, preprocessed, meta
+
+
+def load_tensor_model(model_path: Path) -> pyneat.Model:
     _log(f"Building tensor-input model for {FRAME_WIDTH}x{FRAME_HEIGHT}")
 
     opt = pyneat.ModelOptions()
@@ -343,11 +348,32 @@ def run_detr_inference(model_path: Path, image_path: Path) -> tuple[list[np.ndar
     opt.input_max_height = FRAME_HEIGHT
     opt.input_max_depth = 3
 
-    model = pyneat.Model(str(model_path), opt)
+    return pyneat.Model(str(model_path), opt)
+
+
+def run_model_inference(model: pyneat.Model, preprocessed: np.ndarray) -> list[np.ndarray]:
     tensor = pyneat.Tensor.from_numpy(preprocessed, copy=True)
     sample = model.run_tensor(tensor, timeout_ms=5000)
-    arrays = [tensor_to_numpy(t) for t in iter_tensors(sample)]
-    return arrays, bgr, meta
+    return [tensor_to_numpy(t) for t in iter_tensors(sample)]
+
+
+def build_model_runner(model: pyneat.Model, preprocessed: np.ndarray) -> tuple[pyneat.ModelRunner, pyneat.Tensor]:
+    tensor = pyneat.Tensor.from_numpy(preprocessed, copy=True)
+    runner = model.build_tensor(tensor)
+    return runner, tensor
+
+
+def format_profile_stats(name: str, values: list[float]) -> str:
+    arr = np.array(values, dtype=np.float64)
+    runs = float(len(arr))
+    fps = runs / arr.sum()
+    return (
+        f"  {name}: "
+        f"mean={arr.mean():.8f}s, "
+        f"min={arr.min():.8f}s, "
+        f"max={arr.max():.8f}s, "
+        f"FPS={fps:.3f}"
+    )
 
 
 def main() -> int:
@@ -380,7 +406,18 @@ def main() -> int:
     parser.add_argument(
         "--person-only",
         action="store_true",
-        help="Keep only COCO person detections (class id 0)",
+        help="Keep only DETR person detections (class id 1)",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Profile repeated runs and report session/postprocessing timing",
+    )
+    parser.add_argument(
+        "--num-runs",
+        type=int,
+        default=100,
+        help="Number of runs when --profile is enabled",
     )
     parser.add_argument(
         "--verbose",
@@ -398,10 +435,79 @@ def main() -> int:
         return 2
 
     try:
-        arrays, orig_bgr, meta = run_detr_inference(model_path, Path(args.image))
+        orig_bgr, preprocessed, meta = prepare_input(Path(args.image))
+        model = load_tensor_model(model_path)
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except Exception as exc:
+        logger.debug("Inference failure", exc_info=exc)
+        print(f"Error during inference: {exc}", file=sys.stderr)
+        return 3
+
+    if args.profile:
+        try:
+            runner, tensor = build_model_runner(model, preprocessed)
+            session_times: list[float] = []
+            post_times: list[float] = []
+            last_detections: list[dict[str, Any]] = []
+
+            for _ in range(max(1, int(args.num_runs))):
+                t0 = time.perf_counter()
+                if not runner.push(tensor):
+                    print("Profiling failed: runner.push returned False", file=sys.stderr)
+                    break
+                sample = runner.pull(timeout_ms=5000)
+                t1 = time.perf_counter()
+                if sample is None:
+                    print("Profiling failed: runner.pull returned None", file=sys.stderr)
+                    break
+
+                arrays = [tensor_to_numpy(t) for t in iter_tensors(sample)]
+                logits, boxes = extract_logits_and_boxes(arrays)
+                t2 = time.perf_counter()
+                detections = process_detr_output(
+                    boxes,
+                    logits,
+                    meta,
+                    confidence_threshold=float(args.conf),
+                    detect_only_person=bool(args.person_only),
+                )
+                t3 = time.perf_counter()
+
+                session_times.append(t1 - t0)
+                post_times.append(t3 - t2)
+                last_detections = detections
+
+            runner.close()
+
+            if not session_times:
+                print("Profiling aborted: no successful runs", file=sys.stderr)
+                return 4
+
+            total_times = [a + b for a, b in zip(session_times, post_times)]
+            print(f"Profiling over {len(session_times)} runs (image='{args.image}'):")
+            print(format_profile_stats("Session (push+pull)", session_times))
+            print(format_profile_stats("Postprocessing (decode+NMS)", post_times))
+            print(format_profile_stats("Overall (session + post)", total_times))
+            print(f"Last run detections: {len(last_detections)}")
+            for i, det in enumerate(last_detections[:20]):
+                box = det["box"]
+                print(
+                    f"  [{i}] class={class_name(det['class_id'])}({det['class_id']}) score={det['score']:.4f} "
+                    f"box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]"
+                )
+            return 0
+        except Exception as exc:
+            logger.debug("Profiling failure", exc_info=exc)
+            print(f"Error during profiling: {exc}", file=sys.stderr)
+            return 4
+
+    t0_total = time.perf_counter()
+    try:
+        t0_infer = time.perf_counter()
+        arrays = run_model_inference(model, preprocessed)
+        t1_infer = time.perf_counter()
     except Exception as exc:
         logger.debug("Inference failure", exc_info=exc)
         print(f"Error during inference: {exc}", file=sys.stderr)
@@ -444,6 +550,7 @@ def main() -> int:
         cv2.imwrite(str(out_path), out_img)
         print(f"Wrote annotated image: {out_path}")
 
+    t1_total = time.perf_counter()
     return 0
 
 

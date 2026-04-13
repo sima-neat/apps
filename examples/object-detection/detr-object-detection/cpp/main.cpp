@@ -4,7 +4,7 @@
  *
  * Usage:
  *   detr-object-detection <image_path> [--model <model.tar.gz>] [--output <out.png>]
- *                         [--conf <thr>] [--max-draw <count>] [--person-only]
+ *                         [--conf <thr>] [--max-draw <count>] [--person-only] [--profile] [--num-runs <count>]
  */
 #include "neat.h"
 
@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -155,6 +156,8 @@ struct Args {
   float conf = 0.5f;
   int max_draw = 50;
   bool person_only = false;
+  bool profile = false;
+  int num_runs = 100;
 };
 
 struct Tensor2D {
@@ -163,11 +166,34 @@ struct Tensor2D {
   std::vector<float> data;
 };
 
+struct Stats {
+  double mean = 0.0;
+  double min = 0.0;
+  double max = 0.0;
+  double sum = 0.0;
+};
+
+Stats compute_stats(const std::vector<double>& values) {
+  Stats s;
+  if (values.empty()) {
+    return s;
+  }
+  s.min = values.front();
+  s.max = values.front();
+  for (double x : values) {
+    s.sum += x;
+    s.min = std::min(s.min, x);
+    s.max = std::max(s.max, x);
+  }
+  s.mean = s.sum / static_cast<double>(values.size());
+  return s;
+}
+
 Args parse_args(int argc, char** argv) {
   if (argc < 2) {
     throw std::runtime_error(
         "Usage: detr-object-detection <image_path> [--model ...] [--output ...] "
-        "[--conf ...] [--max-draw ...] [--person-only]");
+        "[--conf ...] [--max-draw ...] [--person-only] [--profile] [--num-runs ...]");
   }
 
   Args a;
@@ -191,6 +217,10 @@ Args parse_args(int argc, char** argv) {
       a.max_draw = std::stoi(need("--max-draw"));
     } else if (arg == "--person-only") {
       a.person_only = true;
+    } else if (arg == "--profile") {
+      a.profile = true;
+    } else if (arg == "--num-runs") {
+      a.num_runs = std::stoi(need("--num-runs"));
     } else {
       throw std::runtime_error("unknown arg: " + arg);
     }
@@ -528,12 +558,69 @@ int main(int argc, char** argv) {
 
     cv::Mat dummy(kModelH, kModelW, CV_32FC3, cv::Scalar(0.0f, 0.0f, 0.0f));
     auto run = session.build(tensor_from_hwc_f32(dummy), simaai::neat::RunMode::Sync);
+    simaai::neat::Tensor input_t = tensor_from_hwc_f32(input_f32);
 
-    if (!run.push(tensor_from_hwc_f32(input_f32))) {
+    if (args.profile) {
+      const int runs = std::max(1, args.num_runs);
+      std::vector<double> session_times;
+      std::vector<double> post_times;
+      std::vector<Detection> last_dets;
+      session_times.reserve(runs);
+      post_times.reserve(runs);
+
+      for (int i = 0; i < runs; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!run.push(input_t)) {
+          throw std::runtime_error("run.push failed during profiling");
+        }
+        auto out_sample = run.pull(kDefaultTimeoutMs);
+        const auto t1 = std::chrono::steady_clock::now();
+        if (!out_sample.has_value()) {
+          throw std::runtime_error("run.pull returned no sample during profiling");
+        }
+
+        const std::vector<simaai::neat::Tensor> tensors = tensors_from_sample(*out_sample);
+        const auto [logits, boxes] = extract_logits_and_boxes(tensors);
+        const auto t2 = std::chrono::steady_clock::now();
+        last_dets = decode_detr_outputs(logits, boxes, meta, args.conf, args.person_only);
+        const auto t3 = std::chrono::steady_clock::now();
+
+        session_times.push_back(std::chrono::duration<double>(t1 - t0).count());
+        post_times.push_back(std::chrono::duration<double>(t3 - t2).count());
+      }
+
+      const Stats sess = compute_stats(session_times);
+      const Stats post = compute_stats(post_times);
+      const double runs_d = static_cast<double>(session_times.size());
+      const double total_sum = sess.sum + post.sum;
+
+      std::cout << "Profiling over " << session_times.size() << " runs (image='" << args.image.string() << "'):\n";
+      std::cout << "  Session (push+pull): mean=" << sess.mean << "s, min=" << sess.min
+                << "s, max=" << sess.max << "s, FPS=" << (runs_d / sess.sum) << "\n";
+      std::cout << "  Postprocessing (decode+NMS): mean=" << post.mean << "s, min=" << post.min
+                << "s, max=" << post.max << "s, FPS=" << (runs_d / post.sum) << "\n";
+      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d) << "s, min="
+                << (sess.min + post.min) << "s, max=" << (sess.max + post.max)
+                << "s, FPS=" << (runs_d / total_sum) << "\n";
+      std::cout << "Last run detections: " << last_dets.size() << "\n";
+      for (size_t i = 0; i < std::min<size_t>(last_dets.size(), 20); ++i) {
+        const auto& d = last_dets[i];
+        std::cout << "  [" << i << "] class=" << class_name(d.class_id) << "(" << d.class_id
+                  << ") score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2
+                  << "," << d.y2 << "]\n";
+      }
+      run.close();
+      return 0;
+    }
+
+    const auto t0_total = std::chrono::steady_clock::now();
+    const auto t0_infer = std::chrono::steady_clock::now();
+    if (!run.push(input_t)) {
       throw std::runtime_error("run.push failed");
     }
 
     auto out_sample = run.pull(kDefaultTimeoutMs);
+    const auto t1_infer = std::chrono::steady_clock::now();
     if (!out_sample.has_value()) {
       throw std::runtime_error("run.pull returned no sample");
     }
@@ -571,6 +658,15 @@ int main(int argc, char** argv) {
         throw std::runtime_error("failed to write: " + args.output.string());
       }
       std::cout << "Wrote annotated image: " << args.output << "\n";
+    }
+
+    const auto t1_total = std::chrono::steady_clock::now();
+    if (args.profile) {
+      const std::chrono::duration<double, std::milli> total_ms = t1_total - t0_total;
+      const std::chrono::duration<double, std::milli> infer_ms = t1_infer - t0_infer;
+      std::cout << "Timing:\n";
+      std::cout << "  End-to-end: " << total_ms.count() << " ms\n";
+      std::cout << "  Model inference: " << infer_ms.count() << " ms\n";
     }
 
     run.close();
