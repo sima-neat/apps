@@ -17,7 +17,7 @@ set -euo pipefail
 # - Extract the archive into ./neat-apps.
 
 BASE_URL="${NEAT_APPS_BASE_URL:-https://apps.sima-neat.com/download}"
-NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.modalix.info/install-neat-from-a-branch.sh}"
+NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat-from-a-branch.sh}"
 BRANCH="${1:-}"
 TAG_INPUT="${2:-latest}"
 DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
@@ -33,7 +33,7 @@ Environment:
   NEAT_APPS_BASE_URL      Base URL for apps downloads
                           default: https://apps.sima-neat.com/download
   NEAT_INSTALLER_URL      Hosted NEAT core installer URL
-                          default: https://tools.modalix.info/install-neat-from-a-branch.sh
+                          default: https://tools.sima-neat.com/install-neat-from-a-branch.sh
   NEAT_APPS_INSTALL_DIR   Destination directory for extracted files
                           default: ./neat-apps
   NEAT_APPS_ARCHIVE       Use an already downloaded local apps archive

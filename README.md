@@ -33,7 +33,7 @@ This repo is intentionally separate from `core`:
    **Note:** After the initial setup completes, the default `pyneat` virtual environment is available at `~/pyneat`. Activate it with `source ~/pyneat/bin/activate` to run Python examples.
 
 3. For broader NEAT framework concepts and platform documentation, see:
-   https://neat.modalix.info/
+   https://docs.sima-neat.com/
 
 This keeps examples editable and easy to customize.
 
