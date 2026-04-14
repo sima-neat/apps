@@ -176,7 +176,7 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 ## NEAT Core Dependency
 
 `neat-core.json` declares which NEAT core SDK branch and version this repo depends on.
-`./build.sh --all` reads this file and uses the hosted `install-neat-from-a-branch.sh`
+`./build.sh --all` reads this file and uses the hosted `install-neat.sh`
 installer to install the correct SDK before building, packaging, and writing the staged runtime metadata.
 
 ## Support
