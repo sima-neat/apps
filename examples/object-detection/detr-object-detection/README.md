@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | detr-object-detection |
-| Model | detr_resnet50_modified_cut_output_renamed_mpk.tar.gz |
+| Model | detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz |
 
 ## Concept
 This example demonstrates single-image object detection with a compiled **DETR** model. The input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the NEAT pipeline, and then decoded into object boxes and class scores.
@@ -17,16 +17,16 @@ This example demonstrates single-image object detection with a compiled **DETR**
 The model emits two raw tensors: classification logits and normalized bounding boxes for a fixed set of object queries. The example applies `softmax` over the class logits, `sigmoid` over the box outputs, filters by confidence, optionally keeps only the COCO `person` class, maps detections back onto the original image, and writes an annotated output image.
 
 ## Supported Models
-Validated with: `detr_resnet50_modified_cut_output_renamed_mpk.tar.gz`
+Validated with: `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 
 Place the model in `assets/models/`:
-- `assets/models/detr_resnet50_modified_cut_output_renamed_mpk.tar.gz`
+- `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be placed under `assets/models/`.
 - Default model path:
-  `assets/models/detr_resnet50_modified_cut_output_renamed_mpk.tar.gz`
+  `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 
 ## Important Behavior
 - The example expects one input image.
@@ -82,7 +82,7 @@ Binary output:
 ```bash
 ./build/examples/object-detection/detr-object-detection/detr-object-detection \
   <input_image_path> \
-  --model assets/models/detr_resnet50_modified_cut_output_renamed_mpk.tar.gz \
+  --model assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz \
   --output <output_image_path> \
   --conf 0.5
 ```
@@ -93,7 +93,7 @@ source ~/pyneat/bin/activate
 pip install -r examples/object-detection/detr-object-detection/python/requirements.txt
 python3 examples/object-detection/detr-object-detection/python/main.py \
   <input_image_path> \
-  --model assets/models/detr_resnet50_modified_cut_output_renamed_mpk.tar.gz \
+  --model assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz \
   --output <output_image_path> \
   --conf 0.5
 ```
@@ -149,7 +149,7 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 ```
 
 ## Debugging Notes
-- If the model fails to load, verify `assets/models/detr_resnet50_modified_cut_output_renamed_mpk.tar.gz` exists and is readable.
+- If the model fails to load, verify `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` exists and is readable.
 - If no detections appear, lower `--conf` and confirm the input image contains supported COCO objects.
 - If detections are visibly offset, verify the model frame assumptions (`1333x800`) still match the compiled package.
 - If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.

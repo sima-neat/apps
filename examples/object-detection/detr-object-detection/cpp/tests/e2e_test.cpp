@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
   if (fs::exists(models_dir)) {
     for (const auto& entry : fs::directory_iterator(models_dir)) {
       const std::string name = entry.path().filename().string();
-      if (name.find("detr_resnet50_modified_cut_output_renamed") != std::string::npos &&
+      if (name.find("detr_resnet50_modified_class_embed_bbox_embed") != std::string::npos &&
           name.find(".tar.gz") != std::string::npos) {
         model_path = entry.path().string();
         break;

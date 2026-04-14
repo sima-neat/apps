@@ -18,7 +18,7 @@ import pyneat
 VERBOSE = False
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_PATH = "assets/models/detr_resnet50_modified_cut_output_renamed_mpk.tar.gz"
+DEFAULT_MODEL_PATH = "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"
 FRAME_WIDTH = 1333
 FRAME_HEIGHT = 800
 PERSON_CLASS_ID = 1

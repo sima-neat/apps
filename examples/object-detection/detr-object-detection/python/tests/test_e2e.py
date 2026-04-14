@@ -46,7 +46,7 @@ class TestE2E:
         test_timeout_ms,
         skip_unless_e2e_ready,
     ):
-        model = _find_model(models_dir, "detr_resnet50_modified_cut_output_renamed")
+        model = _find_model(models_dir, "detr_resnet50_modified_class_embed_bbox_embed")
         skip_unless_e2e_ready(model is not None, "detr model not found in models_dir")
 
         input_dir = _resolve_input_dir(test_images_dir)

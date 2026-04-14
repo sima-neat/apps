@@ -151,7 +151,7 @@ struct Detection {
 
 struct Args {
   fs::path image;
-  std::string model = "assets/models/detr_resnet50_modified_cut_output_renamed_mpk.tar.gz";
+  std::string model = "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz";
   fs::path output;
   float conf = 0.5f;
   int max_draw = 50;
