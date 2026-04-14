@@ -117,7 +117,7 @@ E2E test:
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
 SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp \
-SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
+SIMANEAT_APPS_TEST_TIMEOUT_MS=180000 \
 ctest --test-dir build/examples/object-detection/detr-object-detection \
   -R 'detr-object-detection.e2e' --output-on-failure -V
 ```
@@ -142,7 +142,7 @@ export PYTHONPATH="$PWD"
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
 SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp/detr-python-e2e \
-SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
+SIMANEAT_APPS_TEST_TIMEOUT_MS=180000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
 pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
   examples/object-detection/detr-object-detection/python/tests/test_e2e.py -v
@@ -150,6 +150,7 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 
 ## Debugging Notes
 - If the model fails to load, verify `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` exists and is readable.
+- First-run model initialization can exceed 60 seconds on some setups. Increase `SIMANEAT_APPS_TEST_TIMEOUT_MS` (for example `180000`) for e2e runs.
 - If no detections appear, lower `--conf` and confirm the input image contains supported COCO objects.
 - If detections are visibly offset, verify the model frame assumptions (`1333x800`) still match the compiled package.
 - If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.
