@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout apps repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build apps on eLxr SDK
         env:
@@ -71,7 +71,7 @@ jobs:
 
     steps:
       - name: Checkout apps repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           clean: true
 
@@ -129,7 +129,7 @@ jobs:
 
     steps:
       - name: Checkout apps repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
             
       - name: Write latest.tag for branch
         run: |
@@ -232,7 +232,7 @@ jobs:
 
     steps:
       - name: Checkout apps repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

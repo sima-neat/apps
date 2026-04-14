@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout apps repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: List apps artifacts from Cloudflare R2
         run: |
