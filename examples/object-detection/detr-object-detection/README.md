@@ -16,6 +16,11 @@ This example demonstrates single-image object detection with a compiled **DETR**
 
 The model emits two raw tensors: classification logits and normalized bounding boxes for a fixed set of object queries. The example applies `softmax` over the class logits, `sigmoid` over the box outputs, filters by confidence, optionally keeps only the COCO `person` class, maps detections back onto the original image, and writes an annotated output image.
 
+## Preview
+Snippet from a pipeline run:
+
+![DETR object detection preview](../../../assets/portal/object-detection/detr-object-detection/image.png)
+
 ## Supported Models
 Validated with: `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 
