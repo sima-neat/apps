@@ -503,11 +503,8 @@ def main() -> int:
             print(f"Error during profiling: {exc}", file=sys.stderr)
             return 4
 
-    t0_total = time.perf_counter()
     try:
-        t0_infer = time.perf_counter()
         arrays = run_model_inference(model, preprocessed)
-        t1_infer = time.perf_counter()
     except Exception as exc:
         logger.debug("Inference failure", exc_info=exc)
         print(f"Error during inference: {exc}", file=sys.stderr)
@@ -550,7 +547,6 @@ def main() -> int:
         cv2.imwrite(str(out_path), out_img)
         print(f"Wrote annotated image: {out_path}")
 
-    t1_total = time.perf_counter()
     return 0
 
 
