@@ -11,6 +11,9 @@
 | Binary Name | simple-re-identification-pipeline |
 | Model | reid |
 
+## Preview
+![Demo screenshot](../../../assets/portal/re-identification/simple-re-identification-pipeline/image.png)
+
 ## Concept
 This example performs pairwise person re-identification by computing embeddings for two input images and comparing them with a selectable metric. It is designed as a minimal synchronous pipeline that focuses on practical runtime behavior: model warmup, deterministic preprocessing, inference, score computation, threshold-based decision, and artifact output.
 
@@ -20,12 +23,12 @@ Both C++ and Python implementations follow the same user-facing flow and produce
 Also works with: other ReID variants compatible with 128x256 RGB input.
 
 Download the default variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get reid && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get reid && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get reid && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get reid && cd ../..`
 
 ## Important Behavior
 - Required positional inputs are exactly two image paths (`image1 image2`).
@@ -83,7 +86,7 @@ Binary output:
   <input_image_path_1> \
   <input_image_path_2> \
   --metric euclidean \
-  --threshold 0.75 \
+  --threshold 25.0 \
   --output-dir <output_dir_path> \
   --profile
 ```
@@ -96,7 +99,7 @@ python3 examples/re-identification/simple-re-identification-pipeline/python/main
   <input_image_path_1> \
   <input_image_path_2> \
   --metric euclidean \
-  --threshold 0.75 \
+  --threshold 25.0 \
   --output-dir <output_dir_path> \
   --profile
 ```

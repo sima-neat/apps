@@ -79,13 +79,13 @@ int main(int argc, char** argv) {
   const char* images_env = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
   const fs::path images_root = images_env ? fs::path(images_env) : fs::path("assets/images/neat_reid_examples");
   const std::vector<fs::path> images = collect_images_recursive(images_root);
-  if (images.empty()) {
-    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-                "directory with image files (default assets/images/neat_reid_examples is empty)");
+  if (images.size() < 2) {
+    return skip_or_fail("need at least 2 images under images dir (found " +
+                        std::to_string(images.size()) + ")");
   }
 
-  const fs::path image_a = images.front();
-  const fs::path image_b = (images.size() > 1) ? images[1] : images.front();
+  const fs::path image_a = images[0];
+  const fs::path image_b = images[1];
   const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
   int failures = 0;

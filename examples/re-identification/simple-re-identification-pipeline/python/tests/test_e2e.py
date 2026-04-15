@@ -22,17 +22,15 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
 
 
 def _find_image_pair(images_dir: Path) -> tuple[Path, Path] | None:
-    """Find two images to use as a pair. If only one exists, use it twice."""
+    """Find two distinct images to use as a pair."""
     if not images_dir.exists():
         return None
     images = sorted(
         f for f in images_dir.rglob("*")
         if f.suffix.lower() in {".jpg", ".jpeg", ".png"}
     )
-    if not images:
+    if len(images) < 2:
         return None
-    if len(images) == 1:
-        return images[0], images[0]
     return images[0], images[1]
 
 @pytest.mark.e2e
