@@ -33,7 +33,7 @@ This repo is intentionally separate from `core`:
    **Note:** After the initial setup completes, the default `pyneat` virtual environment is available at `~/pyneat`. Activate it with `source ~/pyneat/bin/activate` to run Python examples.
 
 3. For broader NEAT framework concepts and platform documentation, see:
-   https://neat.modalix.info/
+   https://docs.sima-neat.com/
 
 This keeps examples editable and easy to customize.
 
@@ -176,7 +176,7 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 ## NEAT Core Dependency
 
 `neat-core.json` declares which NEAT core SDK branch and version this repo depends on.
-`./build.sh --all` reads this file and uses the hosted `install-neat-from-a-branch.sh`
+`./build.sh --all` reads this file and uses the hosted `install-neat.sh`
 installer to install the correct SDK before building, packaging, and writing the staged runtime metadata.
 
 ## Support
