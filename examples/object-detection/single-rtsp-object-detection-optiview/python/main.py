@@ -545,7 +545,7 @@ def resolve_yolov8s_model(root: Path) -> str:
 
     1. explicit environment override
     2. local/common modelzoo directories
-    3. `sima-cli modelzoo get yolo_v8s`
+    3. `sima-cli modelzoo -v 2.0.0 get yolo_v8s`
     """
     env_path = os.environ.get("SIMA_YOLO_TAR", "")
     if env_path and Path(env_path).exists():
@@ -603,7 +603,7 @@ def main() -> int:
     model_path = cfg.model or resolve_yolov8s_model(Path.cwd())
     if not model_path or not Path(model_path).is_file():
         print("Failed to locate yolo_v8s compiled model package.", file=sys.stderr)
-        print("Set --model or run 'sima-cli modelzoo get yolo_v8s'.", file=sys.stderr)
+        print("Set --model or run 'sima-cli modelzoo -v 2.0.0 get yolo_v8s'.", file=sys.stderr)
         return 2
 
     rtsp_session = None

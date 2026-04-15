@@ -33,11 +33,11 @@ Download any variant into `assets/models/`:
 ```bash
 mkdir -p assets/models
 cd assets/models
-sima-cli modelzoo get yolo_v8n
-sima-cli modelzoo get yolo_v8s
-sima-cli modelzoo get yolo_v8m
-sima-cli modelzoo get yolo_v8l
-sima-cli modelzoo get yolo_v8x
+sima-cli modelzoo -v 2.0.0 get yolo_v8n
+sima-cli modelzoo -v 2.0.0 get yolo_v8s
+sima-cli modelzoo -v 2.0.0 get yolo_v8m
+sima-cli modelzoo -v 2.0.0 get yolo_v8l
+sima-cli modelzoo -v 2.0.0 get yolo_v8x
 cd ../..
 ```
 

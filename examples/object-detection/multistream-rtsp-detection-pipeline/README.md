@@ -83,13 +83,13 @@ In C++, producer start is intentionally gated until infer/overlay workers are li
 Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8m && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8m && cd ../..`
 
 ## Prerequisites
 - Installed NEAT SDK.
 - One or more RTSP camera sources.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get yolo_v8m && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8m && cd ../..`
 
 ## Important Behavior
 - `--model`, `--output`, and at least one `--rtsp` are required.
