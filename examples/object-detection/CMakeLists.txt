@@ -1,4 +1,5 @@
 foreach(example IN ITEMS
+    detr-object-detection
     single-rtsp-object-detection-optiview
     multistream-rtsp-detection-pipeline
     simple-object-detection-overlay-pipeline
