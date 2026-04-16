@@ -22,6 +22,7 @@ VALID_CATEGORIES = {
     "pose-estimation",
     "depth-estimation",
     "face-detection",
+    "re-identification",
     "throughput",
 }
 
