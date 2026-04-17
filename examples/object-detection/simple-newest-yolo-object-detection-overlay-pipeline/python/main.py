@@ -95,26 +95,24 @@ def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
     return arr
 
 
-def dfl_distance_16(logits: np.ndarray) -> float:
-    e = np.exp(logits - float(np.max(logits)))
-    denom = float(np.sum(e))
-    if denom <= 0:
-        return 0.0
-    return float(np.dot(np.arange(16, dtype=np.float32), e) / denom)
 
-
-def iou_xyxy(a, b) -> float:
-    xx1 = max(a[0], b[0])
-    yy1 = max(a[1], b[1])
-    xx2 = min(a[2], b[2])
-    yy2 = min(a[3], b[3])
-    w = max(0.0, xx2 - xx1)
-    h = max(0.0, yy2 - yy1)
-    inter = w * h
-    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
-    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
-    den = area_a + area_b - inter
-    return inter / den if den > 0 else 0.0
+def nms_numpy(boxes_xyxy: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
+    """Vectorized NMS. boxes_xyxy shape (N,4), scores shape (N,). Returns kept indices."""
+    x1, y1, x2, y2 = boxes_xyxy[:, 0], boxes_xyxy[:, 1], boxes_xyxy[:, 2], boxes_xyxy[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
+        iou = inter / (areas[i] + areas[order[1:]] - inter)
+        order = order[1:][iou <= iou_threshold]
+    return np.array(keep, dtype=np.intp)
 
 
 def decode_yolo26m_boxes_from_sample(
@@ -126,63 +124,44 @@ def decode_yolo26m_boxes_from_sample(
     regs = [tensor_to_hwc_f32(tensors[i]) for i in range(3)]
     clss = [tensor_to_hwc_f32(tensors[i]) for i in range(3, 6)]
 
-    cand: list[dict] = []
-    for reg, cls in zip(regs, clss):
-        h, w, reg_c = reg.shape
-        stride = infer_size / float(h)
-        for y in range(h):
-            for x in range(w):
-                # Classification scores are already post-sigmoid.
-                cls_vec = cls[y, x, :]
-                class_id = int(np.argmax(cls_vec))
-                score = float(cls_vec[class_id])
-                if score < min_score:
-                    continue
-                cx = (x + 0.5) * stride
-                cy = (y + 0.5) * stride
-                r = reg[y, x, :]
-                if reg_c == 4:
-                    # YOLO26: 4-channel regression (cx, cy, w, h) absolute pixel coords.
-                    bcx, bcy = float(r[0]), float(r[1])
-                    bw, bh = float(r[2]), float(r[3])
-                    x1 = max(0.0, bcx - bw / 2.0)
-                    y1 = max(0.0, bcy - bh / 2.0)
-                    x2 = min(float(infer_size), bcx + bw / 2.0)
-                    y2 = min(float(infer_size), bcy + bh / 2.0)
-                elif reg_c >= 64:
-                    # YOLOv8-style DFL 16-bin encoding.
-                    l = dfl_distance_16(r[0:16]) * stride
-                    t = dfl_distance_16(r[16:32]) * stride
-                    rr = dfl_distance_16(r[32:48]) * stride
-                    b = dfl_distance_16(r[48:64]) * stride
-                    x1 = max(0.0, cx - l)
-                    y1 = max(0.0, cy - t)
-                    x2 = min(float(infer_size), cx + rr)
-                    y2 = min(float(infer_size), cy + b)
-                else:
-                    continue
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                cand.append(
-                    dict(x1=x1, y1=y1, x2=x2, y2=y2, score=score, class_id=class_id)
-                )
+    # Flatten all scales: (H,W,C) → (H*W,C), concatenate across levels.
+    all_boxes = np.concatenate([r.reshape(-1, r.shape[2]) for r in regs], axis=0)  # (N, 4)
+    all_probs = np.concatenate([c.reshape(-1, c.shape[2]) for c in clss], axis=0)  # (N, 80)
 
-    cand.sort(key=lambda d: d["score"], reverse=True)
-    keep: list[dict] = []
-    for d in cand:
-        suppressed = False
-        for k in keep:
-            if k["class_id"] == d["class_id"] and iou_xyxy(
-                (k["x1"], k["y1"], k["x2"], k["y2"]),
-                (d["x1"], d["y1"], d["x2"], d["y2"]),
-            ) > nms_iou:
-                suppressed = True
-                break
-        if not suppressed:
-            keep.append(d)
-            if len(keep) >= MAX_DET:
-                break
-    return keep
+    # Vectorized confidence filter (scores are already post-sigmoid).
+    max_scores = all_probs.max(axis=1)
+    mask = max_scores > min_score
+    all_boxes = all_boxes[mask]
+    all_probs = all_probs[mask]
+    max_scores = max_scores[mask]
+
+    if len(all_boxes) == 0:
+        return []
+
+    class_ids = all_probs.argmax(axis=1)
+
+    # (cx, cy, w, h) → (x1, y1, x2, y2)
+    boxes_xyxy = np.empty_like(all_boxes)
+    boxes_xyxy[:, 0] = all_boxes[:, 0] - all_boxes[:, 2] / 2.0
+    boxes_xyxy[:, 1] = all_boxes[:, 1] - all_boxes[:, 3] / 2.0
+    boxes_xyxy[:, 2] = all_boxes[:, 0] + all_boxes[:, 2] / 2.0
+    boxes_xyxy[:, 3] = all_boxes[:, 1] + all_boxes[:, 3] / 2.0
+    np.clip(boxes_xyxy[:, [0, 2]], 0, infer_size, out=boxes_xyxy[:, [0, 2]])
+    np.clip(boxes_xyxy[:, [1, 3]], 0, infer_size, out=boxes_xyxy[:, [1, 3]])
+
+    # Vectorized NMS.
+    keep_idx = nms_numpy(boxes_xyxy, max_scores, nms_iou)
+    if len(keep_idx) > MAX_DET:
+        keep_idx = keep_idx[:MAX_DET]
+
+    result = []
+    for i in keep_idx:
+        result.append(dict(
+            x1=float(boxes_xyxy[i, 0]), y1=float(boxes_xyxy[i, 1]),
+            x2=float(boxes_xyxy[i, 2]), y2=float(boxes_xyxy[i, 3]),
+            score=float(max_scores[i]), class_id=int(class_ids[i]),
+        ))
+    return result
 
 
 def draw_boxes(frame: np.ndarray, boxes: list[dict], labels: list[str]) -> np.ndarray:
@@ -242,6 +221,12 @@ def main() -> int:
         action="store_true",
         help="Skip drawing bounding boxes on output images",
     )
+    parser.add_argument(
+        "--num-runs",
+        type=int,
+        default=1,
+        help="Repeat the image set N times for FPS measurement (default: 1)",
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -272,22 +257,21 @@ def main() -> int:
         opt.input_max_depth = 3
         model = pyneat.Model(args.model, opt)
 
-        sess = pyneat.Session()
-        sess.add(model.session())
-        print(f"[BUILD] Pipeline:\n{sess.describe_backend()}")
-
+        # Warmup inference to stabilize timing before profiling.
         dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
         t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.BGR)
-        run = sess.build(t_dummy, pyneat.RunMode.Sync)
-
-        # Warmup inference to stabilize timing before profiling.
-        run.push_and_pull(t_dummy, timeout_ms=5000)
+        model.run(t_dummy, timeout_ms=10000)
         print("[WARMUP] done")
+
+        total_runs = args.num_runs
+        all_images = images * total_runs
+        if total_runs > 1:
+            print(f"Looping {total_runs}x over {len(images)} images ({len(all_images)} total)")
 
         pipeline_start = time.perf_counter()
         processed = 0
 
-        for img_path in images:
+        for img_path in all_images:
             img_start = time.perf_counter()
 
             bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
@@ -301,7 +285,7 @@ def main() -> int:
             t_in = pyneat.Tensor.from_numpy(resized, copy=True, image_format=pyneat.PixelFormat.BGR)
 
             infer_start = time.perf_counter()
-            out = run.push_and_pull(t_in, timeout_ms=5000)
+            out = model.run(t_in, timeout_ms=5000)
             infer_end = time.perf_counter()
 
             payload = extract_bbox_payload(out)
@@ -314,35 +298,39 @@ def main() -> int:
             decode_end = time.perf_counter()
 
             boxes = scale_boxes(boxes, INFER_SIZE, orig_w, orig_h)
+
             if not args.no_overlay:
                 draw_boxes(bgr, boxes, labels)
-
-            out_path = output_dir / f"{img_path.stem}.png"
-            cv2.imwrite(str(out_path), bgr)
+                out_path = output_dir / f"{img_path.stem}.png"
+                cv2.imwrite(str(out_path), bgr)
             img_end = time.perf_counter()
 
             processed += 1
-            print(f"[{processed}/{len(images)}] {img_path.name} -> {out_path.name} ({len(boxes)} detections)")
+            det_str = f"({len(boxes)} detections)"
+            if args.no_overlay:
+                print(f"[{processed}/{len(all_images)}] {img_path.name} {det_str}")
+            else:
+                print(f"[{processed}/{len(all_images)}] {img_path.name} -> {img_path.stem}.png {det_str}")
 
             if args.profile:
                 pre_ms = (infer_start - img_start) * 1000
                 inf_ms = (infer_end - infer_start) * 1000
                 dec_ms = (decode_end - infer_end) * 1000
-                ovl_ms = (img_end - decode_end) * 1000
+                post_ms = (img_end - decode_end) * 1000
                 tot_ms = (img_end - img_start) * 1000
                 print(
                     f"[PROFILE] {img_path.name}: preprocess={pre_ms:.1f}ms "
                     f"inference={inf_ms:.1f}ms decode={dec_ms:.1f}ms "
-                    f"overlay={ovl_ms:.1f}ms total={tot_ms:.1f}ms"
+                    f"overlay+save={post_ms:.1f}ms total={tot_ms:.1f}ms"
                 )
-
-        run.close()
 
         if args.profile and processed > 0:
             pipeline_end = time.perf_counter()
             total_s = pipeline_end - pipeline_start
             avg_ms = (total_s * 1000) / processed
-            print(f"[PROFILE] Total: {processed} images in {total_s:.1f}s (avg {avg_ms:.1f}ms/image)")
+            fps = processed / total_s
+            print(f"[PROFILE] Total: {processed} images in {total_s:.1f}s "
+                  f"(avg {avg_ms:.1f}ms/image, {fps:.1f} FPS)")
 
         print(f"Done: {processed} images processed")
         return 0

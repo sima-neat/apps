@@ -49,6 +49,7 @@ struct Config {
   float nms_iou = kDefaultNmsIou;
   bool profile = false;
   bool overlay = true;
+  int num_runs = 1;
 };
 
 void print_usage(const char* prog) {
@@ -57,7 +58,7 @@ void print_usage(const char* prog) {
             << "       --input-dir <dir> --output-dir <dir>\n"
             << "       [--min-score " << kDefaultMinScore << "] [--nms-iou "
             << kDefaultNmsIou << "]\n"
-            << "       [--profile] [--no-overlay]\n";
+            << "       [--profile] [--no-overlay] [--num-runs 1]\n";
 }
 
 int parse_args(int argc, char** argv, Config& cfg) {
@@ -70,6 +71,7 @@ int parse_args(int argc, char** argv, Config& cfg) {
       {"nms-iou", required_argument, nullptr, 'n'},
       {"profile", no_argument, nullptr, 'p'},
       {"no-overlay", no_argument, nullptr, 'O'},
+      {"num-runs", required_argument, nullptr, 'R'},
       {"help", no_argument, nullptr, 'h'},
       {nullptr, 0, nullptr, 0},
   };
@@ -100,6 +102,9 @@ int parse_args(int argc, char** argv, Config& cfg) {
       break;
     case 'O':
       cfg.overlay = false;
+      break;
+    case 'R':
+      cfg.num_runs = std::stoi(optarg);
       break;
     case 'h':
       print_usage(argv[0]);
@@ -206,9 +211,6 @@ TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
   return out;
 }
 
-float sigmoid(float x) {
-  return 1.0f / (1.0f + std::exp(-x));
-}
 
 float dfl_distance_16(const float* logits) {
   float maxv = -std::numeric_limits<float>::infinity();
@@ -461,8 +463,21 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 
+    // Build graph with hardware box decoder: Input -> Preprocess -> Infer -> SimaBoxDecode -> Output.
+    simaai::neat::InputOptions in_opt;
+    in_opt.media_type = "video/x-raw";
+    in_opt.format = "BGR";
+    in_opt.width = kInferSize;
+    in_opt.height = kInferSize;
+    in_opt.depth = 3;
+
     simaai::neat::Session session;
-    session.add(model.session());
+    session.add(simaai::neat::nodes::Input(in_opt));
+    session.add(simaai::neat::nodes::groups::Preprocess(model));
+    session.add(simaai::neat::nodes::groups::Infer(model));
+    session.add(simaai::neat::nodes::SimaBoxDecode(model, /*decode_type=*/"", kInferSize, kInferSize,
+                                                    cfg.min_score, cfg.nms_iou, kMaxDet));
+    session.add(simaai::neat::nodes::Output());
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
     cv::Mat dummy_bgr(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
@@ -474,9 +489,16 @@ int main(int argc, char** argv) {
     run.push_and_pull(dummy, kTimeoutMs);
     std::cout << "[WARMUP] done\n";
 
+    const int total_images = static_cast<int>(images.size()) * cfg.num_runs;
+    if (cfg.num_runs > 1) {
+      std::cout << "Looping " << cfg.num_runs << "x over " << images.size()
+                << " images (" << total_images << " total)\n";
+    }
+
     const auto pipeline_start = std::chrono::steady_clock::now();
     int processed = 0;
 
+    for (int run_idx = 0; run_idx < cfg.num_runs; ++run_idx) {
     for (const auto& image_path : images) {
       const auto img_start = std::chrono::steady_clock::now();
 
@@ -519,34 +541,41 @@ int main(int argc, char** argv) {
       const auto decode_end = std::chrono::steady_clock::now();
 
       const auto boxes_orig = scale_boxes_to_original(boxes_infer, orig_w, orig_h);
+
       if (cfg.overlay) {
         draw_boxes(bgr, boxes_orig, labels);
-      }
-
-      const fs::path out_path = output_dir / (image_path.stem().string() + ".png");
-      if (!cv::imwrite(out_path.string(), bgr)) {
-        std::cerr << "Failed to write: " << out_path << "\n";
-        continue;
+        const fs::path out_path = output_dir / (image_path.stem().string() + ".png");
+        if (!cv::imwrite(out_path.string(), bgr)) {
+          std::cerr << "Failed to write: " << out_path << "\n";
+          continue;
+        }
       }
       const auto img_end = std::chrono::steady_clock::now();
 
       ++processed;
-      std::cout << "[" << processed << "/" << images.size() << "] " << image_path.filename()
-                << " -> " << out_path.filename() << " (" << boxes_orig.size() << " detections)\n";
+      if (cfg.overlay) {
+        std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
+                  << " -> " << image_path.stem().string() << ".png"
+                  << " (" << boxes_orig.size() << " detections)\n";
+      } else {
+        std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
+                  << " (" << boxes_orig.size() << " detections)\n";
+      }
 
       if (cfg.profile) {
         const auto pre_ms = std::chrono::duration<double, std::milli>(infer_start - img_start).count();
         const auto inf_ms = std::chrono::duration<double, std::milli>(infer_end - infer_start).count();
         const auto dec_ms = std::chrono::duration<double, std::milli>(decode_end - infer_end).count();
-        const auto ovl_ms = std::chrono::duration<double, std::milli>(img_end - decode_end).count();
+        const auto post_ms = std::chrono::duration<double, std::milli>(img_end - decode_end).count();
         const auto tot_ms = std::chrono::duration<double, std::milli>(img_end - img_start).count();
         std::cout << "[PROFILE] " << image_path.filename().string()
                   << ": preprocess=" << cv::format("%.1f", pre_ms)
                   << "ms inference=" << cv::format("%.1f", inf_ms)
                   << "ms decode=" << cv::format("%.1f", dec_ms)
-                  << "ms overlay=" << cv::format("%.1f", ovl_ms)
+                  << "ms overlay+save=" << cv::format("%.1f", post_ms)
                   << "ms total=" << cv::format("%.1f", tot_ms) << "ms\n";
       }
+    }
     }
 
     run.close();
@@ -555,9 +584,11 @@ int main(int argc, char** argv) {
       const auto pipeline_end = std::chrono::steady_clock::now();
       const auto total_s = std::chrono::duration<double>(pipeline_end - pipeline_start).count();
       const auto avg_ms = (total_s * 1000.0) / static_cast<double>(processed);
+      const auto fps = static_cast<double>(processed) / total_s;
       std::cout << "[PROFILE] Total: " << processed << " images in "
                 << cv::format("%.1f", total_s) << "s (avg "
-                << cv::format("%.1f", avg_ms) << "ms/image)\n";
+                << cv::format("%.1f", avg_ms) << "ms/image, "
+                << cv::format("%.1f", fps) << " FPS)\n";
     }
 
     std::cout << "Done: " << processed << " images processed\n";

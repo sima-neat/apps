@@ -24,7 +24,10 @@ int main(int argc, char** argv) {
   if (fs::exists(models_dir)) {
     for (auto& entry : fs::directory_iterator(models_dir)) {
       auto name = entry.path().filename().string();
-      if (name.find("yolo26m") != std::string::npos && name.find(".tar.gz") != std::string::npos) {
+      if (name.find("yolo26m") != std::string::npos &&
+          name.find("seg") == std::string::npos &&
+          name.size() >= 7 &&
+          name.compare(name.size() - 7, 7, ".tar.gz") == 0) {
         model_path = entry.path().string();
         break;
       }
