@@ -65,19 +65,52 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Test 5: --profile with bad input dir → exit 2 (validates --profile is recognized)
-  {
-    auto r = spawn_and_wait(binary,
-        {"--model", "m.tar.gz", "--labels", "l.txt",
-         "--input-dir", "/nonexistent_dir_abc", "--output-dir", "/tmp/out",
-         "--profile"}, 10000);
+  // Helper: each optional flag should be recognized (not rejected as unknown).
+  // With a bad input-dir we expect exit 2, NOT exit 1 (which would mean arg-parse failed).
+  auto expect_flag_recognized = [&](const std::string& label,
+                                    std::vector<std::string> extra_args) {
+    std::vector<std::string> argv_vec = {
+        "--model", "m.tar.gz", "--labels", "l.txt",
+        "--input-dir", "/nonexistent_dir_abc", "--output-dir", "/tmp/out"};
+    argv_vec.insert(argv_vec.end(), extra_args.begin(), extra_args.end());
+    auto r = spawn_and_wait(binary, argv_vec, 10000);
     if (r.exit_code != 2) {
-      std::cerr << "[FAIL] profile+bad dir: expected exit 2, got " << r.exit_code << "\n";
+      std::cerr << "[FAIL] " << label << ": expected exit 2, got " << r.exit_code << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] --profile flag recognized, bad input dir correctly rejected\n";
+      std::cout << "[OK] " << label << " flag recognized\n";
     }
-  }
+  };
+
+  // Helper: invalid value for a validated flag should exit 1 (not silently accepted).
+  auto expect_flag_rejected = [&](const std::string& label,
+                                  std::vector<std::string> extra_args) {
+    std::vector<std::string> argv_vec = {
+        "--model", "m.tar.gz", "--labels", "l.txt",
+        "--input-dir", "/tmp", "--output-dir", "/tmp/out"};
+    argv_vec.insert(argv_vec.end(), extra_args.begin(), extra_args.end());
+    auto r = spawn_and_wait(binary, argv_vec, 10000);
+    if (r.exit_code != 1) {
+      std::cerr << "[FAIL] " << label << ": expected exit 1, got " << r.exit_code << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] " << label << " rejected\n";
+    }
+  };
+
+  // Tests 5-9: smoke tests that each optional flag is recognized.
+  expect_flag_recognized("--profile", {"--profile"});
+  expect_flag_recognized("--no-overlay", {"--no-overlay"});
+  expect_flag_recognized("--num-runs", {"--num-runs", "3"});
+  expect_flag_recognized("--min-score", {"--min-score", "0.3"});
+  expect_flag_recognized("--nms-iou", {"--nms-iou", "0.5"});
+
+  // Tests 10-14: invalid values must be rejected.
+  expect_flag_rejected("--num-runs 0", {"--num-runs", "0"});
+  expect_flag_rejected("--num-runs -1", {"--num-runs", "-1"});
+  expect_flag_rejected("--min-score 2.0", {"--min-score", "2.0"});
+  expect_flag_rejected("--min-score -0.1", {"--min-score", "-0.1"});
+  expect_flag_rejected("--nms-iou 1.5", {"--nms-iou", "1.5"});
 
   return failures > 0 ? 1 : 0;
 }

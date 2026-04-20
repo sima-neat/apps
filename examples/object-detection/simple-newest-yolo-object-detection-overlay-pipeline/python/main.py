@@ -229,6 +229,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if not 0.0 <= args.min_score <= 1.0:
+        print(f"Error: --min-score must be in [0.0, 1.0], got {args.min_score}", file=sys.stderr)
+        return 2
+    if not 0.0 <= args.nms_iou <= 1.0:
+        print(f"Error: --nms-iou must be in [0.0, 1.0], got {args.nms_iou}", file=sys.stderr)
+        return 2
+    if args.num_runs < 1:
+        print(f"Error: --num-runs must be >= 1, got {args.num_runs}", file=sys.stderr)
+        return 2
+
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     labels_path = Path(args.labels)

@@ -75,17 +75,44 @@ class TestArgParsing:
         assert r.returncode == 2
         assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
 
-    def test_profile_flag_accepted(self):
-        """--profile should be recognized; failure should be from bad dir, not argparse."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY),
-             "--model", "model.tar.gz", "--labels", "labels.txt",
-             "--input-dir", "/nonexistent/path/input",
-             "--output-dir", "/tmp/output",
-             "--profile"],
-            capture_output=True, text=True, timeout=10,
-        )
-        # Should fail due to bad input dir (exit 2), not argparse error
+    @staticmethod
+    def _run_with_extra(extra):
+        """Run main.py with minimal valid required flags plus caller's extras."""
+        base = [
+            sys.executable, str(MAIN_PY),
+            "--model", "model.tar.gz", "--labels", "labels.txt",
+            "--input-dir", "/nonexistent/path/input",
+            "--output-dir", "/tmp/output",
+        ]
+        return subprocess.run(base + extra, capture_output=True, text=True, timeout=10)
+
+    @pytest.mark.parametrize("extra", [
+        ["--profile"],
+        ["--no-overlay"],
+        ["--num-runs", "3"],
+        ["--min-score", "0.3"],
+        ["--nms-iou", "0.5"],
+    ])
+    def test_optional_flag_recognized(self, extra):
+        """Each optional flag should parse cleanly; failure is from bad dir, not argparse."""
+        r = self._run_with_extra(extra)
         assert r.returncode != 0
-        # argparse errors always say "unrecognized arguments"; this should not
         assert "unrecognized" not in r.stderr.lower()
+
+    @pytest.mark.parametrize("extra", [
+        ["--num-runs", "0"],
+        ["--num-runs", "-1"],
+        ["--min-score", "2.0"],
+        ["--min-score", "-0.1"],
+        ["--nms-iou", "1.5"],
+    ])
+    def test_invalid_values_rejected(self, extra):
+        """Out-of-range values must exit non-zero with an error message."""
+        base = [
+            sys.executable, str(MAIN_PY),
+            "--model", "model.tar.gz", "--labels", "labels.txt",
+            "--input-dir", "/tmp", "--output-dir", "/tmp/out",
+        ]
+        r = subprocess.run(base + extra, capture_output=True, text=True, timeout=10)
+        assert r.returncode != 0
+        assert "error" in r.stderr.lower()

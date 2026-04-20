@@ -20,21 +20,18 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
+  const std::string kExpectedModel = "yolo26m_mod_mpk.tar.gz";
   std::string model_path;
   if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      auto name = entry.path().filename().string();
-      if (name.find("yolo26m") != std::string::npos &&
-          name.find("seg") == std::string::npos &&
-          name.size() >= 7 &&
-          name.compare(name.size() - 7, 7, ".tar.gz") == 0) {
-        model_path = entry.path().string();
-        break;
-      }
+    fs::path candidate = fs::path(models_dir) / kExpectedModel;
+    if (fs::exists(candidate)) {
+      model_path = candidate.string();
     }
   }
   if (model_path.empty()) {
-    return skip_or_fail("yolo26m model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+    return skip_or_fail(
+        "expected model '" + kExpectedModel +
+        "' not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   std::string labels_file;
@@ -44,7 +41,8 @@ int main(int argc, char** argv) {
 
   std::string example_dir = fs::path(binary).parent_path().string();
   std::vector<std::string> label_search = {
-    "examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/common/coco_label.txt",
+    "examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/"
+    "common/coco_label.txt",
     example_dir + "/common/coco_label.txt",
   };
   for (const auto& p : label_search) {
@@ -57,7 +55,8 @@ int main(int argc, char** argv) {
   }
   if (labels_file.empty()) {
     return skip_or_fail(
-        "common/coco_label.txt not found; set SIMANEAT_APPS_TEST_LABELS_FILE or ensure example label file is available");
+        "common/coco_label.txt not found; set SIMANEAT_APPS_TEST_LABELS_FILE "
+        "or ensure example label file is available");
   }
 
   const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");

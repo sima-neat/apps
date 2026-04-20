@@ -20,12 +20,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <getopt.h>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -121,15 +119,20 @@ int parse_args(int argc, char** argv, Config& cfg) {
     print_usage(argv[0]);
     return 1;
   }
+  if (cfg.min_score < 0.0f || cfg.min_score > 1.0f) {
+    std::cerr << "Error: --min-score must be in [0.0, 1.0], got " << cfg.min_score << "\n";
+    return 1;
+  }
+  if (cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
+    std::cerr << "Error: --nms-iou must be in [0.0, 1.0], got " << cfg.nms_iou << "\n";
+    return 1;
+  }
+  if (cfg.num_runs < 1) {
+    std::cerr << "Error: --num-runs must be >= 1, got " << cfg.num_runs << "\n";
+    return 1;
+  }
   return 0;
 }
-
-struct TensorHWC {
-  int h = 0;
-  int w = 0;
-  int c = 0;
-  std::vector<float> data;
-};
 
 bool is_image(const fs::path& p) {
   std::string ext = p.extension().string();
@@ -156,202 +159,6 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
     throw std::runtime_error("labels file is empty: " + labels_path.string());
   }
   return labels;
-}
-
-std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
-  if (sample.kind == simaai::neat::SampleKind::Tensor) {
-    if (!sample.tensor.has_value()) {
-      throw std::runtime_error("tensor sample missing payload");
-    }
-    return {*sample.tensor};
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    std::vector<simaai::neat::Tensor> out;
-    for (const auto& field : sample.fields) {
-      auto child = collect_tensors(field);
-      out.insert(out.end(), child.begin(), child.end());
-    }
-    return out;
-  }
-
-  throw std::runtime_error("unexpected sample kind");
-}
-
-TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
-  if (t.dtype != simaai::neat::TensorDType::Float32) {
-    throw std::runtime_error("expected Float32 tensor for yolo26m decode");
-  }
-
-  TensorHWC out;
-  if (t.shape.size() == 4) {
-    if (t.shape[0] != 1) {
-      throw std::runtime_error("only batch=1 is supported");
-    }
-    out.h = static_cast<int>(t.shape[1]);
-    out.w = static_cast<int>(t.shape[2]);
-    out.c = static_cast<int>(t.shape[3]);
-  } else if (t.shape.size() == 3) {
-    out.h = static_cast<int>(t.shape[0]);
-    out.w = static_cast<int>(t.shape[1]);
-    out.c = static_cast<int>(t.shape[2]);
-  } else {
-    throw std::runtime_error("unexpected tensor rank for HWC decode");
-  }
-
-  const size_t elems =
-      static_cast<size_t>(out.h) * static_cast<size_t>(out.w) * static_cast<size_t>(out.c);
-  const std::vector<uint8_t> bytes = t.copy_dense_bytes_tight();
-  if (bytes.size() < elems * sizeof(float)) {
-    throw std::runtime_error("tensor byte size is smaller than expected");
-  }
-
-  out.data.resize(elems);
-  std::memcpy(out.data.data(), bytes.data(), elems * sizeof(float));
-  return out;
-}
-
-
-float dfl_distance_16(const float* logits) {
-  float maxv = -std::numeric_limits<float>::infinity();
-  for (int i = 0; i < 16; ++i) {
-    maxv = std::max(maxv, logits[i]);
-  }
-
-  float denom = 0.0f;
-  float numer = 0.0f;
-  for (int i = 0; i < 16; ++i) {
-    const float e = std::exp(logits[i] - maxv);
-    denom += e;
-    numer += static_cast<float>(i) * e;
-  }
-  if (denom <= 0.0f) {
-    return 0.0f;
-  }
-  return numer / denom;
-}
-
-float iou_xyxy(const objdet::Box& a, const objdet::Box& b) {
-  const float xx1 = std::max(a.x1, b.x1);
-  const float yy1 = std::max(a.y1, b.y1);
-  const float xx2 = std::min(a.x2, b.x2);
-  const float yy2 = std::min(a.y2, b.y2);
-  const float w = std::max(0.0f, xx2 - xx1);
-  const float h = std::max(0.0f, yy2 - yy1);
-  const float inter = w * h;
-  const float area_a = std::max(0.0f, a.x2 - a.x1) * std::max(0.0f, a.y2 - a.y1);
-  const float area_b = std::max(0.0f, b.x2 - b.x1) * std::max(0.0f, b.y2 - b.y1);
-  const float den = area_a + area_b - inter;
-  return den > 0.0f ? (inter / den) : 0.0f;
-}
-
-std::vector<objdet::Box> decode_yolo26m_boxes_from_tensors(
-    const std::vector<simaai::neat::Tensor>& tensors, float min_score, float nms_iou) {
-  if (tensors.size() < 6) {
-    throw std::runtime_error("expected at least 6 tensors for yolo26m decode");
-  }
-
-  const std::array<TensorHWC, 3> regs = {tensor_to_hwc_f32(tensors[0]), tensor_to_hwc_f32(tensors[1]),
-                                         tensor_to_hwc_f32(tensors[2])};
-  const std::array<TensorHWC, 3> clss = {tensor_to_hwc_f32(tensors[3]),
-                                         tensor_to_hwc_f32(tensors[4]),
-                                         tensor_to_hwc_f32(tensors[5])};
-
-  std::vector<objdet::Box> candidates;
-  candidates.reserve(2000);
-
-  for (size_t level = 0; level < regs.size(); ++level) {
-    const auto& reg = regs[level];
-    const auto& cls = clss[level];
-
-    if (reg.h <= 0 || reg.w <= 0 || (reg.c != 4 && reg.c < 64)) {
-      continue;
-    }
-    if (reg.h != cls.h || reg.w != cls.w || cls.c <= 0) {
-      throw std::runtime_error("unexpected yolo26m tensor shapes");
-    }
-
-    const float stride = static_cast<float>(kInferSize) / static_cast<float>(reg.h);
-    for (int y = 0; y < reg.h; ++y) {
-      for (int x = 0; x < reg.w; ++x) {
-        const size_t cls_base =
-            (static_cast<size_t>(y) * static_cast<size_t>(reg.w) + static_cast<size_t>(x)) *
-            static_cast<size_t>(cls.c);
-
-        // Classification scores are already post-sigmoid.
-        int best_class = -1;
-        float best_score = 0.0f;
-        for (int c = 0; c < cls.c; ++c) {
-          const float score = cls.data[cls_base + static_cast<size_t>(c)];
-          if (score > best_score) {
-            best_score = score;
-            best_class = c;
-          }
-        }
-        if (best_score < min_score || best_class < 0) {
-          continue;
-        }
-
-        const float cx = (static_cast<float>(x) + 0.5f) * stride;
-        const float cy = (static_cast<float>(y) + 0.5f) * stride;
-
-        objdet::Box box;
-        if (reg.c == 4) {
-          // YOLO26: 4-channel regression (cx, cy, w, h) absolute pixel coords.
-          const size_t reg_base =
-              (static_cast<size_t>(y) * static_cast<size_t>(reg.w) + static_cast<size_t>(x)) * 4U;
-          const float bcx = reg.data[reg_base + 0];
-          const float bcy = reg.data[reg_base + 1];
-          const float bw  = reg.data[reg_base + 2];
-          const float bh  = reg.data[reg_base + 3];
-          box.x1 = std::max(0.0f, bcx - bw * 0.5f);
-          box.y1 = std::max(0.0f, bcy - bh * 0.5f);
-          box.x2 = std::min(static_cast<float>(kInferSize), bcx + bw * 0.5f);
-          box.y2 = std::min(static_cast<float>(kInferSize), bcy + bh * 0.5f);
-        } else {
-          // YOLOv8-style DFL 16-bin encoding.
-          const size_t reg_base =
-              (static_cast<size_t>(y) * static_cast<size_t>(reg.w) + static_cast<size_t>(x)) * 64U;
-          const float l = dfl_distance_16(&reg.data[reg_base + 0]) * stride;
-          const float t = dfl_distance_16(&reg.data[reg_base + 16]) * stride;
-          const float r = dfl_distance_16(&reg.data[reg_base + 32]) * stride;
-          const float b = dfl_distance_16(&reg.data[reg_base + 48]) * stride;
-          box.x1 = std::max(0.0f, cx - l);
-          box.y1 = std::max(0.0f, cy - t);
-          box.x2 = std::min(static_cast<float>(kInferSize), cx + r);
-          box.y2 = std::min(static_cast<float>(kInferSize), cy + b);
-        }
-        box.score = best_score;
-        box.class_id = best_class;
-
-        if (box.x2 > box.x1 && box.y2 > box.y1) {
-          candidates.push_back(box);
-        }
-      }
-    }
-  }
-
-  std::sort(candidates.begin(), candidates.end(),
-            [](const objdet::Box& a, const objdet::Box& b) { return a.score > b.score; });
-
-  std::vector<objdet::Box> keep;
-  keep.reserve(static_cast<size_t>(kMaxDet));
-  for (const auto& box : candidates) {
-    bool suppressed = false;
-    for (const auto& kept : keep) {
-      if (kept.class_id == box.class_id && iou_xyxy(kept, box) > nms_iou) {
-        suppressed = true;
-        break;
-      }
-    }
-    if (!suppressed) {
-      keep.push_back(box);
-      if (static_cast<int>(keep.size()) >= kMaxDet) {
-        break;
-      }
-    }
-  }
-  return keep;
 }
 
 std::vector<objdet::Box> scale_boxes_to_original(const std::vector<objdet::Box>& boxes, int out_w,
@@ -463,7 +270,8 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 
-    // Build graph with hardware box decoder: Input -> Preprocess -> Infer -> SimaBoxDecode -> Output.
+    // Build graph with hardware box decoder:
+    // Input -> Preprocess -> Infer -> SimaBoxDecode -> Output.
     simaai::neat::InputOptions in_opt;
     in_opt.media_type = "video/x-raw";
     in_opt.format = "BGR";
@@ -475,8 +283,10 @@ int main(int argc, char** argv) {
     session.add(simaai::neat::nodes::Input(in_opt));
     session.add(simaai::neat::nodes::groups::Preprocess(model));
     session.add(simaai::neat::nodes::groups::Infer(model));
-    session.add(simaai::neat::nodes::SimaBoxDecode(model, /*decode_type=*/"", kInferSize, kInferSize,
-                                                    cfg.min_score, cfg.nms_iou, kMaxDet));
+    session.add(simaai::neat::nodes::SimaBoxDecode(model, /*decode_type=*/"",
+                                                   kInferSize, kInferSize,
+                                                   cfg.min_score, cfg.nms_iou,
+                                                   kMaxDet));
     session.add(simaai::neat::nodes::Output());
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
@@ -499,83 +309,75 @@ int main(int argc, char** argv) {
     int processed = 0;
 
     for (int run_idx = 0; run_idx < cfg.num_runs; ++run_idx) {
-    for (const auto& image_path : images) {
-      const auto img_start = std::chrono::steady_clock::now();
+      for (const auto& image_path : images) {
+        const auto img_start = std::chrono::steady_clock::now();
 
-      cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
-      if (bgr.empty()) {
-        std::cerr << "Skipping unreadable: " << image_path.filename() << "\n";
-        continue;
-      }
-
-      const int orig_w = bgr.cols;
-      const int orig_h = bgr.rows;
-
-      cv::Mat resized;
-      cv::resize(bgr, resized, cv::Size(kInferSize, kInferSize), 0, 0, cv::INTER_LINEAR);
-      simaai::neat::Tensor input = simaai::neat::from_cv_mat(
-          resized, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
-
-      const auto infer_start = std::chrono::steady_clock::now();
-      simaai::neat::Sample out = run.push_and_pull(input, kTimeoutMs);
-      const auto infer_end = std::chrono::steady_clock::now();
-
-      std::vector<objdet::Box> boxes_infer;
-      std::vector<uint8_t> payload;
-      std::string bbox_err;
-      if (objdet::extract_bbox_payload(out, payload, bbox_err)) {
-        try {
-          boxes_infer = objdet::parse_boxes_strict(payload, kInferSize, kInferSize, kMaxDet, false);
-        } catch (const std::exception&) {
-          boxes_infer = objdet::parse_boxes_lenient(payload, kInferSize, kInferSize, kMaxDet);
-        }
-      } else {
-        try {
-          const auto tensors = collect_tensors(out);
-          boxes_infer = decode_yolo26m_boxes_from_tensors(tensors, cfg.min_score, cfg.nms_iou);
-        } catch (const std::exception& e) {
-          std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
+        cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+        if (bgr.empty()) {
+          std::cerr << "Skipping unreadable: " << image_path.filename() << "\n";
           continue;
         }
-      }
-      const auto decode_end = std::chrono::steady_clock::now();
 
-      const auto boxes_orig = scale_boxes_to_original(boxes_infer, orig_w, orig_h);
+        const int orig_w = bgr.cols;
+        const int orig_h = bgr.rows;
 
-      if (cfg.overlay) {
-        draw_boxes(bgr, boxes_orig, labels);
-        const fs::path out_path = output_dir / (image_path.stem().string() + ".png");
-        if (!cv::imwrite(out_path.string(), bgr)) {
-          std::cerr << "Failed to write: " << out_path << "\n";
+        cv::Mat resized;
+        cv::resize(bgr, resized, cv::Size(kInferSize, kInferSize), 0, 0, cv::INTER_LINEAR);
+        simaai::neat::Tensor input = simaai::neat::from_cv_mat(
+            resized, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
+
+        const auto infer_start = std::chrono::steady_clock::now();
+        simaai::neat::Sample out = run.push_and_pull(input, kTimeoutMs);
+        const auto infer_end = std::chrono::steady_clock::now();
+
+        // SimaBoxDecode in the graph emits a BBOX payload; parse it directly.
+        std::vector<uint8_t> payload;
+        std::string bbox_err;
+        if (!objdet::extract_bbox_payload(out, payload, bbox_err)) {
+          std::cerr << "No BBOX payload for " << image_path.filename() << ": " << bbox_err << "\n";
           continue;
         }
-      }
-      const auto img_end = std::chrono::steady_clock::now();
+        const std::vector<objdet::Box> boxes_infer =
+            objdet::parse_boxes_strict(payload, kInferSize, kInferSize, kMaxDet, false);
+        const auto decode_end = std::chrono::steady_clock::now();
 
-      ++processed;
-      if (cfg.overlay) {
-        std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
-                  << " -> " << image_path.stem().string() << ".png"
-                  << " (" << boxes_orig.size() << " detections)\n";
-      } else {
-        std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
-                  << " (" << boxes_orig.size() << " detections)\n";
-      }
+        const auto boxes_orig = scale_boxes_to_original(boxes_infer, orig_w, orig_h);
 
-      if (cfg.profile) {
-        const auto pre_ms = std::chrono::duration<double, std::milli>(infer_start - img_start).count();
-        const auto inf_ms = std::chrono::duration<double, std::milli>(infer_end - infer_start).count();
-        const auto dec_ms = std::chrono::duration<double, std::milli>(decode_end - infer_end).count();
-        const auto post_ms = std::chrono::duration<double, std::milli>(img_end - decode_end).count();
-        const auto tot_ms = std::chrono::duration<double, std::milli>(img_end - img_start).count();
-        std::cout << "[PROFILE] " << image_path.filename().string()
-                  << ": preprocess=" << cv::format("%.1f", pre_ms)
-                  << "ms inference=" << cv::format("%.1f", inf_ms)
-                  << "ms decode=" << cv::format("%.1f", dec_ms)
-                  << "ms overlay+save=" << cv::format("%.1f", post_ms)
-                  << "ms total=" << cv::format("%.1f", tot_ms) << "ms\n";
+        if (cfg.overlay) {
+          draw_boxes(bgr, boxes_orig, labels);
+          const fs::path out_path = output_dir / (image_path.stem().string() + ".png");
+          if (!cv::imwrite(out_path.string(), bgr)) {
+            std::cerr << "Failed to write: " << out_path << "\n";
+            continue;
+          }
+        }
+        const auto img_end = std::chrono::steady_clock::now();
+
+        ++processed;
+        if (cfg.overlay) {
+          std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
+                    << " -> " << image_path.stem().string() << ".png"
+                    << " (" << boxes_orig.size() << " detections)\n";
+        } else {
+          std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
+                    << " (" << boxes_orig.size() << " detections)\n";
+        }
+
+        if (cfg.profile) {
+          using ms = std::chrono::duration<double, std::milli>;
+          const auto pre_ms = ms(infer_start - img_start).count();
+          const auto inf_ms = ms(infer_end - infer_start).count();
+          const auto dec_ms = ms(decode_end - infer_end).count();
+          const auto post_ms = ms(img_end - decode_end).count();
+          const auto tot_ms = ms(img_end - img_start).count();
+          std::cout << "[PROFILE] " << image_path.filename().string()
+                    << ": preprocess=" << cv::format("%.1f", pre_ms)
+                    << "ms inference=" << cv::format("%.1f", inf_ms)
+                    << "ms decode=" << cv::format("%.1f", dec_ms)
+                    << "ms overlay+save=" << cv::format("%.1f", post_ms)
+                    << "ms total=" << cv::format("%.1f", tot_ms) << "ms\n";
+        }
       }
-    }
     }
 
     run.close();

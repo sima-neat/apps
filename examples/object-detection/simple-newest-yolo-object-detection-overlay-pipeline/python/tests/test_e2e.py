@@ -9,15 +9,7 @@ import pytest
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 LABELS_FILE = EXAMPLE_DIR / "common" / "coco_label.txt"
-
-
-def _find_model(models_dir: Path, pattern: str) -> Path | None:
-    if not models_dir.exists():
-        return None
-    for f in models_dir.iterdir():
-        if pattern in f.name and "seg" not in f.name and f.name.endswith(".tar.gz"):
-            return f
-    return None
+EXPECTED_MODEL = "yolo26m_mod_mpk.tar.gz"
 
 
 @pytest.mark.e2e
@@ -25,8 +17,11 @@ class TestE2E:
     def test_full_pipeline(
         self, models_dir, tmp_output_dir, test_images_dir, test_timeout_ms, skip_unless_e2e_ready
     ):
-        model = _find_model(models_dir, "yolo26m")
-        skip_unless_e2e_ready(model is not None, "yolo26m model not found in models_dir")
+        model = models_dir / EXPECTED_MODEL
+        skip_unless_e2e_ready(
+            model.is_file(),
+            f"expected model '{EXPECTED_MODEL}' not found in {models_dir}",
+        )
 
         skip_unless_e2e_ready(LABELS_FILE.exists(), f"Labels file not found: {LABELS_FILE}")
 
