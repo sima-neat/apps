@@ -1,8 +1,8 @@
 /**
- * @example simple-newest-yolo-object-detection-overlay-pipeline.cpp
+ * @example yolo26-object-detection-overlay.cpp
  * Minimal yolo26m sync pipeline: infer detections for every image in a folder.
  *
- * Usage: simple-newest-yolo-object-detection-overlay-pipeline
+ * Usage: yolo26-object-detection-overlay
  *          --model <model.tar.gz> --labels <labels.txt>
  *          --input-dir <dir> --output-dir <dir>
  *          [--min-score 0.25] [--nms-iou 0.45]
@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <getopt.h>
@@ -161,6 +162,151 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
   return labels;
 }
 
+// Walk the sample tree and collect every tensor leaf in order.
+std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
+  if (sample.kind == simaai::neat::SampleKind::Tensor) {
+    if (!sample.tensor.has_value()) {
+      throw std::runtime_error("tensor sample missing payload");
+    }
+    return {*sample.tensor};
+  }
+  if (sample.kind == simaai::neat::SampleKind::Bundle) {
+    std::vector<simaai::neat::Tensor> out;
+    for (const auto& field : sample.fields) {
+      auto child = collect_tensors(field);
+      out.insert(out.end(), child.begin(), child.end());
+    }
+    return out;
+  }
+  throw std::runtime_error("unexpected sample kind");
+}
+
+// Return tensor data as a flat float32 vector plus (H, W, C) dims.
+// Expects rank-3 (H,W,C) or rank-4 (1,H,W,C) float32 tensors.
+struct HWCTensor {
+  int h = 0;
+  int w = 0;
+  int c = 0;
+  std::vector<float> data;
+};
+
+HWCTensor tensor_to_hwc(const simaai::neat::Tensor& t) {
+  if (t.dtype != simaai::neat::TensorDType::Float32) {
+    throw std::runtime_error("expected Float32 tensor");
+  }
+  HWCTensor out;
+  if (t.shape.size() == 4 && t.shape[0] == 1) {
+    out.h = static_cast<int>(t.shape[1]);
+    out.w = static_cast<int>(t.shape[2]);
+    out.c = static_cast<int>(t.shape[3]);
+  } else if (t.shape.size() == 3) {
+    out.h = static_cast<int>(t.shape[0]);
+    out.w = static_cast<int>(t.shape[1]);
+    out.c = static_cast<int>(t.shape[2]);
+  } else {
+    throw std::runtime_error("unexpected tensor rank");
+  }
+  const size_t elems = static_cast<size_t>(out.h) * out.w * out.c;
+  const auto bytes = t.copy_dense_bytes_tight();
+  out.data.resize(elems);
+  std::memcpy(out.data.data(), bytes.data(), elems * sizeof(float));
+  return out;
+}
+
+float iou_xyxy(const objdet::Box& a, const objdet::Box& b) {
+  const float xx1 = std::max(a.x1, b.x1);
+  const float yy1 = std::max(a.y1, b.y1);
+  const float xx2 = std::min(a.x2, b.x2);
+  const float yy2 = std::min(a.y2, b.y2);
+  const float inter = std::max(0.0f, xx2 - xx1) * std::max(0.0f, yy2 - yy1);
+  const float area_a = std::max(0.0f, a.x2 - a.x1) * std::max(0.0f, a.y2 - a.y1);
+  const float area_b = std::max(0.0f, b.x2 - b.x1) * std::max(0.0f, b.y2 - b.y1);
+  const float den = area_a + area_b - inter;
+  return den > 0.0f ? (inter / den) : 0.0f;
+}
+
+// Decode YOLO26 raw model output: 3 regression tensors (H,W,4) with absolute
+// (cx, cy, w, h) in pixel space, plus 3 classification tensors (H,W,80) with
+// post-sigmoid probabilities. Applies confidence filter + per-class NMS.
+std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::Sample& sample,
+                                             float min_score, float nms_iou) {
+  const auto tensors = collect_tensors(sample);
+  if (tensors.size() < 6) {
+    throw std::runtime_error("expected at least 6 tensors, got " +
+                             std::to_string(tensors.size()));
+  }
+  const std::array<HWCTensor, 3> regs = {tensor_to_hwc(tensors[0]),
+                                         tensor_to_hwc(tensors[1]),
+                                         tensor_to_hwc(tensors[2])};
+  const std::array<HWCTensor, 3> clss = {tensor_to_hwc(tensors[3]),
+                                         tensor_to_hwc(tensors[4]),
+                                         tensor_to_hwc(tensors[5])};
+
+  std::vector<objdet::Box> candidates;
+  for (size_t lvl = 0; lvl < regs.size(); ++lvl) {
+    const auto& reg = regs[lvl];
+    const auto& cls = clss[lvl];
+    if (reg.c != 4) {
+      throw std::runtime_error("expected 4-channel regression (cx,cy,w,h), got c=" +
+                               std::to_string(reg.c));
+    }
+    if (reg.h != cls.h || reg.w != cls.w) {
+      throw std::runtime_error("reg/cls spatial mismatch");
+    }
+    for (int y = 0; y < reg.h; ++y) {
+      for (int x = 0; x < reg.w; ++x) {
+        const size_t cls_base = (static_cast<size_t>(y) * reg.w + x) * cls.c;
+        int best_class = -1;
+        float best_score = 0.0f;
+        for (int c = 0; c < cls.c; ++c) {
+          const float s = cls.data[cls_base + c];  // already post-sigmoid
+          if (s > best_score) {
+            best_score = s;
+            best_class = c;
+          }
+        }
+        if (best_score < min_score || best_class < 0) continue;
+
+        const size_t reg_base = (static_cast<size_t>(y) * reg.w + x) * 4U;
+        const float bcx = reg.data[reg_base + 0];
+        const float bcy = reg.data[reg_base + 1];
+        const float bw = reg.data[reg_base + 2];
+        const float bh = reg.data[reg_base + 3];
+        objdet::Box box;
+        box.x1 = std::max(0.0f, bcx - bw * 0.5f);
+        box.y1 = std::max(0.0f, bcy - bh * 0.5f);
+        box.x2 = std::min(static_cast<float>(kInferSize), bcx + bw * 0.5f);
+        box.y2 = std::min(static_cast<float>(kInferSize), bcy + bh * 0.5f);
+        box.score = best_score;
+        box.class_id = best_class;
+        if (box.x2 > box.x1 && box.y2 > box.y1) {
+          candidates.push_back(box);
+        }
+      }
+    }
+  }
+
+  // Per-class NMS, highest-score-first.
+  std::sort(candidates.begin(), candidates.end(),
+            [](const objdet::Box& a, const objdet::Box& b) { return a.score > b.score; });
+  std::vector<objdet::Box> keep;
+  keep.reserve(kMaxDet);
+  for (const auto& b : candidates) {
+    bool suppressed = false;
+    for (const auto& k : keep) {
+      if (k.class_id == b.class_id && iou_xyxy(k, b) > nms_iou) {
+        suppressed = true;
+        break;
+      }
+    }
+    if (!suppressed) {
+      keep.push_back(b);
+      if (static_cast<int>(keep.size()) >= kMaxDet) break;
+    }
+  }
+  return keep;
+}
+
 std::vector<objdet::Box> scale_boxes_to_original(const std::vector<objdet::Box>& boxes, int out_w,
                                                   int out_h) {
   const float sx = static_cast<float>(out_w) / static_cast<float>(kInferSize);
@@ -270,24 +416,8 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 
-    // Build graph with hardware box decoder:
-    // Input -> Preprocess -> Infer -> SimaBoxDecode -> Output.
-    simaai::neat::InputOptions in_opt;
-    in_opt.media_type = "video/x-raw";
-    in_opt.format = "BGR";
-    in_opt.width = kInferSize;
-    in_opt.height = kInferSize;
-    in_opt.depth = 3;
-
     simaai::neat::Session session;
-    session.add(simaai::neat::nodes::Input(in_opt));
-    session.add(simaai::neat::nodes::groups::Preprocess(model));
-    session.add(simaai::neat::nodes::groups::Infer(model));
-    session.add(simaai::neat::nodes::SimaBoxDecode(model, /*decode_type=*/"",
-                                                   kInferSize, kInferSize,
-                                                   cfg.min_score, cfg.nms_iou,
-                                                   kMaxDet));
-    session.add(simaai::neat::nodes::Output());
+    session.add(model.session());
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
     cv::Mat dummy_bgr(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
@@ -330,15 +460,10 @@ int main(int argc, char** argv) {
         simaai::neat::Sample out = run.push_and_pull(input, kTimeoutMs);
         const auto infer_end = std::chrono::steady_clock::now();
 
-        // SimaBoxDecode in the graph emits a BBOX payload; parse it directly.
-        std::vector<uint8_t> payload;
-        std::string bbox_err;
-        if (!objdet::extract_bbox_payload(out, payload, bbox_err)) {
-          std::cerr << "No BBOX payload for " << image_path.filename() << ": " << bbox_err << "\n";
-          continue;
-        }
+        // YOLO26 model output: 3 regression tensors (H,W,4) + 3 class tensors (H,W,80).
+        // Decode (cx,cy,w,h) -> xyxy, filter by min_score, per-class NMS.
         const std::vector<objdet::Box> boxes_infer =
-            objdet::parse_boxes_strict(payload, kInferSize, kInferSize, kMaxDet, false);
+            decode_yolo26_boxes(out, cfg.min_score, cfg.nms_iou);
         const auto decode_end = std::chrono::steady_clock::now();
 
         const auto boxes_orig = scale_boxes_to_original(boxes_infer, orig_w, orig_h);

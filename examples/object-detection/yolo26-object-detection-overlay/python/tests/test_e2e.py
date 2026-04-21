@@ -1,4 +1,4 @@
-"""E2E tests for simple-newest-yolo-object-detection-overlay-pipeline (Python)."""
+"""E2E tests for yolo26-object-detection-overlay (Python)."""
 
 import subprocess
 import sys

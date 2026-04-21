@@ -8,7 +8,7 @@
 | Tags | object-detection, yolo26m, folder-inference |
 | Languages | C++, Python |
 | Status | experimental |
-| Binary Name | simple-newest-yolo-object-detection-overlay-pipeline |
+| Binary Name | yolo26-object-detection-overlay |
 | Model | yolo26m_mod [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26m_mod_mpk.tar.gz] |
 
 ## Concept
@@ -19,7 +19,7 @@ Compared to the older YOLOv8 variant, yolo26m outputs decoded box coordinates `(
 ## Preview
 Snippet from a pipeline run:
 
-![Simple newest yolo object detection overlay preview](../../../assets/portal/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/image.png)
+![Simple newest yolo object detection overlay preview](../../../assets/portal/object-detection/yolo26-object-detection-overlay/image.png)
 
 ## Supported Models
 Validated with: `yolo26m_mod`
@@ -33,7 +33,7 @@ Download into `assets/models/`:
 - yolo26m is not yet published in the SiMa modelzoo. Use the direct download URL below until a modelzoo entry is available.
 - Direct URL download:
   `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26m_mod_mpk.tar.gz && cd ../..`
-- Labels file: `examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/common/coco_label.txt`
+- Labels file: `examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt`
 
 ## Important Behavior
 - Both C++ and Python use named flags (`--model`, `--labels`, `--input-dir`, `--output-dir`).
@@ -46,7 +46,7 @@ Download into `assets/models/`:
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/simple-newest-yolo-object-detection-overlay-pipeline --model <model.tar.gz> --labels <labels.txt> --input-dir <dir> --output-dir <dir> [--min-score 0.25] [--nms-iou 0.45] [--profile] [--no-overlay] [--num-runs 1]`
+  `./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay --model <model.tar.gz> --labels <labels.txt> --input-dir <dir> --output-dir <dir> [--min-score 0.25] [--nms-iou 0.45] [--profile] [--no-overlay] [--num-runs 1]`
 - Required arguments:
   `--model <model.tar.gz>`, `--labels <labels.txt>`, `--input-dir <dir>`, `--output-dir <dir>`
 - Optional arguments:
@@ -54,7 +54,7 @@ Download into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/python/main.py --model <model.tar.gz> --labels <labels.txt> --input-dir <dir> --output-dir <dir> [--min-score 0.25] [--nms-iou 0.45] [--profile] [--no-overlay] [--num-runs 1]`
+  `python examples/object-detection/yolo26-object-detection-overlay/python/main.py --model <model.tar.gz> --labels <labels.txt> --input-dir <dir> --output-dir <dir> [--min-score 0.25] [--nms-iou 0.45] [--profile] [--no-overlay] [--num-runs 1]`
 - Required arguments:
   `--model <model.tar.gz>`, `--labels <labels.txt>`, `--input-dir <dir>`, `--output-dir <dir>`
 - Optional arguments:
@@ -69,37 +69,37 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/simple-newest-yolo-object-detection-overlay-pipeline
+./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay
 ```
 
 ### Build This Example Directly With CMake
 ```bash
-cd <apps-repo-root>/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline
+cd <apps-repo-root>/examples/object-detection/yolo26-object-detection-overlay
 cmake -S cpp -B build
 cmake --build build -j
 ```
 
 Binary output:
 ```bash
-./build/simple-newest-yolo-object-detection-overlay-pipeline
+./build/yolo26-object-detection-overlay
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/simple-newest-yolo-object-detection-overlay-pipeline \
+./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay \
   --model assets/models/yolo26m_mod_mpk.tar.gz \
-  --labels examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/common/coco_label.txt \
+  --labels examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt \
   --input-dir <input_dir> --output-dir <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/python/requirements.txt
-python examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/python/main.py \
+pip install -r examples/object-detection/yolo26-object-detection-overlay/python/requirements.txt
+python examples/object-detection/yolo26-object-detection-overlay/python/main.py \
   --model assets/models/yolo26m_mod_mpk.tar.gz \
-  --labels examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/common/coco_label.txt \
+  --labels examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt \
   --input-dir <input_dir> --output-dir <output_dir>
 ```
 
@@ -113,8 +113,8 @@ cd <apps-repo-root>
 ### C++
 Unit test:
 ```bash
-./build/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/simple-newest-yolo-object-detection-overlay-pipeline_unit_test \
-  ./build/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/simple-newest-yolo-object-detection-overlay-pipeline
+./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay_unit_test \
+  ./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay
 ```
 
 E2E test:
@@ -122,27 +122,27 @@ E2E test:
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
 SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
-./build/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/simple-newest-yolo-object-detection-overlay-pipeline_e2e_test \
-  ./build/examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/simple-newest-yolo-object-detection-overlay-pipeline
+./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay_e2e_test \
+  ./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay
 ```
 
 ### Python
 Unit test:
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/python/requirements.txt
-pytest examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/python/tests/test_unit.py -v
+pip install -r examples/object-detection/yolo26-object-detection-overlay/python/requirements.txt
+pytest examples/object-detection/yolo26-object-detection-overlay/python/tests/test_unit.py -v
 ```
 
 E2E test:
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/python/requirements.txt
+pip install -r examples/object-detection/yolo26-object-detection-overlay/python/requirements.txt
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
 SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
-pytest examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/python/tests/test_e2e.py -v
+pytest examples/object-detection/yolo26-object-detection-overlay/python/tests/test_e2e.py -v
 ```
 
 ## Debugging Notes

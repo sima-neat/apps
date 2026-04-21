@@ -1,4 +1,4 @@
-// E2E test for simple-newest-yolo-object-detection-overlay-pipeline.
+// E2E test for yolo26-object-detection-overlay.
 // Runs the binary with a real model, labels, and test images, verifies outputs.
 #include "support/testing/test_process.h"
 
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 
   std::string example_dir = fs::path(binary).parent_path().string();
   std::vector<std::string> label_search = {
-    "examples/object-detection/simple-newest-yolo-object-detection-overlay-pipeline/"
+    "examples/object-detection/yolo26-object-detection-overlay/"
     "common/coco_label.txt",
     example_dir + "/common/coco_label.txt",
   };
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
         "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_temp_dir("simple-newest-yolo-object-detection-overlay-pipeline_e2e_");
+  auto out_dir = create_temp_dir("yolo26-object-detection-overlay_e2e_");
   if (out_dir.empty()) return 1;
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);

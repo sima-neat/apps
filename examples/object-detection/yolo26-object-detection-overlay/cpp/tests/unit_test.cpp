@@ -1,4 +1,4 @@
-// Unit test for simple-newest-yolo-object-detection-overlay-pipeline: validates CLI arg handling.
+// Unit test for yolo26-object-detection-overlay: validates CLI arg handling.
 #include "support/testing/test_process.h"
 
 #include <iostream>
