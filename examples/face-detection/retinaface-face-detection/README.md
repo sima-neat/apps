@@ -49,7 +49,7 @@ Download into `assets/models/`:
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--max-draw <count>] [--profile] [--num-runs <count>] [--no-landmarks]`
+  `./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--max-draw <count>] [--profile] [--num-runs <count>] [--no-landmarks]`
 - Required arguments:
   `<input_image_path>`
 - Optional arguments:
@@ -72,7 +72,7 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection
+./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection
 ```
 
 ### Build This Example Directly With CMake
@@ -90,7 +90,7 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection \
+./build/examples/face-detection/retinaface-face-detection/retinaface-face-detection \
   <input_image_path> \
   --model assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
   --output <output_image_path> \
@@ -118,7 +118,7 @@ cd <apps-repo-root>
 ### C++
 Unit test:
 ```bash
-ctest --test-dir build/examples/face-detection/retinaface-face-detection_cpp \
+ctest --test-dir build/examples/face-detection/retinaface-face-detection \
   -R 'retinaface-face-detection.unit' --output-on-failure -V
 ```
 
@@ -128,7 +128,7 @@ SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
 SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
-ctest --test-dir build/examples/face-detection/retinaface-face-detection_cpp \
+ctest --test-dir build/examples/face-detection/retinaface-face-detection \
   -R 'retinaface-face-detection.e2e' --output-on-failure -V
 ```
 
