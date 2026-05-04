@@ -45,8 +45,8 @@ def letterbox_params(orig_w: int, orig_h: int,
 
     The actual scale + center-pad is done by the MPK's CVU preproc stage on EV74
     (`0_preproc.json` configures padding=CENTER, interpolation=BILINEAR). We need
-    the same parameters host-side only to inverse-map model-canvas coords back to
-    original-image pixels.
+    the same parameters on the APU only to inverse-map model-canvas coords back
+    to original-image pixels.
     """
     scale = min(target_w / orig_w, target_h / orig_h)
     nw = int(round(orig_w * scale))

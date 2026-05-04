@@ -1,9 +1,9 @@
 /**
  * @example yolov5-face.cpp
- * yolov5s-face inference: faces + 5 keypoints per face. Sync pipeline; on-device
- * CVU preproc (EV74) handles resize + letterbox + INT8 quantize, host decodes
- * the six raw split heads into boxes + landmarks because BBOX wire format does
- * not carry landmark coordinates.
+ * yolov5s-face inference: faces + 5 keypoints per face. Sync pipeline; the CVU
+ * preproc plugin (EV74) handles resize + letterbox + INT8 quantize, the MLA
+ * runs the model, and the APU decodes the six raw split heads into boxes +
+ * landmarks because BBOX wire format does not carry landmark coordinates.
  *
  * Usage: yolov5-face
  *          --model <model.tar.gz> --labels <labels.txt>
@@ -181,8 +181,8 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
 // Compute (scale, pad_l, pad_t) for the on-device letterbox without applying it.
 // The actual scale + center-pad is done by the MPK's CVU preproc on EV74
 // (`0_preproc.json` configures padding=CENTER, interpolation=BILINEAR). We need
-// the same parameters host-side only to inverse-map model-canvas coords back to
-// original-image pixels.
+// the same parameters on the APU only to inverse-map model-canvas coords back
+// to original-image pixels.
 LetterboxParams letterbox_params(int orig_w, int orig_h, int target_w, int target_h) {
   const float scale = std::min(static_cast<float>(target_w) / orig_w,
                                static_cast<float>(target_h) / orig_h);
