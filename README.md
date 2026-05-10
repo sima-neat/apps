@@ -66,7 +66,7 @@ Examples are organized under `examples/<category>/<example>`. Each example is so
 | `examples/<category>/<example>/common/` | Files shared by the C++ and Python implementations |
 
 > **IMPORTANT:** Use this structure when reading, extending, or adding examples.
-> Follow the instructions inside each example `README.md`, or visit the [SiMa NEAT Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
+> Follow the instructions inside each example `README.md`, or visit the [SiMa.ai NEAT Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
 
 ### Contributor Guidelines
 

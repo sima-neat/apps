@@ -96,9 +96,9 @@ function CatalogPage({ catalog }) {
         <div className="hero-copy">
           <div className="brand-row">
             <img className="brand-logo" src="./sima-logo.png" alt="SiMa.ai" />
-            <p className="eyebrow">SiMa NEAT Apps Portal</p>
+            <p className="eyebrow">SiMa.ai NEAT Apps Portal</p>
           </div>
-          <h1>Discover SiMa NEAT reference examples that expedite the path from proof of concept to product.</h1>
+          <h1>Discover SiMa.ai Neat reference examples that expedite the path from proof of concept to product.</h1>
           <p className="hero-text">
             Browse source-first applications, search across tags and models, and drill into structured
             example documentation generated from the repo itself.

@@ -20,3 +20,4 @@ portal/public/example-assets/
 install_neat_framework.sh
 neat-apps-runtime/
 docs/*
+.vscode/*
