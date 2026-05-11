@@ -28,7 +28,7 @@ Download into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26m_mod_mpk.tar.gz && cd ../..`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - yolo26m is not yet published in the SiMa modelzoo. Use the direct download URL below until a modelzoo entry is available.
 - Direct URL download:

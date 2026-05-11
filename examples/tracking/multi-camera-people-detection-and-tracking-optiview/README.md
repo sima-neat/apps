@@ -42,7 +42,7 @@ cd ../..
 ```
 
 ## Prerequisites
-- A NEAT Python environment with `pyneat`, `numpy`, and OpenCV available.
+- A Neat Python environment with `pyneat`, `numpy`, and OpenCV available.
 - One or more reachable RTSP camera URLs.
 - A YOLOv8 detector model pack downloaded into `assets/models/`.
 - An OptiView viewer instance reachable from the board/host running this example.

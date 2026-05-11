@@ -1,4 +1,4 @@
-# NEAT Apps Contributor Guidelines
+# Neat Apps Contributor Guidelines
 
 This document defines how contributors should add and maintain examples in `apps/examples`.
 

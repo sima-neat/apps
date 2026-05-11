@@ -35,12 +35,12 @@ Each RTSP stream gets its own set of producer, infer, and overlay worker threads
 Both implementations are intentionally kept in one file (`python/main.py`, `cpp/main.cpp`) but now follow the same high-level structure:
 
 1. CLI/config parsing and validation
-2. NEAT runtime builders (RTSP and model/infer)
+2. Neat runtime builders (RTSP and model/infer)
 3. Shared runtime state (stream state, packets, queues, profiling)
 4. Worker methods (producer, infer, overlay)
 5. Orchestration (thread startup, monitor loop, shutdown, summary)
 
-## NEAT API Usage
+## Neat API Usage
 
 **Python (`pyneat`)**
 - RTSP session build (`build_rtsp_run` in `python/main.py`):

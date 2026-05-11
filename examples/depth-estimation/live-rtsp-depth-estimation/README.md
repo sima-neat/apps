@@ -27,7 +27,7 @@ Pipeline:
 
 Both implementations keep source/session setup, model setup, processing loop, reconnect handling, and teardown as explicit lifecycle stages.
 
-## NEAT API Usage
+## Neat API Usage
 
 - RTSP source:
   Python: `RtspDecodedInputOptions` -> `Session.add(rtsp_decoded_input)` -> `build()`
@@ -63,7 +63,7 @@ Download into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat SDK.
 - RTSP source reachable from runtime environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command (MiDaS): `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get midas_v21_small_256 && cd ../..`

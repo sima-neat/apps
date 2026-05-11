@@ -28,7 +28,7 @@ Download any variant into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get <model_variant_1> && cd ../..`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get <default_model_name> && cd ../..`

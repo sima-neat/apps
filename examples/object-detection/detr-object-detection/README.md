@@ -28,7 +28,7 @@ Download into `assets/models/`:
 - `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat SDK.
 - Model artifacts are user-managed and should be placed under `assets/models/`.
 - Preferred download command: `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
 - Direct URL fallback:

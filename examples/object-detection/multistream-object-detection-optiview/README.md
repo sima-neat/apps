@@ -32,7 +32,7 @@ Video graph:
 - `Input(RGB) -> VideoConvert -> H264EncodeSima -> UdpH264OutputGroup`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat SDK.
 - One or more reachable RTSP camera URLs.
 - A YOLOv8 model pack downloaded into `assets/models/`.
 - Edit `common/config.yaml` before running with real streams.
