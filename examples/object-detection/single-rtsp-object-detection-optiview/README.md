@@ -51,7 +51,7 @@ The sample is split into three independent runtime stages:
 3. `OptiView output`
    The original decoded frame is copied into a second runtime path that re-encodes to H.264, packetizes to RTP, and sends video over UDP to OptiView. Detection results from the YOLO path are converted into OptiView JSON and sent on the JSON side channel.
 
-## NEAT API Usage
+## Neat API Usage
 
 - RTSP ingest: `RtspDecodedInputOptions` -> `Session.add(rtsp_decoded_input)` -> `Session.build(...)`
 - YOLO path:
@@ -70,7 +70,7 @@ The example uses a producer/consumer design:
 This separation keeps the RTSP session from being tightly coupled to the inference latency of each frame and makes timing/debug output easier to interpret.
 
 ## Prerequisites
-- Installed NEAT framework and OptiView on the DevKit
+- Installed Neat framework and OptiView on the DevKit
 - RTSP camera source or use OptiView to start RTSP source
 - SiMa.ai developer portal account so the sample can download the model from modelzoo
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
@@ -137,12 +137,12 @@ The resulting binary is:
 ./build/single-rtsp-object-detection-optiview
 ```
 
-Direct CMake builds use the shared example module support in the `apps` repo and link against the available NEAT/core installation or local core build.
+Direct CMake builds use the shared example module support in the `apps` repo and link against the available Neat/core installation or local core build.
 
 In practice:
 
 - on `eLxr SDK`, this is typically done after sourcing the SDK environment and then building from the repo or the example folder
-- on `DevKit`, this can be done directly on the target device as long as the required NEAT dependencies are installed
+- on `DevKit`, this can be done directly on the target device as long as the required Neat dependencies are installed
 
 ## RTSP Source
 

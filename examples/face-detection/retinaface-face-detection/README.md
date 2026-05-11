@@ -35,7 +35,7 @@ Download into `assets/models/`:
 - `./scripts/download_models.sh retinaface_mobilenet25`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Preferred download command: `./scripts/download_models.sh retinaface_mobilenet25`
 - Direct URL fallback:

@@ -1,4 +1,4 @@
-# SiMa NEAT Apps
+# SiMa Neat Apps
 
 ![Standard Build & Archive](https://img.shields.io/badge/Standard%20Build%20%26%20Archive-TBA-lightgrey)
 ![Fuzz Nightly](https://img.shields.io/badge/Fuzz%20Nightly-TBA-lightgrey)
@@ -6,12 +6,12 @@
 ![SDK](https://img.shields.io/badge/SDK-2.0-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
-NEAT Apps contains editable NEAT applications and reference examples built around real workflows such as detection, segmentation, and streaming pipelines. The goal is to make the apps easy to run, easy to modify, and easy to learn from.
+Neat Apps contains editable Neat applications and reference examples built around real workflows such as detection, segmentation, and streaming pipelines. The goal is to make the apps easy to run, easy to modify, and easy to learn from.
 
-The core idea is simple: `core` installs the NEAT SDK, runtime, and tooling, while `apps` shows how to use them in customer-facing C++ and Python examples where the important NEAT API calls stay visible in the source.
+The core idea is simple: `core` installs the Neat SDK, runtime, and tooling, while `apps` shows how to use them in customer-facing C++ and Python examples where the important Neat API calls stay visible in the source.
 
 This repo is intentionally separate from `core`:
-- `core` installs the NEAT SDK/runtime/tooling
+- `core` installs the Neat SDK/runtime/tooling
 - `apps` holds customer-facing applications and sample code
 
 ## Customer Workflow (Early Release)
@@ -32,7 +32,7 @@ This repo is intentionally separate from `core`:
 
    **Note:** After the initial setup completes, the default `pyneat` virtual environment is available at `~/pyneat`. Activate it with `source ~/pyneat/bin/activate` to run Python examples.
 
-3. For broader NEAT framework concepts and platform documentation, see:
+3. For broader Neat framework concepts and platform documentation, see:
    https://docs.sima-neat.com/
 
 This keeps examples editable and easy to customize.
@@ -43,7 +43,7 @@ This keeps examples editable and easy to customize.
 - `support/`: shared C++ helper code used by multiple examples
 - `assets/`: user-managed runtime assets (models under `assets/models/`, test media under `assets/test_images/`)
 - `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
-- `neat-core.json`: NEAT core SDK dependency declaration (branch and version)
+- `neat-core.json`: Neat core SDK dependency declaration (branch and version)
 
 ## Example Structure
 
@@ -55,18 +55,18 @@ Examples are organized under `examples/<category>/<example>`. Each example is so
 | --- | --- |
 | `examples/<category>/<example>/README.md` | Example-specific usage and setup instructions |
 | `examples/<category>/<example>/cpp/CMakeLists.txt` | C++ example build configuration |
-| `examples/<category>/<example>/cpp/main.cpp` | C++ entrypoint with visible NEAT API flow |
+| `examples/<category>/<example>/cpp/main.cpp` | C++ entrypoint with visible Neat API flow |
 | `examples/<category>/<example>/cpp/tests/CMakeLists.txt` | C++ test build configuration |
 | `examples/<category>/<example>/cpp/tests/unit_test.cpp` | C++ unit tests |
 | `examples/<category>/<example>/cpp/tests/e2e_test.cpp` | C++ end-to-end tests |
-| `examples/<category>/<example>/python/main.py` | Python entrypoint with visible NEAT API flow |
+| `examples/<category>/<example>/python/main.py` | Python entrypoint with visible Neat API flow |
 | `examples/<category>/<example>/python/requirements.txt` | Python example dependencies |
 | `examples/<category>/<example>/python/tests/test_unit.py` | Python unit tests |
 | `examples/<category>/<example>/python/tests/test_e2e.py` | Python end-to-end tests |
 | `examples/<category>/<example>/common/` | Files shared by the C++ and Python implementations |
 
 > **IMPORTANT:** Use this structure when reading, extending, or adding examples.
-> Follow the instructions inside each example `README.md`, or visit the [SiMa.ai NEAT Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
+> Follow the instructions inside each example `README.md`, or visit the [SiMa.ai Neat Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
 
 ### Contributor Guidelines
 
@@ -77,8 +77,8 @@ For the full contributor rules, required layout, and authoring expectations, see
 `build.sh` has three main modes:
 
 - build/configure the apps locally
-- install the NEAT core SDK only
-- run the full first-time or release flow with `--all`, which installs NEAT core, builds the apps, builds the portal, and packages `neat-apps-runtime`
+- install the Neat core SDK only
+- run the full first-time or release flow with `--all`, which installs Neat core, builds the apps, builds the portal, and packages `neat-apps-runtime`
 
 It does not run tests.
 
@@ -94,10 +94,10 @@ Common commands:
 # Clean build directory then build
 ./build.sh --clean
 
-# Install NEAT core, build apps, build portal, then package
+# Install Neat core, build apps, build portal, then package
 ./build.sh --all
 
-# Install NEAT core only, no build
+# Install Neat core only, no build
 ./build.sh --only-install-neat-core
 
 # Override neat-core.json for one run (branch:version)
@@ -112,8 +112,8 @@ Common commands:
 
 Main `build.sh` args:
 
-- `--all`: install NEAT core SDK, build apps, build portal, then package
-- `--only-install-neat-core`: install NEAT core SDK and exit
+- `--all`: install Neat core SDK, build apps, build portal, then package
+- `--only-install-neat-core`: install Neat core SDK and exit
 - `--neat-core-version <branch:version>`: override `neat-core.json`
 - `--clean`: remove build dir before configure
 - `--debug` / `--release`: build type
@@ -128,7 +128,7 @@ When `--all` is used, the script also:
 - writes a packaged `neat-core.json` into that staged runtime
 - creates `neat-apps-<branch>-<sha>.tar.gz` at the repo root
 
-If NEAT is installed in a custom location and CMake cannot find it automatically, set `CMAKE_PREFIX_PATH`:
+If Neat is installed in a custom location and CMake cannot find it automatically, set `CMAKE_PREFIX_PATH`:
 
 ```bash
 CMAKE_PREFIX_PATH=/path/to/neat/install ./build.sh
@@ -175,7 +175,7 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 
 ## NEAT Core Dependency
 
-`neat-core.json` declares which NEAT core SDK branch and version this repo depends on.
+`neat-core.json` declares which Neat core SDK branch and version this repo depends on.
 `./build.sh --all` reads this file and uses the hosted `install-neat.sh`
 installer to install the correct SDK before building, packaging, and writing the staged runtime metadata.
 

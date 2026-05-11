@@ -17,7 +17,7 @@
 ## Concept
 This example performs pairwise person re-identification by computing embeddings for two input images and comparing them with a selectable metric. It is designed as a minimal synchronous pipeline that focuses on practical runtime behavior: model warmup, deterministic preprocessing, inference, score computation, threshold-based decision, and artifact output.
 
-Both C++ and Python implementations follow the same user-facing flow and produce the same output artifacts (`comparison.jpg` and/or `result.json`). The sample demonstrates how to use NEAT for embedding extraction and how to build a lightweight post-processing layer for similarity-based identity matching.
+Both C++ and Python implementations follow the same user-facing flow and produce the same output artifacts (`comparison.jpg` and/or `result.json`). The sample demonstrates how to use Neat for embedding extraction and how to build a lightweight post-processing layer for similarity-based identity matching.
 
 ## Supported Models
 Also works with: other ReID variants compatible with 128x256 RGB input.
@@ -26,7 +26,7 @@ Download the default variant into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get reid && cd ../..`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get reid && cd ../..`
 
