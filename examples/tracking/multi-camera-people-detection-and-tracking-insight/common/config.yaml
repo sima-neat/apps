@@ -1,10 +1,10 @@
 model: assets/models/yolo_v8m_mpk.tar.gz  # Path to the detector model pack.
 
 streams:  # RTSP inputs, one entry per camera.
-  - rtsp://192.168.2.1:8554/src1
-  - rtsp://192.168.2.1:8554/src2
-  - rtsp://192.168.2.1:8554/src3
-  - rtsp://192.168.2.1:8554/src4
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  - <rtsp-url-3>
+  - <rtsp-url-4>
   # - <rtsp-url-5>
   # - <rtsp-url-6>
   # - <rtsp-url-7>
@@ -31,7 +31,7 @@ tracking:  # Tracker settings.
 
 output:  # Live output plus optional debug saves.
   insight:  # Live video and metadata destination.
-    host: 192.168.2.1   # Host running the Insight receiver/viewer.
+    host: <insight-host>   # Host running the Insight receiver/viewer.
     video_port_base: 9000    # Base UDP port for video channels.
     metadata_port_base: 9100     # Base UDP port for metadata channels.
   debug_dir: null            # Optional debug overlay directory. Null disables saved frames.
