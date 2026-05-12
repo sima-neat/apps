@@ -35,12 +35,12 @@ def test_generate_catalog_uses_repo_level_portal_assets_for_example():
         APPS_ROOT
         / "examples"
         / "tracking"
-        / "multi-camera-people-detection-and-tracking-optiview"
+        / "multi-camera-people-detection-and-tracking-insight"
     )
 
     assert module.find_image_path(app_dir) == (
         "assets/portal/tracking/"
-        "multi-camera-people-detection-and-tracking-optiview/image.png"
+        "multi-camera-people-detection-and-tracking-insight/image.png"
     )
 
 

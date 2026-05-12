@@ -868,4 +868,19 @@ bool extract_bbox_payload(const simaai::neat::Sample& result, std::vector<uint8_
   return objdet::extract_bbox_payload(result, payload, err);
 }
 
+std::string metadata_boxes_data_json(const std::string& array_key,
+                                     const std::vector<MetadataBox>& boxes) {
+  json data;
+  data[array_key] = json::array();
+  for (const auto& box : boxes) {
+    data[array_key].push_back({
+        {"id", box.id},
+        {"label", box.label},
+        {"confidence", box.confidence},
+        {"bbox", {box.x, box.y, box.w, box.h}},
+    });
+  }
+  return data.dump();
+}
+
 } // namespace sima_examples
