@@ -103,8 +103,9 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multistre
 
 ## Notes
 - Point `model.path` at a YOLOv8 pack. This example infers YOLOv8 from the model path and does not use a `model.family` config key.
-- Both the C++ and Python paths decode each RTSP stream to RGB in system memory, run YOLOv8 on those RGB frames, and re-encode RGB frames for Insight video output. They do not forward the original encoded H264 bitstream.
-- `output.video_mode: clean` publishes unannotated RGB frames to Insight and keeps metadata enabled. `annotated` draws detection boxes into the RGB video stream and suppresses metadata so Insight does not overlay detections twice.
+- Both the C++ and Python paths decode each RTSP stream to RGB in system memory, run YOLOv8 on those RGB frames, and feed the selected RGB frame into `VideoSender`. They do not manually build lower-level color conversion, encoder, parser, packetizer, or UDP nodes.
+- `output.video_mode: clean` feeds unannotated RGB frames into `VideoSender` and keeps metadata enabled. `annotated` draws detection boxes into the RGB frame before feeding it into `VideoSender` and suppresses metadata so Insight does not overlay detections twice.
+- Because these examples send raw frames, they use the raw-frame `VideoSender` option. If an upstream pipeline already produces H.264, `VideoSender` also supports an encoded-input option that parses, packetizes, and sends without re-encoding.
 - `output.video_enabled: false` disables per-stream H264 video output. In `clean` mode the example still sends metadata detections; in `annotated` mode metadata is suppressed.
 - `runtime.mailbox_depth` defaults to `1` and should usually stay small for dense multistream runs.
 - The example applies the following runtime defaults for dense RTSP runs when the environment does not already override them:

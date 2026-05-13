@@ -549,7 +549,7 @@ def main() -> int:
     video_run = None
     metadata_sender = None
     try:
-        # Probe first so decode, inference, and UDP output all agree on the
+        # Probe first so decode, inference, and VideoSender all agree on the
         # same live frame dimensions.
         frame_w, frame_h, fps = probe_rtsp(cfg.rtsp)
         print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
@@ -565,7 +565,7 @@ def main() -> int:
             cfg.latency_ms,
             tcp=not cfg.udp,
         )
-        # NEAT boundary: build generic video and metadata senders.
+        # NEAT boundary: build VideoSender and MetadataSender.
         video_session, video_run = build_video_sender_run(cfg, frame_w, frame_h, fps)
         metadata_sender = build_metadata_sender(cfg)
 
@@ -624,7 +624,7 @@ def main() -> int:
 
         elapsed = max(time.perf_counter() - started, 1e-6)
         print(f"processed={processed} fps={processed / elapsed:.2f} "
-              f"udp={cfg.insight_host}:{cfg.insight_video_port}")
+              f"video_sender={cfg.insight_host}:{cfg.insight_video_port}")
         return 0 if processed > 0 else 3
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

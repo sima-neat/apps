@@ -40,12 +40,8 @@ class TestE2E:
             cwd=str(EXAMPLE_DIR),
         )
 
-        if result.returncode != 0 and "failed to open UDP H.264 writer" in result.stderr:
-            skip_unless_e2e_ready(
-                False, "OpenCV GStreamer x264 writer is unavailable for Insight Python e2e"
-            )
-
-        # Insight output is UDP, so verify the process exits cleanly.
+        # Insight video is published through VideoSender over UDP, so verify the process exits
+        # cleanly when the receiver path is configured.
         assert result.returncode == 0, (
             f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

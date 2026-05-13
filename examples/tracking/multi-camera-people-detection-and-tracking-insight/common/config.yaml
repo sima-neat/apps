@@ -34,5 +34,6 @@ output:  # Live output plus optional debug saves.
     host: <insight-host>   # Host running the Insight receiver/viewer.
     video_port_base: 9000    # Base UDP port for video channels.
     metadata_port_base: 9100     # Base UDP port for metadata channels.
+  video_mode: clean         # clean sends frames + metadata; annotated draws tracks before VideoSender encodes.
   debug_dir: null            # Optional debug overlay directory. Null disables saved frames.
   save_every: 0              # Save every Nth debug frame. 0 disables saving.

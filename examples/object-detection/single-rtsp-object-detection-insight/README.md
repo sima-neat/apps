@@ -49,7 +49,7 @@ The sample is split into three independent runtime stages:
    The model stage is isolated from transport logic so detection behavior can be debugged separately from RTSP or Insight issues.
 
 3. `Insight output`
-   The original decoded frame is copied into a second runtime path that re-encodes to H.264, packetizes to RTP, and sends video over UDP to Insight. Detection results from the YOLO path are converted into Insight metadata and sent on the metadata side channel.
+   The original decoded frame is pushed into `VideoSender`. The nodegroup owns the raw-frame video transport path, including conversion, H.264 encoding, RTP packetization, and UDP output. Detection results from the YOLO path are converted into Insight metadata and sent on the metadata side channel.
 
 ## Neat API Usage
 
@@ -58,8 +58,7 @@ The sample is split into three independent runtime stages:
   C++ graph uses `Input -> Preprocess -> Infer -> SimaBoxDecode -> Output`
   Python path uses `Model.build(...)`/`Model.run(...)` with packed BBOX parsing first and manual decode fallback.
 - Insight output:
-  C++ builds a dedicated Insight video runtime and MetadataSender.
-  Python builds a UDP video writer plus MetadataSender.
+  C++ and Python build a dedicated `VideoSender` runtime plus `MetadataSender`.
 
 ## Lifecycle
 The example uses a producer/consumer design:
@@ -81,6 +80,8 @@ This separation keeps the RTSP session from being tightly coupled to the inferen
 - The sample always publishes to Insight.
 - Video is sent to the Insight video UDP port 9000.
 - Detection metadata is sent to the Insight metadata UDP port 9100.
+- The app adds only the `VideoSender` nodegroup for video output. It does not manually add lower-level color conversion, encoder, parser, packetizer, or UDP nodes.
+- This example feeds raw decoded frames to `VideoSender` with the raw-frame option. If an upstream pipeline already produces H.264, `VideoSender` also supports the encoded-input option, where it parses, packetizes, and sends without re-encoding.
 - `--model` is required and must point to a valid YOLO compiled model package file.
 - If `--frames` is omitted, the sample runs continuously.
 
@@ -176,7 +177,8 @@ Example with explicit Insight host:
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-insight/single-rtsp-object-detection-insight \
   --rtsp <rtsp-url> \
-  --model assets/models/yolo_v8s_mpk.tar.gz
+  --model assets/models/yolo_v8s_mpk.tar.gz \
+  --insight-host <insight-host>
 ```
 
 ### Python Implementation
@@ -207,8 +209,7 @@ python3 python/main.py --rtsp <rtsp-url> --model yolo_v8s_mpk.tar.gz
 Python-specific notes:
 
 - if `--model` is omitted, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo -v 2.0.0 get yolo_v8s`
-- it sends Insight metadata directly over UDP and streams video to the Insight UDP video port
-- it expects OpenCV to be built with GStreamer support for the UDP H.264 video path
+- it sends Insight metadata directly over UDP and streams video through `VideoSender`
 
 ## Debugging Notes
 - If the sample times out waiting for the first RTSP frame, the problem is usually upstream stream delivery or device connectivity, not YOLO itself.

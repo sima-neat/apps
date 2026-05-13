@@ -16,9 +16,9 @@ Multi-camera people detection and tracking example with RTSP inputs, mixed-resol
 
 Both the Python and C++ entrypoints keep the detector graph explicit rather than hiding it behind a single `model.run(...)` call:
 
-`RTSP decode -> CPU letterbox/normalize -> QuantTess -> MLA -> SimaBoxDecode -> tracker -> clean H264/Insight + tracking metadata`
+`RTSP decode -> CPU letterbox/normalize -> QuantTess -> MLA -> SimaBoxDecode -> tracker -> VideoSender(H.264 RTP/UDP)`
 
-Each RTSP stream gets its own source, detection, tracker, encoder, and Insight publisher runtime so native stream resolution can be preserved per camera.
+Each RTSP stream gets its own source, detection, tracker, and `VideoSender` runtime so native stream resolution can be preserved per camera.
 
 ## Preview
 Demo screenshot from a live run:
@@ -51,11 +51,14 @@ cd ../..
 - The Python and C++ implementations follow the same config-driven structure: config loading, pipeline builders, tracker helpers, image helpers, sample helpers, and worker orchestration.
 - The `streams:` list in `common/config.yaml` controls the number of cameras dynamically.
 - The checked-in `common/config.yaml` uses placeholder RTSP and Insight values; fill them with your own camera URLs and receiver host before running.
-- Stream `i` publishes clean video to `output.insight.video_port_base + i` and tracking metadata to `output.insight.metadata_port_base + i`.
+- Stream `i` publishes video to `output.insight.video_port_base + i`.
+- `output.video_mode: clean` publishes unannotated RGB frames through `VideoSender` and sends tracking metadata to `output.insight.metadata_port_base + i` for Insight-side overlay. `annotated` draws tracking boxes into RGB frames before `VideoSender` encodes them and suppresses metadata so Insight does not overlay twice.
 - `inference.frames: 0` runs indefinitely.
 - `output.debug_dir: null` and `output.save_every: 0` disable saved overlay frames while keeping live Insight output enabled.
 - `inference.detection_threshold`, `inference.nms_iou_threshold`, and `inference.top_k` are optional; if omitted, `SimaBoxDecode` keeps the model-pack defaults.
 - The example defaults to person class id `0`, and tracker behavior is configurable from the config file.
+- Both C++ and Python add the `VideoSender` nodegroup for video transport. They do not manually add lower-level color conversion, encoder, parser, packetizer, or UDP nodes outside `VideoSender`.
+- Because this example sends raw frames, it uses the raw-frame `VideoSender` option. If an upstream pipeline already produces H.264, `VideoSender` also supports an encoded-input option that parses, packetizes, and sends without re-encoding.
 
 ## Command-Line Options
 ### C++
@@ -142,8 +145,11 @@ python3 examples/tracking/multi-camera-people-detection-and-tracking-insight/pyt
 
 Notes:
 
-- stream `i` publishes clean video to `output.insight.video_port_base + i` and tracking metadata to
+- in `output.video_mode: clean`, stream `i` feeds clean frames into `VideoSender` at
+  `output.insight.video_port_base + i` and sends tracking metadata to
   `output.insight.metadata_port_base + i`
+- in `output.video_mode: annotated`, stream `i` draws tracks into the frame before
+  feeding it into `VideoSender` and suppresses metadata so Insight does not overlay twice
 - the default config runs indefinitely and does not save frames because
   `output.debug_dir` is `null` and `output.save_every` is `0`
 - set `inference.frames` for a bounded smoke run
@@ -156,8 +162,8 @@ Notes:
   one-call inference path
 - the example uses CPU-side OpenCV letterbox + normalize on A65 and feeds the
   detector through the model's tensor-input `QuantTess` contract
-- live metadata is emitted separately from video in Insight metadata format, with
-  one channel per stream
+- live metadata is emitted separately from video in Insight metadata format in
+  `clean` mode, with one channel per stream
 
 ## Debugging Notes
 - Start with one RTSP stream and confirm the config before scaling to multiple cameras.

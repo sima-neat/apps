@@ -171,7 +171,7 @@ struct StreamRuntime {
   simaai::neat::Run detect_run;
   simaai::neat::Session video_session;
   simaai::neat::Run video_run;
-  simaai::neat::MetadataSender metadata_sender;
+  std::optional<simaai::neat::MetadataSender> metadata_sender;
   PeopleTracker tracker;
   StreamMetrics metrics;
   std::string error_message;
@@ -196,7 +196,10 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
   auto source = build_source_run(cfg, url, probe);
   auto detect = build_detection_run(cfg, *model, probe, quant_preproc);
   auto video = build_insight_video_run(cfg, probe, index);
-  auto sender = build_insight_metadata_output(cfg, index);
+  std::optional<simaai::neat::MetadataSender> sender;
+  if (metadata_output_enabled(cfg)) {
+    sender.emplace(build_insight_metadata_output(cfg, index));
+  }
 
   StreamRuntime runtime{
       index,
@@ -459,28 +462,39 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       stream.metrics.detections += static_cast<int>(tracked.size());
 
       const double write_t0 = now_steady_s();
-      if (!stream.video_run.push(packet.frame)) {
+      const bool should_save_overlay = output_dir.has_value() && cfg.save_every > 0 &&
+                                       (packet.frame_index % cfg.save_every) == 0;
+      const bool should_render_overlay =
+          cfg.video_mode == VideoMode::Annotated || should_save_overlay;
+      cv::Mat overlay_frame;
+      if (should_render_overlay) {
+        const double overlay_t0 = now_steady_s();
+        overlay_frame = draw_tracked_people(packet.frame.clone(), tracked);
+        stream.metrics.overlay_time_s += now_steady_s() - overlay_t0;
+      }
+
+      const cv::Mat& video_frame =
+          cfg.video_mode == VideoMode::Annotated ? overlay_frame : packet.frame;
+      if (!stream.video_run.push(video_frame)) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " Insight video push failed");
       }
 
-      const auto payload = make_insight_tracking_detection(tracked);
-      const std::string frame_id = std::to_string(packet.frame_index);
-      const std::string data_json =
-          sima_examples::metadata_boxes_data_json("tracks", payload.tracks);
-      std::string metadata_error;
-      if (!stream.metadata_sender.send_metadata("tracking", data_json, now_unix_ms(), frame_id,
-                                                &metadata_error)) {
-        throw std::runtime_error("stream " + std::to_string(stream.index) +
-                                 " Insight metadata send failed: " + metadata_error);
+      if (metadata_output_enabled(cfg) && stream.metadata_sender.has_value()) {
+        const auto payload = make_insight_tracking_detection(tracked);
+        const std::string frame_id = std::to_string(packet.frame_index);
+        const std::string data_json =
+            sima_examples::metadata_boxes_data_json("tracks", payload.tracks);
+        std::string metadata_error;
+        if (!stream.metadata_sender->send_metadata("tracking", data_json, now_unix_ms(), frame_id,
+                                                   &metadata_error)) {
+          throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                   " Insight metadata send failed: " + metadata_error);
+        }
       }
 
-      if (output_dir.has_value() && cfg.save_every > 0 &&
-          (packet.frame_index % cfg.save_every) == 0) {
-        const double overlay_t0 = now_steady_s();
-        const cv::Mat overlay = draw_tracked_people(packet.frame.clone(), tracked);
-        stream.metrics.overlay_time_s += now_steady_s() - overlay_t0;
-        if (save_overlay_frame(output_dir, stream.index, packet.frame_index, overlay,
+      if (should_save_overlay) {
+        if (save_overlay_frame(output_dir, stream.index, packet.frame_index, overlay_frame,
                                cfg.save_every)) {
           stream.metrics.saved += 1;
         }

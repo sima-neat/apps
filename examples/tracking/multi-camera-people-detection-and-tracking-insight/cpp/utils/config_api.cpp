@@ -7,6 +7,11 @@
 
 namespace multi_camera_people_tracking {
 
+enum class VideoMode {
+  Clean,
+  Annotated,
+};
+
 struct AppConfig {
   std::string model;
   std::vector<std::string> rtsp_urls;
@@ -18,6 +23,7 @@ struct AppConfig {
   int fps = 0;
   int bitrate_kbps = 2500;
   int save_every = 0;
+  VideoMode video_mode = VideoMode::Clean;
   bool profile = false;
   int person_class_id = 0;
   std::optional<double> detection_threshold;
@@ -30,6 +36,8 @@ struct AppConfig {
 };
 
 std::filesystem::path default_config_path();
+std::string to_string(VideoMode mode);
+bool metadata_output_enabled(const AppConfig& cfg);
 AppConfig load_app_config(const std::filesystem::path& path);
 
 } // namespace multi_camera_people_tracking
