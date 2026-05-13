@@ -85,6 +85,7 @@ bool test_load_app_config_parses_dynamic_stream_list() {
          "    host: 192.168.0.107\n"
          "    video_port_base: 9000\n"
          "    metadata_port_base: 9100\n"
+         "  video_mode: annotated\n"
          "  debug_dir: null\n"
          "  save_every: 0\n"
          "streams:\n"
@@ -102,6 +103,10 @@ bool test_load_app_config_parses_dynamic_stream_list() {
     ok &= expect_true(cfg.insight_video_port_base == 9000, "config parser keeps video port base");
     ok &= expect_true(cfg.insight_metadata_port_base == 9100,
                       "config parser keeps metadata port base");
+    ok &= expect_true(cfg.video_mode == VideoMode::Annotated,
+                      "config parser keeps annotated video mode");
+    ok &=
+        expect_true(!metadata_output_enabled(cfg), "annotated video mode disables metadata output");
     ok &= expect_true(cfg.tcp, "config parser keeps tcp=true");
     ok &= expect_true(cfg.save_every == 0, "config parser keeps save_every");
     ok &= expect_true(cfg.rtsp_urls ==
@@ -113,6 +118,80 @@ bool test_load_app_config_parses_dynamic_stream_list() {
                       "config parser keeps all RTSP URLs");
   } catch (const std::exception& ex) {
     ok &= expect_true(false, std::string("config parser should load valid config: ") + ex.what());
+  }
+
+  remove_dir(temp_dir);
+  return ok;
+}
+
+bool test_load_app_config_defaults_to_clean_video_mode() {
+  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_mode_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory for video mode default test");
+  }
+
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  std::ofstream out(config_path);
+  out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "input: {}\n"
+         "inference: {}\n"
+         "tracking: {}\n"
+         "output:\n"
+         "  insight:\n"
+         "    host: 127.0.0.1\n"
+         "    video_port_base: 9000\n"
+         "    metadata_port_base: 9100\n"
+         "  debug_dir: null\n"
+         "  save_every: 0\n"
+         "streams:\n"
+         "  - rtsp://127.0.0.1:8554/src1\n";
+  out.close();
+
+  bool ok = true;
+  try {
+    const AppConfig cfg = load_app_config(config_path);
+    ok &= expect_true(cfg.video_mode == VideoMode::Clean,
+                      "config parser defaults to clean video mode");
+    ok &=
+        expect_true(metadata_output_enabled(cfg), "clean video mode keeps metadata output enabled");
+  } catch (const std::exception& ex) {
+    ok &= expect_true(false,
+                      std::string("config parser should load default video mode: ") + ex.what());
+  }
+
+  remove_dir(temp_dir);
+  return ok;
+}
+
+bool test_load_app_config_rejects_invalid_video_mode() {
+  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_badmode_");
+  if (temp_dir.empty()) {
+    return expect_true(false, "created temp directory for bad video mode test");
+  }
+
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  std::ofstream out(config_path);
+  out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "input: {}\n"
+         "inference: {}\n"
+         "tracking: {}\n"
+         "output:\n"
+         "  insight:\n"
+         "    host: 127.0.0.1\n"
+         "    video_port_base: 9000\n"
+         "    metadata_port_base: 9100\n"
+         "  video_mode: invalid\n"
+         "  debug_dir: null\n"
+         "  save_every: 0\n"
+         "streams:\n"
+         "  - rtsp://127.0.0.1:8554/src1\n";
+  out.close();
+
+  bool ok = false;
+  try {
+    static_cast<void>(load_app_config(config_path));
+  } catch (const std::exception& ex) {
+    ok = expect_contains(ex.what(), "video_mode", "invalid video mode error mentions video_mode");
   }
 
   remove_dir(temp_dir);
@@ -252,6 +331,8 @@ int main(int argc, char** argv) {
   failures += !multi_camera_people_tracking::test_help_runs(binary);
   failures += !multi_camera_people_tracking::test_missing_config_file_fails_cleanly(binary);
   failures += !multi_camera_people_tracking::test_load_app_config_parses_dynamic_stream_list();
+  failures += !multi_camera_people_tracking::test_load_app_config_defaults_to_clean_video_mode();
+  failures += !multi_camera_people_tracking::test_load_app_config_rejects_invalid_video_mode();
   failures += !multi_camera_people_tracking::test_load_app_config_rejects_missing_streams();
   failures += !multi_camera_people_tracking::test_common_config_yaml_uses_supported_shape();
   failures += !multi_camera_people_tracking::test_tracker_reuses_track_id_for_nearby_detection();

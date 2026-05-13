@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+class VideoMode(Enum):
+    CLEAN = "clean"
+    ANNOTATED = "annotated"
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,7 @@ class AppConfig:
     tracker_max_missing: int
     latency_ms: int
     tcp: bool
+    video_mode: VideoMode = VideoMode.CLEAN
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:
@@ -61,6 +68,19 @@ def _optional_float_or_none(mapping: dict[str, Any], key: str) -> float | None:
     if not isinstance(value, (int, float)):
         raise ValueError(f"{key} must be numeric or null")
     return float(value)
+
+
+def _parse_video_mode(value: str | None) -> VideoMode:
+    lowered = "clean" if value is None else str(value).strip().lower()
+    if lowered == "clean":
+        return VideoMode.CLEAN
+    if lowered == "annotated":
+        return VideoMode.ANNOTATED
+    raise ValueError("output.video_mode must be one of [clean, annotated]")
+
+
+def metadata_output_enabled(cfg: AppConfig) -> bool:
+    return cfg.video_mode is VideoMode.CLEAN
 
 
 def load_app_config(path: str | Path) -> AppConfig:
@@ -101,6 +121,7 @@ def load_app_config(path: str | Path) -> AppConfig:
         fps=_optional_int(inference, "fps", 0),
         bitrate_kbps=_optional_int(inference, "bitrate_kbps", 2500),
         save_every=_optional_int(output, "save_every", 0),
+        video_mode=_parse_video_mode(output.get("video_mode")),
         profile=bool(inference.get("profile", False)),
         person_class_id=_optional_int(inference, "person_class_id", 0),
         detection_threshold=_optional_float_or_none(inference, "detection_threshold"),

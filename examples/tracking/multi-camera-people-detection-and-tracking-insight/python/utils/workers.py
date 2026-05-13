@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Any
 
-from .config import AppConfig
+from .config import AppConfig, VideoMode, metadata_output_enabled
 from .image_utils import (
     draw_tracked_people,
     save_overlay_frame,
@@ -158,7 +158,7 @@ class StreamRuntime:
     detect_run: Any
     video_session: Any
     video_run: Any
-    metadata_sender: Any
+    metadata_sender: Any | None
     tracker: PeopleTracker
     metrics: StreamMetrics = field(default_factory=StreamMetrics)
     error: Exception | None = None
@@ -204,7 +204,9 @@ def create_stream_runtime(
     source_session, source_run = build_source_run(runtime, cfg, url, probe)
     detect_session, detect_run = build_detection_run(runtime, cfg, probe)
     video_session, video_run = build_insight_video_run(runtime, cfg, probe, index)
-    metadata_sender = build_insight_metadata_output(runtime, cfg, index)
+    metadata_sender = None
+    if metadata_output_enabled(cfg):
+        metadata_sender = build_insight_metadata_output(runtime, cfg, index)
     tracker = PeopleTracker(
         iou_threshold=cfg.tracker_iou_threshold,
         max_missing_frames=cfg.tracker_max_missing,
@@ -457,26 +459,35 @@ def publish_thread(
             stream.metrics.detections += len(tracked)
 
             write_t0 = time.perf_counter()
-            pyneat = runtime.pyneat
-            if not stream.video_run.push(pkt.frame, copy=True, image_format=pyneat.PixelFormat.RGB):
-                raise RuntimeError(f"stream {stream.index} Insight video push failed")
-
-            frame_id = str(pkt.frame_index)
-            tracks = make_insight_tracking_detection(tracked)
-            data_json = json.dumps({"tracks": tracks}, separators=(",", ":"))
-            ok = stream.metadata_sender.send_metadata(
-                "tracking",
-                data_json,
-                int(time.time() * 1000),
-                frame_id,
+            should_save_overlay = (
+                output_dir is not None and cfg.save_every > 0 and pkt.frame_index % cfg.save_every == 0
             )
-            if ok is False:
-                raise RuntimeError(f"stream {stream.index} Insight metadata send failed")
-
-            if output_dir is not None and cfg.save_every > 0 and pkt.frame_index % cfg.save_every == 0:
+            should_render_overlay = cfg.video_mode is VideoMode.ANNOTATED or should_save_overlay
+            overlay = None
+            if should_render_overlay:
                 overlay_t0 = time.perf_counter()
                 overlay = draw_tracked_people(runtime, pkt.frame.copy(), tracked)
                 stream.metrics.overlay_time_s += time.perf_counter() - overlay_t0
+
+            pyneat = runtime.pyneat
+            video_frame = overlay if cfg.video_mode is VideoMode.ANNOTATED else pkt.frame
+            if not stream.video_run.push(video_frame, copy=True, image_format=pyneat.PixelFormat.RGB):
+                raise RuntimeError(f"stream {stream.index} Insight video push failed")
+
+            if metadata_output_enabled(cfg) and stream.metadata_sender is not None:
+                frame_id = str(pkt.frame_index)
+                tracks = make_insight_tracking_detection(tracked)
+                data_json = json.dumps({"tracks": tracks}, separators=(",", ":"))
+                ok = stream.metadata_sender.send_metadata(
+                    "tracking",
+                    data_json,
+                    int(time.time() * 1000),
+                    frame_id,
+                )
+                if ok is False:
+                    raise RuntimeError(f"stream {stream.index} Insight metadata send failed")
+
+            if should_save_overlay:
                 if save_overlay_frame(
                     runtime,
                     output_dir,

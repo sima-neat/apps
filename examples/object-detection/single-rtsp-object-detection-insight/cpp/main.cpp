@@ -293,14 +293,14 @@ struct ConsumerTiming {
   double queue_pop_max = 0.0;
   double convert_sum = 0.0;
   double convert_max = 0.0;
-  double udp_convert_sum = 0.0;
-  double udp_convert_max = 0.0;
+  double video_sender_input_sum = 0.0;
+  double video_sender_input_max = 0.0;
   double yolo_push_sum = 0.0;
   double yolo_push_max = 0.0;
   double yolo_pull_sum = 0.0;
   double yolo_pull_max = 0.0;
-  double udp_push_sum = 0.0;
-  double udp_push_max = 0.0;
+  double video_sender_push_sum = 0.0;
+  double video_sender_push_max = 0.0;
   double bbox_extract_sum = 0.0;
   double bbox_extract_max = 0.0;
   double bbox_parse_sum = 0.0;
@@ -324,10 +324,10 @@ struct ConsumerTiming {
       convert_max = ms;
   }
 
-  void add_udp_convert(double ms) {
-    udp_convert_sum += ms;
-    if (ms > udp_convert_max)
-      udp_convert_max = ms;
+  void add_video_sender_input(double ms) {
+    video_sender_input_sum += ms;
+    if (ms > video_sender_input_max)
+      video_sender_input_max = ms;
   }
 
   void add_yolo_push(double ms) {
@@ -342,10 +342,10 @@ struct ConsumerTiming {
       yolo_pull_max = ms;
   }
 
-  void add_udp_push(double ms) {
-    udp_push_sum += ms;
-    if (ms > udp_push_max)
-      udp_push_max = ms;
+  void add_video_sender_push(double ms) {
+    video_sender_push_sum += ms;
+    if (ms > video_sender_push_max)
+      video_sender_push_max = ms;
   }
 
   void add_bbox_extract(double ms) {
@@ -384,12 +384,13 @@ struct ConsumerTiming {
     std::cout << "consumer_avg_queue_pop_ms " << (queue_pop_sum / count)
               << " consumer_max_queue_pop_ms " << queue_pop_max << " consumer_avg_convert_ms "
               << (convert_sum / count) << " consumer_max_convert_ms " << convert_max
-              << " consumer_avg_udp_convert_ms " << (udp_convert_sum / count)
-              << " consumer_max_udp_convert_ms " << udp_convert_max << " consumer_avg_yolo_push_ms "
-              << (yolo_push_sum / count) << " consumer_max_yolo_push_ms " << yolo_push_max
-              << " consumer_avg_yolo_pull_ms " << (yolo_pull_sum / count)
-              << " consumer_max_yolo_pull_ms " << yolo_pull_max << " consumer_avg_udp_push_ms "
-              << (udp_push_sum / count) << " consumer_max_udp_push_ms " << udp_push_max
+              << " consumer_avg_video_sender_input_ms " << (video_sender_input_sum / count)
+              << " consumer_max_video_sender_input_ms " << video_sender_input_max
+              << " consumer_avg_yolo_push_ms " << (yolo_push_sum / count)
+              << " consumer_max_yolo_push_ms " << yolo_push_max << " consumer_avg_yolo_pull_ms "
+              << (yolo_pull_sum / count) << " consumer_max_yolo_pull_ms " << yolo_pull_max
+              << " consumer_avg_video_sender_push_ms " << (video_sender_push_sum / count)
+              << " consumer_max_video_sender_push_ms " << video_sender_push_max
               << " consumer_avg_bbox_extract_ms " << (bbox_extract_sum / count)
               << " consumer_max_bbox_extract_ms " << bbox_extract_max
               << " consumer_avg_bbox_parse_ms " << (bbox_parse_sum / count)
@@ -518,15 +519,15 @@ InsightRuntime build_insight_runtime(const Config& cfg, int frame_w, int frame_h
   runtime.host = cfg.insight_host;
   runtime.video_port = cfg.insight_video_port;
 
-  simaai::neat::InputOptions udp_src;
-  udp_src.format = "NV12";
-  udp_src.width = frame_w;
-  udp_src.height = frame_h;
-  udp_src.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
-                          ",height=" + std::to_string(frame_h) +
-                          ",framerate=" + std::to_string(output_fps) + "/1";
-  udp_src.use_simaai_pool = false;
-  runtime.session.add(simaai::neat::nodes::Input(udp_src));
+  simaai::neat::InputOptions video_input;
+  video_input.format = "NV12";
+  video_input.width = frame_w;
+  video_input.height = frame_h;
+  video_input.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
+                              ",height=" + std::to_string(frame_h) +
+                              ",framerate=" + std::to_string(output_fps) + "/1";
+  video_input.use_simaai_pool = false;
+  runtime.session.add(simaai::neat::nodes::Input(video_input));
   auto video_opt = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
       frame_w, frame_h, output_fps);
   video_opt.host = runtime.host;
@@ -536,14 +537,15 @@ InsightRuntime build_insight_runtime(const Config& cfg, int frame_w, int frame_h
   video_opt.encoder.bitrate_kbps = 4000;
   runtime.session.add(simaai::neat::nodes::groups::VideoSender(video_opt));
 
-  simaai::neat::Tensor udp_dummy;
-  std::string udp_err;
-  sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, udp_dummy, udp_err), udp_err);
-  simaai::neat::RunOptions udp_run_opt;
-  udp_run_opt.enable_metrics = true;
-  runtime.video_run = runtime.session.build(simaai::neat::TensorList{udp_dummy},
-                                            simaai::neat::RunMode::Async, udp_run_opt);
-  std::cout << "udp=" << runtime.host << ":" << runtime.video_port << "\n";
+  simaai::neat::Tensor video_seed;
+  std::string video_seed_err;
+  sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, video_seed, video_seed_err),
+                         video_seed_err);
+  simaai::neat::RunOptions video_run_opt;
+  video_run_opt.enable_metrics = true;
+  runtime.video_run = runtime.session.build(simaai::neat::TensorList{video_seed},
+                                            simaai::neat::RunMode::Async, video_run_opt);
+  std::cout << "video_sender=" << runtime.host << ":" << runtime.video_port << "\n";
 
   simaai::neat::MetadataSenderOptions metadata_opt;
   metadata_opt.host = cfg.insight_host;
@@ -707,7 +709,7 @@ void producer_worker(simaai::neat::Run& cam, simaai::neat::Tensor first_frame, d
   state.producer_end_ms = time_ms();
 }
 
-void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
+void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& video_run,
                      simaai::neat::MetadataSender& metadata_sender,
                      const std::vector<std::string>& insight_labels, int frame_w, int frame_h,
                      int topk, WorkerSharedState& state) {
@@ -793,30 +795,31 @@ void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
 
     // Contract: publish video first, then publish the matching metadata side-channel payload.
     double output_ts = 0.0;
-    const double t_udp_conv0 = time_ms();
+    const double t_video_input0 = time_ms();
     simaai::neat::Tensor nv12_frame;
     std::string nv12_err;
     const bool converted = nv12_copy_to_cpu_tensor(pending.frame, nv12_frame, nv12_err);
     if (!converted) {
-      std::cerr << "[warn] udp convert failed: " << nv12_err << "\n";
+      std::cerr << "[warn] VideoSender input copy failed: " << nv12_err << "\n";
       continue;
     }
-    const double t_udp_conv1 = time_ms();
-    const double udp_conv_ms = t_udp_conv1 - t_udp_conv0;
-    print_time("nv12_copy_ms", udp_conv_ms, state.cfg.debug);
-    state.consumer_stats.add_udp_convert(udp_conv_ms);
+    const double t_video_input1 = time_ms();
+    const double video_input_ms = t_video_input1 - t_video_input0;
+    print_time("video_sender_input_copy_ms", video_input_ms, state.cfg.debug);
+    state.consumer_stats.add_video_sender_input(video_input_ms);
 
-    // NEAT boundary: push frame to Insight video transport run.
-    const double t_udp_push0 = time_ms();
-    if (!udp_run.push(simaai::neat::TensorList{nv12_frame})) {
-      std::cerr << "[warn] udp push failed\n";
+    // NEAT boundary: push the raw frame into VideoSender; the nodegroup owns conversion, H.264
+    // encoding, RTP packetization, and UDP output.
+    const double t_video_sender_push0 = time_ms();
+    if (!video_run.push(simaai::neat::TensorList{nv12_frame})) {
+      std::cerr << "[warn] VideoSender push failed\n";
       continue;
     }
-    const double t_udp_push1 = time_ms();
-    const double udp_push_ms = t_udp_push1 - t_udp_push0;
-    print_time("udp_push_ms", udp_push_ms, state.cfg.debug);
-    state.consumer_stats.add_udp_push(udp_push_ms);
-    output_ts = t_udp_push1;
+    const double t_video_sender_push1 = time_ms();
+    const double video_sender_push_ms = t_video_sender_push1 - t_video_sender_push0;
+    print_time("video_sender_push_ms", video_sender_push_ms, state.cfg.debug);
+    state.consumer_stats.add_video_sender_push(video_sender_push_ms);
+    output_ts = t_video_sender_push1;
     const int64_t fid =
         out_opt->frame_id >= 0 ? out_opt->frame_id : static_cast<int64_t>(pending.index);
     const auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -904,7 +907,7 @@ int main(int argc, char** argv) {
     if (consumer_thread.joinable())
       consumer_thread.join();
 
-    std::cout << "published=" << published.load() << " udp=" << insight_runtime.host << ":"
+    std::cout << "published=" << published.load() << " video_sender=" << insight_runtime.host << ":"
               << insight_runtime.video_port << "\n";
     print_throughput_summary(producer_stats.count, det_outputs.load(), published.load(),
                              producer_start_ms, producer_end_ms, consumer_start_ms,
@@ -912,8 +915,8 @@ int main(int argc, char** argv) {
     print_stream_summary("rtsp", rtsp_runtime.run, true);
     print_stream_summary("yolo", yolo_runtime.run, true);
     print_pipeline_report("yolo", yolo_runtime.run, true);
-    print_stream_summary("udp", insight_runtime.video_run, true);
-    print_pipeline_report("udp", insight_runtime.video_run, true);
+    print_stream_summary("video_sender", insight_runtime.video_run, true);
+    print_pipeline_report("video_sender", insight_runtime.video_run, true);
     producer_stats.print();
     consumer_stats.print();
 

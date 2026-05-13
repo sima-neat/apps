@@ -34,7 +34,7 @@ class TestUnitSuiteEntrypoint:
 
 class TestConfigLoading:
     def test_load_app_config_parses_dynamic_stream_list(self, tmp_path: Path):
-        from utils.config import load_app_config
+        from utils.config import VideoMode, load_app_config, metadata_output_enabled
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
@@ -60,6 +60,7 @@ output:
     host: 192.168.0.107
     video_port_base: 9000
     metadata_port_base: 9100
+  video_mode: annotated
   debug_dir: null
   save_every: 0
 streams:
@@ -76,6 +77,8 @@ streams:
         assert cfg.insight_host == "192.168.0.107"
         assert cfg.insight_video_port_base == 9000
         assert cfg.insight_metadata_port_base == 9100
+        assert cfg.video_mode is VideoMode.ANNOTATED
+        assert metadata_output_enabled(cfg) is False
         assert cfg.tcp is True
         assert cfg.save_every == 0
         assert cfg.rtsp_urls == [
@@ -108,8 +111,63 @@ output:
         with pytest.raises(ValueError, match="streams"):
             load_app_config(config_path)
 
-    def test_common_config_yaml_uses_supported_shape(self):
+    def test_load_app_config_defaults_to_clean_video_mode(self, tmp_path: Path):
+        from utils.config import VideoMode, load_app_config, metadata_output_enabled
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+model: assets/models/yolo_v8m_mpk.tar.gz
+input: {}
+inference: {}
+tracking: {}
+output:
+  insight:
+    host: 127.0.0.1
+    video_port_base: 9000
+    metadata_port_base: 9100
+  debug_dir: null
+  save_every: 0
+streams:
+  - rtsp://127.0.0.1:8554/src1
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_app_config(config_path)
+
+        assert cfg.video_mode is VideoMode.CLEAN
+        assert metadata_output_enabled(cfg) is True
+
+    def test_load_app_config_rejects_invalid_video_mode(self, tmp_path: Path):
         from utils.config import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            """
+model: assets/models/yolo_v8m_mpk.tar.gz
+input: {}
+inference: {}
+tracking: {}
+output:
+  insight:
+    host: 127.0.0.1
+    video_port_base: 9000
+    metadata_port_base: 9100
+  video_mode: invalid
+  debug_dir: null
+  save_every: 0
+streams:
+  - rtsp://127.0.0.1:8554/src1
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="video_mode"):
+            load_app_config(config_path)
+
+    def test_common_config_yaml_uses_supported_shape(self):
+        from utils.config import VideoMode, load_app_config
 
         config_path = EXAMPLE_DIR / "common" / "config.yaml"
         cfg = load_app_config(config_path)
@@ -118,6 +176,7 @@ output:
         assert cfg.insight_video_port_base > 0
         assert cfg.insight_metadata_port_base > 0
         assert cfg.save_every >= 0
+        assert cfg.video_mode in {VideoMode.CLEAN, VideoMode.ANNOTATED}
         assert isinstance(cfg.rtsp_urls, list)
 
 
@@ -750,6 +809,107 @@ class TestWorkers:
         assert metadata_type == "tracking"
         assert frame_id == "0"
         assert data_json == '{"tracks":[{"id":"5"}]}'
+
+    def test_publish_thread_annotated_video_suppresses_metadata(self, monkeypatch):
+        from utils.config import AppConfig, VideoMode
+        from utils.tracker import TrackedDetection
+        from utils.workers import ResultPacket, StreamMetrics, publish_thread
+
+        class FakeVideoRun:
+            def __init__(self):
+                self.calls = []
+
+            def push(self, frame, copy=False, image_format=None):
+                self.calls.append((frame, copy, image_format))
+                return True
+
+        class FakeMetadataSender:
+            def __init__(self):
+                self.calls = []
+
+            def send_metadata(self, *args):
+                self.calls.append(args)
+                return True
+
+        cfg = AppConfig(
+            model="model.tar.gz",
+            rtsp_urls=["rtsp://camera-0"],
+            output_dir=None,
+            frames=1,
+            insight_host="127.0.0.1",
+            insight_video_port_base=9000,
+            insight_metadata_port_base=9100,
+            fps=0,
+            bitrate_kbps=2500,
+            save_every=0,
+            profile=False,
+            person_class_id=0,
+            detection_threshold=None,
+            nms_iou_threshold=None,
+            top_k=None,
+            tracker_iou_threshold=0.3,
+            tracker_max_missing=15,
+            latency_ms=200,
+            tcp=False,
+            video_mode=VideoMode.ANNOTATED,
+        )
+        video_run = FakeVideoRun()
+        sender = FakeMetadataSender()
+        frame = SimpleNamespace(
+            shape=(24, 32, 3),
+            label="clean-frame",
+            copy=lambda: SimpleNamespace(shape=(24, 32, 3), label="copy-frame"),
+        )
+        stream = SimpleNamespace(
+            index=0,
+            runtime=SimpleNamespace(pyneat=SimpleNamespace(PixelFormat=SimpleNamespace(RGB="rgb"))),
+            tracker=SimpleNamespace(
+                update=lambda boxes, frame_index: [
+                    TrackedDetection(
+                        track_id=5,
+                        x1=1.0,
+                        y1=2.0,
+                        x2=11.0,
+                        y2=22.0,
+                        score=0.9,
+                        class_id=0,
+                    )
+                ]
+            ),
+            video_run=video_run,
+            metadata_sender=sender,
+            metrics=StreamMetrics(),
+            error=None,
+        )
+        result_q: queue.Queue = queue.Queue()
+        result_q.put(
+            ResultPacket(
+                frame=frame,
+                frame_index=0,
+                bbox_payload=b"bbox",
+                source_time_s=0.01,
+                preproc_time_s=0.02,
+                pull_wait_s=0.03,
+            )
+        )
+        stop_event = threading.Event()
+
+        monkeypatch.setattr(
+            "utils.workers.parse_bbox_payload",
+            lambda payload, w, h: [{"class_id": 0, "x1": 1.0, "y1": 2.0, "x2": 11.0, "y2": 22.0, "score": 0.9}],
+        )
+        monkeypatch.setattr("utils.workers.filter_person_detections", lambda boxes, person_class_id: boxes)
+        monkeypatch.setattr("utils.workers.save_overlay_frame", lambda *args, **kwargs: False)
+        monkeypatch.setattr(
+            "utils.workers.draw_tracked_people",
+            lambda runtime, copied_frame, tracked: SimpleNamespace(shape=copied_frame.shape, label="overlay-frame"),
+        )
+
+        publish_thread(stream, cfg, result_q, stop_event)
+
+        assert video_run.calls[0][0].label == "overlay-frame"
+        assert video_run.calls[0][1:] == (True, "rgb")
+        assert sender.calls == []
 
     def test_producer_thread_throttles_to_cfg_fps(self, monkeypatch):
         from utils.config import AppConfig

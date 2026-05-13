@@ -202,6 +202,17 @@ bool optional_bool(const RawConfig& raw, const std::string& key, bool default_va
   throw std::runtime_error(error_name + " must be true or false");
 }
 
+VideoMode parse_video_mode(const std::string& value) {
+  const std::string lowered = lower_copy(trim_copy(value));
+  if (lowered == "clean") {
+    return VideoMode::Clean;
+  }
+  if (lowered == "annotated") {
+    return VideoMode::Annotated;
+  }
+  throw std::runtime_error("output.video_mode must be one of [clean, annotated]");
+}
+
 std::optional<double> optional_double_or_none(const RawConfig& raw, const std::string& key,
                                               const std::string& error_name) {
   const auto value = lookup_scalar(raw, key);
@@ -232,6 +243,20 @@ std::filesystem::path default_config_path() {
 #endif
 }
 
+std::string to_string(VideoMode mode) {
+  switch (mode) {
+  case VideoMode::Clean:
+    return "clean";
+  case VideoMode::Annotated:
+    return "annotated";
+  }
+  return "clean";
+}
+
+bool metadata_output_enabled(const AppConfig& cfg) {
+  return cfg.video_mode == VideoMode::Clean;
+}
+
 AppConfig load_app_config(const std::filesystem::path& path) {
   const RawConfig raw = parse_raw_config(path);
 
@@ -251,6 +276,8 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   cfg.fps = optional_int(raw, "inference.fps", 0, "inference.fps");
   cfg.bitrate_kbps = optional_int(raw, "inference.bitrate_kbps", 2500, "inference.bitrate_kbps");
   cfg.save_every = optional_int(raw, "output.save_every", 0, "output.save_every");
+  cfg.video_mode =
+      parse_video_mode(lookup_scalar(raw, "output.video_mode").value_or(std::string("clean")));
   cfg.profile = optional_bool(raw, "inference.profile", false, "inference.profile");
   cfg.person_class_id =
       optional_int(raw, "inference.person_class_id", 0, "inference.person_class_id");
