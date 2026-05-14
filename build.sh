@@ -275,6 +275,16 @@ core_branch_exists() {
   return 1
 }
 
+core_artifact_branch_exists() {
+  local branch="$1"
+
+  if [[ -z "${branch}" || "${branch}" == "HEAD" ]]; then
+    return 1
+  fi
+
+  download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag" >/dev/null 2>&1
+}
+
 neat_core_available() {
   # Prefer an actual package/config probe over the repo-local marker file so a
   # reused checkout does not incorrectly skip install in a fresh container.
@@ -366,7 +376,7 @@ resolve_neat_core_target() {
 
   if [[ "${policy}" == "snap" ]]; then
     snap_branch="$(current_apps_branch)"
-    if core_branch_exists "${snap_branch}"; then
+    if core_branch_exists "${snap_branch}" || core_artifact_branch_exists "${snap_branch}"; then
       branch="${snap_branch}"
     else
       branch="main"
