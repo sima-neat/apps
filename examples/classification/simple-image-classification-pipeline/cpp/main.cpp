@@ -6,7 +6,6 @@
 #include "support/runtime/example_utils.h"
 
 #include <filesystem>
-#include <array>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -66,28 +65,23 @@ int main(int argc, char** argv) {
     return 4;
   }
 
-  std::vector<float> mean = {0.485f, 0.456f, 0.406f};
-  std::vector<float> stddev = {0.229f, 0.224f, 0.225f};
-
   // [model_basic]
   simaai::neat::Model::Options model_opt;
-  model_opt.media_type = "video/x-raw";
-  model_opt.format = "RGB";
-  model_opt.input_max_width = kInferWidth;
-  model_opt.input_max_height = kInferHeight;
-  model_opt.input_max_depth = 3;
-  model_opt.preproc.normalize = true;
-  model_opt.preproc.channel_mean = std::array<float, 3>{mean[0], mean[1], mean[2]};
-  model_opt.preproc.channel_stddev = std::array<float, 3>{stddev[0], stddev[1], stddev[2]};
+  model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+  model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+  model_opt.preprocess.input_max_width = kInferWidth;
+  model_opt.preprocess.input_max_height = kInferHeight;
+  model_opt.preprocess.input_max_depth = 3;
+  model_opt.preprocess.preset = simaai::neat::NormalizePreset::ImageNet;
   simaai::neat::Model model(model_path, model_opt);
 
   try {
-    auto out = model.run(rgb);
-    if (!out.tensor.has_value()) {
+    const auto outputs = model.run(std::vector<cv::Mat>{rgb});
+    if (outputs.empty()) {
       std::cerr << "Model run returned empty output\n";
       return 6;
     }
-    auto scores = sima_examples::scores_from_tensor(*out.tensor, "model");
+    auto scores = sima_examples::scores_from_tensor(outputs.front(), "model");
     sima_examples::check_top1(scores, kGoldfishId, min_prob, "model");
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n";
