@@ -76,7 +76,9 @@ int main(int argc, char** argv) {
   simaai::neat::Model model(model_path, model_opt);
 
   try {
-    const auto outputs = model.run(std::vector<cv::Mat>{rgb});
+    const auto input =
+        simaai::neat::Tensor::from_cv_mat(rgb, simaai::neat::ImageSpec::PixelFormat::RGB);
+    const auto outputs = model.run(simaai::neat::TensorList{input});
     if (outputs.empty()) {
       std::cerr << "Model run returned empty output\n";
       return 6;

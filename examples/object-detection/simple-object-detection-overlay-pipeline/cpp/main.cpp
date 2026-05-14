@@ -2,7 +2,8 @@
  * @example simple-object-detection-overlay-pipeline.cpp
  * Minimal YOLOv8n sync pipeline: infer detections for every image in a folder.
  *
- * Usage: simple-object-detection-overlay-pipeline <model.tar.gz> <labels.txt> <input_dir> <output_dir>
+ * Usage: simple-object-detection-overlay-pipeline <model.tar.gz> <labels.txt> <input_dir>
+ * <output_dir>
  */
 #include "neat.h"
 #include "support/object_detection/obj_detection_utils.h"
@@ -66,26 +67,6 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
     throw std::runtime_error("labels file is empty: " + labels_path.string());
   }
   return labels;
-}
-
-std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
-  if (sample.kind == simaai::neat::SampleKind::Tensor) {
-    if (!sample.tensor.has_value()) {
-      throw std::runtime_error("tensor sample missing payload");
-    }
-    return {*sample.tensor};
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    std::vector<simaai::neat::Tensor> out;
-    for (const auto& field : sample.fields) {
-      auto child = collect_tensors(field);
-      out.insert(out.end(), child.begin(), child.end());
-    }
-    return out;
-  }
-
-  throw std::runtime_error("unexpected sample kind");
 }
 
 TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
@@ -158,17 +139,16 @@ float iou_xyxy(const objdet::Box& a, const objdet::Box& b) {
   return den > 0.0f ? (inter / den) : 0.0f;
 }
 
-std::vector<objdet::Box> decode_yolov8_boxes_from_tensors(
-    const std::vector<simaai::neat::Tensor>& tensors) {
+std::vector<objdet::Box>
+decode_yolov8_boxes_from_tensors(const std::vector<simaai::neat::Tensor>& tensors) {
   if (tensors.size() < 6) {
     throw std::runtime_error("expected at least 6 tensors for YOLOv8 decode");
   }
 
-  const std::array<TensorHWC, 3> regs = {tensor_to_hwc_f32(tensors[0]), tensor_to_hwc_f32(tensors[1]),
-                                         tensor_to_hwc_f32(tensors[2])};
-  const std::array<TensorHWC, 3> clss = {tensor_to_hwc_f32(tensors[3]),
-                                         tensor_to_hwc_f32(tensors[4]),
-                                         tensor_to_hwc_f32(tensors[5])};
+  const std::array<TensorHWC, 3> regs = {
+      tensor_to_hwc_f32(tensors[0]), tensor_to_hwc_f32(tensors[1]), tensor_to_hwc_f32(tensors[2])};
+  const std::array<TensorHWC, 3> clss = {
+      tensor_to_hwc_f32(tensors[3]), tensor_to_hwc_f32(tensors[4]), tensor_to_hwc_f32(tensors[5])};
 
   std::vector<objdet::Box> candidates;
   candidates.reserve(2000);
@@ -253,14 +233,13 @@ std::vector<objdet::Box> decode_yolov8_boxes_from_tensors(
 }
 
 std::vector<objdet::Box> scale_boxes_to_original(const std::vector<objdet::Box>& boxes, int out_w,
-                                                  int out_h) {
+                                                 int out_h) {
   const float sx = static_cast<float>(out_w) / static_cast<float>(kInferSize);
   const float sy = static_cast<float>(out_h) / static_cast<float>(kInferSize);
   std::vector<objdet::Box> out;
   out.reserve(boxes.size());
   for (const auto& b : boxes) {
-    out.push_back(
-        objdet::Box{b.x1 * sx, b.y1 * sy, b.x2 * sx, b.y2 * sy, b.score, b.class_id});
+    out.push_back(objdet::Box{b.x1 * sx, b.y1 * sy, b.x2 * sx, b.y2 * sy, b.score, b.class_id});
   }
   return out;
 }
@@ -274,7 +253,7 @@ std::string class_name(const std::vector<std::string>& labels, int class_id) {
 
 cv::Scalar class_color(int class_id) {
   static const std::array<cv::Scalar, 8> kColors = {
-      cv::Scalar(0, 255, 0),   cv::Scalar(255, 0, 0), cv::Scalar(0, 0, 255),
+      cv::Scalar(0, 255, 0),   cv::Scalar(255, 0, 0),   cv::Scalar(0, 0, 255),
       cv::Scalar(255, 255, 0), cv::Scalar(255, 0, 255), cv::Scalar(0, 255, 255),
       cv::Scalar(128, 255, 0), cv::Scalar(255, 128, 0)};
   const size_t idx = static_cast<size_t>(class_id >= 0 ? class_id : -class_id) % kColors.size();
@@ -314,8 +293,7 @@ int main(int argc, char** argv) {
   std::cerr.setf(std::ios::unitbuf);
 
   if (argc < 5) {
-    std::cerr << "Usage: " << argv[0]
-              << " <model.tar.gz> <labels.txt> <input_dir> <output_dir>\n";
+    std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <labels.txt> <input_dir> <output_dir>\n";
     return 1;
   }
 
@@ -354,11 +332,11 @@ int main(int argc, char** argv) {
 
   try {
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "BGR";
-    model_opt.input_max_width = kInferSize;
-    model_opt.input_max_height = kInferSize;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
+    model_opt.preprocess.input_max_width = kInferSize;
+    model_opt.preprocess.input_max_height = kInferSize;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
 
@@ -367,9 +345,9 @@ int main(int argc, char** argv) {
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
     cv::Mat dummy_bgr(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor dummy = simaai::neat::from_cv_mat(
-        dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
-    auto run = session.build(dummy, simaai::neat::RunMode::Sync);
+    const auto dummy =
+        simaai::neat::Tensor::from_cv_mat(dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR);
+    auto runner = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Sync);
 
     int processed = 0;
     for (const auto& image_path : images) {
@@ -384,28 +362,16 @@ int main(int argc, char** argv) {
 
       cv::Mat resized;
       cv::resize(bgr, resized, cv::Size(kInferSize, kInferSize), 0, 0, cv::INTER_LINEAR);
-      simaai::neat::Tensor input = simaai::neat::from_cv_mat(
-          resized, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
-
-      simaai::neat::Sample out = run.push_and_pull(input, kTimeoutMs);
+      const auto input =
+          simaai::neat::Tensor::from_cv_mat(resized, simaai::neat::ImageSpec::PixelFormat::BGR);
 
       std::vector<objdet::Box> boxes_infer;
-      std::vector<uint8_t> payload;
-      std::string bbox_err;
-      if (objdet::extract_bbox_payload(out, payload, bbox_err)) {
-        try {
-          boxes_infer = objdet::parse_boxes_strict(payload, kInferSize, kInferSize, kMaxDet, false);
-        } catch (const std::exception&) {
-          boxes_infer = objdet::parse_boxes_lenient(payload, kInferSize, kInferSize, kMaxDet);
-        }
-      } else {
-        try {
-          const auto tensors = collect_tensors(out);
-          boxes_infer = decode_yolov8_boxes_from_tensors(tensors);
-        } catch (const std::exception& e) {
-          std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
-          continue;
-        }
+      try {
+        const auto tensors = runner.run(simaai::neat::TensorList{input}, kTimeoutMs);
+        boxes_infer = decode_yolov8_boxes_from_tensors(tensors);
+      } catch (const std::exception& e) {
+        std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
+        continue;
       }
 
       const auto boxes_orig = scale_boxes_to_original(boxes_infer, orig_w, orig_h);
@@ -422,7 +388,7 @@ int main(int argc, char** argv) {
                 << " -> " << out_path.filename() << " (" << boxes_orig.size() << " detections)\n";
     }
 
-    run.close();
+    runner.close();
     std::cout << "Done: " << processed << " images processed\n";
     return 0;
   } catch (const std::exception& e) {
