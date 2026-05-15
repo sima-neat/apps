@@ -1,6 +1,7 @@
 """Minimal YOLOv5 instance-segmentation overlay from DetessDequant outputs."""
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -66,7 +67,7 @@ def class_name(cid: int) -> str:
     return f"class_{cid}"
 
 
-def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
+def tensor_to_numpy(tensor: pyneat.Tensor, dq_scale: float | None = None) -> np.ndarray:
     dtype_map = {
         pyneat.TensorDType.UInt8: np.uint8,
         pyneat.TensorDType.Int8: np.int8,
@@ -83,22 +84,29 @@ def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
     arr = np.frombuffer(tensor.copy_dense_bytes_tight(), dtype=np_dtype)
     if shape:
         arr = arr.reshape(shape)
+    if dq_scale is not None:
+        if dq_scale <= 0.0:
+            raise ValueError(f"invalid DetessDeQuant dq_scale: {dq_scale}")
+        arr = arr.astype(np.float32, copy=False) / (dq_scale * dq_scale)
     return arr
 
 
-def collect_tensors(sample: pyneat.Sample) -> list:
-    out = []
-    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
-        out.append(sample.tensor)
-        return out
-    if sample.fields:
-        for f in sample.fields:
-            out.extend(collect_tensors(f))
-    return out
+def detess_dequant_scales(model: pyneat.Model, expected_count: int, label: str) -> list[float]:
+    config_path = model.find_config_path_by_plugin("postproc")
+    if not config_path:
+        raise RuntimeError(f"{label}: DetessDeQuant postproc config is missing")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    scales = config.get("dq_scale")
+    if not isinstance(scales, list):
+        raise RuntimeError(f"{label}: DetessDeQuant dq_scale array is missing")
+    if len(scales) != expected_count:
+        raise RuntimeError(f"{label}: expected {expected_count} dq_scale values, got {len(scales)}")
+    return [float(x) for x in scales]
 
 
-def tensor_to_hwc(tensor: pyneat.Tensor):
-    arr = tensor_to_numpy(tensor).astype(np.float32)
+def tensor_to_hwc(tensor: pyneat.Tensor, dq_scale: float):
+    arr = tensor_to_numpy(tensor, dq_scale).astype(np.float32)
     if arr.ndim == 4:
         if arr.shape[0] != 1:
             raise ValueError("only batch=1 is supported")
@@ -141,12 +149,14 @@ def nms_per_class(dets, iou_thr=0.5, max_det=100):
     return keep
 
 
-def decode_yolov5_seg(tensors, infer_size):
+def decode_yolov5_seg(tensors, dq_scales, infer_size):
     """Decode YOLOv5-seg DetessDequant outputs."""
     if len(tensors) < 13:
         raise ValueError("expected 13 output tensors")
+    if len(dq_scales) != 13:
+        raise ValueError("expected 13 DetessDeQuant scales")
 
-    proto = tensor_to_hwc(tensors[0])  # 160x160x32
+    proto = tensor_to_hwc(tensors[0], dq_scales[0])  # 160x160x32
     if proto.shape != (160, 160, 32):
         raise ValueError(f"unexpected proto shape: {proto.shape}")
 
@@ -154,10 +164,10 @@ def decode_yolov5_seg(tensors, infer_size):
 
     dets = []
     for lvl in range(3):
-        txy = tensor_to_hwc(tensors[1 + lvl * 4])
-        twh = tensor_to_hwc(tensors[2 + lvl * 4])
-        tco = tensor_to_hwc(tensors[3 + lvl * 4])
-        tmk = tensor_to_hwc(tensors[4 + lvl * 4])
+        txy = tensor_to_hwc(tensors[1 + lvl * 4], dq_scales[1 + lvl * 4])
+        twh = tensor_to_hwc(tensors[2 + lvl * 4], dq_scales[2 + lvl * 4])
+        tco = tensor_to_hwc(tensors[3 + lvl * 4], dq_scales[3 + lvl * 4])
+        tmk = tensor_to_hwc(tensors[4 + lvl * 4], dq_scales[4 + lvl * 4])
 
         gh, gw = txy.shape[0], txy.shape[1]
         for y in range(gh):
@@ -278,12 +288,26 @@ def main() -> int:
 
     try:
         opt = pyneat.ModelOptions()
-        opt.media_type = "video/x-raw"
-        opt.format = "RGB"
-        opt.input_max_width = INPUT_W
-        opt.input_max_height = INPUT_H
-        opt.input_max_depth = 3
+        opt.preprocess.kind = pyneat.InputKind.Image
+        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+        opt.preprocess.input_max_width = INPUT_W
+        opt.preprocess.input_max_height = INPUT_H
+        opt.preprocess.input_max_depth = 3
         model = pyneat.Model(args.model, opt)
+        dq_scales = detess_dequant_scales(model, 13, "YOLOv5 seg")
+
+        dummy = np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)
+        dummy_tensor = pyneat.Tensor.from_numpy(
+            dummy,
+            copy=True,
+            image_format=pyneat.PixelFormat.RGB,
+            memory=pyneat.TensorMemory.EV74,
+        )
+        run_opt = pyneat.RunOptions()
+        run_opt.queue_depth = 8
+        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
+        run_opt.preset = pyneat.RunPreset.Balanced
+        runner = model.build(dummy_tensor, run_options=run_opt)
 
         print(f"Found {len(images)} images")
 
@@ -299,16 +323,18 @@ def main() -> int:
             rgb_arr = np.ascontiguousarray(resized_rgb, dtype=np.uint8)
 
             input_tensor = pyneat.Tensor.from_numpy(
-                rgb_arr, copy=True, image_format=pyneat.PixelFormat.RGB
+                rgb_arr,
+                copy=True,
+                image_format=pyneat.PixelFormat.RGB,
+                memory=pyneat.TensorMemory.EV74,
             )
-            out = model.run(input_tensor, timeout_ms=3000)
-            tensors = collect_tensors(out)
+            tensors = runner.run(input_tensor, timeout_ms=3000)
             if not tensors:
                 print(f"No tensor outputs for {image_path.name}", file=sys.stderr)
                 continue
 
             try:
-                dets, proto = decode_yolov5_seg(tensors, INPUT_W)
+                dets, proto = decode_yolov5_seg(tensors, dq_scales, INPUT_W)
             except Exception as e:
                 print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
                 continue
@@ -322,6 +348,7 @@ def main() -> int:
             print(f"Wrote: {overlay_path} detections={len(dets)}")
             ok += 1
 
+        runner.close()
         print(f"Processed {ok} / {len(images)} images")
         return 0
     except Exception as e:
