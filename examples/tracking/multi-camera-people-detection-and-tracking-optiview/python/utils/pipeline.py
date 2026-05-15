@@ -127,9 +127,9 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
     ro.tcp = cfg.tcp
     ro.payload_type = 96
     ro.insert_queue = True
-    ro.out_format = "RGB"
-    ro.decoder_raw_output = False
     ro.auto_caps_from_stream = True
+    ro.sima_allocator_type = 2
+    ro.decoder_raw_output = False
     ro.use_videoconvert = False
     ro.use_videoscale = True
     ro.fallback_h264_width = probe.width
@@ -137,7 +137,6 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
     if probe.fps > 0:
         ro.fallback_h264_fps = probe.fps
     ro.output_caps.enable = True
-    ro.output_caps.format = "RGB"
     ro.output_caps.width = probe.width
     ro.output_caps.height = probe.height
     if probe.fps > 0:
@@ -158,23 +157,57 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
 def build_detection_run(
     runtime: RuntimeModules,
     cfg: AppConfig,
-    model: Any,
     probe: RtspProbe,
-    quant_preproc: QuantTessCpuPreproc,
 ):
     pyneat = runtime.pyneat
     np = runtime.np
 
-    # Keep the detector graph explicit in the example:
-    # tensor input -> QuantTess -> MLA -> BoxDecode.
+    model_opt = pyneat.ModelOptions()
+    model_opt.preprocess.kind = pyneat.InputKind.Image
+    model_opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+    model_opt.preprocess.input_max_width = probe.width
+    model_opt.preprocess.input_max_height = probe.height
+    model_opt.preprocess.input_max_depth = 3
+    model_opt.decode_type = pyneat.BoxDecodeType.YoloV8
+    model_opt.score_threshold = (
+        cfg.detection_threshold
+        if cfg.detection_threshold is not None
+        else _YOLOV8_BOXDECODE_DEFAULTS["detection_threshold"]
+    )
+    model_opt.nms_iou_threshold = (
+        cfg.nms_iou_threshold
+        if cfg.nms_iou_threshold is not None
+        else _YOLOV8_BOXDECODE_DEFAULTS["nms_iou_threshold"]
+    )
+    model_opt.top_k = (
+        cfg.top_k if cfg.top_k is not None else _YOLOV8_BOXDECODE_DEFAULTS["topk"]
+    )
+    model_opt.boxdecode_original_width = probe.width
+    model_opt.boxdecode_original_height = probe.height
+    model = pyneat.Model(cfg.model, model_opt)
+
+    input_opt = model.input_appsrc_options(False)
+    input_opt.media_type = "video/x-raw"
+    input_opt.format = "RGB"
+    input_opt.width = probe.width
+    input_opt.height = probe.height
+    input_opt.depth = 3
+    for attr, value in (
+        ("max_width", probe.width),
+        ("max_height", probe.height),
+        ("max_depth", 3),
+    ):
+        if hasattr(input_opt, attr):
+            setattr(input_opt, attr, value)
+
     session = pyneat.Session()
-    session.add(pyneat.nodes.input(model.input_appsrc_options(True)))
-    session.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
+    session.add(pyneat.nodes.input(input_opt))
+    session.add(model.preprocess())
     session.add(pyneat.groups.mla(model))
     session.add(
         pyneat.nodes.sima_box_decode(
             model,
-            decode_type="yolov8",
+            decode_type=pyneat.BoxDecodeType.YoloV8,
             original_width=probe.width,
             original_height=probe.height,
             detection_threshold=(
@@ -192,8 +225,18 @@ def build_detection_run(
     )
     session.add(pyneat.nodes.output())
 
-    seed = np.zeros((quant_preproc.height, quant_preproc.width, 3), dtype=np.float32)
-    run = session.build(seed)
+    seed = pyneat.Tensor.from_numpy(
+        np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
+    run_opt = pyneat.RunOptions()
+    run_opt.preset = pyneat.RunPreset.Realtime
+    run_opt.queue_depth = 1
+    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_opt.output_memory = pyneat.OutputMemory.Owned
+    run = session.build(seed, pyneat.RunMode.Async, run_opt)
     return session, run
 
 
@@ -237,6 +280,7 @@ def build_optiview_video_run(
         np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
         copy=True,
         image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
     )
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 2

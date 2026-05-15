@@ -12,9 +12,6 @@ from typing import Any
 
 from .config import AppConfig
 from .image_utils import (
-    QuantTessCpuPreprocState,
-    build_cpu_quanttess_preproc_state,
-    cpu_quanttess_input,
     draw_tracked_people,
     save_overlay_frame,
 )
@@ -22,7 +19,6 @@ from .pipeline import (
     _SOURCE_PULL_TIMEOUT_MS,
     _SOURCE_STARTUP_PULL_TIMEOUT_MS,
     _SOURCE_STARTUP_STAGGER_S,
-    QuantTessCpuPreproc,
     RtspProbe,
     RuntimeModules,
     build_detection_run,
@@ -30,12 +26,10 @@ from .pipeline import (
     build_optiview_video_run,
     build_source_run,
     effective_writer_fps,
-    load_detector_model,
     load_runtime_modules,
     optiview_json_port_for_stream,
     optiview_video_port_for_stream,
     probe_rtsp,
-    read_preproc_contract,
 )
 from .sample_utils import (
     extract_bbox_payload,
@@ -156,8 +150,6 @@ class StreamRuntime:
     url: str
     probe: RtspProbe
     runtime: RuntimeModules
-    model: Any
-    quant_preproc_state: QuantTessCpuPreprocState
     # Keep sessions alive for as long as the runs built from them are in use.
     source_session: Any
     source_run: Any
@@ -205,19 +197,11 @@ def create_stream_runtime(
     index: int,
     url: str,
     cfg: AppConfig,
-    model: Any,
-    quant_preproc: QuantTessCpuPreproc,
 ) -> StreamRuntime:
     runtime = load_runtime_modules()
     probe = probe_rtsp(url)
-    quant_preproc_state = build_cpu_quanttess_preproc_state(
-        runtime,
-        quant_preproc,
-        probe.width,
-        probe.height,
-    )
     source_session, source_run = build_source_run(runtime, cfg, url, probe)
-    detect_session, detect_run = build_detection_run(runtime, cfg, model, probe, quant_preproc)
+    detect_session, detect_run = build_detection_run(runtime, cfg, probe)
     video_session, video_run = build_optiview_video_run(runtime, cfg, probe, index)
     json_sender = build_optiview_json_output(runtime, cfg, index)
     tracker = PeopleTracker(
@@ -229,8 +213,6 @@ def create_stream_runtime(
         url=url,
         probe=probe,
         runtime=runtime,
-        model=model,
-        quant_preproc_state=quant_preproc_state,
         source_session=source_session,
         source_run=source_run,
         detect_session=detect_session,
@@ -391,20 +373,23 @@ def infer_thread(
                     return
                 continue
 
-            preproc_t0 = time.perf_counter()
-            quant_input = cpu_quanttess_input(
-                runtime,
-                pkt.frame,
-                stream.quant_preproc_state,
+            preproc_elapsed = 0.0
+            input_tensor = runtime.pyneat.Tensor.from_numpy(
+                runtime.np.ascontiguousarray(pkt.frame),
+                copy=True,
+                image_format=runtime.pyneat.PixelFormat.RGB,
+                memory=runtime.pyneat.TensorMemory.EV74,
             )
-            preproc_elapsed = time.perf_counter() - preproc_t0
 
             roundtrip_t0 = time.perf_counter()
-            det_sample = detect_run.run(quant_input, timeout_ms=50000)
+            if not detect_run.push_tensor(input_tensor):
+                raise RuntimeError(f"stream {stream.index} detector push failed")
+            det_samples = detect_run.pull_samples(timeout_ms=50000)
             roundtrip_elapsed = time.perf_counter() - roundtrip_t0
 
-            if det_sample is None:
+            if not det_samples:
                 raise RuntimeError(f"stream {stream.index} detect run timed out")
+            det_sample = det_samples[0]
 
             bbox_payload = extract_bbox_payload(runtime.pyneat, det_sample)
             put_keep_latest(
@@ -586,18 +571,10 @@ def run_app(cfg: AppConfig) -> int:
     if cfg.output_dir:
         Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
 
-    runtime = load_runtime_modules()
-    try:
-        model = load_detector_model(runtime, cfg)
-        quant_preproc = read_preproc_contract(runtime, model)
-    except Exception as exc:
-        print(f"Error: failed to build model: {exc}", flush=True)
-        return 3
-
     streams: list[StreamRuntime] = []
     try:
         for index, url in enumerate(cfg.rtsp_urls):
-            stream = create_stream_runtime(index, url, cfg, model, quant_preproc)
+            stream = create_stream_runtime(index, url, cfg)
             streams.append(stream)
     except Exception as exc:
         print(f"Error: failed to set up stream runtimes: {exc}", flush=True)

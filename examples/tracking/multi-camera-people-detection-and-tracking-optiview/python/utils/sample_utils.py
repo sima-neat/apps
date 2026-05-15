@@ -34,6 +34,8 @@ def make_optiview_tracking_detection(
 def iter_tensors(pyneat: Any, sample: Any):
     if getattr(sample, "kind", None) == pyneat.SampleKind.Tensor and getattr(sample, "tensor", None) is not None:
         yield sample.tensor
+    for tensor in getattr(sample, "tensors", []):
+        yield tensor
     for field in getattr(sample, "fields", []):
         yield from iter_tensors(pyneat, field)
 
@@ -49,18 +51,7 @@ def first_tensor(pyneat: Any, sample: Any) -> Any:
 
 
 def extract_bbox_payload(pyneat: Any, sample: Any) -> bytes | None:
-    stack = [sample]
-    while stack:
-        current = stack.pop()
-        stack.extend(reversed(list(getattr(current, "fields", []))))
-        if getattr(current, "kind", None) != pyneat.SampleKind.Tensor:
-            continue
-        tensor = getattr(current, "tensor", None)
-        if tensor is None:
-            continue
-        fmt = (getattr(current, "payload_tag", "") or getattr(current, "format", "") or "").upper()
-        if fmt and fmt != "BBOX":
-            continue
+    for tensor in iter_tensors(pyneat, sample):
         try:
             payload = tensor.copy_payload_bytes()
         except Exception:
@@ -68,6 +59,55 @@ def extract_bbox_payload(pyneat: Any, sample: Any) -> bytes | None:
         if payload:
             return payload
     return None
+
+
+def tensor_bgr_from_sample(runtime, sample: Any):
+    tensor = first_tensor(runtime.pyneat, sample)
+    if tensor is None:
+        raise RuntimeError("no tensor payload found in decoded RTSP sample")
+
+    if tensor.is_nv12():
+        width = int(tensor.width() if callable(tensor.width) else tensor.width)
+        height = int(tensor.height() if callable(tensor.height) else tensor.height)
+        payload = runtime.np.frombuffer(tensor.copy_payload_bytes(), dtype=runtime.np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
+        nv12 = payload[:expected].reshape((height * 3 // 2, width))
+        bgr = runtime.cv2.cvtColor(nv12, runtime.cv2.COLOR_YUV2BGR_NV12)
+        rgb = runtime.cv2.cvtColor(bgr, runtime.cv2.COLOR_BGR2RGB)
+        return runtime.np.ascontiguousarray(rgb)
+
+    if tensor.is_i420():
+        width = int(tensor.width() if callable(tensor.width) else tensor.width)
+        height = int(tensor.height() if callable(tensor.height) else tensor.height)
+        payload = runtime.np.frombuffer(tensor.copy_payload_bytes(), dtype=runtime.np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise RuntimeError(f"I420 payload too small: {payload.size} < {expected}")
+        i420 = payload[:expected].reshape((height * 3 // 2, width))
+        bgr = runtime.cv2.cvtColor(i420, runtime.cv2.COLOR_YUV2BGR_I420)
+        rgb = runtime.cv2.cvtColor(bgr, runtime.cv2.COLOR_BGR2RGB)
+        return runtime.np.ascontiguousarray(rgb)
+
+    if hasattr(tensor, "to_numpy"):
+        try:
+            arr = runtime.np.asarray(tensor.to_numpy(copy=True))
+        except Exception:
+            arr = None
+        if arr is not None:
+            if arr.ndim == 4 and arr.shape[0] == 1:
+                arr = arr[0]
+            if arr.ndim != 3:
+                raise RuntimeError(f"unexpected decoded tensor shape: {arr.shape}")
+            if arr.dtype != runtime.np.uint8:
+                arr = runtime.np.clip(arr, 0, 255).astype(runtime.np.uint8)
+            return runtime.np.ascontiguousarray(arr)
+
+    if hasattr(tensor, "to_cv_mat_copy"):
+        return tensor.to_cv_mat_copy(runtime.pyneat.PixelFormat.RGB)
+
+    raise RuntimeError("decoded sample tensor does not expose a supported conversion API")
 
 
 def parse_bbox_payload(payload: bytes | None, img_w: int, img_h: int) -> list[dict]:
@@ -96,17 +136,3 @@ def parse_bbox_payload(payload: bytes | None, img_w: int, img_h: int) -> list[di
             }
         )
     return boxes
-
-
-def tensor_bgr_from_sample(runtime, sample: Any):
-    tensor = first_tensor(runtime.pyneat, sample)
-    if tensor is None:
-        raise RuntimeError("no tensor payload found in decoded RTSP sample")
-    arr = runtime.np.asarray(tensor.to_numpy(copy=True))
-    if arr.ndim == 4 and arr.shape[0] == 1:
-        arr = arr[0]
-    if arr.ndim != 3:
-        raise RuntimeError(f"unexpected decoded tensor shape: {arr.shape}")
-    if arr.dtype != runtime.np.uint8:
-        arr = runtime.np.clip(arr, 0, 255).astype(runtime.np.uint8)
-    return runtime.np.ascontiguousarray(arr)

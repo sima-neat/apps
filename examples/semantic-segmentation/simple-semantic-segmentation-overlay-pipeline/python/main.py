@@ -1,42 +1,37 @@
 """Minimal semantic-segmentation overlay example for FCN-HRNet models."""
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
-import pyneat
-
 INPUT_W = 512
 INPUT_H = 512
 
-VOC21_PALETTE = np.array(
-    [
-        [0, 0, 0],        # background
-        [0, 0, 128],      # aeroplane
-        [0, 128, 0],      # bicycle
-        [0, 128, 128],    # bird
-        [128, 0, 0],      # boat
-        [128, 0, 128],    # bottle
-        [0, 255, 0],      # bus
-        [255, 0, 0],      # car
-        [0, 0, 64],       # cat
-        [0, 64, 0],       # chair
-        [0, 64, 64],      # cow
-        [64, 0, 0],       # diningtable
-        [64, 0, 64],      # dog
-        [64, 64, 0],      # horse
-        [64, 64, 64],     # motorbike
-        [0, 0, 192],      # person
-        [0, 192, 0],      # pottedplant
-        [0, 192, 192],    # sheep
-        [192, 0, 0],      # sofa
-        [192, 0, 192],    # train
-        [192, 192, 0],    # tvmonitor
-    ],
-    dtype=np.uint8,
-)
+VOC21_PALETTE = [
+    (0, 0, 0),        # background
+    (0, 0, 128),      # aeroplane
+    (0, 128, 0),      # bicycle
+    (0, 128, 128),    # bird
+    (128, 0, 0),      # boat
+    (128, 0, 128),    # bottle
+    (0, 255, 0),      # bus
+    (255, 0, 0),      # car
+    (0, 0, 64),       # cat
+    (0, 64, 0),       # chair
+    (0, 64, 64),      # cow
+    (64, 0, 0),       # diningtable
+    (64, 0, 64),      # dog
+    (64, 64, 0),      # horse
+    (64, 64, 64),     # motorbike
+    (0, 0, 192),      # person
+    (0, 192, 0),      # pottedplant
+    (0, 192, 192),    # sheep
+    (192, 0, 0),      # sofa
+    (192, 0, 192),    # train
+    (192, 192, 0),    # tvmonitor
+]
 
 VOC21_NAMES = [
     "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus",
@@ -69,10 +64,20 @@ def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
     return arr
 
 
-def find_first_tensor(sample: pyneat.Sample):
+def find_first_tensor(sample):
     """Find the first tensor in a sample (handles bundles)."""
+    if isinstance(sample, (list, tuple)):
+        for item in sample:
+            t = find_first_tensor(item)
+            if t is not None:
+                return t
+        return None
+    if isinstance(sample, pyneat.Tensor):
+        return sample
     if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         return sample.tensor
+    for tensor in getattr(sample, "tensors", []):
+        return tensor
     if sample.fields:
         for field in sample.fields:
             t = find_first_tensor(field)
@@ -108,7 +113,7 @@ def logits_to_label_map(arr: np.ndarray) -> np.ndarray:
 
 def color_for_class(class_id: int) -> np.ndarray:
     if 0 <= class_id < 21:
-        return VOC21_PALETTE[class_id]
+        return np.array(VOC21_PALETTE[class_id], dtype=np.uint8)
     return np.array(
         [(37 * class_id) % 255, (67 * class_id) % 255, (97 * class_id) % 255],
         dtype=np.uint8,
@@ -161,13 +166,26 @@ def main() -> int:
         return 3
 
     try:
+        global cv2, np, pyneat
+        import cv2
+        import numpy as np
+        import pyneat
+
         opt = pyneat.ModelOptions()
-        opt.media_type = "video/x-raw"
-        opt.format = "RGB"
-        opt.input_max_width = INPUT_W
-        opt.input_max_height = INPUT_H
-        opt.input_max_depth = 3
+        opt.preprocess.kind = pyneat.InputKind.Image
+        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+        opt.preprocess.input_max_width = INPUT_W
+        opt.preprocess.input_max_height = INPUT_H
+        opt.preprocess.input_max_depth = 3
         model = pyneat.Model(args.model, opt)
+        dummy = np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)
+        dummy_tensor = pyneat.Tensor.from_numpy(
+            dummy,
+            copy=True,
+            image_format=pyneat.PixelFormat.RGB,
+            memory=pyneat.TensorMemory.EV74,
+        )
+        runner = model.build(dummy_tensor)
 
         print(f"Found {len(images)} images")
 
@@ -183,9 +201,12 @@ def main() -> int:
             rgb_arr = np.ascontiguousarray(resized_rgb, dtype=np.uint8)
 
             input_tensor = pyneat.Tensor.from_numpy(
-                rgb_arr, copy=True, image_format=pyneat.PixelFormat.RGB
+                rgb_arr,
+                copy=True,
+                image_format=pyneat.PixelFormat.RGB,
+                memory=pyneat.TensorMemory.EV74,
             )
-            out = model.run(input_tensor, timeout_ms=5000)
+            out = runner.run(input_tensor, timeout_ms=5000)
             out_tensor = find_first_tensor(out)
             if out_tensor is None:
                 print(f"No tensor output for: {image_path.name}", file=sys.stderr)
@@ -209,6 +230,7 @@ def main() -> int:
             ok += 1
 
         print(f"Processed {ok} / {len(images)} images")
+        runner.close()
         return 0
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

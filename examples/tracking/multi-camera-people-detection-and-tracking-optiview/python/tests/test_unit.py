@@ -381,9 +381,9 @@ class TestMainEntrypoint:
 
 
 class TestPipelineBuilders:
-    def test_build_detection_run_uses_quanttess_mla_and_boxdecode_tensor_contract(self):
+    def test_build_detection_run_uses_model_preprocess_mla_and_boxdecode_contract(self):
         from utils.config import AppConfig
-        from utils.pipeline import QuantTessCpuPreproc, RtspProbe, RuntimeModules, build_detection_run
+        from utils.pipeline import RtspProbe, RuntimeModules, build_detection_run
 
         class FakeSession:
             def __init__(self):
@@ -397,38 +397,86 @@ class TestPipelineBuilders:
                 self.build_calls.append((args, kwargs))
                 return "fake-run"
 
-        class FakeQuantTessOptions:
-            def __init__(self, model):
-                self.model = model
+        class FakeModelOptions:
+            def __init__(self):
+                self.preprocess = SimpleNamespace(color_convert=SimpleNamespace())
+
+        class FakeRunOptions:
+            pass
+
+        class FakeTensor:
+            @staticmethod
+            def from_numpy(array, **kwargs):
+                return ("tensor", array, kwargs)
+
+        class FakeModel:
+            def __init__(self, path, options):
+                self.path = path
+                self.options = options
+
+            def input_appsrc_options(self, copy):
+                return SimpleNamespace(copy=copy)
+
+            def preprocess(self):
+                return ("preprocess", self)
 
         class FakePyneat:
+            class InputKind:
+                Image = "image"
+
+            class PreprocessColorFormat:
+                RGB = "rgb"
+
+            class BoxDecodeType:
+                YoloV8 = "yolov8"
+
+            class PixelFormat:
+                RGB = "rgb"
+
+            class TensorMemory:
+                EV74 = "ev74"
+
+            class RunPreset:
+                Realtime = "realtime"
+
+            class OverflowPolicy:
+                KeepLatest = "keep-latest"
+
+            class OutputMemory:
+                Owned = "owned"
+
+            class RunMode:
+                Async = "async"
+
+            Tensor = FakeTensor
+
             def __init__(self):
                 self.last_session = None
                 self.nodes = SimpleNamespace(
                     input=lambda opt=None: ("input", opt),
-                    quant_tess=lambda opt: ("quant_tess", opt),
                     sima_box_decode=lambda model, **kwargs: ("boxdecode", model, kwargs),
                     output=lambda: ("output",),
                 )
                 self.groups = SimpleNamespace(mla=lambda model: ("mla", model))
+                self.models = []
 
             def Session(self):
                 self.last_session = FakeSession()
                 return self.last_session
 
-            def QuantTessOptions(self, model):
-                return FakeQuantTessOptions(model)
+            def ModelOptions(self):
+                return FakeModelOptions()
 
-        class FakeModel:
-            def input_appsrc_options(self, copy):
-                return SimpleNamespace(
-                    copy=copy,
-                    media_type="application/vnd.simaai.tensor",
-                    format="FP32",
-                )
+            def Model(self, path, options):
+                model = FakeModel(path, options)
+                self.models.append(model)
+                return model
+
+            def RunOptions(self):
+                return FakeRunOptions()
 
         class FakeNp:
-            float32 = "float32"
+            uint8 = "uint8"
 
             @staticmethod
             def zeros(shape, dtype=None):
@@ -456,14 +504,15 @@ class TestPipelineBuilders:
             tcp=False,
         )
         probe = RtspProbe(width=1280, height=720, fps=16)
-        preproc = QuantTessCpuPreproc(width=640, height=640, aspect_ratio=True, padding_type="CENTER")
         runtime = RuntimeModules(cv2=None, np=FakeNp(), pyneat=FakePyneat())
 
-        _, run = build_detection_run(runtime, cfg, FakeModel(), probe, preproc)
+        _, run = build_detection_run(runtime, cfg, probe)
 
         added_kinds = [node[0] for node in runtime.pyneat.last_session.added]
         assert run == "fake-run"
-        assert added_kinds == ["input", "quant_tess", "mla", "boxdecode", "output"]
+        assert added_kinds == ["input", "preprocess", "mla", "boxdecode", "output"]
+        assert runtime.pyneat.models[0].options.preprocess.kind == runtime.pyneat.InputKind.Image
+        assert runtime.pyneat.last_session.build_calls
 
     def test_build_optiview_json_output_uses_per_stream_ports(self):
         from utils.config import AppConfig
