@@ -209,11 +209,10 @@ bool depth_tensor_to_u8(const simaai::neat::Tensor& t, int fallback_w, int fallb
   for (int y = 0; y < h; ++y) {
     float* row = depth_f.ptr<float>(y);
     for (int x = 0; x < w; ++x) {
-      const size_t idx = column_major_order
-                             ? (static_cast<size_t>(x) * static_cast<size_t>(h) +
-                                static_cast<size_t>(y))
-                             : (static_cast<size_t>(y) * static_cast<size_t>(w) +
-                                static_cast<size_t>(x));
+      const size_t idx =
+          column_major_order
+              ? (static_cast<size_t>(x) * static_cast<size_t>(h) + static_cast<size_t>(y))
+              : (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x));
       float v = read_elem(data, idx, t.dtype);
       row[x] = v;
       minv = std::min(minv, v);
@@ -252,42 +251,29 @@ bool tensor_to_depth_bgr(const simaai::neat::Tensor& t, int fallback_w, int fall
   return true;
 }
 
-const simaai::neat::Tensor* find_first_tensor(const simaai::neat::Sample& s) {
-  if (s.kind == simaai::neat::SampleKind::Tensor && s.tensor.has_value()) {
-    return &(*s.tensor);
-  }
-  if (s.kind == simaai::neat::SampleKind::Bundle) {
-    for (const auto& field : s.fields) {
-      if (const auto* t = find_first_tensor(field)) {
-        return t;
-      }
-    }
-  }
-  return nullptr;
-}
+const simaai::neat::Tensor* find_depth_tensor(const simaai::neat::TensorList& tensors) {
+  if (tensors.empty())
+    return nullptr;
 
-const simaai::neat::Tensor* find_depth_tensor(const simaai::neat::Sample& s) {
-  const simaai::neat::Tensor* first = find_first_tensor(s);
-  if (s.kind == simaai::neat::SampleKind::Tensor && s.tensor.has_value()) {
-    const auto& t = *s.tensor;
+  for (const auto& t : tensors) {
     const bool looks_like_depth =
         !t.semantic.image.has_value() && t.dtype != simaai::neat::TensorDType::UInt8;
     if (looks_like_depth)
       return &t;
-    return first;
   }
-  if (s.kind == simaai::neat::SampleKind::Bundle) {
-    for (const auto& field : s.fields) {
-      if (field.kind != simaai::neat::SampleKind::Tensor || !field.tensor.has_value())
-        continue;
-      const auto& t = *field.tensor;
-      const bool looks_like_depth =
-          !t.semantic.image.has_value() && t.dtype != simaai::neat::TensorDType::UInt8;
-      if (looks_like_depth)
-        return &t;
-    }
-  }
-  return first;
+  return &tensors.front();
+}
+
+simaai::neat::ImageSpec::PixelFormat pixel_format_from_name(const std::string& format) {
+  if (format == "RGB")
+    return simaai::neat::ImageSpec::PixelFormat::RGB;
+  return simaai::neat::ImageSpec::PixelFormat::BGR;
+}
+
+simaai::neat::PreprocessColorFormat preprocess_format_from_name(const std::string& format) {
+  if (format == "RGB")
+    return simaai::neat::PreprocessColorFormat::RGB;
+  return simaai::neat::PreprocessColorFormat::BGR;
 }
 
 bool tensor_to_bgr_mat(const simaai::neat::Tensor& t, cv::Mat& bgr_out) {
@@ -344,12 +330,24 @@ public:
       skip_next_frame_ = true;
   }
 
-  void add_pull(double dt_s, bool include) { add(pull_, dt_s, include); }
-  void add_tensor(double dt_s, bool include) { add(tensor_, dt_s, include); }
-  void add_model(double dt_s, bool include) { add(model_, dt_s, include); }
-  void add_post(double dt_s, bool include) { add(post_, dt_s, include); }
-  void add_write(double dt_s, bool include) { add(write_, dt_s, include); }
-  void add_frame(double dt_s, bool include) { add(frame_, dt_s, include); }
+  void add_pull(double dt_s, bool include) {
+    add(pull_, dt_s, include);
+  }
+  void add_tensor(double dt_s, bool include) {
+    add(tensor_, dt_s, include);
+  }
+  void add_model(double dt_s, bool include) {
+    add(model_, dt_s, include);
+  }
+  void add_post(double dt_s, bool include) {
+    add(post_, dt_s, include);
+  }
+  void add_write(double dt_s, bool include) {
+    add(write_, dt_s, include);
+  }
+  void add_frame(double dt_s, bool include) {
+    add(frame_, dt_s, include);
+  }
 
   void print(const std::string& label) const {
     if (!enabled_)
@@ -385,10 +383,9 @@ private:
       return;
     const double avg_ms = 1000.0 * s.sum_s / static_cast<double>(s.n);
     const double max_ms = 1000.0 * s.max_s;
-    std::cout << "[PROFILE]   " << std::left << std::setw(12) << name << std::right
-              << std::setw(8) << std::fixed << std::setprecision(1) << avg_ms
-              << std::setw(9) << std::fixed << std::setprecision(1) << max_ms << std::setw(5)
-              << s.n << "\n";
+    std::cout << "[PROFILE]   " << std::left << std::setw(12) << name << std::right << std::setw(8)
+              << std::fixed << std::setprecision(1) << avg_ms << std::setw(9) << std::fixed
+              << std::setprecision(1) << max_ms << std::setw(5) << s.n << "\n";
   }
 
   bool enabled_ = false;
@@ -402,9 +399,9 @@ private:
 };
 
 bool process_stream(simaai::neat::Model& model,
-                    const std::function<bool(FetchedFrame&)>& next_frame,
-                    cv::VideoWriter& writer, int max_frames, int log_every, bool profile,
-                    float alpha, bool use_colormap, const DepthModelProfile& model_profile) {
+                    const std::function<bool(FetchedFrame&)>& next_frame, cv::VideoWriter& writer,
+                    int max_frames, int log_every, bool profile, float alpha, bool use_colormap,
+                    const DepthModelProfile& model_profile) {
   simaai::neat::Model::Runner model_run;
   StageProfiler profiler(profile);
   int processed = 0;
@@ -434,13 +431,17 @@ bool process_stream(simaai::neat::Model& model,
     if (model_profile.input_format == "RGB") {
       cv::cvtColor(frame, model_input, cv::COLOR_BGR2RGB);
     }
+    const auto input = simaai::neat::Tensor::from_cv_mat(
+        model_input, pixel_format_from_name(model_profile.input_format),
+        simaai::neat::TensorMemory::EV74);
+    const simaai::neat::TensorList inputs{input};
     if (!model_run) {
-      model_run = model.build(model_input);
+      model_run = model.build(inputs);
     }
     const auto t_model0 = Clock::now();
-    simaai::neat::Sample out = model_run.run(model_input);
+    const auto outputs = model_run.run(inputs);
     const double model_dt_s = elapsed_s(t_model0);
-    const simaai::neat::Tensor* out_tensor = find_depth_tensor(out);
+    const simaai::neat::Tensor* out_tensor = find_depth_tensor(outputs);
     if (out_tensor == nullptr) {
       std::cerr << "Model output missing tensor\n";
       return false;
@@ -586,35 +587,38 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "Using model: " << tar_gz << "\n";
-  std::cout << "Model profile: " << model_profile.name << " (input_format=" << model_profile.input_format
-            << ", size=" << width << "x" << height << ")\n";
+  std::cout << "Model profile: " << model_profile.name
+            << " (input_format=" << model_profile.input_format << ", size=" << width << "x"
+            << height << ")\n";
   if (!self_test)
     std::cout << "RTSP url: " << url << "\n";
   std::cout << "Output: " << out_path << "\n";
 
   // NEAT API boundary: model object creation and preprocessing configuration.
   simaai::neat::Model::Options model_opt;
-  model_opt.media_type = "video/x-raw";
-  model_opt.format = model_profile.input_format;
-  model_opt.preproc.input_width = width;
-  model_opt.preproc.input_height = height;
-  model_opt.input_max_width = width;
-  model_opt.input_max_height = height;
-  model_opt.input_max_depth = 3;
-  model_opt.preproc.normalize = normalize;
+  model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+  model_opt.preprocess.color_convert.input_format =
+      preprocess_format_from_name(model_profile.input_format);
+  model_opt.preprocess.input_max_width = width;
+  model_opt.preprocess.input_max_height = height;
+  model_opt.preprocess.input_max_depth = 3;
+  model_opt.preprocess.normalize.enable =
+      normalize ? simaai::neat::AutoFlag::On : simaai::neat::AutoFlag::Off;
   if (!mean.empty()) {
     std::array<float, 3> m{0.0f, 0.0f, 0.0f};
     for (std::size_t i = 0; i < std::min<std::size_t>(3, mean.size()); ++i) {
       m[i] = mean[i];
     }
-    model_opt.preproc.channel_mean = m;
+    model_opt.preprocess.normalize.mean = m;
+    model_opt.preprocess.normalize.has_explicit_stats = true;
   }
   if (!stddev.empty()) {
     std::array<float, 3> s{1.0f, 1.0f, 1.0f};
     for (std::size_t i = 0; i < std::min<std::size_t>(3, stddev.size()); ++i) {
       s[i] = stddev[i];
     }
-    model_opt.preproc.channel_stddev = s;
+    model_opt.preprocess.normalize.stddev = s;
+    model_opt.preprocess.normalize.has_explicit_stats = true;
   }
 
   simaai::neat::Model model(tar_gz, model_opt);
@@ -715,9 +719,9 @@ int main(int argc, char** argv) {
           }
         }
         const auto t_pull0 = Clock::now();
-        auto ref_opt = rtsp_run->pull_tensor(/*timeout_ms=*/5000);
+        auto tensors = rtsp_run->pull_tensors(/*timeout_ms=*/5000);
         const double pull_dt_s = elapsed_s(t_pull0);
-        if (!ref_opt.has_value()) {
+        if (tensors.empty()) {
           if (reconnect_attempts < max_reconnect_attempts) {
             // Contract: reconnect policy/threshold is preserved.
             ++reconnect_attempts;
@@ -744,7 +748,7 @@ int main(int argc, char** argv) {
         reconnect_attempts = 0;
         const auto t_tensor0 = Clock::now();
         cv::Mat view;
-        if (!tensor_to_bgr_mat(*ref_opt, view))
+        if (!tensor_to_bgr_mat(tensors.front(), view))
           return false;
         out.pull_s = pull_dt_s;
         out.tensor_s = elapsed_s(t_tensor0);
