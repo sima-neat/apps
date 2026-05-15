@@ -161,8 +161,29 @@ def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
 def iter_tensors(sample: pyneat.Sample):
     if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
+    elif sample.kind == pyneat.SampleKind.TensorSet:
+        yield from sample.tensors
     for field in sample.fields:
         yield from iter_tensors(field)
+
+
+def collect_tensors(samples: list[pyneat.Sample]) -> list[pyneat.Tensor]:
+    tensors: list[pyneat.Tensor] = []
+    for sample in samples:
+        tensors.extend(iter_tensors(sample))
+    return tensors
+
+
+def tensor_from_hwc_f32(array: np.ndarray) -> pyneat.Tensor:
+    if array.ndim != 3 or array.shape[2] != 3:
+        raise ValueError(f"expected HWC float32 image tensor, got {array.shape}")
+    arr = np.ascontiguousarray(array, dtype=np.float32)
+    return pyneat.Tensor.from_numpy(
+        arr,
+        copy=True,
+        layout=pyneat.TensorLayout.HWC,
+        memory=pyneat.TensorMemory.EV74,
+    )
 
 
 def class_name(class_id: int) -> str:
@@ -342,24 +363,43 @@ def load_tensor_model(model_path: Path) -> pyneat.Model:
     _log(f"Building tensor-input model for {FRAME_WIDTH}x{FRAME_HEIGHT}")
 
     opt = pyneat.ModelOptions()
-    opt.media_type = "application/vnd.simaai.tensor"
-    opt.format = ""
-    opt.input_max_width = FRAME_WIDTH
-    opt.input_max_height = FRAME_HEIGHT
-    opt.input_max_depth = 3
+    opt.preprocess.kind = pyneat.InputKind.Tensor
+    opt.preprocess.input_max_width = FRAME_WIDTH
+    opt.preprocess.input_max_height = FRAME_HEIGHT
+    opt.preprocess.input_max_depth = 3
 
     return pyneat.Model(str(model_path), opt)
 
 
+def build_session_runner(model: pyneat.Model) -> pyneat.Run:
+    sess = pyneat.Session()
+    sess.add(pyneat.nodes.input(model.input_appsrc_options(True)))
+    sess.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
+    sess.add(pyneat.groups.mla(model))
+    sess.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
+    sess.add(pyneat.nodes.output())
+
+    dummy = tensor_from_hwc_f32(np.zeros((FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.float32))
+    return sess.build(dummy, pyneat.RunMode.Async)
+
+
 def run_model_inference(model: pyneat.Model, preprocessed: np.ndarray) -> list[np.ndarray]:
-    tensor = pyneat.Tensor.from_numpy(preprocessed, copy=True)
-    sample = model.run_tensor(tensor, timeout_ms=5000)
-    return [tensor_to_numpy(t) for t in iter_tensors(sample)]
+    runner = build_session_runner(model)
+    tensor = tensor_from_hwc_f32(preprocessed)
+    try:
+        if not runner.push_tensor(tensor):
+            raise RuntimeError("Run.push_tensor() failed")
+        samples = runner.pull_samples(timeout_ms=5000)
+        if not samples:
+            raise RuntimeError("Run.pull_samples() returned no samples")
+        return [tensor_to_numpy(t) for t in collect_tensors(samples)]
+    finally:
+        runner.close()
 
 
-def build_model_runner(model: pyneat.Model, preprocessed: np.ndarray) -> tuple[pyneat.ModelRunner, pyneat.Tensor]:
-    tensor = pyneat.Tensor.from_numpy(preprocessed, copy=True)
-    runner = model.build_tensor(tensor)
+def build_model_runner(model: pyneat.Model, preprocessed: np.ndarray) -> tuple[pyneat.Run, pyneat.Tensor]:
+    tensor = tensor_from_hwc_f32(preprocessed)
+    runner = build_session_runner(model)
     return runner, tensor
 
 
@@ -454,16 +494,16 @@ def main() -> int:
 
             for _ in range(max(1, int(args.num_runs))):
                 t0 = time.perf_counter()
-                if not runner.push(tensor):
-                    print("Profiling failed: runner.push returned False", file=sys.stderr)
+                if not runner.push_tensor(tensor):
+                    print("Profiling failed: runner.push_tensor returned False", file=sys.stderr)
                     break
-                sample = runner.pull(timeout_ms=5000)
+                samples = runner.pull_samples(timeout_ms=5000)
                 t1 = time.perf_counter()
-                if sample is None:
-                    print("Profiling failed: runner.pull returned None", file=sys.stderr)
+                if not samples:
+                    print("Profiling failed: runner.pull_samples returned no samples", file=sys.stderr)
                     break
 
-                arrays = [tensor_to_numpy(t) for t in iter_tensors(sample)]
+                arrays = [tensor_to_numpy(t) for t in collect_tensors(samples)]
                 logits, boxes = extract_logits_and_boxes(arrays)
                 t2 = time.perf_counter()
                 detections = process_detr_output(
