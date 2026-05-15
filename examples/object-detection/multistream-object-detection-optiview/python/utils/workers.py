@@ -390,12 +390,16 @@ def _process_frame(
         stream.runtime.np.ascontiguousarray(packet.frame),
         copy=True,
         image_format=stream.runtime.pyneat.PixelFormat.RGB,
+        memory=stream.runtime.pyneat.TensorMemory.EV74,
     )
     detect_t0 = _now_steady_s()
-    det_sample = detector.runtime.run.run(input_tensor, timeout_ms=50000)
+    if not detector.runtime.run.push_tensor(input_tensor):
+        raise RuntimeError(f"stream {stream.index} detector push failed")
+    det_samples = detector.runtime.run.pull_samples(timeout_ms=50000)
     detect_elapsed = _now_steady_s() - detect_t0
-    if det_sample is None:
+    if not det_samples:
         raise RuntimeError(f"stream {stream.index} detect run timed out")
+    det_sample = det_samples[0]
 
     preproc_elapsed = 0.0
     detections = detections_from_detector_sample(

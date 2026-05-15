@@ -31,6 +31,8 @@ def _sample_payload_tag_upper(sample: Any) -> str:
     tag = str(tag).upper()
     if tag:
         return tag
+    if getattr(sample, "tensors", []):
+        return _BBOX_PAYLOAD_TAG
     for field in getattr(sample, "fields", []):
         nested = _sample_payload_tag_upper(field)
         if nested:
@@ -41,6 +43,8 @@ def _sample_payload_tag_upper(sample: Any) -> str:
 def iter_tensors(sample: Any):
     if getattr(sample, "tensor", None) is not None:
         yield sample.tensor
+    for tensor in getattr(sample, "tensors", []):
+        yield tensor
     for field in getattr(sample, "fields", []):
         yield from iter_tensors(field)
 
@@ -167,6 +171,30 @@ def tensor_rgb_from_sample(runtime: Any, sample: Any):
     tensor = first_tensor(sample)
     if tensor is None:
         raise RuntimeError("no tensor payload found in decoded RTSP sample")
+
+    if tensor.is_nv12():
+        width = int(tensor.width() if callable(tensor.width) else tensor.width)
+        height = int(tensor.height() if callable(tensor.height) else tensor.height)
+        payload = runtime.np.frombuffer(tensor.copy_payload_bytes(), dtype=runtime.np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
+        nv12 = payload[:expected].reshape((height * 3 // 2, width))
+        bgr = runtime.cv2.cvtColor(nv12, runtime.cv2.COLOR_YUV2BGR_NV12)
+        rgb = runtime.cv2.cvtColor(bgr, runtime.cv2.COLOR_BGR2RGB)
+        return runtime.np.ascontiguousarray(rgb)
+
+    if tensor.is_i420():
+        width = int(tensor.width() if callable(tensor.width) else tensor.width)
+        height = int(tensor.height() if callable(tensor.height) else tensor.height)
+        payload = runtime.np.frombuffer(tensor.copy_payload_bytes(), dtype=runtime.np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise RuntimeError(f"I420 payload too small: {payload.size} < {expected}")
+        i420 = payload[:expected].reshape((height * 3 // 2, width))
+        bgr = runtime.cv2.cvtColor(i420, runtime.cv2.COLOR_YUV2BGR_I420)
+        rgb = runtime.cv2.cvtColor(bgr, runtime.cv2.COLOR_BGR2RGB)
+        return runtime.np.ascontiguousarray(rgb)
 
     if hasattr(tensor, "to_numpy"):
         arr = runtime.np.asarray(tensor.to_numpy(copy=True))

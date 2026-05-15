@@ -161,12 +161,10 @@ def build_source_run(
     ro.fallback_h264_height = probe.height
     ro.fallback_h264_fps = probe.fps
     ro.sima_allocator_type = 2
-    ro.out_format = "RGB"
     ro.decoder_raw_output = False
     ro.use_videoconvert = False
     ro.use_videoscale = True
     ro.output_caps.enable = True
-    ro.output_caps.format = "RGB"
     ro.output_caps.width = probe.width
     ro.output_caps.height = probe.height
     if probe.fps > 0:
@@ -200,11 +198,17 @@ def build_detection_run(
     np = runtime.np
 
     model_opt = pyneat.ModelOptions()
-    model_opt.media_type = "video/x-raw"
-    model_opt.format = "RGB"
-    model_opt.input_max_width = probe.width
-    model_opt.input_max_height = probe.height
-    model_opt.input_max_depth = 3
+    model_opt.preprocess.kind = pyneat.InputKind.Image
+    model_opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+    model_opt.preprocess.input_max_width = probe.width
+    model_opt.preprocess.input_max_height = probe.height
+    model_opt.preprocess.input_max_depth = 3
+    model_opt.decode_type = pyneat.BoxDecodeType.YoloV8
+    model_opt.score_threshold = cfg.min_score
+    model_opt.nms_iou_threshold = cfg.nms_iou
+    model_opt.top_k = cfg.max_detections
+    model_opt.boxdecode_original_width = probe.width
+    model_opt.boxdecode_original_height = probe.height
     model = pyneat.Model(cfg.model.path, model_opt)
 
     input_opt = model.input_appsrc_options(False)
@@ -222,7 +226,7 @@ def build_detection_run(
     session.add(
         pyneat.nodes.sima_box_decode(
             model,
-            decode_type="yolov8",
+            decode_type=pyneat.BoxDecodeType.YoloV8,
             original_width=probe.width,
             original_height=probe.height,
             detection_threshold=cfg.min_score,
@@ -236,6 +240,7 @@ def build_detection_run(
         np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
         copy=True,
         image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
     )
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 1
@@ -294,6 +299,7 @@ def build_optiview_video_run(
         np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
         copy=True,
         image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
     )
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 1
