@@ -9,9 +9,12 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -119,23 +122,6 @@ static bool depth_tensor_to_colormap(const simaai::neat::Tensor& t, cv::Mat& bgr
   return true;
 }
 
-static std::vector<simaai::neat::Tensor> tensors_from_sample(const simaai::neat::Sample& sample) {
-  if (sample.kind == simaai::neat::SampleKind::Tensor && sample.tensor.has_value()) {
-    return {*sample.tensor};
-  }
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    std::vector<simaai::neat::Tensor> out;
-    out.reserve(sample.fields.size());
-    for (const auto& field : sample.fields) {
-      if (field.kind != simaai::neat::SampleKind::Tensor || !field.tensor.has_value())
-        throw std::runtime_error("bundle field missing tensor");
-      out.push_back(*field.tensor);
-    }
-    return out;
-  }
-  throw std::runtime_error("expected tensor output");
-}
-
 static bool is_image(const fs::path& p) {
   auto ext = p.extension().string();
   for (auto& c : ext)
@@ -185,30 +171,26 @@ int main(int argc, char** argv) {
 
   std::cout << "[BUILD] Loading model...\n";
   simaai::neat::Model::Options model_opt;
-  model_opt.media_type = "video/x-raw";
-  model_opt.format = "RGB";
-  model_opt.input_max_width = kInferSize;
-  model_opt.input_max_height = kInferSize;
-  model_opt.input_max_depth = 3;
+  model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+  model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+  model_opt.preprocess.input_max_width = kInferSize;
+  model_opt.preprocess.input_max_height = kInferSize;
+  model_opt.preprocess.input_max_depth = 3;
   simaai::neat::Model model(tar_gz, model_opt);
   std::cout << "[BUILD] Model loaded\n";
 
-  // Build session manually (like ANPR pattern) so we can pass a dummy tensor
-  simaai::neat::Session sess;
-  sess.add(model.session());
-  std::cout << "[BUILD] Pipeline:\n" << sess.describe_backend() << "\n";
-
-  // Create dummy input tensor for build()
+  // Seed the runner so the Model planner can validate image shape and caps once.
   cv::Mat dummy_rgb(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
-  simaai::neat::Tensor dummy_input = simaai::neat::from_cv_mat(
-      dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, /*read_only=*/true);
+  simaai::neat::Tensor dummy_input = simaai::neat::Tensor::from_cv_mat(
+      dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
   simaai::neat::RunOptions run_opt;
   run_opt.queue_depth = 4;
   run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
 
   std::cout << "[BUILD] Building pipeline...\n";
-  auto run = sess.build(dummy_input, simaai::neat::RunMode::Async, run_opt);
+  auto runner = model.build(simaai::neat::TensorList{dummy_input},
+                            simaai::neat::Model::SessionOptions{}, run_opt);
   std::cout << "[BUILD] Pipeline built\n";
 
   int processed = 0;
@@ -223,24 +205,12 @@ int main(int argc, char** argv) {
     cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
     cv::resize(rgb, rgb, {kInferSize, kInferSize});
 
-    simaai::neat::Tensor input = simaai::neat::from_cv_mat(
-        rgb, simaai::neat::ImageSpec::PixelFormat::RGB, /*read_only=*/true);
+    simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
+        rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
-    std::cout << "[INFER] Pushing " << img_path.filename() << "...\n";
-    if (!run.push(input)) {
-      std::cerr << "Push failed for " << img_path.filename() << "\n";
-      continue;
-    }
-
-    std::cout << "[INFER] Pulling...\n";
-    auto out_opt = run.pull();
-    if (!out_opt.has_value()) {
-      std::cerr << "Pull failed for " << img_path.filename() << "\n";
-      continue;
-    }
+    std::cout << "[INFER] Running " << img_path.filename() << "...\n";
+    auto tensors = runner.run(simaai::neat::TensorList{input});
     std::cout << "[INFER] Got output\n";
-
-    auto tensors = tensors_from_sample(*out_opt);
     if (tensors.empty()) {
       std::cerr << "No output tensors for " << img_path.filename() << "\n";
       continue;
@@ -273,7 +243,7 @@ int main(int argc, char** argv) {
               << out_path.filename() << "\n";
   }
 
-  run.close();
+  runner.close();
   std::cout << "Done: " << processed << " images processed\n";
   return 0;
 }
