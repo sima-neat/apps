@@ -38,6 +38,10 @@ constexpr float kDefaultMinScore = 0.25f;
 constexpr float kDefaultNmsIou = 0.45f;
 constexpr int kMaxDet = 100;
 constexpr int kTimeoutMs = 5000;
+constexpr std::array<float, 3> kYolo26BoxScales = {0.39925800887880125f, 0.4013774459258692f,
+                                                   0.37927551510002144f};
+constexpr std::array<float, 3> kYolo26ClassScales = {8781.289874988339f, 370.5916340739125f,
+                                                     301.5390117926171f};
 
 struct Config {
   std::string model_path;
@@ -52,11 +56,10 @@ struct Config {
 };
 
 void print_usage(const char* prog) {
-  std::cerr << "Usage: " << prog
-            << " --model <model.tar.gz> --labels <labels.txt>\n"
+  std::cerr << "Usage: " << prog << " --model <model.tar.gz> --labels <labels.txt>\n"
             << "       --input-dir <dir> --output-dir <dir>\n"
-            << "       [--min-score " << kDefaultMinScore << "] [--nms-iou "
-            << kDefaultNmsIou << "]\n"
+            << "       [--min-score " << kDefaultMinScore << "] [--nms-iou " << kDefaultNmsIou
+            << "]\n"
             << "       [--profile] [--no-overlay] [--num-runs 1]\n";
 }
 
@@ -114,8 +117,8 @@ int parse_args(int argc, char** argv, Config& cfg) {
     }
   }
 
-  if (cfg.model_path.empty() || cfg.labels_path.empty() ||
-      cfg.input_dir.empty() || cfg.output_dir.empty()) {
+  if (cfg.model_path.empty() || cfg.labels_path.empty() || cfg.input_dir.empty() ||
+      cfg.output_dir.empty()) {
     std::cerr << "Error: --model, --labels, --input-dir, and --output-dir are required.\n";
     print_usage(argv[0]);
     return 1;
@@ -162,25 +165,6 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
   return labels;
 }
 
-// Walk the sample tree and collect every tensor leaf in order.
-std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
-  if (sample.kind == simaai::neat::SampleKind::Tensor) {
-    if (!sample.tensor.has_value()) {
-      throw std::runtime_error("tensor sample missing payload");
-    }
-    return {*sample.tensor};
-  }
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    std::vector<simaai::neat::Tensor> out;
-    for (const auto& field : sample.fields) {
-      auto child = collect_tensors(field);
-      out.insert(out.end(), child.begin(), child.end());
-    }
-    return out;
-  }
-  throw std::runtime_error("unexpected sample kind");
-}
-
 // Return tensor data as a flat float32 vector plus (H, W, C) dims.
 // Expects rank-3 (H,W,C) or rank-4 (1,H,W,C) float32 tensors.
 struct HWCTensor {
@@ -225,21 +209,25 @@ float iou_xyxy(const objdet::Box& a, const objdet::Box& b) {
   return den > 0.0f ? (inter / den) : 0.0f;
 }
 
-// Decode YOLO26 raw model output: 3 regression tensors (H,W,4) with absolute
-// (cx, cy, w, h) in pixel space, plus 3 classification tensors (H,W,80) with
-// post-sigmoid probabilities. Applies confidence filter + per-class NMS.
-std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::Sample& sample,
+float package_dequant_value(float value, float scale) {
+  return value / (scale * scale);
+}
+
+float class_confidence(float value, size_t level) {
+  return std::clamp(package_dequant_value(value, kYolo26ClassScales.at(level)), 0.0f, 1.0f);
+}
+
+// Decode YOLO26 detess/dequant output into the package's postprocess contract:
+// 3 regression tensors as absolute (cx,cy,w,h) in 640x640 model space, plus
+// 3 class-probability tensors.
+std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::TensorList& tensors,
                                              float min_score, float nms_iou) {
-  const auto tensors = collect_tensors(sample);
   if (tensors.size() < 6) {
-    throw std::runtime_error("expected at least 6 tensors, got " +
-                             std::to_string(tensors.size()));
+    throw std::runtime_error("expected at least 6 tensors, got " + std::to_string(tensors.size()));
   }
-  const std::array<HWCTensor, 3> regs = {tensor_to_hwc(tensors[0]),
-                                         tensor_to_hwc(tensors[1]),
+  const std::array<HWCTensor, 3> regs = {tensor_to_hwc(tensors[0]), tensor_to_hwc(tensors[1]),
                                          tensor_to_hwc(tensors[2])};
-  const std::array<HWCTensor, 3> clss = {tensor_to_hwc(tensors[3]),
-                                         tensor_to_hwc(tensors[4]),
+  const std::array<HWCTensor, 3> clss = {tensor_to_hwc(tensors[3]), tensor_to_hwc(tensors[4]),
                                          tensor_to_hwc(tensors[5])};
 
   std::vector<objdet::Box> candidates;
@@ -259,19 +247,21 @@ std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::Sample& sample,
         int best_class = -1;
         float best_score = 0.0f;
         for (int c = 0; c < cls.c; ++c) {
-          const float s = cls.data[cls_base + c];  // already post-sigmoid
+          const float s = class_confidence(cls.data[cls_base + c], lvl);
           if (s > best_score) {
             best_score = s;
             best_class = c;
           }
         }
-        if (best_score < min_score || best_class < 0) continue;
+        if (best_score < min_score || best_class < 0)
+          continue;
 
         const size_t reg_base = (static_cast<size_t>(y) * reg.w + x) * 4U;
-        const float bcx = reg.data[reg_base + 0];
-        const float bcy = reg.data[reg_base + 1];
-        const float bw = reg.data[reg_base + 2];
-        const float bh = reg.data[reg_base + 3];
+        const float box_scale = kYolo26BoxScales.at(lvl);
+        const float bcx = package_dequant_value(reg.data[reg_base + 0], box_scale);
+        const float bcy = package_dequant_value(reg.data[reg_base + 1], box_scale);
+        const float bw = package_dequant_value(reg.data[reg_base + 2], box_scale);
+        const float bh = package_dequant_value(reg.data[reg_base + 3], box_scale);
         objdet::Box box;
         box.x1 = std::max(0.0f, bcx - bw * 0.5f);
         box.y1 = std::max(0.0f, bcy - bh * 0.5f);
@@ -301,21 +291,21 @@ std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::Sample& sample,
     }
     if (!suppressed) {
       keep.push_back(b);
-      if (static_cast<int>(keep.size()) >= kMaxDet) break;
+      if (static_cast<int>(keep.size()) >= kMaxDet)
+        break;
     }
   }
   return keep;
 }
 
 std::vector<objdet::Box> scale_boxes_to_original(const std::vector<objdet::Box>& boxes, int out_w,
-                                                  int out_h) {
+                                                 int out_h) {
   const float sx = static_cast<float>(out_w) / static_cast<float>(kInferSize);
   const float sy = static_cast<float>(out_h) / static_cast<float>(kInferSize);
   std::vector<objdet::Box> out;
   out.reserve(boxes.size());
   for (const auto& b : boxes) {
-    out.push_back(
-        objdet::Box{b.x1 * sx, b.y1 * sy, b.x2 * sx, b.y2 * sy, b.score, b.class_id});
+    out.push_back(objdet::Box{b.x1 * sx, b.y1 * sy, b.x2 * sx, b.y2 * sy, b.score, b.class_id});
   }
   return out;
 }
@@ -329,7 +319,7 @@ std::string class_name(const std::vector<std::string>& labels, int class_id) {
 
 cv::Scalar class_color(int class_id) {
   static const std::array<cv::Scalar, 8> kColors = {
-      cv::Scalar(0, 255, 0),   cv::Scalar(255, 0, 0), cv::Scalar(0, 0, 255),
+      cv::Scalar(0, 255, 0),   cv::Scalar(255, 0, 0),   cv::Scalar(0, 0, 255),
       cv::Scalar(255, 255, 0), cv::Scalar(255, 0, 255), cv::Scalar(0, 255, 255),
       cv::Scalar(128, 255, 0), cv::Scalar(255, 128, 0)};
   const size_t idx = static_cast<size_t>(class_id >= 0 ? class_id : -class_id) % kColors.size();
@@ -408,11 +398,12 @@ int main(int argc, char** argv) {
 
   try {
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "BGR";
-    model_opt.input_max_width = kInferSize;
-    model_opt.input_max_height = kInferSize;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
+    model_opt.preprocess.input_max_width = kInferSize;
+    model_opt.preprocess.input_max_height = kInferSize;
+    model_opt.preprocess.input_max_depth = 3;
+    model_opt.processcvu.post_run_target = "A65";
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 
@@ -421,18 +412,18 @@ int main(int argc, char** argv) {
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
     cv::Mat dummy_bgr(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor dummy = simaai::neat::from_cv_mat(
-        dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
-    auto run = session.build(dummy, simaai::neat::RunMode::Sync);
+    simaai::neat::Tensor dummy =
+        simaai::neat::Tensor::from_cv_mat(dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR);
+    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Sync);
 
     // Warmup inference to stabilize timing before profiling.
-    run.push_and_pull(dummy, kTimeoutMs);
+    run.run(simaai::neat::TensorList{dummy}, kTimeoutMs);
     std::cout << "[WARMUP] done\n";
 
     const int total_images = static_cast<int>(images.size()) * cfg.num_runs;
     if (cfg.num_runs > 1) {
-      std::cout << "Looping " << cfg.num_runs << "x over " << images.size()
-                << " images (" << total_images << " total)\n";
+      std::cout << "Looping " << cfg.num_runs << "x over " << images.size() << " images ("
+                << total_images << " total)\n";
     }
 
     const auto pipeline_start = std::chrono::steady_clock::now();
@@ -453,15 +444,13 @@ int main(int argc, char** argv) {
 
         cv::Mat resized;
         cv::resize(bgr, resized, cv::Size(kInferSize, kInferSize), 0, 0, cv::INTER_LINEAR);
-        simaai::neat::Tensor input = simaai::neat::from_cv_mat(
-            resized, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
+        simaai::neat::Tensor input =
+            simaai::neat::Tensor::from_cv_mat(resized, simaai::neat::ImageSpec::PixelFormat::BGR);
 
         const auto infer_start = std::chrono::steady_clock::now();
-        simaai::neat::Sample out = run.push_and_pull(input, kTimeoutMs);
+        simaai::neat::TensorList out = run.run(simaai::neat::TensorList{input}, kTimeoutMs);
         const auto infer_end = std::chrono::steady_clock::now();
 
-        // YOLO26 model output: 3 regression tensors (H,W,4) + 3 class tensors (H,W,80).
-        // Decode (cx,cy,w,h) -> xyxy, filter by min_score, per-class NMS.
         const std::vector<objdet::Box> boxes_infer =
             decode_yolo26_boxes(out, cfg.min_score, cfg.nms_iou);
         const auto decode_end = std::chrono::steady_clock::now();
@@ -512,9 +501,8 @@ int main(int argc, char** argv) {
       const auto total_s = std::chrono::duration<double>(pipeline_end - pipeline_start).count();
       const auto avg_ms = (total_s * 1000.0) / static_cast<double>(processed);
       const auto fps = static_cast<double>(processed) / total_s;
-      std::cout << "[PROFILE] Total: " << processed << " images in "
-                << cv::format("%.1f", total_s) << "s (avg "
-                << cv::format("%.1f", avg_ms) << "ms/image, "
+      std::cout << "[PROFILE] Total: " << processed << " images in " << cv::format("%.1f", total_s)
+                << "s (avg " << cv::format("%.1f", avg_ms) << "ms/image, "
                 << cv::format("%.1f", fps) << " FPS)\n";
     }
 
