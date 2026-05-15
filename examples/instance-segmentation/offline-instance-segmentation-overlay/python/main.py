@@ -1,6 +1,7 @@
 """Minimal YOLOv8-seg pipeline using DetessDequant postprocess (no boxdecode)."""
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -76,7 +77,7 @@ def iou_xyxy(a, b) -> float:
     return inter / uni if uni > 0 else 0.0
 
 
-def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
+def tensor_to_numpy(tensor: pyneat.Tensor, dq_scale: float | None = None) -> np.ndarray:
     dtype_map = {
         pyneat.TensorDType.UInt8: np.uint8,
         pyneat.TensorDType.Int8: np.int8,
@@ -93,22 +94,29 @@ def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
     arr = np.frombuffer(tensor.copy_dense_bytes_tight(), dtype=np_dtype)
     if shape:
         arr = arr.reshape(shape)
+    if dq_scale is not None:
+        if dq_scale <= 0.0:
+            raise ValueError(f"invalid DetessDequant dq_scale: {dq_scale}")
+        arr = arr.astype(np.float32, copy=False) / (dq_scale * dq_scale)
     return arr
 
 
-def tensors_from_sample(sample: pyneat.Sample) -> list:
-    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
-        return [sample.tensor]
-    if sample.fields:
-        out = []
-        for field in sample.fields:
-            out.extend(tensors_from_sample(field))
-        return out
-    raise RuntimeError("unexpected sample kind")
+def detess_dequant_scales(model: pyneat.Model, expected_count: int, label: str) -> list[float]:
+    config_path = model.find_config_path_by_plugin("postproc")
+    if not config_path:
+        raise RuntimeError(f"{label}: DetessDequant postproc config is missing")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    scales = config.get("dq_scale")
+    if not isinstance(scales, list):
+        raise RuntimeError(f"{label}: DetessDequant dq_scale array is missing")
+    if len(scales) != expected_count:
+        raise RuntimeError(f"{label}: expected {expected_count} dq_scale values, got {len(scales)}")
+    return [float(x) for x in scales]
 
 
-def tensor_to_hwc_f32(tensor: pyneat.Tensor) -> np.ndarray:
-    arr = tensor_to_numpy(tensor).astype(np.float32)
+def tensor_to_hwc_f32(tensor: pyneat.Tensor, dq_scale: float) -> np.ndarray:
+    arr = tensor_to_numpy(tensor, dq_scale).astype(np.float32)
     if arr.ndim == 4:
         if arr.shape[0] != 1:
             raise ValueError("only batch=1 supported")
@@ -128,21 +136,23 @@ def dfl_distance_16(logits: np.ndarray) -> float:
     return float(numer / denom)
 
 
-def decode_yolov8_instances(tensors, infer_size, conf_thr, nms_iou, max_det):
+def decode_yolov8_instances(tensors, dq_scales, infer_size, conf_thr, nms_iou, max_det):
     """Decode YOLOv8 boxes and mask coefficients from DetessDequant outputs."""
     if len(tensors) < 10:
         raise ValueError("expected at least 10 tensors for instance-seg decode")
+    if len(dq_scales) != 10:
+        raise ValueError("expected 10 DetessDequant scales for instance-seg decode")
 
-    reg80 = tensor_to_hwc_f32(tensors[0])
-    reg40 = tensor_to_hwc_f32(tensors[1])
-    reg20 = tensor_to_hwc_f32(tensors[2])
-    cls80 = tensor_to_hwc_f32(tensors[3])
-    cls40 = tensor_to_hwc_f32(tensors[4])
-    cls20 = tensor_to_hwc_f32(tensors[5])
-    mk80 = tensor_to_hwc_f32(tensors[6])
-    mk40 = tensor_to_hwc_f32(tensors[7])
-    mk20 = tensor_to_hwc_f32(tensors[8])
-    proto = tensor_to_hwc_f32(tensors[9])
+    reg80 = tensor_to_hwc_f32(tensors[0], dq_scales[0])
+    reg40 = tensor_to_hwc_f32(tensors[1], dq_scales[1])
+    reg20 = tensor_to_hwc_f32(tensors[2], dq_scales[2])
+    cls80 = tensor_to_hwc_f32(tensors[3], dq_scales[3])
+    cls40 = tensor_to_hwc_f32(tensors[4], dq_scales[4])
+    cls20 = tensor_to_hwc_f32(tensors[5], dq_scales[5])
+    mk80 = tensor_to_hwc_f32(tensors[6], dq_scales[6])
+    mk40 = tensor_to_hwc_f32(tensors[7], dq_scales[7])
+    mk20 = tensor_to_hwc_f32(tensors[8], dq_scales[8])
+    proto = tensor_to_hwc_f32(tensors[9], dq_scales[9])
     if proto.shape[2] != 32:
         raise ValueError(f"unexpected proto channels: {proto.shape}")
 
@@ -280,12 +290,26 @@ def main() -> int:
 
     try:
         opt = pyneat.ModelOptions()
-        opt.media_type = "video/x-raw"
-        opt.format = "RGB"
-        opt.input_max_width = INFER_SIZE
-        opt.input_max_height = INFER_SIZE
-        opt.input_max_depth = 3
+        opt.preprocess.kind = pyneat.InputKind.Image
+        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+        opt.preprocess.input_max_width = INFER_SIZE
+        opt.preprocess.input_max_height = INFER_SIZE
+        opt.preprocess.input_max_depth = 3
         model = pyneat.Model(args.model, opt)
+        dq_scales = detess_dequant_scales(model, 10, "YOLOv8 instance")
+
+        dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
+        dummy_tensor = pyneat.Tensor.from_numpy(
+            dummy,
+            copy=True,
+            image_format=pyneat.PixelFormat.RGB,
+            memory=pyneat.TensorMemory.EV74,
+        )
+        run_opt = pyneat.RunOptions()
+        run_opt.queue_depth = 8
+        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
+        run_opt.preset = pyneat.RunPreset.Balanced
+        runner = model.build(dummy_tensor, run_options=run_opt)
 
         print(f"Found {len(images)} images")
 
@@ -301,13 +325,17 @@ def main() -> int:
             rgb_arr = np.ascontiguousarray(rgb, dtype=np.uint8)
 
             input_tensor = pyneat.Tensor.from_numpy(
-                rgb_arr, copy=True, image_format=pyneat.PixelFormat.RGB
+                rgb_arr,
+                copy=True,
+                image_format=pyneat.PixelFormat.RGB,
+                memory=pyneat.TensorMemory.EV74,
             )
-            out = model.run(input_tensor, timeout_ms=3000)
-            tensors = tensors_from_sample(out)
+            tensors = runner.run(input_tensor, timeout_ms=3000)
 
             try:
-                boxes, proto = decode_yolov8_instances(tensors, INFER_SIZE, SCORE_THR, NMS_IOU, MAX_DET)
+                boxes, proto = decode_yolov8_instances(
+                    tensors, dq_scales, INFER_SIZE, SCORE_THR, NMS_IOU, MAX_DET
+                )
             except Exception as e:
                 print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
                 continue
@@ -321,6 +349,7 @@ def main() -> int:
             print(f"Wrote: {out_file} boxes={len(boxes)}")
             processed += 1
 
+        runner.close()
         print(f"Processed {processed} / {len(images)} images")
         return 0
     except Exception as e:
