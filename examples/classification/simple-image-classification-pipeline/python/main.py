@@ -3,7 +3,6 @@
 import argparse
 import sys
 import urllib.request
-from array import array
 from pathlib import Path
 
 import numpy as np
@@ -110,26 +109,23 @@ def main() -> int:
 
     # Configure model with ImageNet normalization
     opt = pyneat.ModelOptions()
-    opt.media_type = "video/x-raw"
-    opt.format = "RGB"
-    opt.input_max_width = INFER_WIDTH
-    opt.input_max_height = INFER_HEIGHT
-    opt.input_max_depth = 3
-    opt.preproc.normalize = True
-    # nanobind in this build accepts typed float arrays here (std::optional<std::array<float, 3>>).
-    opt.preproc.channel_mean = array("f", (0.485, 0.456, 0.406))
-    opt.preproc.channel_stddev = array("f", (0.229, 0.224, 0.225))
+    opt.preprocess.kind = pyneat.InputKind.Image
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+    opt.preprocess.input_max_width = INFER_WIDTH
+    opt.preprocess.input_max_height = INFER_HEIGHT
+    opt.preprocess.input_max_depth = 3
+    opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
 
     model = pyneat.Model(model_path, opt)
 
     # Run inference
     t = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
     try:
-        out = model.run(t, timeout_ms=2000)
-        if out.tensor is None:
+        outputs = model.run(t, timeout_ms=2000)
+        if not outputs:
             print("Model run returned empty output", file=sys.stderr)
             return 6
-        scores = tensor_to_numpy_dense(out.tensor).flatten().astype(np.float32)
+        scores = tensor_to_numpy_dense(outputs[0]).flatten().astype(np.float32)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 6
