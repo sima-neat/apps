@@ -74,11 +74,76 @@ def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
 
+def tensor_dim(t: pyneat.Tensor, name: str) -> int:
+    value = getattr(t, name)
+    return int(value() if callable(value) else value)
+
+
+def tensor_bgr_from_decoded(t: pyneat.Tensor) -> np.ndarray:
+    if t.is_nv12():
+        width = tensor_dim(t, "width")
+        height = tensor_dim(t, "height")
+        payload = np.frombuffer(t.copy_payload_bytes(), dtype=np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise ValueError(f"NV12 payload too small: {payload.size} < {expected}")
+        nv12 = payload[:expected].reshape((height * 3 // 2, width))
+        return cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
+    if t.is_i420():
+        width = tensor_dim(t, "width")
+        height = tensor_dim(t, "height")
+        payload = np.frombuffer(t.copy_payload_bytes(), dtype=np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise ValueError(f"I420 payload too small: {payload.size} < {expected}")
+        i420 = payload[:expected].reshape((height * 3 // 2, width))
+        return cv2.cvtColor(i420, cv2.COLOR_YUV2BGR_I420)
+
+    arr = tensor_to_numpy(t)
+    if arr.ndim == 4 and arr.shape[0] == 1:
+        arr = arr[0]
+    if arr.ndim != 3:
+        raise ValueError(f"unexpected decoded tensor shape {arr.shape}")
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(arr)
+
+
+def tensor_from_bgr_frame(frame: np.ndarray) -> pyneat.Tensor:
+    return pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(frame),
+        copy=True,
+        image_format=pyneat.PixelFormat.BGR,
+        memory=pyneat.TensorMemory.EV74,
+    )
+
+
 def iter_tensors(sample: pyneat.Sample):
     if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
+    elif sample.kind == pyneat.SampleKind.TensorSet:
+        yield from sample.tensors
     for field in sample.fields:
         yield from iter_tensors(field)
+
+
+def extract_bbox_payload_from_tensors(tensors) -> bytes | None:
+    for tensor in tensors:
+        try:
+            payload = tensor.copy_payload_bytes()
+        except Exception:
+            continue
+        if payload:
+            return payload
+    return None
+
+
+def is_tensor_like(value) -> bool:
+    return hasattr(value, "copy_payload_bytes") and hasattr(value, "to_numpy")
+
+
+def is_sample_like(value) -> bool:
+    return hasattr(value, "kind") and hasattr(value, "fields")
 
 
 def extract_bbox_payload(sample: pyneat.Sample) -> bytes | None:
@@ -86,6 +151,11 @@ def extract_bbox_payload(sample: pyneat.Sample) -> bytes | None:
     while stack:
         s = stack.pop()
         stack.extend(reversed(list(s.fields)))
+        if s.kind == pyneat.SampleKind.TensorSet:
+            payload = extract_bbox_payload_from_tensors(s.tensors)
+            if payload:
+                return payload
+            continue
         if s.kind != pyneat.SampleKind.Tensor or s.tensor is None:
             continue
         fmt = (s.payload_tag or s.format or "").upper()
@@ -98,6 +168,50 @@ def extract_bbox_payload(sample: pyneat.Sample) -> bytes | None:
         if payload:
             return payload
     return None
+
+
+def decode_yolov8_boxes_from_result(
+    result,
+    infer_size: int,
+    img_w: int,
+    img_h: int,
+    min_score_logit: float,
+    nms_iou: float,
+    max_det: int,
+) -> list[dict]:
+    if is_sample_like(result):
+        payload = extract_bbox_payload(result)
+        if payload:
+            return parse_bbox_payload(payload, img_w, img_h)
+        return decode_yolov8_boxes_from_sample(
+            result, infer_size, img_w, img_h, min_score_logit, nms_iou, max_det
+        )
+
+    if isinstance(result, (list, tuple)):
+        if not result:
+            return []
+        if all(is_tensor_like(item) for item in result):
+            payload = extract_bbox_payload_from_tensors(result)
+            if payload:
+                return parse_bbox_payload(payload, img_w, img_h)
+            return decode_yolov8_boxes_from_tensors(
+                result, infer_size, img_w, img_h, min_score_logit, nms_iou, max_det
+            )
+
+        for item in result:
+            if not is_sample_like(item):
+                continue
+            payload = extract_bbox_payload(item)
+            if payload:
+                return parse_bbox_payload(payload, img_w, img_h)
+            boxes = decode_yolov8_boxes_from_sample(
+                item, infer_size, img_w, img_h, min_score_logit, nms_iou, max_det
+            )
+            if boxes:
+                return boxes
+        return []
+
+    raise TypeError(f"unsupported model result type: {type(result).__name__}")
 
 
 def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
@@ -155,8 +269,8 @@ def iou_xyxy(a, b) -> float:
     return inter / den if den > 0 else 0.0
 
 
-def decode_yolov8_boxes_from_sample(
-    sample: pyneat.Sample,
+def decode_yolov8_boxes_from_tensors(
+    tensors,
     infer_size: int,
     img_w: int,
     img_h: int,
@@ -164,7 +278,6 @@ def decode_yolov8_boxes_from_sample(
     nms_iou: float,
     max_det: int,
 ) -> list[dict]:
-    tensors = list(iter_tensors(sample))
     if len(tensors) < 6:
         raise ValueError(f"expected at least 6 tensors, got {len(tensors)}")
     regs = [tensor_to_hwc_f32(tensors[i]) for i in range(3)]
@@ -264,6 +377,26 @@ def decode_yolov8_boxes_from_sample(
     return out
 
 
+def decode_yolov8_boxes_from_sample(
+    sample: pyneat.Sample,
+    infer_size: int,
+    img_w: int,
+    img_h: int,
+    min_score_logit: float,
+    nms_iou: float,
+    max_det: int,
+) -> list[dict]:
+    return decode_yolov8_boxes_from_tensors(
+        list(iter_tensors(sample)),
+        infer_size,
+        img_w,
+        img_h,
+        min_score_logit,
+        nms_iou,
+        max_det,
+    )
+
+
 def build_rtsp_run(
     url: str,
     latency_ms: int,
@@ -284,7 +417,6 @@ def build_rtsp_run(
     ro.tcp = tcp
     ro.payload_type = 96
     ro.insert_queue = True
-    ro.out_format = "BGR"
     ro.decoder_raw_output = False
     ro.auto_caps_from_stream = True
     ro.use_videoconvert = False
@@ -296,7 +428,6 @@ def build_rtsp_run(
     if stream_fps > 0:
         ro.fallback_h264_fps = stream_fps
     ro.output_caps.enable = True
-    ro.output_caps.format = "BGR"
     ro.output_caps.width = out_w
     ro.output_caps.height = out_h
     if stream_fps > 0:
@@ -668,7 +799,8 @@ class PipelineApp:
     NEAT usage (Python):
     - RTSP decode runs are created per stream via pyneat.Session in build_rtsp_run(...)
     - Model objects are created per stream in _make_model(...)
-    - Model runner sessions are lazily built in _infer_worker(...) on first frame
+    - Inference sessions are lazily built in _infer_worker(...) on first frame:
+      Input -> Preprocess -> MLA -> SimaBoxDecode -> Output
     """
 
     def __init__(self, cfg: AppConfig):
@@ -693,11 +825,17 @@ class PipelineApp:
 
     def _make_model(self) -> pyneat.Model:
         mopt = pyneat.ModelOptions()
-        mopt.media_type = "video/x-raw"
-        mopt.format = "BGR"
-        mopt.input_max_width = self.cfg.width
-        mopt.input_max_height = self.cfg.height
-        mopt.input_max_depth = 3
+        mopt.preprocess.kind = pyneat.InputKind.Image
+        mopt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+        mopt.preprocess.input_max_width = self.cfg.width
+        mopt.preprocess.input_max_height = self.cfg.height
+        mopt.preprocess.input_max_depth = 3
+        mopt.decode_type = pyneat.BoxDecodeType.YoloV8
+        mopt.score_threshold = self.cfg.min_score
+        mopt.nms_iou_threshold = self.cfg.nms_iou
+        mopt.top_k = self.cfg.max_det
+        mopt.boxdecode_original_width = self.cfg.width
+        mopt.boxdecode_original_height = self.cfg.height
         return pyneat.Model(self.cfg.model_path, mopt)
 
     def _setup(self) -> None:
@@ -747,11 +885,11 @@ class PipelineApp:
                     if st.processed >= self.cfg.frames:
                         break
                 t_pull0 = time.perf_counter()
-                frame_t = st.run.pull_tensor(timeout_ms=self.cfg.pull_timeout_ms)
+                tensors = st.run.pull_tensors(timeout_ms=self.cfg.pull_timeout_ms)
                 self.profiler.add_time(
                     ProfileTracker.stage_key("pull_call", st.idx), time.perf_counter() - t_pull0
                 )
-                if frame_t is None:
+                if not tensors:
                     miss_count += 1
                     running = True
                     try:
@@ -795,12 +933,7 @@ class PipelineApp:
                 miss_count = 0
                 pulled_ts = time.perf_counter()
                 t_np0 = time.perf_counter()
-                bgr = tensor_to_numpy(frame_t)
-                if bgr.ndim == 4 and bgr.shape[0] == 1:
-                    bgr = bgr[0]
-                if bgr.dtype != np.uint8:
-                    bgr = np.clip(bgr, 0, 255).astype(np.uint8)
-                bgr = np.ascontiguousarray(bgr)
+                bgr = tensor_bgr_from_decoded(tensors[0])
                 self.profiler.add_time(
                     ProfileTracker.stage_key("to_numpy", st.idx), time.perf_counter() - t_np0
                 )
@@ -820,7 +953,8 @@ class PipelineApp:
     def _infer_worker(self, stream_idx: int, model_local: pyneat.Model) -> None:
         frame_q = self.frame_queues[stream_idx]
         result_q = self.result_queues[stream_idx]
-        runner = None
+        session = None
+        run = None
         pending: deque[FramePacket] = deque()
         model_qdepth = max(1, self.cfg.model_queue_depth)
         push_failures = 0
@@ -840,21 +974,58 @@ class PipelineApp:
             except queue.Empty:
                 return None
 
-        def process_result(sample: pyneat.Sample, pkt: FramePacket) -> None:
-            t_dec0 = time.perf_counter()
-            payload = extract_bbox_payload(sample)
-            if payload:
-                boxes = parse_bbox_payload(payload, pkt.frame.shape[1], pkt.frame.shape[0])
-            else:
-                boxes = decode_yolov8_boxes_from_sample(
-                    sample,
-                    self.cfg.infer_size,
-                    pkt.frame.shape[1],
-                    pkt.frame.shape[0],
-                    self.cfg.min_score_logit,
-                    self.cfg.nms_iou,
-                    self.cfg.max_det,
+        def build_infer_run(seed_frame: np.ndarray):
+            input_opt = model_local.input_appsrc_options(False)
+            input_opt.media_type = "video/x-raw"
+            input_opt.format = "BGR"
+            input_opt.width = seed_frame.shape[1]
+            input_opt.height = seed_frame.shape[0]
+            input_opt.depth = 3
+            for attr, value in (
+                ("max_width", seed_frame.shape[1]),
+                ("max_height", seed_frame.shape[0]),
+                ("max_depth", 3),
+            ):
+                if hasattr(input_opt, attr):
+                    setattr(input_opt, attr, value)
+
+            sess = pyneat.Session()
+            sess.add(pyneat.nodes.input(input_opt))
+            sess.add(model_local.preprocess())
+            sess.add(pyneat.groups.mla(model_local))
+            sess.add(
+                pyneat.nodes.sima_box_decode(
+                    model_local,
+                    decode_type=pyneat.BoxDecodeType.YoloV8,
+                    original_width=seed_frame.shape[1],
+                    original_height=seed_frame.shape[0],
+                    detection_threshold=self.cfg.min_score,
+                    nms_iou_threshold=self.cfg.nms_iou,
+                    top_k=self.cfg.max_det,
                 )
+            )
+            sess.add(pyneat.nodes.output())
+
+            ropt = pyneat.RunOptions()
+            ropt.queue_depth = model_qdepth
+            ropt.overflow_policy = pyneat.OverflowPolicy.Block
+            return sess, sess.build(
+                tensor_from_bgr_frame(seed_frame),
+                pyneat.RunMode.Async,
+                ropt,
+            )
+
+        def process_result(result, pkt: FramePacket) -> None:
+            t_dec0 = time.perf_counter()
+            boxes = decode_yolov8_boxes_from_result(
+                result,
+                self.cfg.infer_size,
+                pkt.frame.shape[1],
+                pkt.frame.shape[0],
+                self.cfg.min_score_logit,
+                self.cfg.nms_iou,
+                self.cfg.max_det,
+            )
             self.profiler.add_time(
                 ProfileTracker.stage_key("decode_boxes", stream_idx),
                 time.perf_counter() - t_dec0,
@@ -884,15 +1055,11 @@ class PipelineApp:
                             input_done = True
                             break
                     try:
-                        if runner is None:
-                            sopt = pyneat.ModelSessionOptions()
-                            ropt = pyneat.RunOptions()
-                            ropt.queue_depth = model_qdepth
-                            ropt.overflow_policy = pyneat.OverflowPolicy.Block
+                        if run is None:
                             with self.model_build_mu:
-                                runner = model_local.build(pkt.frame, sopt, ropt)
+                                session, run = build_infer_run(pkt.frame)
                         t_push0 = time.perf_counter()
-                        ok = runner.push(pkt.frame)
+                        ok = run.push_tensor(tensor_from_bgr_frame(pkt.frame))
                         self.profiler.add_time(
                             ProfileTracker.stage_key("model_push", stream_idx),
                             time.perf_counter() - t_push0,
@@ -901,7 +1068,7 @@ class PipelineApp:
                             pending.append(pkt)
                             push_failures = 0
                         else:
-                            print(f"[stream {stream_idx}] runner.push rejected frame", file=sys.stderr)
+                            print(f"[stream {stream_idx}] run.push rejected frame", file=sys.stderr)
                     except Exception as e:
                         push_failures += 1
                         print(f"[stream {stream_idx}] push error ({push_failures}/{max_push_failures}): {e}", file=sys.stderr)
@@ -917,7 +1084,7 @@ class PipelineApp:
 
                 try:
                     t_pull0 = time.perf_counter()
-                    sample = runner.pull(timeout_ms=self.cfg.model_timeout_ms)
+                    sample = run.pull_samples(timeout_ms=self.cfg.model_timeout_ms)
                     self.profiler.add_time(
                         ProfileTracker.stage_key("model_run", stream_idx),
                         time.perf_counter() - t_pull0,
@@ -932,10 +1099,10 @@ class PipelineApp:
                     if pending:
                         pending.popleft()
 
-            if runner is not None and pending:
+            if run is not None and pending:
                 while pending:
                     try:
-                        sample = runner.pull(timeout_ms=self.cfg.model_timeout_ms)
+                        sample = run.pull_samples(timeout_ms=self.cfg.model_timeout_ms)
                         if sample is not None:
                             pkt = pending.popleft()
                             process_result(sample, pkt)
@@ -945,9 +1112,9 @@ class PipelineApp:
                         print(f"[stream {stream_idx}] drain error: {e}", file=sys.stderr)
                         pending.popleft()
         finally:
-            if runner is not None:
+            if run is not None:
                 try:
-                    runner.close()
+                    run.close()
                 except Exception:
                     pass
             with self.stats_mu:
