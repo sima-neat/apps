@@ -12,25 +12,43 @@ INPUT_W = 128
 INPUT_H = 256
 
 
-def find_first_tensor(sample: pyneat.Sample):
-    """Find the first tensor in a sample (handles bundles)."""
-    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
-        return sample.tensor
-    if sample.fields:
-        for field in sample.fields:
-            t = find_first_tensor(field)
+def find_first_tensor(value):
+    """Find the first tensor in beta TensorList or Sample-style outputs."""
+    if value is None:
+        return None
+    if isinstance(value, pyneat.Tensor):
+        return value
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            t = find_first_tensor(item)
             if t is not None:
                 return t
+        return None
+    if getattr(value, "kind", None) == pyneat.SampleKind.Tensor and value.tensor is not None:
+        return value.tensor
+    for tensor in getattr(value, "tensors", []) or []:
+        return tensor
+    for field in getattr(value, "fields", []) or []:
+        t = find_first_tensor(field)
+        if t is not None:
+            return t
     return None
 
-def warmup_model(model: pyneat.Model) -> None:
+def make_rgb_tensor(image: np.ndarray) -> pyneat.Tensor:
+    return pyneat.Tensor.from_numpy(
+        image,
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
+
+
+def warmup_model(runner: pyneat.Run) -> None:
     """Run one dummy inference to initialize the hardware pipeline before timing."""
     dummy = np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)
-    input_tensor = pyneat.Tensor.from_numpy(
-        dummy, copy=True, image_format=pyneat.PixelFormat.RGB
-    )
-    model.run(input_tensor, timeout_ms=10000)
+    runner.run(make_rgb_tensor(dummy), timeout_ms=10000)
     print("Model warmed up.")
+
 
 def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
     dtype_map = {
@@ -69,7 +87,7 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 def euclidean_distance(a: np.ndarray, b: np.ndarray) -> float:
     return float(euclidean(a.flatten(), b.flatten()))
 
-def run_inference(model: pyneat.Model, image_path: Path) -> tuple[np.ndarray, float]:
+def run_inference(runner: pyneat.Run, image_path: Path) -> tuple[np.ndarray, float]:
     """Run inference on a single image. Returns (embedding, inference_time_s)."""
     bgr_image = cv2.imread(str(image_path))
     if bgr_image is None:
@@ -77,12 +95,8 @@ def run_inference(model: pyneat.Model, image_path: Path) -> tuple[np.ndarray, fl
 
     image = preprocess_image(bgr_image)
 
-    input_tensor = pyneat.Tensor.from_numpy(
-        image, copy=True, image_format=pyneat.PixelFormat.RGB
-    )
-
     t0 = time.perf_counter()
-    out = model.run(input_tensor, timeout_ms=5000)
+    out = runner.run(make_rgb_tensor(image), timeout_ms=5000)
     infer_time_s = time.perf_counter() - t0
 
     out_tensor = find_first_tensor(out)
@@ -251,23 +265,25 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    runner = None
     try:
 
         opt = pyneat.ModelOptions()
-        opt.media_type = "video/x-raw"
-        opt.format = "RGB"
-        opt.input_max_width = INPUT_W
-        opt.input_max_height = INPUT_H
-        opt.input_max_depth = 3
+        opt.preprocess.kind = pyneat.InputKind.Image
+        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
+        opt.preprocess.input_max_width = INPUT_W
+        opt.preprocess.input_max_height = INPUT_H
+        opt.preprocess.input_max_depth = 3
         model = pyneat.Model(str(args.model), opt)
-        warmup_model(model)
+        runner = model.build(make_rgb_tensor(np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)))
+        warmup_model(runner)
 
         t_start = time.perf_counter()
         print(f"Processing: {args.image1.name}")
-        emb1, infer_time_1 = run_inference(model, args.image1)
+        emb1, infer_time_1 = run_inference(runner, args.image1)
 
         print(f"Processing: {args.image2.name}")
-        emb2, infer_time_2 = run_inference(model, args.image2)
+        emb2, infer_time_2 = run_inference(runner, args.image2)
 
         if args.metric == "cosine":
             score = cosine_similarity(emb1, emb2)
@@ -304,9 +320,15 @@ def main() -> int:
         if args.profile:
             print_profile(infer_time_1, infer_time_2, total_time)
 
+        runner.close()
         return 0
 
     except Exception as e:
+        if runner is not None:
+            try:
+                runner.close()
+            except Exception:
+                pass
         print(f"Error: {e}", file=sys.stderr)
         return 4
 
