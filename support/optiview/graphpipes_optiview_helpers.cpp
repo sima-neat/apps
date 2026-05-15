@@ -400,10 +400,11 @@ add_yolo_pipeline(simaai::neat::graph::Graph& g, simaai::neat::Model& model, int
   for (const auto& node : infer_group.nodes())
     yolo_nodes.push_back(node);
 
-  yolo_nodes.push_back(simaai::neat::nodes::SimaBoxDecode(model, "yolov8", frame_w, frame_h,
-                                                          /*min_score=*/0.52f,
-                                                          /*nms=*/0.5f,
-                                                          /*topk=*/100));
+  yolo_nodes.push_back(simaai::neat::nodes::SimaBoxDecode(
+      model, simaai::neat::BoxDecodeType::YoloV8,
+      /*min_score=*/0.52f,
+      /*nms=*/0.5f,
+      /*topk=*/100, "", std::nullopt, std::nullopt, frame_w, frame_h));
 
   auto yolo_group = simaai::neat::NodeGroup(std::move(yolo_nodes));
   auto yolo_pipe =

@@ -73,9 +73,8 @@ void print_usage(const char* argv0) {
 
 bool is_image(const fs::path& p) {
   std::string ext = p.extension().string();
-  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp");
 }
 
@@ -214,6 +213,10 @@ std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sa
     return {*sample.tensor};
   }
 
+  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
+    return sample.tensors;
+  }
+
   if (sample.kind == simaai::neat::SampleKind::Bundle) {
     std::vector<simaai::neat::Tensor> out;
     for (const auto& field : sample.fields) {
@@ -323,11 +326,13 @@ double euclidean_distance(const std::vector<float>& a, const std::vector<float>&
   return std::sqrt(sum);
 }
 
-double fit_font_scale(const std::string& text, int max_width, int thickness, double start_scale = 3.0) {
+double fit_font_scale(const std::string& text, int max_width, int thickness,
+                      double start_scale = 3.0) {
   double scale = start_scale;
   while (scale > 0.1) {
     int baseline = 0;
-    const cv::Size size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, scale, thickness, &baseline);
+    const cv::Size size =
+        cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, scale, thickness, &baseline);
     if (size.width <= max_width) {
       return scale;
     }
@@ -367,17 +372,18 @@ void save_comparison_image(const fs::path& path1, const fs::path& path2, double 
   const int decision_thickness = 3;
   const double decision_scale = fit_font_scale(decision, max_text_w, decision_thickness);
   int decision_baseline = 0;
-  const cv::Size decision_size = cv::getTextSize(
-      decision, cv::FONT_HERSHEY_SIMPLEX, decision_scale, decision_thickness, &decision_baseline);
+  const cv::Size decision_size = cv::getTextSize(decision, cv::FONT_HERSHEY_SIMPLEX, decision_scale,
+                                                 decision_thickness, &decision_baseline);
 
-  const std::string metric_label = (metric == "cosine") ? "Cosine similarity" : "Euclidean distance";
+  const std::string metric_label =
+      (metric == "cosine") ? "Cosine similarity" : "Euclidean distance";
   const std::string details = metric_label + ": " + cv::format("%.4f", sim) +
                               "   |   Threshold: " + cv::format("%.2f", threshold);
   const int details_thickness = 1;
   const double details_scale = fit_font_scale(details, max_text_w, details_thickness);
   int details_baseline = 0;
-  const cv::Size details_size = cv::getTextSize(
-      details, cv::FONT_HERSHEY_SIMPLEX, details_scale, details_thickness, &details_baseline);
+  const cv::Size details_size = cv::getTextSize(details, cv::FONT_HERSHEY_SIMPLEX, details_scale,
+                                                details_thickness, &details_baseline);
 
   constexpr int padding = 12;
   const int bar_h = decision_size.height + details_size.height + decision_baseline +
@@ -386,7 +392,8 @@ void save_comparison_image(const fs::path& path1, const fs::path& path2, double 
 
   cv::vconcat(canvas, bar, canvas);
 
-  const cv::Scalar decision_color = (decision == "SAME") ? cv::Scalar(0, 200, 0) : cv::Scalar(0, 0, 220);
+  const cv::Scalar decision_color =
+      (decision == "SAME") ? cv::Scalar(0, 200, 0) : cv::Scalar(0, 0, 220);
   const int decision_x = (canvas_w - decision_size.width) / 2;
   const int decision_y = target_h + padding + decision_size.height;
   cv::putText(canvas, decision, cv::Point(decision_x, decision_y), cv::FONT_HERSHEY_SIMPLEX,
@@ -444,15 +451,21 @@ std::vector<float> run_inference_embedding(simaai::neat::Run& run, const fs::pat
   }
 
   cv::Mat preprocessed = preprocess_image_like_python(bgr);
-  simaai::neat::Tensor input =
-      simaai::neat::from_cv_mat(preprocessed, simaai::neat::ImageSpec::PixelFormat::RGB, true);
+  simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
+      preprocessed, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
   const auto t0 = std::chrono::steady_clock::now();
-  simaai::neat::Sample out = run.push_and_pull(input, kTimeoutMs);
+  if (!run.push(simaai::neat::TensorList{input})) {
+    throw std::runtime_error("run.push failed for: " + image_path.filename().string());
+  }
+  auto out = run.pull(kTimeoutMs);
   const auto t1 = std::chrono::steady_clock::now();
   infer_time_s = std::chrono::duration<double>(t1 - t0).count();
+  if (!out.has_value()) {
+    throw std::runtime_error("run.pull timeout for: " + image_path.filename().string());
+  }
 
-  const auto tensors = collect_tensors(out);
+  const auto tensors = collect_tensors(*out);
   if (tensors.empty()) {
     throw std::runtime_error("No tensor output for: " + image_path.filename().string());
   }
@@ -494,23 +507,28 @@ int main(int argc, char** argv) {
 
   try {
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "RGB";
-    model_opt.input_max_width = kInputW;
-    model_opt.input_max_height = kInputH;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+    model_opt.preprocess.input_max_width = kInputW;
+    model_opt.preprocess.input_max_height = kInputH;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(args.model.string(), model_opt);
     simaai::neat::Session session;
     session.add(model.session());
 
     cv::Mat dummy_rgb(kInputH, kInputW, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor dummy =
-        simaai::neat::from_cv_mat(dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, true);
-    auto run = session.build(dummy, simaai::neat::RunMode::Sync);
+    simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
+        dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
 
     // Warmup run before any timed inference.
-    (void)run.push_and_pull(dummy, 10000);
+    if (!run.push(simaai::neat::TensorList{dummy})) {
+      throw std::runtime_error("warmup push failed");
+    }
+    if (!run.pull(10000).has_value()) {
+      throw std::runtime_error("warmup pull timeout");
+    }
     std::cout << "Model warmed up.\n";
 
     const auto t_total_0 = std::chrono::steady_clock::now();

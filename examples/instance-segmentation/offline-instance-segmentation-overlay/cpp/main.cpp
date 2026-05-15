@@ -5,6 +5,7 @@
  * Usage: offline-instance-segmentation-overlay <model.tar.gz> <input_dir> <output_dir>
  */
 #include "neat.h"
+#include "support/runtime/example_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -26,7 +27,7 @@
 namespace {
 namespace fs = std::filesystem;
 
-std::vector<simaai::neat::Tensor> tensors_from_sample(const simaai::neat::Sample& sample) {
+std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
   if (sample.kind == simaai::neat::SampleKind::Tensor) {
     if (!sample.tensor.has_value()) {
       throw std::runtime_error("tensor sample missing payload");
@@ -34,10 +35,14 @@ std::vector<simaai::neat::Tensor> tensors_from_sample(const simaai::neat::Sample
     return {*sample.tensor};
   }
 
+  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
+    return sample.tensors;
+  }
+
   if (sample.kind == simaai::neat::SampleKind::Bundle) {
     std::vector<simaai::neat::Tensor> out;
     for (const auto& field : sample.fields) {
-      auto part = tensors_from_sample(field);
+      auto part = collect_tensors(field);
       out.insert(out.end(), part.begin(), part.end());
     }
     return out;
@@ -112,18 +117,10 @@ std::string class_name_for_id(int class_id) {
 
 cv::Scalar class_color(int class_id) {
   static const std::array<cv::Scalar, 12> kPalette = {
-      cv::Scalar(56, 56, 255),
-      cv::Scalar(151, 157, 255),
-      cv::Scalar(31, 112, 255),
-      cv::Scalar(29, 178, 255),
-      cv::Scalar(49, 210, 207),
-      cv::Scalar(10, 249, 72),
-      cv::Scalar(23, 204, 146),
-      cv::Scalar(134, 219, 61),
-      cv::Scalar(52, 147, 26),
-      cv::Scalar(187, 212, 0),
-      cv::Scalar(255, 194, 0),
-      cv::Scalar(168, 153, 44),
+      cv::Scalar(56, 56, 255),  cv::Scalar(151, 157, 255), cv::Scalar(31, 112, 255),
+      cv::Scalar(29, 178, 255), cv::Scalar(49, 210, 207),  cv::Scalar(10, 249, 72),
+      cv::Scalar(23, 204, 146), cv::Scalar(134, 219, 61),  cv::Scalar(52, 147, 26),
+      cv::Scalar(187, 212, 0),  cv::Scalar(255, 194, 0),   cv::Scalar(168, 153, 44),
   };
   if (class_id < 0) {
     class_id = 0;
@@ -156,7 +153,7 @@ inline float at_hwc(const TensorHWC& t, int y, int x, int c) {
   return t.data[idx];
 }
 
-TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
+TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t, float dq_scale) {
   if (t.dtype != simaai::neat::TensorDType::Float32) {
     throw std::runtime_error("expected Float32 tensor");
   }
@@ -186,6 +183,7 @@ TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
 
   out.data.resize(elems);
   std::memcpy(out.data.data(), bytes.data(), elems * sizeof(float));
+  sima_examples::apply_detess_dequant_scale_correction(out.data, dq_scale);
   return out;
 }
 
@@ -207,23 +205,27 @@ float dfl_distance_16(const float* logits) {
   return numer / denom;
 }
 
-std::vector<Box> decode_yolov8_instances_from_detess(const std::vector<simaai::neat::Tensor>& tensors,
-                                                     int infer_size, float conf_thr, float nms_iou,
-                                                     int max_det, TensorHWC& proto) {
+std::vector<Box>
+decode_yolov8_instances_from_detess(const std::vector<simaai::neat::Tensor>& tensors,
+                                    int infer_size, float conf_thr, float nms_iou, int max_det,
+                                    TensorHWC& proto, const std::vector<float>& dq_scales) {
   if (tensors.size() < 10) {
     throw std::runtime_error("expected at least 10 tensors for instance-seg decode");
   }
+  if (dq_scales.size() != 10) {
+    throw std::runtime_error("instance-seg DetessDequant scale count mismatch");
+  }
 
-  const TensorHWC reg80 = tensor_to_hwc_f32(tensors[0]);
-  const TensorHWC reg40 = tensor_to_hwc_f32(tensors[1]);
-  const TensorHWC reg20 = tensor_to_hwc_f32(tensors[2]);
-  const TensorHWC cls80 = tensor_to_hwc_f32(tensors[3]);
-  const TensorHWC cls40 = tensor_to_hwc_f32(tensors[4]);
-  const TensorHWC cls20 = tensor_to_hwc_f32(tensors[5]);
-  const TensorHWC mk80 = tensor_to_hwc_f32(tensors[6]);
-  const TensorHWC mk40 = tensor_to_hwc_f32(tensors[7]);
-  const TensorHWC mk20 = tensor_to_hwc_f32(tensors[8]);
-  proto = tensor_to_hwc_f32(tensors[9]);
+  const TensorHWC reg80 = tensor_to_hwc_f32(tensors[0], dq_scales[0]);
+  const TensorHWC reg40 = tensor_to_hwc_f32(tensors[1], dq_scales[1]);
+  const TensorHWC reg20 = tensor_to_hwc_f32(tensors[2], dq_scales[2]);
+  const TensorHWC cls80 = tensor_to_hwc_f32(tensors[3], dq_scales[3]);
+  const TensorHWC cls40 = tensor_to_hwc_f32(tensors[4], dq_scales[4]);
+  const TensorHWC cls20 = tensor_to_hwc_f32(tensors[5], dq_scales[5]);
+  const TensorHWC mk80 = tensor_to_hwc_f32(tensors[6], dq_scales[6]);
+  const TensorHWC mk40 = tensor_to_hwc_f32(tensors[7], dq_scales[7]);
+  const TensorHWC mk20 = tensor_to_hwc_f32(tensors[8], dq_scales[8]);
+  proto = tensor_to_hwc_f32(tensors[9], dq_scales[9]);
   if (proto.c != 32) {
     throw std::runtime_error("unexpected prototype channels");
   }
@@ -367,9 +369,9 @@ void apply_mask_overlay(cv::Mat& bgr, const std::vector<Box>& dets, const Tensor
         }
         contour_row[x] = 255;
         for (int c = 0; c < 3; ++c) {
-          pix[x][c] = static_cast<uint8_t>(
-              std::round((1.0f - alpha) * static_cast<float>(pix[x][c]) +
-                         alpha * static_cast<float>(color[c])));
+          pix[x][c] =
+              static_cast<uint8_t>(std::round((1.0f - alpha) * static_cast<float>(pix[x][c]) +
+                                              alpha * static_cast<float>(color[c])));
         }
       }
     }
@@ -439,16 +441,15 @@ int main(int argc, char** argv) {
     }
 
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "RGB";
-    model_opt.preproc.input_width = kInferSize;
-    model_opt.preproc.input_height = kInferSize;
-    model_opt.preproc.input_img_type = "RGB";
-    model_opt.input_max_width = kInferSize;
-    model_opt.input_max_height = kInferSize;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+    model_opt.preprocess.input_max_width = kInferSize;
+    model_opt.preprocess.input_max_height = kInferSize;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(tar_gz, model_opt);
+    const std::vector<float> dq_scales =
+        sima_examples::detess_dequant_scales(model, /*expected_count=*/10, "YOLOv8 instance");
 
     simaai::neat::Session session;
     session.add(simaai::neat::nodes::Input(model.input_appsrc_options(false)));
@@ -460,15 +461,16 @@ int main(int argc, char** argv) {
     std::cout << "Pipeline:\n" << session.describe_backend() << "\n";
 
     cv::Mat dummy_rgb(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor input_tensor = simaai::neat::from_cv_mat(
-        dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, /*read_only=*/true);
+    simaai::neat::Tensor input_tensor = simaai::neat::Tensor::from_cv_mat(
+        dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
     simaai::neat::RunOptions run_opt;
     run_opt.queue_depth = 8;
     run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
     run_opt.preset = simaai::neat::RunPreset::Balanced;
 
-    auto run = session.build(input_tensor, simaai::neat::RunMode::Async, run_opt);
+    auto run = session.build(simaai::neat::TensorList{input_tensor}, simaai::neat::RunMode::Async,
+                             run_opt);
     std::cout << "Found " << images.size() << " images\n";
 
     int processed = 0;
@@ -483,9 +485,9 @@ int main(int argc, char** argv) {
       cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
       cv::resize(rgb, rgb, cv::Size(kInferSize, kInferSize), 0, 0, cv::INTER_LINEAR);
 
-      simaai::neat::Tensor input = simaai::neat::from_cv_mat(
-          rgb, simaai::neat::ImageSpec::PixelFormat::RGB, /*read_only=*/true);
-      if (!run.push(input)) {
+      simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
+          rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+      if (!run.push(simaai::neat::TensorList{input})) {
         std::cerr << "Push failed for: " << image_path.filename() << "\n";
         continue;
       }
@@ -496,12 +498,12 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      const std::vector<simaai::neat::Tensor> tensors = tensors_from_sample(*out);
+      const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out);
       std::vector<Box> boxes;
       TensorHWC proto;
       try {
-        boxes = decode_yolov8_instances_from_detess(
-            tensors, kInferSize, kScoreThr, kNmsIou, kMaxDet, proto);
+        boxes = decode_yolov8_instances_from_detess(tensors, kInferSize, kScoreThr, kNmsIou,
+                                                    kMaxDet, proto, dq_scales);
       } catch (const std::exception& e) {
         std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
         continue;

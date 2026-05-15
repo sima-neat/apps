@@ -46,7 +46,8 @@ struct Config {
   std::vector<std::string> rtsp_urls;
   std::string model_path;
   std::string output_dir;
-  std::string labels_file = "examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt";
+  std::string labels_file =
+      "examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt";
 
   int frames = 100;
   bool debug = false;
@@ -220,7 +221,6 @@ public:
     timing_window_[key].add(dt_ms);
   }
 
-
   void mark_processing_started(int done_frames) {
     std::lock_guard<std::mutex> lock(mu_);
     if (started_) {
@@ -270,8 +270,9 @@ public:
 
     std::lock_guard<std::mutex> log_lock(log_mu);
     std::cout << "--------------------------\n";
-    std::cout << "[PROGRESS] frames=" << done_frames << " fps=" << std::fixed << std::setprecision(2)
-              << fps << " (last " << window_frames << " in " << window_elapsed_s << "s)\n";
+    std::cout << "[PROGRESS] frames=" << done_frames << " fps=" << std::fixed
+              << std::setprecision(2) << fps << " (last " << window_frames << " in "
+              << window_elapsed_s << "s)\n";
 
     for (const auto& s : stream_snapshot) {
       const int idx = s.idx;
@@ -292,7 +293,6 @@ public:
   }
 
 private:
-
   void print_stage_header() const {
     std::cout << "[PROFILE]   stage         avg(ms)   max(ms)   n\n";
   }
@@ -304,9 +304,9 @@ private:
     }
     const TimingAgg& agg = it->second;
     const double avg_ms = agg.total_ms / static_cast<double>(agg.count);
-    std::cout << "[PROFILE]   " << std::left << std::setw(12) << pretty << std::right << std::setw(8)
-              << std::fixed << std::setprecision(1) << avg_ms << " " << std::setw(8) << agg.max_ms
-              << " " << std::setw(4) << agg.count << "\n";
+    std::cout << "[PROFILE]   " << std::left << std::setw(12) << pretty << std::right
+              << std::setw(8) << std::fixed << std::setprecision(1) << avg_ms << " " << std::setw(8)
+              << agg.max_ms << " " << std::setw(4) << agg.count << "\n";
   }
 
   void print_combined_stage(int stream_idx, const std::string& key_a, const std::string& key_b,
@@ -323,18 +323,21 @@ private:
     int count = 0;
     if (has_a) {
       total_ms += it_a->second.total_ms;
-      if (it_a->second.max_ms > max_ms) max_ms = it_a->second.max_ms;
+      if (it_a->second.max_ms > max_ms)
+        max_ms = it_a->second.max_ms;
       count = it_a->second.count;
     }
     if (has_b) {
       total_ms += it_b->second.total_ms;
-      if (it_b->second.max_ms > max_ms) max_ms = it_b->second.max_ms;
-      if (it_b->second.count > count) count = it_b->second.count;
+      if (it_b->second.max_ms > max_ms)
+        max_ms = it_b->second.max_ms;
+      if (it_b->second.count > count)
+        count = it_b->second.count;
     }
     const double avg_ms = (count > 0) ? total_ms / static_cast<double>(count) : 0.0;
-    std::cout << "[PROFILE]   " << std::left << std::setw(12) << pretty << std::right << std::setw(8)
-              << std::fixed << std::setprecision(1) << avg_ms << " " << std::setw(8) << max_ms
-              << " " << std::setw(4) << count << "\n";
+    std::cout << "[PROFILE]   " << std::left << std::setw(12) << pretty << std::right
+              << std::setw(8) << std::fixed << std::setprecision(1) << avg_ms << " " << std::setw(8)
+              << max_ms << " " << std::setw(4) << count << "\n";
   }
 
   bool enabled_ = false;
@@ -353,9 +356,8 @@ private:
 }
 
 std::string lower_ascii(std::string s) {
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
+  std::transform(s.begin(), s.end(), s.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return s;
 }
 
@@ -391,7 +393,9 @@ void usage() {
   std::cerr << "Usage:\n";
   std::cerr << "  multistream-rtsp-detection-pipeline --model <mpk.tar.gz> --output <dir>\n";
   std::cerr << "    --rtsp <url0> [--rtsp <url1> ...]\n";
-  std::cerr << "    [--labels-file examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt]\n";
+  std::cerr
+      << "    [--labels-file "
+         "examples/object-detection/multistream-rtsp-detection-pipeline/common/coco_label.txt]\n";
   std::cerr << "    [--frames 100] [--fps 30]\n";
   std::cerr << "    [--frame-queue 128] [--result-queue 128]\n";
   std::cerr << "    [--pull-timeout-ms 50] [--max-idle-ms 15000] [--reconnect-miss 3]\n";
@@ -625,7 +629,8 @@ void draw_boxes(cv::Mat& frame, const std::vector<objdet::Box>& boxes,
     }
 
     const cv::Scalar color = class_color(b.class_id);
-    const std::string text = label_for_class(labels, b.class_id) + " " + cv::format("%.2f", b.score);
+    const std::string text =
+        label_for_class(labels, b.class_id) + " " + cv::format("%.2f", b.score);
     cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
 
     int baseline = 0;
@@ -650,6 +655,27 @@ cv::Mat tensor_to_bgr_mat(const simaai::neat::Tensor& t) {
     bgr = out;
   }
   return bgr;
+}
+
+bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::uint8_t>& payload,
+                          std::string& err) {
+  if (sample.kind == simaai::neat::SampleKind::Bundle) {
+    for (const auto& field : sample.fields) {
+      if (extract_bbox_payload(field, payload, err)) {
+        return true;
+      }
+    }
+    err = "bundle missing BBOX field";
+    return false;
+  }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    simaai::neat::Sample tensor_sample = sample;
+    tensor_sample.kind = simaai::neat::SampleKind::Tensor;
+    tensor_sample.tensor = sample.tensors.front();
+    tensor_sample.tensors.clear();
+    return objdet::extract_bbox_payload(tensor_sample, payload, err);
+  }
+  return objdet::extract_bbox_payload(sample, payload, err);
 }
 
 RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int sima_allocator_type,
@@ -686,7 +712,8 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const std::string& url, int si
 
   simaai::neat::Session session;
   session.add(simaai::neat::nodes::groups::RtspDecodedInput(ro));
-  session.add(simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(cfg.sample_every)));
+  session.add(
+      simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(cfg.sample_every)));
 
   simaai::neat::RunOptions run_opt;
   run_opt.queue_depth = std::max(1, cfg.run_queue_depth);
@@ -728,11 +755,17 @@ sima_examples::RtspStreamInfo probe_stream_info(const Config& cfg, const std::st
 
 InferRuntime build_infer_runtime(const Config& cfg, int frame_width, int frame_height) {
   simaai::neat::Model::Options mopt;
-  mopt.media_type = "video/x-raw";
-  mopt.format = "BGR";
-  mopt.input_max_width = frame_width;
-  mopt.input_max_height = frame_height;
-  mopt.input_max_depth = 3;
+  mopt.preprocess.kind = simaai::neat::InputKind::Image;
+  mopt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
+  mopt.preprocess.input_max_width = frame_width;
+  mopt.preprocess.input_max_height = frame_height;
+  mopt.preprocess.input_max_depth = 3;
+  mopt.decode_type = simaai::neat::BoxDecodeType::YoloV8;
+  mopt.score_threshold = cfg.min_score;
+  mopt.nms_iou_threshold = cfg.nms_iou;
+  mopt.top_k = cfg.max_det;
+  mopt.boxdecode_original_width = frame_width;
+  mopt.boxdecode_original_height = frame_height;
   simaai::neat::Model model(cfg.model_path, mopt);
 
   simaai::neat::Session yolo;
@@ -743,8 +776,9 @@ InferRuntime build_infer_runtime(const Config& cfg, int frame_width, int frame_h
   yolo.add(simaai::neat::nodes::Input(in_opt));
   yolo.add(simaai::neat::nodes::groups::Preprocess(model));
   yolo.add(simaai::neat::nodes::groups::Infer(model));
-  yolo.add(simaai::neat::nodes::SimaBoxDecode(model, "yolov8", frame_width, frame_height, cfg.min_score,
-                                               cfg.nms_iou, cfg.max_det));
+  yolo.add(simaai::neat::nodes::SimaBoxDecode(
+      model, simaai::neat::BoxDecodeType::YoloV8, cfg.min_score, cfg.nms_iou, cfg.max_det, "",
+      std::nullopt, std::nullopt, frame_width, frame_height));
   yolo.add(simaai::neat::nodes::Output());
 
   simaai::neat::RunOptions run_opt;
@@ -752,7 +786,8 @@ InferRuntime build_infer_runtime(const Config& cfg, int frame_width, int frame_h
   run_opt.overflow_policy = cfg.overflow_policy;
   run_opt.output_memory = cfg.output_memory;
   cv::Mat dummy(frame_height, frame_width, CV_8UC3, cv::Scalar(0, 0, 0));
-  simaai::neat::Run run = yolo.build(dummy, simaai::neat::RunMode::Async, run_opt);
+  simaai::neat::Run run =
+      yolo.build(std::vector<cv::Mat>{dummy}, simaai::neat::RunMode::Async, run_opt);
   const std::string pipeline = yolo.last_pipeline();
   return InferRuntime(std::move(model), std::move(yolo), std::move(run), pipeline);
 }
@@ -761,19 +796,19 @@ double elapsed_ms(TimePoint a, TimePoint b) {
   return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
-
 } // namespace
 
 // Orchestrates producer/infer/overlay workers while keeping NEAT pipeline construction explicit.
 // NEAT usage (C++):
-// - build_rtsp_runtime_with_fallback(...) creates per-stream simaai::neat::Session + Run for RTSP decode.
+// - build_rtsp_runtime_with_fallback(...) creates per-stream simaai::neat::Session + Run for RTSP
+// decode.
 // - build_infer_runtime(...) creates model session:
 //   Input -> Preprocess -> Infer -> SimaBoxDecode -> Output.
 class PipelineApp {
 public:
   explicit PipelineApp(Config cfg)
-      : cfg_(std::move(cfg)), labels_(load_labels(cfg_.labels_file)),
-        out_root_(cfg_.output_dir), profiler_(cfg_.profile, cfg_.profile_every) {}
+      : cfg_(std::move(cfg)), labels_(load_labels(cfg_.labels_file)), out_root_(cfg_.output_dir),
+        profiler_(cfg_.profile, cfg_.profile_every) {}
 
   int run() {
     fs::create_directories(out_root_);
@@ -805,7 +840,8 @@ private:
       const std::string& url = cfg_.rtsp_urls[i];
       const auto probe = probe_stream_info(cfg_, url);
       bool used_fallback_allocator = false;
-      RtspRuntime rtsp = build_rtsp_runtime_with_fallback(cfg_, url, probe, used_fallback_allocator);
+      RtspRuntime rtsp =
+          build_rtsp_runtime_with_fallback(cfg_, url, probe, used_fallback_allocator);
 
       auto st = std::make_shared<StreamState>();
       st->idx = static_cast<int>(i);
@@ -817,8 +853,8 @@ private:
       st->out_dir = out_root_ / ("stream_" + std::to_string(i));
       fs::create_directories(st->out_dir);
 
-      frame_queues_.push_back(
-          std::make_shared<KeepLatestQueue<FramePacket>>(static_cast<std::size_t>(cfg_.frame_queue)));
+      frame_queues_.push_back(std::make_shared<KeepLatestQueue<FramePacket>>(
+          static_cast<std::size_t>(cfg_.frame_queue)));
       result_queues_.push_back(std::make_shared<KeepLatestQueue<ResultPacket>>(
           static_cast<std::size_t>(cfg_.result_queue)));
       streams_.push_back(st);
@@ -827,7 +863,8 @@ private:
       std::cout << "[stream " << i << "] started: " << url << " -> " << st->out_dir.string()
                 << "/ (runtime geometry=" << st->frame_width << "x" << st->frame_height << ")\n";
       if (used_fallback_allocator) {
-        std::cout << "[stream " << i << "] decoder allocator fallback: using sima_allocator_type=1\n";
+        std::cout << "[stream " << i
+                  << "] decoder allocator fallback: using sima_allocator_type=1\n";
       }
       if (cfg_.debug) {
         std::cout << "[PIPE][rtsp " << i << "] " << rtsp.pipeline << "\n";
@@ -840,8 +877,8 @@ private:
     // Build infer runtimes sequentially to avoid shared model-config race during startup.
     for (const auto& st : streams_) {
       try {
-        auto infer =
-            std::make_unique<InferRuntime>(build_infer_runtime(cfg_, st->frame_width, st->frame_height));
+        auto infer = std::make_unique<InferRuntime>(
+            build_infer_runtime(cfg_, st->frame_width, st->frame_height));
         if (cfg_.debug) {
           std::lock_guard<std::mutex> log_lock(log_mu_);
           std::cout << "[PIPE][infer " << st->idx << "] " << infer->pipeline << "\n";
@@ -876,9 +913,10 @@ private:
       auto frame_q = frame_queues_[static_cast<std::size_t>(idx)];
       auto result_q = result_queues_[static_cast<std::size_t>(idx)];
       auto infer_ptr = std::move(infer_runtimes_[static_cast<std::size_t>(idx)]);
-      infer_threads_.emplace_back([this, st, frame_q, result_q, infer_ptr = std::move(infer_ptr)]() mutable {
-        infer_worker(st, frame_q, result_q, std::move(infer_ptr));
-      });
+      infer_threads_.emplace_back(
+          [this, st, frame_q, result_q, infer_ptr = std::move(infer_ptr)]() mutable {
+            infer_worker(st, frame_q, result_q, std::move(infer_ptr));
+          });
     }
   }
 
@@ -908,9 +946,10 @@ private:
         }
 
         const auto t_pull0 = Clock::now();
-        auto frame_opt = st->run.pull_tensor(cfg_.pull_timeout_ms);
+        auto frame_opt = st->run.pull(cfg_.pull_timeout_ms);
         const auto t_pull1 = Clock::now();
-        profiler_.add_time(ProfileTracker::stage_key("pull_call", st->idx), elapsed_ms(t_pull0, t_pull1));
+        profiler_.add_time(ProfileTracker::stage_key("pull_call", st->idx),
+                           elapsed_ms(t_pull0, t_pull1));
 
         if (!frame_opt.has_value()) {
           ++miss_count;
@@ -929,8 +968,8 @@ private:
             try {
               const auto probe = probe_stream_info(cfg_, st->url);
               bool used_fallback_allocator = false;
-              RtspRuntime rtsp_new = build_rtsp_runtime_with_fallback(cfg_, st->url, probe,
-                                                                      used_fallback_allocator);
+              RtspRuntime rtsp_new =
+                  build_rtsp_runtime_with_fallback(cfg_, st->url, probe, used_fallback_allocator);
               st->session = std::move(rtsp_new.session);
               st->run = std::move(rtsp_new.run);
               miss_count = 0;
@@ -961,9 +1000,11 @@ private:
         miss_count = 0;
         const auto pulled_ts = Clock::now();
         const auto t_np0 = Clock::now();
-        cv::Mat bgr = tensor_to_bgr_mat(*frame_opt);
+        auto tensors = simaai::neat::tensors_from_sample(*frame_opt);
+        cv::Mat bgr = tensor_to_bgr_mat(tensors.front());
         const auto t_np1 = Clock::now();
-        profiler_.add_time(ProfileTracker::stage_key("to_numpy", st->idx), elapsed_ms(t_np0, t_np1));
+        profiler_.add_time(ProfileTracker::stage_key("to_numpy", st->idx),
+                           elapsed_ms(t_np0, t_np1));
 
         {
           std::lock_guard<std::mutex> stats_lock(stats_mu_);
@@ -1027,17 +1068,16 @@ private:
         std::vector<uint8_t> payload;
         std::string bbox_err;
         std::vector<objdet::Box> boxes;
-        if (objdet::extract_bbox_payload(sample, payload, bbox_err)) {
+        if (extract_bbox_payload(sample, payload, bbox_err)) {
           try {
             boxes = objdet::parse_boxes_strict(payload, fpkt.frame.cols, fpkt.frame.rows,
                                                cfg_.max_det, false);
           } catch (const std::exception& ex) {
-            boxes =
-                objdet::parse_boxes_lenient(payload, fpkt.frame.cols, fpkt.frame.rows, cfg_.max_det);
+            boxes = objdet::parse_boxes_lenient(payload, fpkt.frame.cols, fpkt.frame.rows,
+                                                cfg_.max_det);
             if (cfg_.debug) {
               std::lock_guard<std::mutex> log_lock(log_mu_);
-              std::cerr << "[stream " << st->idx
-                        << "] strict bbox parse failed (" << ex.what()
+              std::cerr << "[stream " << st->idx << "] strict bbox parse failed (" << ex.what()
                         << "), using lenient parser\n";
             }
           }
@@ -1082,7 +1122,8 @@ private:
             break; // No frame available right now, move to pull phase.
           }
 
-          profiler_.add_time(ProfileTracker::stage_key("infer_q_wait", st->idx), elapsed_ms(t_wait0, t_wait1));
+          profiler_.add_time(ProfileTracker::stage_key("infer_q_wait", st->idx),
+                             elapsed_ms(t_wait0, t_wait1));
 
           {
             std::lock_guard<std::mutex> stats_lock(stats_mu_);
@@ -1092,7 +1133,7 @@ private:
             }
           }
 
-          if (!infer.run.push(pkt.frame)) {
+          if (!infer.run.push(std::vector<cv::Mat>{pkt.frame})) {
             std::lock_guard<std::mutex> log_lock(log_mu_);
             std::cerr << "[stream " << st->idx << "] model push failed\n";
             break;
@@ -1202,8 +1243,8 @@ private:
 
       if (cfg_.debug || ((frame_idx + 1) % 10 == 0)) {
         std::lock_guard<std::mutex> log_lock(log_mu_);
-        std::cout << "[stream " << st->idx << "] frames=" << (frame_idx + 1) << " pulled=" << pulled_now
-                  << " det=" << pkt.boxes.size() << "\n";
+        std::cout << "[stream " << st->idx << "] frames=" << (frame_idx + 1)
+                  << " pulled=" << pulled_now << " det=" << pkt.boxes.size() << "\n";
       }
 
       const int done_now = total_done_.fetch_add(1) + 1;
@@ -1213,8 +1254,8 @@ private:
         {
           std::lock_guard<std::mutex> stats_lock(stats_mu_);
           for (const auto& s : streams_) {
-            snapshot.push_back(StreamSnapshot{s->idx, s->processed, s->pulled,
-                                              s->frame_q_dropped, s->result_q_dropped});
+            snapshot.push_back(StreamSnapshot{s->idx, s->processed, s->pulled, s->frame_q_dropped,
+                                              s->result_q_dropped});
           }
         }
         profiler_.maybe_report(done_now, snapshot, log_mu_);
@@ -1293,11 +1334,12 @@ private:
     {
       std::lock_guard<std::mutex> log_lock(log_mu_);
       std::cout << "Processed " << done << " outputs in " << std::fixed << std::setprecision(2)
-                << elapsed_s << "s avg_fps="
-                << (static_cast<double>(std::max(0, done_since_start)) / elapsed_s) << "\n";
+                << elapsed_s
+                << "s avg_fps=" << (static_cast<double>(std::max(0, done_since_start)) / elapsed_s)
+                << "\n";
       for (const auto& s : streams_) {
-        std::cout << "stream[" << s->idx << "] processed=" << s->processed << " pulled=" << s->pulled
-                  << " saved to " << s->out_dir.string() << "/\n";
+        std::cout << "stream[" << s->idx << "] processed=" << s->processed
+                  << " pulled=" << s->pulled << " saved to " << s->out_dir.string() << "/\n";
       }
     }
   }

@@ -2,6 +2,7 @@
 
 #include "neat/session.h"
 #include "neat/nodes.h"
+#include "neat/models.h"
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/videoio.hpp>
@@ -43,7 +44,8 @@ struct RtspStreamInfo {
 
 bool parse_dim_from_caps(const std::string& caps, const char* key, int& out);
 bool parse_fps_from_caps(const std::string& caps, int& fps_out);
-bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt, RtspStreamInfo& out);
+bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
+                            RtspStreamInfo& out);
 bool probe_rtsp_encoded(const std::string& url, const RtspProbeOptions& opt, int fps, int w, int h,
                         int tries, int timeout_ms, bool enforce_caps);
 bool probe_rtsp_decoded_dims(const std::string& url, const RtspProbeOptions& opt, int tries,
@@ -81,6 +83,9 @@ struct ScoredIndex {
 };
 
 std::vector<float> tensor_to_floats(const simaai::neat::Tensor& t);
+std::vector<float> detess_dequant_scales(const simaai::neat::Model& model,
+                                         std::size_t expected_count, const std::string& label);
+void apply_detess_dequant_scale_correction(std::vector<float>& values, float dq_scale);
 std::vector<float> scores_from_tensor(const simaai::neat::Tensor& t, const std::string& label);
 std::vector<ScoredIndex> topk_with_softmax(const std::vector<float>& v, int k);
 void check_top1(const std::vector<float>& scores, int expected_id, float min_prob,

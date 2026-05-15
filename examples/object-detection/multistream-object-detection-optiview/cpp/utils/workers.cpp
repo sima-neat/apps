@@ -427,11 +427,11 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
       }
     }
     if (cfg.video_mode == VideoMode::Clean) {
-      if (!stream.video->run.push(packet.decoded)) {
+      if (!stream.video->run.push(simaai::neat::SampleList{packet.decoded})) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " OptiView clean video push failed");
       }
-    } else if (!stream.video->run.push(frame_out)) {
+    } else if (!stream.video->run.push(std::vector<cv::Mat>{frame_out})) {
       throw std::runtime_error("stream " + std::to_string(stream.index) +
                                " OptiView video push failed");
     }

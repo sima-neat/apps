@@ -4,7 +4,8 @@
  *
  * Usage:
  *   detr-object-detection <image_path> [--model <model.tar.gz>] [--output <out.png>]
- *                         [--conf <thr>] [--max-draw <count>] [--person-only] [--profile] [--num-runs <count>]
+ *                         [--conf <thr>] [--max-draw <count>] [--person-only] [--profile]
+ * [--num-runs <count>]
  */
 #include "neat.h"
 
@@ -36,96 +37,36 @@ constexpr int kDefaultTimeoutMs = 5000;
 constexpr int kPersonClassId = 1;
 
 constexpr std::array<std::string_view, 91> kDetrCocoLabels = {
-    "N/A",
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "airplane",
-    "bus",
-    "train",
-    "truck",
-    "boat",
-    "traffic light",
-    "fire hydrant",
-    "N/A",
-    "stop sign",
-    "parking meter",
-    "bench",
-    "bird",
-    "cat",
-    "dog",
-    "horse",
-    "sheep",
-    "cow",
-    "elephant",
-    "bear",
-    "zebra",
-    "giraffe",
-    "N/A",
-    "backpack",
-    "umbrella",
-    "N/A",
-    "N/A",
-    "handbag",
-    "tie",
-    "suitcase",
-    "frisbee",
-    "skis",
-    "snowboard",
-    "sports ball",
-    "kite",
-    "baseball bat",
-    "baseball glove",
-    "skateboard",
-    "surfboard",
-    "tennis racket",
-    "bottle",
-    "N/A",
-    "wine glass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hot dog",
-    "pizza",
-    "donut",
-    "cake",
-    "chair",
-    "couch",
-    "potted plant",
-    "bed",
-    "N/A",
-    "dining table",
-    "N/A",
-    "N/A",
-    "toilet",
-    "N/A",
-    "tv",
-    "laptop",
-    "mouse",
-    "remote",
-    "keyboard",
-    "cell phone",
-    "microwave",
-    "oven",
-    "toaster",
-    "sink",
-    "refrigerator",
-    "N/A",
-    "book",
-    "clock",
-    "vase",
-    "scissors",
-    "teddy bear",
-    "hair drier",
+    "N/A",          "person",         "bicycle",
+    "car",          "motorcycle",     "airplane",
+    "bus",          "train",          "truck",
+    "boat",         "traffic light",  "fire hydrant",
+    "N/A",          "stop sign",      "parking meter",
+    "bench",        "bird",           "cat",
+    "dog",          "horse",          "sheep",
+    "cow",          "elephant",       "bear",
+    "zebra",        "giraffe",        "N/A",
+    "backpack",     "umbrella",       "N/A",
+    "N/A",          "handbag",        "tie",
+    "suitcase",     "frisbee",        "skis",
+    "snowboard",    "sports ball",    "kite",
+    "baseball bat", "baseball glove", "skateboard",
+    "surfboard",    "tennis racket",  "bottle",
+    "N/A",          "wine glass",     "cup",
+    "fork",         "knife",          "spoon",
+    "bowl",         "banana",         "apple",
+    "sandwich",     "orange",         "broccoli",
+    "carrot",       "hot dog",        "pizza",
+    "donut",        "cake",           "chair",
+    "couch",        "potted plant",   "bed",
+    "N/A",          "dining table",   "N/A",
+    "N/A",          "toilet",         "N/A",
+    "tv",           "laptop",         "mouse",
+    "remote",       "keyboard",       "cell phone",
+    "microwave",    "oven",           "toaster",
+    "sink",         "refrigerator",   "N/A",
+    "book",         "clock",          "vase",
+    "scissors",     "teddy bear",     "hair drier",
     "toothbrush",
 };
 
@@ -237,19 +178,19 @@ std::pair<cv::Mat, PreprocMeta> preprocess_to_tensor_input(const cv::Mat& bgr_u8
   meta.orig_h = bgr_u8.rows;
   meta.orig_w = bgr_u8.cols;
 
-  const float scale = std::min(
-      static_cast<float>(kModelW) / static_cast<float>(meta.orig_w),
-      static_cast<float>(kModelH) / static_cast<float>(meta.orig_h));
-  meta.resized_w = std::max(1, static_cast<int>(std::lround(static_cast<float>(meta.orig_w) * scale)));
-  meta.resized_h = std::max(1, static_cast<int>(std::lround(static_cast<float>(meta.orig_h) * scale)));
+  const float scale = std::min(static_cast<float>(kModelW) / static_cast<float>(meta.orig_w),
+                               static_cast<float>(kModelH) / static_cast<float>(meta.orig_h));
+  meta.resized_w =
+      std::max(1, static_cast<int>(std::lround(static_cast<float>(meta.orig_w) * scale)));
+  meta.resized_h =
+      std::max(1, static_cast<int>(std::lround(static_cast<float>(meta.orig_h) * scale)));
   meta.scale_x = static_cast<float>(meta.resized_w) / static_cast<float>(meta.orig_w);
   meta.scale_y = static_cast<float>(meta.resized_h) / static_cast<float>(meta.orig_h);
   meta.pad_left = (kModelW - meta.resized_w) / 2;
   meta.pad_top = (kModelH - meta.resized_h) / 2;
 
   cv::Mat resized;
-  cv::resize(
-      bgr_u8, resized, cv::Size(meta.resized_w, meta.resized_h), 0.0, 0.0, cv::INTER_LINEAR);
+  cv::resize(bgr_u8, resized, cv::Size(meta.resized_w, meta.resized_h), 0.0, 0.0, cv::INTER_LINEAR);
 
   cv::Mat canvas_bgr(kModelH, kModelW, CV_8UC3, cv::Scalar(0, 0, 0));
   resized.copyTo(canvas_bgr(cv::Rect(meta.pad_left, meta.pad_top, meta.resized_w, meta.resized_h)));
@@ -290,31 +231,31 @@ simaai::neat::Tensor tensor_from_hwc_f32(const cv::Mat& hwc_f32) {
   const size_t elems = static_cast<size_t>(h) * static_cast<size_t>(w) * static_cast<size_t>(c);
   const size_t bytes = elems * sizeof(float);
 
-  auto buf = std::make_shared<std::vector<float>>(elems);
-  std::memcpy(buf->data(), hwc_f32.ptr<float>(), bytes);
+  std::vector<float> data(elems);
+  std::memcpy(data.data(), hwc_f32.ptr<float>(), bytes);
 
-  simaai::neat::Tensor t;
-  t.storage = simaai::neat::make_cpu_external_storage(buf->data(), bytes, buf, /*read_only=*/true);
-  t.dtype = simaai::neat::TensorDType::Float32;
+  simaai::neat::Tensor t =
+      simaai::neat::Tensor::from_vector(data, {h, w, c}, simaai::neat::TensorMemory::EV74);
   t.layout = simaai::neat::TensorLayout::HWC;
-  t.shape = {h, w, c};
   t.strides_bytes = {static_cast<int64_t>(w * c * sizeof(float)),
-                     static_cast<int64_t>(c * sizeof(float)),
-                     static_cast<int64_t>(sizeof(float))};
+                     static_cast<int64_t>(c * sizeof(float)), static_cast<int64_t>(sizeof(float))};
   return t;
 }
 
-std::vector<simaai::neat::Tensor> tensors_from_sample(const simaai::neat::Sample& sample) {
+std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
   if (sample.kind == simaai::neat::SampleKind::Tensor) {
     if (!sample.tensor.has_value()) {
       throw std::runtime_error("tensor sample missing payload");
     }
     return {*sample.tensor};
   }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
+    return sample.tensors;
+  }
   if (sample.kind == simaai::neat::SampleKind::Bundle) {
     std::vector<simaai::neat::Tensor> out;
     for (const auto& field : sample.fields) {
-      auto child = tensors_from_sample(field);
+      auto child = collect_tensors(field);
       out.insert(out.end(), child.begin(), child.end());
     }
     return out;
@@ -365,7 +306,8 @@ Tensor2D tensor_to_2d_rows(const simaai::neat::Tensor& t, const char* name) {
   return Tensor2D{static_cast<int>(rows64), cols, std::move(data)};
 }
 
-std::pair<Tensor2D, Tensor2D> extract_logits_and_boxes(const std::vector<simaai::neat::Tensor>& tensors) {
+std::pair<Tensor2D, Tensor2D>
+extract_logits_and_boxes(const std::vector<simaai::neat::Tensor>& tensors) {
   std::optional<Tensor2D> logits;
   std::optional<Tensor2D> boxes;
 
@@ -408,32 +350,25 @@ std::string class_name(int class_id) {
 
 cv::Scalar class_color(int class_id) {
   static const std::array<cv::Scalar, 8> kColors = {
-      cv::Scalar(0, 255, 0),
-      cv::Scalar(255, 0, 0),
-      cv::Scalar(0, 0, 255),
-      cv::Scalar(255, 255, 0),
-      cv::Scalar(255, 0, 255),
-      cv::Scalar(0, 255, 255),
-      cv::Scalar(128, 255, 0),
-      cv::Scalar(255, 128, 0),
+      cv::Scalar(0, 255, 0),   cv::Scalar(255, 0, 0),   cv::Scalar(0, 0, 255),
+      cv::Scalar(255, 255, 0), cv::Scalar(255, 0, 255), cv::Scalar(0, 255, 255),
+      cv::Scalar(128, 255, 0), cv::Scalar(255, 128, 0),
   };
   const size_t idx = static_cast<size_t>(class_id >= 0 ? class_id : -class_id) % kColors.size();
   return kColors[idx];
 }
 
-std::vector<Detection> decode_detr_outputs(
-    const Tensor2D& logits,
-    const Tensor2D& boxes,
-    const PreprocMeta& meta,
-    float conf_threshold,
-    bool person_only) {
+std::vector<Detection> decode_detr_outputs(const Tensor2D& logits, const Tensor2D& boxes,
+                                           const PreprocMeta& meta, float conf_threshold,
+                                           bool person_only) {
   const int foreground_classes =
       std::min(logits.cols - 1, static_cast<int>(kDetrCocoLabels.size()));
   std::vector<Detection> dets;
   dets.reserve(static_cast<size_t>(logits.rows));
 
   for (int row = 0; row < logits.rows; ++row) {
-    const float* logit_row = logits.data.data() + static_cast<size_t>(row) * static_cast<size_t>(logits.cols);
+    const float* logit_row =
+        logits.data.data() + static_cast<size_t>(row) * static_cast<size_t>(logits.cols);
     const float* box_row = boxes.data.data() + static_cast<size_t>(row) * 4U;
 
     float max_logit = -std::numeric_limits<float>::infinity();
@@ -491,9 +426,8 @@ std::vector<Detection> decode_detr_outputs(
     dets.push_back(Detection{x1, y1, x2, y2, best_score, best_class});
   }
 
-  std::sort(dets.begin(), dets.end(), [](const Detection& a, const Detection& b) {
-    return a.score > b.score;
-  });
+  std::sort(dets.begin(), dets.end(),
+            [](const Detection& a, const Detection& b) { return a.score > b.score; });
   return dets;
 }
 
@@ -513,13 +447,12 @@ void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, int max_d
     const cv::Scalar color = class_color(d.class_id);
     const std::string text = class_name(d.class_id) + " " + cv::format("%.2f", d.score);
     cv::rectangle(bgr, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
-    cv::putText(
-        bgr, text, cv::Point(x1, std::max(0, y1 - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-        color, 2, cv::LINE_AA);
+    cv::putText(bgr, text, cv::Point(x1, std::max(0, y1 - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.5, color,
+                2, cv::LINE_AA);
   }
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv) {
   std::cout.setf(std::ios::unitbuf);
@@ -542,11 +475,10 @@ int main(int argc, char** argv) {
     auto [input_f32, meta] = preprocess_to_tensor_input(bgr_u8);
 
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "application/vnd.simaai.tensor";
-    model_opt.format = "";
-    model_opt.input_max_width = kModelW;
-    model_opt.input_max_height = kModelH;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Tensor;
+    model_opt.preprocess.input_max_width = kModelW;
+    model_opt.preprocess.input_max_height = kModelH;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(args.model, model_opt);
     simaai::neat::Session session;
@@ -557,7 +489,8 @@ int main(int argc, char** argv) {
     session.add(simaai::neat::nodes::Output());
 
     cv::Mat dummy(kModelH, kModelW, CV_32FC3, cv::Scalar(0.0f, 0.0f, 0.0f));
-    auto run = session.build(tensor_from_hwc_f32(dummy), simaai::neat::RunMode::Sync);
+    auto run = session.build(simaai::neat::TensorList{tensor_from_hwc_f32(dummy)},
+                             simaai::neat::RunMode::Async);
     simaai::neat::Tensor input_t = tensor_from_hwc_f32(input_f32);
 
     if (args.profile) {
@@ -570,7 +503,7 @@ int main(int argc, char** argv) {
 
       for (int i = 0; i < runs; ++i) {
         const auto t0 = std::chrono::steady_clock::now();
-        if (!run.push(input_t)) {
+        if (!run.push(simaai::neat::TensorList{input_t})) {
           throw std::runtime_error("run.push failed during profiling");
         }
         auto out_sample = run.pull(kDefaultTimeoutMs);
@@ -579,7 +512,7 @@ int main(int argc, char** argv) {
           throw std::runtime_error("run.pull returned no sample during profiling");
         }
 
-        const std::vector<simaai::neat::Tensor> tensors = tensors_from_sample(*out_sample);
+        const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out_sample);
         const auto [logits, boxes] = extract_logits_and_boxes(tensors);
         const auto t2 = std::chrono::steady_clock::now();
         last_dets = decode_detr_outputs(logits, boxes, meta, args.conf, args.person_only);
@@ -594,20 +527,21 @@ int main(int argc, char** argv) {
       const double runs_d = static_cast<double>(session_times.size());
       const double total_sum = sess.sum + post.sum;
 
-      std::cout << "Profiling over " << session_times.size() << " runs (image='" << args.image.string() << "'):\n";
+      std::cout << "Profiling over " << session_times.size() << " runs (image='"
+                << args.image.string() << "'):\n";
       std::cout << "  Session (push+pull): mean=" << sess.mean << "s, min=" << sess.min
                 << "s, max=" << sess.max << "s, FPS=" << (runs_d / sess.sum) << "\n";
       std::cout << "  Postprocessing (decode+NMS): mean=" << post.mean << "s, min=" << post.min
                 << "s, max=" << post.max << "s, FPS=" << (runs_d / post.sum) << "\n";
-      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d) << "s, min="
-                << (sess.min + post.min) << "s, max=" << (sess.max + post.max)
+      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d)
+                << "s, min=" << (sess.min + post.min) << "s, max=" << (sess.max + post.max)
                 << "s, FPS=" << (runs_d / total_sum) << "\n";
       std::cout << "Last run detections: " << last_dets.size() << "\n";
       for (size_t i = 0; i < std::min<size_t>(last_dets.size(), 20); ++i) {
         const auto& d = last_dets[i];
         std::cout << "  [" << i << "] class=" << class_name(d.class_id) << "(" << d.class_id
-                  << ") score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2
-                  << "," << d.y2 << "]\n";
+                  << ") score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
+                  << d.y2 << "]\n";
       }
       run.close();
       return 0;
@@ -615,7 +549,7 @@ int main(int argc, char** argv) {
 
     const auto t0_total = std::chrono::steady_clock::now();
     const auto t0_infer = std::chrono::steady_clock::now();
-    if (!run.push(input_t)) {
+    if (!run.push(simaai::neat::TensorList{input_t})) {
       throw std::runtime_error("run.push failed");
     }
 
@@ -625,7 +559,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("run.pull returned no sample");
     }
 
-    const std::vector<simaai::neat::Tensor> tensors = tensors_from_sample(*out_sample);
+    const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out_sample);
     std::cout << "Model produced " << tensors.size() << " tensor(s)\n";
     for (size_t i = 0; i < tensors.size(); ++i) {
       std::cout << "  [" << i << "] shape=[";
@@ -643,8 +577,8 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
       const auto& d = dets[i];
       std::cout << "  [" << i << "] class=" << class_name(d.class_id) << "(" << d.class_id
-                << ") score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2
-                << "," << d.y2 << "]\n";
+                << ") score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
+                << d.y2 << "]\n";
     }
 
     if (!args.output.empty()) {

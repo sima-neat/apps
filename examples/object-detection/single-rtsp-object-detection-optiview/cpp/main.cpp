@@ -93,23 +93,55 @@ void print_time(const char* label, double ms, bool enabled) {
 // model-specific semantics into generic OptiView helpers used by other models.
 std::vector<std::string> yolo_coco_labels() {
   return {
-      "person",         "bicycle",      "car",           "motorcycle",    "airplane",
-      "bus",            "train",        "truck",         "boat",          "traffic light",
-      "fire hydrant",   "stop sign",    "parking meter", "bench",         "bird",
-      "cat",            "dog",          "horse",         "sheep",         "cow",
-      "elephant",       "bear",         "zebra",         "giraffe",       "backpack",
-      "umbrella",       "handbag",      "tie",           "suitcase",      "frisbee",
-      "skis",           "snowboard",    "sports ball",   "kite",          "baseball bat",
-      "baseball glove", "skateboard",   "surfboard",     "tennis racket", "bottle",
-      "wine glass",     "cup",          "fork",          "knife",         "spoon",
-      "bowl",           "banana",       "apple",         "sandwich",      "orange",
-      "broccoli",       "carrot",       "hot dog",       "pizza",         "donut",
-      "cake",           "chair",        "couch",         "potted plant",  "bed",
-      "dining table",   "toilet",       "tv",            "laptop",        "mouse",
-      "remote",         "keyboard",     "cell phone",    "microwave",     "oven",
-      "toaster",        "sink",         "refrigerator",  "book",          "clock",
-      "vase",           "scissors",     "teddy bear",    "hair drier",    "toothbrush",
+      "person",        "bicycle",      "car",
+      "motorcycle",    "airplane",     "bus",
+      "train",         "truck",        "boat",
+      "traffic light", "fire hydrant", "stop sign",
+      "parking meter", "bench",        "bird",
+      "cat",           "dog",          "horse",
+      "sheep",         "cow",          "elephant",
+      "bear",          "zebra",        "giraffe",
+      "backpack",      "umbrella",     "handbag",
+      "tie",           "suitcase",     "frisbee",
+      "skis",          "snowboard",    "sports ball",
+      "kite",          "baseball bat", "baseball glove",
+      "skateboard",    "surfboard",    "tennis racket",
+      "bottle",        "wine glass",   "cup",
+      "fork",          "knife",        "spoon",
+      "bowl",          "banana",       "apple",
+      "sandwich",      "orange",       "broccoli",
+      "carrot",        "hot dog",      "pizza",
+      "donut",         "cake",         "chair",
+      "couch",         "potted plant", "bed",
+      "dining table",  "toilet",       "tv",
+      "laptop",        "mouse",        "remote",
+      "keyboard",      "cell phone",   "microwave",
+      "oven",          "toaster",      "sink",
+      "refrigerator",  "book",         "clock",
+      "vase",          "scissors",     "teddy bear",
+      "hair drier",    "toothbrush",
   };
+}
+
+bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::uint8_t>& payload,
+                          std::string& err) {
+  if (sample.kind == simaai::neat::SampleKind::Bundle) {
+    for (const auto& field : sample.fields) {
+      if (extract_bbox_payload(field, payload, err)) {
+        return true;
+      }
+    }
+    err = "bundle missing BBOX field";
+    return false;
+  }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    simaai::neat::Sample tensor_sample = sample;
+    tensor_sample.kind = simaai::neat::SampleKind::Tensor;
+    tensor_sample.tensor = sample.tensors.front();
+    tensor_sample.tensors.clear();
+    return objdet::extract_bbox_payload(tensor_sample, payload, err);
+  }
+  return objdet::extract_bbox_payload(sample, payload, err);
 }
 
 void enable_optiview_diagnostics(bool enabled) {
@@ -155,9 +187,9 @@ double fps_from_count(int count, double elapsed_ms) {
   return static_cast<double>(count) * 1000.0 / elapsed_ms;
 }
 
-void print_throughput_summary(int produced, int det_outputs, int published, double producer_start_ms,
-                              double producer_end_ms, double consumer_start_ms,
-                              double consumer_end_ms) {
+void print_throughput_summary(int produced, int det_outputs, int published,
+                              double producer_start_ms, double producer_end_ms,
+                              double consumer_start_ms, double consumer_end_ms) {
   const double producer_elapsed_ms =
       (producer_end_ms > producer_start_ms) ? (producer_end_ms - producer_start_ms) : 0.0;
   const double consumer_elapsed_ms =
@@ -452,18 +484,20 @@ RtspRuntime build_rtsp_runtime(const Config& cfg) {
   runtime.run = runtime.session.build(cam_run_opt);
 
   const double first_pull_start = time_ms();
-  try {
-    runtime.first_frame = runtime.run.pull_tensor_or_throw(5000);
-  } catch (const std::exception& e) {
-    const std::string msg = e.what();
-    if (msg.find("timeout") != std::string::npos) {
+  simaai::neat::Sample first_sample;
+  simaai::neat::PullError first_pull_error;
+  const auto first_pull_status = runtime.run.pull(5000, first_sample, &first_pull_error);
+  if (first_pull_status != simaai::neat::PullStatus::Ok) {
+    if (first_pull_status == simaai::neat::PullStatus::Timeout) {
       throw std::runtime_error(
           "Timed out waiting for first RTSP frame. This is usually upstream connectivity or stream "
           "delivery, not framerate derivation. If diagnostics show zero buffers at rtspsrc/depay/"
           "decoder, the device is not receiving RTP from the source.");
     }
-    throw;
+    throw std::runtime_error("Failed waiting for first RTSP frame: " + first_pull_error.message);
   }
+  auto first_tensors = simaai::neat::tensors_from_sample(first_sample);
+  runtime.first_frame = std::move(first_tensors.front());
   const double first_pull_end = time_ms();
   runtime.first_pull_ms = first_pull_end - first_pull_start;
   runtime.first_pull_ts = first_pull_end;
@@ -477,7 +511,8 @@ RtspRuntime build_rtsp_runtime(const Config& cfg) {
   return runtime;
 }
 
-OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame_h, int output_fps) {
+OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame_h,
+                                       int output_fps) {
   OptiViewRuntime runtime;
   runtime.host = cfg.optiview_host;
   runtime.video_port = cfg.optiview_video_port;
@@ -487,8 +522,8 @@ OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame
   udp_src.width = frame_w;
   udp_src.height = frame_h;
   udp_src.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
-                          ",height=" + std::to_string(frame_h) + ",framerate=" +
-                          std::to_string(output_fps) + "/1";
+                          ",height=" + std::to_string(frame_h) +
+                          ",framerate=" + std::to_string(output_fps) + "/1";
   udp_src.use_simaai_pool = false;
   runtime.session.add(simaai::neat::nodes::Input(udp_src));
   runtime.session.add(simaai::neat::nodes::H264EncodeSima(frame_w, frame_h, output_fps, 4000));
@@ -504,8 +539,8 @@ OptiViewRuntime build_optiview_runtime(const Config& cfg, int frame_w, int frame
   sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, udp_dummy, udp_err), udp_err);
   simaai::neat::RunOptions udp_run_opt;
   udp_run_opt.enable_metrics = true;
-  runtime.video_run =
-      runtime.session.build(udp_dummy, simaai::neat::RunMode::Async, udp_run_opt);
+  runtime.video_run = runtime.session.build(simaai::neat::TensorList{udp_dummy},
+                                            simaai::neat::RunMode::Async, udp_run_opt);
   std::cout << "udp=" << runtime.host << ":" << runtime.video_port << "\n";
 
   sima_examples::OptiViewOptions opt;
@@ -529,28 +564,33 @@ YoloRuntime build_yolo_runtime(const Config& cfg, int frame_w, int frame_h) {
 
   // NEAT boundary: build model + async inference runtime.
   simaai::neat::Model::Options model_opt;
-  model_opt.media_type = "video/x-raw";
-  model_opt.format = "NV12";
-  model_opt.preproc.input_width = frame_w;
-  model_opt.preproc.input_height = frame_h;
-  model_opt.input_max_width = frame_w;
-  model_opt.input_max_height = frame_h;
-  model_opt.input_max_depth = 1;
+  model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+  model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
+  model_opt.preprocess.input_max_width = frame_w;
+  model_opt.preprocess.input_max_height = frame_h;
+  model_opt.preprocess.input_max_depth = 3;
+  model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV8;
+  model_opt.score_threshold = runtime.min_score;
+  model_opt.nms_iou_threshold = 0.5f;
+  model_opt.top_k = runtime.topk;
+  model_opt.boxdecode_original_width = frame_w;
+  model_opt.boxdecode_original_height = frame_h;
   runtime.model = std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
-  std::cout << "[init] model configured for " << frame_w << "x" << frame_h << " NV12\n";
+  std::cout << "[init] model configured for " << frame_w << "x" << frame_h << " BGR\n";
 
   simaai::neat::InputOptions ysrc = runtime.model->input_appsrc_options(false);
   ysrc.media_type = "video/x-raw";
-  ysrc.format = "NV12";
+  ysrc.format = "BGR";
   ysrc.width = frame_w;
   ysrc.height = frame_h;
-  ysrc.depth = 1;
+  ysrc.depth = 3;
 
   runtime.session.add(simaai::neat::nodes::Input(ysrc));
   runtime.session.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
   runtime.session.add(simaai::neat::nodes::groups::Infer(*runtime.model));
-  runtime.session.add(simaai::neat::nodes::SimaBoxDecode(*runtime.model, "yolov8", frame_w, frame_h,
-                                                         runtime.min_score, 0.5f, runtime.topk));
+  runtime.session.add(simaai::neat::nodes::SimaBoxDecode(
+      *runtime.model, simaai::neat::BoxDecodeType::YoloV8, runtime.min_score, 0.5f, runtime.topk,
+      "", std::nullopt, std::nullopt, frame_w, frame_h));
   runtime.session.add(simaai::neat::nodes::Output());
 
   simaai::neat::RunOptions det_run_opt;
@@ -559,11 +599,10 @@ YoloRuntime build_yolo_runtime(const Config& cfg, int frame_w, int frame_h) {
   det_run_opt.queue_depth = 4;
   det_run_opt.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   det_run_opt.output_memory = simaai::neat::OutputMemory::Owned;
-  simaai::neat::Tensor det_dummy;
-  std::string det_err;
-  sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, det_dummy, det_err), det_err);
+  cv::Mat det_dummy(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
   std::cout << "[init] building YOLO pipeline\n";
-  runtime.run = runtime.session.build(det_dummy, simaai::neat::RunMode::Async, det_run_opt);
+  runtime.run = runtime.session.build(std::vector<cv::Mat>{det_dummy}, simaai::neat::RunMode::Async,
+                                      det_run_opt);
   std::cout << "[init] YOLO pipeline ready\n";
   return runtime;
 }
@@ -576,8 +615,8 @@ std::optional<int> resolve_frame_limit(const Config& cfg) {
   return std::nullopt;
 }
 
-std::vector<sima_examples::OptiViewObject> build_optiview_objects(const std::vector<objdet::Box>& boxes,
-                                                                   int frame_w, int frame_h) {
+std::vector<sima_examples::OptiViewObject>
+build_optiview_objects(const std::vector<objdet::Box>& boxes, int frame_w, int frame_h) {
   std::vector<sima_examples::OptiViewObject> optiview_objects;
   optiview_objects.reserve(boxes.size());
   for (const auto& box : boxes) {
@@ -629,11 +668,12 @@ void producer_worker(simaai::neat::Run& cam, simaai::neat::Tensor first_frame, d
       pull_ts = first_pull_ts;
     } else {
       const double t0 = time_ms();
-      auto frame_opt = cam.pull_tensor();
+      auto frame_opt = cam.pull();
       if (!frame_opt.has_value())
         continue;
       const double t1 = time_ms();
-      frame = std::move(*frame_opt);
+      auto tensors = simaai::neat::tensors_from_sample(*frame_opt);
+      frame = std::move(tensors.front());
       pull_ms = t1 - t0;
       pull_ts = t1;
     }
@@ -666,7 +706,8 @@ void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
                      int topk, WorkerSharedState& state) {
   state.consumer_start_ms = time_ms();
   int out_pulls = 0;
-  while (!state.stop.load() && (!state.frame_limit || state.published.load() < *state.frame_limit)) {
+  while (!state.stop.load() &&
+         (!state.frame_limit || state.published.load() < *state.frame_limit)) {
     FrameItem item;
     const double q0 = time_ms();
     if (!state.queue.pop(item))
@@ -683,7 +724,9 @@ void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
 
     // NEAT boundary: push current frame into async YOLO run, then pull next output.
     const double t_push0 = time_ms();
-    const bool pushed = det.push(pending_current.frame);
+    const cv::Mat det_frame =
+        pending_current.frame.to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::BGR);
+    const bool pushed = det.push(std::vector<cv::Mat>{det_frame});
     const double t_push1 = time_ms();
     const double push_ms = t_push1 - t_push0;
     print_time("yolo_push_ms", push_ms, state.cfg.debug);
@@ -705,8 +748,7 @@ void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
     if (state.cfg.debug) {
       std::cout << "[dbg] det pull=" << out_pulls << " kind=" << static_cast<int>(out_opt->kind)
                 << " tag=" << out_opt->payload_tag << " format=" << out_opt->format
-                << " frame_id=" << out_opt->frame_id << " input_seq=" << out_opt->input_seq
-                << "\n";
+                << " frame_id=" << out_opt->frame_id << " input_seq=" << out_opt->input_seq << "\n";
     }
 
     PendingFrame pending = std::move(pending_current);
@@ -714,7 +756,7 @@ void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
     const double t_extract0 = time_ms();
     std::vector<uint8_t> payload;
     std::string err;
-    if (!sima_examples::extract_bbox_payload(*out_opt, payload, err)) {
+    if (!extract_bbox_payload(*out_opt, payload, err)) {
       std::cerr << "[warn] bbox extract failed: " << err << "\n";
       continue;
     }
@@ -759,7 +801,7 @@ void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
 
     // NEAT boundary: push frame to OptiView video transport run.
     const double t_udp_push0 = time_ms();
-    if (!udp_run.push(nv12_frame)) {
+    if (!udp_run.push(simaai::neat::TensorList{nv12_frame})) {
       std::cerr << "[warn] udp push failed\n";
       continue;
     }
@@ -768,10 +810,11 @@ void consumer_worker(simaai::neat::Run& det, simaai::neat::Run& udp_run,
     print_time("udp_push_ms", udp_push_ms, state.cfg.debug);
     state.consumer_stats.add_udp_push(udp_push_ms);
     output_ts = t_udp_push1;
-    const int64_t fid = out_opt->frame_id >= 0 ? out_opt->frame_id : static_cast<int64_t>(pending.index);
+    const int64_t fid =
+        out_opt->frame_id >= 0 ? out_opt->frame_id : static_cast<int64_t>(pending.index);
     const int64_t ts_ms = static_cast<int64_t>(output_ts);
-    std::string json_payload = sima_examples::optiview_make_json(
-        ts_ms, std::to_string(fid), optiview_objects, optiview_labels);
+    std::string json_payload = sima_examples::optiview_make_json(ts_ms, std::to_string(fid),
+                                                                 optiview_objects, optiview_labels);
     std::string json_err;
     if (!optiview_sender.send_json(json_payload, &json_err)) {
       std::cerr << "[warn] optiview json send failed: " << json_err << "\n";
@@ -801,9 +844,8 @@ int main(int argc, char** argv) {
     enable_optiview_diagnostics(true);
 
     RtspRuntime rtsp_runtime = build_rtsp_runtime(cfg);
-    OptiViewRuntime optiview_runtime =
-        build_optiview_runtime(cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h,
-                               rtsp_runtime.output_fps);
+    OptiViewRuntime optiview_runtime = build_optiview_runtime(
+        cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h, rtsp_runtime.output_fps);
     YoloRuntime yolo_runtime = build_yolo_runtime(cfg, rtsp_runtime.frame_w, rtsp_runtime.frame_h);
 
     std::optional<int> frame_limit = resolve_frame_limit(cfg);
@@ -838,14 +880,15 @@ int main(int argc, char** argv) {
         consumer_end_ms,
     };
 
-    // Contract: start producer first, then consumer; both terminate when queue closes or stop is set.
+    // Contract: start producer first, then consumer; both terminate when queue closes or stop is
+    // set.
     std::thread producer_thread(producer_worker, std::ref(rtsp_runtime.run),
                                 std::move(rtsp_runtime.first_frame), rtsp_runtime.first_pull_ms,
                                 rtsp_runtime.first_pull_ts, std::ref(worker_state));
     std::thread consumer_thread(
         consumer_worker, std::ref(yolo_runtime.run), std::ref(optiview_runtime.video_run),
-        std::ref(*optiview_runtime.sender), std::cref(optiview_runtime.labels), rtsp_runtime.frame_w,
-        rtsp_runtime.frame_h, yolo_runtime.topk, std::ref(worker_state));
+        std::ref(*optiview_runtime.sender), std::cref(optiview_runtime.labels),
+        rtsp_runtime.frame_w, rtsp_runtime.frame_h, yolo_runtime.topk, std::ref(worker_state));
 
     if (producer_thread.joinable())
       producer_thread.join();
@@ -865,12 +908,11 @@ int main(int argc, char** argv) {
     producer_stats.print();
     consumer_stats.print();
 
-    // Contract: join workers before dropping NEAT runs, then release pipelines in deterministic order.
-    std::cerr << "[HOLD] pid=" << getpid() << " (sleeping 20s)\n";
-    optiview_runtime.video_run = simaai::neat::Run{};
-    rtsp_runtime.run = simaai::neat::Run{};
-    yolo_runtime.run = simaai::neat::Run{};
-    std::this_thread::sleep_for(std::chrono::seconds(20));
+    // Contract: worker threads are joined before pipeline teardown. Explicit close avoids handing
+    // live appsrc/encoder teardown to Run move-assignment while bounded examples are exiting.
+    yolo_runtime.run.close();
+    optiview_runtime.video_run.close();
+    rtsp_runtime.run.close();
     return 0;
 
   } catch (const std::exception& e) {

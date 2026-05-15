@@ -6,6 +6,7 @@
  *   simple-detess-segmentation-mask-overlay <model.tar.gz> <input_dir> <output_dir>
  */
 #include "neat.h"
+#include "support/runtime/example_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -59,6 +60,9 @@ const std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Samp
     out.push_back(*s.tensor);
     return out;
   }
+  if (s.kind == simaai::neat::SampleKind::TensorSet) {
+    return s.tensors;
+  }
   if (s.kind == simaai::neat::SampleKind::Bundle) {
     for (const auto& f : s.fields) {
       auto t = collect_tensors(f);
@@ -68,7 +72,8 @@ const std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Samp
   return out;
 }
 
-bool tensor_to_hwc(const simaai::neat::Tensor& t, DenseTensor& out, std::string& err) {
+bool tensor_to_hwc(const simaai::neat::Tensor& t, float dq_scale, DenseTensor& out,
+                   std::string& err) {
   if (!t.is_dense()) {
     err = "tensor is not dense";
     return false;
@@ -110,6 +115,7 @@ bool tensor_to_hwc(const simaai::neat::Tensor& t, DenseTensor& out, std::string&
 
   out.data.resize(elems);
   std::memcpy(out.data.data(), raw.data(), elems * sizeof(float));
+  sima_examples::apply_detess_dequant_scale_correction(out.data, dq_scale);
   return true;
 }
 
@@ -157,9 +163,14 @@ std::vector<Detection> nms_per_class(std::vector<Detection> dets, float iou_thr,
 }
 
 bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int infer_size,
-                       std::vector<Detection>& dets, DenseTensor& proto, std::string& err) {
+                       std::vector<Detection>& dets, DenseTensor& proto, std::string& err,
+                       const std::vector<float>& dq_scales) {
   if (tensors.size() < 13) {
     err = "expected 13 output tensors";
+    return false;
+  }
+  if (dq_scales.size() != 13) {
+    err = "DetessDequant scale count mismatch";
     return false;
   }
 
@@ -167,7 +178,7 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
   // 0 proto(160x160x32),
   // 1..4 stride8: xy(6), wh(6), cls+obj(243), coeff(96)
   // 5..8 stride16, 9..12 stride32.
-  if (!tensor_to_hwc(tensors[0], proto, err))
+  if (!tensor_to_hwc(tensors[0], dq_scales[0], proto, err))
     return false;
   if (proto.h != 160 || proto.w != 160 || proto.c != 32) {
     err = "unexpected proto shape";
@@ -177,10 +188,10 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
   constexpr float kConfThr = 0.35f;
   for (int lvl = 0; lvl < 3; ++lvl) {
     DenseTensor txy, twh, tco, tmk;
-    if (!tensor_to_hwc(tensors[1 + lvl * 4], txy, err) ||
-        !tensor_to_hwc(tensors[2 + lvl * 4], twh, err) ||
-        !tensor_to_hwc(tensors[3 + lvl * 4], tco, err) ||
-        !tensor_to_hwc(tensors[4 + lvl * 4], tmk, err)) {
+    if (!tensor_to_hwc(tensors[1 + lvl * 4], dq_scales[1 + lvl * 4], txy, err) ||
+        !tensor_to_hwc(tensors[2 + lvl * 4], dq_scales[2 + lvl * 4], twh, err) ||
+        !tensor_to_hwc(tensors[3 + lvl * 4], dq_scales[3 + lvl * 4], tco, err) ||
+        !tensor_to_hwc(tensors[4 + lvl * 4], dq_scales[4 + lvl * 4], tmk, err)) {
       return false;
     }
 
@@ -252,18 +263,10 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
 
 cv::Scalar class_color(int cid) {
   static const std::array<cv::Scalar, 12> kPalette = {
-      cv::Scalar(56, 56, 255),
-      cv::Scalar(151, 157, 255),
-      cv::Scalar(31, 112, 255),
-      cv::Scalar(29, 178, 255),
-      cv::Scalar(49, 210, 207),
-      cv::Scalar(10, 249, 72),
-      cv::Scalar(23, 204, 146),
-      cv::Scalar(134, 219, 61),
-      cv::Scalar(52, 147, 26),
-      cv::Scalar(187, 212, 0),
-      cv::Scalar(255, 194, 0),
-      cv::Scalar(168, 153, 44),
+      cv::Scalar(56, 56, 255),  cv::Scalar(151, 157, 255), cv::Scalar(31, 112, 255),
+      cv::Scalar(29, 178, 255), cv::Scalar(49, 210, 207),  cv::Scalar(10, 249, 72),
+      cv::Scalar(23, 204, 146), cv::Scalar(134, 219, 61),  cv::Scalar(52, 147, 26),
+      cv::Scalar(187, 212, 0),  cv::Scalar(255, 194, 0),   cv::Scalar(168, 153, 44),
   };
   if (cid < 0) {
     cid = 0;
@@ -382,8 +385,8 @@ void draw_bboxes(cv::Mat& bgr, const std::vector<Detection>& dets, int infer_siz
     const cv::Scalar col = class_color(d.class_id);
     cv::rectangle(bgr, cv::Point(x1, y1), cv::Point(x2, y2), col, 2);
     const std::string label = class_name(d.class_id) + " s=" + cv::format("%.2f", d.score);
-    cv::putText(bgr, label, cv::Point(x1, std::max(0, y1 - 6)), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                col, 1, cv::LINE_AA);
+    cv::putText(bgr, label, cv::Point(x1, std::max(0, y1 - 6)), cv::FONT_HERSHEY_SIMPLEX, 0.5, col,
+                1, cv::LINE_AA);
   }
 }
 
@@ -425,24 +428,23 @@ int main(int argc, char** argv) {
 
   try {
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "RGB";
-    model_opt.preproc.input_width = kInputW;
-    model_opt.preproc.input_height = kInputH;
-    model_opt.preproc.input_img_type = "RGB";
-    model_opt.input_max_width = kInputW;
-    model_opt.input_max_height = kInputH;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+    model_opt.preprocess.input_max_width = kInputW;
+    model_opt.preprocess.input_max_height = kInputH;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
+    const std::vector<float> dq_scales =
+        sima_examples::detess_dequant_scales(model, /*expected_count=*/13, "YOLOv5 seg");
 
     simaai::neat::Session session;
     session.add(model.session());
 
     cv::Mat dummy_rgb(kInputH, kInputW, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor dummy =
-        simaai::neat::from_cv_mat(dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, true);
-    auto run = session.build(dummy, simaai::neat::RunMode::Sync);
+    simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
+        dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
 
     std::cout << "Pipeline:\n" << session.describe_backend() << "\n";
     std::cout << "Found " << images.size() << " images\n";
@@ -460,11 +462,19 @@ int main(int argc, char** argv) {
 
       cv::Mat resized_rgb;
       cv::cvtColor(resized_bgr, resized_rgb, cv::COLOR_BGR2RGB);
-      simaai::neat::Tensor input =
-          simaai::neat::from_cv_mat(resized_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, true);
+      simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
+          resized_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
-      simaai::neat::Sample out = run.push_and_pull(input, /*timeout_ms=*/3000);
-      const std::vector<simaai::neat::Tensor> tensors = collect_tensors(out);
+      if (!run.push(simaai::neat::TensorList{input})) {
+        std::cerr << "Push failed for: " << image_path.filename() << "\n";
+        continue;
+      }
+      auto out = run.pull(/*timeout_ms=*/3000);
+      if (!out.has_value()) {
+        std::cerr << "Pull timeout for: " << image_path.filename() << "\n";
+        continue;
+      }
+      const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out);
       if (tensors.empty()) {
         std::cerr << "No tensor outputs for " << image_path.filename() << "\n";
         continue;
@@ -473,7 +483,7 @@ int main(int argc, char** argv) {
       std::vector<Detection> dets;
       DenseTensor proto;
       std::string err;
-      if (!decode_yolov5_seg(tensors, kInputW, dets, proto, err)) {
+      if (!decode_yolov5_seg(tensors, kInputW, dets, proto, err, dq_scales)) {
         std::cerr << "Decode failed for " << image_path.filename() << ": " << err << "\n";
         continue;
       }

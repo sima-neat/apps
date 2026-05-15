@@ -35,6 +35,9 @@ const simaai::neat::Tensor* find_first_tensor(const simaai::neat::Sample& s) {
   if (s.kind == simaai::neat::SampleKind::Tensor && s.tensor.has_value()) {
     return &(*s.tensor);
   }
+  if (s.kind == simaai::neat::SampleKind::TensorSet && !s.tensors.empty()) {
+    return &s.tensors.front();
+  }
   if (s.kind == simaai::neat::SampleKind::Bundle) {
     for (const auto& field : s.fields) {
       if (const auto* t = find_first_tensor(field)) {
@@ -277,14 +280,11 @@ int main(int argc, char** argv) {
 
   try {
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "RGB";
-    model_opt.preproc.input_width = kInputW;
-    model_opt.preproc.input_height = kInputH;
-    model_opt.preproc.input_img_type = "RGB";
-    model_opt.input_max_width = kInputW;
-    model_opt.input_max_height = kInputH;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+    model_opt.preprocess.input_max_width = kInputW;
+    model_opt.preprocess.input_max_height = kInputH;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
 
@@ -292,9 +292,9 @@ int main(int argc, char** argv) {
     session.add(model.session());
 
     cv::Mat dummy_rgb(kInputH, kInputW, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor dummy =
-        simaai::neat::from_cv_mat(dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, true);
-    auto run = session.build(dummy, simaai::neat::RunMode::Sync);
+    simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
+        dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
 
     std::cout << "Pipeline:\n" << session.describe_backend() << "\n";
     std::cout << "Found " << images.size() << " images\n";
@@ -312,10 +312,10 @@ int main(int argc, char** argv) {
 
       cv::Mat resized_rgb;
       cv::cvtColor(resized_bgr, resized_rgb, cv::COLOR_BGR2RGB);
-      simaai::neat::Tensor input =
-          simaai::neat::from_cv_mat(resized_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, true);
+      simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
+          resized_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
-      if (!run.push(input)) {
+      if (!run.push(simaai::neat::TensorList{input})) {
         std::cerr << "Push failed for: " << image_path.filename() << "\n";
         continue;
       }

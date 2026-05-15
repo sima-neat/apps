@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace multistream_object_detection_optiview {
@@ -159,11 +160,17 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
   SessionRun runtime;
 
   simaai::neat::Model::Options model_options;
-  model_options.media_type = "video/x-raw";
-  model_options.format = "RGB";
-  model_options.input_max_width = probe.width;
-  model_options.input_max_height = probe.height;
-  model_options.input_max_depth = 3;
+  model_options.preprocess.kind = simaai::neat::InputKind::Image;
+  model_options.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+  model_options.preprocess.input_max_width = probe.width;
+  model_options.preprocess.input_max_height = probe.height;
+  model_options.preprocess.input_max_depth = 3;
+  model_options.decode_type = simaai::neat::BoxDecodeType::YoloV8;
+  model_options.score_threshold = cfg.min_score;
+  model_options.nms_iou_threshold = cfg.nms_iou;
+  model_options.top_k = cfg.max_detections;
+  model_options.boxdecode_original_width = probe.width;
+  model_options.boxdecode_original_height = probe.height;
   runtime.model = std::make_shared<simaai::neat::Model>(cfg.model.path, model_options);
 
   auto input_options = runtime.model->input_appsrc_options(false);
@@ -178,9 +185,9 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
 
   switch (family) {
   case ModelFamily::YoloV8:
-    runtime.session.add(simaai::neat::nodes::SimaBoxDecode(*runtime.model, "yolov8", probe.width,
-                                                           probe.height, cfg.min_score, cfg.nms_iou,
-                                                           cfg.max_detections));
+    runtime.session.add(simaai::neat::nodes::SimaBoxDecode(
+        *runtime.model, simaai::neat::BoxDecodeType::YoloV8, cfg.min_score, cfg.nms_iou,
+        cfg.max_detections, "", std::nullopt, std::nullopt, probe.width, probe.height));
     break;
   case ModelFamily::Auto:
     throw std::invalid_argument("unsupported model family for detector graph");
@@ -189,20 +196,23 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
   runtime.session.add(simaai::neat::nodes::Output());
 
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
-  simaai::neat::Tensor seed_tensor =
-      simaai::neat::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::RGB, true);
   simaai::neat::RunOptions run_options;
   run_options.preset = kRealtimeRunPreset;
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
-  runtime.run = runtime.session.build(seed_tensor, simaai::neat::RunMode::Async, run_options);
+  runtime.run =
+      runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 
 simaai::neat::Sample run_sample_input_once(simaai::neat::Run& run,
                                            const simaai::neat::Sample& input, int timeout_ms) {
-  return run.run(input, timeout_ms);
+  auto outputs = run.run(simaai::neat::SampleList{input}, timeout_ms);
+  if (outputs.empty()) {
+    throw std::runtime_error("detector run produced no samples");
+  }
+  return std::move(outputs.front());
 }
 
 SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe,
@@ -243,9 +253,8 @@ SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
-  simaai::neat::Tensor seed_tensor =
-      simaai::neat::from_cv_mat(seed, simaai::neat::ImageSpec::PixelFormat::RGB, true);
-  runtime.run = runtime.session.build(seed_tensor, simaai::neat::RunMode::Async, run_options);
+  runtime.run =
+      runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 

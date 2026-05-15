@@ -429,7 +429,6 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
         }
         continue;
       }
-
       const double loop_start = now_steady_s();
       if (!stream.metrics.wall_started_at_s.has_value()) {
         stream.metrics.wall_started_at_s = loop_start;
@@ -456,7 +455,7 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       stream.metrics.detections += static_cast<int>(tracked.size());
 
       const double write_t0 = now_steady_s();
-      if (!stream.video_run.push(packet.frame)) {
+      if (!stream.video_run.push(std::vector<cv::Mat>{packet.frame})) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " OptiView video push failed");
       }
@@ -565,7 +564,7 @@ int run_app(const AppConfig& cfg) {
   startup_events.reserve(streams.size());
   producer_jobs.reserve(streams.size());
 
-  for (auto& stream : streams) {
+  for (std::size_t index = 0; index < streams.size(); ++index) {
     auto frame_queue = std::make_shared<KeepLatestQueue<FramePacket>>(4);
     auto result_queue = std::make_shared<KeepLatestQueue<ResultPacket>>(4);
     auto startup_ready = std::make_shared<Event>();
@@ -574,13 +573,16 @@ int run_app(const AppConfig& cfg) {
     result_queues.push_back(result_queue);
     startup_events.push_back(startup_ready);
 
-    worker_threads.emplace_back([&stream, &cfg, frame_queue, result_queue, &stop_event] {
+    worker_threads.emplace_back([&streams, index, &cfg, frame_queue, result_queue, &stop_event] {
+      auto& stream = streams[index];
       infer_thread(stream, *frame_queue, *result_queue, stop_event);
     });
-    worker_threads.emplace_back([&stream, &cfg, result_queue, &stop_event] {
+    worker_threads.emplace_back([&streams, index, &cfg, result_queue, &stop_event] {
+      auto& stream = streams[index];
       publish_thread(stream, cfg, *result_queue, stop_event);
     });
-    producer_jobs.push_back([&stream, &cfg, frame_queue, startup_ready, &stop_event] {
+    producer_jobs.push_back([&streams, index, &cfg, frame_queue, startup_ready, &stop_event] {
+      auto& stream = streams[index];
       producer_thread(stream, cfg, *frame_queue, stop_event, startup_ready.get());
     });
   }
@@ -630,6 +632,7 @@ int run_app(const AppConfig& cfg) {
 
   if (cfg.profile) {
     print_profile_summary(streams);
+    std::cout << std::flush;
   }
   return 0;
 }

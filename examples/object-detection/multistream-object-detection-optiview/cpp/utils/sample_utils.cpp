@@ -18,6 +18,9 @@ std::string sample_payload_tag_upper(const simaai::neat::Sample& sample) {
   if (!tag.empty()) {
     return tag;
   }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    return "BBOX";
+  }
   for (const auto& field : sample.fields) {
     tag = sample_payload_tag_upper(field);
     if (!tag.empty()) {
@@ -31,6 +34,9 @@ const simaai::neat::Tensor* first_tensor_impl(const simaai::neat::Sample& sample
   if (sample.kind == simaai::neat::SampleKind::Tensor && sample.tensor.has_value()) {
     return &sample.tensor.value();
   }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    return &sample.tensors.front();
+  }
   for (const auto& field : sample.fields) {
     if (const auto* tensor = first_tensor_impl(field); tensor != nullptr) {
       return tensor;
@@ -39,12 +45,33 @@ const simaai::neat::Tensor* first_tensor_impl(const simaai::neat::Sample& sample
   return nullptr;
 }
 
+bool extract_bbox_payload_impl(const simaai::neat::Sample& sample,
+                               std::vector<std::uint8_t>& payload, std::string& error) {
+  if (sample.kind == simaai::neat::SampleKind::Bundle) {
+    for (const auto& field : sample.fields) {
+      if (extract_bbox_payload_impl(field, payload, error)) {
+        return true;
+      }
+    }
+    error = "bundle missing BBOX field";
+    return false;
+  }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    simaai::neat::Sample tensor_sample = sample;
+    tensor_sample.kind = simaai::neat::SampleKind::Tensor;
+    tensor_sample.tensor = sample.tensors.front();
+    tensor_sample.tensors.clear();
+    return objdet::extract_bbox_payload(tensor_sample, payload, error);
+  }
+  return objdet::extract_bbox_payload(sample, payload, error);
+}
+
 } // namespace
 
 std::vector<std::uint8_t> extract_bbox_payload(const simaai::neat::Sample& sample) {
   std::vector<std::uint8_t> payload;
   std::string error;
-  if (!objdet::extract_bbox_payload(sample, payload, error)) {
+  if (!extract_bbox_payload_impl(sample, payload, error)) {
     return {};
   }
   return payload;
