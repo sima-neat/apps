@@ -41,7 +41,31 @@ def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
 
+def tensor_dim(t: pyneat.Tensor, name: str) -> int:
+    value = getattr(t, name)
+    return int(value() if callable(value) else value)
+
+
 def tensor_bgr_from_decoded(t: pyneat.Tensor) -> np.ndarray:
+    if t.is_nv12():
+        width = tensor_dim(t, "width")
+        height = tensor_dim(t, "height")
+        payload = np.frombuffer(t.copy_payload_bytes(), dtype=np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise ValueError(f"NV12 payload too small: {payload.size} < {expected}")
+        nv12 = payload[:expected].reshape((height * 3 // 2, width))
+        return cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
+    if t.is_i420():
+        width = tensor_dim(t, "width")
+        height = tensor_dim(t, "height")
+        payload = np.frombuffer(t.copy_payload_bytes(), dtype=np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise ValueError(f"I420 payload too small: {payload.size} < {expected}")
+        i420 = payload[:expected].reshape((height * 3 // 2, width))
+        return cv2.cvtColor(i420, cv2.COLOR_YUV2BGR_I420)
+
     arr = tensor_to_numpy(t)
     if arr.ndim == 4 and arr.shape[0] == 1:
         arr = arr[0]
@@ -52,21 +76,19 @@ def tensor_bgr_from_decoded(t: pyneat.Tensor) -> np.ndarray:
     return np.ascontiguousarray(arr)
 
 
-def iter_tensors(sample: pyneat.Sample):
-    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
-        yield sample.tensor
-    for field in sample.fields:
-        yield from iter_tensors(field)
+def pixel_format_from_profile(profile: DepthModelProfile):
+    if profile.input_format == "RGB":
+        return pyneat.PixelFormat.RGB
+    return pyneat.PixelFormat.BGR
 
 
-def first_tensor(sample: pyneat.Sample) -> pyneat.Tensor | None:
-    for t in iter_tensors(sample):
-        return t
-    return None
+def preprocess_format_from_profile(profile: DepthModelProfile):
+    if profile.input_format == "RGB":
+        return pyneat.PreprocessColorFormat.RGB
+    return pyneat.PreprocessColorFormat.BGR
 
 
-def depth_tensor_from_sample(sample: pyneat.Sample) -> pyneat.Tensor | None:
-    tensors = list(iter_tensors(sample))
+def depth_tensor_from_outputs(tensors: list[pyneat.Tensor]) -> pyneat.Tensor | None:
     if not tensors:
         return None
     for t in tensors:
@@ -135,7 +157,6 @@ def build_rtsp_run(
     ro.tcp = tcp
     ro.payload_type = 96
     ro.insert_queue = True
-    ro.out_format = "BGR"
     ro.decoder_raw_output = False
     ro.decoder_name = "decoder"
     ro.auto_caps_from_stream = True
@@ -148,7 +169,6 @@ def build_rtsp_run(
     if stream_fps > 0:
         ro.fallback_h264_fps = stream_fps
     ro.output_caps.enable = True
-    ro.output_caps.format = "BGR"
     ro.output_caps.width = width
     ro.output_caps.height = height
     if stream_fps > 0:
@@ -164,11 +184,11 @@ def build_rtsp_run(
 
 def build_depth_model(model_path: str, width: int, height: int, profile: DepthModelProfile):
     opt = pyneat.ModelOptions()
-    opt.media_type = "video/x-raw"
-    opt.format = profile.input_format
-    opt.input_max_width = width
-    opt.input_max_height = height
-    opt.input_max_depth = 3
+    opt.preprocess.kind = pyneat.InputKind.Image
+    opt.preprocess.color_convert.input_format = preprocess_format_from_profile(profile)
+    opt.preprocess.input_max_width = width
+    opt.preprocess.input_max_height = height
+    opt.preprocess.input_max_depth = 3
     model = pyneat.Model(model_path, opt)
     return model
 
@@ -179,7 +199,7 @@ def make_model(model_path: str, width: int, height: int, profile: DepthModelProf
 
 
 def render_depth_overlay(
-    model: pyneat.Model,
+    model_runner,
     bgr: np.ndarray,
     width: int,
     height: int,
@@ -194,9 +214,15 @@ def render_depth_overlay(
         model_input = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
     t0 = time.perf_counter()
-    sample = model.run(model_input, timeout_ms=5000)
+    input_tensor = pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(model_input),
+        copy=True,
+        image_format=pixel_format_from_profile(model_profile),
+        memory=pyneat.TensorMemory.EV74,
+    )
+    outputs = model_runner.run(input_tensor, timeout_ms=5000)
     t1 = time.perf_counter()
-    depth_t = depth_tensor_from_sample(sample)
+    depth_t = depth_tensor_from_outputs(outputs)
     if depth_t is None:
         raise RuntimeError("Model output missing depth tensor")
 
@@ -297,26 +323,6 @@ def print_queue_profile(run: pyneat.Run, queue2_depth: int | None) -> None:
         print(f"[PROFILE]   gst_queue2_depth_config         {queue2_depth}")
 
 
-def handle_reconnect(
-    rtsp_url: str,
-    width: int,
-    height: int,
-    fps: int,
-    latency_ms: int,
-    tcp: bool,
-    sample_every: int,
-    profile_enabled: bool,
-    profiler: StageProfiler,
-) -> tuple[pyneat.Session, pyneat.Run, int | None]:
-    """Reconnect stage: rebuild source session/run with unchanged options."""
-    rtsp_session, rtsp_run = build_rtsp_run(
-        rtsp_url, width, height, fps, latency_ms, tcp, sample_every
-    )
-    queue2_depth = parse_queue2_depth(rtsp_run.report()) if profile_enabled else None
-    profiler.skip_next_frame()
-    return rtsp_session, rtsp_run, queue2_depth
-
-
 def shutdown(writer, rtsp_run) -> None:
     """Teardown stage: release writer then close RTSP run."""
     try:
@@ -329,120 +335,6 @@ def shutdown(writer, rtsp_run) -> None:
             rtsp_run.close()
     except Exception:
         pass
-
-
-def run_frame_loop(
-    *,
-    model,
-    rtsp_url: str,
-    width: int,
-    height: int,
-    fps: int,
-    latency_ms: int,
-    tcp: bool,
-    sample_every: int,
-    alpha: float,
-    model_profile: DepthModelProfile,
-    profile_enabled: bool,
-    log_every: int,
-    frame_limit: int,
-    output_file: str,
-):
-    """Processing stage: pull -> infer -> overlay -> write with reconnect handling."""
-    writer = None
-    rtsp_session, rtsp_run = build_rtsp_run(rtsp_url, width, height, fps, latency_ms, tcp, sample_every)
-    queue2_depth = parse_queue2_depth(rtsp_run.report()) if profile_enabled else None
-    profiler = StageProfiler(profile_enabled)
-    reconnect_attempts = 0
-    max_reconnect_attempts = 8
-    processed = 0
-    log_window_start = None
-    log_window_start_frames = 0
-
-    while processed < frame_limit:
-        t_frame0 = time.perf_counter()
-        t_pull0 = time.perf_counter()
-        t = rtsp_run.pull_tensor(timeout_ms=5000)
-        pull_dt = time.perf_counter() - t_pull0
-        if t is None:
-            if processed > 0 and reconnect_attempts < max_reconnect_attempts:
-                reconnect_attempts += 1
-                print(
-                    f"RTSP pull timed out; reconnecting ({reconnect_attempts}/{max_reconnect_attempts})",
-                    file=sys.stderr,
-                )
-                try:
-                    rtsp_run.close()
-                except Exception:
-                    pass
-                rtsp_run = None
-                time.sleep(0.5)
-                rtsp_session, rtsp_run, queue2_depth = handle_reconnect(
-                    rtsp_url,
-                    width,
-                    height,
-                    fps,
-                    latency_ms,
-                    tcp,
-                    sample_every,
-                    profile_enabled,
-                    profiler,
-                )
-                continue
-            print("RTSP pull timed out / stream closed", file=sys.stderr)
-            break
-
-        profile_frame = profiler.begin_frame()
-        profiler.add("pull_ok", pull_dt, include=profile_frame)
-        reconnect_attempts = 0
-        if log_window_start is None:
-            log_window_start = time.perf_counter()
-
-        t_bgr0 = time.perf_counter()
-        bgr = tensor_bgr_from_decoded(t)
-        profiler.add("tensor_to_bgr", time.perf_counter() - t_bgr0, include=profile_frame)
-        render_timings: dict[str, float] | None = {} if profile_enabled else None
-        overlay = render_depth_overlay(
-            model, bgr, width, height, alpha, model_profile, timings=render_timings
-        )
-        if render_timings:
-            profiler.add("model_run", render_timings.get("model_s", 0.0), include=profile_frame)
-            profiler.add("postprocess", render_timings.get("post_s", 0.0), include=profile_frame)
-        if writer is None:
-            writer = cv2.VideoWriter(
-                output_file,
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                max(1, fps),
-                (width, height),
-                True,
-            )
-            if not writer.isOpened():
-                raise RuntimeError(f"Failed to open output video: {output_file}")
-        t_write0 = time.perf_counter()
-        writer.write(overlay)
-        profiler.add("writer_write", time.perf_counter() - t_write0, include=profile_frame)
-        processed += 1
-        profiler.add("frame_total", time.perf_counter() - t_frame0, include=profile_frame)
-
-        if processed % log_every == 0:
-            now = time.perf_counter()
-            interval_frames = processed - log_window_start_frames
-            interval_elapsed = max(1e-6, now - log_window_start)
-            print(
-                f"[PROGRESS] frames={processed} "
-                f"FPS={interval_frames/interval_elapsed:.2f} "
-                f"(last {interval_frames} frames)"
-            )
-            log_window_start = now
-            log_window_start_frames = processed
-            profiler.print(f"frames={processed}")
-            if profile_enabled and rtsp_run is not None:
-                print_queue_profile(rtsp_run, queue2_depth)
-
-    profiler.print("summary")
-    if profile_enabled and rtsp_run is not None:
-        print_queue_profile(rtsp_run, queue2_depth)
-    return processed, writer, rtsp_session, rtsp_run
 
 
 def main() -> int:
@@ -495,6 +387,7 @@ def main() -> int:
 
     writer = None
     rtsp_run = None
+    model_runner = None
     try:
         model_profile = detect_model_profile(args.model)
         width = args.width if args.width > 0 else model_profile.default_size
@@ -505,6 +398,17 @@ def main() -> int:
         )
         # Lifecycle stage: make model runtime.
         model = make_model(args.model, width, height, model_profile)
+        dummy = np.zeros((height, width, 3), dtype=np.uint8)
+        dummy_tensor = pyneat.Tensor.from_numpy(
+            dummy,
+            copy=True,
+            image_format=pixel_format_from_profile(model_profile),
+            memory=pyneat.TensorMemory.EV74,
+        )
+        run_opt = pyneat.RunOptions()
+        run_opt.queue_depth = 4
+        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
+        model_runner = model.build(dummy_tensor, run_options=run_opt)
         out_dir = os.path.dirname(os.path.abspath(args.output_file))
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
@@ -539,9 +443,9 @@ def main() -> int:
         while processed < args.frames:
             t_frame0 = time.perf_counter()
             t_pull0 = time.perf_counter()
-            t = rtsp_run.pull_tensor(timeout_ms=5000)
+            tensors = rtsp_run.pull_tensors(timeout_ms=5000)
             pull_dt = time.perf_counter() - t_pull0
-            if t is None:
+            if not tensors:
                 if processed > 0 and reconnect_attempts < max_reconnect_attempts:
                     reconnect_attempts += 1
                     print(
@@ -578,11 +482,11 @@ def main() -> int:
             if log_window_start is None:
                 log_window_start = time.perf_counter()
             t_bgr0 = time.perf_counter()
-            bgr = tensor_bgr_from_decoded(t)
+            bgr = tensor_bgr_from_decoded(tensors[0])
             profiler.add("tensor_to_bgr", time.perf_counter() - t_bgr0, include=profile_frame)
             render_timings: dict[str, float] | None = {} if args.profile else None
             overlay = render_depth_overlay(
-                model, bgr, width, height, args.alpha, model_profile, timings=render_timings
+                model_runner, bgr, width, height, args.alpha, model_profile, timings=render_timings
             )
             if render_timings:
                 profiler.add("model_run", render_timings.get("model_s", 0.0), include=profile_frame)
@@ -633,6 +537,8 @@ def main() -> int:
         writer = None
         rtsp_run = None
         rtsp_session = None
+        model_runner.close()
+        model_runner = None
         print(f"Wrote depth overlay video to: {os.path.abspath(args.output_file)}")
         return 0
     except Exception as e:
@@ -641,6 +547,11 @@ def main() -> int:
     finally:
         # Always finalize resources, even if processing raises.
         shutdown(writer, rtsp_run)
+        if model_runner is not None:
+            try:
+                model_runner.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
