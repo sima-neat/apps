@@ -23,12 +23,12 @@ Both C++ and Python implementations follow the same user-facing flow and produce
 Also works with: other ReID variants compatible with 128x256 RGB input.
 
 Download the default variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get reid && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get reid && cd ../..`
 
 ## Prerequisites
 - Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get reid && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo get reid && cd ../..`
 
 ## Important Behavior
 - Required positional inputs are exactly two image paths (`image1 image2`).

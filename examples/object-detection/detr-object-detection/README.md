@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | detr-object-detection |
-| Model | detr_resnet50_modified_class_embed_bbox_embed [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz] |
+| Model | detr_resnet50_modified_class_embed_bbox_embed |
 
 ## Concept
 This example demonstrates single-image object detection with a compiled **DETR** model. The input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the NEAT pipeline, and then decoded into object boxes and class scores.
@@ -25,14 +25,12 @@ Snippet from a pipeline run:
 Validated with: `detr_resnet50_modified_class_embed_bbox_embed`
 
 Download into `assets/models/`:
-- `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
+- The DETR MPK is not available in the current GA modelzoo. Place `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` under `assets/models/` when the artifact is available.
 
 ## Prerequisites
 - Installed Neat SDK.
 - Model artifacts are user-managed and should be placed under `assets/models/`.
-- Preferred download command: `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
-- Direct URL fallback:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz && cd ../..`
+- The current GA modelzoo does not publish this DETR artifact, and the old SDK2.0.0 direct URL should not be used.
 - Default model path:
   `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 
