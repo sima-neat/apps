@@ -244,11 +244,23 @@ class TestPipelineHelpers:
 
         class FakeModelOptions:
             def __init__(self):
-                self.media_type = ""
-                self.format = ""
-                self.input_max_width = 0
-                self.input_max_height = 0
-                self.input_max_depth = 0
+                self.preprocess = type(
+                    "FakePreprocess",
+                    (),
+                    {
+                        "kind": None,
+                        "color_convert": type("FakeColorConvert", (), {"input_format": None})(),
+                        "input_max_width": 0,
+                        "input_max_height": 0,
+                        "input_max_depth": 0,
+                    },
+                )()
+                self.decode_type = None
+                self.score_threshold = 0.0
+                self.nms_iou_threshold = 0.0
+                self.top_k = 0
+                self.boxdecode_original_width = 0
+                self.boxdecode_original_height = 0
 
         class FakeRunOptions:
             def __init__(self):
@@ -315,8 +327,20 @@ class TestPipelineHelpers:
             class RunMode:
                 Async = "async"
 
+            class InputKind:
+                Image = "image"
+
+            class PreprocessColorFormat:
+                RGB = "rgb"
+
+            class BoxDecodeType:
+                YoloV8 = "yolov8"
+
             class PixelFormat:
                 RGB = "rgb"
+
+            class TensorMemory:
+                EV74 = "ev74"
 
             nodes = FakeNodes()
             groups = FakeGroups()

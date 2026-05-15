@@ -460,7 +460,7 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       cv::Mat overlay_frame;
       if (should_render_overlay) {
         const double overlay_t0 = now_steady_s();
-        overlay_frame = draw_tracked_people(packet.frame.clone(), tracked);
+        overlay_frame = draw_tracked_people(frame.clone(), tracked);
         stream.metrics.overlay_time_s += now_steady_s() - overlay_t0;
       }
 
