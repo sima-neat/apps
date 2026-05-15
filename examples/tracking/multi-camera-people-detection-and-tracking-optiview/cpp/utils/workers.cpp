@@ -59,13 +59,13 @@ struct StreamMetrics {
 };
 
 struct FramePacket {
-  cv::Mat frame;
+  simaai::neat::Sample decoded;
   int frame_index = 0;
   double source_time_s = 0.0;
 };
 
 struct ResultPacket {
-  cv::Mat frame;
+  simaai::neat::Sample decoded;
   int frame_index = 0;
   std::vector<std::uint8_t> bbox_payload;
   double source_time_s = 0.0;
@@ -160,12 +160,11 @@ struct StreamRuntime {
   int index = 0;
   std::string url;
   RtspProbe probe;
-  std::shared_ptr<simaai::neat::Model> model;
-  QuantTessCpuPreprocState quant_preproc_state;
   simaai::neat::Session source_session;
   simaai::neat::Run source_run;
   simaai::neat::Session detect_session;
   simaai::neat::Run detect_run;
+  std::shared_ptr<simaai::neat::Model> detect_model;
   simaai::neat::Session video_session;
   simaai::neat::Run video_run;
   sima_examples::OptiViewSender json_sender;
@@ -184,14 +183,10 @@ std::int64_t now_unix_ms() {
       .count();
 }
 
-StreamRuntime create_stream_runtime(int index, const std::string& url, const AppConfig& cfg,
-                                    const std::shared_ptr<simaai::neat::Model>& model,
-                                    const QuantTessCpuPreproc& quant_preproc) {
+StreamRuntime create_stream_runtime(int index, const std::string& url, const AppConfig& cfg) {
   const RtspProbe probe = probe_rtsp(url);
-  const auto quant_preproc_state =
-      build_cpu_quanttess_preproc_state(quant_preproc, probe.width, probe.height);
   auto source = build_source_run(cfg, url, probe);
-  auto detect = build_detection_run(cfg, *model, probe, quant_preproc);
+  auto detect = build_detection_run(cfg, probe);
   auto video = build_optiview_video_run(cfg, probe, index);
   auto sender = build_optiview_json_output(cfg, index);
 
@@ -199,12 +194,11 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
       index,
       url,
       probe,
-      model,
-      quant_preproc_state,
       std::move(source.session),
       std::move(source.run),
       std::move(detect.session),
       std::move(detect.run),
+      std::move(detect.model),
       std::move(video.session),
       std::move(video.run),
       std::move(sender),
@@ -291,7 +285,7 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
       }
 
       FramePacket packet;
-      packet.frame = tensor_rgb_from_sample(*sample);
+      packet.decoded = *sample;
       packet.frame_index = frame_index;
       packet.source_time_s = elapsed;
       put_keep_latest(frame_queue, std::move(packet), stream, "frame");
@@ -323,21 +317,17 @@ void infer_thread(StreamRuntime& stream, KeepLatestQueue<FramePacket>& frame_que
         continue;
       }
 
-      const double preproc_t0 = now_steady_s();
-      const cv::Mat quant_input = cpu_quanttess_input(packet.frame, stream.quant_preproc_state);
-      const double preproc_elapsed = now_steady_s() - preproc_t0;
-
       const double roundtrip_t0 = now_steady_s();
       const simaai::neat::Sample det_sample =
-          run_tensor_input_once(stream.detect_run, quant_input, 50000);
+          run_sample_input_once(stream.detect_run, packet.decoded, 50000);
       const double roundtrip_elapsed = now_steady_s() - roundtrip_t0;
 
       ResultPacket result;
-      result.frame = std::move(packet.frame);
+      result.decoded = std::move(packet.decoded);
       result.frame_index = packet.frame_index;
       result.bbox_payload = extract_bbox_payload(det_sample);
       result.source_time_s = packet.source_time_s;
-      result.preproc_time_s = preproc_elapsed;
+      result.preproc_time_s = 0.0;
       result.pull_wait_s = roundtrip_elapsed;
       put_keep_latest(result_queue, std::move(result), stream, "result");
     }
@@ -379,7 +369,7 @@ void print_interval_profile(const StreamRuntime& stream) {
   std::cout << "  [stream " << stream.index << "] frames " << (metrics.processed - n) << "-"
             << (metrics.processed - 1) << " | src=" << src_ms << "ms  preproc=" << pre_ms
             << "ms  pull_wait=" << pull_ms << "ms  output=" << out_ms << "ms  loop=" << loop_ms
-            << "ms  throughput_fps=" << throughput_fps
+            << "ms  throughput_fps=" << throughput_fps << "  detections=" << metrics.detections
             << "  frame_q(drops=" << metrics.interval_frame_q_drops
             << ",peak=" << metrics.frame_q_peak
             << ")  result_q(drops=" << metrics.interval_result_q_drops
@@ -406,6 +396,7 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
               << " frames | src=" << src << "ms  preproc=" << pre << "ms  pull_wait=" << pull
               << "ms  output=" << out << "ms (track=" << track << " overlay=" << overlay
               << " write=" << write << ")  loop=" << loop << "ms  throughput_fps=" << throughput_fps
+              << "  detections=" << metrics.detections
               << "  frame_q(total_drops=" << metrics.frame_q_drops
               << ",peak=" << metrics.frame_q_peak
               << ")  result_q(total_drops=" << metrics.result_q_drops
@@ -445,8 +436,9 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       stream.metrics.interval_pull_s += packet.pull_wait_s;
       stream.metrics.pulled += 1;
 
+      cv::Mat frame = tensor_rgb_from_sample(packet.decoded);
       std::vector<Detection> boxes =
-          parse_bbox_payload(packet.bbox_payload, packet.frame.cols, packet.frame.rows);
+          parse_bbox_payload(packet.bbox_payload, frame.cols, frame.rows);
       boxes = filter_person_detections(boxes, cfg.person_class_id);
 
       const double track_t0 = now_steady_s();
@@ -455,7 +447,7 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       stream.metrics.detections += static_cast<int>(tracked.size());
 
       const double write_t0 = now_steady_s();
-      if (!stream.video_run.push(std::vector<cv::Mat>{packet.frame})) {
+      if (!stream.video_run.push(std::vector<cv::Mat>{frame})) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " OptiView video push failed");
       }
@@ -471,7 +463,7 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       if (output_dir.has_value() && cfg.save_every > 0 &&
           (packet.frame_index % cfg.save_every) == 0) {
         const double overlay_t0 = now_steady_s();
-        const cv::Mat overlay = draw_tracked_people(packet.frame.clone(), tracked);
+        const cv::Mat overlay = draw_tracked_people(frame.clone(), tracked);
         stream.metrics.overlay_time_s += now_steady_s() - overlay_t0;
         if (save_overlay_frame(output_dir, stream.index, packet.frame_index, overlay,
                                cfg.save_every)) {
@@ -517,22 +509,11 @@ int run_app(const AppConfig& cfg) {
     fs::create_directories(*cfg.output_dir);
   }
 
-  std::shared_ptr<simaai::neat::Model> model;
-  QuantTessCpuPreproc quant_preproc;
-  try {
-    model = load_detector_model(cfg);
-    quant_preproc = read_preproc_contract(*model);
-  } catch (const std::exception& ex) {
-    std::cerr << "Error: failed to build model: " << ex.what() << "\n";
-    return 3;
-  }
-
   std::vector<StreamRuntime> streams;
   try {
     streams.reserve(cfg.rtsp_urls.size());
     for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
-      streams.push_back(create_stream_runtime(static_cast<int>(index), cfg.rtsp_urls[index], cfg,
-                                              model, quant_preproc));
+      streams.push_back(create_stream_runtime(static_cast<int>(index), cfg.rtsp_urls[index], cfg));
     }
   } catch (const std::exception& ex) {
     std::cerr << "Error: failed to set up stream runtimes: " << ex.what() << "\n";

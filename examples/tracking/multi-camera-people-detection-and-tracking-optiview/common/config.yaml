@@ -21,7 +21,7 @@ inference:  # Detector and runtime settings.
   bitrate_kbps: 2500          # H.264 bitrate for OptiView video output.
   profile: true               # Print per-stream profiling information.
   person_class_id: 0          # Class id to keep from detector output (ID: 0 -> person).
-  detection_threshold: 0.65   # Optional score threshold override.
+  detection_threshold: 0.25   # Optional score threshold override.
   nms_iou_threshold: 0.5      # Optional NMS IoU override.
   top_k: 24                   # Optional top-k override.
 

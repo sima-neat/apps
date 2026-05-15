@@ -25,32 +25,20 @@ struct RtspProbe {
   int fps = 0;
 };
 
-struct QuantTessCpuPreproc {
-  int width = 640;
-  int height = 640;
-  bool aspect_ratio = false;
-  std::string padding_type = "CENTER";
-};
-
 struct SessionRun {
   simaai::neat::Session session;
   simaai::neat::Run run;
+  std::shared_ptr<simaai::neat::Model> model;
 };
 
-simaai::neat::Run build_tensor_input_run(simaai::neat::Session& session, const cv::Mat& seed,
-                                         simaai::neat::RunMode mode = simaai::neat::RunMode::Async,
-                                         const simaai::neat::RunOptions& options = {});
-simaai::neat::Sample run_tensor_input_once(simaai::neat::Run& run, const cv::Mat& input,
-                                           int timeout_ms);
+simaai::neat::Sample run_sample_input_once(simaai::neat::Run& run,
+                                           const simaai::neat::Sample& input, int timeout_ms);
 int optiview_video_port_for_stream(int port_base, int stream_index);
 int optiview_json_port_for_stream(int port_base, int stream_index);
 int effective_writer_fps(const AppConfig& cfg, const RtspProbe& probe);
 RtspProbe probe_rtsp(const std::string& url);
-std::shared_ptr<simaai::neat::Model> load_detector_model(const AppConfig& cfg);
-QuantTessCpuPreproc read_preproc_contract(const simaai::neat::Model& model);
 SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe);
-SessionRun build_detection_run(const AppConfig& cfg, const simaai::neat::Model& model,
-                               const RtspProbe& probe, const QuantTessCpuPreproc& quant_preproc);
+SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe);
 SessionRun build_optiview_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index);
 sima_examples::OptiViewSender build_optiview_json_output(const AppConfig& cfg, int stream_index);
 

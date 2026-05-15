@@ -1,10 +1,8 @@
 #include "examples/tracking/multi-camera-people-detection-and-tracking-optiview/cpp/utils/pipeline_api.cpp"
 
-#include <nlohmann/json.hpp>
 #include <opencv2/videoio.hpp>
 
 #include <cmath>
-#include <cctype>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -17,51 +15,11 @@ constexpr double kYoloV8DefaultDetectionThreshold = 0.6;
 constexpr double kYoloV8DefaultNmsIouThreshold = 0.5;
 constexpr int kYoloV8DefaultTopK = 24;
 
-std::string upper_copy(std::string value) {
-  for (char& c : value) {
-    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  }
-  return value;
-}
-
-simaai::neat::Sample make_fp32_tensor_sample(const cv::Mat& input) {
-  if (input.type() != CV_32FC3) {
-    throw std::runtime_error("FP32 tensor input must be CV_32FC3");
-  }
-  const cv::Mat contiguous = input.isContinuous() ? input : input.clone();
-  const float* begin = contiguous.ptr<float>();
-  const std::size_t element_count = contiguous.total() * contiguous.channels();
-  std::vector<float> data(begin, begin + element_count);
-
-  simaai::neat::Sample sample;
-  sample.kind = simaai::neat::SampleKind::Tensor;
-  auto tensor = simaai::neat::Tensor::from_vector(
-      data, {contiguous.rows, contiguous.cols, contiguous.channels()},
-      simaai::neat::TensorMemory::EV74);
-  tensor.layout = simaai::neat::TensorLayout::HWC;
-  tensor.strides_bytes = {
-      static_cast<int64_t>(contiguous.cols * contiguous.channels() * sizeof(float)),
-      static_cast<int64_t>(contiguous.channels() * sizeof(float)),
-      static_cast<int64_t>(sizeof(float)),
-  };
-  sample.tensor = std::move(tensor);
-  sample.media_type = "application/vnd.simaai.tensor";
-  sample.payload_tag = "FP32";
-  sample.format = sample.payload_tag;
-  return sample;
-}
-
 } // namespace
 
-simaai::neat::Run build_tensor_input_run(simaai::neat::Session& session, const cv::Mat& seed,
-                                         simaai::neat::RunMode mode,
-                                         const simaai::neat::RunOptions& options) {
-  return session.build(simaai::neat::SampleList{make_fp32_tensor_sample(seed)}, mode, options);
-}
-
-simaai::neat::Sample run_tensor_input_once(simaai::neat::Run& run, const cv::Mat& input,
-                                           int timeout_ms) {
-  auto outputs = run.run(simaai::neat::SampleList{make_fp32_tensor_sample(input)}, timeout_ms);
+simaai::neat::Sample run_sample_input_once(simaai::neat::Run& run,
+                                           const simaai::neat::Sample& input, int timeout_ms) {
+  auto outputs = run.run(simaai::neat::SampleList{input}, timeout_ms);
   if (outputs.empty()) {
     throw std::runtime_error("detector run produced no samples");
   }
@@ -95,27 +53,6 @@ RtspProbe probe_rtsp(const std::string& url) {
     throw std::runtime_error("failed to probe RTSP frame size: " + url);
   }
   return RtspProbe{width, height, std::max(0, fps)};
-}
-
-std::shared_ptr<simaai::neat::Model> load_detector_model(const AppConfig& cfg) {
-  simaai::neat::Model::Options options;
-  options.preprocess.kind = simaai::neat::InputKind::Tensor;
-  options.decode_type = simaai::neat::BoxDecodeType::YoloV8;
-  return std::make_shared<simaai::neat::Model>(cfg.model, options);
-}
-
-QuantTessCpuPreproc read_preproc_contract(const simaai::neat::Model& model) {
-  const simaai::neat::QuantTessOptions quant_tess(model);
-  const nlohmann::json config = quant_tess.config_json.value_or(nlohmann::json::object());
-
-  const int width = config.value("output_width", config.value("input_width", 640));
-  const int height = config.value("output_height", config.value("input_height", 640));
-  return QuantTessCpuPreproc{
-      width,
-      height,
-      config.value("aspect_ratio", false),
-      upper_copy(config.value("padding_type", std::string("CENTER"))),
-  };
 }
 
 SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
@@ -156,25 +93,49 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
   return runtime;
 }
 
-SessionRun build_detection_run(const AppConfig& cfg, const simaai::neat::Model& model,
-                               const RtspProbe& probe, const QuantTessCpuPreproc& quant_preproc) {
+SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
   SessionRun runtime;
-  runtime.session.add(simaai::neat::nodes::Input(model.input_appsrc_options(true)));
-  runtime.session.add(simaai::neat::nodes::QuantTess(simaai::neat::QuantTessOptions(model)));
-  runtime.session.add(simaai::neat::nodes::groups::MLA(model));
-  const simaai::neat::ResizeMode resize_mode = quant_preproc.aspect_ratio
-                                                   ? simaai::neat::ResizeMode::Letterbox
-                                                   : simaai::neat::ResizeMode::Stretch;
+
+  simaai::neat::Model::Options model_options;
+  model_options.preprocess.kind = simaai::neat::InputKind::Image;
+  model_options.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
+  model_options.preprocess.input_max_width = probe.width;
+  model_options.preprocess.input_max_height = probe.height;
+  model_options.preprocess.input_max_depth = 3;
+  model_options.decode_type = simaai::neat::BoxDecodeType::YoloV8;
+  model_options.score_threshold =
+      cfg.detection_threshold.value_or(kYoloV8DefaultDetectionThreshold);
+  model_options.nms_iou_threshold = cfg.nms_iou_threshold.value_or(kYoloV8DefaultNmsIouThreshold);
+  model_options.top_k = cfg.top_k.value_or(kYoloV8DefaultTopK);
+  model_options.boxdecode_original_width = probe.width;
+  model_options.boxdecode_original_height = probe.height;
+  runtime.model = std::make_shared<simaai::neat::Model>(cfg.model, model_options);
+
+  auto input_options = runtime.model->input_appsrc_options(false);
+  input_options.media_type = "video/x-raw";
+  input_options.format = "RGB";
+  input_options.width = probe.width;
+  input_options.height = probe.height;
+  input_options.depth = 3;
+  runtime.session.add(simaai::neat::nodes::Input(input_options));
+  runtime.session.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
+  runtime.session.add(simaai::neat::nodes::groups::Infer(*runtime.model));
   runtime.session.add(simaai::neat::nodes::SimaBoxDecode(
-      model, simaai::neat::BoxDecodeType::YoloV8,
+      *runtime.model, simaai::neat::BoxDecodeType::YoloV8,
       cfg.detection_threshold.value_or(kYoloV8DefaultDetectionThreshold),
       cfg.nms_iou_threshold.value_or(kYoloV8DefaultNmsIouThreshold),
       cfg.top_k.value_or(kYoloV8DefaultTopK), "", std::nullopt, std::nullopt, probe.width,
-      probe.height, quant_preproc.width, quant_preproc.height, resize_mode));
+      probe.height));
   runtime.session.add(simaai::neat::nodes::Output());
 
-  cv::Mat seed = cv::Mat::zeros(quant_preproc.height, quant_preproc.width, CV_32FC3);
-  runtime.run = build_tensor_input_run(runtime.session, seed);
+  cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
+  simaai::neat::RunOptions run_options;
+  run_options.preset = simaai::neat::RunPreset::Realtime;
+  run_options.queue_depth = 1;
+  run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
+  run_options.output_memory = simaai::neat::OutputMemory::Owned;
+  runtime.run =
+      runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 

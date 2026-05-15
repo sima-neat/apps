@@ -213,31 +213,6 @@ bool test_make_optiview_tracking_detection_uses_track_id_label_text() {
   return ok;
 }
 
-bool test_tensor_mode_session_accepts_fp32_cv_mat_through_session_api() {
-  simaai::neat::InputOptions input_options;
-  input_options.media_type = "application/vnd.simaai.tensor";
-  input_options.format = "FP32";
-  input_options.max_width = 4;
-  input_options.max_height = 4;
-  input_options.max_depth = 3;
-
-  simaai::neat::Session session;
-  session.add(simaai::neat::nodes::Input(input_options));
-  session.add(simaai::neat::nodes::Output());
-
-  cv::Mat tensor_input = cv::Mat::zeros(4, 4, CV_32FC3);
-
-  auto run = build_tensor_input_run(session, tensor_input);
-  const auto output = run_tensor_input_once(run, tensor_input, 1000);
-
-  bool ok = true;
-  ok &= expect_true(output.kind == simaai::neat::SampleKind::Tensor,
-                    "tensor-mode session returns tensor output for FP32 cv::Mat input");
-  ok &= expect_true(output.tensor.has_value(),
-                    "tensor-mode session returns tensor payload for FP32 cv::Mat input");
-  return ok;
-}
-
 bool test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg() {
   const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_overlay_");
   if (temp_dir.empty()) {
@@ -282,8 +257,6 @@ int main(int argc, char** argv) {
   failures += !multi_camera_people_tracking::test_tracker_drops_track_after_missing_budget();
   failures += !multi_camera_people_tracking::
                   test_make_optiview_tracking_detection_uses_track_id_label_text();
-  failures += !multi_camera_people_tracking::
-                  test_tensor_mode_session_accepts_fp32_cv_mat_through_session_api();
   failures += !multi_camera_people_tracking::test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg();
 
   return failures == 0 ? 0 : 1;
