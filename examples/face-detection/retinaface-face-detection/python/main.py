@@ -11,6 +11,7 @@ This script performs an end-to-end single-image RetinaFace pipeline:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -54,15 +55,63 @@ class PreprocMeta(NamedTuple):
     pad_left: int
 
 
-def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
-    return np.asarray(t.to_numpy(copy=True))
+def tensor_to_numpy(t: pyneat.Tensor, dq_scale: float | None = None) -> np.ndarray:
+    arr = np.asarray(t.to_numpy(copy=True))
+    if dq_scale is None:
+        return arr
+    if dq_scale <= 0.0:
+        raise ValueError(f"Invalid DetessDequant dq_scale: {dq_scale}")
+    return arr.astype(np.float32, copy=False) / (dq_scale * dq_scale)
 
 
 def iter_tensors(sample: pyneat.Sample):
     if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
+    elif sample.kind == pyneat.SampleKind.TensorSet:
+        yield from sample.tensors
     for field in sample.fields:
         yield from iter_tensors(field)
+
+
+def collect_tensors(samples: list[pyneat.Sample]) -> list[pyneat.Tensor]:
+    tensors: list[pyneat.Tensor] = []
+    for sample in samples:
+        tensors.extend(iter_tensors(sample))
+    return tensors
+
+
+def tensor_from_hwc_f32(array: np.ndarray) -> pyneat.Tensor:
+    return pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(array, dtype=np.float32),
+        copy=True,
+        layout=pyneat.TensorLayout.HWC,
+        memory=pyneat.TensorMemory.EV74,
+    )
+
+
+def detess_dequant_scales(model: pyneat.Model, expected_count: int, label: str) -> list[float]:
+    config_path = model.find_config_path_by_plugin("postproc")
+    if not config_path:
+        raise RuntimeError(f"{label}: DetessDequant postproc config is missing")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    scales = config.get("dq_scale")
+    if not isinstance(scales, list):
+        raise RuntimeError(f"{label}: DetessDequant dq_scale array is missing")
+    if len(scales) != expected_count:
+        raise RuntimeError(
+            f"{label}: expected {expected_count} dq_scale values, got {len(scales)}"
+        )
+    return [float(x) for x in scales]
+
+
+def scaled_numpy_outputs(tensors: list[pyneat.Tensor], dq_scales: list[float]) -> list[np.ndarray]:
+    if len(tensors) != len(dq_scales):
+        raise ValueError(
+            f"RetinaFace output/scale count mismatch: {len(tensors)} tensors, "
+            f"{len(dq_scales)} scales"
+        )
+    return [tensor_to_numpy(t, scale) for t, scale in zip(tensors, dq_scales)]
 
 
 def pad_image_bgr(
@@ -369,7 +418,7 @@ def draw_detections(image_bgr: np.ndarray, detections: list[dict[str, Any]]) -> 
 def prepare_session_and_frame(
     model_path: Path,
     image_path: Path,
-) -> tuple[Any, np.ndarray, np.ndarray, PreprocMeta]:
+) -> tuple[Any, pyneat.Tensor, np.ndarray, PreprocMeta, list[float]]:
     """Prepare a reusable Session run object and preprocessed frame for repeated inference."""
     _log(f"Preparing session and frame. model_path={model_path}, image_path={image_path}")
     if not image_path.is_file():
@@ -395,14 +444,14 @@ def prepare_session_and_frame(
 
     _log("Configuring pyneat.ModelOptions for tensor input (FP32)")
     opt = pyneat.ModelOptions()
-    opt.media_type = "application/vnd.simaai.tensor"
-    opt.format = ""
-    opt.input_max_width = INFER_WIDTH
-    opt.input_max_height = INFER_HEIGHT
-    opt.input_max_depth = 3
+    opt.preprocess.kind = pyneat.InputKind.Tensor
+    opt.preprocess.input_max_width = INFER_WIDTH
+    opt.preprocess.input_max_height = INFER_HEIGHT
+    opt.preprocess.input_max_depth = 3
 
     _log("Creating pyneat.Model")
     model = pyneat.Model(str(model_path), opt)
+    dq_scales = detess_dequant_scales(model, 9, "RetinaFace")
 
     _log("Building Session pipeline: input -> quant_tess -> infer(MLA) -> detess_dequant -> output")
     sess = pyneat.Session()
@@ -414,27 +463,27 @@ def prepare_session_and_frame(
     _log(f"Session backend description:\n{sess.describe_backend()}")
 
     _log("Building run with dummy frame")
-    dummy = np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32)
-    run = sess.build(dummy)
+    dummy = tensor_from_hwc_f32(np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32))
+    run = sess.build(dummy, pyneat.RunMode.Async)
 
-    return run, resized, bgr, meta
+    return run, tensor_from_hwc_f32(resized), bgr, meta, dq_scales
 
 
 def run_retinaface_inference(
     model_path: Path,
     image_path: Path,
-) -> tuple[pyneat.Sample, np.ndarray, PreprocMeta]:
+) -> tuple[list[pyneat.Tensor], list[float], np.ndarray, PreprocMeta]:
     _log(f"Starting inference. model_path={model_path}, image_path={image_path}")
-    run, resized, bgr, meta = prepare_session_and_frame(model_path, image_path)
+    run, input_tensor, bgr, meta, dq_scales = prepare_session_and_frame(model_path, image_path)
 
     _log("Pushing preprocessed frame into Session")
-    if not run.push(resized):
+    if not run.push_tensor(input_tensor):
         raise RuntimeError("Failed to push frame into Session pipeline")
 
-    _log("Pulling output sample from Session")
-    sample = run.pull(timeout_ms=5000)
-    if sample is None:
-        raise RuntimeError("Session.pull() returned None")
+    _log("Pulling output samples from Session")
+    samples = run.pull_samples(timeout_ms=5000)
+    if not samples:
+        raise RuntimeError("Session.pull_samples() returned no samples")
 
     _log(f"Inference complete. Original image size: {meta.orig_w}x{meta.orig_h}")
 
@@ -444,7 +493,7 @@ def run_retinaface_inference(
         # Best-effort cleanup: log and continue, do not mask inference result.
         logger.debug("Failed to close RetinaFace session cleanly", exc_info=exc)
 
-    return sample, bgr, meta
+    return collect_tensors(samples), dq_scales, bgr, meta
 
 
 def main() -> int:
@@ -525,7 +574,9 @@ def main() -> int:
     # Profiling mode: reuse a single session/run and frame, and profile session vs postprocessing.
     if args.profile:
         try:
-            run, resized, orig_bgr, meta = prepare_session_and_frame(model_path, Path(args.image))
+            run, input_tensor, orig_bgr, meta, dq_scales = prepare_session_and_frame(
+                model_path, Path(args.image)
+            )
         except Exception as e:
             print(f"Error during session preparation: {e}", file=sys.stderr)
             return 3
@@ -537,17 +588,17 @@ def main() -> int:
 
         for i in range(total_runs):
             t0 = time.perf_counter()
-            if not run.push(resized):
+            if not run.push_tensor(input_tensor):
                 print(f"Run {i}: failed to push frame into Session pipeline", file=sys.stderr)
                 break
-            sample = run.pull(timeout_ms=5000)
+            samples = run.pull_samples(timeout_ms=5000)
             t1 = time.perf_counter()
-            if sample is None:
-                print(f"Run {i}: Session.pull() returned None", file=sys.stderr)
+            if not samples:
+                print(f"Run {i}: Session.pull_samples() returned no samples", file=sys.stderr)
                 break
 
-            tensors = list(iter_tensors(sample))
-            np_outs = [tensor_to_numpy(t) for t in tensors]
+            tensors = collect_tensors(samples)
+            np_outs = scaled_numpy_outputs(tensors, dq_scales)
             bboxes, scores, landmarks = parse_retinaface_outputs(np_outs)
             t2 = time.perf_counter()
 
@@ -621,18 +672,17 @@ def main() -> int:
 
     try:
         _log("Invoking run_retinaface_inference()")
-        sample, orig_bgr, meta = run_retinaface_inference(model_path, Path(args.image))
+        tensors, dq_scales, orig_bgr, meta = run_retinaface_inference(model_path, Path(args.image))
     except Exception as e:
         print(f"Error during inference: {e}", file=sys.stderr)
         return 3
 
-    _log("Collecting tensors from sample")
-    tensors = list(iter_tensors(sample))
+    _log("Collecting tensors from output samples")
     if not tensors:
         print("No tensors found in model output", file=sys.stderr)
         return 4
 
-    np_outs = [tensor_to_numpy(t) for t in tensors]
+    np_outs = scaled_numpy_outputs(tensors, dq_scales)
     print(f"Model produced {len(np_outs)} tensor(s):")
     for i, arr in enumerate(np_outs):
         print(f"  [{i}] shape={arr.shape}, dtype={arr.dtype}")
@@ -667,4 +717,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
