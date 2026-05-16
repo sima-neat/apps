@@ -35,7 +35,7 @@ endif()
 
 if (BUILD_TESTING)
   add_library(sima_neat_apps_support_testing STATIC
-    testing/optiview_json_listener.cpp
+    testing/metadata_json_listener.cpp
     testing/test_process.cpp
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)

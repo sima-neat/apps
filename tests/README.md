@@ -39,8 +39,8 @@ export SIMANEAT_APPS_TEST_KEEP_OUTPUT=1
 export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg"
 export SIMANEAT_APPS_TEST_RTSP_URL="<rtsp-url>"
 export SIMANEAT_APPS_TEST_RTSP_URLS="<rtsp-url-0>,<rtsp-url-1>"
-export SIMANEAT_APPS_TEST_OPTIVIEW_VIDEO_PORT=19000
-export SIMANEAT_APPS_TEST_OPTIVIEW_JSON_PORT=19100
+export SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT=19000
+export SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT=19100
 ```
 
 ## `tests/test.sh` Commands
@@ -81,7 +81,7 @@ cd "${APPS_ROOT}/build"
 ctest -N
 
 # Run one C++ test by name regex
-ctest -R "single-rtsp-object-detection-optiview\.optiview_json_e2e" --verbose
+ctest -R "single-rtsp-object-detection-insight\.metadata_json_e2e" --verbose
 ```
 
 ### Python (pytest)
@@ -131,7 +131,7 @@ export SIMANEAT_APPS_TEST_REQUIRE_E2E=1
 
 RTSP e2e tests require live reachable RTSP streams at test time:
 
-- `single-rtsp-object-detection-optiview` (C++/Python)
+- `single-rtsp-object-detection-insight` (C++/Python)
 - `multistream-rtsp-detection-pipeline` (C++/Python)
 - `live-rtsp-depth-estimation` (C++/Python)
 

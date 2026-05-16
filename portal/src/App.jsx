@@ -519,6 +519,7 @@ function formatDisplayLabel(value) {
 
   const acronyms = new Map([
     ["rtsp", "RTSP"],
+    ["insight", "Insight"],
     ["optiview", "OptiView"],
     ["yolo", "YOLO"],
     ["mpk", "MPK"],

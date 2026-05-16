@@ -36,7 +36,11 @@ jobs:
           NEAT_APPS_ARTIFACT_SHORT_SHA: ${{ github.sha }}
         run: |
           chmod +x build.sh scripts/ci/check_public_includes.sh
-          ./build.sh --all --clean
+          core_args=()
+          if [[ "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}" == "feat/insight-sender-beta" ]]; then
+            core_args=(--neat-core-version feat/insight-adaptations:latest)
+          fi
+          ./build.sh --all --clean "${core_args[@]}"
 
       - name: Enforce public include boundary
         run: ./scripts/ci/check_public_includes.sh
