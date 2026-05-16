@@ -18,8 +18,8 @@
 #include "neat/models.h"
 #include "neat/nodes.h"
 #include "neat/node_groups.h"
-#include "nodes/groups/VideoSender.h"
-#include "nodes/io/MetadataSender.h"
+#include <nodes/groups/VideoSender.h>
+#include <nodes/io/MetadataSender.h>
 
 #include <gst/gst.h>
 #include <atomic>

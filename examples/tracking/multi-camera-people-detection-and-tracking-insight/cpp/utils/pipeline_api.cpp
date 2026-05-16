@@ -7,7 +7,7 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "neat/session.h"
-#include "nodes/io/MetadataSender.h"
+#include <nodes/io/MetadataSender.h>
 
 #include <opencv2/core/mat.hpp>
 

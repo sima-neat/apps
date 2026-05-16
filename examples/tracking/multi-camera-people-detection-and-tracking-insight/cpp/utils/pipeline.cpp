@@ -1,6 +1,6 @@
 #include "examples/tracking/multi-camera-people-detection-and-tracking-insight/cpp/utils/pipeline_api.cpp"
 
-#include "nodes/groups/VideoSender.h"
+#include <nodes/groups/VideoSender.h>
 
 #include <opencv2/videoio.hpp>
 
