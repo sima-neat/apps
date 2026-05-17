@@ -72,8 +72,7 @@ const std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Samp
   return out;
 }
 
-bool tensor_to_hwc(const simaai::neat::Tensor& t, float dq_scale, DenseTensor& out,
-                   std::string& err) {
+bool tensor_to_hwc(const simaai::neat::Tensor& t, DenseTensor& out, std::string& err) {
   if (!t.is_dense()) {
     err = "tensor is not dense";
     return false;
@@ -115,7 +114,6 @@ bool tensor_to_hwc(const simaai::neat::Tensor& t, float dq_scale, DenseTensor& o
 
   out.data.resize(elems);
   std::memcpy(out.data.data(), raw.data(), elems * sizeof(float));
-  sima_examples::apply_detess_dequant_scale_correction(out.data, dq_scale);
   return true;
 }
 
@@ -163,22 +161,16 @@ std::vector<Detection> nms_per_class(std::vector<Detection> dets, float iou_thr,
 }
 
 bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int infer_size,
-                       std::vector<Detection>& dets, DenseTensor& proto, std::string& err,
-                       const std::vector<float>& dq_scales) {
+                       std::vector<Detection>& dets, DenseTensor& proto, std::string& err) {
   if (tensors.size() < 13) {
     err = "expected 13 output tensors";
     return false;
   }
-  if (dq_scales.size() != 13) {
-    err = "DetessDequant scale count mismatch";
-    return false;
-  }
-
   // Expected order from MPK detessdequant:
   // 0 proto(160x160x32),
   // 1..4 stride8: xy(6), wh(6), cls+obj(243), coeff(96)
   // 5..8 stride16, 9..12 stride32.
-  if (!tensor_to_hwc(tensors[0], dq_scales[0], proto, err))
+  if (!tensor_to_hwc(tensors[0], proto, err))
     return false;
   if (proto.h != 160 || proto.w != 160 || proto.c != 32) {
     err = "unexpected proto shape";
@@ -188,10 +180,10 @@ bool decode_yolov5_seg(const std::vector<simaai::neat::Tensor>& tensors, int inf
   constexpr float kConfThr = 0.35f;
   for (int lvl = 0; lvl < 3; ++lvl) {
     DenseTensor txy, twh, tco, tmk;
-    if (!tensor_to_hwc(tensors[1 + lvl * 4], dq_scales[1 + lvl * 4], txy, err) ||
-        !tensor_to_hwc(tensors[2 + lvl * 4], dq_scales[2 + lvl * 4], twh, err) ||
-        !tensor_to_hwc(tensors[3 + lvl * 4], dq_scales[3 + lvl * 4], tco, err) ||
-        !tensor_to_hwc(tensors[4 + lvl * 4], dq_scales[4 + lvl * 4], tmk, err)) {
+    if (!tensor_to_hwc(tensors[1 + lvl * 4], txy, err) ||
+        !tensor_to_hwc(tensors[2 + lvl * 4], twh, err) ||
+        !tensor_to_hwc(tensors[3 + lvl * 4], tco, err) ||
+        !tensor_to_hwc(tensors[4 + lvl * 4], tmk, err)) {
       return false;
     }
 
@@ -435,8 +427,6 @@ int main(int argc, char** argv) {
     model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
-    const std::vector<float> dq_scales =
-        sima_examples::detess_dequant_scales(model, /*expected_count=*/13, "YOLOv5 seg");
 
     simaai::neat::Session session;
     session.add(model.session());
@@ -483,7 +473,7 @@ int main(int argc, char** argv) {
       std::vector<Detection> dets;
       DenseTensor proto;
       std::string err;
-      if (!decode_yolov5_seg(tensors, kInputW, dets, proto, err, dq_scales)) {
+      if (!decode_yolov5_seg(tensors, kInputW, dets, proto, err)) {
         std::cerr << "Decode failed for " << image_path.filename() << ": " << err << "\n";
         continue;
       }

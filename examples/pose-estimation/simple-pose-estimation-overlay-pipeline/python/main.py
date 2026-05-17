@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -28,27 +27,8 @@ PAF_CHANNELS = [
 def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
-def tensor_to_numpy(t: pyneat.Tensor, dq_scale: float | None = None) -> np.ndarray:
-    arr = np.asarray(t.to_numpy(copy=True))
-    if dq_scale is None:
-        return arr
-    if dq_scale <= 0.0:
-        raise ValueError(f"invalid DetessDequant dq_scale: {dq_scale}")
-    return arr.astype(np.float32, copy=False) / (dq_scale * dq_scale)
-
-
-def detess_dequant_scales(model: pyneat.Model, expected_count: int, label: str) -> list[float]:
-    config_path = model.find_config_path_by_plugin("postproc")
-    if not config_path:
-        raise RuntimeError(f"{label}: DetessDequant postproc config is missing")
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    scales = config.get("dq_scale")
-    if not isinstance(scales, list):
-        raise RuntimeError(f"{label}: DetessDequant dq_scale array is missing")
-    if len(scales) != expected_count:
-        raise RuntimeError(f"{label}: expected {expected_count} dq_scale values, got {len(scales)}")
-    return [float(scale) for scale in scales]
+def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
+    return np.asarray(t.to_numpy(copy=True))
 
 
 def iter_tensors(sample: pyneat.Sample):
@@ -67,8 +47,8 @@ def iter_tensors(sample: pyneat.Sample):
         yield from iter_tensors(field)
 
 
-def tensor_to_hwc_f32(t: pyneat.Tensor, dq_scale: float) -> np.ndarray:
-    arr = tensor_to_numpy(t, dq_scale).astype(np.float32)
+def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
+    arr = tensor_to_numpy(t).astype(np.float32)
     if arr.ndim == 4 and arr.shape[0] == 1:
         arr = arr[0]
     if arr.ndim != 3:
@@ -407,7 +387,6 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
         opt.preprocess.input_max_depth = 3
 
         model = pyneat.Model(cfg.model.path, opt)
-        dq_scales = detess_dequant_scales(model, 2, "OpenPose")
 
         sess = pyneat.Session()
         sess.add(model.session())
@@ -465,8 +444,8 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
                     file=sys.stderr,
                 )
                 continue
-            heatmap_tensor = tensor_to_hwc_f32(tensors[0], dq_scales[0])
-            paf_tensor = tensor_to_hwc_f32(tensors[1], dq_scales[1])
+            heatmap_tensor = tensor_to_hwc_f32(tensors[0])
+            paf_tensor = tensor_to_hwc_f32(tensors[1])
 
             heatmap_tensor = cv2.resize(
                 heatmap_tensor,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 import time
@@ -155,13 +154,8 @@ def sigmoid(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def tensor_to_numpy(t: pyneat.Tensor, dq_scale: float | None = None) -> np.ndarray:
-    arr = np.asarray(t.to_numpy(copy=True))
-    if dq_scale is None:
-        return arr
-    if dq_scale <= 0.0:
-        raise ValueError(f"Invalid DetessDequant dq_scale: {dq_scale}")
-    return arr.astype(np.float32, copy=False) / (dq_scale * dq_scale)
+def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
+    return np.asarray(t.to_numpy(copy=True))
 
 
 def iter_tensors(sample: pyneat.Sample):
@@ -192,26 +186,8 @@ def tensor_from_hwc_f32(array: np.ndarray) -> pyneat.Tensor:
     )
 
 
-def detess_dequant_scales(model: pyneat.Model, expected_count: int, label: str) -> list[float]:
-    config_path = model.find_config_path_by_plugin("postproc")
-    if not config_path:
-        raise RuntimeError(f"{label}: DetessDequant postproc config is missing")
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    scales = config.get("dq_scale")
-    if not isinstance(scales, list):
-        raise RuntimeError(f"{label}: DetessDequant dq_scale array is missing")
-    if len(scales) != expected_count:
-        raise RuntimeError(f"{label}: expected {expected_count} dq_scale values, got {len(scales)}")
-    return [float(x) for x in scales]
-
-
-def scaled_numpy_outputs(tensors: list[pyneat.Tensor], dq_scales: list[float]) -> list[np.ndarray]:
-    if len(tensors) != len(dq_scales):
-        raise ValueError(
-            f"DETR output/scale count mismatch: {len(tensors)} tensors, {len(dq_scales)} scales"
-        )
-    return [tensor_to_numpy(t, scale) for t, scale in zip(tensors, dq_scales)]
+def tensor_numpy_outputs(tensors: list[pyneat.Tensor]) -> list[np.ndarray]:
+    return [tensor_to_numpy(t) for t in tensors]
 
 
 def class_name(class_id: int) -> str:
@@ -411,9 +387,7 @@ def build_session_runner(model: pyneat.Model) -> pyneat.Run:
     return sess.build(dummy, pyneat.RunMode.Async)
 
 
-def run_model_inference(
-    model: pyneat.Model, preprocessed: np.ndarray, dq_scales: list[float]
-) -> list[np.ndarray]:
+def run_model_inference(model: pyneat.Model, preprocessed: np.ndarray) -> list[np.ndarray]:
     runner = build_session_runner(model)
     tensor = tensor_from_hwc_f32(preprocessed)
     try:
@@ -422,7 +396,7 @@ def run_model_inference(
         samples = runner.pull_samples(timeout_ms=5000)
         if not samples:
             raise RuntimeError("Run.pull_samples() returned no samples")
-        return scaled_numpy_outputs(collect_tensors(samples), dq_scales)
+        return tensor_numpy_outputs(collect_tensors(samples))
     finally:
         runner.close()
 
@@ -507,7 +481,6 @@ def main() -> int:
     try:
         orig_bgr, preprocessed, meta = prepare_input(Path(args.image))
         model = load_tensor_model(model_path)
-        dq_scales = detess_dequant_scales(model, 2, "DETR")
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -534,7 +507,7 @@ def main() -> int:
                     print("Profiling failed: runner.pull_samples returned no samples", file=sys.stderr)
                     break
 
-                arrays = scaled_numpy_outputs(collect_tensors(samples), dq_scales)
+                arrays = tensor_numpy_outputs(collect_tensors(samples))
                 logits, boxes = extract_logits_and_boxes(arrays)
                 t2 = time.perf_counter()
                 detections = process_detr_output(
@@ -575,7 +548,7 @@ def main() -> int:
             return 4
 
     try:
-        arrays = run_model_inference(model, preprocessed, dq_scales)
+        arrays = run_model_inference(model, preprocessed)
     except Exception as exc:
         logger.debug("Inference failure", exc_info=exc)
         print(f"Error during inference: {exc}", file=sys.stderr)

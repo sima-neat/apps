@@ -38,10 +38,6 @@ constexpr float kDefaultMinScore = 0.25f;
 constexpr float kDefaultNmsIou = 0.45f;
 constexpr int kMaxDet = 100;
 constexpr int kTimeoutMs = 5000;
-constexpr std::array<float, 3> kYolo26BoxScales = {0.39925800887880125f, 0.4013774459258692f,
-                                                   0.37927551510002144f};
-constexpr std::array<float, 3> kYolo26ClassScales = {8781.289874988339f, 370.5916340739125f,
-                                                     301.5390117926171f};
 
 struct Config {
   std::string model_path;
@@ -209,12 +205,8 @@ float iou_xyxy(const objdet::Box& a, const objdet::Box& b) {
   return den > 0.0f ? (inter / den) : 0.0f;
 }
 
-float package_dequant_value(float value, float scale) {
-  return value / (scale * scale);
-}
-
-float class_confidence(float value, size_t level) {
-  return std::clamp(package_dequant_value(value, kYolo26ClassScales.at(level)), 0.0f, 1.0f);
+float class_confidence(float value) {
+  return std::clamp(value, 0.0f, 1.0f);
 }
 
 // Decode YOLO26 detess/dequant output into the package's postprocess contract:
@@ -247,7 +239,7 @@ std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::TensorList& ten
         int best_class = -1;
         float best_score = 0.0f;
         for (int c = 0; c < cls.c; ++c) {
-          const float s = class_confidence(cls.data[cls_base + c], lvl);
+          const float s = class_confidence(cls.data[cls_base + c]);
           if (s > best_score) {
             best_score = s;
             best_class = c;
@@ -257,11 +249,10 @@ std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::TensorList& ten
           continue;
 
         const size_t reg_base = (static_cast<size_t>(y) * reg.w + x) * 4U;
-        const float box_scale = kYolo26BoxScales.at(lvl);
-        const float bcx = package_dequant_value(reg.data[reg_base + 0], box_scale);
-        const float bcy = package_dequant_value(reg.data[reg_base + 1], box_scale);
-        const float bw = package_dequant_value(reg.data[reg_base + 2], box_scale);
-        const float bh = package_dequant_value(reg.data[reg_base + 3], box_scale);
+        const float bcx = reg.data[reg_base + 0];
+        const float bcy = reg.data[reg_base + 1];
+        const float bw = reg.data[reg_base + 2];
+        const float bh = reg.data[reg_base + 3];
         objdet::Box box;
         box.x1 = std::max(0.0f, bcx - bw * 0.5f);
         box.y1 = std::max(0.0f, bcy - bh * 0.5f);
