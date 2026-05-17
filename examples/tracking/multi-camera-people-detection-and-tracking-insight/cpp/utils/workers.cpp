@@ -5,8 +5,6 @@
 #include "examples/tracking/multi-camera-people-detection-and-tracking-insight/cpp/utils/sample_utils_api.cpp"
 #include "examples/tracking/multi-camera-people-detection-and-tracking-insight/cpp/utils/tracker_api.cpp"
 
-#include "pipeline/RuntimeMetrics.h"
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -414,13 +412,12 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
 
 void print_power_metrics(const std::vector<StreamRuntime>& streams) {
   for (const auto& stream : streams) {
-    const auto metrics = stream.detect_run.metrics();
-    if (!metrics.power.enabled) {
+    const auto power = stream.detect_run.power_summary();
+    if (!power.enabled) {
       continue;
     }
     std::cout << "\n[stream " << stream.index << "] detection run runtime metrics:\n"
-              << simaai::neat::format_runtime_metrics(metrics,
-                                                      simaai::neat::RuntimeMetricsFormat::Text);
+              << stream.detect_run.metrics_report();
   }
 }
 
