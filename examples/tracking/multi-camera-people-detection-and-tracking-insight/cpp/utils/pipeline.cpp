@@ -95,7 +95,8 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
   return runtime;
 }
 
-SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
+SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe,
+                               bool enable_power_monitor) {
   SessionRun runtime;
 
   simaai::neat::Model::Options model_options;
@@ -136,6 +137,9 @@ SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
+  if (enable_power_monitor) {
+    run_options.enable_board_power(100);
+  }
   runtime.run =
       runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;

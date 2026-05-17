@@ -39,7 +39,8 @@ int insight_metadata_port_for_stream(int port_base, int stream_index);
 int effective_writer_fps(const AppConfig& cfg, const RtspProbe& probe);
 RtspProbe probe_rtsp(const std::string& url);
 SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe);
-SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe);
+SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe,
+                               bool enable_power_monitor);
 SessionRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index);
 simaai::neat::MetadataSender build_insight_metadata_output(const AppConfig& cfg, int stream_index);
 

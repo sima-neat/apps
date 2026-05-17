@@ -423,7 +423,7 @@ struct InsightRuntime {
 };
 
 struct YoloRuntime {
-  float min_score = 0.52f;
+  float min_score = 0.55f;
   int topk = 100;
   std::unique_ptr<simaai::neat::Model> model;
   simaai::neat::Session session;

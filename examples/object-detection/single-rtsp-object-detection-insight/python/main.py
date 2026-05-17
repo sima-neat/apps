@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-MIN_SCORE = 0.52
+MIN_SCORE = 0.55
 NMS_IOU = 0.50
 MAX_DET = 100
 DEFAULT_FPS = 30

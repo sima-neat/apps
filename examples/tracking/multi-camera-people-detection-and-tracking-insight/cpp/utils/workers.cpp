@@ -5,6 +5,8 @@
 #include "examples/tracking/multi-camera-people-detection-and-tracking-insight/cpp/utils/sample_utils_api.cpp"
 #include "examples/tracking/multi-camera-people-detection-and-tracking-insight/cpp/utils/tracker_api.cpp"
 
+#include "pipeline/RuntimeMetrics.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -189,7 +191,7 @@ std::int64_t now_unix_ms() {
 StreamRuntime create_stream_runtime(int index, const std::string& url, const AppConfig& cfg) {
   const RtspProbe probe = probe_rtsp(url);
   auto source = build_source_run(cfg, url, probe);
-  auto detect = build_detection_run(cfg, probe);
+  auto detect = build_detection_run(cfg, probe, index == 0);
   auto video = build_insight_video_run(cfg, probe, index);
   std::optional<simaai::neat::MetadataSender> sender;
   if (metadata_output_enabled(cfg)) {
@@ -410,6 +412,18 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
   }
 }
 
+void print_power_metrics(const std::vector<StreamRuntime>& streams) {
+  for (const auto& stream : streams) {
+    const auto metrics = stream.detect_run.metrics();
+    if (!metrics.power.enabled) {
+      continue;
+    }
+    std::cout << "\n[stream " << stream.index << "] detection run runtime metrics:\n"
+              << simaai::neat::format_runtime_metrics(metrics,
+                                                      simaai::neat::RuntimeMetricsFormat::Text);
+  }
+}
+
 void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
                     KeepLatestQueue<ResultPacket>& result_queue, std::atomic<bool>& stop_event) {
   const std::optional<fs::path> output_dir =
@@ -615,6 +629,8 @@ int run_app(const AppConfig& cfg) {
       thread.join();
     }
   }
+
+  print_power_metrics(streams);
 
   for (auto& stream : streams) {
     close_stream_runtime(stream);
