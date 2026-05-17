@@ -264,7 +264,7 @@ std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sa
   throw std::runtime_error("unexpected sample kind");
 }
 
-std::vector<float> tensor_to_f32(const simaai::neat::Tensor& t, float dq_scale) {
+std::vector<float> tensor_to_f32(const simaai::neat::Tensor& t) {
   if (t.dtype != simaai::neat::TensorDType::Float32) {
     throw std::runtime_error("expected Float32 tensor");
   }
@@ -274,11 +274,10 @@ std::vector<float> tensor_to_f32(const simaai::neat::Tensor& t, float dq_scale) 
   }
   std::vector<float> out(raw.size() / sizeof(float));
   std::memcpy(out.data(), raw.data(), raw.size());
-  sima_examples::apply_detess_dequant_scale_correction(out, dq_scale);
   return out;
 }
 
-Tensor2D tensor_to_2d_rows(const simaai::neat::Tensor& t, const char* name, float dq_scale) {
+Tensor2D tensor_to_2d_rows(const simaai::neat::Tensor& t, const char* name) {
   if (t.shape.empty()) {
     throw std::runtime_error(std::string(name) + ": empty tensor shape");
   }
@@ -299,7 +298,7 @@ Tensor2D tensor_to_2d_rows(const simaai::neat::Tensor& t, const char* name, floa
     throw std::runtime_error(std::string(name) + ": invalid row count");
   }
 
-  std::vector<float> data = tensor_to_f32(t, dq_scale);
+  std::vector<float> data = tensor_to_f32(t);
   const int64_t expected = rows64 * static_cast<int64_t>(cols);
   if (static_cast<int64_t>(data.size()) != expected) {
     throw std::runtime_error(std::string(name) + ": unexpected dense tensor size");
@@ -309,18 +308,12 @@ Tensor2D tensor_to_2d_rows(const simaai::neat::Tensor& t, const char* name, floa
 }
 
 std::pair<Tensor2D, Tensor2D>
-extract_logits_and_boxes(const std::vector<simaai::neat::Tensor>& tensors,
-                         const std::vector<float>& dq_scales) {
-  if (tensors.size() != dq_scales.size()) {
-    throw std::runtime_error("DETR output/scale count mismatch");
-  }
-
+extract_logits_and_boxes(const std::vector<simaai::neat::Tensor>& tensors) {
   std::optional<Tensor2D> logits;
   std::optional<Tensor2D> boxes;
 
   for (size_t i = 0; i < tensors.size(); ++i) {
-    Tensor2D flat =
-        tensor_to_2d_rows(tensors[i], ("tensor_" + std::to_string(i)).c_str(), dq_scales[i]);
+    Tensor2D flat = tensor_to_2d_rows(tensors[i], ("tensor_" + std::to_string(i)).c_str());
     if (flat.cols == 4) {
       boxes = std::move(flat);
     } else if (flat.cols > 4) {
@@ -489,8 +482,6 @@ int main(int argc, char** argv) {
     model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(args.model, model_opt);
-    const std::vector<float> dq_scales =
-        sima_examples::detess_dequant_scales(model, /*expected_count=*/2, "DETR");
 
     simaai::neat::Session session;
     session.add(simaai::neat::nodes::Input(model.input_appsrc_options(true)));
@@ -524,7 +515,7 @@ int main(int argc, char** argv) {
         }
 
         const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out_sample);
-        const auto [logits, boxes] = extract_logits_and_boxes(tensors, dq_scales);
+        const auto [logits, boxes] = extract_logits_and_boxes(tensors);
         const auto t2 = std::chrono::steady_clock::now();
         last_dets = decode_detr_outputs(logits, boxes, meta, args.conf, args.person_only);
         const auto t3 = std::chrono::steady_clock::now();
@@ -580,7 +571,7 @@ int main(int argc, char** argv) {
       std::cout << "] dtype=" << static_cast<int>(tensors[i].dtype) << "\n";
     }
 
-    const auto [logits, boxes] = extract_logits_and_boxes(tensors, dq_scales);
+    const auto [logits, boxes] = extract_logits_and_boxes(tensors);
     const std::vector<Detection> dets =
         decode_detr_outputs(logits, boxes, meta, args.conf, args.person_only);
 

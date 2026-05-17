@@ -16,9 +16,6 @@ INFER_SIZE = 640
 MIN_SCORE = 0.25
 NMS_IOU = 0.45
 MAX_DET = 100
-YOLO26_BOX_SCALES = (0.39925800887880125, 0.4013774459258692, 0.37927551510002144)
-YOLO26_CLASS_SCALES = (8781.289874988339, 370.5916340739125, 301.5390117926171)
-
 BOX_COLORS = [
     (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0),
     (255, 0, 255), (0, 255, 255), (128, 255, 0), (255, 128, 0),
@@ -49,10 +46,6 @@ def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
     if arr.ndim != 3:
         raise ValueError(f"unexpected tensor rank {arr.ndim}")
     return arr
-
-
-def package_dequant_value(value: np.ndarray, scale: float) -> np.ndarray:
-    return value / (scale * scale)
 
 
 def nms_numpy(boxes_xyxy: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
@@ -89,12 +82,10 @@ def decode_yolo26m_boxes_from_tensors(
             raise ValueError(f"expected 4-channel regression tensor, got {reg.shape[2]}")
         if reg.shape[:2] != cls.shape[:2]:
             raise ValueError("regression/class spatial mismatch")
-        boxes_by_level.append(
-            package_dequant_value(reg.reshape(-1, reg.shape[2]), YOLO26_BOX_SCALES[level])
-        )
+        boxes_by_level.append(reg.reshape(-1, reg.shape[2]))
         probs_by_level.append(
             np.clip(
-                package_dequant_value(cls.reshape(-1, cls.shape[2]), YOLO26_CLASS_SCALES[level]),
+                cls.reshape(-1, cls.shape[2]),
                 0.0,
                 1.0,
             )

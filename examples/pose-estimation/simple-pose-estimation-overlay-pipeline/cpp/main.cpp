@@ -172,7 +172,7 @@ std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sa
   throw std::runtime_error("unexpected sample kind");
 }
 
-TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t, float dq_scale) {
+TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
   if (t.dtype != simaai::neat::TensorDType::Float32) {
     throw std::runtime_error("expected Float32 tensor");
   }
@@ -202,7 +202,6 @@ TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t, float dq_scale) {
 
   out.data.resize(elems);
   std::memcpy(out.data.data(), bytes.data(), elems * sizeof(float));
-  sima_examples::apply_detess_dequant_scale_correction(out.data, dq_scale);
   return out;
 }
 
@@ -650,8 +649,6 @@ int main(int argc, char** argv) {
     model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
-    const std::vector<float> dq_scales =
-        sima_examples::detess_dequant_scales(model, /*expected_count=*/2, "OpenPose");
 
     simaai::neat::Session session;
     session.add(model.session());
@@ -698,8 +695,8 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      TensorHWC heatmap = tensor_to_hwc_f32(tensors[0], dq_scales[0]);
-      TensorHWC paf = tensor_to_hwc_f32(tensors[1], dq_scales[1]);
+      TensorHWC heatmap = tensor_to_hwc_f32(tensors[0]);
+      TensorHWC paf = tensor_to_hwc_f32(tensors[1]);
 
       // Upsample by configured factor using bicubic interpolation
       heatmap = upsample_tensor(heatmap, static_cast<float>(cfg.runtime.upsample_factor));

@@ -83,9 +83,6 @@ struct ScoredIndex {
 };
 
 std::vector<float> tensor_to_floats(const simaai::neat::Tensor& t);
-std::vector<float> detess_dequant_scales(const simaai::neat::Model& model,
-                                         std::size_t expected_count, const std::string& label);
-void apply_detess_dequant_scale_correction(std::vector<float>& values, float dq_scale);
 std::vector<float> scores_from_tensor(const simaai::neat::Tensor& t, const std::string& label);
 std::vector<ScoredIndex> topk_with_softmax(const std::vector<float>& v, int k);
 void check_top1(const std::vector<float>& scores, int expected_id, float min_prob,

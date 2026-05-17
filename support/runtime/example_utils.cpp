@@ -710,52 +710,6 @@ std::vector<float> tensor_to_floats(const simaai::neat::Tensor& t) {
   return out;
 }
 
-std::vector<float> detess_dequant_scales(const simaai::neat::Model& model,
-                                         std::size_t expected_count, const std::string& label) {
-  const simaai::neat::DetessDequantOptions options(model);
-  json config;
-  if (options.config_json.has_value()) {
-    config = *options.config_json;
-  } else {
-    std::string config_path = options.config_path;
-    if (config_path.empty()) {
-      config_path = model.find_config_path_by_plugin("postproc");
-    }
-    if (config_path.empty()) {
-      throw std::runtime_error(label + ": DetessDequant config JSON is missing");
-    }
-
-    std::ifstream input(config_path);
-    if (!input.is_open()) {
-      throw std::runtime_error(label + ": failed to open DetessDequant config: " + config_path);
-    }
-    input >> config;
-  }
-
-  if (!config.contains("dq_scale") || !config.at("dq_scale").is_array()) {
-    throw std::runtime_error(label + ": DetessDequant dq_scale array is missing");
-  }
-
-  const std::vector<float> scales = config.at("dq_scale").get<std::vector<float>>();
-  if (scales.size() != expected_count) {
-    throw std::runtime_error(label + ": expected " + std::to_string(expected_count) +
-                             " DetessDequant scales, got " + std::to_string(scales.size()));
-  }
-  return scales;
-}
-
-void apply_detess_dequant_scale_correction(std::vector<float>& values, float dq_scale) {
-  if (!(dq_scale > 0.0f)) {
-    throw std::runtime_error("invalid DetessDequant scale");
-  }
-
-  // beta_changes currently surfaces (q-zp)*scale; these app-side decoders need (q-zp)/scale.
-  const float inv_scale_sq = 1.0f / (dq_scale * dq_scale);
-  for (float& value : values) {
-    value *= inv_scale_sq;
-  }
-}
-
 std::vector<float> scores_from_tensor(const simaai::neat::Tensor& t, const std::string& label) {
   auto scores_full = tensor_to_floats(t);
   if (scores_full.empty()) {

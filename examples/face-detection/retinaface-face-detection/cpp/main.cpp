@@ -142,7 +142,7 @@ static std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sam
   throw std::runtime_error("unexpected sample kind");
 }
 
-static std::vector<float> tensor_to_f32(const simaai::neat::Tensor& t, float dq_scale) {
+static std::vector<float> tensor_to_f32(const simaai::neat::Tensor& t) {
   if (t.dtype != simaai::neat::TensorDType::Float32)
     throw std::runtime_error("expected Float32 tensor");
   const std::vector<uint8_t> raw = t.copy_dense_bytes_tight();
@@ -150,7 +150,6 @@ static std::vector<float> tensor_to_f32(const simaai::neat::Tensor& t, float dq_
     throw std::runtime_error("tensor raw byte size is not float-aligned");
   std::vector<float> out(raw.size() / sizeof(float));
   std::memcpy(out.data(), raw.data(), raw.size());
-  sima_examples::apply_detess_dequant_scale_correction(out, dq_scale);
   return out;
 }
 
@@ -263,10 +262,9 @@ static std::vector<float> reshape_rows_grouped(const std::vector<float>& transpo
 }
 
 static void append_rows_python_style(const simaai::neat::Tensor& tensor, int group_size,
-                                     const char* tensor_name, float dq_scale,
-                                     std::vector<float>& out_rows) {
+                                     const char* tensor_name, std::vector<float>& out_rows) {
   const TensorDims4 dims = get_tensor_dims_4d_batch1(tensor, tensor_name);
-  const std::vector<float> raw = tensor_to_f32(tensor, dq_scale);
+  const std::vector<float> raw = tensor_to_f32(tensor);
   const std::vector<float> transposed = transpose_0312_drop_batch(raw, dims, tensor_name);
   const std::vector<float> rows =
       reshape_rows_grouped(transposed, dims.d2, group_size, tensor_name);
@@ -275,14 +273,10 @@ static void append_rows_python_style(const simaai::neat::Tensor& tensor, int gro
 
 static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors,
                            std::vector<Detection>& out, const PreprocMeta& meta, float conf_thr,
-                           float nms_iou, int top_k, int keep_top_k, bool with_landmarks,
-                           const std::vector<float>& dq_scales) {
+                           float nms_iou, int top_k, int keep_top_k, bool with_landmarks) {
   if (tensors.size() != 9) {
     throw std::runtime_error("expected exactly 9 tensors for RetinaFace (got " +
                              std::to_string(tensors.size()) + ")");
-  }
-  if (dq_scales.size() != tensors.size()) {
-    throw std::runtime_error("RetinaFace DetessDequant scale count mismatch");
   }
 
   // Tensors arrive as [N,H,C,W]; transpose to [N,W,H,C], then group anchors in C.
@@ -292,17 +286,17 @@ static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors,
   std::vector<float> box_rows;  // flattened rows of 4
   std::vector<float> cls_rows;  // flattened rows of 2 (logits)
 
-  append_rows_python_style(tensors[2], /*group_size=*/10, "land0", dq_scales[2], land_rows);
-  append_rows_python_style(tensors[1], /*group_size=*/10, "land1", dq_scales[1], land_rows);
-  append_rows_python_style(tensors[0], /*group_size=*/10, "land2", dq_scales[0], land_rows);
+  append_rows_python_style(tensors[2], /*group_size=*/10, "land0", land_rows);
+  append_rows_python_style(tensors[1], /*group_size=*/10, "land1", land_rows);
+  append_rows_python_style(tensors[0], /*group_size=*/10, "land2", land_rows);
 
-  append_rows_python_style(tensors[5], /*group_size=*/4, "box0", dq_scales[5], box_rows);
-  append_rows_python_style(tensors[4], /*group_size=*/4, "box1", dq_scales[4], box_rows);
-  append_rows_python_style(tensors[3], /*group_size=*/4, "box2", dq_scales[3], box_rows);
+  append_rows_python_style(tensors[5], /*group_size=*/4, "box0", box_rows);
+  append_rows_python_style(tensors[4], /*group_size=*/4, "box1", box_rows);
+  append_rows_python_style(tensors[3], /*group_size=*/4, "box2", box_rows);
 
-  append_rows_python_style(tensors[8], /*group_size=*/2, "cls0", dq_scales[8], cls_rows);
-  append_rows_python_style(tensors[7], /*group_size=*/2, "cls1", dq_scales[7], cls_rows);
-  append_rows_python_style(tensors[6], /*group_size=*/2, "cls2", dq_scales[6], cls_rows);
+  append_rows_python_style(tensors[8], /*group_size=*/2, "cls0", cls_rows);
+  append_rows_python_style(tensors[7], /*group_size=*/2, "cls1", cls_rows);
+  append_rows_python_style(tensors[6], /*group_size=*/2, "cls2", cls_rows);
 
   const std::vector<Prior> priors = make_priors(kInferH, kInferW);
   if (priors.size() != 16800) {
@@ -561,8 +555,6 @@ int main(int argc, char** argv) {
     model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(args.model, model_opt);
-    const std::vector<float> dq_scales =
-        sima_examples::detess_dequant_scales(model, /*expected_count=*/9, "RetinaFace");
 
     simaai::neat::Session session;
     session.add(simaai::neat::nodes::Input(model.input_appsrc_options(true)));
@@ -601,7 +593,7 @@ int main(int argc, char** argv) {
         const std::vector<simaai::neat::Tensor> out_tensors = collect_tensors(*out_sample);
         dets.clear();
         decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k,
-                       args.landmarks, dq_scales);
+                       args.landmarks);
         const auto t3 = std::chrono::steady_clock::now();
 
         const std::chrono::duration<double> dt_session = t1 - t0;
@@ -676,7 +668,7 @@ int main(int argc, char** argv) {
       }
 
       decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k,
-                     args.landmarks, dq_scales);
+                     args.landmarks);
 
       std::cout << "Detections: " << dets.size() << "\n";
       for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {

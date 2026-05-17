@@ -11,7 +11,6 @@ This script performs an end-to-end single-image RetinaFace pipeline:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 import time
@@ -55,13 +54,8 @@ class PreprocMeta(NamedTuple):
     pad_left: int
 
 
-def tensor_to_numpy(t: pyneat.Tensor, dq_scale: float | None = None) -> np.ndarray:
-    arr = np.asarray(t.to_numpy(copy=True))
-    if dq_scale is None:
-        return arr
-    if dq_scale <= 0.0:
-        raise ValueError(f"Invalid DetessDequant dq_scale: {dq_scale}")
-    return arr.astype(np.float32, copy=False) / (dq_scale * dq_scale)
+def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
+    return np.asarray(t.to_numpy(copy=True))
 
 
 def iter_tensors(sample: pyneat.Sample):
@@ -89,29 +83,8 @@ def tensor_from_hwc_f32(array: np.ndarray) -> pyneat.Tensor:
     )
 
 
-def detess_dequant_scales(model: pyneat.Model, expected_count: int, label: str) -> list[float]:
-    config_path = model.find_config_path_by_plugin("postproc")
-    if not config_path:
-        raise RuntimeError(f"{label}: DetessDequant postproc config is missing")
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    scales = config.get("dq_scale")
-    if not isinstance(scales, list):
-        raise RuntimeError(f"{label}: DetessDequant dq_scale array is missing")
-    if len(scales) != expected_count:
-        raise RuntimeError(
-            f"{label}: expected {expected_count} dq_scale values, got {len(scales)}"
-        )
-    return [float(x) for x in scales]
-
-
-def scaled_numpy_outputs(tensors: list[pyneat.Tensor], dq_scales: list[float]) -> list[np.ndarray]:
-    if len(tensors) != len(dq_scales):
-        raise ValueError(
-            f"RetinaFace output/scale count mismatch: {len(tensors)} tensors, "
-            f"{len(dq_scales)} scales"
-        )
-    return [tensor_to_numpy(t, scale) for t, scale in zip(tensors, dq_scales)]
+def tensor_numpy_outputs(tensors: list[pyneat.Tensor]) -> list[np.ndarray]:
+    return [tensor_to_numpy(t) for t in tensors]
 
 
 def pad_image_bgr(
@@ -451,7 +424,6 @@ def prepare_session_and_frame(
 
     _log("Creating pyneat.Model")
     model = pyneat.Model(str(model_path), opt)
-    dq_scales = detess_dequant_scales(model, 9, "RetinaFace")
 
     _log("Building Session pipeline: input -> quant_tess -> infer(MLA) -> detess_dequant -> output")
     sess = pyneat.Session()
@@ -466,15 +438,15 @@ def prepare_session_and_frame(
     dummy = tensor_from_hwc_f32(np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32))
     run = sess.build(dummy, pyneat.RunMode.Async)
 
-    return run, tensor_from_hwc_f32(resized), bgr, meta, dq_scales
+    return run, tensor_from_hwc_f32(resized), bgr, meta
 
 
 def run_retinaface_inference(
     model_path: Path,
     image_path: Path,
-) -> tuple[list[pyneat.Tensor], list[float], np.ndarray, PreprocMeta]:
+) -> tuple[list[pyneat.Tensor], np.ndarray, PreprocMeta]:
     _log(f"Starting inference. model_path={model_path}, image_path={image_path}")
-    run, input_tensor, bgr, meta, dq_scales = prepare_session_and_frame(model_path, image_path)
+    run, input_tensor, bgr, meta = prepare_session_and_frame(model_path, image_path)
 
     _log("Pushing preprocessed frame into Session")
     if not run.push_tensor(input_tensor):
@@ -493,7 +465,7 @@ def run_retinaface_inference(
         # Best-effort cleanup: log and continue, do not mask inference result.
         logger.debug("Failed to close RetinaFace session cleanly", exc_info=exc)
 
-    return collect_tensors(samples), dq_scales, bgr, meta
+    return collect_tensors(samples), bgr, meta
 
 
 def main() -> int:
@@ -574,7 +546,7 @@ def main() -> int:
     # Profiling mode: reuse a single session/run and frame, and profile session vs postprocessing.
     if args.profile:
         try:
-            run, input_tensor, orig_bgr, meta, dq_scales = prepare_session_and_frame(
+            run, input_tensor, orig_bgr, meta = prepare_session_and_frame(
                 model_path, Path(args.image)
             )
         except Exception as e:
@@ -598,7 +570,7 @@ def main() -> int:
                 break
 
             tensors = collect_tensors(samples)
-            np_outs = scaled_numpy_outputs(tensors, dq_scales)
+            np_outs = tensor_numpy_outputs(tensors)
             bboxes, scores, landmarks = parse_retinaface_outputs(np_outs)
             t2 = time.perf_counter()
 
@@ -672,7 +644,7 @@ def main() -> int:
 
     try:
         _log("Invoking run_retinaface_inference()")
-        tensors, dq_scales, orig_bgr, meta = run_retinaface_inference(model_path, Path(args.image))
+        tensors, orig_bgr, meta = run_retinaface_inference(model_path, Path(args.image))
     except Exception as e:
         print(f"Error during inference: {e}", file=sys.stderr)
         return 3
@@ -682,7 +654,7 @@ def main() -> int:
         print("No tensors found in model output", file=sys.stderr)
         return 4
 
-    np_outs = scaled_numpy_outputs(tensors, dq_scales)
+    np_outs = tensor_numpy_outputs(tensors)
     print(f"Model produced {len(np_outs)} tensor(s):")
     for i, arr in enumerate(np_outs):
         print(f"  [{i}] shape={arr.shape}, dtype={arr.dtype}")

@@ -153,7 +153,7 @@ inline float at_hwc(const TensorHWC& t, int y, int x, int c) {
   return t.data[idx];
 }
 
-TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t, float dq_scale) {
+TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
   if (t.dtype != simaai::neat::TensorDType::Float32) {
     throw std::runtime_error("expected Float32 tensor");
   }
@@ -183,7 +183,6 @@ TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t, float dq_scale) {
 
   out.data.resize(elems);
   std::memcpy(out.data.data(), bytes.data(), elems * sizeof(float));
-  sima_examples::apply_detess_dequant_scale_correction(out.data, dq_scale);
   return out;
 }
 
@@ -208,24 +207,20 @@ float dfl_distance_16(const float* logits) {
 std::vector<Box>
 decode_yolov8_instances_from_detess(const std::vector<simaai::neat::Tensor>& tensors,
                                     int infer_size, float conf_thr, float nms_iou, int max_det,
-                                    TensorHWC& proto, const std::vector<float>& dq_scales) {
+                                    TensorHWC& proto) {
   if (tensors.size() < 10) {
     throw std::runtime_error("expected at least 10 tensors for instance-seg decode");
   }
-  if (dq_scales.size() != 10) {
-    throw std::runtime_error("instance-seg DetessDequant scale count mismatch");
-  }
-
-  const TensorHWC reg80 = tensor_to_hwc_f32(tensors[0], dq_scales[0]);
-  const TensorHWC reg40 = tensor_to_hwc_f32(tensors[1], dq_scales[1]);
-  const TensorHWC reg20 = tensor_to_hwc_f32(tensors[2], dq_scales[2]);
-  const TensorHWC cls80 = tensor_to_hwc_f32(tensors[3], dq_scales[3]);
-  const TensorHWC cls40 = tensor_to_hwc_f32(tensors[4], dq_scales[4]);
-  const TensorHWC cls20 = tensor_to_hwc_f32(tensors[5], dq_scales[5]);
-  const TensorHWC mk80 = tensor_to_hwc_f32(tensors[6], dq_scales[6]);
-  const TensorHWC mk40 = tensor_to_hwc_f32(tensors[7], dq_scales[7]);
-  const TensorHWC mk20 = tensor_to_hwc_f32(tensors[8], dq_scales[8]);
-  proto = tensor_to_hwc_f32(tensors[9], dq_scales[9]);
+  const TensorHWC reg80 = tensor_to_hwc_f32(tensors[0]);
+  const TensorHWC reg40 = tensor_to_hwc_f32(tensors[1]);
+  const TensorHWC reg20 = tensor_to_hwc_f32(tensors[2]);
+  const TensorHWC cls80 = tensor_to_hwc_f32(tensors[3]);
+  const TensorHWC cls40 = tensor_to_hwc_f32(tensors[4]);
+  const TensorHWC cls20 = tensor_to_hwc_f32(tensors[5]);
+  const TensorHWC mk80 = tensor_to_hwc_f32(tensors[6]);
+  const TensorHWC mk40 = tensor_to_hwc_f32(tensors[7]);
+  const TensorHWC mk20 = tensor_to_hwc_f32(tensors[8]);
+  proto = tensor_to_hwc_f32(tensors[9]);
   if (proto.c != 32) {
     throw std::runtime_error("unexpected prototype channels");
   }
@@ -448,8 +443,6 @@ int main(int argc, char** argv) {
     model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(tar_gz, model_opt);
-    const std::vector<float> dq_scales =
-        sima_examples::detess_dequant_scales(model, /*expected_count=*/10, "YOLOv8 instance");
 
     simaai::neat::Session session;
     session.add(simaai::neat::nodes::Input(model.input_appsrc_options(false)));
@@ -503,7 +496,7 @@ int main(int argc, char** argv) {
       TensorHWC proto;
       try {
         boxes = decode_yolov8_instances_from_detess(tensors, kInferSize, kScoreThr, kNmsIou,
-                                                    kMaxDet, proto, dq_scales);
+                                                    kMaxDet, proto);
       } catch (const std::exception& e) {
         std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
         continue;
