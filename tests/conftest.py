@@ -95,7 +95,7 @@ def test_timeout_ms() -> int:
 
 @pytest.fixture
 def require_e2e() -> bool:
-    """True when strict e2e mode is enabled."""
+    """True when strict mode is enabled for e2e tests."""
     return os.environ.get("SIMANEAT_APPS_TEST_REQUIRE_E2E", "").strip() == "1"
 
 

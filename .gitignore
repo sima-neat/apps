@@ -11,6 +11,7 @@ models/
 assets/models/
 tmp/
 sandbox/
+tests/.env.local
 .neat-core-installed
 portal/node_modules/
 portal/.vite/

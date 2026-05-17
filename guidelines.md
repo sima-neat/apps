@@ -69,13 +69,18 @@ From `apps/`:
 
 ```bash
 ./build.sh --clean
-source tests/scripts/testing/setup_test_env.sh
 ./tests/test.sh --unit
 ./tests/test.sh --e2e
+./tests/test.sh --e2e --strict
 python3 scripts/validate_readmes.py
 ```
 
-`build.sh` compiles examples and tests.
+`build.sh` compiles examples and tests. `tests/test.sh` is the single test
+entrypoint and owns test defaults.
+
+For local e2e config, copy `tests/.env.example` to `tests/.env.local`.
+`tests/.env.example` is the committed template; `tests/.env.local` is ignored
+and should contain local RTSP URLs and `PYTHON_TEST_BIN`.
 
 ## README Requirements
 Each example README must be updated when paths or behavior-relevant commands change.
@@ -107,6 +112,10 @@ Path examples in README must use current layout:
   - `.github/workflows/*.yml` as needed
 
 Always verify CI entrypoints still work after structural changes.
+
+Regular CI runs `./tests/test.sh --unit`. Nightly/manual e2e runs
+`./tests/test.sh --e2e --strict` and gets RTSP URLs from GitHub Actions
+`vars.SIMANEAT_APPS_TEST_RTSP_URL*`.
 
 ## Contributor Checklist
 Before asking for review:
