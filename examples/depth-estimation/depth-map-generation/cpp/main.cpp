@@ -1,8 +1,8 @@
 /**
- * @example offline-depth-map-generation.cpp
+ * @example depth-map-generation.cpp
  * Minimal Depth Anything V2 pipeline: infer depth for every image in a folder.
  *
- * Usage: offline-depth-map-generation <model.tar.gz> <input_dir> <output_dir>
+ * Usage: depth-map-generation <model.tar.gz> <input_dir> <output_dir>
  */
 #include "neat.h"
 
@@ -19,10 +19,6 @@
 #include <vector>
 
 namespace fs = std::filesystem;
-
-// ---------------------------------------------------------------------------
-// Helpers (adapted from live-rtsp-depth-estimation.cpp)
-// ---------------------------------------------------------------------------
 
 static size_t dtype_bytes(simaai::neat::TensorDType dtype) {
   switch (dtype) {

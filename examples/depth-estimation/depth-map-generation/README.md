@@ -1,4 +1,4 @@
-# Offline Depth Map Generation
+# Depth Map Generation
 
 ## Metadata
 | Field | Value |
@@ -7,16 +7,16 @@
 | Difficulty | Intermediate |
 | Tags | depth-estimation |
 | Status | experimental |
-| Binary Name | offline-depth-map-generation |
+| Binary Name | depth-map-generation |
 | Model | depth_anything_v2_vits |
 
 ## Concept
-Offline depth-map generation for image folders. The example runs inference per image and writes visual depth outputs.
+Depth-map generation for image folders. The example runs inference per image and writes visual depth outputs.
 
 ## Preview
 Snippet from a pipeline run:
 
-![Offline depth map generation preview](../../../assets/portal/depth-estimation/offline-depth-map-generation/image.png)
+![Depth map generation preview](../../../assets/portal/depth-estimation/depth-map-generation/image.png)
 
 ## Supported Models
 Primary model: `depth_anything_v2_vits`
@@ -37,7 +37,7 @@ Download into `assets/models/`:
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/depth-estimation/offline-depth-map-generation/offline-depth-map-generation <model.tar.gz> <input_dir> <output_dir>`
+  `./build/examples/depth-estimation/depth-map-generation/depth-map-generation <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -45,7 +45,7 @@ Download into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/depth-estimation/offline-depth-map-generation/python/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python examples/depth-estimation/depth-map-generation/python/main.py <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -60,33 +60,33 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/depth-estimation/offline-depth-map-generation/offline-depth-map-generation
+./build/examples/depth-estimation/depth-map-generation/depth-map-generation
 ```
 
 ### Build This Example Directly With CMake
 ```bash
-cd <apps-repo-root>/examples/depth-estimation/offline-depth-map-generation
+cd <apps-repo-root>/examples/depth-estimation/depth-map-generation
 cmake -S cpp -B build
 cmake --build build -j
 ```
 
 Binary output:
 ```bash
-./build/offline-depth-map-generation
+./build/depth-map-generation
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/depth-estimation/offline-depth-map-generation/offline-depth-map-generation \
+./build/examples/depth-estimation/depth-map-generation/depth-map-generation \
   assets/models/depth_anything_v2_vits_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/depth-estimation/offline-depth-map-generation/python/requirements.txt
-python examples/depth-estimation/offline-depth-map-generation/python/main.py \
+pip install -r examples/depth-estimation/depth-map-generation/python/requirements.txt
+python examples/depth-estimation/depth-map-generation/python/main.py \
   assets/models/depth_anything_v2_vits_mpk.tar.gz <input_dir> <output_dir>
 ```
 

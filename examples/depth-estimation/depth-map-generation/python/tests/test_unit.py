@@ -1,4 +1,4 @@
-"""Unit tests for offline-depth-map-generation (Python)."""
+"""Unit tests for depth-map-generation (Python)."""
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 
 @pytest.mark.unit
 class TestArgParsing:
-    """Validate CLI argument parsing for the offline depth map generation pipeline."""
+    """Validate CLI argument parsing for the depth map generation pipeline."""
 
     def test_missing_all_args(self):
         """Running with no arguments should fail (3 positional args required)."""

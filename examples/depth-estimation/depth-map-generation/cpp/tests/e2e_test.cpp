@@ -1,4 +1,4 @@
-// E2E test for offline-depth-map-generation.
+// E2E test for depth-map-generation.
 // Runs the binary with a real model and test images, verifies output files.
 #include "support/testing/test_process.h"
 
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
         "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_temp_dir("offline-depth-map-generation_e2e_");
+  auto out_dir = create_temp_dir("depth-map-generation_e2e_");
   if (out_dir.empty()) return 1;
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] offline depth map generation produced "
+    std::cout << "[OK] depth map generation produced "
               << count_files(out_dir) << " output files\n";
   }
 
