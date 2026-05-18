@@ -225,11 +225,11 @@ def test_empty_manifest_custom_branch_falls_back_to_develop(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core target      : develop:devsha1" in proc.stdout
-    assert "using develop:latest" in proc.stderr
+    assert "using develop-latest" in proc.stderr
 
 
 def test_explicit_manifest_uses_valid_branch_version(tmp_path):
-    proc = _run_build(tmp_path, neat_core="zz-core-artifact-for-test:pinnedsha1")
+    proc = _run_build(tmp_path, neat_core="zz-core-artifact-for-test-pinnedsha1")
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
@@ -240,7 +240,7 @@ def test_explicit_manifest_uses_valid_branch_version(tmp_path):
 
 
 def test_explicit_manifest_fails_when_artifact_is_invalid(tmp_path):
-    proc = _run_build(tmp_path, neat_core="zz-missing-core-artifact-for-test:pinnedsha1")
+    proc = _run_build(tmp_path, neat_core="zz-missing-core-artifact-for-test-pinnedsha1")
 
     assert proc.returncode != 0
     assert "unavailable NEAT core artifact" in proc.stderr
@@ -249,7 +249,7 @@ def test_explicit_manifest_fails_when_artifact_is_invalid(tmp_path):
 def test_protected_branch_rejects_explicit_manifest_value(tmp_path):
     proc = _run_build(
         tmp_path,
-        neat_core="main:mainsha1",
+        neat_core="main-mainsha1",
         env={"GITHUB_REF_NAME": "main"},
     )
 

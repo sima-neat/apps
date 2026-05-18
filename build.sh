@@ -40,7 +40,8 @@ Options:
   --all                     Install NEAT core SDK, build apps, build portal, then package
   --portal-only             Build portal only and exit
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
-  --neat-core-version <b:v> Override deps/manifest.json neat_core for one run
+  --neat-core-version <branch-version>
+                            Override deps/manifest.json neat_core for one run
   -h, --help                Show help
 
 Environment:
@@ -456,14 +457,14 @@ parse_core_ref() {
   local label="$2"
   local branch version
 
-  if [[ "${ref}" != *:* ]]; then
-    echo "ERROR: ${label} must use branch:version (example: main:latest)." >&2
+  if [[ "${ref}" != *-* ]]; then
+    echo "ERROR: ${label} must use branch-version (example: main-latest)." >&2
     return 1
   fi
 
-  branch="${ref%%:*}"
-  version="${ref#*:}"
-  if [[ -z "${branch}" || -z "${version}" || "${version}" == *:* ]]; then
+  branch="${ref%-*}"
+  version="${ref##*-}"
+  if [[ -z "${branch}" || -z "${version}" ]]; then
     echo "ERROR: ${label} must provide exactly one non-empty branch and version." >&2
     return 1
   fi
@@ -487,7 +488,7 @@ validate_explicit_core_ref() {
 
   if [[ "${version}" == "latest" ]]; then
     if ! resolved_version="$(resolve_latest_version "${branch}")"; then
-      echo "ERROR: ${label} references '${branch}:latest', but that latest tag is unavailable." >&2
+      echo "ERROR: ${label} references '${branch}-latest', but that latest tag is unavailable." >&2
       return 1
     fi
     return 0
@@ -497,7 +498,7 @@ validate_explicit_core_ref() {
     return 0
   fi
 
-  echo "ERROR: ${label} references unavailable NEAT core artifact '${branch}:${version}'." >&2
+  echo "ERROR: ${label} references unavailable NEAT core artifact '${branch}-${version}'." >&2
   return 1
 }
 
@@ -515,7 +516,7 @@ resolve_empty_neat_core_branch() {
     return 0
   fi
 
-  echo "No NEAT core artifact found for dependency branch '${branch}'; using develop:latest." >&2
+  echo "No NEAT core artifact found for dependency branch '${branch}'; using develop-latest." >&2
   printf '%s\n' "develop"
 }
 

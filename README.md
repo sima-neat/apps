@@ -100,8 +100,8 @@ Common commands:
 # Install Neat core only, no build
 ./build.sh --only-install-neat-core
 
-# Override deps/manifest.json for one run (branch:version)
-./build.sh --all --neat-core-version main:latest
+# Override deps/manifest.json for one run (branch-version)
+./build.sh --all --neat-core-version main-latest
 
 # Debug build
 ./build.sh --debug
@@ -114,7 +114,7 @@ Main `build.sh` args:
 
 - `--all`: install Neat core SDK, build apps, build portal, then package
 - `--only-install-neat-core`: install Neat core SDK and exit
-- `--neat-core-version <branch:version>`: override `deps/manifest.json`
+- `--neat-core-version <branch-version>`: override `deps/manifest.json`
 - `--clean`: remove build dir before configure
 - `--debug` / `--release`: build type
 - `--build-dir <dir>`: build directory
@@ -177,9 +177,9 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 
 `deps/manifest.json` declares the Neat core dependency and the platform version.
 When `neat_core` is empty, `build.sh` resolves it from the dependency branch:
-`main` uses `main:latest`, `develop` uses `develop:latest`, and custom branches use
-a matching core branch when available or fall back to `develop:latest`. Explicit
-core pins use `branch:version`.
+`main` uses `main-latest`, `develop` uses `develop-latest`, and custom branches use
+a matching core branch when available or fall back to `develop-latest`. Explicit
+core pins use `branch-version`, matching the core repo's internals manifest shape.
 
 ## Support
 
