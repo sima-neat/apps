@@ -28,7 +28,7 @@ This repo is intentionally separate from `core`:
    ./build.sh --all --clean
    ```
 
-   This installs the NEAT core version declared in `neat-core.json`, configures and builds the apps, builds the portal, and creates a packaged `neat-apps-runtime/` bundle plus a `neat-apps-<branch>-<sha>.tar.gz` archive.
+   This installs the NEAT core version resolved from `deps/manifest.json`, configures and builds the apps, builds the portal, and creates a packaged `neat-apps-runtime/` bundle plus a `neat-apps-<branch>-<sha>.tar.gz` archive.
 
    **Note:** After the initial setup completes, the default `pyneat` virtual environment is available at `~/pyneat`. Activate it with `source ~/pyneat/bin/activate` to run Python examples.
 
@@ -43,7 +43,7 @@ This keeps examples editable and easy to customize.
 - `support/`: shared C++ helper code used by multiple examples
 - `assets/`: user-managed runtime assets (models under `assets/models/`, test media under `assets/test_images/`)
 - `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
-- `neat-core.json`: Neat core SDK dependency declaration (branch and version)
+- `deps/manifest.json`: Neat core SDK and platform-version dependency declaration
 
 ## Example Structure
 
@@ -100,8 +100,8 @@ Common commands:
 # Install Neat core only, no build
 ./build.sh --only-install-neat-core
 
-# Override neat-core.json for one run (branch:version)
-./build.sh --all --neat-core-version main:latest
+# Override deps/manifest.json for one run (branch-version)
+./build.sh --all --neat-core-version main-latest
 
 # Debug build
 ./build.sh --debug
@@ -114,7 +114,7 @@ Main `build.sh` args:
 
 - `--all`: install Neat core SDK, build apps, build portal, then package
 - `--only-install-neat-core`: install Neat core SDK and exit
-- `--neat-core-version <branch:version>`: override `neat-core.json`
+- `--neat-core-version <branch-version>`: override `deps/manifest.json`
 - `--clean`: remove build dir before configure
 - `--debug` / `--release`: build type
 - `--build-dir <dir>`: build directory
@@ -175,9 +175,11 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 
 ## NEAT Core Dependency
 
-`neat-core.json` declares which Neat core SDK branch and version this repo depends on.
-`./build.sh --all` reads this file and uses the hosted `install-neat.sh`
-installer to install the correct SDK before building, packaging, and writing the staged runtime metadata.
+`deps/manifest.json` declares the Neat core dependency and the platform version.
+When `neat_core` is empty, `build.sh` resolves it from the dependency branch:
+`main` uses `main-latest`, `develop` uses `develop-latest`, and custom branches use
+a matching core branch when available or fall back to `develop-latest`. Explicit
+core pins use `branch-version`, matching the core repo's internals manifest shape.
 
 ## Support
 
