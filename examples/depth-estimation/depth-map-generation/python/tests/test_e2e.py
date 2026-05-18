@@ -1,4 +1,4 @@
-"""E2E tests for offline-depth-map-generation (Python)."""
+"""E2E tests for depth-map-generation (Python)."""
 
 import subprocess
 import sys

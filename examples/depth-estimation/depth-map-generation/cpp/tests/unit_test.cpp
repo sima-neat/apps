@@ -1,4 +1,4 @@
-// Unit test for offline-depth-map-generation: validates CLI arg handling.
+// Unit test for depth-map-generation: validates CLI arg handling.
 #include "support/testing/test_process.h"
 
 #include <iostream>

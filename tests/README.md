@@ -150,7 +150,6 @@ RTSP e2e tests require live reachable RTSP streams at test time:
 
 - `single-rtsp-object-detection-insight` (C++/Python)
 - `multistream-object-detection-insight` (C++/Python)
-- `live-rtsp-depth-estimation` (C++/Python)
 
 Any RTSP source works. If streams are host-served, use the host IP in the RTSP
 URLs instead of `127.0.0.1`.
