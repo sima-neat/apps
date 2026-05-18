@@ -2,10 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NEAT_CORE_JSON="${ROOT_DIR}/neat-core.json"
-NEAT_CORE_MARKER="${ROOT_DIR}/.neat-core-installed"
+DEPS_DIR="${NEAT_APPS_TEST_DEPS_DIR:-${ROOT_DIR}/deps}"
+APPS_MANIFEST="${DEPS_DIR}/manifest.json"
+NEAT_DEBS_DIR="${DEPS_DIR}/debs"
+NEAT_CORE_MARKER="${DEPS_DIR}/.neat_core"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
 NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.sima-neat.com/core}"
+LATEST_TAG_CACHE_DIR="$(mktemp -d /tmp/neat-apps-latest.XXXXXX)"
+
+cleanup_latest_tag_cache() {
+  rm -rf "${LATEST_TAG_CACHE_DIR}"
+}
+trap cleanup_latest_tag_cache EXIT
 
 BUILD_DIR="${BUILD_DIR:-build}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
@@ -32,12 +40,15 @@ Options:
   --all                     Install NEAT core SDK, build apps, build portal, then package
   --portal-only             Build portal only and exit
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
-  --neat-core-version <b:v> Override neat-core.json with branch:version (example: main:latest)
+  --neat-core-version <b:v> Override deps/manifest.json neat_core for one run
   -h, --help                Show help
 
 Environment:
   SIMA_CLI_BIN              Path to sima-cli binary (default: sima-cli)
+  NEAT_APPS_DEPENDENCY_BRANCH
+                            Dependency branch for empty manifest neat_core
   NEAT_INSTALLER_URL        Hosted branch installer URL
+  NEAT_ARTIFACTS_BASE_URL   Hosted NEAT core artifact index
   CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
   SYSROOT                   Target sysroot (used by the default cross toolchain file)
 EOF
@@ -102,9 +113,9 @@ package_distribution() {
   rm -rf "${stage_dir}"
   mkdir -p "${stage_dir}/examples" "${stage_dir}/assets"
 
-  mapfile -t neat_core_target < <(resolve_neat_core_target)
-  neat_core_branch="${neat_core_target[0]}"
-  neat_core_version="${neat_core_target[1]}"
+  load_neat_core_target
+  neat_core_branch="${NEAT_CORE_TARGET_BRANCH}"
+  neat_core_version="${NEAT_CORE_TARGET_VERSION}"
   if [[ "${neat_core_version}" == "latest" ]]; then
     neat_core_version="$(resolve_latest_version "${neat_core_branch}")"
   fi
@@ -219,27 +230,60 @@ done
 # NEAT core install
 # ---------------------------------------------------------------------------
 
-extract_json_field() {
-  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['neat_core'][sys.argv[2]])" "$1" "$2"
-}
-
-extract_neat_core_config() {
+read_app_manifest() {
   python3 - <<'PY' "$1"
 import json
 import sys
 
-with open(sys.argv[1], encoding="utf-8") as fh:
-    neat_core = json.load(fh).get("neat_core", {})
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except FileNotFoundError:
+    print(f"ERROR: Missing manifest: {path}", file=sys.stderr)
+    raise SystemExit(1)
+except json.JSONDecodeError as exc:
+    print(f"ERROR: Invalid JSON in {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
 
-print(neat_core.get("policy", ""))
-print(neat_core.get("branch", ""))
-print(neat_core.get("version", ""))
+neat_core = data.get("neat_core")
+platform_version = data.get("platform-version")
+
+if not isinstance(neat_core, str):
+    print(f"ERROR: {path} must define neat_core as a string.", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(platform_version, str) or not platform_version.strip():
+    print(f"ERROR: {path} must define platform-version as a non-empty string.", file=sys.stderr)
+    raise SystemExit(1)
+
+print(neat_core.strip())
+print(platform_version.strip())
 PY
 }
 
-current_apps_branch() {
-  if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
-    printf '%s\n' "${GITHUB_HEAD_REF}"
+current_dependency_branch() {
+  if [[ -n "${NEAT_APPS_DEPENDENCY_BRANCH:-}" ]]; then
+    printf '%s\n' "${NEAT_APPS_DEPENDENCY_BRANCH}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
+    printf '%s\n' "${GITHUB_BASE_REF}"
+    return 0
+  fi
+  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+    printf '%s\n' "${GITHUB_REF_NAME}"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null
+    return 0
+  fi
+  echo "develop"
+}
+
+protected_manifest_branch_context() {
+  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
+    printf '%s\n' "${GITHUB_BASE_REF}"
     return 0
   fi
   if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
@@ -251,6 +295,12 @@ current_apps_branch() {
     return 0
   fi
   echo ""
+}
+
+is_protected_manifest_context() {
+  local branch
+  branch="$(protected_manifest_branch_context)"
+  [[ "${branch}" == "main" || "${branch}" == "develop" ]]
 }
 
 core_branch_exists() {
@@ -283,7 +333,20 @@ core_artifact_branch_exists() {
     return 1
   fi
 
-  download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag" >/dev/null 2>&1
+  resolve_latest_version "${branch}" >/dev/null 2>&1
+}
+
+core_artifact_version_exists() {
+  local branch="$1"
+  local version="$2"
+  local branch_key
+
+  if [[ -z "${branch}" || -z "${version}" || "${branch}" == "HEAD" ]]; then
+    return 1
+  fi
+
+  branch_key="$(sanitize_branch_key "${branch}")"
+  download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch_key}/${version}/metadata.json" >/dev/null 2>&1
 }
 
 neat_core_available() {
@@ -323,11 +386,11 @@ download_file() {
   local url="$1"
   local output="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${url}" -o "${output}"
+    curl -fsSL "${url}" -o "${output}" || return $?
     return 0
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget -qO "${output}" "${url}"
+    wget -qO "${output}" "${url}" || return $?
     return 0
   fi
   echo "ERROR: neither curl nor wget is installed." >&2
@@ -337,11 +400,11 @@ download_file() {
 download_text() {
   local url="$1"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${url}"
+    curl -fsSL "${url}" || return $?
     return 0
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget -qO- "${url}"
+    wget -qO- "${url}" || return $?
     return 0
   fi
   echo "ERROR: neither curl nor wget is installed." >&2
@@ -350,8 +413,26 @@ download_text() {
 
 resolve_latest_version() {
   local branch="$1"
-  local latest_url="${NEAT_ARTIFACTS_BASE_URL}/${branch}/latest.tag"
+  local branch_key cache_key cache_path missing_path latest_url
   local resolved=""
+
+  branch_key="$(sanitize_branch_key "${branch}")"
+  cache_key="$(printf '%s' "${branch_key}" | tr -c 'A-Za-z0-9._-' '_')"
+  cache_path="${LATEST_TAG_CACHE_DIR}/${cache_key}.tag"
+  missing_path="${LATEST_TAG_CACHE_DIR}/${cache_key}.missing"
+  latest_url="${NEAT_ARTIFACTS_BASE_URL}/${branch_key}/latest.tag"
+
+  if [[ -f "${cache_path}" ]]; then
+    resolved="$(tr -d '[:space:]' < "${cache_path}")"
+    if [[ -n "${resolved}" ]]; then
+      printf '%s\n' "${resolved}"
+      return 0
+    fi
+  fi
+  if [[ -f "${missing_path}" ]]; then
+    echo "ERROR: Could not resolve latest NEAT core artifact from ${latest_url}." >&2
+    return 1
+  fi
 
   if resolved="$(download_text "${latest_url}" 2>/dev/null)"; then
     resolved="$(printf '%s' "${resolved}" | tr -d '[:space:]')"
@@ -360,62 +441,140 @@ resolve_latest_version() {
   fi
 
   if [[ -n "${resolved}" ]]; then
+    printf '%s\n' "${resolved}" > "${cache_path}"
     printf '%s\n' "${resolved}"
     return 0
   fi
 
-  echo "WARN: Could not fetch ${latest_url}; using literal version 'latest'." >&2
-  printf '%s\n' "latest"
+  : > "${missing_path}"
+  echo "ERROR: Could not resolve latest NEAT core artifact from ${latest_url}." >&2
+  return 1
 }
 
-resolve_neat_core_target() {
-  local policy branch version snap_branch
-  mapfile -t neat_core_config < <(extract_neat_core_config "${NEAT_CORE_JSON}")
-  policy="${neat_core_config[0]:-}"
-  branch="${neat_core_config[1]:-}"
-  version="${neat_core_config[2]:-}"
+parse_core_ref() {
+  local ref="$1"
+  local label="$2"
+  local branch version
 
-  if [[ "${policy}" == "snap" ]]; then
-    snap_branch="$(current_apps_branch)"
-    if core_branch_exists "${snap_branch}" || core_artifact_branch_exists "${snap_branch}"; then
-      branch="${snap_branch}"
-    else
-      branch="main"
-    fi
-    version="latest"
+  if [[ "${ref}" != *:* ]]; then
+    echo "ERROR: ${label} must use branch:version (example: main:latest)." >&2
+    return 1
   fi
 
-  if [[ -n "${NEAT_CORE_OVERRIDE}" ]]; then
-    if [[ "${NEAT_CORE_OVERRIDE}" != *:* ]]; then
-      echo "ERROR: --neat-core-version must use branch:version (example: main:latest)." >&2
-      exit 1
-    fi
-    branch="${NEAT_CORE_OVERRIDE%%:*}"
-    version="${NEAT_CORE_OVERRIDE#*:}"
-    if [[ -z "${branch}" || -z "${version}" ]]; then
-      echo "ERROR: --neat-core-version must provide both branch and version." >&2
-      exit 1
-    fi
-  fi
-
-  if [[ -z "${branch}" || -z "${version}" ]]; then
-    echo "ERROR: neat-core.json must define either neat_core.branch + neat_core.version or neat_core.policy=snap." >&2
-    exit 1
+  branch="${ref%%:*}"
+  version="${ref#*:}"
+  if [[ -z "${branch}" || -z "${version}" || "${version}" == *:* ]]; then
+    echo "ERROR: ${label} must provide exactly one non-empty branch and version." >&2
+    return 1
   fi
 
   printf '%s\n%s\n' "${branch}" "${version}"
 }
 
-ensure_neat_core() {
-  if [[ ! -f "${NEAT_CORE_JSON}" ]]; then
-    echo "ERROR: Missing ${NEAT_CORE_JSON}" >&2
-    exit 1
+first_line() {
+  printf '%s\n' "$1" | sed -n '1p'
+}
+
+second_line() {
+  printf '%s\n' "$1" | sed -n '2p'
+}
+
+validate_explicit_core_ref() {
+  local branch="$1"
+  local version="$2"
+  local label="$3"
+  local resolved_version
+
+  if [[ "${version}" == "latest" ]]; then
+    if ! resolved_version="$(resolve_latest_version "${branch}")"; then
+      echo "ERROR: ${label} references '${branch}:latest', but that latest tag is unavailable." >&2
+      return 1
+    fi
+    return 0
   fi
 
+  if core_artifact_version_exists "${branch}" "${version}"; then
+    return 0
+  fi
+
+  echo "ERROR: ${label} references unavailable NEAT core artifact '${branch}:${version}'." >&2
+  return 1
+}
+
+resolve_empty_neat_core_branch() {
+  local branch
+  branch="$(current_dependency_branch)"
+
+  if [[ "${branch}" == "main" || "${branch}" == "develop" ]]; then
+    printf '%s\n' "${branch}"
+    return 0
+  fi
+
+  if core_branch_exists "${branch}" || core_artifact_branch_exists "${branch}"; then
+    printf '%s\n' "${branch}"
+    return 0
+  fi
+
+  echo "No NEAT core artifact found for dependency branch '${branch}'; using develop:latest." >&2
+  printf '%s\n' "develop"
+}
+
+resolve_neat_core_target() {
+  local branch version manifest_core ref_output manifest_output
+  if ! manifest_output="$(read_app_manifest "${APPS_MANIFEST}")"; then
+    return 1
+  fi
+  manifest_core="$(first_line "${manifest_output}")"
+
+  if [[ -n "${NEAT_CORE_OVERRIDE}" ]]; then
+    if ! ref_output="$(parse_core_ref "${NEAT_CORE_OVERRIDE}" "--neat-core-version")"; then
+      return 1
+    fi
+    branch="$(first_line "${ref_output}")"
+    version="$(second_line "${ref_output}")"
+    validate_explicit_core_ref "${branch}" "${version}" "--neat-core-version" || return 1
+    printf '%s\n%s\n' "${branch}" "${version}"
+    return 0
+  fi
+
+  if [[ -n "${manifest_core}" ]]; then
+    if is_protected_manifest_context; then
+      echo "ERROR: ${APPS_MANIFEST} must keep neat_core empty on main/develop." >&2
+      return 1
+    fi
+    if ! ref_output="$(parse_core_ref "${manifest_core}" "${APPS_MANIFEST} neat_core")"; then
+      return 1
+    fi
+    branch="$(first_line "${ref_output}")"
+    version="$(second_line "${ref_output}")"
+    validate_explicit_core_ref "${branch}" "${version}" "${APPS_MANIFEST} neat_core" || return 1
+    printf '%s\n%s\n' "${branch}" "${version}"
+    return 0
+  fi
+
+  branch="$(resolve_empty_neat_core_branch)"
+  version="latest"
+  printf '%s\n%s\n' "${branch}" "${version}"
+}
+
+load_neat_core_target() {
+  local target_output
+  if [[ -n "${NEAT_CORE_TARGET_BRANCH:-}" && -n "${NEAT_CORE_TARGET_VERSION:-}" ]]; then
+    return 0
+  fi
+  if ! target_output="$(resolve_neat_core_target)"; then
+    exit 1
+  fi
+  NEAT_CORE_TARGET_BRANCH="$(first_line "${target_output}")"
+  NEAT_CORE_TARGET_VERSION="$(second_line "${target_output}")"
+}
+
+ensure_neat_core() {
   local branch version
-  mapfile -t neat_core_target < <(resolve_neat_core_target)
-  branch="${neat_core_target[0]}"
-  version="${neat_core_target[1]}"
+  mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
+  load_neat_core_target
+  branch="${NEAT_CORE_TARGET_BRANCH}"
+  version="${NEAT_CORE_TARGET_VERSION}"
 
   # Resolve "latest" to the actual commit tag so the marker is precise.
   if [[ "${version}" == "latest" ]]; then
@@ -438,19 +597,22 @@ ensure_neat_core() {
 
   # Remove stale artifacts from previous installs so the upstream installer
   # downloads fresh copies and is not tripped by corrupted cached files.
+  find "${NEAT_DEBS_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   rm -f "${ROOT_DIR}"/install_neat_framework.sh \
         "${ROOT_DIR}"/pyneat-*.whl \
         "${ROOT_DIR}"/sima-neat-*-Linux-core.deb \
-        "${ROOT_DIR}"/neat-*.deb
+        "${ROOT_DIR}"/neat-*.deb \
+        "${ROOT_DIR}"/.neat-core-installed
 
   local installer_path
   installer_path="$(mktemp /tmp/install-neat-from-a-branch.XXXXXX.sh)"
   trap 'rm -f "${installer_path}"' RETURN
   download_file "${NEAT_INSTALLER_URL}" "${installer_path}"
   chmod +x "${installer_path}"
-  "${installer_path}" --minimum "${branch}" "${version}"
+  (cd "${NEAT_DEBS_DIR}" && "${installer_path}" --minimum "${branch}" "${version}")
   rm -f "${installer_path}"
   trap - RETURN
+  find "${NEAT_DEBS_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
   # Write marker on success.
   printf '%s\n' "${expected_tag}" > "${NEAT_CORE_MARKER}"
@@ -479,13 +641,16 @@ fi
 
 NEAT_CORE_DISPLAY_BRANCH="(unresolved)"
 NEAT_CORE_DISPLAY_VERSION="(unresolved)"
-if [[ -f "${NEAT_CORE_JSON}" ]]; then
-  mapfile -t neat_core_target < <(resolve_neat_core_target)
-  NEAT_CORE_DISPLAY_BRANCH="${neat_core_target[0]}"
-  NEAT_CORE_DISPLAY_VERSION="${neat_core_target[1]}"
-  if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
-    NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"
-  fi
+PLATFORM_VERSION="(unresolved)"
+if ! manifest_output="$(read_app_manifest "${APPS_MANIFEST}")"; then
+  exit 1
+fi
+PLATFORM_VERSION="$(second_line "${manifest_output}")"
+load_neat_core_target
+NEAT_CORE_DISPLAY_BRANCH="${NEAT_CORE_TARGET_BRANCH}"
+NEAT_CORE_DISPLAY_VERSION="${NEAT_CORE_TARGET_VERSION}"
+if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
+  NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"
 fi
 
 echo ""
@@ -496,8 +661,9 @@ echo "  Build type            : ${BUILD_TYPE}"
 echo "  Build C++ examples    : ${BUILD_CPP}"
 echo "  Build portal          : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF"; fi)"
 echo "  Install NEAT core     : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF (use --all to enable)"; fi)"
+echo "  Platform version      : ${PLATFORM_VERSION}"
 echo "  NEAT core target      : ${NEAT_CORE_DISPLAY_BRANCH}:${NEAT_CORE_DISPLAY_VERSION}"
-echo "  NEAT core override    : ${NEAT_CORE_OVERRIDE:-"(from neat-core.json)"}"
+echo "  NEAT core override    : ${NEAT_CORE_OVERRIDE:-"(from deps/manifest.json)"}"
 echo ""
 
 if [[ "${CLEAN}" -eq 1 ]]; then
@@ -516,19 +682,22 @@ if [[ -z "${TOOLCHAIN_FILE}" ]]; then
   fi
 fi
 
-TOOLCHAIN_ARG=()
-if [[ -n "${TOOLCHAIN_FILE}" ]]; then
-  TOOLCHAIN_ARG=("-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE}")
-fi
-
 echo "  Toolchain file         : ${TOOLCHAIN_FILE:-"(none)"}"
 
-cmake -S . -B "${BUILD_DIR}" \
-  -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-  -DBUILD_TESTING=ON \
-  -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}" \
-  -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}" \
-  "${TOOLCHAIN_ARG[@]}"
+if [[ -n "${TOOLCHAIN_FILE}" ]]; then
+  cmake -S . -B "${BUILD_DIR}" \
+    -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+    -DBUILD_TESTING=ON \
+    -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}" \
+    -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}" \
+    -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
+else
+  cmake -S . -B "${BUILD_DIR}" \
+    -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+    -DBUILD_TESTING=ON \
+    -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}" \
+    -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}"
+fi
 
 if [[ "${BUILD_CPP}" == "ON" ]]; then
   cmake --build "${BUILD_DIR}" -j"$(nproc 2>/dev/null || echo 8)"

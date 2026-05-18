@@ -1,0 +1,287 @@
+"""Regression tests for the apps dependency manifest contract."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import textwrap
+from pathlib import Path
+
+
+APPS_ROOT = Path(__file__).resolve().parents[2]
+BUILD_SH = APPS_ROOT / "build.sh"
+
+
+def _write_manifest(path: Path, neat_core: str = "", platform_version: str = "2.0.0") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "neat_core": neat_core,
+                "platform-version": platform_version,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "curl.log"
+    curl_path = bin_dir / "curl"
+    curl_path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            from __future__ import annotations
+
+            import os
+            import sys
+            from pathlib import Path
+            from urllib.parse import urlparse
+
+            args = sys.argv[1:]
+            output = None
+            url = None
+            index = 0
+            while index < len(args):
+                arg = args[index]
+                if arg == "-o":
+                    output = args[index + 1]
+                    index += 2
+                elif arg.startswith("-"):
+                    index += 1
+                else:
+                    url = arg
+                    index += 1
+
+            if not url:
+                sys.exit(2)
+
+            log = os.environ.get("NEAT_APPS_TEST_CURL_LOG")
+            if log:
+                Path(log).parent.mkdir(parents=True, exist_ok=True)
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write(url + "\\n")
+
+            installer_url = os.environ.get("NEAT_APPS_TEST_INSTALLER_URL", "")
+            if installer_url and url == installer_url:
+                body = '''#!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\\n' "$PWD" > "${NEAT_APPS_TEST_INSTALLER_PWD}"
+            printf '%s\\n' "$*" > "${NEAT_APPS_TEST_INSTALLER_ARGS}"
+            touch sima-neat-test-Linux-core.deb neat-test.deb pyneat-test.whl
+            '''
+                if output:
+                    Path(output).write_text(body, encoding="utf-8")
+                else:
+                    print(body, end="")
+                sys.exit(0)
+
+            tags: dict[str, str] = {}
+            for line in os.environ.get("NEAT_APPS_TEST_LATEST_TAGS", "").splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    tags[key] = value
+
+            metadata = set(
+                line.strip()
+                for line in os.environ.get("NEAT_APPS_TEST_METADATA", "").splitlines()
+                if line.strip()
+            )
+
+            parts = [part for part in urlparse(url).path.split("/") if part]
+            body = None
+            if len(parts) >= 2 and parts[-1] == "latest.tag":
+                body = tags.get(parts[-2])
+            elif len(parts) >= 3 and parts[-1] == "metadata.json":
+                branch = parts[-3]
+                version = parts[-2]
+                if f"{branch}:{version}" in metadata:
+                    body = "{}"
+
+            if body is None:
+                sys.exit(22)
+
+            if output:
+                Path(output).write_text(body, encoding="utf-8")
+            else:
+                print(body)
+            sys.exit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    curl_path.chmod(0o755)
+    return bin_dir, log_path
+
+
+def _run_build(
+    tmp_path: Path,
+    *,
+    neat_core: str = "",
+    platform_version: str = "2.0.0",
+    args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    deps_dir = tmp_path / "deps"
+    manifest_path = deps_dir / "manifest.json"
+    _write_manifest(manifest_path, neat_core, platform_version)
+
+    bin_dir, log_path = _write_fake_curl(tmp_path)
+    build_dir = tmp_path / "build"
+    run_env = os.environ.copy()
+    for name in (
+        "GITHUB_BASE_REF",
+        "GITHUB_HEAD_REF",
+        "GITHUB_REF_NAME",
+        "NEAT_APPS_ARTIFACT_BRANCH_KEY",
+        "NEAT_APPS_ARTIFACT_SHORT_SHA",
+        "NEAT_APPS_DEPENDENCY_BRANCH",
+    ):
+        run_env.pop(name, None)
+
+    run_env.update(
+        {
+            "PATH": f"{bin_dir}:{run_env['PATH']}",
+            "NEAT_APPS_TEST_DEPS_DIR": str(deps_dir),
+            "NEAT_ARTIFACTS_BASE_URL": "https://core.test",
+            "NEAT_APPS_TEST_CURL_LOG": str(log_path),
+            "NEAT_APPS_TEST_LATEST_TAGS": "\n".join(
+                [
+                    "develop=devsha1",
+                    "main=mainsha1",
+                    "zz-core-artifact-for-test=featsha1",
+                    "scratch-core-for-test=scratchsha1",
+                ]
+            ),
+            "NEAT_APPS_TEST_METADATA": "\n".join(
+                [
+                    "main:mainsha1",
+                    "zz-core-artifact-for-test:pinnedsha1",
+                ]
+            ),
+        }
+    )
+    if env:
+        run_env.update(env)
+
+    command = [str(BUILD_SH)] + (args or ["--no-cpp", "--build-dir", str(build_dir)])
+    return subprocess.run(
+        command,
+        cwd=APPS_ROOT,
+        env=run_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def _curl_log(tmp_path: Path) -> list[str]:
+    path = tmp_path / "curl.log"
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def test_empty_manifest_resolves_from_dependency_branch_and_platform_version(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        env={"NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "Platform version      : 2.0.0" in proc.stdout
+    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
+
+
+def test_empty_manifest_custom_branch_uses_matching_core_artifact_once(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        env={"NEAT_APPS_DEPENDENCY_BRANCH": "zz-core-artifact-for-test"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : zz-core-artifact-for-test:featsha1" in proc.stdout
+    assert (
+        _curl_log(tmp_path).count(
+            "https://core.test/zz-core-artifact-for-test/latest.tag"
+        )
+        == 1
+    )
+
+
+def test_empty_manifest_custom_branch_falls_back_to_develop(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        env={"NEAT_APPS_DEPENDENCY_BRANCH": "zz-missing-core-artifact-for-test"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert "using develop:latest" in proc.stderr
+
+
+def test_explicit_manifest_uses_valid_branch_version(tmp_path):
+    proc = _run_build(tmp_path, neat_core="zz-core-artifact-for-test:pinnedsha1")
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
+    assert (
+        "https://core.test/zz-core-artifact-for-test/pinnedsha1/metadata.json"
+        in _curl_log(tmp_path)
+    )
+
+
+def test_explicit_manifest_fails_when_artifact_is_invalid(tmp_path):
+    proc = _run_build(tmp_path, neat_core="zz-missing-core-artifact-for-test:pinnedsha1")
+
+    assert proc.returncode != 0
+    assert "unavailable NEAT core artifact" in proc.stderr
+
+
+def test_protected_branch_rejects_explicit_manifest_value(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core="main:mainsha1",
+        env={"GITHUB_REF_NAME": "main"},
+    )
+
+    assert proc.returncode != 0
+    assert "must keep neat_core empty on main/develop" in proc.stderr
+
+
+def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):
+    installer_pwd = tmp_path / "installer-pwd.txt"
+    installer_args = tmp_path / "installer-args.txt"
+    deps_dir = tmp_path / "deps"
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_INSTALLER_URL": "https://installer.test/install-neat.sh",
+            "NEAT_APPS_TEST_INSTALLER_URL": "https://installer.test/install-neat.sh",
+            "NEAT_APPS_TEST_INSTALLER_PWD": str(installer_pwd),
+            "NEAT_APPS_TEST_INSTALLER_ARGS": str(installer_args),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert installer_pwd.read_text(encoding="utf-8").strip() == str(deps_dir / "debs")
+    assert installer_args.read_text(encoding="utf-8").strip() == (
+        "--minimum scratch-core-for-test scratchsha1"
+    )
+    assert (deps_dir / ".neat_core").read_text(encoding="utf-8").strip() == (
+        "scratch-core-for-test/scratchsha1"
+    )
+    assert list((deps_dir / "debs").iterdir()) == []
+    assert not (APPS_ROOT / "sima-neat-test-Linux-core.deb").exists()
+    assert not (APPS_ROOT / "neat-test.deb").exists()
+    assert not (APPS_ROOT / "pyneat-test.whl").exists()
