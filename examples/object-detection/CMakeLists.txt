@@ -1,7 +1,6 @@
 foreach(example IN ITEMS
     detr-object-detection
     single-rtsp-object-detection-insight
-    multistream-rtsp-detection-pipeline
     simple-object-detection-overlay-pipeline
     yolo26-object-detection-overlay
 )
