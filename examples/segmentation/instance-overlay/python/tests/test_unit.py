@@ -1,4 +1,4 @@
-"""Unit tests for offline-instance-segmentation-overlay (Python)."""
+"""Unit tests for instance-overlay (Python)."""
 import importlib.util
 import subprocess
 import sys

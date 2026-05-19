@@ -1,4 +1,4 @@
-"""E2E tests for simple-semantic-segmentation-overlay-pipeline (Python)."""
+"""E2E tests for semantic-overlay (Python)."""
 
 import subprocess
 import sys

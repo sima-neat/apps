@@ -1,9 +1,9 @@
 /**
- * @example simple-semantic-segmentation-overlay-pipeline.cpp
- * Minimal semantic-segmentation overlay example for FCN-HRNet models.
+ * @example semantic-overlay.cpp
+ * Minimal semantic segmentation overlay example for FCN-HRNet models.
  *
  * Usage:
- *   simple-semantic-segmentation-overlay-pipeline <model.tar.gz> <input_dir> <output_dir>
+ *   semantic-overlay <model.tar.gz> <input_dir> <output_dir>
  */
 #include "neat.h"
 

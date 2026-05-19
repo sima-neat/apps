@@ -1,4 +1,4 @@
-"""Minimal semantic-segmentation overlay example for FCN-HRNet models."""
+"""Minimal segmentation overlay example for FCN-HRNet models."""
 
 from __future__ import annotations
 

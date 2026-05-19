@@ -488,8 +488,7 @@ select {
   background: linear-gradient(135deg, #da642a, #f0b451);
 }
 
-.fallback-semantic-segmentation,
-.fallback-instance-segmentation {
+.fallback-segmentation {
   background: linear-gradient(135deg, #16746b, #69cbb0);
 }
 

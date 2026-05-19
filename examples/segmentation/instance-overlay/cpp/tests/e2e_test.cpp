@@ -1,4 +1,4 @@
-// E2E test for offline-instance-segmentation-overlay.
+// E2E test for instance-overlay.
 // Runs the binary with a real model and test images, verifies overlay outputs.
 #include "support/testing/test_process.h"
 
@@ -38,11 +38,12 @@ int main(int argc, char** argv) {
   const std::string input_dir = images_raw ? images_raw : "assets/test_images";
   if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory with test images (assets/test_images is empty or missing)");
+                "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_temp_dir("offline-instance-segmentation-overlay_e2e_");
-  if (out_dir.empty()) return 1;
+  auto out_dir = create_temp_dir("instance-overlay_e2e_");
+  if (out_dir.empty())
+    return 1;
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
@@ -60,8 +61,8 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] instance segmentation overlay produced "
-              << count_files(out_dir) << " output files\n";
+    std::cout << "[OK] instance segmentation overlay produced " << count_files(out_dir)
+              << " output files\n";
   }
 
   remove_dir(out_dir);
