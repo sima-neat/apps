@@ -13,28 +13,27 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 class TestArgParsing:
     """Validate CLI argument parsing for the classification pipeline."""
 
-    def test_missing_all_args(self):
-        """Running with no arguments should fail because --model is required."""
+    def test_help(self):
+        """--help should print usage."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY)],
+            [sys.executable, str(MAIN_PY), "--help"],
             capture_output=True, text=True, timeout=10,
         )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
+        assert r.returncode == 0
+        assert "usage" in r.stdout.lower()
 
-    def test_missing_model_flag(self):
-        """Passing an image but no --model should fail."""
+    def test_bad_config_path(self):
+        """A missing config should produce a nonzero exit."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--image", "some_image.jpg"],
+            [sys.executable, str(MAIN_PY), "--config", "/nonexistent/config.yaml"],
             capture_output=True, text=True, timeout=10,
         )
-        assert r.returncode == 2
-        assert "--model" in r.stderr or "required" in r.stderr.lower()
+        assert r.returncode != 0
 
     def test_unknown_flag(self):
         """An unrecognized flag should cause argparse to exit with code 2."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--model", "m.tar.gz", "--bogus"],
+            [sys.executable, str(MAIN_PY), "--bogus"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode == 2

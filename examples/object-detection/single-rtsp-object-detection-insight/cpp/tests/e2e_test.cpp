@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cerrno>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <sys/types.h>
@@ -115,20 +116,31 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  const fs::path config_dir =
+      fs::path("/tmp") / ("single-rtsp-config-" + std::to_string(::getpid()));
+  fs::create_directories(config_dir);
+  const fs::path config_path = config_dir / "config.yaml";
+  {
+    std::ofstream config_file(config_path);
+    config_file << "source:\n"
+                << "  rtsp_url: " << rtsp_url << "\n"
+                << "  latency_ms: 200\n"
+                << "  udp: false\n"
+                << "model:\n"
+                << "  path: " << mpk_path << "\n"
+                << "runtime:\n"
+                << "  frames: 300\n"
+                << "  debug: false\n"
+                << "insight:\n"
+                << "  host: 127.0.0.1\n"
+                << "  video_port: " << video_port << "\n"
+                << "  metadata_port: " << metadata_port << "\n";
+  }
+
   std::vector<std::string> arg_storage;
   arg_storage.push_back(argv[1]);
-  arg_storage.push_back("--rtsp");
-  arg_storage.push_back(rtsp_url);
-  arg_storage.push_back("--insight-host");
-  arg_storage.push_back("127.0.0.1");
-  arg_storage.push_back("--insight-video-port");
-  arg_storage.push_back(std::to_string(video_port));
-  arg_storage.push_back("--insight-metadata-port");
-  arg_storage.push_back(std::to_string(metadata_port));
-  arg_storage.push_back("--frames");
-  arg_storage.push_back("300");
-  arg_storage.push_back("--model");
-  arg_storage.push_back(mpk_path);
+  arg_storage.push_back("--config");
+  arg_storage.push_back(config_path.string());
 
   std::vector<char*> child_argv;
   child_argv.reserve(arg_storage.size() + 1);
@@ -150,6 +162,7 @@ int main(int argc, char** argv) {
 
   const auto result = listener.wait_for_messages();
   terminate_child(pid);
+  fs::remove_all(config_dir);
 
   if (!result.success) {
     std::cerr << "[ERR] no valid Insight metadata received: " << result.error << "\n";

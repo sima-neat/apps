@@ -6,12 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
-import pyneat
-
-
-INFER_SIZE = 518
+import yaml
 
 
 def is_image(path: Path) -> bool:
@@ -62,13 +57,25 @@ def depth_tensor_to_colormap(t: pyneat.Tensor) -> np.ndarray:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Depth Anything V2 folder inference")
-    parser.add_argument("model", type=str, help="Path to depth_anything_v2_vits compiled model package")
-    parser.add_argument("input_dir", type=str, help="Input image directory")
-    parser.add_argument("output_dir", type=str, help="Output directory")
+    default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+    parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    global cv2, np, pyneat
+    import cv2
+    import numpy as np
+    import pyneat
+
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    model_path = raw.get("model", {}).get("path", "assets/models/depth_anything_v2_vits_mpk.tar.gz")
+    io_cfg = raw.get("io", {})
+    runtime = raw.get("runtime", {})
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/depth_map_generation"))
+    infer_size = int(runtime.get("infer_size", 518))
+    timeout_ms = int(runtime.get("timeout_ms", 5000))
+    queue_depth = int(runtime.get("queue_depth", 4))
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
@@ -84,15 +91,15 @@ def main() -> int:
         opt = pyneat.ModelOptions()
         opt.preprocess.kind = pyneat.InputKind.Image
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-        opt.preprocess.input_max_width = INFER_SIZE
-        opt.preprocess.input_max_height = INFER_SIZE
+        opt.preprocess.input_max_width = infer_size
+        opt.preprocess.input_max_height = infer_size
         opt.preprocess.input_max_depth = 3
-        model = pyneat.Model(args.model, opt)
+        model = pyneat.Model(model_path, opt)
 
-        dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
+        dummy = np.zeros((infer_size, infer_size, 3), dtype=np.uint8)
         t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.RGB)
         run_opt = pyneat.RunOptions()
-        run_opt.queue_depth = 4
+        run_opt.queue_depth = queue_depth
         run_opt.overflow_policy = pyneat.OverflowPolicy.Block
         runner = model.build(t_dummy, run_options=run_opt)
 
@@ -104,11 +111,11 @@ def main() -> int:
                 continue
 
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            rgb = cv2.resize(rgb, (INFER_SIZE, INFER_SIZE), interpolation=cv2.INTER_LINEAR)
+            rgb = cv2.resize(rgb, (infer_size, infer_size), interpolation=cv2.INTER_LINEAR)
             rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
             t_in = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
-            outputs = runner.run(t_in, timeout_ms=5000)
+            outputs = runner.run(t_in, timeout_ms=timeout_ms)
             if not outputs:
                 print(f"No output tensors for {img_path.name}", file=sys.stderr)
                 continue

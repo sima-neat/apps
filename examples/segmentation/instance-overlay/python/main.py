@@ -1,18 +1,14 @@
 """Minimal YOLOv8-seg pipeline using DetessDequant postprocess (no boxdecode)."""
 
+from __future__ import annotations
+
 import argparse
 import math
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
-import pyneat
+import yaml
 
-INFER_SIZE = 640
-SCORE_THR = 0.6
-NMS_IOU = 0.45
-MAX_DET = 200
 MASK_ALPHA = 0.65
 
 MASK_COLOR_PALETTE = [
@@ -250,13 +246,31 @@ def draw_boxes(bgr, boxes, infer_size):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="YOLOv8n instance segmentation overlay")
-    parser.add_argument("model", type=str, help="Path to compiled model package")
-    parser.add_argument("input_dir", type=str, help="Input image directory")
-    parser.add_argument("output_dir", type=str, help="Output directory")
+    default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+    parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    global cv2, np, pyneat
+    import cv2
+    import numpy as np
+    import pyneat
+
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    model_path = raw.get("model", {}).get("path", "assets/models/yolo_v8n_seg_mpk.tar.gz")
+    io_cfg = raw.get("io", {})
+    runtime = raw.get("runtime", {})
+    decode = raw.get("decode", {})
+    visualization = raw.get("visualization", {})
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/instance_overlay"))
+    infer_size = int(runtime.get("infer_size", 640))
+    timeout_ms = int(runtime.get("timeout_ms", 3000))
+    queue_depth = int(runtime.get("queue_depth", 8))
+    score_thr = float(decode.get("score_threshold", 0.6))
+    nms_iou = float(decode.get("nms_iou", 0.45))
+    max_det = int(decode.get("max_detections", 200))
+    mask_alpha = float(visualization.get("mask_alpha", MASK_ALPHA))
 
     if not input_dir.is_dir():
         raise RuntimeError(f"input directory does not exist: {input_dir}")
@@ -270,12 +284,12 @@ def main() -> int:
         opt = pyneat.ModelOptions()
         opt.preprocess.kind = pyneat.InputKind.Image
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-        opt.preprocess.input_max_width = INFER_SIZE
-        opt.preprocess.input_max_height = INFER_SIZE
+        opt.preprocess.input_max_width = infer_size
+        opt.preprocess.input_max_height = infer_size
         opt.preprocess.input_max_depth = 3
-        model = pyneat.Model(args.model, opt)
+        model = pyneat.Model(model_path, opt)
 
-        dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
+        dummy = np.zeros((infer_size, infer_size, 3), dtype=np.uint8)
         dummy_tensor = pyneat.Tensor.from_numpy(
             dummy,
             copy=True,
@@ -283,7 +297,7 @@ def main() -> int:
             memory=pyneat.TensorMemory.EV74,
         )
         run_opt = pyneat.RunOptions()
-        run_opt.queue_depth = 8
+        run_opt.queue_depth = queue_depth
         run_opt.overflow_policy = pyneat.OverflowPolicy.Block
         run_opt.preset = pyneat.RunPreset.Balanced
         runner = model.build(dummy_tensor, run_options=run_opt)
@@ -298,7 +312,7 @@ def main() -> int:
                 continue
 
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            rgb = cv2.resize(rgb, (INFER_SIZE, INFER_SIZE), interpolation=cv2.INTER_LINEAR)
+            rgb = cv2.resize(rgb, (infer_size, infer_size), interpolation=cv2.INTER_LINEAR)
             rgb_arr = np.ascontiguousarray(rgb, dtype=np.uint8)
 
             input_tensor = pyneat.Tensor.from_numpy(
@@ -307,17 +321,17 @@ def main() -> int:
                 image_format=pyneat.PixelFormat.RGB,
                 memory=pyneat.TensorMemory.EV74,
             )
-            tensors = runner.run(input_tensor, timeout_ms=3000)
+            tensors = runner.run(input_tensor, timeout_ms=timeout_ms)
 
             try:
-                boxes, proto = decode_yolov8_instances(tensors, INFER_SIZE, SCORE_THR, NMS_IOU, MAX_DET)
+                boxes, proto = decode_yolov8_instances(tensors, infer_size, score_thr, nms_iou, max_det)
             except Exception as e:
                 print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
                 continue
 
             overlay = bgr.copy()
-            apply_mask_overlay(overlay, boxes, proto, INFER_SIZE)
-            draw_boxes(overlay, boxes, INFER_SIZE)
+            apply_mask_overlay(overlay, boxes, proto, infer_size, alpha=mask_alpha)
+            draw_boxes(overlay, boxes, infer_size)
             out_file = output_dir / (image_path.stem + "_overlay.jpg")
             cv2.imwrite(str(out_file), overlay)
 

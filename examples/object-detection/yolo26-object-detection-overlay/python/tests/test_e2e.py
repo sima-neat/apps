@@ -30,13 +30,36 @@ class TestE2E:
             "test_images_dir is missing or empty",
         )
 
+        config_path = tmp_output_dir.parent / "yolo26_config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    f"  labels: {LABELS_FILE}",
+                    "io:",
+                    f"  input_dir: {test_images_dir}",
+                    f"  output_dir: {tmp_output_dir}",
+                    "decode:",
+                    "  score_threshold: 0.25",
+                    "  nms_iou: 0.45",
+                    "  max_detections: 100",
+                    "runtime:",
+                    "  timeout_ms: 5000",
+                    "  num_runs: 1",
+                    "  profile: false",
+                    "output:",
+                    "  overlay: true",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                "--model", str(model),
-                "--labels", str(LABELS_FILE),
-                "--input-dir", str(test_images_dir),
-                "--output-dir", str(tmp_output_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,

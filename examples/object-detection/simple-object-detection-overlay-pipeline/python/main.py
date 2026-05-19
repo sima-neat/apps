@@ -7,14 +7,10 @@ import struct
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
-import pyneat
+import yaml
 
 
-MIN_SCORE = 0.55
-NMS_IOU = 0.50
-MAX_DET = 100
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
 BOX_COLORS = [
     (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0),
@@ -81,23 +77,41 @@ def draw_boxes(frame: np.ndarray, boxes: list[dict], labels: list[str]) -> np.nd
     return frame
 
 
+def load_config(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="YOLOv8n simple folder detection pipeline")
-    parser.add_argument("model", type=str, help="Path to yolov8n compiled model package")
-    parser.add_argument("labels_file", type=str, help="Path to labels txt file (one label per line)")
-    parser.add_argument("input_dir", type=str, help="Input image directory")
-    parser.add_argument("output_dir", type=str, help="Output directory")
-    parser.add_argument(
-        "--min-score",
-        type=float,
-        default=MIN_SCORE,
-        help="Detection confidence threshold (default: 0.55)",
-    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
-    labels_path = Path(args.labels_file)
+    global cv2, np, pyneat
+    import cv2
+    import numpy as np
+    import pyneat
+
+    raw = load_config(args.config)
+    model_cfg = raw.get("model", {})
+    io_cfg = raw.get("io", {})
+    decode_cfg = raw.get("decode", {})
+    runtime_cfg = raw.get("runtime", {})
+
+    model_path = model_cfg.get("path", "assets/models/yolo_v8n_mpk.tar.gz")
+    labels_path = Path(
+        model_cfg.get(
+            "labels",
+            "examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt",
+        )
+    )
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/simple_object_detection_overlay"))
+    min_score = float(decode_cfg.get("score_threshold", 0.55))
+    nms_iou = float(decode_cfg.get("nms_iou", 0.50))
+    max_det = int(decode_cfg.get("max_detections", 100))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
@@ -121,10 +135,10 @@ def main() -> int:
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
         opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
         opt.decode_type = pyneat.BoxDecodeType.YoloV8
-        opt.score_threshold = args.min_score
-        opt.nms_iou_threshold = NMS_IOU
-        opt.top_k = MAX_DET
-        model = pyneat.Model(args.model, opt)
+        opt.score_threshold = min_score
+        opt.nms_iou_threshold = nms_iou
+        opt.top_k = max_det
+        model = pyneat.Model(model_path, opt)
 
         processed = 0
         for img_path in images:
@@ -141,7 +155,7 @@ def main() -> int:
                 memory=pyneat.TensorMemory.EV74,
             )
 
-            outputs = model.run(t_in, timeout_ms=5000)
+            outputs = model.run(t_in, timeout_ms=timeout_ms)
             if not outputs:
                 print(f"Model returned no output for {img_path.name}", file=sys.stderr)
                 continue
@@ -150,7 +164,7 @@ def main() -> int:
             if not payload:
                 print(f"Model returned no BBOX payload for {img_path.name}", file=sys.stderr)
                 continue
-            boxes = parse_bbox_payload(payload, orig_w, orig_h, args.min_score)
+            boxes = parse_bbox_payload(payload, orig_w, orig_h, min_score)
 
             draw_boxes(bgr, boxes, labels)
 

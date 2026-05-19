@@ -36,6 +36,11 @@ function(sima_neat_apps_add_example example_name)
       ${PROJECT_SOURCE_DIR}
   )
 
+  target_compile_definitions("${target_name}"
+    PRIVATE
+      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+
   set_target_properties("${target_name}" PROPERTIES OUTPUT_NAME "${example_name}")
 
   if (APP_OUTPUT_TARGET_VAR)

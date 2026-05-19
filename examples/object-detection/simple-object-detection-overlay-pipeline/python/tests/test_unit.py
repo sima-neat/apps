@@ -13,47 +13,19 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 class TestArgParsing:
     """Validate CLI argument parsing for the object detection overlay pipeline."""
 
-    def test_missing_all_args(self):
-        """Running with no arguments should fail (4 positional args required)."""
+    def test_help(self):
+        """--help should describe the config-driven CLI."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY)],
+            [sys.executable, str(MAIN_PY), "--help"],
             capture_output=True, text=True, timeout=10,
         )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
+        assert r.returncode == 0
+        assert "--config" in r.stdout
 
-    def test_missing_three_positional_args(self):
-        """Providing only model should fail (labels_file, input_dir, output_dir missing)."""
+    def test_bad_config_path(self):
+        """A missing config file should produce a nonzero exit."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "model.tar.gz"],
-            capture_output=True, text=True, timeout=10,
-        )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
-
-    def test_missing_two_positional_args(self):
-        """Providing model and labels_file but not input_dir/output_dir should fail."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "model.tar.gz", "labels.txt"],
-            capture_output=True, text=True, timeout=10,
-        )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
-
-    def test_missing_one_positional_arg(self):
-        """Providing model, labels_file, and input_dir but not output_dir should fail."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "model.tar.gz", "labels.txt", "/tmp/input"],
-            capture_output=True, text=True, timeout=10,
-        )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
-
-    def test_bad_input_dir(self):
-        """A nonexistent input directory should produce a nonzero exit."""
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "model.tar.gz", "labels.txt",
-             "/nonexistent/path/input", "/tmp/output"],
+            [sys.executable, str(MAIN_PY), "--config", "/nonexistent/simple-det-config.yaml"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode != 0
@@ -61,8 +33,7 @@ class TestArgParsing:
     def test_unknown_flag(self):
         """An unrecognized flag should cause argparse to exit with code 2."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "model.tar.gz", "labels.txt",
-             "/tmp/in", "/tmp/out", "--bogus"],
+            [sys.executable, str(MAIN_PY), "--bogus"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode == 2

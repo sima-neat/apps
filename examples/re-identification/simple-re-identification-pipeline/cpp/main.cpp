@@ -2,16 +2,10 @@
  * @example simple-re-identification-pipeline.cpp
  * Pairwise ReID pipeline: infer embeddings for two images and compare similarity.
  *
- * Usage:
- *   simple-re-identification-pipeline <image1> <image2>
- *     [--metric cosine|euclidean]
- *     [--threshold <float>]
- *     [--output-dir <path>]
- *     [--output-type image|json|both]
- *     [--model <model.tar.gz>]
- *     [--profile]
+ * Usage: simple-re-identification-pipeline [--config <path>]
  */
 #include "neat.h"
+#include "support/runtime/config_utils.h"
 
 #include <nlohmann/json.hpp>
 
@@ -21,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -40,36 +35,17 @@ constexpr int kInputW = 128;
 constexpr int kInputH = 256;
 constexpr int kTimeoutMs = 5000;
 
-struct Args {
+struct Config {
   fs::path image1;
   fs::path image2;
   std::string metric = "cosine";
-  bool has_threshold = false;
   double threshold = 0.0;
   fs::path output_dir;
   std::string output_type = "both";
   fs::path model;
   bool profile = false;
+  int timeout_ms = kTimeoutMs;
 };
-
-fs::path default_output_dir() {
-  return fs::path(__FILE__).parent_path().parent_path() / "output_dir";
-}
-
-fs::path default_model_path() {
-  return fs::path(__FILE__).parent_path().parent_path().parent_path().parent_path().parent_path() /
-         "assets" / "models" / "reid_mpk.tar.gz";
-}
-
-void print_usage(const char* argv0) {
-  std::cerr << "Usage: " << argv0 << " <image1> <image2>"
-            << " [--metric cosine|euclidean]"
-            << " [--threshold <float>]"
-            << " [--output-dir <path>]"
-            << " [--output-type image|json|both]"
-            << " [--model <model.tar.gz>]"
-            << " [--profile]\n";
-}
 
 bool is_image(const fs::path& p) {
   std::string ext = p.extension().string();
@@ -78,94 +54,47 @@ bool is_image(const fs::path& p) {
   return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp");
 }
 
-double parse_double(const std::string& s) {
-  size_t consumed = 0;
-  const double v = std::stod(s, &consumed);
-  if (consumed != s.size() || !std::isfinite(v)) {
-    throw std::runtime_error("invalid float: " + s);
+Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model = raw.string_or("model.path", "assets/models/reid_mpk.tar.gz");
+  cfg.image1 = raw.string_or("io.image1", "assets/test_images/person_a.jpg");
+  cfg.image2 = raw.string_or("io.image2", "assets/test_images/person_b.jpg");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/simple_re_identification");
+  cfg.output_type = raw.string_or("output.type", "both");
+  cfg.metric = raw.string_or("comparison.metric", "cosine");
+  cfg.threshold = raw.double_or("comparison.threshold", cfg.metric == "cosine" ? 0.65 : 25.0);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kTimeoutMs);
+  cfg.profile = raw.bool_or("runtime.profile", false);
+  if (cfg.metric != "cosine" && cfg.metric != "euclidean") {
+    throw std::runtime_error("comparison.metric must be cosine or euclidean");
   }
-  return v;
+  if (cfg.output_type != "image" && cfg.output_type != "json" && cfg.output_type != "both") {
+    throw std::runtime_error("output.type must be image, json, or both");
+  }
+  if (cfg.timeout_ms <= 0) {
+    throw std::runtime_error("runtime.timeout_ms must be > 0");
+  }
+  return cfg;
 }
 
-int parse_args(int argc, char** argv, Args& args, std::string& err) {
-  args.output_dir = default_output_dir();
-  args.model = default_model_path();
-
-  if (argc < 3) {
-    print_usage(argv[0]);
-    return 2;
-  }
-
-  std::vector<std::string> positional;
+Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
   for (int i = 1; i < argc; ++i) {
-    const std::string cur = argv[i];
-    if (cur == "--metric") {
+    const std::string arg = argv[i];
+    if (arg == "--config") {
       if (i + 1 >= argc) {
-        err = "missing value for --metric";
-        return 2;
+        throw std::runtime_error("--config requires a path");
       }
-      args.metric = argv[++i];
-      if (args.metric != "cosine" && args.metric != "euclidean") {
-        err = "invalid --metric value: " + args.metric;
-        return 2;
-      }
-    } else if (cur == "--threshold") {
-      if (i + 1 >= argc) {
-        err = "missing value for --threshold";
-        return 2;
-      }
-      try {
-        args.threshold = parse_double(argv[++i]);
-        args.has_threshold = true;
-      } catch (const std::exception& e) {
-        err = e.what();
-        return 2;
-      }
-    } else if (cur == "--output-dir") {
-      if (i + 1 >= argc) {
-        err = "missing value for --output-dir";
-        return 2;
-      }
-      args.output_dir = argv[++i];
-    } else if (cur == "--output-type") {
-      if (i + 1 >= argc) {
-        err = "missing value for --output-type";
-        return 2;
-      }
-      args.output_type = argv[++i];
-      if (args.output_type != "image" && args.output_type != "json" && args.output_type != "both") {
-        err = "invalid --output-type value: " + args.output_type;
-        return 2;
-      }
-    } else if (cur == "--model") {
-      if (i + 1 >= argc) {
-        err = "missing value for --model";
-        return 2;
-      }
-      args.model = argv[++i];
-    } else if (cur == "--profile") {
-      args.profile = true;
-    } else if (cur.rfind("--", 0) == 0) {
-      err = "unrecognized argument: " + cur;
-      return 2;
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
     } else {
-      positional.push_back(cur);
+      throw std::runtime_error("unknown argument: " + arg);
     }
   }
-
-  if (positional.size() != 2) {
-    err = "expected exactly two image paths";
-    return 2;
-  }
-
-  args.image1 = positional[0];
-  args.image2 = positional[1];
-
-  if (!args.has_threshold) {
-    args.threshold = (args.metric == "cosine") ? 0.65 : 25.0;
-  }
-
-  return 0;
+  return load_config(config_path);
 }
 
 size_t dtype_bytes(simaai::neat::TensorDType dtype) {
@@ -444,7 +373,7 @@ void print_profile(double infer_a_s, double infer_b_s, double total_s) {
 }
 
 std::vector<float> run_inference_embedding(simaai::neat::Run& run, const fs::path& image_path,
-                                           double& infer_time_s) {
+                                           int timeout_ms, double& infer_time_s) {
   cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
   if (bgr.empty()) {
     throw std::runtime_error("Cannot read image: " + image_path.string());
@@ -458,7 +387,7 @@ std::vector<float> run_inference_embedding(simaai::neat::Run& run, const fs::pat
   if (!run.push(simaai::neat::TensorList{input})) {
     throw std::runtime_error("run.push failed for: " + image_path.filename().string());
   }
-  auto out = run.pull(kTimeoutMs);
+  auto out = run.pull(timeout_ms);
   const auto t1 = std::chrono::steady_clock::now();
   infer_time_s = std::chrono::duration<double>(t1 - t0).count();
   if (!out.has_value()) {
@@ -479,15 +408,12 @@ int main(int argc, char** argv) {
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
 
-  Args args;
-  std::string parse_err;
-  const int parse_rc = parse_args(argc, argv, args, parse_err);
-  if (parse_rc != 0) {
-    if (!parse_err.empty()) {
-      std::cerr << "Error: " << parse_err << "\n";
-      print_usage(argv[0]);
-    }
-    return parse_rc;
+  Config args;
+  try {
+    args = parse_config(argc, argv);
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n";
+    return 2;
   }
 
   if (!fs::is_regular_file(args.model)) {
@@ -526,7 +452,7 @@ int main(int argc, char** argv) {
     if (!run.push(simaai::neat::TensorList{dummy})) {
       throw std::runtime_error("warmup push failed");
     }
-    if (!run.pull(10000).has_value()) {
+    if (!run.pull(args.timeout_ms).has_value()) {
       throw std::runtime_error("warmup pull timeout");
     }
     std::cout << "Model warmed up.\n";
@@ -534,11 +460,13 @@ int main(int argc, char** argv) {
     const auto t_total_0 = std::chrono::steady_clock::now();
     std::cout << "Processing: " << args.image1.filename().string() << "\n";
     double infer_a_s = 0.0;
-    const std::vector<float> emb_a = run_inference_embedding(run, args.image1, infer_a_s);
+    const std::vector<float> emb_a =
+        run_inference_embedding(run, args.image1, args.timeout_ms, infer_a_s);
 
     std::cout << "Processing: " << args.image2.filename().string() << "\n";
     double infer_b_s = 0.0;
-    const std::vector<float> emb_b = run_inference_embedding(run, args.image2, infer_b_s);
+    const std::vector<float> emb_b =
+        run_inference_embedding(run, args.image2, args.timeout_ms, infer_b_s);
 
     double score = 0.0;
     std::string decision;

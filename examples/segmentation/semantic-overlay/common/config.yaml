@@ -1,0 +1,14 @@
+model:
+  path: assets/models/fcn_hrnet48_mpk.tar.gz
+
+io:
+  input_dir: assets/test_images
+  output_dir: sandbox/semantic_overlay
+
+runtime:
+  input_width: 512
+  input_height: 512
+  timeout_ms: 5000
+
+visualization:
+  alpha: 0.55

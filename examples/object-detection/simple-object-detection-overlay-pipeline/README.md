@@ -32,26 +32,22 @@ Download any variant into `assets/models/`:
 - Labels file: `examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt`
 
 ## Important Behavior
-- C++ and Python both use positional arguments.
-- Labels file is required.
+- C++ and Python read runtime values from `common/config.yaml`.
+- Labels file is configured under `model.labels`.
 - Output images are written as `.png` files.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/object-detection/simple-object-detection-overlay-pipeline/simple-object-detection-overlay-pipeline <model.tar.gz> <labels.txt> <input_dir> <output_dir>`
-- Required arguments:
-  `<model.tar.gz> <labels.txt> <input_dir> <output_dir>`
+  `./build/examples/object-detection/simple-object-detection-overlay-pipeline/simple-object-detection-overlay-pipeline [--config <path>]`
 - Optional arguments:
-  None.
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ### Python
 - Invocation:
-  `python examples/object-detection/simple-object-detection-overlay-pipeline/python/main.py <model.tar.gz> <labels.txt> <input_dir> <output_dir> [--min-score 0.55]`
-- Required arguments:
-  `<model.tar.gz> <labels.txt> <input_dir> <output_dir>`
+  `python examples/object-detection/simple-object-detection-overlay-pipeline/python/main.py [--config <path>]`
 - Optional arguments:
-  `--min-score` (default: `0.55`)
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ## Build
 ### Build From The Apps Repo
@@ -80,20 +76,14 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/simple-object-detection-overlay-pipeline/simple-object-detection-overlay-pipeline \
-  assets/models/yolo_v8n_mpk.tar.gz \
-  examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt \
-  <input_dir> <output_dir>
+./build/examples/object-detection/simple-object-detection-overlay-pipeline/simple-object-detection-overlay-pipeline
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/simple-object-detection-overlay-pipeline/python/requirements.txt
-python examples/object-detection/simple-object-detection-overlay-pipeline/python/main.py \
-  assets/models/yolo_v8n_mpk.tar.gz \
-  examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt \
-  <input_dir> <output_dir>
+python examples/object-detection/simple-object-detection-overlay-pipeline/python/main.py
 ```
 
 ## Debugging Notes
@@ -104,3 +94,4 @@ python examples/object-detection/simple-object-detection-overlay-pipeline/python
 ## Source Files
 - C++ source: `cpp/main.cpp`
 - Python source: `python/main.py`
+- Shared config: `common/config.yaml`

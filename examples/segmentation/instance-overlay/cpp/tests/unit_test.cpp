@@ -15,39 +15,39 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   int failures = 0;
 
-  // Test 1: no args → exit 1, prints usage
+  // Test 1: --help exits successfully and prints usage.
   {
-    auto r = spawn_and_wait(binary, {}, 10000);
-    if (r.exit_code != 1) {
-      std::cerr << "[FAIL] no args: expected exit 1, got " << r.exit_code << "\n";
+    auto r = spawn_and_wait(binary, {"--help"}, 10000);
+    if (r.exit_code != 0) {
+      std::cerr << "[FAIL] --help: expected exit 0, got " << r.exit_code << "\n";
       ++failures;
-    } else if (r.stderr_text.find("Usage") == std::string::npos) {
-      std::cerr << "[FAIL] no args: stderr does not contain Usage\n";
+    } else if (r.stdout_text.find("Usage") == std::string::npos) {
+      std::cerr << "[FAIL] --help: stdout does not contain Usage\n";
       ++failures;
     } else {
-      std::cout << "[OK] no args correctly rejected\n";
+      std::cout << "[OK] --help printed usage\n";
     }
   }
 
-  // Test 2: only 1 arg → exit 1
+  // Test 2: unknown flag is rejected.
   {
-    auto r = spawn_and_wait(binary, {"dummy_model.tar.gz"}, 10000);
-    if (r.exit_code != 1) {
-      std::cerr << "[FAIL] 1 arg: expected exit 1, got " << r.exit_code << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] insufficient args correctly rejected\n";
-    }
-  }
-
-  // Test 3: bad input dir → nonzero exit
-  {
-    auto r = spawn_and_wait(binary, {"dummy.tar.gz", "/nonexistent_dir_abc", "/tmp/out"}, 10000);
+    auto r = spawn_and_wait(binary, {"--bogus"}, 10000);
     if (r.exit_code == 0) {
-      std::cerr << "[FAIL] bad input dir: expected nonzero exit, got 0\n";
+      std::cerr << "[FAIL] --bogus: expected nonzero exit\n";
       ++failures;
     } else {
-      std::cout << "[OK] bad input dir correctly rejected (exit " << r.exit_code << ")\n";
+      std::cout << "[OK] unknown flag rejected\n";
+    }
+  }
+
+  // Test 3: bad config path is rejected.
+  {
+    auto r = spawn_and_wait(binary, {"--config", "/nonexistent_config.yaml"}, 10000);
+    if (r.exit_code == 0) {
+      std::cerr << "[FAIL] bad config: expected nonzero exit\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] bad config path rejected\n";
     }
   }
 

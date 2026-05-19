@@ -78,28 +78,17 @@ This separation keeps the RTSP session from being tightly coupled to the inferen
 
 ## Important Behavior
 - The sample always publishes to Insight.
-- Video is sent to the Insight video UDP port 9000.
-- Detection metadata is sent to the Insight metadata UDP port 9100.
+- Video is sent to the configured Insight video UDP port.
+- Detection metadata is sent to the configured Insight metadata UDP port.
 - The app adds only the `VideoSender` nodegroup for video output. It does not manually add lower-level color conversion, encoder, parser, packetizer, or UDP nodes.
 - This example feeds raw decoded frames to `VideoSender` with the raw-frame option. If an upstream pipeline already produces H.264, `VideoSender` also supports the encoded-input option, where it parses, packetizes, and sends without re-encoding.
-- `--model` is required and must point to a valid YOLO compiled model package file.
-- If `--frames` is omitted, the sample runs continuously.
+- `model.path` must point to a valid YOLO compiled model package file.
+- `source.rtsp_url` must be set before running.
+- If `runtime.frames` is empty or zero, the sample runs continuously.
 
 ## Command-Line Options
-- `--rtsp <url>`
-  Required. RTSP source URL.
-- `--model <path>`
-  Required. Path to the YOLO model pack.
-- `--frames <n>`
-  Optional. Number of frames to process before exiting.
-- `--debug`
-  Optional. Enables per-stage timing prints and additional runtime diagnostics.
-- `--insight-host <host>`
-  Optional. Destination host for Insight video and metadata. Default: `127.0.0.1`.
-- `--insight-video-port <port>`
-  Optional. UDP port for Insight video. Default: `9000`.
-- `--insight-metadata-port <port>`
-  Optional. UDP port for Insight metadata. Default: `9100`.
+- `--config <path>`
+  Optional. YAML config path. Defaults to `common/config.yaml`.
 
 ## Build
 This example can be built in either of these environments:
@@ -161,24 +150,24 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 ### Binary Built From The Apps Repo
 ```bash
 ./build/examples/object-detection/single-rtsp-object-detection-insight/single-rtsp-object-detection-insight \
-  --rtsp <rtsp_url> \
-  --model assets/models/yolo_v8s_mpk.tar.gz
+  --config examples/object-detection/single-rtsp-object-detection-insight/common/config.yaml
 ```
 
 ### Binary Built Directly In The Example Folder
 ```bash
 ./build/single-rtsp-object-detection-insight \
-  --rtsp <rtsp_url> \
-  --model assets/models/yolo_v8s_mpk.tar.gz
+  --config common/config.yaml
 ```
 
-Example with explicit Insight host:
+Set the RTSP source and Insight destination in the config:
 
-```bash
-./build/examples/object-detection/single-rtsp-object-detection-insight/single-rtsp-object-detection-insight \
-  --rtsp <rtsp-url> \
-  --model assets/models/yolo_v8s_mpk.tar.gz \
-  --insight-host <insight-host>
+```yaml
+source:
+  rtsp_url: rtsp://<host>:8554/<stream>
+model:
+  path: assets/models/yolo_v8s_mpk.tar.gz
+insight:
+  host: <insight-host>
 ```
 
 ### Python Implementation
@@ -187,7 +176,7 @@ Run the Python sample directly from the example folder:
 ```bash
 cd <apps-repo-root>/examples/object-detection/single-rtsp-object-detection-insight
 pip install -r python/requirements.txt
-python3 python/main.py --model <path-to-yolo_v8s-mpk.tar.gz> --rtsp <rtsp_url>
+python3 python/main.py --config common/config.yaml
 ```
 
 Example workflow:
@@ -203,12 +192,12 @@ Then start the Python app:
 ```bash
 source ~/pyneat/bin/activate
 pip install -r python/requirements.txt
-python3 python/main.py --rtsp <rtsp-url> --model yolo_v8s_mpk.tar.gz
+python3 python/main.py --config common/config.yaml
 ```
 
 Python-specific notes:
 
-- if `--model` is omitted, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo -v 2.0.0 get yolo_v8s`
+- if `model.path` is empty, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo -v 2.0.0 get yolo_v8s`
 - it sends Insight metadata directly over UDP and streams video through `VideoSender`
 
 ## Debugging Notes

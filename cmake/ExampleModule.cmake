@@ -64,6 +64,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
 
   add_library(sima_neat_apps_support_runtime STATIC
     "${apps_root}/support/runtime/asset_utils.cpp"
+    "${apps_root}/support/runtime/config_utils.cpp"
     "${apps_root}/support/runtime/example_utils.cpp"
     "${apps_root}/support/object_detection/obj_detection_utils.cpp"
   )
@@ -288,6 +289,11 @@ function(sima_neat_apps_module example_name)
   target_include_directories(${example_name}
     PRIVATE
       "${_apps_root}"
+  )
+
+  target_compile_definitions(${example_name}
+    PRIVATE
+      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_module_dir}/.."
   )
 
   if (APP_OUTPUT_TARGET_VAR)

@@ -3,6 +3,7 @@
 #include "support/testing/test_process.h"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -44,9 +45,25 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
+  const std::string config_path = out_dir + "/config.yaml";
+  {
+    std::ofstream config(config_path);
+    config << "model:\n"
+           << "  path: " << model_path << "\n"
+           << "io:\n"
+           << "  input_dir: " << input_dir << "\n"
+           << "  output_dir: " << out_dir << "\n"
+           << "runtime:\n"
+           << "  input_width: 512\n"
+           << "  input_height: 512\n"
+           << "  timeout_ms: 5000\n"
+           << "visualization:\n"
+           << "  alpha: 0.55\n";
+  }
+
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
-  auto r = spawn_and_wait(binary, {model_path, input_dir, out_dir}, timeout);
+  auto r = spawn_and_wait(binary, {"--config", config_path}, timeout);
 
   int rc = 0;
   if (r.exit_code != 0) {

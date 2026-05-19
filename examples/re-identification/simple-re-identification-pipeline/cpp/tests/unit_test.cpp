@@ -15,64 +15,52 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   int failures = 0;
 
-  // Test 1: no args -> exit 2.
   {
-    auto r = spawn_and_wait(binary, {}, 10000);
-    if (r.exit_code != 2) {
-      std::cerr << "[FAIL] no args: expected exit 2, got " << r.exit_code << "\n";
+    auto r = spawn_and_wait(binary, {"--help"}, 10000);
+    if (r.exit_code != 0) {
+      std::cerr << "[FAIL] help: expected exit 0, got " << r.exit_code << "\n";
+      ++failures;
+    } else if (r.stdout_text.find("Usage") == std::string::npos) {
+      std::cerr << "[FAIL] help: stdout missing usage\n";
       ++failures;
     } else {
-      std::cout << "[OK] no args correctly rejected\n";
+      std::cout << "[OK] help prints usage\n";
     }
   }
 
-  // Test 2: only one image -> exit 2.
   {
-    auto r = spawn_and_wait(binary, {"some_image.jpg"}, 10000);
+    auto r = spawn_and_wait(binary, {"--config"}, 10000);
     if (r.exit_code != 2) {
-      std::cerr << "[FAIL] one image: expected exit 2, got " << r.exit_code << "\n";
+      std::cerr << "[FAIL] missing config path: expected exit 2, got " << r.exit_code << "\n";
+      ++failures;
+    } else if (r.stderr_text.find("--config requires a path") == std::string::npos) {
+      std::cerr << "[FAIL] missing config path: stderr missing expected message\n";
       ++failures;
     } else {
-      std::cout << "[OK] missing second image correctly rejected\n";
+      std::cout << "[OK] missing config path correctly rejected\n";
     }
   }
 
-  // Test 3: non-existent explicit model path -> exit 2.
   {
-    auto r = spawn_and_wait(
-        binary,
-        {"some_image.jpg", "other_image.jpg", "--model", "does_not_exist.tar.gz"},
-        10000);
+    auto r = spawn_and_wait(binary, {"--config", "/nonexistent/reid-config.yaml"}, 10000);
     if (r.exit_code != 2) {
-      std::cerr << "[FAIL] bad model path: expected exit 2, got " << r.exit_code << "\n";
+      std::cerr << "[FAIL] bad config: expected exit 2, got " << r.exit_code << "\n";
       ++failures;
-    } else if (r.stderr_text.find("Model file does not exist") == std::string::npos) {
-      std::cerr << "[FAIL] bad model path: stderr missing expected message\n";
+    } else if (r.stderr_text.find("failed to open config") == std::string::npos) {
+      std::cerr << "[FAIL] bad config: stderr missing expected message\n";
       ++failures;
     } else {
-      std::cout << "[OK] missing model path correctly rejected\n";
+      std::cout << "[OK] bad config path correctly rejected\n";
     }
   }
 
-  // Test 4: invalid metric -> exit 2.
   {
-    auto r = spawn_and_wait(
-        binary,
-        {"a.jpg", "b.jpg", "--metric", "manhattan"},
-        10000);
-    if (r.exit_code != 2) {
-      std::cerr << "[FAIL] invalid metric: expected exit 2, got " << r.exit_code << "\n";
-      ++failures;
-    } else {
-      std::cout << "[OK] invalid metric correctly rejected\n";
-    }
-  }
-
-  // Test 5: unknown flag -> exit 2.
-  {
-    auto r = spawn_and_wait(binary, {"a.jpg", "b.jpg", "--bogus"}, 10000);
+    auto r = spawn_and_wait(binary, {"--bogus"}, 10000);
     if (r.exit_code != 2) {
       std::cerr << "[FAIL] unknown flag: expected exit 2, got " << r.exit_code << "\n";
+      ++failures;
+    } else if (r.stderr_text.find("unknown argument") == std::string::npos) {
+      std::cerr << "[FAIL] unknown flag: stderr missing expected message\n";
       ++failures;
     } else {
       std::cout << "[OK] unknown flag correctly rejected\n";

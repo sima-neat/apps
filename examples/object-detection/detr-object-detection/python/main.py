@@ -10,15 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import cv2
-import numpy as np
-import pyneat
+import yaml
 
 
 VERBOSE = False
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATH = "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 FRAME_WIDTH = 1333
 FRAME_HEIGHT = 800
 PERSON_CLASS_ID = 1
@@ -422,64 +421,40 @@ def format_profile_stats(name: str, values: list[float]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="DETR single-image object detection example")
-    parser.add_argument("image", type=str, help="Path to input image")
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=DEFAULT_MODEL_PATH,
-        help=f"Path to DETR compiled model package (default: {DEFAULT_MODEL_PATH})",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="",
-        help="Optional path to write an annotated output image",
-    )
-    parser.add_argument(
-        "--conf",
-        type=float,
-        default=0.5,
-        help="Confidence threshold for detections",
-    )
-    parser.add_argument(
-        "--max-draw",
-        type=int,
-        default=50,
-        help="Maximum number of detections to draw (<=0 draws all)",
-    )
-    parser.add_argument(
-        "--person-only",
-        action="store_true",
-        help="Keep only DETR person detections (class id 1)",
-    )
-    parser.add_argument(
-        "--profile",
-        action="store_true",
-        help="Profile repeated runs and report session/postprocessing timing",
-    )
-    parser.add_argument(
-        "--num-runs",
-        type=int,
-        default=100,
-        help="Number of runs when --profile is enabled",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable debug logging",
-    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    global VERBOSE
-    VERBOSE = bool(args.verbose)
+    global cv2, np, pyneat
+    import cv2
+    import numpy as np
+    import pyneat
 
-    model_path = Path(args.model)
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    model_cfg = raw.get("model", {})
+    io_cfg = raw.get("io", {})
+    decode_cfg = raw.get("decode", {})
+    runtime_cfg = raw.get("runtime", {})
+
+    image_path = Path(io_cfg.get("image", "assets/test_images/input.jpg"))
+    model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
+    output_path = Path(io_cfg.get("output", "sandbox/detr_object_detection/output.png"))
+    confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.5))
+    max_draw = int(decode_cfg.get("max_draw", 50))
+    person_only = bool(decode_cfg.get("person_only", False))
+    profile = bool(runtime_cfg.get("profile", False))
+    num_runs = int(runtime_cfg.get("num_runs", 100))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+
+    global VERBOSE
+    VERBOSE = bool(runtime_cfg.get("verbose", False))
+
     if not model_path.is_file():
         print(f"Model file does not exist: {model_path}", file=sys.stderr)
         return 2
 
     try:
-        orig_bgr, preprocessed, meta = prepare_input(Path(args.image))
+        orig_bgr, preprocessed, meta = prepare_input(image_path)
         model = load_tensor_model(model_path)
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
@@ -489,19 +464,19 @@ def main() -> int:
         print(f"Error during inference: {exc}", file=sys.stderr)
         return 3
 
-    if args.profile:
+    if profile:
         try:
             runner, tensor = build_model_runner(model, preprocessed)
             session_times: list[float] = []
             post_times: list[float] = []
             last_detections: list[dict[str, Any]] = []
 
-            for _ in range(max(1, int(args.num_runs))):
+            for _ in range(max(1, num_runs)):
                 t0 = time.perf_counter()
                 if not runner.push_tensor(tensor):
                     print("Profiling failed: runner.push_tensor returned False", file=sys.stderr)
                     break
-                samples = runner.pull_samples(timeout_ms=5000)
+                samples = runner.pull_samples(timeout_ms=timeout_ms)
                 t1 = time.perf_counter()
                 if not samples:
                     print("Profiling failed: runner.pull_samples returned no samples", file=sys.stderr)
@@ -514,8 +489,8 @@ def main() -> int:
                     boxes,
                     logits,
                     meta,
-                    confidence_threshold=float(args.conf),
-                    detect_only_person=bool(args.person_only),
+                    confidence_threshold=confidence_threshold,
+                    detect_only_person=person_only,
                 )
                 t3 = time.perf_counter()
 
@@ -530,7 +505,7 @@ def main() -> int:
                 return 4
 
             total_times = [a + b for a, b in zip(session_times, post_times)]
-            print(f"Profiling over {len(session_times)} runs (image='{args.image}'):")
+            print(f"Profiling over {len(session_times)} runs (image='{image_path}'):")
             print(format_profile_stats("Session (push+pull)", session_times))
             print(format_profile_stats("Postprocessing (decode+NMS)", post_times))
             print(format_profile_stats("Overall (session + post)", total_times))
@@ -568,8 +543,8 @@ def main() -> int:
             boxes,
             logits,
             meta,
-            confidence_threshold=float(args.conf),
-            detect_only_person=bool(args.person_only),
+            confidence_threshold=confidence_threshold,
+            detect_only_person=person_only,
         )
     except Exception as exc:
         logger.debug("Decode failure", exc_info=exc)
@@ -584,12 +559,11 @@ def main() -> int:
             f"box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]"
         )
 
-    if args.output:
-        out_img = visualize_detections(orig_bgr, detections, max_draw=int(args.max_draw))
-        out_path = Path(args.output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(out_path), out_img)
-        print(f"Wrote annotated image: {out_path}")
+    if str(output_path):
+        out_img = visualize_detections(orig_bgr, detections, max_draw=max_draw)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(output_path), out_img)
+        print(f"Wrote annotated image: {output_path}")
 
     return 0
 

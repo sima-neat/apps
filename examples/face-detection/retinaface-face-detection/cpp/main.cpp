@@ -3,12 +3,11 @@
  * Minimal RetinaFace pipeline (tensor input): run inference on one image and decode
  * boxes/landmarks.
  *
- * Usage:
- *   retinaface-face-detection <image_path> [--model <model.tar.gz>] [--output <out.jpg>]
- *                         [--conf <thr>] [--nms <iou>] [--no-landmarks]
+ * Usage: retinaface-face-detection [--config <path>]
  */
 #include "neat.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/config_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -19,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -462,7 +462,7 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
   }
 }
 
-struct Args {
+struct Config {
   fs::path image;
   std::string model = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz";
   fs::path output;
@@ -474,50 +474,59 @@ struct Args {
   bool landmarks = true;
   bool profile = false;
   int num_runs = 100;
+  int timeout_ms = 5000;
 };
 
-static Args parse_args(int argc, char** argv) {
-  if (argc < 2) {
-    throw std::runtime_error(
-        "Usage: retinaface-face-detection <image_path> [--model ...] [--output ...] "
-        "[--conf ...] [--nms ...] [--top-k ...] [--keep-top-k ...] [--max-draw ...] "
-        "[--no-landmarks]");
+static Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model = raw.string_or("model.path", "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz");
+  cfg.image = raw.string_or("io.image", "assets/test_images/input.jpg");
+  cfg.output = raw.string_or("io.output", "sandbox/retinaface_face_detection/output.png");
+  cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.4));
+  cfg.nms = static_cast<float>(raw.double_or("decode.nms_iou", 0.9));
+  cfg.top_k = raw.int_or("decode.top_k", 5000);
+  cfg.keep_top_k = raw.int_or("decode.keep_top_k", 750);
+  cfg.max_draw = raw.int_or("decode.max_draw", 50);
+  cfg.landmarks = raw.bool_or("decode.landmarks", true);
+  cfg.profile = raw.bool_or("runtime.profile", false);
+  cfg.num_runs = raw.int_or("runtime.num_runs", 100);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  if (cfg.conf < 0.0f || cfg.conf > 1.0f) {
+    throw std::runtime_error("decode.confidence_threshold must be in [0.0, 1.0]");
   }
+  if (cfg.nms < 0.0f || cfg.nms > 1.0f) {
+    throw std::runtime_error("decode.nms_iou must be in [0.0, 1.0]");
+  }
+  if (cfg.top_k < 1 || cfg.keep_top_k < 1 || cfg.max_draw < 0) {
+    throw std::runtime_error("decode top/max values must be valid");
+  }
+  if (cfg.num_runs < 1) {
+    throw std::runtime_error("runtime.num_runs must be >= 1");
+  }
+  if (cfg.timeout_ms <= 0) {
+    throw std::runtime_error("runtime.timeout_ms must be > 0");
+  }
+  return cfg;
+}
 
-  Args a;
-  a.image = argv[1];
-  for (int i = 2; i < argc; ++i) {
+static Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    auto need = [&](const char* flag) -> std::string {
-      if (i + 1 >= argc)
-        throw std::runtime_error(std::string("missing value for ") + flag);
-      return argv[++i];
-    };
-    if (arg == "--model") {
-      a.model = need("--model");
-    } else if (arg == "--output") {
-      a.output = need("--output");
-    } else if (arg == "--conf") {
-      a.conf = std::stof(need("--conf"));
-    } else if (arg == "--nms") {
-      a.nms = std::stof(need("--nms"));
-    } else if (arg == "--top-k") {
-      a.top_k = std::stoi(need("--top-k"));
-    } else if (arg == "--keep-top-k") {
-      a.keep_top_k = std::stoi(need("--keep-top-k"));
-    } else if (arg == "--max-draw") {
-      a.max_draw = std::stoi(need("--max-draw"));
-    } else if (arg == "--profile") {
-      a.profile = true;
-    } else if (arg == "--num-runs") {
-      a.num_runs = std::stoi(need("--num-runs"));
-    } else if (arg == "--no-landmarks") {
-      a.landmarks = false;
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--config requires a path");
+      }
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
     } else {
-      throw std::runtime_error("unknown arg: " + arg);
+      throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  return a;
+  return load_config(config_path);
 }
 
 } // namespace
@@ -527,7 +536,7 @@ int main(int argc, char** argv) {
   std::cerr.setf(std::ios::unitbuf);
 
   try {
-    const Args args = parse_args(argc, argv);
+    const Config args = parse_config(argc, argv);
     if (!fs::exists(args.image)) {
       throw std::runtime_error("image does not exist: " + args.image.string());
     }
@@ -583,7 +592,7 @@ int main(int argc, char** argv) {
         if (!run.push(simaai::neat::TensorList{input_t})) {
           throw std::runtime_error("run.push failed during profiling");
         }
-        auto out_sample = run.pull(/*timeout_ms=*/5000);
+        auto out_sample = run.pull(args.timeout_ms);
         const auto t1 = std::chrono::steady_clock::now();
         if (!out_sample.has_value()) {
           throw std::runtime_error("run.pull returned no sample during profiling");
@@ -651,7 +660,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("run.push failed");
       }
 
-      auto out_sample = run.pull(/*timeout_ms=*/5000);
+      auto out_sample = run.pull(args.timeout_ms);
       if (!out_sample.has_value()) {
         throw std::runtime_error("run.pull returned no sample");
       }

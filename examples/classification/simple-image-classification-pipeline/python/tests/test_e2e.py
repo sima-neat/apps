@@ -38,17 +38,35 @@ class TestE2E:
             image_env.exists(),
             "classification image missing; set SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
         )
+        config_path = apps_root / "sandbox" / "classification_test_config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  image: {image_env}",
+                    "  fallback_image_url: null",
+                    "runtime:",
+                    "  input_width: 224",
+                    "  input_height: 224",
+                    "  timeout_ms: 2000",
+                    "validation:",
+                    "  expected_class_id: 1",
+                    "  min_probability: 0.0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
                 sys.executable,
                 str(MAIN_PY),
-                "--model",
-                str(model),
-                "--image",
-                str(image_env),
-                "--min-prob",
-                "0.0",
+                "--config",
+                str(config_path),
             ],
             capture_output=True,
             text=True,

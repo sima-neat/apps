@@ -36,29 +36,25 @@ Download into `assets/models/`:
 - Labels file: `examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt`
 
 ## Important Behavior
-- Both C++ and Python use named flags (`--model`, `--labels`, `--input-dir`, `--output-dir`).
-- Labels file is required.
+- C++ and Python read runtime values from `common/config.yaml`.
+- Labels file is configured under `model.labels`.
 - Output images are written as `.png` files.
-- Use `--profile` to print per-image and aggregate timing plus FPS.
-- Use `--num-runs N` to repeat the image set N times for benchmarking.
-- Use `--no-overlay` to skip drawing bounding boxes and writing output images (useful for benchmarking pure inference).
+- Use `runtime.profile` to print per-image and aggregate timing plus FPS.
+- Use `runtime.num_runs` to repeat the image set for benchmarking.
+- Use `output.overlay: false` to skip drawing bounding boxes and writing output images.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay --model <model.tar.gz> --labels <labels.txt> --input-dir <dir> --output-dir <dir> [--min-score 0.25] [--nms-iou 0.45] [--profile] [--no-overlay] [--num-runs 1]`
-- Required arguments:
-  `--model <model.tar.gz>`, `--labels <labels.txt>`, `--input-dir <dir>`, `--output-dir <dir>`
+  `./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay [--config <path>]`
 - Optional arguments:
-  `--min-score <float>` (default: `0.25`), `--nms-iou <float>` (default: `0.45`), `--profile`, `--no-overlay`, `--num-runs <int>` (default: `1`)
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ### Python
 - Invocation:
-  `python examples/object-detection/yolo26-object-detection-overlay/python/main.py --model <model.tar.gz> --labels <labels.txt> --input-dir <dir> --output-dir <dir> [--min-score 0.25] [--nms-iou 0.45] [--profile] [--no-overlay] [--num-runs 1]`
-- Required arguments:
-  `--model <model.tar.gz>`, `--labels <labels.txt>`, `--input-dir <dir>`, `--output-dir <dir>`
+  `python examples/object-detection/yolo26-object-detection-overlay/python/main.py [--config <path>]`
 - Optional arguments:
-  `--min-score <float>` (default: `0.25`), `--nms-iou <float>` (default: `0.45`), `--profile`, `--no-overlay`, `--num-runs <int>` (default: `1`)
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ## Build
 ### Build From The Apps Repo
@@ -87,20 +83,14 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay \
-  --model assets/models/yolo26m_mod_mpk.tar.gz \
-  --labels examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt \
-  --input-dir <input_dir> --output-dir <output_dir>
+./build/examples/object-detection/yolo26-object-detection-overlay/yolo26-object-detection-overlay
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/yolo26-object-detection-overlay/python/requirements.txt
-python examples/object-detection/yolo26-object-detection-overlay/python/main.py \
-  --model assets/models/yolo26m_mod_mpk.tar.gz \
-  --labels examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt \
-  --input-dir <input_dir> --output-dir <output_dir>
+python examples/object-detection/yolo26-object-detection-overlay/python/main.py
 ```
 
 ## Testing
@@ -150,7 +140,7 @@ pytest examples/object-detection/yolo26-object-detection-overlay/python/tests/te
 - If model load fails, verify `assets/models/yolo26m_mod_mpk.tar.gz` exists.
 - Ensure input folder contains supported image extensions (`.jpg`, `.jpeg`, `.png`, `.bmp`).
 - Use `--profile` to identify bottlenecks in the pipeline.
-- Use `--min-score` and `--nms-iou` to tune detection sensitivity.
+- Use `decode.score_threshold` and `decode.nms_iou` to tune detection sensitivity.
 
 ## Source Files
 - C++ source: `cpp/main.cpp`

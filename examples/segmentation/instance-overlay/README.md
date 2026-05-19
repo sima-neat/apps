@@ -33,6 +33,7 @@ Download any variant into `assets/models/`:
 - Model path is positional and required.
 - Input directory is scanned for common image extensions.
 - Output images include per-instance mask overlays plus bounding boxes/class labels.
+- Runtime and decode settings live in `common/config.yaml`.
 - Inference runs on a resized model input, but saved overlays preserve the original image resolution.
 - Uses YOLOv8-seg tensors for box regression/class scores, mask coefficients, and prototype masks.
 - Masks, mask contours, and bounding boxes share the same vivid class-color palette.
@@ -40,19 +41,19 @@ Download any variant into `assets/models/`:
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/segmentation/instance-overlay/instance-overlay <model.tar.gz> <input_dir> <output_dir>`
+  `./build/examples/segmentation/instance-overlay/instance-overlay [--config <path>]`
 - Required arguments:
-  `<model.tar.gz> <input_dir> <output_dir>`
+  None. Defaults to `common/config.yaml`.
 - Optional arguments:
-  None.
+  `--config <path>`
 
 ### Python
 - Invocation:
-  `python3 examples/segmentation/instance-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python3 examples/segmentation/instance-overlay/python/main.py [--config <path>]`
 - Required arguments:
-  `<model.tar.gz> <input_dir> <output_dir>`
+  None. Defaults to `common/config.yaml`.
 - Optional arguments:
-  None.
+  `--config <path>`
 
 ## Build
 ### Build From The Apps Repo
@@ -82,7 +83,7 @@ Binary output:
 ### C++
 ```bash
 ./build/examples/segmentation/instance-overlay/instance-overlay \
-  assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
+  --config examples/segmentation/instance-overlay/common/config.yaml
 ```
 
 ### Python
@@ -90,14 +91,15 @@ Binary output:
 source ~/pyneat/bin/activate
 pip install -r examples/segmentation/instance-overlay/python/requirements.txt
 python3 examples/segmentation/instance-overlay/python/main.py \
-  assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
+  --config examples/segmentation/instance-overlay/common/config.yaml
 ```
 
 ## Debugging Notes
 - If startup fails, verify model file path and filename.
-- If output is empty, check score thresholds in code and input image resolution.
+- If output is empty, check `decode.score_threshold` and `runtime.infer_size`.
 - Ensure output directory is writable.
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
 - Python source: `python/main.py`
+- Shared config: `common/config.yaml`

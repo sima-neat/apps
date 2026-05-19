@@ -25,11 +25,31 @@ class TestE2E:
         model = _find_model(models_dir, "yolo_v8s")
         skip_unless_e2e_ready(model is not None, "yolo (non-seg) model not found in models_dir")
 
+        config_path = Path("/tmp") / "single_rtsp_python_config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "source:",
+                    f"  rtsp_url: {rtsp_url}",
+                    "  latency_ms: 200",
+                    "  udp: false",
+                    "model:",
+                    f"  path: {model}",
+                    "runtime:",
+                    "  frames: 10",
+                    "  debug: false",
+                    "insight:",
+                    "  host: 127.0.0.1",
+                    "  video_port: 9000",
+                    "  metadata_port: 9100",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
         cmd = [
             sys.executable, str(MAIN_PY),
-            "--rtsp", rtsp_url,
-            "--frames", "10",
-            "--model", str(model),
+            "--config", str(config_path),
         ]
 
         result = subprocess.run(

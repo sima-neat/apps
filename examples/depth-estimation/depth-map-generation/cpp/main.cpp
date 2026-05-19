@@ -2,9 +2,10 @@
  * @example depth-map-generation.cpp
  * Minimal Depth Anything V2 pipeline: infer depth for every image in a folder.
  *
- * Usage: depth-map-generation <model.tar.gz> <input_dir> <output_dir>
+ * Usage: depth-map-generation [--config <path>]
  */
 #include "neat.h"
+#include "support/runtime/config_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -12,13 +13,55 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
+
+struct Config {
+  std::string model_path;
+  fs::path input_dir;
+  fs::path output_dir;
+  int infer_size = 518;
+  int timeout_ms = 5000;
+  int queue_depth = 4;
+};
+
+static Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model_path = raw.string_or("model.path", "assets/models/depth_anything_v2_vits_mpk.tar.gz");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/depth_map_generation");
+  cfg.infer_size = raw.int_or("runtime.infer_size", 518);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  cfg.queue_depth = raw.int_or("runtime.queue_depth", 4);
+  return cfg;
+}
+
+static Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--config requires a path");
+      }
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
+    } else {
+      throw std::runtime_error("unknown argument: " + arg);
+    }
+  }
+  return load_config(config_path);
+}
 
 static size_t dtype_bytes(simaai::neat::TensorDType dtype) {
   switch (dtype) {
@@ -133,55 +176,52 @@ int main(int argc, char** argv) {
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
 
-  if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir>\n";
+  Config cfg;
+  try {
+    cfg = parse_config(argc, argv);
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n";
     return 1;
   }
 
-  const std::string tar_gz = argv[1];
-  const fs::path input_dir = argv[2];
-  const fs::path output_dir = argv[3];
-
-  if (!fs::is_directory(input_dir)) {
-    std::cerr << "Input directory does not exist: " << input_dir << "\n";
+  if (!fs::is_directory(cfg.input_dir)) {
+    std::cerr << "Input directory does not exist: " << cfg.input_dir << "\n";
     return 2;
   }
-  fs::create_directories(output_dir);
+  fs::create_directories(cfg.output_dir);
 
   // Collect image paths
   std::vector<fs::path> images;
-  for (const auto& entry : fs::directory_iterator(input_dir)) {
+  for (const auto& entry : fs::directory_iterator(cfg.input_dir)) {
     if (entry.is_regular_file() && is_image(entry.path()))
       images.push_back(entry.path());
   }
   std::sort(images.begin(), images.end());
 
   if (images.empty()) {
-    std::cerr << "No images found in " << input_dir << "\n";
+    std::cerr << "No images found in " << cfg.input_dir << "\n";
     return 3;
   }
   std::cout << "Found " << images.size() << " images\n";
 
   // Configure model (518x518 input from MPK transform table)
-  constexpr int kInferSize = 518;
-
   std::cout << "[BUILD] Loading model...\n";
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
-  model_opt.preprocess.input_max_width = kInferSize;
-  model_opt.preprocess.input_max_height = kInferSize;
+  model_opt.preprocess.input_max_width = cfg.infer_size;
+  model_opt.preprocess.input_max_height = cfg.infer_size;
   model_opt.preprocess.input_max_depth = 3;
-  simaai::neat::Model model(tar_gz, model_opt);
+  simaai::neat::Model model(cfg.model_path, model_opt);
   std::cout << "[BUILD] Model loaded\n";
 
   // Seed the runner so the Model planner can validate image shape and caps once.
-  cv::Mat dummy_rgb(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
+  cv::Mat dummy_rgb(cfg.infer_size, cfg.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
   simaai::neat::Tensor dummy_input = simaai::neat::Tensor::from_cv_mat(
       dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
   simaai::neat::RunOptions run_opt;
-  run_opt.queue_depth = 4;
+  run_opt.queue_depth = cfg.queue_depth;
   run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
 
   std::cout << "[BUILD] Building pipeline...\n";
@@ -199,13 +239,13 @@ int main(int argc, char** argv) {
 
     cv::Mat rgb;
     cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-    cv::resize(rgb, rgb, {kInferSize, kInferSize});
+    cv::resize(rgb, rgb, {cfg.infer_size, cfg.infer_size});
 
     simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
         rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
     std::cout << "[INFER] Running " << img_path.filename() << "...\n";
-    auto tensors = runner.run(simaai::neat::TensorList{input});
+    auto tensors = runner.run(simaai::neat::TensorList{input}, cfg.timeout_ms);
     std::cout << "[INFER] Got output\n";
     if (tensors.empty()) {
       std::cerr << "No output tensors for " << img_path.filename() << "\n";
@@ -233,7 +273,7 @@ int main(int argc, char** argv) {
     input_resized.copyTo(subplot(cv::Rect(0, 0, colormap.cols, colormap.rows)));
     colormap.copyTo(subplot(cv::Rect(colormap.cols, 0, colormap.cols, colormap.rows)));
 
-    fs::path out_path = output_dir / (img_path.stem().string() + ".png");
+    fs::path out_path = cfg.output_dir / (img_path.stem().string() + ".png");
     cv::imwrite(out_path.string(), subplot);
     std::cout << "[" << ++processed << "/" << images.size() << "] " << img_path.filename() << " -> "
               << out_path.filename() << "\n";

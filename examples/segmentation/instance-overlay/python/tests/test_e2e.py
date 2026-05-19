@@ -31,13 +31,35 @@ class TestE2E:
             test_images_dir.exists() and any(test_images_dir.iterdir()),
             "test_images_dir is missing or empty",
         )
+        config_path = tmp_output_dir / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  input_dir: {test_images_dir}",
+                    f"  output_dir: {tmp_output_dir}",
+                    "runtime:",
+                    "  infer_size: 640",
+                    "  timeout_ms: 3000",
+                    "  queue_depth: 8",
+                    "decode:",
+                    "  score_threshold: 0.60",
+                    "  nms_iou: 0.45",
+                    "  max_detections: 200",
+                    "visualization:",
+                    "  mask_alpha: 0.65",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                str(model),
-                str(test_images_dir),
-                str(tmp_output_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,

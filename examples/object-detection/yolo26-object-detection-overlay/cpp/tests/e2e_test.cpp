@@ -3,6 +3,7 @@
 #include "support/testing/test_process.h"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -29,9 +30,8 @@ int main(int argc, char** argv) {
     }
   }
   if (model_path.empty()) {
-    return skip_or_fail(
-        "expected model '" + kExpectedModel +
-        "' not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+    return skip_or_fail("expected model '" + kExpectedModel +
+                        "' not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   std::string labels_file;
@@ -41,9 +41,9 @@ int main(int argc, char** argv) {
 
   std::string example_dir = fs::path(binary).parent_path().string();
   std::vector<std::string> label_search = {
-    "examples/object-detection/yolo26-object-detection-overlay/"
-    "common/coco_label.txt",
-    example_dir + "/common/coco_label.txt",
+      "examples/object-detection/yolo26-object-detection-overlay/"
+      "common/coco_label.txt",
+      example_dir + "/common/coco_label.txt",
   };
   for (const auto& p : label_search) {
     if (!labels_file.empty()) {
@@ -54,26 +54,50 @@ int main(int argc, char** argv) {
     }
   }
   if (labels_file.empty()) {
-    return skip_or_fail(
-        "common/coco_label.txt not found; set SIMANEAT_APPS_TEST_LABELS_FILE "
-        "or ensure example label file is available");
+    return skip_or_fail("common/coco_label.txt not found; set SIMANEAT_APPS_TEST_LABELS_FILE "
+                        "or ensure example label file is available");
   }
 
   const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
   const std::string input_dir = images_raw ? images_raw : "assets/test_images";
   if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory with test images (assets/test_images is empty or missing)");
+                "directory with test images (assets/test_images is empty or missing)");
   }
 
   auto out_dir = create_temp_dir("yolo26-object-detection-overlay_e2e_");
-  if (out_dir.empty()) return 1;
+  if (out_dir.empty())
+    return 1;
+
+  auto config_dir = create_temp_dir("yolo26-object-detection-overlay_config_");
+  if (config_dir.empty()) {
+    remove_dir(out_dir);
+    return 1;
+  }
+  const fs::path config_path = fs::path(config_dir) / "config.yaml";
+  {
+    std::ofstream config_file(config_path);
+    config_file << "model:\n"
+                << "  path: " << model_path << "\n"
+                << "  labels: " << labels_file << "\n"
+                << "io:\n"
+                << "  input_dir: " << input_dir << "\n"
+                << "  output_dir: " << out_dir << "\n"
+                << "decode:\n"
+                << "  score_threshold: 0.25\n"
+                << "  nms_iou: 0.45\n"
+                << "  max_detections: 100\n"
+                << "runtime:\n"
+                << "  timeout_ms: 5000\n"
+                << "  num_runs: 1\n"
+                << "  profile: false\n"
+                << "output:\n"
+                << "  overlay: true\n";
+  }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
-  auto r = spawn_and_wait(binary,
-      {"--model", model_path, "--labels", labels_file,
-       "--input-dir", input_dir, "--output-dir", out_dir}, timeout);
+  auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
   int rc = 0;
   if (r.exit_code != 0) {
@@ -87,10 +111,11 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] yolo26m object detection overlay produced "
-              << count_files(out_dir) << " output files\n";
+    std::cout << "[OK] yolo26m object detection overlay produced " << count_files(out_dir)
+              << " output files\n";
   }
 
+  remove_dir(config_dir);
   remove_dir(out_dir);
   return rc;
 }

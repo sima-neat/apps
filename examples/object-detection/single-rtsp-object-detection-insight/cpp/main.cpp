@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "support/runtime/example_utils.h"
+#include "support/runtime/config_utils.h"
 #include "support/object_detection/obj_detection_utils.h"
 #include "neat/session.h"
 #include "neat/models.h"
@@ -42,7 +43,6 @@
 
 namespace fs = std::filesystem;
 
-using sima_examples::parse_int_arg;
 using sima_examples::time_ms;
 
 namespace {
@@ -59,6 +59,8 @@ struct Config {
   int frames = 300;
   bool frames_set = false;
   bool debug = false;
+  int latency_ms = 200;
+  bool udp = false;
   std::string insight_host = "127.0.0.1";
   int insight_video_port = 9000;
   int insight_metadata_port = 9100;
@@ -68,15 +70,35 @@ struct Config {
 // only source selection, bounded runs, debug timings, and Insight address/ports.
 Config parse_config(int argc, char** argv) {
   Config cfg;
-  sima_examples::get_arg(argc, argv, "--rtsp", cfg.url);
-  sima_examples::get_arg(argc, argv, "--model", cfg.model_path);
-  cfg.frames_set = parse_int_arg(argc, argv, "--frames", cfg.frames);
-  cfg.debug = sima_examples::has_flag(argc, argv, "--debug");
-  sima_examples::get_arg(argc, argv, "--insight-host", cfg.insight_host);
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--config requires a path");
+      }
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
+    } else {
+      throw std::runtime_error("unknown argument: " + arg);
+    }
+  }
+
+  const auto raw = sima_examples::ScalarConfig::load(config_path);
+  cfg.url = raw.string_or("source.rtsp_url", "");
+  cfg.latency_ms = raw.int_or("source.latency_ms", 200);
+  cfg.udp = raw.bool_or("source.udp", false);
+  cfg.model_path = raw.string_or("model.path", "");
+  cfg.frames = raw.int_or("runtime.frames", 300);
+  cfg.frames_set = cfg.frames > 0;
+  cfg.debug = raw.bool_or("runtime.debug", false);
+  cfg.insight_host = raw.string_or("insight.host", "127.0.0.1");
   if (cfg.insight_host.empty())
     cfg.insight_host = "127.0.0.1";
-  parse_int_arg(argc, argv, "--insight-video-port", cfg.insight_video_port);
-  parse_int_arg(argc, argv, "--insight-metadata-port", cfg.insight_metadata_port);
+  cfg.insight_video_port = raw.int_or("insight.video_port", 9000);
+  cfg.insight_metadata_port = raw.int_or("insight.metadata_port", 9100);
   return cfg;
 }
 
@@ -451,15 +473,15 @@ RtspRuntime build_rtsp_runtime(const Config& cfg) {
   sima_examples::RtspStreamInfo rtsp_probe;
   sima_examples::RtspProbeOptions rtsp_probe_opt;
   rtsp_probe_opt.payload_type = 96;
-  rtsp_probe_opt.latency_ms = 200;
-  rtsp_probe_opt.rtsp_tcp = true;
+  rtsp_probe_opt.latency_ms = cfg.latency_ms;
+  rtsp_probe_opt.rtsp_tcp = !cfg.udp;
   rtsp_probe_opt.debug = cfg.debug;
   (void)sima_examples::probe_rtsp_stream_info(cfg.url, rtsp_probe_opt, rtsp_probe);
 
   simaai::neat::nodes::groups::RtspDecodedInputOptions cam_opt;
   cam_opt.url = cfg.url;
-  cam_opt.latency_ms = 200;
-  cam_opt.tcp = true;
+  cam_opt.latency_ms = cfg.latency_ms;
+  cam_opt.tcp = !cfg.udp;
   cam_opt.payload_type = 96;
   cam_opt.insert_queue = true;
   cam_opt.out_format = "NV12";
@@ -613,7 +635,6 @@ YoloRuntime build_yolo_runtime(const Config& cfg, int frame_w, int frame_h) {
 
 std::optional<int> resolve_frame_limit(const Config& cfg) {
   if (cfg.frames_set) {
-    sima_examples::require(cfg.frames > 0, "--frames must be > 0");
     return cfg.frames;
   }
   return std::nullopt;
@@ -850,8 +871,8 @@ int main(int argc, char** argv) {
   try {
     // Lifecycle: setup -> start workers -> join -> summary -> teardown.
     Config cfg = parse_config(argc, argv);
-    sima_examples::require(!cfg.url.empty(), "Missing --rtsp <url>");
-    sima_examples::require(!cfg.model_path.empty(), "Missing --model <path/to/model_mpk.tar.gz>");
+    sima_examples::require(!cfg.url.empty(), "Missing source.rtsp_url in config");
+    sima_examples::require(!cfg.model_path.empty(), "Missing model.path in config");
 
     enable_insight_diagnostics(true);
 

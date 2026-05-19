@@ -3,6 +3,7 @@
 #include "support/testing/test_process.h"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -40,15 +41,35 @@ int main(int argc, char** argv) {
   const std::string input_dir = images_raw ? images_raw : "assets/test_images";
   if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory with test images (assets/test_images is empty or missing)");
+                "directory with test images (assets/test_images is empty or missing)");
   }
 
   auto out_dir = create_temp_dir("depth-map-generation_e2e_");
-  if (out_dir.empty()) return 1;
+  if (out_dir.empty())
+    return 1;
+
+  auto config_dir = create_temp_dir("depth-map-generation_config_");
+  if (config_dir.empty()) {
+    remove_dir(out_dir);
+    return 1;
+  }
+  const fs::path config_path = fs::path(config_dir) / "config.yaml";
+  {
+    std::ofstream config_file(config_path);
+    config_file << "model:\n"
+                << "  path: " << model_path << "\n"
+                << "io:\n"
+                << "  input_dir: " << input_dir << "\n"
+                << "  output_dir: " << out_dir << "\n"
+                << "runtime:\n"
+                << "  infer_size: 518\n"
+                << "  timeout_ms: 5000\n"
+                << "  queue_depth: 4\n";
+  }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
-  auto r = spawn_and_wait(binary, {model_path, input_dir, out_dir}, timeout);
+  auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
   int rc = 0;
   if (r.exit_code != 0) {
@@ -62,10 +83,10 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] depth map generation produced "
-              << count_files(out_dir) << " output files\n";
+    std::cout << "[OK] depth map generation produced " << count_files(out_dir) << " output files\n";
   }
 
+  remove_dir(config_dir);
   remove_dir(out_dir);
   return rc;
 }

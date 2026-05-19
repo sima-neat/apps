@@ -2,14 +2,11 @@
  * @example yolo26-object-detection-overlay.cpp
  * Minimal yolo26m sync pipeline: infer detections for every image in a folder.
  *
- * Usage: yolo26-object-detection-overlay
- *          --model <model.tar.gz> --labels <labels.txt>
- *          --input-dir <dir> --output-dir <dir>
- *          [--min-score 0.25] [--nms-iou 0.45]
- *          [--profile] [--no-overlay]
+ * Usage: yolo26-object-detection-overlay [--config <path>]
  */
 #include "neat.h"
 #include "support/object_detection/obj_detection_utils.h"
+#include "support/runtime/config_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -21,9 +18,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <getopt.h>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -46,92 +43,64 @@ struct Config {
   std::string output_dir;
   float min_score = kDefaultMinScore;
   float nms_iou = kDefaultNmsIou;
+  int max_detections = kMaxDet;
+  int timeout_ms = kTimeoutMs;
   bool profile = false;
   bool overlay = true;
   int num_runs = 1;
 };
 
-void print_usage(const char* prog) {
-  std::cerr << "Usage: " << prog << " --model <model.tar.gz> --labels <labels.txt>\n"
-            << "       --input-dir <dir> --output-dir <dir>\n"
-            << "       [--min-score " << kDefaultMinScore << "] [--nms-iou " << kDefaultNmsIou
-            << "]\n"
-            << "       [--profile] [--no-overlay] [--num-runs 1]\n";
-}
-
-int parse_args(int argc, char** argv, Config& cfg) {
-  static const struct option long_opts[] = {
-      {"model", required_argument, nullptr, 'm'},
-      {"labels", required_argument, nullptr, 'l'},
-      {"input-dir", required_argument, nullptr, 'i'},
-      {"output-dir", required_argument, nullptr, 'o'},
-      {"min-score", required_argument, nullptr, 's'},
-      {"nms-iou", required_argument, nullptr, 'n'},
-      {"profile", no_argument, nullptr, 'p'},
-      {"no-overlay", no_argument, nullptr, 'O'},
-      {"num-runs", required_argument, nullptr, 'R'},
-      {"help", no_argument, nullptr, 'h'},
-      {nullptr, 0, nullptr, 0},
-  };
-
-  int opt;
-  while ((opt = getopt_long(argc, argv, "", long_opts, nullptr)) != -1) {
-    switch (opt) {
-    case 'm':
-      cfg.model_path = optarg;
-      break;
-    case 'l':
-      cfg.labels_path = optarg;
-      break;
-    case 'i':
-      cfg.input_dir = optarg;
-      break;
-    case 'o':
-      cfg.output_dir = optarg;
-      break;
-    case 's':
-      cfg.min_score = std::stof(optarg);
-      break;
-    case 'n':
-      cfg.nms_iou = std::stof(optarg);
-      break;
-    case 'p':
-      cfg.profile = true;
-      break;
-    case 'O':
-      cfg.overlay = false;
-      break;
-    case 'R':
-      cfg.num_runs = std::stoi(optarg);
-      break;
-    case 'h':
-      print_usage(argv[0]);
-      return 1;
-    default:
-      print_usage(argv[0]);
-      return 1;
-    }
-  }
-
-  if (cfg.model_path.empty() || cfg.labels_path.empty() || cfg.input_dir.empty() ||
-      cfg.output_dir.empty()) {
-    std::cerr << "Error: --model, --labels, --input-dir, and --output-dir are required.\n";
-    print_usage(argv[0]);
-    return 1;
-  }
+Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model_path = raw.string_or("model.path", "assets/models/yolo26m_mod_mpk.tar.gz");
+  cfg.labels_path = raw.string_or(
+      "model.labels",
+      "examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/yolo26_object_detection_overlay");
+  cfg.min_score = static_cast<float>(raw.double_or("decode.score_threshold", kDefaultMinScore));
+  cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", kDefaultNmsIou));
+  cfg.max_detections = raw.int_or("decode.max_detections", kMaxDet);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kTimeoutMs);
+  cfg.num_runs = raw.int_or("runtime.num_runs", 1);
+  cfg.profile = raw.bool_or("runtime.profile", false);
+  cfg.overlay = raw.bool_or("output.overlay", true);
   if (cfg.min_score < 0.0f || cfg.min_score > 1.0f) {
-    std::cerr << "Error: --min-score must be in [0.0, 1.0], got " << cfg.min_score << "\n";
-    return 1;
+    throw std::runtime_error("decode.score_threshold must be in [0.0, 1.0]");
   }
   if (cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
-    std::cerr << "Error: --nms-iou must be in [0.0, 1.0], got " << cfg.nms_iou << "\n";
-    return 1;
+    throw std::runtime_error("decode.nms_iou must be in [0.0, 1.0]");
+  }
+  if (cfg.max_detections < 1) {
+    throw std::runtime_error("decode.max_detections must be >= 1");
+  }
+  if (cfg.timeout_ms <= 0) {
+    throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
   if (cfg.num_runs < 1) {
-    std::cerr << "Error: --num-runs must be >= 1, got " << cfg.num_runs << "\n";
-    return 1;
+    throw std::runtime_error("runtime.num_runs must be >= 1");
   }
-  return 0;
+  return cfg;
+}
+
+Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--config requires a path");
+      }
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
+    } else {
+      throw std::runtime_error("unknown argument: " + arg);
+    }
+  }
+  return load_config(config_path);
 }
 
 bool is_image(const fs::path& p) {
@@ -213,7 +182,7 @@ float class_confidence(float value) {
 // 3 regression tensors as absolute (cx,cy,w,h) in 640x640 model space, plus
 // 3 class-probability tensors.
 std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::TensorList& tensors,
-                                             float min_score, float nms_iou) {
+                                             float min_score, float nms_iou, int max_detections) {
   if (tensors.size() < 6) {
     throw std::runtime_error("expected at least 6 tensors, got " + std::to_string(tensors.size()));
   }
@@ -271,7 +240,7 @@ std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::TensorList& ten
   std::sort(candidates.begin(), candidates.end(),
             [](const objdet::Box& a, const objdet::Box& b) { return a.score > b.score; });
   std::vector<objdet::Box> keep;
-  keep.reserve(kMaxDet);
+  keep.reserve(static_cast<size_t>(max_detections));
   for (const auto& b : candidates) {
     bool suppressed = false;
     for (const auto& k : keep) {
@@ -282,7 +251,7 @@ std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::TensorList& ten
     }
     if (!suppressed) {
       keep.push_back(b);
-      if (static_cast<int>(keep.size()) >= kMaxDet)
+      if (static_cast<int>(keep.size()) >= max_detections)
         break;
     }
   }
@@ -350,9 +319,11 @@ int main(int argc, char** argv) {
   std::cerr.setf(std::ios::unitbuf);
 
   Config cfg;
-  int rc = parse_args(argc, argv, cfg);
-  if (rc != 0) {
-    return rc;
+  try {
+    cfg = parse_config(argc, argv);
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n";
+    return 1;
   }
 
   const fs::path input_dir = cfg.input_dir;
@@ -408,7 +379,7 @@ int main(int argc, char** argv) {
     auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Sync);
 
     // Warmup inference to stabilize timing before profiling.
-    run.run(simaai::neat::TensorList{dummy}, kTimeoutMs);
+    run.run(simaai::neat::TensorList{dummy}, cfg.timeout_ms);
     std::cout << "[WARMUP] done\n";
 
     const int total_images = static_cast<int>(images.size()) * cfg.num_runs;
@@ -439,11 +410,11 @@ int main(int argc, char** argv) {
             simaai::neat::Tensor::from_cv_mat(resized, simaai::neat::ImageSpec::PixelFormat::BGR);
 
         const auto infer_start = std::chrono::steady_clock::now();
-        simaai::neat::TensorList out = run.run(simaai::neat::TensorList{input}, kTimeoutMs);
+        simaai::neat::TensorList out = run.run(simaai::neat::TensorList{input}, cfg.timeout_ms);
         const auto infer_end = std::chrono::steady_clock::now();
 
         const std::vector<objdet::Box> boxes_infer =
-            decode_yolo26_boxes(out, cfg.min_score, cfg.nms_iou);
+            decode_yolo26_boxes(out, cfg.min_score, cfg.nms_iou, cfg.max_detections);
         const auto decode_end = std::chrono::steady_clock::now();
 
         const auto boxes_orig = scale_boxes_to_original(boxes_infer, orig_w, orig_h);
