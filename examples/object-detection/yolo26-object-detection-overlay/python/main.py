@@ -7,15 +7,14 @@ import sys
 import time
 from pathlib import Path
 
-import cv2
-import numpy as np
-import pyneat
+import yaml
 
 
 INFER_SIZE = 640
 MIN_SCORE = 0.25
 NMS_IOU = 0.45
 MAX_DET = 100
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 BOX_COLORS = [
     (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0),
     (255, 0, 255), (0, 255, 255), (128, 255, 0), (255, 128, 0),
@@ -68,7 +67,7 @@ def nms_numpy(boxes_xyxy: np.ndarray, scores: np.ndarray, iou_threshold: float) 
 
 
 def decode_yolo26m_boxes_from_tensors(
-    tensors, infer_size: int, min_score: float, nms_iou: float,
+    tensors, infer_size: int, min_score: float, nms_iou: float, max_detections: int,
 ) -> list[dict]:
     if len(tensors) < 6:
         raise ValueError(f"expected at least 6 tensors, got {len(tensors)}")
@@ -117,8 +116,8 @@ def decode_yolo26m_boxes_from_tensors(
 
     # Vectorized NMS.
     keep_idx = nms_numpy(boxes_xyxy, max_scores, nms_iou)
-    if len(keep_idx) > MAX_DET:
-        keep_idx = keep_idx[:MAX_DET]
+    if len(keep_idx) > max_detections:
+        keep_idx = keep_idx[:max_detections]
 
     result = []
     for i in keep_idx:
@@ -159,55 +158,60 @@ def scale_boxes(boxes: list[dict], from_size: int, to_w: int, to_h: int) -> list
     return scaled
 
 
+def load_config(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="yolo26m simple folder detection pipeline")
-    parser.add_argument("--model", required=True, help="Path to yolo26m compiled model package")
-    parser.add_argument("--labels", required=True, help="Path to labels txt file (one label per line)")
-    parser.add_argument("--input-dir", required=True, help="Input image directory")
-    parser.add_argument("--output-dir", required=True, help="Output directory")
-    parser.add_argument(
-        "--min-score",
-        type=float,
-        default=MIN_SCORE,
-        help=f"Detection confidence threshold (default: {MIN_SCORE})",
-    )
-    parser.add_argument(
-        "--nms-iou",
-        type=float,
-        default=NMS_IOU,
-        help=f"NMS IoU threshold (default: {NMS_IOU})",
-    )
-    parser.add_argument(
-        "--profile",
-        action="store_true",
-        help="Print per-image and aggregate timing",
-    )
-    parser.add_argument(
-        "--no-overlay",
-        action="store_true",
-        help="Skip drawing bounding boxes on output images",
-    )
-    parser.add_argument(
-        "--num-runs",
-        type=int,
-        default=1,
-        help="Repeat the image set N times for FPS measurement (default: 1)",
-    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    if not 0.0 <= args.min_score <= 1.0:
-        print(f"Error: --min-score must be in [0.0, 1.0], got {args.min_score}", file=sys.stderr)
-        return 2
-    if not 0.0 <= args.nms_iou <= 1.0:
-        print(f"Error: --nms-iou must be in [0.0, 1.0], got {args.nms_iou}", file=sys.stderr)
-        return 2
-    if args.num_runs < 1:
-        print(f"Error: --num-runs must be >= 1, got {args.num_runs}", file=sys.stderr)
-        return 2
+    global cv2, np, pyneat
+    import cv2
+    import numpy as np
+    import pyneat
 
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
-    labels_path = Path(args.labels)
+    raw = load_config(args.config)
+    model_cfg = raw.get("model", {})
+    io_cfg = raw.get("io", {})
+    decode_cfg = raw.get("decode", {})
+    runtime_cfg = raw.get("runtime", {})
+    output_cfg = raw.get("output", {})
+
+    model_path = model_cfg.get("path", "assets/models/yolo26m_mod_mpk.tar.gz")
+    labels_path = Path(
+        model_cfg.get(
+            "labels",
+            "examples/object-detection/yolo26-object-detection-overlay/common/coco_label.txt",
+        )
+    )
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/yolo26_object_detection_overlay"))
+    min_score = float(decode_cfg.get("score_threshold", MIN_SCORE))
+    nms_iou = float(decode_cfg.get("nms_iou", NMS_IOU))
+    max_detections = int(decode_cfg.get("max_detections", MAX_DET))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+    num_runs = int(runtime_cfg.get("num_runs", 1))
+    profile = bool(runtime_cfg.get("profile", False))
+    overlay = bool(output_cfg.get("overlay", True))
+
+    if not 0.0 <= min_score <= 1.0:
+        print(f"Error: decode.score_threshold must be in [0.0, 1.0], got {min_score}", file=sys.stderr)
+        return 2
+    if not 0.0 <= nms_iou <= 1.0:
+        print(f"Error: decode.nms_iou must be in [0.0, 1.0], got {nms_iou}", file=sys.stderr)
+        return 2
+    if max_detections < 1:
+        print(f"Error: decode.max_detections must be >= 1, got {max_detections}", file=sys.stderr)
+        return 2
+    if timeout_ms <= 0:
+        print(f"Error: runtime.timeout_ms must be > 0, got {timeout_ms}", file=sys.stderr)
+        return 2
+    if num_runs < 1:
+        print(f"Error: runtime.num_runs must be >= 1, got {num_runs}", file=sys.stderr)
+        return 2
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
@@ -231,7 +235,7 @@ def main() -> int:
         opt.preprocess.input_max_width = INFER_SIZE
         opt.preprocess.input_max_height = INFER_SIZE
         opt.preprocess.input_max_depth = 3
-        model = pyneat.Model(args.model, opt)
+        model = pyneat.Model(model_path, opt)
 
         # Warmup inference to stabilize timing before profiling.
         dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
@@ -246,13 +250,12 @@ def main() -> int:
         run_opt.overflow_policy = pyneat.OverflowPolicy.Block
         run_opt.preset = pyneat.RunPreset.Balanced
         runner = model.build(t_dummy, run_options=run_opt)
-        runner.run(t_dummy, timeout_ms=10000)
+        runner.run(t_dummy, timeout_ms=timeout_ms)
         print("[WARMUP] done")
 
-        total_runs = args.num_runs
-        all_images = images * total_runs
-        if total_runs > 1:
-            print(f"Looping {total_runs}x over {len(images)} images ({len(all_images)} total)")
+        all_images = images * num_runs
+        if num_runs > 1:
+            print(f"Looping {num_runs}x over {len(images)} images ({len(all_images)} total)")
 
         pipeline_start = time.perf_counter()
         processed = 0
@@ -276,17 +279,17 @@ def main() -> int:
             )
 
             infer_start = time.perf_counter()
-            out = runner.run(t_in, timeout_ms=5000)
+            out = runner.run(t_in, timeout_ms=timeout_ms)
             infer_end = time.perf_counter()
 
             boxes = decode_yolo26m_boxes_from_tensors(
-                out, INFER_SIZE, args.min_score, args.nms_iou,
+                out, INFER_SIZE, min_score, nms_iou, max_detections,
             )
             decode_end = time.perf_counter()
 
             boxes = scale_boxes(boxes, INFER_SIZE, orig_w, orig_h)
 
-            if not args.no_overlay:
+            if overlay:
                 draw_boxes(bgr, boxes, labels)
                 out_path = output_dir / f"{img_path.stem}.png"
                 cv2.imwrite(str(out_path), bgr)
@@ -294,12 +297,12 @@ def main() -> int:
 
             processed += 1
             det_str = f"({len(boxes)} detections)"
-            if args.no_overlay:
-                print(f"[{processed}/{len(all_images)}] {img_path.name} {det_str}")
-            else:
+            if overlay:
                 print(f"[{processed}/{len(all_images)}] {img_path.name} -> {img_path.stem}.png {det_str}")
+            else:
+                print(f"[{processed}/{len(all_images)}] {img_path.name} {det_str}")
 
-            if args.profile:
+            if profile:
                 pre_ms = (infer_start - img_start) * 1000
                 inf_ms = (infer_end - infer_start) * 1000
                 dec_ms = (decode_end - infer_end) * 1000
@@ -311,7 +314,7 @@ def main() -> int:
                     f"overlay+save={post_ms:.1f}ms total={tot_ms:.1f}ms"
                 )
 
-        if args.profile and processed > 0:
+        if profile and processed > 0:
             pipeline_end = time.perf_counter()
             total_s = pipeline_end - pipeline_start
             avg_ms = (total_s * 1000) / processed

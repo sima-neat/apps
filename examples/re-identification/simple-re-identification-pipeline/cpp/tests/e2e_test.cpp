@@ -65,8 +65,7 @@ int main(int argc, char** argv) {
   if (fs::exists(models_dir)) {
     for (const auto& entry : fs::directory_iterator(models_dir)) {
       const std::string name = entry.path().filename().string();
-      if (name.find("reid") != std::string::npos &&
-          name.find(".tar.gz") != std::string::npos) {
+      if (name.find("reid") != std::string::npos && name.find(".tar.gz") != std::string::npos) {
         model_path = entry.path().string();
         break;
       }
@@ -77,7 +76,8 @@ int main(int argc, char** argv) {
   }
 
   const char* images_env = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
-  const fs::path images_root = images_env ? fs::path(images_env) : fs::path("assets/images/neat_reid_examples");
+  const fs::path images_root =
+      images_env ? fs::path(images_env) : fs::path("assets/images/neat_reid_examples");
   const std::vector<fs::path> images = collect_images_recursive(images_root);
   if (images.size() < 2) {
     return skip_or_fail("need at least 2 images under images dir (found " +
@@ -96,12 +96,26 @@ int main(int argc, char** argv) {
     if (out_dir.empty()) {
       return 1;
     }
+    const fs::path config_path = fs::path(out_dir) / "config.yaml";
+    {
+      std::ofstream config_file(config_path);
+      config_file << "model:\n"
+                  << "  path: " << model_path << "\n"
+                  << "io:\n"
+                  << "  image1: " << image_a.string() << "\n"
+                  << "  image2: " << image_b.string() << "\n"
+                  << "  output_dir: " << out_dir << "\n"
+                  << "output:\n"
+                  << "  type: both\n"
+                  << "comparison:\n"
+                  << "  metric: cosine\n"
+                  << "  threshold: 0.65\n"
+                  << "runtime:\n"
+                  << "  timeout_ms: 5000\n"
+                  << "  profile: false\n";
+    }
 
-    auto r = spawn_and_wait(
-        binary,
-        {image_a.string(), image_b.string(), "--model", model_path, "--metric", "cosine",
-         "--threshold", "0.65", "--output-dir", out_dir},
-        timeout);
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
     const fs::path comparison = fs::path(out_dir) / "comparison.jpg";
     const fs::path result_json = fs::path(out_dir) / "result.json";
@@ -138,12 +152,26 @@ int main(int argc, char** argv) {
     if (out_dir.empty()) {
       return 1;
     }
+    const fs::path config_path = fs::path(out_dir) / "config.yaml";
+    {
+      std::ofstream config_file(config_path);
+      config_file << "model:\n"
+                  << "  path: " << model_path << "\n"
+                  << "io:\n"
+                  << "  image1: " << image_a.string() << "\n"
+                  << "  image2: " << image_b.string() << "\n"
+                  << "  output_dir: " << out_dir << "\n"
+                  << "output:\n"
+                  << "  type: json\n"
+                  << "comparison:\n"
+                  << "  metric: euclidean\n"
+                  << "  threshold: 25.0\n"
+                  << "runtime:\n"
+                  << "  timeout_ms: 5000\n"
+                  << "  profile: false\n";
+    }
 
-    auto r = spawn_and_wait(
-        binary,
-        {image_a.string(), image_b.string(), "--model", model_path, "--metric", "euclidean",
-         "--output-type", "json", "--output-dir", out_dir},
-        timeout);
+    auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
     const fs::path comparison = fs::path(out_dir) / "comparison.jpg";
     const fs::path result_json = fs::path(out_dir) / "result.json";

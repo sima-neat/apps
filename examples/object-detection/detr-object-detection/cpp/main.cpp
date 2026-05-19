@@ -2,13 +2,11 @@
  * @example detr-object-detection.cpp
  * Minimal DETR single-image detection pipeline using tensor input and raw tensor decode.
  *
- * Usage:
- *   detr-object-detection <image_path> [--model <model.tar.gz>] [--output <out.png>]
- *                         [--conf <thr>] [--max-draw <count>] [--person-only] [--profile]
- * [--num-runs <count>]
+ * Usage: detr-object-detection [--config <path>]
  */
 #include "neat.h"
 #include "support/runtime/example_utils.h"
+#include "support/runtime/config_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -19,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -91,7 +90,7 @@ struct Detection {
   int class_id = -1;
 };
 
-struct Args {
+struct Config {
   fs::path image;
   std::string model = "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz";
   fs::path output;
@@ -100,6 +99,7 @@ struct Args {
   bool person_only = false;
   bool profile = false;
   int num_runs = 100;
+  int timeout_ms = kDefaultTimeoutMs;
 };
 
 struct Tensor2D {
@@ -131,43 +131,48 @@ Stats compute_stats(const std::vector<double>& values) {
   return s;
 }
 
-Args parse_args(int argc, char** argv) {
-  if (argc < 2) {
-    throw std::runtime_error(
-        "Usage: detr-object-detection <image_path> [--model ...] [--output ...] "
-        "[--conf ...] [--max-draw ...] [--person-only] [--profile] [--num-runs ...]");
+Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model = raw.string_or(
+      "model.path", "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz");
+  cfg.image = raw.string_or("io.image", "assets/test_images/input.jpg");
+  cfg.output = raw.string_or("io.output", "sandbox/detr_object_detection/output.png");
+  cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.5));
+  cfg.max_draw = raw.int_or("decode.max_draw", 50);
+  cfg.person_only = raw.bool_or("decode.person_only", false);
+  cfg.profile = raw.bool_or("runtime.profile", false);
+  cfg.num_runs = raw.int_or("runtime.num_runs", 100);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
+  if (cfg.conf < 0.0f || cfg.conf > 1.0f) {
+    throw std::runtime_error("decode.confidence_threshold must be in [0.0, 1.0]");
   }
+  if (cfg.num_runs < 1) {
+    throw std::runtime_error("runtime.num_runs must be >= 1");
+  }
+  if (cfg.timeout_ms <= 0) {
+    throw std::runtime_error("runtime.timeout_ms must be > 0");
+  }
+  return cfg;
+}
 
-  Args a;
-  a.image = argv[1];
-  for (int i = 2; i < argc; ++i) {
+Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    auto need = [&](const char* flag) -> std::string {
+    if (arg == "--config") {
       if (i + 1 >= argc) {
-        throw std::runtime_error(std::string("missing value for ") + flag);
+        throw std::runtime_error("--config requires a path");
       }
-      return argv[++i];
-    };
-
-    if (arg == "--model") {
-      a.model = need("--model");
-    } else if (arg == "--output") {
-      a.output = need("--output");
-    } else if (arg == "--conf") {
-      a.conf = std::stof(need("--conf"));
-    } else if (arg == "--max-draw") {
-      a.max_draw = std::stoi(need("--max-draw"));
-    } else if (arg == "--person-only") {
-      a.person_only = true;
-    } else if (arg == "--profile") {
-      a.profile = true;
-    } else if (arg == "--num-runs") {
-      a.num_runs = std::stoi(need("--num-runs"));
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
     } else {
-      throw std::runtime_error("unknown arg: " + arg);
+      throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  return a;
+  return load_config(config_path);
 }
 
 std::pair<cv::Mat, PreprocMeta> preprocess_to_tensor_input(const cv::Mat& bgr_u8) {
@@ -460,7 +465,7 @@ int main(int argc, char** argv) {
   std::cerr.setf(std::ios::unitbuf);
 
   try {
-    const Args args = parse_args(argc, argv);
+    const Config args = parse_config(argc, argv);
     if (!fs::exists(args.image)) {
       throw std::runtime_error("image does not exist: " + args.image.string());
     }
@@ -508,7 +513,7 @@ int main(int argc, char** argv) {
         if (!run.push(simaai::neat::TensorList{input_t})) {
           throw std::runtime_error("run.push failed during profiling");
         }
-        auto out_sample = run.pull(kDefaultTimeoutMs);
+        auto out_sample = run.pull(args.timeout_ms);
         const auto t1 = std::chrono::steady_clock::now();
         if (!out_sample.has_value()) {
           throw std::runtime_error("run.pull returned no sample during profiling");
@@ -555,7 +560,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("run.push failed");
     }
 
-    auto out_sample = run.pull(kDefaultTimeoutMs);
+    auto out_sample = run.pull(args.timeout_ms);
     const auto t1_infer = std::chrono::steady_clock::now();
     if (!out_sample.has_value()) {
       throw std::runtime_error("run.pull returned no sample");

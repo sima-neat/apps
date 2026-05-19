@@ -3,9 +3,10 @@
  * Minimal semantic segmentation overlay example for FCN-HRNet models.
  *
  * Usage:
- *   semantic-overlay <model.tar.gz> <input_dir> <output_dir>
+ *   semantic-overlay [--config <path>]
  */
 #include "neat.h"
+#include "support/runtime/config_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -13,15 +14,59 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
 namespace fs = std::filesystem;
+
+struct Config {
+  std::string model_path;
+  fs::path input_dir;
+  fs::path output_dir;
+  int input_width = 512;
+  int input_height = 512;
+  int timeout_ms = 5000;
+  double alpha = 0.55;
+};
+
+Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model_path = raw.string_or("model.path", "assets/models/fcn_hrnet48_mpk.tar.gz");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/semantic_overlay");
+  cfg.input_width = raw.int_or("runtime.input_width", 512);
+  cfg.input_height = raw.int_or("runtime.input_height", 512);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  cfg.alpha = raw.double_or("visualization.alpha", 0.55);
+  return cfg;
+}
+
+Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--config requires a path");
+      }
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
+    } else {
+      throw std::runtime_error("unknown argument: " + arg);
+    }
+  }
+  return load_config(config_path);
+}
 
 bool is_image(const fs::path& p) {
   std::string ext = p.extension().string();
@@ -248,33 +293,23 @@ int main(int argc, char** argv) {
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
 
-  if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir>\n";
-    return 1;
-  }
+  const Config cfg = parse_config(argc, argv);
 
-  constexpr int kInputW = 512;
-  constexpr int kInputH = 512;
-
-  const std::string model_path = argv[1];
-  const fs::path input_dir = argv[2];
-  const fs::path output_dir = argv[3];
-
-  if (!fs::is_directory(input_dir)) {
-    std::cerr << "Input directory does not exist: " << input_dir << "\n";
+  if (!fs::is_directory(cfg.input_dir)) {
+    std::cerr << "Input directory does not exist: " << cfg.input_dir << "\n";
     return 2;
   }
-  fs::create_directories(output_dir);
+  fs::create_directories(cfg.output_dir);
 
   std::vector<fs::path> images;
-  for (const auto& entry : fs::directory_iterator(input_dir)) {
+  for (const auto& entry : fs::directory_iterator(cfg.input_dir)) {
     if (entry.is_regular_file() && is_image(entry.path())) {
       images.push_back(entry.path());
     }
   }
   std::sort(images.begin(), images.end());
   if (images.empty()) {
-    std::cerr << "No images found in " << input_dir << "\n";
+    std::cerr << "No images found in " << cfg.input_dir << "\n";
     return 3;
   }
 
@@ -282,16 +317,16 @@ int main(int argc, char** argv) {
     simaai::neat::Model::Options model_opt;
     model_opt.preprocess.kind = simaai::neat::InputKind::Image;
     model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
-    model_opt.preprocess.input_max_width = kInputW;
-    model_opt.preprocess.input_max_height = kInputH;
+    model_opt.preprocess.input_max_width = cfg.input_width;
+    model_opt.preprocess.input_max_height = cfg.input_height;
     model_opt.preprocess.input_max_depth = 3;
 
-    simaai::neat::Model model(model_path, model_opt);
+    simaai::neat::Model model(cfg.model_path, model_opt);
 
     simaai::neat::Session session;
     session.add(model.session());
 
-    cv::Mat dummy_rgb(kInputH, kInputW, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat dummy_rgb(cfg.input_height, cfg.input_width, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
         dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
     auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
@@ -308,7 +343,8 @@ int main(int argc, char** argv) {
       }
 
       cv::Mat resized_bgr;
-      cv::resize(src_bgr, resized_bgr, cv::Size(kInputW, kInputH), 0, 0, cv::INTER_LINEAR);
+      cv::resize(src_bgr, resized_bgr, cv::Size(cfg.input_width, cfg.input_height), 0, 0,
+                 cv::INTER_LINEAR);
 
       cv::Mat resized_rgb;
       cv::cvtColor(resized_bgr, resized_rgb, cv::COLOR_BGR2RGB);
@@ -322,7 +358,7 @@ int main(int argc, char** argv) {
 
       std::optional<simaai::neat::Sample> out_opt;
       for (int i = 0; i < 3 && !out_opt.has_value(); ++i) {
-        out_opt = run.pull(/*timeout_ms=*/5000);
+        out_opt = run.pull(cfg.timeout_ms);
       }
       if (!out_opt.has_value()) {
         std::cerr << "Pull timeout for: " << image_path.filename() << "\n";
@@ -343,13 +379,14 @@ int main(int argc, char** argv) {
       }
 
       cv::Mat label_resized;
-      cv::resize(label_small, label_resized, cv::Size(kInputW, kInputH), 0, 0, cv::INTER_NEAREST);
+      cv::resize(label_small, label_resized, cv::Size(cfg.input_width, cfg.input_height), 0, 0,
+                 cv::INTER_NEAREST);
       print_histogram(label_resized, image_path);
 
       cv::Mat overlay = resized_bgr.clone();
-      draw_overlay(overlay, label_resized);
+      draw_overlay(overlay, label_resized, static_cast<float>(cfg.alpha));
 
-      const fs::path out_path = output_dir / (image_path.stem().string() + "_overlay.png");
+      const fs::path out_path = cfg.output_dir / (image_path.stem().string() + "_overlay.png");
       if (!cv::imwrite(out_path.string(), overlay)) {
         std::cerr << "Failed to write: " << out_path << "\n";
         continue;

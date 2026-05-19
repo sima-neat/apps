@@ -31,29 +31,25 @@ Download the default variant into `assets/models/`:
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get reid && cd ../..`
 
 ## Important Behavior
-- Required positional inputs are exactly two image paths (`image1 image2`).
-- Default model path is `assets/models/reid_mpk.tar.gz` (override with `--model`).
-- Default output directory is `examples/re-identification/simple-re-identification-pipeline/output_dir` (override with `--output-dir`).
+- Runtime inputs are read from `common/config.yaml`.
+- Default model path is `assets/models/reid_mpk.tar.gz`.
+- Default output directory is `examples/re-identification/simple-re-identification-pipeline/output_dir`.
 - Metric options: `cosine` (default threshold 0.65) or `euclidean` (default threshold 25.0).
-- Output artifact mode is controlled by `--output-type image|json|both` (default: `both`).
+- Output artifact mode is configured as `image`, `json`, or `both` (default: `both`).
 - One warmup inference is executed before timing/profile reporting.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/re-identification/simple-re-identification-pipeline/simple-re-identification-pipeline <image1> <image2> [options]`
-- Required arguments:
-  `<image1> <image2>`
+  `./build/examples/re-identification/simple-re-identification-pipeline/simple-re-identification-pipeline [--config <path>]`
 - Optional arguments:
-  `--metric <cosine|euclidean>`, `--threshold <float>`, `--output-dir <path>`, `--output-type <image|json|both>`, `--model <path>`, `--profile`
+  `--config <path>`
 
 ### Python
 - Invocation:
-  `python3 examples/re-identification/simple-re-identification-pipeline/python/main.py <image1> <image2> [options]`
-- Required arguments:
-  `<image1> <image2>`
+  `python3 examples/re-identification/simple-re-identification-pipeline/python/main.py [--config <path>]`
 - Optional arguments:
-  `--metric <cosine|euclidean>`, `--threshold <float>`, `--output-dir <path>`, `--output-type <image|json|both>`, `--model <path>`, `--profile`
+  `--config <path>`
 
 ## Build
 ### Build From The Apps Repo
@@ -83,12 +79,7 @@ Binary output:
 ### C++
 ```bash
 ./build/examples/re-identification/simple-re-identification-pipeline/simple-re-identification-pipeline \
-  <input_image_path_1> \
-  <input_image_path_2> \
-  --metric euclidean \
-  --threshold 25.0 \
-  --output-dir <output_dir_path> \
-  --profile
+  --config examples/re-identification/simple-re-identification-pipeline/common/config.yaml
 ```
 
 ### Python
@@ -96,17 +87,12 @@ Binary output:
 source ~/pyneat/bin/activate
 pip install -r examples/re-identification/simple-re-identification-pipeline/python/requirements.txt
 python3 examples/re-identification/simple-re-identification-pipeline/python/main.py \
-  <input_image_path_1> \
-  <input_image_path_2> \
-  --metric euclidean \
-  --threshold 25.0 \
-  --output-dir <output_dir_path> \
-  --profile
+  --config examples/re-identification/simple-re-identification-pipeline/common/config.yaml
 ```
 
 ## Debugging Notes
-- Confirm the model file exists at `assets/models/reid_mpk.tar.gz` or pass an explicit `--model` path.
-- Confirm both input image paths are valid image files.
+- Confirm the configured model file exists.
+- Confirm both configured input image paths are valid image files.
 - Confirm output directory is writable.
 - If score/decision seems unexpected, verify metric selection and threshold values.
 

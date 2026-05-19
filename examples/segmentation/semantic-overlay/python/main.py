@@ -6,8 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-INPUT_W = 512
-INPUT_H = 512
+import yaml
 
 VOC21_PALETTE = [
     (0, 0, 0),        # background
@@ -147,13 +146,22 @@ def print_histogram(labels: np.ndarray, image_name: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="FCN-HRNet semantic segmentation overlay")
-    parser.add_argument("model", type=str, help="Path to compiled model package")
-    parser.add_argument("input_dir", type=str, help="Input image directory")
-    parser.add_argument("output_dir", type=str, help="Output directory")
+    default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+    parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    model_path = raw.get("model", {}).get("path", "assets/models/fcn_hrnet48_mpk.tar.gz")
+    io_cfg = raw.get("io", {})
+    runtime = raw.get("runtime", {})
+    visualization = raw.get("visualization", {})
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/semantic_overlay"))
+    input_w = int(runtime.get("input_width", 512))
+    input_h = int(runtime.get("input_height", 512))
+    timeout_ms = int(runtime.get("timeout_ms", 5000))
+    alpha = float(visualization.get("alpha", 0.55))
 
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
@@ -174,11 +182,11 @@ def main() -> int:
         opt = pyneat.ModelOptions()
         opt.preprocess.kind = pyneat.InputKind.Image
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-        opt.preprocess.input_max_width = INPUT_W
-        opt.preprocess.input_max_height = INPUT_H
+        opt.preprocess.input_max_width = input_w
+        opt.preprocess.input_max_height = input_h
         opt.preprocess.input_max_depth = 3
-        model = pyneat.Model(args.model, opt)
-        dummy = np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)
+        model = pyneat.Model(model_path, opt)
+        dummy = np.zeros((input_h, input_w, 3), dtype=np.uint8)
         dummy_tensor = pyneat.Tensor.from_numpy(
             dummy,
             copy=True,
@@ -196,7 +204,7 @@ def main() -> int:
                 print(f"Skipping unreadable image: {image_path.name}", file=sys.stderr)
                 continue
 
-            resized_bgr = cv2.resize(src_bgr, (INPUT_W, INPUT_H), interpolation=cv2.INTER_LINEAR)
+            resized_bgr = cv2.resize(src_bgr, (input_w, input_h), interpolation=cv2.INTER_LINEAR)
             resized_rgb = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2RGB)
             rgb_arr = np.ascontiguousarray(resized_rgb, dtype=np.uint8)
 
@@ -206,7 +214,7 @@ def main() -> int:
                 image_format=pyneat.PixelFormat.RGB,
                 memory=pyneat.TensorMemory.EV74,
             )
-            out = runner.run(input_tensor, timeout_ms=5000)
+            out = runner.run(input_tensor, timeout_ms=timeout_ms)
             out_tensor = find_first_tensor(out)
             if out_tensor is None:
                 print(f"No tensor output for: {image_path.name}", file=sys.stderr)
@@ -216,11 +224,11 @@ def main() -> int:
             label_small = logits_to_label_map(logits)
 
             label_resized = cv2.resize(
-                label_small, (INPUT_W, INPUT_H), interpolation=cv2.INTER_NEAREST
+                label_small, (input_w, input_h), interpolation=cv2.INTER_NEAREST
             )
             print_histogram(label_resized, image_path.name)
 
-            overlay = draw_overlay(resized_bgr, label_resized)
+            overlay = draw_overlay(resized_bgr, label_resized, alpha=alpha)
             out_path = output_dir / (image_path.stem + "_overlay.png")
             if not cv2.imwrite(str(out_path), overlay):
                 print(f"Failed to write: {out_path}", file=sys.stderr)

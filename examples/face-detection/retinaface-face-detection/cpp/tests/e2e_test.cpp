@@ -1,11 +1,12 @@
 // E2E test for retinaface-face-detection.
-// Runs the binary with a real RetinaFace model and a local face image, and verifies it exits successfully
-// and produces an annotated output image.
+// Runs the binary with a real RetinaFace model and a local face image, and verifies it exits
+// successfully and produces an annotated output image.
 #include "support/testing/test_process.h"
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -59,11 +60,8 @@ int main(int argc, char** argv) {
 
     for (const auto& candidate : image_candidates) {
       std::string name = candidate.filename().string();
-      std::transform(
-          name.begin(),
-          name.end(),
-          name.begin(),
-          [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      std::transform(name.begin(), name.end(), name.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
       if (name.find("face") != std::string::npos) {
         image_path = candidate.string();
         break;
@@ -76,9 +74,8 @@ int main(int argc, char** argv) {
   }
 
   if (image_path.empty()) {
-    env_or_skip(
-        "SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory containing test images (defaults to assets/test_images)");
+    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
+                "directory containing test images (defaults to assets/test_images)");
     return kSkipCode; // not reached if env_or_skip exits, but keeps compiler happy
   }
 
@@ -90,27 +87,39 @@ int main(int argc, char** argv) {
   std::error_code ec;
   fs::create_directories(out_dir, ec);
   if (ec) {
-    std::cerr << "[FAIL] could not create output directory: " << out_dir << " (" << ec.message() << ")\n";
+    std::cerr << "[FAIL] could not create output directory: " << out_dir << " (" << ec.message()
+              << ")\n";
     return 1;
   }
   fs::path out_image = out_dir / "retinaface_output.png";
+  auto config_dir = create_temp_dir("retinaface-face-detection_config_");
+  if (config_dir.empty()) {
+    return 1;
+  }
+  const fs::path config_path = fs::path(config_dir) / "config.yaml";
+  {
+    std::ofstream config_file(config_path);
+    config_file << "model:\n"
+                << "  path: " << model_path << "\n"
+                << "io:\n"
+                << "  image: " << image_path << "\n"
+                << "  output: " << out_image.string() << "\n"
+                << "decode:\n"
+                << "  confidence_threshold: 0.40\n"
+                << "  nms_iou: 0.90\n"
+                << "  top_k: 5000\n"
+                << "  keep_top_k: 750\n"
+                << "  max_draw: 50\n"
+                << "  landmarks: true\n"
+                << "runtime:\n"
+                << "  timeout_ms: 5000\n"
+                << "  profile: false\n"
+                << "  num_runs: 1\n";
+  }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 30000);
 
-  auto r = spawn_and_wait(
-      binary,
-      {
-          image_path,
-          "--model",
-          model_path,
-          "--conf",
-          "0.4",
-          "--nms",
-          "0.9",
-          "--output",
-          out_image.string(),
-      },
-      timeout);
+  auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
@@ -123,6 +132,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::cout << "[OK] retinaface-face-detection pipeline completed successfully: " << out_image << "\n";
+  remove_dir(config_dir);
+  std::cout << "[OK] retinaface-face-detection pipeline completed successfully: " << out_image
+            << "\n";
   return 0;
 }

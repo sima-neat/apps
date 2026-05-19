@@ -42,24 +42,20 @@ Download into `assets/models/`:
 - Output boxes are mapped back to the original image resolution before drawing.
 - By default all DETR foreground classes are considered; `--person-only` keeps only the DETR `person` class.
 - Overlay text uses built-in DETR COCO labels and class-colored boxes.
-- `--profile` runs repeated inference and reports session, postprocessing, and overall timing statistics.
+- `runtime.profile` runs repeated inference and reports session, postprocessing, and overall timing statistics.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/object-detection/detr-object-detection/detr-object-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--max-draw <count>] [--person-only] [--profile] [--num-runs <count>]`
-- Required arguments:
-  `<input_image_path>`
+  `./build/examples/object-detection/detr-object-detection/detr-object-detection [--config <path>]`
 - Optional arguments:
-  `--model`, `--output`, `--conf`, `--max-draw`, `--person-only`, `--profile`, `--num-runs`
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ### Python
 - Invocation:
-  `python3 examples/object-detection/detr-object-detection/python/main.py <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--max-draw <count>] [--person-only] [--profile] [--num-runs <count>] [--verbose]`
-- Required arguments:
-  `<input_image_path>`
+  `python3 examples/object-detection/detr-object-detection/python/main.py [--config <path>]`
 - Optional arguments:
-  `--model`, `--output`, `--conf`, `--max-draw`, `--person-only`, `--profile`, `--num-runs`, `--verbose`
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ## Build
 ### Build From The Apps Repo
@@ -88,22 +84,14 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/detr-object-detection/detr-object-detection \
-  <input_image_path> \
-  --model assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz \
-  --output <output_image_path> \
-  --conf 0.5
+./build/examples/object-detection/detr-object-detection/detr-object-detection
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/detr-object-detection/python/requirements.txt
-python3 examples/object-detection/detr-object-detection/python/main.py \
-  <input_image_path> \
-  --model assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz \
-  --output <output_image_path> \
-  --conf 0.5
+python3 examples/object-detection/detr-object-detection/python/main.py
 ```
 
 ## Testing
@@ -159,7 +147,7 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 ## Debugging Notes
 - If the model fails to load, verify `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` exists and is readable.
 - First-run model initialization can exceed 60 seconds on some setups. Increase `SIMANEAT_APPS_TEST_TIMEOUT_MS` (for example `180000`) for e2e runs.
-- If no detections appear, lower `--conf` and confirm the input image contains supported COCO objects.
+- If no detections appear, lower `decode.confidence_threshold` and confirm the input image contains supported COCO objects.
 - If detections are visibly offset, verify the model frame assumptions (`1333x800`) still match the compiled package.
 - If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.
 

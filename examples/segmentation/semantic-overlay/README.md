@@ -33,24 +33,25 @@ Download any variant into `assets/models/`:
 - Model path is positional and required.
 - Input directory is scanned for image files.
 - Output files are segmentation overlays.
+- Runtime settings live in `common/config.yaml`.
 - Every pixel receives a class label via per-pixel argmax, but the overlay intentionally leaves class `0`/background untinted so the original image remains visible in background regions.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/segmentation/semantic-overlay/semantic-overlay <model.tar.gz> <input_dir> <output_dir>`
+  `./build/examples/segmentation/semantic-overlay/semantic-overlay [--config <path>]`
 - Required arguments:
-  `<model.tar.gz> <input_dir> <output_dir>`
+  None. Defaults to `common/config.yaml`.
 - Optional arguments:
-  None.
+  `--config <path>`
 
 ### Python
 - Invocation:
-  `python examples/segmentation/semantic-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python examples/segmentation/semantic-overlay/python/main.py [--config <path>]`
 - Required arguments:
-  `<model.tar.gz> <input_dir> <output_dir>`
+  None. Defaults to `common/config.yaml`.
 - Optional arguments:
-  None.
+  `--config <path>`
 
 ## Build
 ### Build From The Apps Repo
@@ -80,7 +81,7 @@ Binary output:
 ### C++
 ```bash
 ./build/examples/segmentation/semantic-overlay/semantic-overlay \
-  assets/models/fcn_hrnet48_mpk.tar.gz <input_dir> <output_dir>
+  --config examples/segmentation/semantic-overlay/common/config.yaml
 ```
 
 ### Python
@@ -88,7 +89,7 @@ Binary output:
 source ~/pyneat/bin/activate
 pip install -r examples/segmentation/semantic-overlay/python/requirements.txt
 python examples/segmentation/semantic-overlay/python/main.py \
-  assets/models/fcn_hrnet48_mpk.tar.gz <input_dir> <output_dir>
+  --config examples/segmentation/semantic-overlay/common/config.yaml
 ```
 
 ## Debugging Notes
@@ -99,3 +100,4 @@ python examples/segmentation/semantic-overlay/python/main.py \
 ## Source Files
 - C++ source: `cpp/main.cpp`
 - Python source: `python/main.py`
+- Shared config: `common/config.yaml`

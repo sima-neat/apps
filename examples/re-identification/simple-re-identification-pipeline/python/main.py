@@ -1,15 +1,15 @@
+from __future__ import annotations
+
 from pathlib import Path
 import sys
 import argparse
 import json
 import time
-import numpy as np
-import cv2
-import pyneat
-from scipy.spatial.distance import cosine, euclidean
+import yaml
 
 INPUT_W = 128
 INPUT_H = 256
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
 
 def find_first_tensor(value):
@@ -43,10 +43,10 @@ def make_rgb_tensor(image: np.ndarray) -> pyneat.Tensor:
     )
 
 
-def warmup_model(runner: pyneat.Run) -> None:
+def warmup_model(runner: pyneat.Run, timeout_ms: int) -> None:
     """Run one dummy inference to initialize the hardware pipeline before timing."""
     dummy = np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)
-    runner.run(make_rgb_tensor(dummy), timeout_ms=10000)
+    runner.run(make_rgb_tensor(dummy), timeout_ms=timeout_ms)
     print("Model warmed up.")
 
 
@@ -87,7 +87,7 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 def euclidean_distance(a: np.ndarray, b: np.ndarray) -> float:
     return float(euclidean(a.flatten(), b.flatten()))
 
-def run_inference(runner: pyneat.Run, image_path: Path) -> tuple[np.ndarray, float]:
+def run_inference(runner: pyneat.Run, image_path: Path, timeout_ms: int) -> tuple[np.ndarray, float]:
     """Run inference on a single image. Returns (embedding, inference_time_s)."""
     bgr_image = cv2.imread(str(image_path))
     if bgr_image is None:
@@ -96,7 +96,7 @@ def run_inference(runner: pyneat.Run, image_path: Path) -> tuple[np.ndarray, flo
     image = preprocess_image(bgr_image)
 
     t0 = time.perf_counter()
-    out = runner.run(make_rgb_tensor(image), timeout_ms=5000)
+    out = runner.run(make_rgb_tensor(image), timeout_ms=timeout_ms)
     infer_time_s = time.perf_counter() - t0
 
     out_tensor = find_first_tensor(out)
@@ -214,56 +214,48 @@ def print_profile(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="ReID inference with embedding comparison")
-    parser.add_argument("image1", type=Path, help="Path to first image")
-    parser.add_argument("image2", type=Path, help="Path to second image")
-    parser.add_argument(
-        "--metric",
-        choices=["cosine", "euclidean"],
-        default="cosine",
-        help="Similarity/distance metric to use (default: cosine)",
-    )
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=None,
-        help="Decision threshold (default: 0.65 for cosine, 25.0 for euclidean)",
-    )
-
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path(__file__).resolve().parents[1] / "output_dir",
-        help="Directory to write output artifacts",
-    )
-    parser.add_argument(
-        "--output-type",
-        choices=["image", "json", "both"],
-        default="both",
-        help="Output artifact type: image, json, or both (default: both)",
-    )
-    parser.add_argument(
-        "--profile",
-        action="store_true",
-        help="Report end-to-end and per-inference timing",
-    )
-    parser.add_argument(
-    "--model",
-    type=Path,
-    default=Path(__file__).resolve().parents[4] / "assets" / "models" / "reid_mpk.tar.gz",
-    help="Path to the ReID compiled model package",
-)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     args = parser.parse_args()
-    if args.threshold is None:
-        args.threshold = 0.65 if args.metric == "cosine" else 25.0
-    if not args.model.is_file():
-        print(f"Model file does not exist: {args.model}", file=sys.stderr)
+
+    global np, cv2, pyneat, cosine, euclidean
+    import numpy as np
+    import cv2
+    import pyneat
+    from scipy.spatial.distance import cosine, euclidean
+
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    model_cfg = raw.get("model", {})
+    io_cfg = raw.get("io", {})
+    output_cfg = raw.get("output", {})
+    comparison_cfg = raw.get("comparison", {})
+    runtime_cfg = raw.get("runtime", {})
+
+    model_path = Path(model_cfg.get("path", "assets/models/reid_mpk.tar.gz"))
+    image1 = Path(io_cfg.get("image1", "assets/test_images/person_a.jpg"))
+    image2 = Path(io_cfg.get("image2", "assets/test_images/person_b.jpg"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/simple_re_identification"))
+    output_type = output_cfg.get("type", "both")
+    metric = comparison_cfg.get("metric", "cosine")
+    threshold = float(comparison_cfg.get("threshold", 0.65 if metric == "cosine" else 25.0))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+    profile = bool(runtime_cfg.get("profile", False))
+
+    if metric not in {"cosine", "euclidean"}:
+        print(f"Invalid metric: {metric}", file=sys.stderr)
         return 2
-    for p in (args.image1, args.image2):
+    if output_type not in {"image", "json", "both"}:
+        print(f"Invalid output type: {output_type}", file=sys.stderr)
+        return 2
+    if not model_path.is_file():
+        print(f"Model file does not exist: {model_path}", file=sys.stderr)
+        return 2
+    for p in (image1, image2):
         if not p.is_file() or not is_image(p):
             print(f"Not a valid image file: {p}", file=sys.stderr)
             return 2
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     runner = None
     try:
@@ -274,50 +266,50 @@ def main() -> int:
         opt.preprocess.input_max_width = INPUT_W
         opt.preprocess.input_max_height = INPUT_H
         opt.preprocess.input_max_depth = 3
-        model = pyneat.Model(str(args.model), opt)
+        model = pyneat.Model(str(model_path), opt)
         runner = model.build(make_rgb_tensor(np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)))
-        warmup_model(runner)
+        warmup_model(runner, timeout_ms)
 
         t_start = time.perf_counter()
-        print(f"Processing: {args.image1.name}")
-        emb1, infer_time_1 = run_inference(runner, args.image1)
+        print(f"Processing: {image1.name}")
+        emb1, infer_time_1 = run_inference(runner, image1, timeout_ms)
 
-        print(f"Processing: {args.image2.name}")
-        emb2, infer_time_2 = run_inference(runner, args.image2)
+        print(f"Processing: {image2.name}")
+        emb2, infer_time_2 = run_inference(runner, image2, timeout_ms)
 
-        if args.metric == "cosine":
+        if metric == "cosine":
             score = cosine_similarity(emb1, emb2)
-            decision = "SAME" if score >= args.threshold else "DIFFERENT"
+            decision = "SAME" if score >= threshold else "DIFFERENT"
             print(f"\nCosine similarity : {score:.6f}")
-            print(f"Threshold         : {args.threshold:.2f}")
+            print(f"Threshold         : {threshold:.2f}")
             print(f"Decision          : {decision}")
         else:
             score = euclidean_distance(emb1, emb2)
-            decision = "SAME" if score <= args.threshold else "DIFFERENT"
+            decision = "SAME" if score <= threshold else "DIFFERENT"
             print(f"\nEuclidean distance: {score:.6f}")
-            print(f"Threshold         : {args.threshold:.2f}")
+            print(f"Threshold         : {threshold:.2f}")
             print(f"Decision          : {decision}")
 
         total_time = time.perf_counter() - t_start
 
-        if args.output_type in {"image", "both"}:
+        if output_type in {"image", "both"}:
             save_comparison_image(
-                args.image1, args.image2, score, decision, args.threshold, args.metric,
-                args.output_dir / "comparison.jpg",
+                image1, image2, score, decision, threshold, metric,
+                output_dir / "comparison.jpg",
             )
 
-        if args.output_type in {"json", "both"}:
+        if output_type in {"json", "both"}:
             save_result_json(
-                args.output_dir / "result.json",
-                args.image1,
-                args.image2,
-                args.metric,
+                output_dir / "result.json",
+                image1,
+                image2,
+                metric,
                 score,
-                args.threshold,
+                threshold,
                 decision,
             )
 
-        if args.profile:
+        if profile:
             print_profile(infer_time_1, infer_time_2, total_time)
 
         runner.close()

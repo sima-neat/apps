@@ -1,5 +1,6 @@
 add_library(sima_neat_apps_support_runtime STATIC
   runtime/asset_utils.cpp
+  runtime/config_utils.cpp
   runtime/example_utils.cpp
   object_detection/obj_detection_utils.cpp
 )

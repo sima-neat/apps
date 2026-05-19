@@ -2,9 +2,10 @@
  * @example instance-overlay.cpp
  * Minimal YOLOv8-seg pipeline using DetessDequant postprocess (no boxdecode).
  *
- * Usage: instance-overlay <model.tar.gz> <input_dir> <output_dir>
+ * Usage: instance-overlay [--config <path>]
  */
 #include "neat.h"
+#include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -13,8 +14,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstring>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
@@ -26,6 +28,54 @@
 
 namespace {
 namespace fs = std::filesystem;
+
+struct Config {
+  std::string model_path;
+  fs::path input_dir;
+  fs::path output_dir;
+  int infer_size = 640;
+  int timeout_ms = 3000;
+  int queue_depth = 8;
+  float score_threshold = 0.6f;
+  float nms_iou = 0.45f;
+  int max_detections = 200;
+  float mask_alpha = 0.65f;
+};
+
+Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model_path = raw.string_or("model.path", "assets/models/yolo_v8n_seg_mpk.tar.gz");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/instance_overlay");
+  cfg.infer_size = raw.int_or("runtime.infer_size", 640);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 3000);
+  cfg.queue_depth = raw.int_or("runtime.queue_depth", 8);
+  cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.6));
+  cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.45));
+  cfg.max_detections = raw.int_or("decode.max_detections", 200);
+  cfg.mask_alpha = static_cast<float>(raw.double_or("visualization.mask_alpha", 0.65));
+  return cfg;
+}
+
+Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--config requires a path");
+      }
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
+    } else {
+      throw std::runtime_error("unknown argument: " + arg);
+    }
+  }
+  return load_config(config_path);
+}
 
 std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
   if (sample.kind == simaai::neat::SampleKind::Tensor) {
@@ -404,45 +454,33 @@ int main(int argc, char** argv) {
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
 
-  if (argc < 4) {
-    std::cerr << "Usage: " << argv[0] << " <model.tar.gz> <input_dir> <output_dir>\n";
-    return 1;
-  }
-
   try {
-    constexpr int kInferSize = 640;
-    constexpr float kScoreThr = 0.6f;
-    constexpr float kNmsIou = 0.45f;
-    constexpr int kMaxDet = 200;
+    const Config cfg = parse_config(argc, argv);
 
-    const std::string tar_gz = argv[1];
-    const fs::path input_dir = argv[2];
-    const fs::path output_dir = argv[3];
-
-    if (!fs::is_directory(input_dir)) {
-      throw std::runtime_error("input directory does not exist: " + input_dir.string());
+    if (!fs::is_directory(cfg.input_dir)) {
+      throw std::runtime_error("input directory does not exist: " + cfg.input_dir.string());
     }
-    fs::create_directories(output_dir);
+    fs::create_directories(cfg.output_dir);
 
     std::vector<fs::path> images;
-    for (const auto& entry : fs::directory_iterator(input_dir)) {
+    for (const auto& entry : fs::directory_iterator(cfg.input_dir)) {
       if (entry.is_regular_file() && is_image(entry.path())) {
         images.push_back(entry.path());
       }
     }
     std::sort(images.begin(), images.end());
     if (images.empty()) {
-      throw std::runtime_error("no images found in: " + input_dir.string());
+      throw std::runtime_error("no images found in: " + cfg.input_dir.string());
     }
 
     simaai::neat::Model::Options model_opt;
     model_opt.preprocess.kind = simaai::neat::InputKind::Image;
     model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
-    model_opt.preprocess.input_max_width = kInferSize;
-    model_opt.preprocess.input_max_height = kInferSize;
+    model_opt.preprocess.input_max_width = cfg.infer_size;
+    model_opt.preprocess.input_max_height = cfg.infer_size;
     model_opt.preprocess.input_max_depth = 3;
 
-    simaai::neat::Model model(tar_gz, model_opt);
+    simaai::neat::Model model(cfg.model_path, model_opt);
 
     simaai::neat::Session session;
     session.add(simaai::neat::nodes::Input(model.input_appsrc_options(false)));
@@ -453,12 +491,12 @@ int main(int argc, char** argv) {
 
     std::cout << "Pipeline:\n" << session.describe_backend() << "\n";
 
-    cv::Mat dummy_rgb(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat dummy_rgb(cfg.infer_size, cfg.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor input_tensor = simaai::neat::Tensor::from_cv_mat(
         dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
     simaai::neat::RunOptions run_opt;
-    run_opt.queue_depth = 8;
+    run_opt.queue_depth = cfg.queue_depth;
     run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
     run_opt.preset = simaai::neat::RunPreset::Balanced;
 
@@ -476,7 +514,7 @@ int main(int argc, char** argv) {
 
       cv::Mat rgb;
       cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-      cv::resize(rgb, rgb, cv::Size(kInferSize, kInferSize), 0, 0, cv::INTER_LINEAR);
+      cv::resize(rgb, rgb, cv::Size(cfg.infer_size, cfg.infer_size), 0, 0, cv::INTER_LINEAR);
 
       simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
           rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
@@ -485,7 +523,7 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      auto out = run.pull(/*timeout_ms=*/1000);
+      auto out = run.pull(cfg.timeout_ms);
       if (!out.has_value()) {
         std::cerr << "Pull failed for: " << image_path.filename() << "\n";
         continue;
@@ -495,17 +533,17 @@ int main(int argc, char** argv) {
       std::vector<Box> boxes;
       TensorHWC proto;
       try {
-        boxes = decode_yolov8_instances_from_detess(tensors, kInferSize, kScoreThr, kNmsIou,
-                                                    kMaxDet, proto);
+        boxes = decode_yolov8_instances_from_detess(tensors, cfg.infer_size, cfg.score_threshold,
+                                                    cfg.nms_iou, cfg.max_detections, proto);
       } catch (const std::exception& e) {
         std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
         continue;
       }
 
       cv::Mat overlay = bgr.clone();
-      apply_mask_overlay(overlay, boxes, proto, kInferSize);
-      draw_boxes_on_image(overlay, boxes, kInferSize);
-      const fs::path out_file = output_dir / (image_path.stem().string() + "_overlay.jpg");
+      apply_mask_overlay(overlay, boxes, proto, cfg.infer_size, cfg.mask_alpha);
+      draw_boxes_on_image(overlay, boxes, cfg.infer_size);
+      const fs::path out_file = cfg.output_dir / (image_path.stem().string() + "_overlay.jpg");
       if (!cv::imwrite(out_file.string(), overlay)) {
         std::cerr << "Failed to write overlay image: " << out_file << "\n";
         continue;

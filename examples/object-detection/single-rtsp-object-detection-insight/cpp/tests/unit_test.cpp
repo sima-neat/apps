@@ -15,17 +15,25 @@ int main(int argc, char** argv) {
   int failures = 0;
 
   {
-    auto r = spawn_and_wait(binary, {"--model", "dummy.tar.gz"}, 10000);
-    if (r.exit_code == 0 || r.stderr_text.find("--rtsp") == std::string::npos) {
-      std::cerr << "[FAIL] missing --rtsp should fail and mention --rtsp\n";
+    auto r = spawn_and_wait(binary, {"--help"}, 10000);
+    if (r.exit_code != 0 || r.stdout_text.find("Usage") == std::string::npos) {
+      std::cerr << "[FAIL] help should pass and print usage\n";
       ++failures;
     }
   }
 
   {
-    auto r = spawn_and_wait(binary, {"--rtsp", "rtsp://127.0.0.1:8554/stream"}, 10000);
-    if (r.exit_code == 0 || r.stderr_text.find("--model") == std::string::npos) {
-      std::cerr << "[FAIL] missing --model should fail and mention --model\n";
+    auto r = spawn_and_wait(binary, {"--config", "/nonexistent/single-rtsp-config.yaml"}, 10000);
+    if (r.exit_code == 0 || r.stderr_text.find("failed to open config") == std::string::npos) {
+      std::cerr << "[FAIL] bad config should fail and mention config\n";
+      ++failures;
+    }
+  }
+
+  {
+    auto r = spawn_and_wait(binary, {"--bogus"}, 10000);
+    if (r.exit_code == 0 || r.stderr_text.find("unknown argument") == std::string::npos) {
+      std::cerr << "[FAIL] unknown flag should fail and mention unknown argument\n";
       ++failures;
     }
   }

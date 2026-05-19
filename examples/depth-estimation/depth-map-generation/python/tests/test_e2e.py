@@ -32,12 +32,29 @@ class TestE2E:
             "test_images_dir is missing or empty",
         )
 
+        config_path = tmp_output_dir.parent / "depth_config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  input_dir: {test_images_dir}",
+                    f"  output_dir: {tmp_output_dir}",
+                    "runtime:",
+                    "  infer_size: 518",
+                    "  timeout_ms: 5000",
+                    "  queue_depth: 4",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                str(model),
-                str(test_images_dir),
-                str(tmp_output_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,

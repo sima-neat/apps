@@ -1,20 +1,13 @@
 """Minimal Model usage with a ResNet50 compiled model package."""
 
+from __future__ import annotations
+
 import argparse
 import sys
 import urllib.request
 from pathlib import Path
 
-import numpy as np
-import pyneat
-
-GOLDFISH_URL = (
-    "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
-    "n01443537_goldfish.JPEG"
-)
-GOLDFISH_ID = 1  # ILSVRC2012 0-based index for "goldfish"
-INFER_WIDTH = 224
-INFER_HEIGHT = 224
+import yaml
 
 
 def download_image(url: str, dest: Path) -> Path:
@@ -79,19 +72,37 @@ def print_topk(scores: np.ndarray, k: int = 5) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="ResNet50 classification example")
-    parser.add_argument("--model", type=str, required=True, help="Path to ResNet50 compiled model package")
-    parser.add_argument("--image", type=str, default="", help="Path to input image")
-    parser.add_argument("--min-prob", type=float, default=0.2, help="Minimum probability threshold")
+    default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+    parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
     args = parser.parse_args()
 
-    model_path = args.model
+    global np, pyneat
+    import numpy as np
+    import pyneat
+
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    model_path = raw.get("model", {}).get("path", "assets/models/resnet_50_mpk.tar.gz")
+    io_cfg = raw.get("io", {})
+    runtime = raw.get("runtime", {})
+    validation = raw.get("validation", {})
+    image_path = io_cfg.get("image") or ""
+    fallback_image_url = io_cfg.get(
+        "fallback_image_url",
+        "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/"
+        "n01443537_goldfish.JPEG",
+    )
+    input_width = int(runtime.get("input_width", 224))
+    input_height = int(runtime.get("input_height", 224))
+    timeout_ms = int(runtime.get("timeout_ms", 2000))
+    expected_class_id = int(validation.get("expected_class_id", 1))
+    min_probability = float(validation.get("min_probability", 0.2))
 
     # Resolve image path
-    image_path = args.image
     if not image_path:
         dest = Path("/tmp/goldfish.jpeg")
         try:
-            download_image(GOLDFISH_URL, dest)
+            download_image(fallback_image_url, dest)
             image_path = str(dest)
         except Exception as e:
             print(f"Failed to download goldfish image: {e}", file=sys.stderr)
@@ -102,7 +113,7 @@ def main() -> int:
 
     # Load and resize image
     try:
-        rgb = load_rgb_resized(image_path, INFER_WIDTH, INFER_HEIGHT)
+        rgb = load_rgb_resized(image_path, input_width, input_height)
     except Exception as e:
         print(f"Failed to load image: {e}", file=sys.stderr)
         return 4
@@ -111,8 +122,8 @@ def main() -> int:
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-    opt.preprocess.input_max_width = INFER_WIDTH
-    opt.preprocess.input_max_height = INFER_HEIGHT
+    opt.preprocess.input_max_width = input_width
+    opt.preprocess.input_max_height = input_height
     opt.preprocess.input_max_depth = 3
     opt.preprocess.preset = pyneat.NormalizePreset.ImageNet
 
@@ -121,7 +132,7 @@ def main() -> int:
     # Run inference
     t = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
     try:
-        outputs = model.run(t, timeout_ms=2000)
+        outputs = model.run(t, timeout_ms=timeout_ms)
         if not outputs:
             print("Model run returned empty output", file=sys.stderr)
             return 6
@@ -140,11 +151,11 @@ def main() -> int:
     top1 = print_topk(scores, k=5)
 
     probs = softmax(scores)
-    if top1 != GOLDFISH_ID:
-        print(f"FAIL: expected top1={GOLDFISH_ID} (goldfish), got {top1}", file=sys.stderr)
+    if top1 != expected_class_id:
+        print(f"FAIL: expected top1={expected_class_id} (goldfish), got {top1}", file=sys.stderr)
         return 1
-    if probs[top1] < args.min_prob:
-        print(f"FAIL: top1 prob {probs[top1]:.4f} < {args.min_prob}", file=sys.stderr)
+    if probs[top1] < min_probability:
+        print(f"FAIL: top1 prob {probs[top1]:.4f} < {min_probability}", file=sys.stderr)
         return 1
 
     print("PASS")

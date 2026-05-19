@@ -13,28 +13,27 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 class TestArgParsing:
     """Validate CLI argument parsing for the single RTSP Insight detection pipeline."""
 
-    def test_missing_all_args(self):
-        """Running with no arguments should fail (--rtsp is required)."""
+    def test_help(self):
+        """--help should describe the config-driven CLI."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY)],
+            [sys.executable, str(MAIN_PY), "--help"],
             capture_output=True, text=True, timeout=10,
         )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
+        assert r.returncode == 0
+        assert "--config" in r.stdout
 
-    def test_missing_rtsp_flag(self):
-        """Providing --model but not --rtsp should fail."""
+    def test_bad_config_path(self):
+        """Missing config should fail."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--model", "model.tar.gz"],
+            [sys.executable, str(MAIN_PY), "--config", "/nonexistent/single-rtsp-config.yaml"],
             capture_output=True, text=True, timeout=10,
         )
-        assert r.returncode == 2
-        assert "--rtsp" in r.stderr or "required" in r.stderr.lower()
+        assert r.returncode != 0
 
     def test_unknown_flag(self):
         """An unrecognized flag should cause argparse to exit with code 2."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--rtsp", "rtsp://x", "--bogus"],
+            [sys.executable, str(MAIN_PY), "--bogus"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode == 2

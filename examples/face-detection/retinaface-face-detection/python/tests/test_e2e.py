@@ -60,20 +60,39 @@ class TestE2E:
         )
 
         out_path = tmp_output_dir / "retinaface_output.png"
+        config_path = tmp_output_dir.parent / "retinaface_config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  image: {image}",
+                    f"  output: {out_path}",
+                    "decode:",
+                    "  confidence_threshold: 0.40",
+                    "  nms_iou: 0.90",
+                    "  top_k: 5000",
+                    "  keep_top_k: 750",
+                    "  max_draw: 50",
+                    "  landmarks: true",
+                    "runtime:",
+                    "  timeout_ms: 5000",
+                    "  profile: false",
+                    "  num_runs: 1",
+                    "  verbose: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
                 sys.executable,
                 str(MAIN_PY),
-                str(image),
-                "--model",
-                str(model),
-                "--conf",
-                "0.4",
-                "--nms",
-                "0.9",
-                "--output",
-                str(out_path),
+                "--config",
+                str(config_path),
             ],
             capture_output=True,
             text=True,

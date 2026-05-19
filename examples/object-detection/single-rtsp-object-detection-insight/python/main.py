@@ -26,12 +26,14 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import yaml
 
 MIN_SCORE = 0.55
 NMS_IOU = 0.50
 MAX_DET = 100
 DEFAULT_FPS = 30
 SOURCE_RUN_QUEUE_DEPTH = 4
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 cv2 = None
 np = None
 pyneat = None
@@ -373,30 +375,28 @@ def make_object_detection_data_json(boxes: list[dict]) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     """Expose only the small set of controls needed for this reference flow."""
     parser = argparse.ArgumentParser(description="Single-camera RTSP YOLOv8 Insight example")
-    parser.add_argument("--rtsp", required=True, help="RTSP URL")
-    parser.add_argument("--model", dest="model", default="", help="Path to YOLOv8 compiled model package")
-    parser.add_argument("--frames", type=int, default=0, help="Number of frames to process (0 = run forever)")
-    parser.add_argument("--insight-host", default="127.0.0.1", help="Insight host")
-    parser.add_argument("--insight-video-port", type=int, default=9000, help="Insight UDP video port")
-    parser.add_argument("--insight-metadata-port", type=int, default=9100, help="Insight UDP metadata port")
-    parser.add_argument("--latency-ms", type=int, default=200, help="RTSP latency in milliseconds")
-    parser.add_argument("--udp", action="store_true", help="Use UDP RTSP transport instead of TCP")
-    parser.add_argument("--debug", action="store_true", help="Enable timing prints")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     return parser
 
 
 def parse_config(argv: list[str] | None = None) -> AppConfig:
     args = build_arg_parser().parse_args(argv)
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    source_cfg = raw.get("source", {})
+    model_cfg = raw.get("model", {})
+    runtime_cfg = raw.get("runtime", {})
+    insight_cfg = raw.get("insight", {})
     return AppConfig(
-        rtsp=args.rtsp,
-        model=args.model,
-        frames=args.frames,
-        insight_host=args.insight_host,
-        insight_video_port=args.insight_video_port,
-        insight_metadata_port=args.insight_metadata_port,
-        latency_ms=args.latency_ms,
-        udp=args.udp,
-        debug=args.debug,
+        rtsp=source_cfg.get("rtsp_url", ""),
+        model=model_cfg.get("path", ""),
+        frames=int(runtime_cfg.get("frames", 0)),
+        insight_host=insight_cfg.get("host", "127.0.0.1") or "127.0.0.1",
+        insight_video_port=int(insight_cfg.get("video_port", 9000)),
+        insight_metadata_port=int(insight_cfg.get("metadata_port", 9100)),
+        latency_ms=int(source_cfg.get("latency_ms", 200)),
+        udp=bool(source_cfg.get("udp", False)),
+        debug=bool(runtime_cfg.get("debug", False)),
     )
 
 
@@ -462,11 +462,14 @@ def resolve_yolov8s_model(root: Path) -> str:
 
 def main() -> int:
     cfg = parse_config()
+    if not cfg.rtsp:
+        print("Missing source.rtsp_url in config.", file=sys.stderr)
+        return 2
     load_runtime_dependencies()
     model_path = cfg.model or resolve_yolov8s_model(Path.cwd())
     if not model_path or not Path(model_path).is_file():
         print("Failed to locate yolo_v8s compiled model package.", file=sys.stderr)
-        print("Set --model or run 'sima-cli modelzoo -v 2.0.0 get yolo_v8s'.", file=sys.stderr)
+        print("Set model.path or run 'sima-cli modelzoo -v 2.0.0 get yolo_v8s'.", file=sys.stderr)
         return 2
 
     rtsp_session = None
