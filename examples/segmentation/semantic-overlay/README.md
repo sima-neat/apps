@@ -1,13 +1,13 @@
-# Simple Semantic Segmentation Overlay Pipeline
+# Semantic Overlay
 
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | semantic-segmentation |
+| Category | segmentation |
 | Difficulty | Intermediate |
-| Tags | semantic-segmentation |
+| Tags | segmentation |
 | Status | experimental |
-| Binary Name | simple-semantic-segmentation-overlay-pipeline |
+| Binary Name | semantic-overlay |
 | Model | fcn_hrnet48 |
 
 ## Concept
@@ -16,7 +16,7 @@ Semantic segmentation overlay for image folders using FCN-HRNet output tensors.
 ## Preview
 Snippet from a pipeline run:
 
-![Semantic segmentation overlay preview](../../../assets/portal/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/image.png)
+![Semantic segmentation overlay preview](../../../assets/portal/segmentation/semantic-overlay/image.png)
 
 ## Supported Models
 Also works with: `fcn_hrnet18`
@@ -38,7 +38,7 @@ Download any variant into `assets/models/`:
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/simple-semantic-segmentation-overlay-pipeline <model.tar.gz> <input_dir> <output_dir>`
+  `./build/examples/segmentation/semantic-overlay/semantic-overlay <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -46,7 +46,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/python/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python examples/segmentation/semantic-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -61,33 +61,33 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/simple-semantic-segmentation-overlay-pipeline
+./build/examples/segmentation/semantic-overlay/semantic-overlay
 ```
 
 ### Build This Example Directly With CMake
 ```bash
-cd <apps-repo-root>/examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline
+cd <apps-repo-root>/examples/segmentation/semantic-overlay
 cmake -S cpp -B build
 cmake --build build -j
 ```
 
 Binary output:
 ```bash
-./build/simple-semantic-segmentation-overlay-pipeline
+./build/semantic-overlay
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/simple-semantic-segmentation-overlay-pipeline \
+./build/examples/segmentation/semantic-overlay/semantic-overlay \
   assets/models/fcn_hrnet48_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/python/requirements.txt
-python examples/semantic-segmentation/simple-semantic-segmentation-overlay-pipeline/python/main.py \
+pip install -r examples/segmentation/semantic-overlay/python/requirements.txt
+python examples/segmentation/semantic-overlay/python/main.py \
   assets/models/fcn_hrnet48_mpk.tar.gz <input_dir> <output_dir>
 ```
 

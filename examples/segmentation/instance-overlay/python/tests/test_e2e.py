@@ -1,4 +1,4 @@
-"""E2E tests for offline-instance-segmentation-overlay (Python)."""
+"""E2E tests for instance-overlay (Python)."""
 
 import subprocess
 import sys

@@ -1,13 +1,13 @@
-# Offline Instance Segmentation Overlay
+# Instance Overlay
 
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | instance-segmentation |
+| Category | segmentation |
 | Difficulty | Intermediate |
-| Tags | instance-segmentation |
+| Tags | segmentation |
 | Status | experimental |
-| Binary Name | offline-instance-segmentation-overlay |
+| Binary Name | instance-overlay |
 | Model | yolo_v8n_seg |
 
 ## Concept
@@ -16,7 +16,7 @@ Offline instance segmentation over image folders using YOLOv8 segmentation outpu
 ## Preview
 Snippet from a pipeline run:
 
-![Offline instance segmentation overlay preview](../../../assets/portal/instance-segmentation/offline-instance-segmentation-overlay/image.jpg)
+![Offline instance segmentation overlay preview](../../../assets/portal/segmentation/instance-overlay/image.jpg)
 
 ## Supported Models
 Also works with: `yolo_v8s_seg`, `yolo_v8m_seg`, `yolo_v8l_seg`
@@ -40,7 +40,7 @@ Download any variant into `assets/models/`:
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/instance-segmentation/offline-instance-segmentation-overlay/offline-instance-segmentation-overlay <model.tar.gz> <input_dir> <output_dir>`
+  `./build/examples/segmentation/instance-overlay/instance-overlay <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -48,7 +48,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python3 examples/instance-segmentation/offline-instance-segmentation-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
+  `python3 examples/segmentation/instance-overlay/python/main.py <model.tar.gz> <input_dir> <output_dir>`
 - Required arguments:
   `<model.tar.gz> <input_dir> <output_dir>`
 - Optional arguments:
@@ -63,33 +63,33 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/instance-segmentation/offline-instance-segmentation-overlay/offline-instance-segmentation-overlay
+./build/examples/segmentation/instance-overlay/instance-overlay
 ```
 
 ### Build This Example Directly With CMake
 ```bash
-cd <apps-repo-root>/examples/instance-segmentation/offline-instance-segmentation-overlay
+cd <apps-repo-root>/examples/segmentation/instance-overlay
 cmake -S cpp -B build
 cmake --build build -j
 ```
 
 Binary output:
 ```bash
-./build/offline-instance-segmentation-overlay
+./build/instance-overlay
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/instance-segmentation/offline-instance-segmentation-overlay/offline-instance-segmentation-overlay \
+./build/examples/segmentation/instance-overlay/instance-overlay \
   assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/instance-segmentation/offline-instance-segmentation-overlay/python/requirements.txt
-python3 examples/instance-segmentation/offline-instance-segmentation-overlay/python/main.py \
+pip install -r examples/segmentation/instance-overlay/python/requirements.txt
+python3 examples/segmentation/instance-overlay/python/main.py \
   assets/models/yolo_v8n_seg_mpk.tar.gz <input_dir> <output_dir>
 ```
 

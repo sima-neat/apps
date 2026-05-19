@@ -1,8 +1,8 @@
 /**
- * @example offline-instance-segmentation-overlay.cpp
+ * @example instance-overlay.cpp
  * Minimal YOLOv8-seg pipeline using DetessDequant postprocess (no boxdecode).
  *
- * Usage: offline-instance-segmentation-overlay <model.tar.gz> <input_dir> <output_dir>
+ * Usage: instance-overlay <model.tar.gz> <input_dir> <output_dir>
  */
 #include "neat.h"
 #include "support/runtime/example_utils.h"

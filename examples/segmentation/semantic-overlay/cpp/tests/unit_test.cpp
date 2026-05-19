@@ -1,4 +1,4 @@
-// Unit test for offline-instance-segmentation-overlay: validates CLI arg handling.
+// Unit test for semantic-overlay: validates CLI arg handling.
 #include "support/testing/test_process.h"
 
 #include <iostream>
@@ -40,14 +40,14 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Test 3: bad input dir → nonzero exit
+  // Test 3: bad input dir → exit 2
   {
     auto r = spawn_and_wait(binary, {"dummy.tar.gz", "/nonexistent_dir_abc", "/tmp/out"}, 10000);
-    if (r.exit_code == 0) {
-      std::cerr << "[FAIL] bad input dir: expected nonzero exit, got 0\n";
+    if (r.exit_code != 2) {
+      std::cerr << "[FAIL] bad input dir: expected exit 2, got " << r.exit_code << "\n";
       ++failures;
     } else {
-      std::cout << "[OK] bad input dir correctly rejected (exit " << r.exit_code << ")\n";
+      std::cout << "[OK] bad input dir correctly rejected\n";
     }
   }
 

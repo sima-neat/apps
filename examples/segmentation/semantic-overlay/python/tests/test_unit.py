@@ -1,4 +1,4 @@
-"""Unit tests for simple-semantic-segmentation-overlay-pipeline (Python)."""
+"""Unit tests for semantic-overlay (Python)."""
 import subprocess
 import sys
 from pathlib import Path
