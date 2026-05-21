@@ -21,6 +21,7 @@ VALID_CATEGORIES = {
     "pose-estimation",
     "depth-estimation",
     "face-detection",
+    "genai",
     "re-identification",
     "throughput",
 }
