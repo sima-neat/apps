@@ -49,7 +49,7 @@ int count_files_recursive(const fs::path& root) {
     return 0;
   }
   for (fs::recursive_directory_iterator it(root, ec), end; it != end && !ec; it.increment(ec)) {
-    if (it->is_regular_file()) {
+    if (it->is_regular_file() && it->path().filename() != "config.yaml") {
       ++total;
     }
   }
@@ -86,7 +86,9 @@ int main(int argc, char** argv) {
     return skip_or_fail("yolo detector model not found in SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  const std::string output_dir = create_temp_dir("multi_camera_people_tracking_e2e_");
+  const std::string output_dir =
+      create_test_output_dir("multi-camera-people-detection-and-tracking-insight",
+                             "test_multi_stream_insight_and_save_pipeline");
   if (output_dir.empty()) {
     return 1;
   }

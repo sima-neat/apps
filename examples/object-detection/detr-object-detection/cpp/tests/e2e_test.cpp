@@ -58,24 +58,13 @@ int main(int argc, char** argv) {
     return kSkipCode;
   }
 
-  const char* output_root_raw = env_or_null("SIMANEAT_APPS_TEST_OUTPUT_DIR");
-  const std::string output_root = output_root_raw ? output_root_raw : "/tmp";
-  fs::path out_dir = fs::path(output_root) / "cpp" / "detr-object-detection";
-
-  std::error_code ec;
-  fs::create_directories(out_dir, ec);
-  if (ec) {
-    std::cerr << "[FAIL] could not create output directory: " << out_dir << " (" << ec.message()
-              << ")\n";
+  const std::string out_dir = create_test_output_dir("detr-object-detection", "test_full_pipeline");
+  if (out_dir.empty()) {
     return 1;
   }
 
-  fs::path out_image = out_dir / "detr_output.png";
-  auto config_dir = create_temp_dir("detr-object-detection_config_");
-  if (config_dir.empty()) {
-    return 1;
-  }
-  const fs::path config_path = fs::path(config_dir) / "config.yaml";
+  fs::path out_image = fs::path(out_dir) / "detr_output.png";
+  const fs::path config_path = fs::path(out_dir) / "config.yaml";
   {
     std::ofstream config_file(config_path);
     config_file << "model:\n"
@@ -99,15 +88,17 @@ int main(int argc, char** argv) {
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
+    remove_dir(out_dir);
     return 1;
   }
 
   if (!fs::exists(out_image)) {
     std::cerr << "[FAIL] expected annotated output image not found at " << out_image << "\n";
+    remove_dir(out_dir);
     return 1;
   }
 
-  remove_dir(config_dir);
+  remove_dir(out_dir);
   std::cout << "[OK] detr-object-detection pipeline completed successfully: " << out_image << "\n";
   return 0;
 }

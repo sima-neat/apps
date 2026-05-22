@@ -57,7 +57,7 @@ class TestE2E:
         )
 
         out_path = tmp_output_dir / "detr_output.png"
-        config_path = tmp_output_dir.parent / "detr_config.yaml"
+        config_path = tmp_output_dir / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

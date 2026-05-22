@@ -6,7 +6,7 @@
 #include <iostream>
 #include <string>
 
-using sima_examples::testing::create_temp_dir;
+using sima_examples::testing::create_test_output_dir;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
@@ -17,7 +17,8 @@ int main(int argc, char** argv) {
   }
 
   const std::string binary = argv[1];
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_e2e_");
+  const std::string temp_dir = create_test_output_dir("multistream-object-detection-insight",
+                                                      "test_validate_config_only_smoke_runs");
   if (temp_dir.empty()) {
     std::cerr << "[FAIL] failed to create temp directory\n";
     return 1;

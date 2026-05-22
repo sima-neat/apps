@@ -92,7 +92,8 @@ int main(int argc, char** argv) {
 
   // Case 1: cosine metric, default output type (both).
   {
-    const std::string out_dir = create_temp_dir("simple-re-identification-pipeline_e2e_cosine_");
+    const std::string out_dir =
+        create_test_output_dir("simple-re-identification-pipeline", "test_full_pipeline_cosine");
     if (out_dir.empty()) {
       return 1;
     }
@@ -148,7 +149,8 @@ int main(int argc, char** argv) {
 
   // Case 2: euclidean metric, explicit json-only output.
   {
-    const std::string out_dir = create_temp_dir("simple-re-identification-pipeline_e2e_json_");
+    const std::string out_dir =
+        create_test_output_dir("simple-re-identification-pipeline", "test_output_type_json_only");
     if (out_dir.empty()) {
       return 1;
     }

@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
                 "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_temp_dir("instance-overlay_e2e_");
+  auto out_dir = create_test_output_dir("instance-overlay", "test_full_pipeline");
   if (out_dir.empty())
     return 1;
 
@@ -75,14 +75,14 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_files(out_dir) == 0) {
+  } else if (count_output_files(out_dir) == 0) {
     std::cerr << "[FAIL] no overlay output files produced\n";
     rc = 1;
-  } else if (!all_files_nonempty(out_dir)) {
+  } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] instance segmentation overlay produced " << count_files(out_dir)
+    std::cout << "[OK] instance segmentation overlay produced " << count_output_files(out_dir)
               << " output files\n";
   }
 

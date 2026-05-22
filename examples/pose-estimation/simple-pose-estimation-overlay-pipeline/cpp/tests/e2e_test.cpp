@@ -39,19 +39,15 @@ int main(int argc, char** argv) {
   const std::string input_dir = images_raw ? images_raw : "assets/test_images";
   if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory with test images (assets/test_images is empty or missing)");
+                "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_temp_dir("simple-pose-estimation-overlay-pipeline_e2e_");
-  if (out_dir.empty()) return 1;
-
-  auto config_dir = create_temp_dir("simple-pose-estimation-overlay-pipeline_cfg_");
-  if (config_dir.empty()) {
-    remove_dir(out_dir);
+  auto out_dir =
+      create_test_output_dir("simple-pose-estimation-overlay-pipeline", "test_full_pipeline");
+  if (out_dir.empty())
     return 1;
-  }
 
-  const fs::path config_path = fs::path(config_dir) / "config.yaml";
+  const fs::path config_path = fs::path(out_dir) / "config.yaml";
   {
     std::ofstream config_file(config_path);
     config_file << "model:\n";
@@ -82,18 +78,17 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_files(out_dir) == 0) {
+  } else if (count_output_files(out_dir) == 0) {
     std::cerr << "[FAIL] no annotated output files produced\n";
     rc = 1;
-  } else if (!all_files_nonempty(out_dir)) {
+  } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] pose estimation overlay produced "
-              << count_files(out_dir) << " output files\n";
+    std::cout << "[OK] pose estimation overlay produced " << count_output_files(out_dir)
+              << " output files\n";
   }
 
-  remove_dir(config_dir);
   remove_dir(out_dir);
   return rc;
 }

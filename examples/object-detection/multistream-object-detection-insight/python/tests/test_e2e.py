@@ -16,8 +16,8 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 
 @pytest.mark.e2e
 class TestE2E:
-    def test_validate_config_only_smoke_runs(self, tmp_path: Path):
-        config_path = tmp_path / "config.yaml"
+    def test_validate_config_only_smoke_runs(self, tmp_output_dir: Path):
+        config_path = tmp_output_dir / "config.yaml"
         config_path.write_text(
             textwrap.dedent(
                 """

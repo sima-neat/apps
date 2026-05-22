@@ -65,16 +65,11 @@ int main(int argc, char** argv) {
                 "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_temp_dir("yolo26-object-detection-overlay_e2e_");
+  auto out_dir = create_test_output_dir("yolo26-object-detection-overlay", "test_full_pipeline");
   if (out_dir.empty())
     return 1;
 
-  auto config_dir = create_temp_dir("yolo26-object-detection-overlay_config_");
-  if (config_dir.empty()) {
-    remove_dir(out_dir);
-    return 1;
-  }
-  const fs::path config_path = fs::path(config_dir) / "config.yaml";
+  const fs::path config_path = fs::path(out_dir) / "config.yaml";
   {
     std::ofstream config_file(config_path);
     config_file << "model:\n"
@@ -104,18 +99,17 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_files(out_dir) == 0) {
+  } else if (count_output_files(out_dir) == 0) {
     std::cerr << "[FAIL] no annotated output files produced\n";
     rc = 1;
-  } else if (!all_files_nonempty(out_dir)) {
+  } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] yolo26m object detection overlay produced " << count_files(out_dir)
+    std::cout << "[OK] yolo26m object detection overlay produced " << count_output_files(out_dir)
               << " output files\n";
   }
 
-  remove_dir(config_dir);
   remove_dir(out_dir);
   return rc;
 }

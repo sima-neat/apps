@@ -13,7 +13,7 @@
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_temp_dir;
+using sima_examples::testing::create_test_output_dir;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
@@ -53,7 +53,8 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 }
 
 bool test_validate_config_only_smoke_runs(const std::string& binary) {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_validate_only_");
+  const std::string temp_dir = create_test_output_dir("multistream-object-detection-insight",
+                                                      "test_validate_config_only_smoke_runs");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -81,7 +82,8 @@ bool test_validate_config_only_smoke_runs(const std::string& binary) {
 }
 
 bool test_load_app_config_parses_runtime_worker_count() {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_cfg_");
+  const std::string temp_dir = create_test_output_dir(
+      "multistream-object-detection-insight", "test_load_app_config_parses_runtime_worker_count");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -139,7 +141,9 @@ bool test_load_app_config_parses_runtime_worker_count() {
 }
 
 bool test_load_app_config_rejects_removed_model_family_field() {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_bad_family_");
+  const std::string temp_dir =
+      create_test_output_dir("multistream-object-detection-insight",
+                             "test_load_app_config_rejects_removed_model_family_field");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -171,7 +175,8 @@ bool test_load_app_config_rejects_removed_model_family_field() {
 }
 
 bool test_load_app_config_rejects_invalid_worker_count() {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_bad_worker_");
+  const std::string temp_dir = create_test_output_dir(
+      "multistream-object-detection-insight", "test_load_app_config_rejects_invalid_worker_count");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -202,7 +207,8 @@ bool test_load_app_config_rejects_invalid_worker_count() {
 }
 
 bool test_load_app_config_rejects_invalid_video_mode() {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_bad_mode_");
+  const std::string temp_dir = create_test_output_dir(
+      "multistream-object-detection-insight", "test_load_app_config_rejects_invalid_video_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -233,7 +239,8 @@ bool test_load_app_config_rejects_invalid_video_mode() {
 }
 
 bool test_load_app_config_rejects_empty_streams() {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_no_streams_");
+  const std::string temp_dir = create_test_output_dir("multistream-object-detection-insight",
+                                                      "test_load_app_config_rejects_empty_streams");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -262,7 +269,9 @@ bool test_load_app_config_rejects_empty_streams() {
 }
 
 bool test_metadata_output_enabled_follows_video_mode_contract() {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_video_metadata_off_");
+  const std::string temp_dir =
+      create_test_output_dir("multistream-object-detection-insight",
+                             "test_metadata_output_enabled_follows_video_mode_contract");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -300,7 +309,9 @@ bool test_metadata_output_enabled_follows_video_mode_contract() {
 }
 
 bool test_metadata_output_enabled_stays_enabled_for_metadata_only_mode() {
-  const std::string temp_dir = create_temp_dir("multistream_object_detection_metadata_only_on_");
+  const std::string temp_dir =
+      create_test_output_dir("multistream-object-detection-insight",
+                             "test_metadata_output_enabled_stays_enabled_for_metadata_only_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
@@ -334,8 +345,9 @@ bool test_metadata_output_enabled_stays_enabled_for_metadata_only_mode() {
 }
 
 bool test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode() {
-  const std::string temp_dir =
-      create_temp_dir("multistream_object_detection_video_off_metadata_on_");
+  const std::string temp_dir = create_test_output_dir(
+      "multistream-object-detection-insight",
+      "test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }

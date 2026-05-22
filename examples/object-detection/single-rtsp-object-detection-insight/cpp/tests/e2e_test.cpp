@@ -1,4 +1,5 @@
 #include "support/testing/metadata_json_listener.h"
+#include "support/testing/test_process.h"
 
 #include <csignal>
 #include <cstdlib>
@@ -116,10 +117,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const fs::path config_dir =
-      fs::path("/tmp") / ("single-rtsp-config-" + std::to_string(::getpid()));
-  fs::create_directories(config_dir);
-  const fs::path config_path = config_dir / "config.yaml";
+  const std::string output_dir = sima_examples::testing::create_test_output_dir(
+      "single-rtsp-object-detection-insight", "test_full_pipeline");
+  if (output_dir.empty()) {
+    return 1;
+  }
+  const fs::path config_path = fs::path(output_dir) / "config.yaml";
   {
     std::ofstream config_file(config_path);
     config_file << "source:\n"
@@ -152,6 +155,7 @@ int main(int argc, char** argv) {
   const pid_t pid = ::fork();
   if (pid < 0) {
     std::cerr << "[ERR] fork failed: " << std::strerror(errno) << "\n";
+    sima_examples::testing::remove_dir(output_dir);
     return 1;
   }
   if (pid == 0) {
@@ -162,7 +166,7 @@ int main(int argc, char** argv) {
 
   const auto result = listener.wait_for_messages();
   terminate_child(pid);
-  fs::remove_all(config_dir);
+  sima_examples::testing::remove_dir(output_dir);
 
   if (!result.success) {
     std::cerr << "[ERR] no valid Insight metadata received: " << result.error << "\n";

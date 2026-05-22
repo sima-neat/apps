@@ -23,7 +23,7 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
-        self, models_dir, apps_root, test_timeout_ms, skip_unless_e2e_ready
+        self, models_dir, apps_root, tmp_output_dir, test_timeout_ms, skip_unless_e2e_ready
     ):
         model = _find_model(models_dir, "resnet")
         skip_unless_e2e_ready(model is not None, "resnet model not found in models_dir")
@@ -38,8 +38,7 @@ class TestE2E:
             image_env.exists(),
             "classification image missing; set SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
         )
-        config_path = apps_root / "sandbox" / "classification_test_config.yaml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path = tmp_output_dir / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

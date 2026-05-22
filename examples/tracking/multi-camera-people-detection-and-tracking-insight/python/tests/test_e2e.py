@@ -102,5 +102,9 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        files = [path for path in tmp_output_dir.rglob("*") if path.is_file()]
+        files = [
+            path
+            for path in tmp_output_dir.rglob("*")
+            if path.is_file() and path.name != "config.yaml"
+        ]
         assert files, "Expected sampled output files but output directory is empty"

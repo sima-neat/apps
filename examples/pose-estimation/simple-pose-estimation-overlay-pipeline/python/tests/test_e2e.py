@@ -2,7 +2,6 @@
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,52 +32,55 @@ class TestE2E:
             "test_images_dir is missing or empty",
         )
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "config.yaml"
-            config_path.write_text(
-                yaml.safe_dump(
-                    {
-                        "model": {"path": str(model)},
-                        "io": {
-                            "input_dir": str(test_images_dir),
-                            "output_dir": str(tmp_output_dir),
-                        },
-                        "runtime": {
-                            "infer_size": 640,
-                            "timeout_ms": 1000,
-                            "upsample_factor": 4.0,
-                        },
-                        "decode": {
-                            "keypoint_score": 0.1,
-                            "nms_radius": 6,
-                            "paf_score": 0.05,
-                            "paf_success_ratio": 0.8,
-                            "paf_samples": 10,
-                            "min_valid_joints": 3,
-                            "min_avg_person_score": 0.2,
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
+        config_path = tmp_output_dir / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "model": {"path": str(model)},
+                    "io": {
+                        "input_dir": str(test_images_dir),
+                        "output_dir": str(tmp_output_dir),
+                    },
+                    "runtime": {
+                        "infer_size": 640,
+                        "timeout_ms": 1000,
+                        "upsample_factor": 4.0,
+                    },
+                    "decode": {
+                        "keypoint_score": 0.1,
+                        "nms_radius": 6,
+                        "paf_score": 0.05,
+                        "paf_success_ratio": 0.8,
+                        "paf_samples": 10,
+                        "min_valid_joints": 3,
+                        "min_avg_person_score": 0.2,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(MAIN_PY),
-                    "--config",
-                    str(config_path),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=test_timeout_ms / 1000,
-                cwd=str(WORKSPACE_DIR),
-            )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MAIN_PY),
+                "--config",
+                str(config_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=test_timeout_ms / 1000,
+            cwd=str(WORKSPACE_DIR),
+        )
 
-            assert result.returncode == 0, (
-                f"main_pose.py exited with code {result.returncode}\\n"
-                f"stdout:\\n{result.stdout}\\nstderr:\\n{result.stderr}"
-            )
+        assert result.returncode == 0, (
+            f"main_pose.py exited with code {result.returncode}\\n"
+            f"stdout:\\n{result.stdout}\\nstderr:\\n{result.stderr}"
+        )
 
-        output_files = list(tmp_output_dir.iterdir())
+        output_files = [
+            path
+            for path in tmp_output_dir.iterdir()
+            if path.is_file() and path.name != "config.yaml"
+        ]
         assert len(output_files) > 0, "Expected output files but output directory is empty"

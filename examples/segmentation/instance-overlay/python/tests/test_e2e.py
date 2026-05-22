@@ -72,5 +72,9 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        output_files = list(tmp_output_dir.iterdir())
+        output_files = [
+            path
+            for path in tmp_output_dir.iterdir()
+            if path.is_file() and path.name != "config.yaml"
+        ]
         assert len(output_files) > 0, "Expected output files but output directory is empty"

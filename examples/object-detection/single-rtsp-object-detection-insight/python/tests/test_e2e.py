@@ -21,11 +21,13 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
 
 @pytest.mark.e2e
 class TestE2E:
-    def test_full_pipeline(self, models_dir, rtsp_url, test_timeout_ms, skip_unless_e2e_ready):
+    def test_full_pipeline(
+        self, models_dir, rtsp_url, tmp_output_dir, test_timeout_ms, skip_unless_e2e_ready
+    ):
         model = _find_model(models_dir, "yolo_v8s")
         skip_unless_e2e_ready(model is not None, "yolo (non-seg) model not found in models_dir")
 
-        config_path = Path("/tmp") / "single_rtsp_python_config.yaml"
+        config_path = tmp_output_dir / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

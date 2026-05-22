@@ -18,7 +18,7 @@
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_temp_dir;
+using sima_examples::testing::create_test_output_dir;
 using sima_examples::testing::ProcessResult;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
@@ -57,7 +57,9 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 }
 
 bool test_load_app_config_parses_dynamic_stream_list() {
-  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_cfg_");
+  const std::string temp_dir =
+      create_test_output_dir("multi-camera-people-detection-and-tracking-insight",
+                             "test_load_app_config_parses_dynamic_stream_list");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for config parsing test");
   }
@@ -125,7 +127,9 @@ bool test_load_app_config_parses_dynamic_stream_list() {
 }
 
 bool test_load_app_config_defaults_to_clean_video_mode() {
-  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_mode_");
+  const std::string temp_dir =
+      create_test_output_dir("multi-camera-people-detection-and-tracking-insight",
+                             "test_load_app_config_defaults_to_clean_video_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for video mode default test");
   }
@@ -164,7 +168,9 @@ bool test_load_app_config_defaults_to_clean_video_mode() {
 }
 
 bool test_load_app_config_rejects_invalid_video_mode() {
-  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_badmode_");
+  const std::string temp_dir =
+      create_test_output_dir("multi-camera-people-detection-and-tracking-insight",
+                             "test_load_app_config_rejects_invalid_video_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for bad video mode test");
   }
@@ -199,7 +205,9 @@ bool test_load_app_config_rejects_invalid_video_mode() {
 }
 
 bool test_load_app_config_rejects_missing_streams() {
-  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_badcfg_");
+  const std::string temp_dir =
+      create_test_output_dir("multi-camera-people-detection-and-tracking-insight",
+                             "test_load_app_config_rejects_missing_streams");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for missing streams test");
   }
@@ -294,7 +302,9 @@ bool test_make_insight_tracking_detection_uses_track_id() {
 }
 
 bool test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg() {
-  const std::string temp_dir = create_temp_dir("multi_camera_people_tracking_unit_overlay_");
+  const std::string temp_dir =
+      create_test_output_dir("multi-camera-people-detection-and-tracking-insight",
+                             "test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for overlay save test");
   }
