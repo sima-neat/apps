@@ -50,7 +50,7 @@ class TestE2E:
         skip_unless_e2e_ready(pair is not None, f"no images found in {test_images_dir}")
 
         image_a, image_b = pair
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [
@@ -114,7 +114,7 @@ class TestE2E:
         pair = _find_image_pair(test_images_dir)
         skip_unless_e2e_ready(pair is not None, f"need at least 2 images in {test_images_dir}")
         image_a, image_b = pair
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [
@@ -181,7 +181,7 @@ class TestE2E:
 
         new_out_dir = tmp_output_dir / "brand_new_dir"
         assert not new_out_dir.exists()
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [
@@ -235,7 +235,7 @@ class TestE2E:
         image_a, image_b = pair
 
         out_dir = tmp_output_dir / "json_only"
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

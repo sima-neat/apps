@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
   }
 
   fs::path out_image = fs::path(out_dir) / "detr_output.png";
-  const fs::path config_path = fs::path(out_dir) / "config.yaml";
+  const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
     config_file << "model:\n"

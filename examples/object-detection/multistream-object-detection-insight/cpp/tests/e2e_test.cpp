@@ -24,7 +24,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const std::filesystem::path config_path = std::filesystem::path(temp_dir) / "config.yaml";
+  const std::filesystem::path config_path =
+      std::filesystem::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"

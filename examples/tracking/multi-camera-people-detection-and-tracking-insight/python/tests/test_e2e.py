@@ -41,7 +41,7 @@ class TestE2E:
         skip_unless_e2e_ready(model is not None, "yolo detector model not found in models_dir")
         skip_unless_e2e_ready(len(rtsp_urls) >= 2, "need at least two RTSP URLs for multistream e2e")
 
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             textwrap.dedent(
                 f"""

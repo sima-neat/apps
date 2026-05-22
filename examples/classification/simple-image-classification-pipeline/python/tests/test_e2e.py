@@ -38,7 +38,7 @@ class TestE2E:
             image_env.exists(),
             "classification image missing; set SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
         )
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

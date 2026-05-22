@@ -31,7 +31,7 @@ class TestE2E:
             test_images_dir.exists() and any(test_images_dir.iterdir()),
             "test_images_dir is missing or empty",
         )
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

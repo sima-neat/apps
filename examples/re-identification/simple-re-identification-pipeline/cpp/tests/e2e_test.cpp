@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
     if (out_dir.empty()) {
       return 1;
     }
-    const fs::path config_path = fs::path(out_dir) / "config.yaml";
+    const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
     {
       std::ofstream config_file(config_path);
       config_file << "model:\n"
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
     if (out_dir.empty()) {
       return 1;
     }
-    const fs::path config_path = fs::path(out_dir) / "config.yaml";
+    const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
     {
       std::ofstream config_file(config_path);
       config_file << "model:\n"

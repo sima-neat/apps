@@ -59,7 +59,7 @@ bool test_validate_config_only_smoke_runs(const std::string& binary) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -88,7 +88,7 @@ bool test_load_app_config_parses_runtime_worker_count() {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -148,7 +148,7 @@ bool test_load_app_config_rejects_removed_model_family_field() {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/unsupported_mpk.tar.gz\n"
@@ -181,7 +181,7 @@ bool test_load_app_config_rejects_invalid_worker_count() {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -213,7 +213,7 @@ bool test_load_app_config_rejects_invalid_video_mode() {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -245,7 +245,7 @@ bool test_load_app_config_rejects_empty_streams() {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -278,7 +278,7 @@ bool test_metadata_output_enabled_follows_video_mode_contract() {
 
   bool ok = true;
   for (const std::string mode : {"clean", "annotated"}) {
-    const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
+    const fs::path config_path = fs::path(temp_dir).parent_path() / ("config_" + mode + ".yaml");
     std::ofstream out(config_path);
     out << "model:\n"
            "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -316,7 +316,7 @@ bool test_metadata_output_enabled_stays_enabled_for_metadata_only_mode() {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -354,7 +354,7 @@ bool test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode()
 
   bool ok = true;
   for (const std::string mode : {"clean", "annotated"}) {
-    const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
+    const fs::path config_path = fs::path(temp_dir).parent_path() / ("config_" + mode + ".yaml");
     std::ofstream out(config_path);
     out << "model:\n"
            "  path: assets/models/yolo_v8m_mpk.tar.gz\n"

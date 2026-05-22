@@ -60,7 +60,7 @@ class TestE2E:
         )
 
         out_path = tmp_output_dir / "retinaface_output.png"
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

@@ -27,7 +27,7 @@ class TestE2E:
         model = _find_model(models_dir, "yolo_v8s")
         skip_unless_e2e_ready(model is not None, "yolo (non-seg) model not found in models_dir")
 
-        config_path = tmp_output_dir / "config.yaml"
+        config_path = tmp_output_dir.parent / "config.yaml"
         config_path.write_text(
             "\n".join(
                 [

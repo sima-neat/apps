@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
-  const std::string config_path = out_dir + "/config.yaml";
+  const std::string config_path = (fs::path(out_dir).parent_path() / "config.yaml").string();
   {
     std::ofstream config(config_path);
     config << "model:\n"

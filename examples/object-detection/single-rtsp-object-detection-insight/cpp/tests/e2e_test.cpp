@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
   if (output_dir.empty()) {
     return 1;
   }
-  const fs::path config_path = fs::path(output_dir) / "config.yaml";
+  const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
     config_file << "source:\n"

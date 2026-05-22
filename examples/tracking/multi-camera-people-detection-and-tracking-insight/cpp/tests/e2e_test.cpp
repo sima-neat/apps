@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const fs::path config_path = fs::path(output_dir) / "config.yaml";
+  const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
   {
     std::ofstream out(config_path);
     out << "model: " << model_path

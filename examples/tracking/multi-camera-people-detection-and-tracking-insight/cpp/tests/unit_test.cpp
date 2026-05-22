@@ -64,7 +64,7 @@ bool test_load_app_config_parses_dynamic_stream_list() {
     return expect_true(false, "created temp directory for config parsing test");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input:\n"
@@ -134,7 +134,7 @@ bool test_load_app_config_defaults_to_clean_video_mode() {
     return expect_true(false, "created temp directory for video mode default test");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
@@ -175,7 +175,7 @@ bool test_load_app_config_rejects_invalid_video_mode() {
     return expect_true(false, "created temp directory for bad video mode test");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
@@ -212,7 +212,7 @@ bool test_load_app_config_rejects_missing_streams() {
     return expect_true(false, "created temp directory for missing streams test");
   }
 
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
