@@ -547,7 +547,7 @@ def main() -> int:
                 nms_threshold=nms_threshold,
                 top_k=top_k,
                 keep_top_k=keep_top_k,
-                with_landmarks=landmarks,
+                with_landmarks=landmarks is not None,
             )
             t3 = time.perf_counter()
 
@@ -634,7 +634,7 @@ def main() -> int:
         nms_threshold=nms_threshold,
         top_k=top_k,
         keep_top_k=keep_top_k,
-        with_landmarks=landmarks,
+        with_landmarks=landmarks is not None,
     )
 
     print(f"Detections: {len(detections)}")
