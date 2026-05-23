@@ -1,12 +1,13 @@
 /**
  * @example retinaface-face-detection.cpp
- * Minimal RetinaFace pipeline (tensor input): run inference on one image and decode boxes/landmarks.
+ * Minimal RetinaFace pipeline (tensor input): run inference on one image and decode
+ * boxes/landmarks.
  *
- * Usage:
- *   retinaface-face-detection <image_path> [--model <model.tar.gz>] [--output <out.jpg>]
- *                         [--conf <thr>] [--nms <iou>] [--no-landmarks]
+ * Usage: retinaface-face-detection [--config <path>]
  */
 #include "neat.h"
+#include "support/runtime/example_utils.h"
+#include "support/runtime/config_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -53,14 +55,14 @@ struct Detection {
 constexpr std::array<std::array<int, 2>, 3> kMinSizes = {{{16, 32}, {64, 128}, {256, 512}}};
 constexpr std::array<int, 3> kSteps = {8, 16, 32};
 constexpr std::array<float, 2> kVariance = {0.1f, 0.2f};
-
 static void bgr_mean_subtract_inplace(cv::Mat& bgr_f32) {
   CV_Assert(bgr_f32.type() == CV_32FC3);
   const cv::Scalar mean(104.0, 117.0, 123.0);
   bgr_f32 -= mean;
 }
 
-static std::pair<cv::Mat, PreprocMeta> pad_to_aspect(const cv::Mat& img, int target_w, int target_h) {
+static std::pair<cv::Mat, PreprocMeta> pad_to_aspect(const cv::Mat& img, int target_w,
+                                                     int target_h) {
   if (img.empty())
     throw std::runtime_error("pad_to_aspect: empty image");
   const int orig_h = img.rows;
@@ -77,14 +79,16 @@ static std::pair<cv::Mat, PreprocMeta> pad_to_aspect(const cv::Mat& img, int tar
     const int new_h = static_cast<int>(orig_w / target);
     const int pad_top = (new_h - orig_h) / 2;
     const int pad_bottom = new_h - orig_h - pad_top;
-    cv::copyMakeBorder(img, padded, pad_top, pad_bottom, 0, 0, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+    cv::copyMakeBorder(img, padded, pad_top, pad_bottom, 0, 0, cv::BORDER_CONSTANT,
+                       cv::Scalar(0, 0, 0));
     meta.pad_top = pad_top;
     meta.pad_left = 0;
   } else {
     const int new_w = static_cast<int>(orig_h * target);
     const int pad_left = (new_w - orig_w) / 2;
     const int pad_right = new_w - orig_w - pad_left;
-    cv::copyMakeBorder(img, padded, 0, 0, pad_left, pad_right, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+    cv::copyMakeBorder(img, padded, 0, 0, pad_left, pad_right, cv::BORDER_CONSTANT,
+                       cv::Scalar(0, 0, 0));
     meta.pad_top = 0;
     meta.pad_left = pad_left;
   }
@@ -106,30 +110,31 @@ static simaai::neat::Tensor tensor_from_hwc_f32(const cv::Mat& hwc_f32) {
   const size_t elems = static_cast<size_t>(h) * static_cast<size_t>(w) * static_cast<size_t>(c);
   const size_t bytes = elems * sizeof(float);
 
-  auto buf = std::make_shared<std::vector<float>>(elems);
-  std::memcpy(buf->data(), hwc_f32.ptr<float>(), bytes);
+  std::vector<float> data(elems);
+  std::memcpy(data.data(), hwc_f32.ptr<float>(), bytes);
 
-  simaai::neat::Tensor t;
-  t.storage = simaai::neat::make_cpu_external_storage(buf->data(), bytes, buf, /*read_only=*/true);
-  t.dtype = simaai::neat::TensorDType::Float32;
+  simaai::neat::Tensor t =
+      simaai::neat::Tensor::from_vector(data, {h, w, c}, simaai::neat::TensorMemory::EV74);
   t.layout = simaai::neat::TensorLayout::HWC;
   t.shape = {h, w, c};
   t.strides_bytes = {static_cast<int64_t>(w * c * sizeof(float)),
-                     static_cast<int64_t>(c * sizeof(float)),
-                     static_cast<int64_t>(sizeof(float))};
+                     static_cast<int64_t>(c * sizeof(float)), static_cast<int64_t>(sizeof(float))};
   return t;
 }
 
-static std::vector<simaai::neat::Tensor> tensors_from_sample(const simaai::neat::Sample& sample) {
+static std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
   if (sample.kind == simaai::neat::SampleKind::Tensor) {
     if (!sample.tensor.has_value())
       throw std::runtime_error("tensor sample missing payload");
     return {*sample.tensor};
   }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
+    return sample.tensors;
+  }
   if (sample.kind == simaai::neat::SampleKind::Bundle) {
     std::vector<simaai::neat::Tensor> out;
     for (const auto& field : sample.fields) {
-      auto child = tensors_from_sample(field);
+      auto child = collect_tensors(field);
       out.insert(out.end(), child.begin(), child.end());
     }
     return out;
@@ -165,8 +170,10 @@ static std::vector<Prior> make_priors(int image_h, int image_w) {
         for (int ms : kMinSizes[k]) {
           const float s_kx = static_cast<float>(ms) / static_cast<float>(image_w);
           const float s_ky = static_cast<float>(ms) / static_cast<float>(image_h);
-          const float cx = (static_cast<float>(j) + 0.5f) * static_cast<float>(step) / static_cast<float>(image_w);
-          const float cy = (static_cast<float>(i) + 0.5f) * static_cast<float>(step) / static_cast<float>(image_h);
+          const float cx = (static_cast<float>(j) + 0.5f) * static_cast<float>(step) /
+                           static_cast<float>(image_w);
+          const float cy = (static_cast<float>(i) + 0.5f) * static_cast<float>(step) /
+                           static_cast<float>(image_h);
           priors.push_back(Prior{cx, cy, s_kx, s_ky});
         }
       }
@@ -182,7 +189,8 @@ struct TensorDims4 {
   int64_t d3 = 0;
 };
 
-static TensorDims4 get_tensor_dims_4d_batch1(const simaai::neat::Tensor& t, const char* tensor_name) {
+static TensorDims4 get_tensor_dims_4d_batch1(const simaai::neat::Tensor& t,
+                                             const char* tensor_name) {
   if (t.shape.size() != 4) {
     throw std::runtime_error(std::string(tensor_name) + ": expected rank-4 tensor");
   }
@@ -200,11 +208,9 @@ static TensorDims4 get_tensor_dims_4d_batch1(const simaai::neat::Tensor& t, cons
   return dims;
 }
 
-// Match Python exactly:
-// arr = arr.transpose(0, 3, 1, 2)
-// Input is [1, d1, d2, d3], output is [1, d3, d1, d2], batch dropped.
-static std::vector<float> transpose_0312_drop_batch(const std::vector<float>& in, const TensorDims4& dims,
-                                                     const char* tensor_name) {
+static std::vector<float> transpose_0312_drop_batch(const std::vector<float>& in,
+                                                    const TensorDims4& dims,
+                                                    const char* tensor_name) {
   const size_t elems =
       static_cast<size_t>(dims.d1) * static_cast<size_t>(dims.d2) * static_cast<size_t>(dims.d3);
   if (in.size() != elems) {
@@ -214,12 +220,14 @@ static std::vector<float> transpose_0312_drop_batch(const std::vector<float>& in
   for (int64_t a = 0; a < dims.d3; ++a) {
     for (int64_t b = 0; b < dims.d1; ++b) {
       for (int64_t c = 0; c < dims.d2; ++c) {
-        const size_t src = (static_cast<size_t>(b) * static_cast<size_t>(dims.d2) + static_cast<size_t>(c)) *
-                               static_cast<size_t>(dims.d3) +
-                           static_cast<size_t>(a);
-        const size_t dst = (static_cast<size_t>(a) * static_cast<size_t>(dims.d1) + static_cast<size_t>(b)) *
-                               static_cast<size_t>(dims.d2) +
-                           static_cast<size_t>(c);
+        const size_t src =
+            (static_cast<size_t>(b) * static_cast<size_t>(dims.d2) + static_cast<size_t>(c)) *
+                static_cast<size_t>(dims.d3) +
+            static_cast<size_t>(a);
+        const size_t dst =
+            (static_cast<size_t>(a) * static_cast<size_t>(dims.d1) + static_cast<size_t>(b)) *
+                static_cast<size_t>(dims.d2) +
+            static_cast<size_t>(c);
         out[dst] = in[src];
       }
     }
@@ -227,10 +235,9 @@ static std::vector<float> transpose_0312_drop_batch(const std::vector<float>& in
   return out;
 }
 
-// Match Python exactly:
-// transposed.reshape(1, -1, group_size)
-static std::vector<float> reshape_rows_grouped(const std::vector<float>& transposed, int64_t channels,
-                                               int group_size, const char* tensor_name) {
+static std::vector<float> reshape_rows_grouped(const std::vector<float>& transposed,
+                                               int64_t channels, int group_size,
+                                               const char* tensor_name) {
   if (channels <= 0 || channels % group_size != 0) {
     throw std::runtime_error(std::string(tensor_name) + ": channels not divisible by group size");
   }
@@ -240,7 +247,8 @@ static std::vector<float> reshape_rows_grouped(const std::vector<float>& transpo
 
   const size_t cells = transposed.size() / static_cast<size_t>(channels);
   std::vector<float> rows;
-  rows.reserve((transposed.size() / static_cast<size_t>(group_size)) * static_cast<size_t>(group_size));
+  rows.reserve((transposed.size() / static_cast<size_t>(group_size)) *
+               static_cast<size_t>(group_size));
 
   for (size_t cell = 0; cell < cells; ++cell) {
     const size_t base = cell * static_cast<size_t>(channels);
@@ -253,25 +261,27 @@ static std::vector<float> reshape_rows_grouped(const std::vector<float>& transpo
   return rows;
 }
 
-static void append_rows_python_style(const simaai::neat::Tensor& tensor, int group_size, const char* tensor_name,
-                                     std::vector<float>& out_rows) {
+static void append_rows_python_style(const simaai::neat::Tensor& tensor, int group_size,
+                                     const char* tensor_name, std::vector<float>& out_rows) {
   const TensorDims4 dims = get_tensor_dims_4d_batch1(tensor, tensor_name);
   const std::vector<float> raw = tensor_to_f32(tensor);
   const std::vector<float> transposed = transpose_0312_drop_batch(raw, dims, tensor_name);
-  const std::vector<float> rows = reshape_rows_grouped(transposed, dims.d2, group_size, tensor_name);
+  const std::vector<float> rows =
+      reshape_rows_grouped(transposed, dims.d2, group_size, tensor_name);
   out_rows.insert(out_rows.end(), rows.begin(), rows.end());
 }
 
-static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors, std::vector<Detection>& out,
-                           const PreprocMeta& meta, float conf_thr, float nms_iou, int top_k, int keep_top_k,
-                           bool with_landmarks) {
+static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors,
+                           std::vector<Detection>& out, const PreprocMeta& meta, float conf_thr,
+                           float nms_iou, int top_k, int keep_top_k, bool with_landmarks) {
   if (tensors.size() != 9) {
-    throw std::runtime_error("expected exactly 9 tensors for RetinaFace (got " + std::to_string(tensors.size()) + ")");
+    throw std::runtime_error("expected exactly 9 tensors for RetinaFace (got " +
+                             std::to_string(tensors.size()) + ")");
   }
 
-  // Match Python parse_retinaface_outputs exactly:
-  // tensors order = [land2, land1, land0, box2, box1, box0, cls2, cls1, cls0]
-  // then concatenate as [level0(80), level1(40), level2(20)] after transpose+reshape.
+  // Tensors arrive as [N,H,C,W]; transpose to [N,W,H,C], then group anchors in C.
+  // Order is [land2, land1, land0, box2, box1, box0, cls2, cls1, cls0].
+  // Concatenate as [level0(80), level1(40), level2(20)] before RetinaFace decode.
   std::vector<float> land_rows; // flattened rows of 10
   std::vector<float> box_rows;  // flattened rows of 4
   std::vector<float> cls_rows;  // flattened rows of 2 (logits)
@@ -353,7 +363,8 @@ static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors, std
   }
 
   // Sort by score desc and keep top-k before NMS (like RetinaFaceSpy).
-  std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.score > b.score; });
+  std::sort(cands.begin(), cands.end(),
+            [](const Cand& a, const Cand& b) { return a.score > b.score; });
   if (top_k > 0 && static_cast<size_t>(top_k) < cands.size()) {
     cands.resize(static_cast<size_t>(top_k));
   }
@@ -416,10 +427,12 @@ static void decode_outputs(const std::vector<simaai::neat::Tensor>& tensors, std
     if (k.landm.has_value()) {
       std::array<float, 10> lm = *k.landm;
       for (int i = 0; i < 10; i += 2) {
-        lm[static_cast<size_t>(i)] = lm[static_cast<size_t>(i)] * static_cast<float>(meta.padded_w) -
-                                     static_cast<float>(meta.pad_left);
-        lm[static_cast<size_t>(i + 1)] = lm[static_cast<size_t>(i + 1)] * static_cast<float>(meta.padded_h) -
-                                         static_cast<float>(meta.pad_top);
+        lm[static_cast<size_t>(i)] =
+            lm[static_cast<size_t>(i)] * static_cast<float>(meta.padded_w) -
+            static_cast<float>(meta.pad_left);
+        lm[static_cast<size_t>(i + 1)] =
+            lm[static_cast<size_t>(i + 1)] * static_cast<float>(meta.padded_h) -
+            static_cast<float>(meta.pad_top);
       }
       d.landmarks = lm;
     }
@@ -440,15 +453,16 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
     if (d.landmarks.has_value()) {
       const auto& lm = *d.landmarks;
       for (int i = 0; i < 10; i += 2) {
-        cv::circle(bgr, cv::Point(static_cast<int>(std::lround(lm[static_cast<size_t>(i)])),
-                                  static_cast<int>(std::lround(lm[static_cast<size_t>(i + 1)]))),
+        cv::circle(bgr,
+                   cv::Point(static_cast<int>(std::lround(lm[static_cast<size_t>(i)])),
+                             static_cast<int>(std::lround(lm[static_cast<size_t>(i + 1)]))),
                    2, cv::Scalar(0, 0, 255), -1);
       }
     }
   }
 }
 
-struct Args {
+struct Config {
   fs::path image;
   std::string model = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz";
   fs::path output;
@@ -460,49 +474,59 @@ struct Args {
   bool landmarks = true;
   bool profile = false;
   int num_runs = 100;
+  int timeout_ms = 5000;
 };
 
-static Args parse_args(int argc, char** argv) {
-  if (argc < 2) {
-    throw std::runtime_error("Usage: retinaface-face-detection <image_path> [--model ...] [--output ...] "
-                             "[--conf ...] [--nms ...] [--top-k ...] [--keep-top-k ...] [--max-draw ...] "
-                             "[--no-landmarks]");
+static Config load_config(const fs::path& path) {
+  const auto raw = sima_examples::ScalarConfig::load(path);
+  Config cfg;
+  cfg.model = raw.string_or("model.path", "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz");
+  cfg.image = raw.string_or("io.image", "assets/test_images/input.jpg");
+  cfg.output = raw.string_or("io.output", "sandbox/retinaface_face_detection/output.png");
+  cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.4));
+  cfg.nms = static_cast<float>(raw.double_or("decode.nms_iou", 0.9));
+  cfg.top_k = raw.int_or("decode.top_k", 5000);
+  cfg.keep_top_k = raw.int_or("decode.keep_top_k", 750);
+  cfg.max_draw = raw.int_or("decode.max_draw", 50);
+  cfg.landmarks = raw.bool_or("decode.landmarks", true);
+  cfg.profile = raw.bool_or("runtime.profile", false);
+  cfg.num_runs = raw.int_or("runtime.num_runs", 100);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  if (cfg.conf < 0.0f || cfg.conf > 1.0f) {
+    throw std::runtime_error("decode.confidence_threshold must be in [0.0, 1.0]");
   }
+  if (cfg.nms < 0.0f || cfg.nms > 1.0f) {
+    throw std::runtime_error("decode.nms_iou must be in [0.0, 1.0]");
+  }
+  if (cfg.top_k < 1 || cfg.keep_top_k < 1 || cfg.max_draw < 0) {
+    throw std::runtime_error("decode top/max values must be valid");
+  }
+  if (cfg.num_runs < 1) {
+    throw std::runtime_error("runtime.num_runs must be >= 1");
+  }
+  if (cfg.timeout_ms <= 0) {
+    throw std::runtime_error("runtime.timeout_ms must be > 0");
+  }
+  return cfg;
+}
 
-  Args a;
-  a.image = argv[1];
-  for (int i = 2; i < argc; ++i) {
+static Config parse_config(int argc, char** argv) {
+  fs::path config_path = sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR);
+  for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    auto need = [&](const char* flag) -> std::string {
-      if (i + 1 >= argc)
-        throw std::runtime_error(std::string("missing value for ") + flag);
-      return argv[++i];
-    };
-    if (arg == "--model") {
-      a.model = need("--model");
-    } else if (arg == "--output") {
-      a.output = need("--output");
-    } else if (arg == "--conf") {
-      a.conf = std::stof(need("--conf"));
-    } else if (arg == "--nms") {
-      a.nms = std::stof(need("--nms"));
-    } else if (arg == "--top-k") {
-      a.top_k = std::stoi(need("--top-k"));
-    } else if (arg == "--keep-top-k") {
-      a.keep_top_k = std::stoi(need("--keep-top-k"));
-    } else if (arg == "--max-draw") {
-      a.max_draw = std::stoi(need("--max-draw"));
-    } else if (arg == "--profile") {
-      a.profile = true;
-    } else if (arg == "--num-runs") {
-      a.num_runs = std::stoi(need("--num-runs"));
-    } else if (arg == "--no-landmarks") {
-      a.landmarks = false;
+    if (arg == "--config") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--config requires a path");
+      }
+      config_path = argv[++i];
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: " << argv[0] << " [--config <path>]\n";
+      std::exit(0);
     } else {
-      throw std::runtime_error("unknown arg: " + arg);
+      throw std::runtime_error("unknown argument: " + arg);
     }
   }
-  return a;
+  return load_config(config_path);
 }
 
 } // namespace
@@ -512,7 +536,7 @@ int main(int argc, char** argv) {
   std::cerr.setf(std::ios::unitbuf);
 
   try {
-    const Args args = parse_args(argc, argv);
+    const Config args = parse_config(argc, argv);
     if (!fs::exists(args.image)) {
       throw std::runtime_error("image does not exist: " + args.image.string());
     }
@@ -534,11 +558,10 @@ int main(int argc, char** argv) {
     cv::resize(padded, resized, cv::Size(kInferW, kInferH), 0, 0, cv::INTER_LINEAR);
 
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "application/vnd.simaai.tensor";
-    model_opt.format = "";
-    model_opt.input_max_width = kInferW;
-    model_opt.input_max_height = kInferH;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Tensor;
+    model_opt.preprocess.input_max_width = kInferW;
+    model_opt.preprocess.input_max_height = kInferH;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(args.model, model_opt);
 
@@ -552,7 +575,7 @@ int main(int argc, char** argv) {
     // Build run with dummy tensor
     cv::Mat dummy(kInferH, kInferW, CV_32FC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy_t = tensor_from_hwc_f32(dummy);
-    auto run = session.build(dummy_t, simaai::neat::RunMode::Sync);
+    auto run = session.build(simaai::neat::TensorList{dummy_t}, simaai::neat::RunMode::Async);
 
     simaai::neat::Tensor input_t = tensor_from_hwc_f32(resized);
     std::vector<Detection> dets;
@@ -566,19 +589,20 @@ int main(int argc, char** argv) {
 
       for (int i = 0; i < runs; ++i) {
         const auto t0 = std::chrono::steady_clock::now();
-        if (!run.push(input_t)) {
+        if (!run.push(simaai::neat::TensorList{input_t})) {
           throw std::runtime_error("run.push failed during profiling");
         }
-        auto out_sample = run.pull(/*timeout_ms=*/5000);
+        auto out_sample = run.pull(args.timeout_ms);
         const auto t1 = std::chrono::steady_clock::now();
         if (!out_sample.has_value()) {
           throw std::runtime_error("run.pull returned no sample during profiling");
         }
 
         const auto t2 = std::chrono::steady_clock::now();
-        const std::vector<simaai::neat::Tensor> out_tensors = tensors_from_sample(*out_sample);
+        const std::vector<simaai::neat::Tensor> out_tensors = collect_tensors(*out_sample);
         dets.clear();
-        decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k, args.landmarks);
+        decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k,
+                       args.landmarks);
         const auto t3 = std::chrono::steady_clock::now();
 
         const std::chrono::duration<double> dt_session = t1 - t0;
@@ -615,31 +639,33 @@ int main(int argc, char** argv) {
       const double total_sum = sess.sum + post.sum;
       const double fps_overall = runs_d / total_sum;
 
-      std::cout << "Profiling over " << session_times.size() << " runs (image='" << args.image.string() << "'):\n";
-      std::cout << "  Session (push+pull): mean=" << sess.mean << "s, min=" << sess.min << "s, max=" << sess.max
-                << "s, FPS=" << fps_session << "\n";
+      std::cout << "Profiling over " << session_times.size() << " runs (image='"
+                << args.image.string() << "'):\n";
+      std::cout << "  Session (push+pull): mean=" << sess.mean << "s, min=" << sess.min
+                << "s, max=" << sess.max << "s, FPS=" << fps_session << "\n";
       std::cout << "  Postprocessing (decode+NMS): mean=" << post.mean << "s, min=" << post.min
                 << "s, max=" << post.max << "s, FPS=" << fps_post << "\n";
-      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d) << "s, min="
-                << (sess.min + post.min) << "s, max=" << (sess.max + post.max) << "s, FPS=" << fps_overall << "\n";
+      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d)
+                << "s, min=" << (sess.min + post.min) << "s, max=" << (sess.max + post.max)
+                << "s, FPS=" << fps_overall << "\n";
 
       std::cout << "Last run detections: " << dets.size() << "\n";
       for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
         const auto& d = dets[i];
-        std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
-                  << d.y2 << "]\n";
+        std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << ","
+                  << d.x2 << "," << d.y2 << "]\n";
       }
     } else {
-      if (!run.push(input_t)) {
+      if (!run.push(simaai::neat::TensorList{input_t})) {
         throw std::runtime_error("run.push failed");
       }
 
-      auto out_sample = run.pull(/*timeout_ms=*/5000);
+      auto out_sample = run.pull(args.timeout_ms);
       if (!out_sample.has_value()) {
         throw std::runtime_error("run.pull returned no sample");
       }
 
-      const std::vector<simaai::neat::Tensor> out_tensors = tensors_from_sample(*out_sample);
+      const std::vector<simaai::neat::Tensor> out_tensors = collect_tensors(*out_sample);
       std::cout << "Model produced " << out_tensors.size() << " tensor(s)\n";
       for (size_t i = 0; i < out_tensors.size(); ++i) {
         const auto& t = out_tensors[i];
@@ -650,13 +676,14 @@ int main(int argc, char** argv) {
         std::cout << "]\n";
       }
 
-      decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k, args.landmarks);
+      decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k,
+                     args.landmarks);
 
       std::cout << "Detections: " << dets.size() << "\n";
       for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
         const auto& d = dets[i];
-        std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
-                  << d.y2 << "]\n";
+        std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << ","
+                  << d.x2 << "," << d.y2 << "]\n";
       }
 
       if (!args.output.empty()) {

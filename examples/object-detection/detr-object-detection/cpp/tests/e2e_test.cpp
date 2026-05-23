@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -52,50 +53,52 @@ int main(int argc, char** argv) {
   }
   std::sort(image_candidates.begin(), image_candidates.end());
   if (image_candidates.empty()) {
-    env_or_skip(
-        "SIMANEAT_APPS_TEST_INPUT_DIR",
-        "directory containing test images (defaults to assets/test_images)");
+    env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
+                "directory containing test images (defaults to assets/test_images)");
     return kSkipCode;
   }
 
-  const char* output_root_raw = env_or_null("SIMANEAT_APPS_TEST_OUTPUT_DIR");
-  const std::string output_root = output_root_raw ? output_root_raw : "/tmp";
-  fs::path out_dir = fs::path(output_root) / "cpp" / "detr-object-detection";
-
-  std::error_code ec;
-  fs::create_directories(out_dir, ec);
-  if (ec) {
-    std::cerr << "[FAIL] could not create output directory: " << out_dir << " (" << ec.message() << ")\n";
+  const std::string out_dir = create_test_output_dir("detr-object-detection", "test_full_pipeline");
+  if (out_dir.empty()) {
     return 1;
   }
 
-  fs::path out_image = out_dir / "detr_output.png";
+  fs::path out_image = fs::path(out_dir) / "detr_output.png";
+  const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
+  {
+    std::ofstream config_file(config_path);
+    config_file << "model:\n"
+                << "  path: " << model_path << "\n"
+                << "io:\n"
+                << "  image: " << image_candidates.front().string() << "\n"
+                << "  output: " << out_image.string() << "\n"
+                << "decode:\n"
+                << "  confidence_threshold: 0.5\n"
+                << "  max_draw: 50\n"
+                << "  person_only: false\n"
+                << "runtime:\n"
+                << "  timeout_ms: 5000\n"
+                << "  profile: false\n"
+                << "  num_runs: 1\n";
+  }
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 30000);
 
-  auto r = spawn_and_wait(
-      binary,
-      {
-          image_candidates.front().string(),
-          "--model",
-          model_path,
-          "--conf",
-          "0.5",
-          "--output",
-          out_image.string(),
-      },
-      timeout);
+  auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
+    remove_dir(out_dir);
     return 1;
   }
 
   if (!fs::exists(out_image)) {
     std::cerr << "[FAIL] expected annotated output image not found at " << out_image << "\n";
+    remove_dir(out_dir);
     return 1;
   }
 
+  remove_dir(out_dir);
   std::cout << "[OK] detr-object-detection pipeline completed successfully: " << out_image << "\n";
   return 0;
 }

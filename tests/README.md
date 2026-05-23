@@ -1,12 +1,7 @@
 # SiMa NEAT Apps Testing
 
-This document covers test execution only. Build and NEAT install stay in `build.sh`.
-
-## Scope
-
-- `build.sh` is build-only.
-- `tests/test.sh` is test-only.
-- Run `build.sh` first, then run `tests/test.sh`.
+`tests/test.sh` is the single test entrypoint for CI, VS Code tasks, and manual
+SDK runs. Build and NEAT install stay in `build.sh`.
 
 ## Quick Start
 
@@ -14,41 +9,51 @@ This document covers test execution only. Build and NEAT install stay in `build.
 export APPS_ROOT=/path/to/sima-neat/apps
 cd "${APPS_ROOT}"
 
-# Build first
 ./build.sh
+./tests/test.sh --unit
+```
 
-# Run all tests
+Run everything that can run with the available local resources:
+
+```bash
 ./tests/test.sh --all
 ```
 
-## Auto-Setup Test Env
-
-Use the helper script to export all common test variables in one step.
+Run CI-like strict e2e validation:
 
 ```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-source tests/scripts/testing/setup_test_env.sh
+./tests/test.sh --e2e --strict
 ```
 
-Then override only what you need:
+## Local E2E Config
+
+Machine-specific values belong in a local config file, not in tracked scripts.
+`tests/.env.example` is the committed template. `tests/.env.local` is your
+ignored local copy with real board URLs and interpreter paths.
 
 ```bash
-export SIMANEAT_APPS_TEST_OUTPUT_DIR="${APPS_ROOT}/sandbox/test-output"
-export SIMANEAT_APPS_TEST_KEEP_OUTPUT=1
-export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg"
-export SIMANEAT_APPS_TEST_RTSP_URL="<rtsp-url>"
-export SIMANEAT_APPS_TEST_RTSP_URLS="<rtsp-url-0>,<rtsp-url-1>"
-export SIMANEAT_APPS_TEST_OPTIVIEW_VIDEO_PORT=19000
-export SIMANEAT_APPS_TEST_OPTIVIEW_JSON_PORT=19100
+cp tests/.env.example tests/.env.local
 ```
 
-## `tests/test.sh` Commands
+Edit `tests/.env.local`:
 
 ```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
+SIMANEAT_APPS_TEST_RTSP_URL=rtsp://<host>:<port>/<stream>
+SIMANEAT_APPS_TEST_RTSP_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+```
 
+`tests/.env.local` is ignored by git and is auto-loaded by `tests/test.sh`.
+Use `--config <file>` to load a different config:
+
+```bash
+./tests/test.sh --all --config /path/to/board.env
+```
+
+Process environment variables override values loaded from the config file.
+
+## Commands
+
+```bash
 # All unit tests (C++ + Python)
 ./tests/test.sh --unit
 
@@ -65,7 +70,39 @@ cd "${APPS_ROOT}"
 
 # Everything
 ./tests/test.sh --all
+
+# Strict mode: missing prerequisites or skipped e2e tests fail
+./tests/test.sh --e2e --strict
 ```
+
+## Python Test Interpreter
+
+Python tests run through `PYTHON_TEST_BIN`. If it is unset, `tests/test.sh`
+uses common pyneat locations first, then the active virtual environment, then
+system `python3`.
+
+The selected interpreter must have `pytest` installed:
+
+```bash
+${PYTHON_TEST_BIN:-python3} -m pip install pytest
+```
+
+For a persistent local override, set `PYTHON_TEST_BIN` in `tests/.env.local`.
+
+## VS Code From SDK
+
+Launch the VS Code tasks from the eLxr SDK workspace under `/workspace`.
+The task wrapper builds in the SDK, recovers the board through `dk`, then calls
+`tests/test.sh` on the board-side workspace.
+
+```bash
+bash tests/scripts/testing/run_vscode_test_task.sh --unit
+bash tests/scripts/testing/run_vscode_test_task.sh --all
+bash tests/scripts/testing/run_vscode_test_task.sh --all --strict
+```
+
+The same `tests/.env.local` file is visible to the board when the workspace is
+shared under `/workspace`.
 
 ## Run Individual Tests
 
@@ -77,11 +114,8 @@ Use native runners when you need one specific test.
 export APPS_ROOT=/path/to/sima-neat/apps
 cd "${APPS_ROOT}/build"
 
-# List registered C++ tests
 ctest -N
-
-# Run one C++ test by name regex
-ctest -R "single-rtsp-object-detection-optiview\.optiview_json_e2e" --verbose
+ctest -R "single-rtsp-object-detection-insight\.metadata_json_e2e" --verbose
 ```
 
 ### Python (pytest)
@@ -90,82 +124,39 @@ ctest -R "single-rtsp-object-detection-optiview\.optiview_json_e2e" --verbose
 export APPS_ROOT=/path/to/sima-neat/apps
 cd "${APPS_ROOT}"
 
-# Run one Python test node
 python3 -m pytest \
-  examples/object-detection/multistream-rtsp-detection-pipeline/python/tests/test_unit.py::TestArgParsing::test_missing_model \
+  examples/object-detection/multistream-object-detection-insight/python/tests/test_unit.py::TestMainEntrypoint::test_missing_config_file_fails_cleanly \
   -v
 ```
 
 ## Environment Variables
 
-`tests/test.sh` reads these variables during e2e preflight:
+`tests/test.sh` reads these variables:
 
 - `SIMANEAT_APPS_TEST_MODELS_DIR` (default: `${APPS_ROOT}/assets/models`)
 - `SIMANEAT_APPS_TEST_INPUT_DIR` (default: `${APPS_ROOT}/assets/test_images`)
-- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `/tmp`; setup script default: `${APPS_ROOT}/sandbox/tests`)
-  - C++ e2e output root: `${SIMANEAT_APPS_TEST_OUTPUT_DIR}/cpp`
-  - Python e2e output root: `${SIMANEAT_APPS_TEST_OUTPUT_DIR}/python`
+- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox/tests`)
 - `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg`)
-- `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `0`)
+- `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `1`)
 - `SIMANEAT_APPS_TEST_RTSP_URL` (single RTSP stream URL)
 - `SIMANEAT_APPS_TEST_RTSP_URLS` (comma-separated RTSP URLs for multistream tests)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
-- `SIMANEAT_APPS_TEST_REQUIRE_E2E` (`1` means missing e2e prerequisites fail instead of skip)
-
-Example:
-
-```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-
-export SIMANEAT_APPS_TEST_MODELS_DIR="${APPS_ROOT}/assets/models"
-export SIMANEAT_APPS_TEST_INPUT_DIR="${APPS_ROOT}/assets/test_images"
-export SIMANEAT_APPS_TEST_OUTPUT_DIR="${APPS_ROOT}/sandbox/tests"
-export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg"
-export SIMANEAT_APPS_TEST_KEEP_OUTPUT=0
-export SIMANEAT_APPS_TEST_TIMEOUT_MS=180000
-export SIMANEAT_APPS_TEST_REQUIRE_E2E=1
-```
+- `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
+- `PYTHON_TEST_BIN` (optional Python interpreter override)
 
 ## RTSP E2E Prerequisites
 
 RTSP e2e tests require live reachable RTSP streams at test time:
 
-- `single-rtsp-object-detection-optiview` (C++/Python)
-- `multistream-rtsp-detection-pipeline` (C++/Python)
-- `live-rtsp-depth-estimation` (C++/Python)
+- `single-rtsp-object-detection-insight` (C++/Python)
+- `multistream-object-detection-insight` (C++/Python)
 
-You can use any RTSP source for these tests. If you want a quick setup, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
-
-```bash
-sima-cli install gh:sima-ai/tool-mediasources
-./mediasrc.sh <video-dir>
-```
-
-If you use [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources), you can check the streams with:
-
-```bash
-open preview.html
-```
-
-If you use host-streamed sources, use the host IP in the RTSP URLs instead of `127.0.0.1`. Any other RTSP source also works:
-
-```bash
-export APPS_ROOT=/path/to/sima-neat/apps
-cd "${APPS_ROOT}"
-
-export SIMANEAT_APPS_TEST_RTSP_URL="<rtsp-url>"
-export SIMANEAT_APPS_TEST_RTSP_URLS="<rtsp-url-0>,<rtsp-url-1>"
-
-# Optional reachability check from the board
-ffprobe <rtsp-url-0>
-ffprobe <rtsp-url-1>
-
-./tests/test.sh --all
-```
+Any RTSP source works. If streams are host-served, use the host IP in the RTSP
+URLs instead of `127.0.0.1`.
 
 ## Two-Stage CI
 
-- Stage 1 (eLxr runner): `./build.sh` and package artifacts.
-- Stage 2 (board/devkit runner): set `SIMANEAT_APPS_TEST_*` and run `./tests/test.sh`.
-- Keep build and test as separate stages.
+- Stage 1 (eLxr runner): `./build.sh --all --clean` builds and packages apps.
+- Stage 2 (Modalix runner): installs the packaged runtime and runs `tests/test.sh`.
+- Regular CI runs unit tests with `./tests/test.sh --unit`.
+- Nightly/manual e2e runs `./tests/test.sh --e2e --strict`.

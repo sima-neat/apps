@@ -1,0 +1,13 @@
+source:
+  rtsp_url: ""
+  latency_ms: 200
+  udp: false
+model:
+  path: assets/models/yolo_v8s_mpk.tar.gz
+runtime:
+  frames: 300
+  debug: false
+insight:
+  host: ""
+  video_port: 9000
+  metadata_port: 9100

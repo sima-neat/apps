@@ -58,8 +58,7 @@ jobs:
           /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
           source "${PYNEAT_ACTIVATE}"
-          source tests/scripts/testing/setup_test_env.sh
-          ./tests/test.sh --e2e
+          ./tests/test.sh --e2e --strict
 
   modalix-manual-e2e:
     if: github.event_name == 'workflow_dispatch'
@@ -101,5 +100,4 @@ jobs:
           /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
           source "${PYNEAT_ACTIVATE}"
-          source tests/scripts/testing/setup_test_env.sh
-          ./tests/test.sh --e2e
+          ./tests/test.sh --e2e --strict

@@ -255,7 +255,8 @@ bool parse_fps_from_caps(const std::string& caps, int& fps_out) {
   return true;
 }
 
-bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt, RtspStreamInfo& out) {
+bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
+                            RtspStreamInfo& out) {
   out = RtspStreamInfo{};
 
   simaai::neat::Session probe;
@@ -779,9 +780,9 @@ void check_top1(const std::vector<float>& scores, int expected_id, float min_pro
 simaai::neat::Tensor pull_tensor_with_retry(simaai::neat::Run& run, const std::string& label,
                                             int per_try_ms, int tries) {
   for (int i = 0; i < tries; ++i) {
-    auto t = run.pull_tensor(per_try_ms);
-    if (t.has_value())
-      return *t;
+    auto tensors = run.pull_tensors(per_try_ms);
+    if (!tensors.empty())
+      return tensors.front();
   }
   throw std::runtime_error(label + ": no tensor received (timeout/EOS)");
 }
@@ -819,6 +820,21 @@ bool open_h264_writer(cv::VideoWriter& writer, const fs::path& out_path, int wid
 bool extract_bbox_payload(const simaai::neat::Sample& result, std::vector<uint8_t>& payload,
                           std::string& err) {
   return objdet::extract_bbox_payload(result, payload, err);
+}
+
+std::string metadata_boxes_data_json(const std::string& array_key,
+                                     const std::vector<MetadataBox>& boxes) {
+  json data;
+  data[array_key] = json::array();
+  for (const auto& box : boxes) {
+    data[array_key].push_back({
+        {"id", box.id},
+        {"label", box.label},
+        {"confidence", box.confidence},
+        {"bbox", {box.x, box.y, box.w, box.h}},
+    });
+  }
+  return data.dump();
 }
 
 } // namespace sima_examples

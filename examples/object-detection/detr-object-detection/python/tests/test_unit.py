@@ -14,41 +14,29 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 class TestArgParsing:
     """Validate CLI argument parsing for the DETR example."""
 
-    def test_missing_all_args(self):
+    def test_help(self):
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY)],
+            [sys.executable, str(MAIN_PY), "--help"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
+        assert r.returncode == 0
+        assert "--config" in r.stdout
 
-    def test_missing_model_file(self):
+    def test_bad_config_path(self):
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "assets/test_images/image.png", "--model", "does_not_exist.tar.gz"],
+            [sys.executable, str(MAIN_PY), "--config", "/nonexistent/detr-config.yaml"],
             capture_output=True,
             text=True,
             timeout=10,
             cwd=str(EXAMPLE_DIR),
         )
-        assert r.returncode == 2
-        assert "model file does not exist" in r.stderr.lower()
-
-    def test_missing_image_file(self):
-        r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "/does/not/exist.png", "--model", "assets/models/fake.tar.gz"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(EXAMPLE_DIR),
-        )
-        assert r.returncode == 2
-        assert "model file does not exist" in r.stderr.lower()
+        assert r.returncode != 0
 
     def test_unknown_flag(self):
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "assets/test_images/image.png", "--bogus"],
+            [sys.executable, str(MAIN_PY), "--bogus"],
             capture_output=True,
             text=True,
             timeout=10,

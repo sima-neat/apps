@@ -17,11 +17,11 @@ VALID_CATEGORIES = {
     "classification",
     "object-detection",
     "tracking",
-    "semantic-segmentation",
-    "instance-segmentation",
+    "segmentation",
     "pose-estimation",
     "depth-estimation",
     "face-detection",
+    "genai",
     "re-identification",
     "throughput",
 }

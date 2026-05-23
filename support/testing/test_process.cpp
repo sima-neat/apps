@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -95,8 +94,7 @@ std::string read_fd(int fd) {
 
 } // namespace
 
-ProcessResult spawn_and_wait(const std::string& binary,
-                             const std::vector<std::string>& args,
+ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::string>& args,
                              int timeout_ms) {
   int stdout_pipe[2];
   int stderr_pipe[2];
@@ -168,25 +166,24 @@ ProcessResult spawn_and_wait(const std::string& binary,
 // Filesystem helpers
 // ---------------------------------------------------------------------------
 
-std::string create_temp_dir(const std::string& prefix) {
+std::string create_test_output_dir(const std::string& example_name, const std::string& test_name) {
   const char* out_root_raw = env_or_null("SIMANEAT_APPS_TEST_OUTPUT_DIR");
   const std::string base_root = out_root_raw ? out_root_raw : "/tmp";
-  const std::string out_root = (fs::path(base_root) / "cpp").string();
+  const fs::path out_dir = fs::path(base_root) / "cpp" / example_name / test_name;
   std::error_code ec;
-  fs::create_directories(out_root, ec);
+  fs::remove_all(out_dir, ec);
   if (ec) {
-    std::cerr << "[ERR] failed to create output root directory '" << out_root
+    std::cerr << "[ERR] failed to clear output directory '" << out_dir.string()
               << "': " << ec.message() << "\n";
     return "";
   }
-
-  std::string tmpl = (fs::path(out_root) / (prefix + "XXXXXX")).string();
-  char* result = ::mkdtemp(tmpl.data());
-  if (!result) {
-    std::cerr << "[ERR] mkdtemp failed: " << std::strerror(errno) << "\n";
+  fs::create_directories(out_dir, ec);
+  if (ec) {
+    std::cerr << "[ERR] failed to create output directory '" << out_dir.string()
+              << "': " << ec.message() << "\n";
     return "";
   }
-  return std::string(result);
+  return out_dir.string();
 }
 
 void remove_dir(const std::string& path) {
@@ -198,20 +195,28 @@ void remove_dir(const std::string& path) {
   fs::remove_all(path, ec);
 }
 
-int count_files(const std::string& dir) {
+namespace {
+
+bool is_output_file(const fs::directory_entry& entry) {
+  return entry.is_regular_file() && entry.path().filename() != "config.yaml";
+}
+
+} // namespace
+
+int count_output_files(const std::string& dir) {
   int count = 0;
   std::error_code ec;
   for (auto& entry : fs::directory_iterator(dir, ec)) {
-    if (entry.is_regular_file())
+    if (is_output_file(entry))
       ++count;
   }
   return count;
 }
 
-bool all_files_nonempty(const std::string& dir) {
+bool all_output_files_nonempty(const std::string& dir) {
   std::error_code ec;
   for (auto& entry : fs::directory_iterator(dir, ec)) {
-    if (entry.is_regular_file() && entry.file_size() == 0)
+    if (is_output_file(entry) && entry.file_size() == 0)
       return false;
   }
   return true;

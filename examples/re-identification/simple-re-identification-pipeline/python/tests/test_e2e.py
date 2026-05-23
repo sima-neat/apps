@@ -50,15 +50,34 @@ class TestE2E:
         skip_unless_e2e_ready(pair is not None, f"no images found in {test_images_dir}")
 
         image_a, image_b = pair
+        config_path = tmp_output_dir.parent / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  image1: {image_a}",
+                    f"  image2: {image_b}",
+                    f"  output_dir: {tmp_output_dir}",
+                    "output:",
+                    "  type: both",
+                    "comparison:",
+                    "  metric: cosine",
+                    "  threshold: 0.65",
+                    "runtime:",
+                    "  timeout_ms: 5000",
+                    "  profile: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                str(image_a), str(image_b),
-                "--model", str(model),
-                "--metric", "cosine",
-                "--threshold", "0.65",
-                "--output-dir", str(tmp_output_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,
@@ -95,14 +114,34 @@ class TestE2E:
         pair = _find_image_pair(test_images_dir)
         skip_unless_e2e_ready(pair is not None, f"need at least 2 images in {test_images_dir}")
         image_a, image_b = pair
+        config_path = tmp_output_dir.parent / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  image1: {image_a}",
+                    f"  image2: {image_b}",
+                    f"  output_dir: {tmp_output_dir}",
+                    "output:",
+                    "  type: both",
+                    "comparison:",
+                    "  metric: euclidean",
+                    "  threshold: 25.0",
+                    "runtime:",
+                    "  timeout_ms: 5000",
+                    "  profile: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                str(image_a), str(image_b),
-                "--model", str(model),
-                "--metric", "euclidean",
-                "--output-dir", str(tmp_output_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,
@@ -142,13 +181,34 @@ class TestE2E:
 
         new_out_dir = tmp_output_dir / "brand_new_dir"
         assert not new_out_dir.exists()
+        config_path = tmp_output_dir.parent / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  image1: {image_a}",
+                    f"  image2: {image_b}",
+                    f"  output_dir: {new_out_dir}",
+                    "output:",
+                    "  type: both",
+                    "comparison:",
+                    "  metric: cosine",
+                    "  threshold: 0.65",
+                    "runtime:",
+                    "  timeout_ms: 5000",
+                    "  profile: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                str(image_a), str(image_b),
-                "--model", str(model),
-                "--output-dir", str(new_out_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,
@@ -175,14 +235,34 @@ class TestE2E:
         image_a, image_b = pair
 
         out_dir = tmp_output_dir / "json_only"
+        config_path = tmp_output_dir.parent / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    "io:",
+                    f"  image1: {image_a}",
+                    f"  image2: {image_b}",
+                    f"  output_dir: {out_dir}",
+                    "output:",
+                    "  type: json",
+                    "comparison:",
+                    "  metric: cosine",
+                    "  threshold: 0.65",
+                    "runtime:",
+                    "  timeout_ms: 5000",
+                    "  profile: false",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                str(image_a), str(image_b),
-                "--model", str(model),
-                "--output-type", "json",
-                "--output-dir", str(out_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,

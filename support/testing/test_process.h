@@ -35,21 +35,21 @@ int skip_or_fail(const std::string& reason);
 
 // Spawn a process and capture its exit code, stdout and stderr.
 // If timeout_ms > 0, SIGTERM the child after that many milliseconds.
-ProcessResult spawn_and_wait(const std::string& binary,
-                             const std::vector<std::string>& args,
+ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::string>& args,
                              int timeout_ms = 30000);
 
-// Create a temporary directory under SIMANEAT_APPS_TEST_OUTPUT_DIR
-// (or /tmp if unset). Returns the path.
-std::string create_temp_dir(const std::string& prefix = "sima_test_");
+// Create a deterministic per-test output directory under
+// SIMANEAT_APPS_TEST_OUTPUT_DIR/cpp/<example>/<test> (or /tmp/cpp/... if unset).
+// The directory is cleared before each run so repeated tests overwrite artifacts.
+std::string create_test_output_dir(const std::string& example_name, const std::string& test_name);
 
 // Remove a directory tree.
 void remove_dir(const std::string& path);
 
-// Count regular files in a directory (non-recursive).
-int count_files(const std::string& dir);
+// Count regular output files in a directory, excluding the test config file.
+int count_output_files(const std::string& dir);
 
-// Return true if every regular file in dir is non-empty.
-bool all_files_nonempty(const std::string& dir);
+// Return true if every regular output file in dir is non-empty.
+bool all_output_files_nonempty(const std::string& dir);
 
 } // namespace sima_examples::testing

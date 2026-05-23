@@ -32,9 +32,18 @@ def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
 
 
 def iter_tensors(sample: pyneat.Sample):
+    if isinstance(sample, (list, tuple)):
+        for item in sample:
+            yield from iter_tensors(item)
+        return
+    if isinstance(sample, pyneat.Tensor):
+        yield sample
+        return
     if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
-    for field in sample.fields:
+    for tensor in getattr(sample, "tensors", []):
+        yield tensor
+    for field in getattr(sample, "fields", []):
         yield from iter_tensors(field)
 
 
@@ -371,11 +380,11 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
 
     try:
         opt = pyneat.ModelOptions()
-        opt.media_type = "video/x-raw"
-        opt.format = "BGR"
-        opt.input_max_width = cfg.runtime.infer_size
-        opt.input_max_height = cfg.runtime.infer_size
-        opt.input_max_depth = 3
+        opt.preprocess.kind = pyneat.InputKind.Image
+        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+        opt.preprocess.input_max_width = cfg.runtime.infer_size
+        opt.preprocess.input_max_height = cfg.runtime.infer_size
+        opt.preprocess.input_max_depth = 3
 
         model = pyneat.Model(cfg.model.path, opt)
 
@@ -384,8 +393,13 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
         print(f"[BUILD] Pipeline:\n{sess.describe_backend()}")
 
         dummy = np.zeros((cfg.runtime.infer_size, cfg.runtime.infer_size, 3), dtype=np.uint8)
-        t_dummy = pyneat.Tensor.from_numpy(dummy, copy=True, image_format=pyneat.PixelFormat.BGR)
-        run = sess.build(t_dummy, pyneat.RunMode.Sync)
+        t_dummy = pyneat.Tensor.from_numpy(
+            dummy,
+            copy=True,
+            image_format=pyneat.PixelFormat.BGR,
+            memory=pyneat.TensorMemory.EV74,
+        )
+        run = sess.build(t_dummy, pyneat.RunMode.Async)
 
         processed = 0
         total_e2e_time = 0.0
@@ -406,7 +420,12 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
             )
             resized = np.ascontiguousarray(resized, dtype=np.uint8)
 
-            t_in = pyneat.Tensor.from_numpy(resized, copy=True, image_format=pyneat.PixelFormat.BGR)
+            t_in = pyneat.Tensor.from_numpy(
+                resized,
+                copy=True,
+                image_format=pyneat.PixelFormat.BGR,
+                memory=pyneat.TensorMemory.EV74,
+            )
 
             infer_start = time.perf_counter()
             out_opt = run.run(t_in, timeout_ms=cfg.runtime.timeout_ms)
@@ -425,7 +444,7 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
                     file=sys.stderr,
                 )
                 continue
-            heatmap_tensor = tensor_to_hwc_f32(tensors[0]) 
+            heatmap_tensor = tensor_to_hwc_f32(tensors[0])
             paf_tensor = tensor_to_hwc_f32(tensors[1])
 
             heatmap_tensor = cv2.resize(

@@ -35,13 +35,32 @@ class TestE2E:
             "test_images_dir is missing or empty",
         )
 
+        config_path = tmp_output_dir.parent / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "model:",
+                    f"  path: {model}",
+                    f"  labels: {LABELS_FILE}",
+                    "io:",
+                    f"  input_dir: {test_images_dir}",
+                    f"  output_dir: {tmp_output_dir}",
+                    "decode:",
+                    "  score_threshold: 0.55",
+                    "  nms_iou: 0.50",
+                    "  max_detections: 100",
+                    "runtime:",
+                    "  timeout_ms: 5000",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
         result = subprocess.run(
             [
                 sys.executable, str(MAIN_PY),
-                str(model),
-                str(LABELS_FILE),
-                str(test_images_dir),
-                str(tmp_output_dir),
+                "--config", str(config_path),
             ],
             capture_output=True,
             text=True,
@@ -54,5 +73,9 @@ class TestE2E:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
-        output_files = list(tmp_output_dir.iterdir())
+        output_files = [
+            path
+            for path in tmp_output_dir.iterdir()
+            if path.is_file() and path.name != "config.yaml"
+        ]
         assert len(output_files) > 0, "Expected output files but output directory is empty"

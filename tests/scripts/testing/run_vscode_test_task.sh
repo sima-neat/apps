@@ -35,6 +35,37 @@ else
   exit 2
 fi
 
+remove_stale_build_dir() {
+  local build_dir="${BUILD_DIR:-build}"
+  local build_path
+  if [[ "${build_dir}" == /* ]]; then
+    build_path="${build_dir}"
+  else
+    build_path="${ROOT_DIR}/${build_dir}"
+  fi
+
+  local cache_path="${build_path}/CMakeCache.txt"
+  if [[ ! -f "${cache_path}" ]]; then
+    return 0
+  fi
+
+  local expected="CMAKE_HOME_DIRECTORY:INTERNAL=${ROOT_DIR}"
+  if ! grep -Fxq "${expected}" "${cache_path}"; then
+    echo "[task] removing stale build directory created from a different checkout path"
+    rm -rf "${build_path:?}"
+  fi
+}
+
+echo "[task] building apps in the SDK with the installed NEAT core"
+remove_stale_build_dir
+if ! (cd "${ROOT_DIR}" && ./build.sh); then
+  rc=$?
+  echo ""
+  echo "[task] SDK build failed. Press Enter to close this task terminal."
+  read -r
+  exit "${rc}"
+fi
+
 if ! bash -ic "${recovery_cmd}"; then
   rc=$?
   echo ""

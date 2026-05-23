@@ -36,6 +36,11 @@ function(sima_neat_apps_add_example example_name)
       ${PROJECT_SOURCE_DIR}
   )
 
+  target_compile_definitions("${target_name}"
+    PRIVATE
+      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+
   set_target_properties("${target_name}" PROPERTIES OUTPUT_NAME "${example_name}")
 
   if (APP_OUTPUT_TARGET_VAR)
@@ -47,8 +52,8 @@ add_subdirectory(classification)
 add_subdirectory(object-detection)
 add_subdirectory(re-identification)
 add_subdirectory(tracking)
-add_subdirectory(semantic-segmentation)
-add_subdirectory(instance-segmentation)
+add_subdirectory(segmentation)
 add_subdirectory(depth-estimation)
 add_subdirectory(face-detection)
 add_subdirectory(pose-estimation)
+add_subdirectory(genai)

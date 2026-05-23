@@ -15,19 +15,17 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   int failures = 0;
 
-  // Test 1: no --model → exit 2, error mentions "model"
+  // Test 1: --help prints usage.
   {
-    auto r = spawn_and_wait(binary, {}, 10000);
-    if (r.exit_code != 2) {
-      std::cerr << "[FAIL] missing --model: expected exit 2, got " << r.exit_code << "\n";
+    auto r = spawn_and_wait(binary, {"--help"}, 10000);
+    if (r.exit_code != 0) {
+      std::cerr << "[FAIL] --help: expected exit 0, got " << r.exit_code << "\n";
       ++failures;
-    } else if (r.stderr_text.find("model") == std::string::npos &&
-               r.stderr_text.find("Model") == std::string::npos &&
-               r.stderr_text.find("compiled model package") == std::string::npos) {
-      std::cerr << "[FAIL] missing --model: stderr does not mention compiled model package\n";
+    } else if (r.stdout_text.find("Usage") == std::string::npos) {
+      std::cerr << "[FAIL] --help: stdout does not contain Usage\n";
       ++failures;
     } else {
-      std::cout << "[OK] missing --model correctly rejected\n";
+      std::cout << "[OK] --help printed usage\n";
     }
   }
 

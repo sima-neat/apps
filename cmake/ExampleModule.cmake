@@ -64,6 +64,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
 
   add_library(sima_neat_apps_support_runtime STATIC
     "${apps_root}/support/runtime/asset_utils.cpp"
+    "${apps_root}/support/runtime/config_utils.cpp"
     "${apps_root}/support/runtime/example_utils.cpp"
     "${apps_root}/support/object_detection/obj_detection_utils.cpp"
   )
@@ -113,7 +114,7 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   find_package(nlohmann_json REQUIRED)
 
   add_library(sima_neat_apps_support_testing STATIC
-    "${apps_root}/support/testing/optiview_json_listener.cpp"
+    "${apps_root}/support/testing/metadata_json_listener.cpp"
     "${apps_root}/support/testing/test_process.cpp"
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
@@ -129,7 +130,7 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   )
 endfunction()
 
-function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_target)
+function(_sima_neat_apps_add_metadata_e2e_test example_name module_dir example_target)
   get_filename_component(_apps_root "${module_dir}/../../../.." ABSOLUTE)
   set(_e2e_source "${module_dir}/tests/e2e_test.cpp")
   if (NOT EXISTS "${_e2e_source}")
@@ -149,10 +150,10 @@ function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_t
   )
 
   add_test(
-    NAME "${example_name}.optiview_json_e2e"
+    NAME "${example_name}.metadata_json_e2e"
     COMMAND $<TARGET_FILE:${_e2e_target}> $<TARGET_FILE:${example_target}>
   )
-  set_tests_properties("${example_name}.optiview_json_e2e" PROPERTIES
+  set_tests_properties("${example_name}.metadata_json_e2e" PROPERTIES
     SKIP_RETURN_CODE 77
     LABELS "e2e"
     WORKING_DIRECTORY "${_apps_root}"
@@ -226,7 +227,7 @@ function(_sima_neat_apps_add_generic_e2e_test example_name module_dir example_ta
 endfunction()
 
 function(sima_neat_apps_module example_name)
-  set(options OPTIVIEW OPTIVIEW_E2E_TEST UNIT_TEST E2E_TEST)
+  set(options OPTIVIEW METADATA_E2E_TEST UNIT_TEST E2E_TEST)
   set(one_value_args OUTPUT_TARGET_VAR)
   set(multi_value_args SOURCES)
   cmake_parse_arguments(APP "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
@@ -242,8 +243,8 @@ function(sima_neat_apps_module example_name)
     endif()
 
     get_filename_component(_module_dir "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
-    if (BUILD_TESTING AND APP_OPTIVIEW_E2E_TEST)
-      _sima_neat_apps_add_optiview_e2e_test("${example_name}" "${_module_dir}" "${_module_target_name}")
+    if (BUILD_TESTING AND APP_METADATA_E2E_TEST)
+      _sima_neat_apps_add_metadata_e2e_test("${example_name}" "${_module_dir}" "${_module_target_name}")
     endif()
     if (BUILD_TESTING AND APP_UNIT_TEST)
       _sima_neat_apps_add_unit_test("${example_name}" "${_module_dir}" "${_module_target_name}")
@@ -290,12 +291,17 @@ function(sima_neat_apps_module example_name)
       "${_apps_root}"
   )
 
+  target_compile_definitions(${example_name}
+    PRIVATE
+      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_module_dir}/.."
+  )
+
   if (APP_OUTPUT_TARGET_VAR)
     set(${APP_OUTPUT_TARGET_VAR} "${example_name}" PARENT_SCOPE)
   endif()
 
-  if (BUILD_TESTING AND APP_OPTIVIEW_E2E_TEST)
-    _sima_neat_apps_add_optiview_e2e_test("${example_name}" "${_module_dir}" "${example_name}")
+  if (BUILD_TESTING AND APP_METADATA_E2E_TEST)
+    _sima_neat_apps_add_metadata_e2e_test("${example_name}" "${_module_dir}" "${example_name}")
   endif()
 
   if (BUILD_TESTING AND APP_UNIT_TEST)

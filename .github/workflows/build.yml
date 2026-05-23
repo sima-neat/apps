@@ -113,10 +113,8 @@ jobs:
           SIMANEAT_APPS_TEST_RTSP_URL: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URL }}
           SIMANEAT_APPS_TEST_RTSP_URLS: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URLS }}
         run: |
-          /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
           source "${PYNEAT_ACTIVATE}"
-          source tests/scripts/testing/setup_test_env.sh
           ./tests/test.sh --unit
 
   publish-index:

@@ -42,26 +42,22 @@ Download into `assets/models/`:
   `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
 
 ## Important Behavior
-- Input and output paths are user-provided.
-- Detection confidence (`--conf`) and NMS IoU (`--nms`) control final detection count.
-- By default, detections include 5-point facial landmarks unless `--no-landmarks` is set.
+- C++ and Python read runtime values from `common/config.yaml`.
+- Detection confidence and NMS IoU live under `decode`.
+- By default, detections include 5-point facial landmarks unless `decode.landmarks` is `false`.
 
 ## Command-Line Options
 ### C++
 - Invocation:
-  `./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--max-draw <count>] [--profile] [--num-runs <count>] [--no-landmarks]`
-- Required arguments:
-  `<input_image_path>`
+  `./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection [--config <path>]`
 - Optional arguments:
-  `--model`, `--output`, `--conf`, `--nms`, `--top-k`, `--keep-top-k`, `--max-draw`, `--profile`, `--num-runs`, `--no-landmarks`
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ### Python
 - Invocation:
-  `python3 examples/face-detection/retinaface-face-detection/python/main.py <input_image_path> [--model <model_path>] [--output <output_image_path>] [--conf <threshold>] [--nms <iou>] [--top-k <count>] [--keep-top-k <count>] [--profile] [--num-runs <count>] [--no-landmarks] [--verbose]`
-- Required arguments:
-  `<input_image_path>`
+  `python3 examples/face-detection/retinaface-face-detection/python/main.py [--config <path>]`
 - Optional arguments:
-  `--model`, `--output`, `--conf`, `--nms`, `--top-k`, `--keep-top-k`, `--profile`, `--num-runs`, `--no-landmarks`, `--verbose`
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
 
 ## Build
 ### Build From The Apps Repo
@@ -90,22 +86,14 @@ Binary output:
 ## Run
 ### C++
 ```bash
-./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection \
-  <input_image_path> \
-  --model assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
-  --output <output_image_path> \
-  --conf 0.4 --nms 0.9
+./build/examples/face-detection/retinaface-face-detection_cpp/retinaface-face-detection
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/face-detection/retinaface-face-detection/python/requirements.txt
-python3 examples/face-detection/retinaface-face-detection/python/main.py \
-  <input_image_path> \
-  --model assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz \
-  --output <output_image_path> \
-  --conf 0.4 --nms 0.9
+python3 examples/face-detection/retinaface-face-detection/python/main.py
 ```
 
 ## Testing
@@ -166,8 +154,8 @@ Notes:
 
 ## Debugging Notes
 - If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.
-- If no detections appear, lower `--conf` (for example `0.25`) and confirm the input actually contains faces.
-- If too many duplicate boxes appear, reduce `--nms` and/or lower `--top-k`.
+- If no detections appear, lower `decode.confidence_threshold` and confirm the input actually contains faces.
+- If too many duplicate boxes appear, reduce `decode.nms_iou` and/or lower `decode.top_k`.
 - If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.
 
 ## Source Files

@@ -1,7 +1,6 @@
 foreach(example IN ITEMS
     detr-object-detection
-    single-rtsp-object-detection-optiview
-    multistream-rtsp-detection-pipeline
+    single-rtsp-object-detection-insight
     simple-object-detection-overlay-pipeline
     yolo26-object-detection-overlay
 )
@@ -9,4 +8,4 @@ foreach(example IN ITEMS
     add_subdirectory(${example}/cpp ${example})
   endif()
 endforeach()
-add_subdirectory(multistream-object-detection-optiview/cpp multistream-object-detection-optiview)
+add_subdirectory(multistream-object-detection-insight/cpp multistream-object-detection-insight)

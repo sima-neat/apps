@@ -13,37 +13,34 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 class TestArgParsing:
     """Validate CLI argument parsing for the RetinaFace example."""
 
-    def test_missing_all_args(self):
-        """Running with no arguments should fail because image is required."""
+    def test_help(self):
+        """--help should describe the config-driven CLI."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY)],
+            [sys.executable, str(MAIN_PY), "--help"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        assert r.returncode == 2
-        assert "error" in r.stderr.lower()
+        assert r.returncode == 0
+        assert "--config" in r.stdout
 
-    def test_missing_model_file(self):
-        """Passing an image but a non-existent --model path should fail."""
+    def test_bad_config_path(self):
+        """Missing config path should fail."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "some_image.jpg", "--model", "does_not_exist.tar.gz"],
+            [sys.executable, str(MAIN_PY), "--config", "/nonexistent/retinaface-config.yaml"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        # main() prints a friendly error and returns 2 when the model is missing
-        assert r.returncode == 2
-        assert "model file does not exist" in r.stderr.lower()
+        assert r.returncode != 0
 
     def test_unknown_flag(self):
         """An unrecognized flag should cause argparse to exit with code 2."""
         r = subprocess.run(
-            [sys.executable, str(MAIN_PY), "some_image.jpg", "--bogus"],
+            [sys.executable, str(MAIN_PY), "--bogus"],
             capture_output=True,
             text=True,
             timeout=10,
         )
         assert r.returncode == 2
         assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
-

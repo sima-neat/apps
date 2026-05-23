@@ -17,9 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import cv2
-import numpy as np
-import pyneat
+import yaml
 
 
 VERBOSE = False
@@ -32,6 +30,7 @@ def _log(msg: str) -> None:
 
 
 DEFAULT_MODEL_PATH = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz"
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 # RetinaFaceSpy postprocessing assumes 640x640 input space (80/40/20 feature maps).
 INFER_WIDTH = 640
 INFER_HEIGHT = 640
@@ -61,8 +60,30 @@ def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
 def iter_tensors(sample: pyneat.Sample):
     if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         yield sample.tensor
+    elif sample.kind == pyneat.SampleKind.TensorSet:
+        yield from sample.tensors
     for field in sample.fields:
         yield from iter_tensors(field)
+
+
+def collect_tensors(samples: list[pyneat.Sample]) -> list[pyneat.Tensor]:
+    tensors: list[pyneat.Tensor] = []
+    for sample in samples:
+        tensors.extend(iter_tensors(sample))
+    return tensors
+
+
+def tensor_from_hwc_f32(array: np.ndarray) -> pyneat.Tensor:
+    return pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(array, dtype=np.float32),
+        copy=True,
+        layout=pyneat.TensorLayout.HWC,
+        memory=pyneat.TensorMemory.EV74,
+    )
+
+
+def tensor_numpy_outputs(tensors: list[pyneat.Tensor]) -> list[np.ndarray]:
+    return [tensor_to_numpy(t) for t in tensors]
 
 
 def pad_image_bgr(
@@ -369,7 +390,7 @@ def draw_detections(image_bgr: np.ndarray, detections: list[dict[str, Any]]) -> 
 def prepare_session_and_frame(
     model_path: Path,
     image_path: Path,
-) -> tuple[Any, np.ndarray, np.ndarray, PreprocMeta]:
+) -> tuple[Any, pyneat.Tensor, np.ndarray, PreprocMeta, list[float]]:
     """Prepare a reusable Session run object and preprocessed frame for repeated inference."""
     _log(f"Preparing session and frame. model_path={model_path}, image_path={image_path}")
     if not image_path.is_file():
@@ -395,11 +416,10 @@ def prepare_session_and_frame(
 
     _log("Configuring pyneat.ModelOptions for tensor input (FP32)")
     opt = pyneat.ModelOptions()
-    opt.media_type = "application/vnd.simaai.tensor"
-    opt.format = ""
-    opt.input_max_width = INFER_WIDTH
-    opt.input_max_height = INFER_HEIGHT
-    opt.input_max_depth = 3
+    opt.preprocess.kind = pyneat.InputKind.Tensor
+    opt.preprocess.input_max_width = INFER_WIDTH
+    opt.preprocess.input_max_height = INFER_HEIGHT
+    opt.preprocess.input_max_depth = 3
 
     _log("Creating pyneat.Model")
     model = pyneat.Model(str(model_path), opt)
@@ -414,27 +434,28 @@ def prepare_session_and_frame(
     _log(f"Session backend description:\n{sess.describe_backend()}")
 
     _log("Building run with dummy frame")
-    dummy = np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32)
-    run = sess.build(dummy)
+    dummy = tensor_from_hwc_f32(np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32))
+    run = sess.build(dummy, pyneat.RunMode.Async)
 
-    return run, resized, bgr, meta
+    return run, tensor_from_hwc_f32(resized), bgr, meta
 
 
 def run_retinaface_inference(
     model_path: Path,
     image_path: Path,
-) -> tuple[pyneat.Sample, np.ndarray, PreprocMeta]:
+    timeout_ms: int,
+) -> tuple[list[pyneat.Tensor], np.ndarray, PreprocMeta]:
     _log(f"Starting inference. model_path={model_path}, image_path={image_path}")
-    run, resized, bgr, meta = prepare_session_and_frame(model_path, image_path)
+    run, input_tensor, bgr, meta = prepare_session_and_frame(model_path, image_path)
 
     _log("Pushing preprocessed frame into Session")
-    if not run.push(resized):
+    if not run.push_tensor(input_tensor):
         raise RuntimeError("Failed to push frame into Session pipeline")
 
-    _log("Pulling output sample from Session")
-    sample = run.pull(timeout_ms=5000)
-    if sample is None:
-        raise RuntimeError("Session.pull() returned None")
+    _log("Pulling output samples from Session")
+    samples = run.pull_samples(timeout_ms=timeout_ms)
+    if not samples:
+        raise RuntimeError("Session.pull_samples() returned no samples")
 
     _log(f"Inference complete. Original image size: {meta.orig_w}x{meta.orig_h}")
 
@@ -444,110 +465,76 @@ def run_retinaface_inference(
         # Best-effort cleanup: log and continue, do not mask inference result.
         logger.debug("Failed to close RetinaFace session cleanly", exc_info=exc)
 
-    return sample, bgr, meta
+    return collect_tensors(samples), bgr, meta
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="RetinaFace face detection example")
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=DEFAULT_MODEL_PATH,
-        help=f"Path to RetinaFace compiled model package (default: {DEFAULT_MODEL_PATH})",
-    )
-    parser.add_argument(
-        "image",
-        type=str,
-        help="Path to input image",
-    )
-    parser.add_argument(
-        "--conf",
-        type=float,
-        default=0.4,
-        help="Confidence threshold for face detections",
-    )
-    parser.add_argument(
-        "--nms",
-        type=float,
-        default=0.9,
-        help="NMS IoU threshold",
-    )
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        default=5000,
-        help="Top-K pre-NMS",
-    )
-    parser.add_argument(
-        "--keep-top-k",
-        type=int,
-        default=750,
-        help="Top-K post-NMS",
-    )
-    parser.add_argument(
-        "--no-landmarks",
-        action="store_true",
-        help="Disable decoding and rendering of facial landmarks",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="",
-        help="Optional path to write an annotated output image",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable debug logging",
-    )
-    parser.add_argument(
-        "--profile",
-        action="store_true",
-        help="Run profiling loop (no output image) over repeated inferences",
-    )
-    parser.add_argument(
-        "--num-runs",
-        type=int,
-        default=100,
-        help="Number of inferences to run when --profile is enabled",
-    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     args = parser.parse_args()
+
+    global cv2, np, pyneat
+    import cv2
+    import numpy as np
+    import pyneat
+
+    with args.config.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    model_cfg = raw.get("model", {})
+    io_cfg = raw.get("io", {})
+    decode_cfg = raw.get("decode", {})
+    runtime_cfg = raw.get("runtime", {})
+
+    model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
+    image_path = Path(io_cfg.get("image", "assets/test_images/input.jpg"))
+    output_path = Path(io_cfg.get("output", "sandbox/retinaface_face_detection/output.png"))
+    confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.4))
+    nms_threshold = float(decode_cfg.get("nms_iou", 0.9))
+    top_k = int(decode_cfg.get("top_k", 5000))
+    keep_top_k = int(decode_cfg.get("keep_top_k", 750))
+    max_draw = int(decode_cfg.get("max_draw", 50))
+    landmarks = bool(decode_cfg.get("landmarks", True))
+    profile = bool(runtime_cfg.get("profile", False))
+    num_runs = int(runtime_cfg.get("num_runs", 100))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+
     global VERBOSE
-    VERBOSE = bool(args.verbose)
+    VERBOSE = bool(runtime_cfg.get("verbose", False))
     _log("Parsing command-line arguments")
 
-    model_path = Path(args.model)
     _log(f"Using model_path={model_path}")
     if not model_path.is_file():
         print(f"Model file does not exist: {model_path}", file=sys.stderr)
         return 2
 
     # Profiling mode: reuse a single session/run and frame, and profile session vs postprocessing.
-    if args.profile:
+    if profile:
         try:
-            run, resized, orig_bgr, meta = prepare_session_and_frame(model_path, Path(args.image))
+            run, input_tensor, orig_bgr, meta = prepare_session_and_frame(
+                model_path, image_path
+            )
         except Exception as e:
             print(f"Error during session preparation: {e}", file=sys.stderr)
             return 3
 
         session_times: list[float] = []
         post_times: list[float] = []
-        total_runs = int(args.num_runs)
+        total_runs = num_runs
         last_detections: list[dict[str, Any]] = []
 
         for i in range(total_runs):
             t0 = time.perf_counter()
-            if not run.push(resized):
+            if not run.push_tensor(input_tensor):
                 print(f"Run {i}: failed to push frame into Session pipeline", file=sys.stderr)
                 break
-            sample = run.pull(timeout_ms=5000)
+            samples = run.pull_samples(timeout_ms=timeout_ms)
             t1 = time.perf_counter()
-            if sample is None:
-                print(f"Run {i}: Session.pull() returned None", file=sys.stderr)
+            if not samples:
+                print(f"Run {i}: Session.pull_samples() returned no samples", file=sys.stderr)
                 break
 
-            tensors = list(iter_tensors(sample))
-            np_outs = [tensor_to_numpy(t) for t in tensors]
+            tensors = collect_tensors(samples)
+            np_outs = tensor_numpy_outputs(tensors)
             bboxes, scores, landmarks = parse_retinaface_outputs(np_outs)
             t2 = time.perf_counter()
 
@@ -556,11 +543,11 @@ def main() -> int:
                 scores,
                 landmarks,
                 meta,
-                confidence_threshold=float(args.conf),
-                nms_threshold=float(args.nms),
-                top_k=int(args.top_k),
-                keep_top_k=int(args.keep_top_k),
-                with_landmarks=not bool(args.no_landmarks),
+                confidence_threshold=confidence_threshold,
+                nms_threshold=nms_threshold,
+                top_k=top_k,
+                keep_top_k=keep_top_k,
+                with_landmarks=landmarks is not None,
             )
             t3 = time.perf_counter()
 
@@ -586,7 +573,7 @@ def main() -> int:
         post_fps = runs / post_arr.sum()
         overall_fps = runs / total_arr.sum()
 
-        print(f"Profiling over {len(session_times)} runs (image='{args.image}'):")
+        print(f"Profiling over {len(session_times)} runs (image='{image_path}'):")
         print(
             f"  Session (push+pull): "
             f"mean={session_arr.mean():.6f}s, "
@@ -621,18 +608,17 @@ def main() -> int:
 
     try:
         _log("Invoking run_retinaface_inference()")
-        sample, orig_bgr, meta = run_retinaface_inference(model_path, Path(args.image))
+        tensors, orig_bgr, meta = run_retinaface_inference(model_path, image_path, timeout_ms)
     except Exception as e:
         print(f"Error during inference: {e}", file=sys.stderr)
         return 3
 
-    _log("Collecting tensors from sample")
-    tensors = list(iter_tensors(sample))
+    _log("Collecting tensors from output samples")
     if not tensors:
         print("No tensors found in model output", file=sys.stderr)
         return 4
 
-    np_outs = [tensor_to_numpy(t) for t in tensors]
+    np_outs = tensor_numpy_outputs(tensors)
     print(f"Model produced {len(np_outs)} tensor(s):")
     for i, arr in enumerate(np_outs):
         print(f"  [{i}] shape={arr.shape}, dtype={arr.dtype}")
@@ -644,11 +630,11 @@ def main() -> int:
         scores,
         landmarks,
         meta,
-        confidence_threshold=float(args.conf),
-        nms_threshold=float(args.nms),
-        top_k=int(args.top_k),
-        keep_top_k=int(args.keep_top_k),
-        with_landmarks=not bool(args.no_landmarks),
+        confidence_threshold=confidence_threshold,
+        nms_threshold=nms_threshold,
+        top_k=top_k,
+        keep_top_k=keep_top_k,
+        with_landmarks=landmarks is not None,
     )
 
     print(f"Detections: {len(detections)}")
@@ -656,15 +642,13 @@ def main() -> int:
         box = det["box"]
         print(f"  [{i}] score={det['score']:.4f} box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]")
 
-    if args.output:
+    if str(output_path):
         out_img = draw_detections(orig_bgr, detections)
-        out_path = Path(args.output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(out_path), out_img)
-        print(f"Wrote annotated image: {out_path}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(output_path), out_img)
+        print(f"Wrote annotated image: {output_path}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

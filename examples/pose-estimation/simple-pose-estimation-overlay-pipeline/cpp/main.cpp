@@ -6,6 +6,7 @@
  */
 #include "utils/config.h"
 #include "neat.h"
+#include "support/runtime/example_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -35,27 +36,66 @@ constexpr int kNumParts = 18;
 constexpr int kNumPairs = 19;
 
 // Skeleton limb pairs (part_a, part_b)
-constexpr std::array<std::pair<int, int>, kNumPairs> kPosePairs = {{
-    {1, 2}, {1, 5}, {2, 3}, {3, 4}, {5, 6}, {6, 7}, {1, 8},
-    {8, 9}, {9, 10}, {1, 11}, {11, 12}, {12, 13}, {1, 0},
-    {0, 14}, {14, 16}, {0, 15}, {15, 17}, {2, 16}, {5, 17}
-}};
+constexpr std::array<std::pair<int, int>, kNumPairs> kPosePairs = {{{1, 2},
+                                                                    {1, 5},
+                                                                    {2, 3},
+                                                                    {3, 4},
+                                                                    {5, 6},
+                                                                    {6, 7},
+                                                                    {1, 8},
+                                                                    {8, 9},
+                                                                    {9, 10},
+                                                                    {1, 11},
+                                                                    {11, 12},
+                                                                    {12, 13},
+                                                                    {1, 0},
+                                                                    {0, 14},
+                                                                    {14, 16},
+                                                                    {0, 15},
+                                                                    {15, 17},
+                                                                    {2, 16},
+                                                                    {5, 17}}};
 
 // PAF channel indices (x_channel, y_channel) for each limb pair
-constexpr std::array<std::pair<int, int>, kNumPairs> kPafChannels = {{
-    {12, 13}, {20, 21}, {14, 15}, {16, 17}, {22, 23}, {24, 25}, {0, 1},
-    {2, 3}, {4, 5}, {6, 7}, {8, 9}, {10, 11}, {28, 29},
-    {30, 31}, {34, 35}, {32, 33}, {36, 37}, {18, 19}, {26, 27}
-}};
+constexpr std::array<std::pair<int, int>, kNumPairs> kPafChannels = {{{12, 13},
+                                                                      {20, 21},
+                                                                      {14, 15},
+                                                                      {16, 17},
+                                                                      {22, 23},
+                                                                      {24, 25},
+                                                                      {0, 1},
+                                                                      {2, 3},
+                                                                      {4, 5},
+                                                                      {6, 7},
+                                                                      {8, 9},
+                                                                      {10, 11},
+                                                                      {28, 29},
+                                                                      {30, 31},
+                                                                      {34, 35},
+                                                                      {32, 33},
+                                                                      {36, 37},
+                                                                      {18, 19},
+                                                                      {26, 27}}};
 
 // Keypoint colors (BGR)
-constexpr std::array<std::array<int, 3>, kNumParts> kKpColors = {{
-    {255, 0, 0}, {255, 85, 0}, {255, 170, 0}, {255, 255, 0}, {170, 255, 0},
-    {85, 255, 0}, {0, 255, 0}, {0, 255, 85}, {0, 255, 170}, {0, 255, 255},
-    {0, 170, 255}, {0, 85, 255}, {0, 0, 255}, {85, 0, 255}, {170, 0, 255},
-    {255, 0, 255}, {255, 0, 170}, {255, 0, 85}
-}};
-
+constexpr std::array<std::array<int, 3>, kNumParts> kKpColors = {{{255, 0, 0},
+                                                                  {255, 85, 0},
+                                                                  {255, 170, 0},
+                                                                  {255, 255, 0},
+                                                                  {170, 255, 0},
+                                                                  {85, 255, 0},
+                                                                  {0, 255, 0},
+                                                                  {0, 255, 85},
+                                                                  {0, 255, 170},
+                                                                  {0, 255, 255},
+                                                                  {0, 170, 255},
+                                                                  {0, 85, 255},
+                                                                  {0, 0, 255},
+                                                                  {85, 0, 255},
+                                                                  {170, 0, 255},
+                                                                  {255, 0, 255},
+                                                                  {255, 0, 170},
+                                                                  {255, 0, 85}}};
 
 struct TensorHWC {
   int h = 0;
@@ -79,13 +119,17 @@ struct Keypoint {
 };
 
 struct Person {
-  std::array<int, kNumParts> kpt_indices;  
+  std::array<int, kNumParts> kpt_indices;
   float total_score = 0.0f;
   int valid_joints_count = 0;
 
-  Person() { kpt_indices.fill(-1); }
+  Person() {
+    kpt_indices.fill(-1);
+  }
 
-  bool has(int part_id) const { return kpt_indices[part_id] >= 0; }
+  bool has(int part_id) const {
+    return kpt_indices[part_id] >= 0;
+  }
 };
 
 struct Connection {
@@ -96,7 +140,6 @@ struct Connection {
   int b_id = -1;
 };
 
-
 bool is_image(const fs::path& p) {
   std::string ext = p.extension().string();
   for (char& c : ext) {
@@ -105,13 +148,16 @@ bool is_image(const fs::path& p) {
   return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp");
 }
 
-
 std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
   if (sample.kind == simaai::neat::SampleKind::Tensor) {
     if (!sample.tensor.has_value()) {
       throw std::runtime_error("tensor sample missing payload");
     }
     return {*sample.tensor};
+  }
+
+  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
+    return sample.tensors;
   }
 
   if (sample.kind == simaai::neat::SampleKind::Bundle) {
@@ -174,9 +220,8 @@ LetterboxResult letterbox(const cv::Mat& src, int target_size) {
   const int src_h = src.rows;
   const int src_w = src.cols;
 
-  result.ratio = std::min(
-      static_cast<float>(target_size) / static_cast<float>(src_h),
-      static_cast<float>(target_size) / static_cast<float>(src_w));
+  result.ratio = std::min(static_cast<float>(target_size) / static_cast<float>(src_h),
+                          static_cast<float>(target_size) / static_cast<float>(src_w));
 
   const int new_w = static_cast<int>(std::round(static_cast<float>(src_w) * result.ratio));
   const int new_h = static_cast<int>(std::round(static_cast<float>(src_h) * result.ratio));
@@ -213,19 +258,13 @@ TensorHWC upsample_tensor(const TensorHWC& src, float factor) {
   dst.w = new_w;
   dst.c = src.c;
   dst.data.resize(static_cast<size_t>(new_h) * static_cast<size_t>(new_w) *
-                   static_cast<size_t>(src.c));
+                  static_cast<size_t>(src.c));
 
   // Treat the source tensor as a single multi-channel float image.
   // Note: const_cast is safe here because we do not modify the source data.
-  cv::Mat src_mat(src.h,
-                  src.w,
-                  CV_32FC(src.c),
-                  const_cast<float*>(src.data.data()));
+  cv::Mat src_mat(src.h, src.w, CV_32FC(src.c), const_cast<float*>(src.data.data()));
   // Destination multi-channel image backed directly by dst.data.
-  cv::Mat dst_mat(new_h,
-                  new_w,
-                  CV_32FC(dst.c),
-                  dst.data.data());
+  cv::Mat dst_mat(new_h, new_w, CV_32FC(dst.c), dst.data.data());
   // Single bicubic resize over all channels.
   cv::resize(src_mat, dst_mat, dst_mat.size(), 0, 0, cv::INTER_CUBIC);
   return dst;
@@ -244,7 +283,7 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
 
   for (int part_id = 0; part_id < kNumParts; ++part_id) {
     // Build padded probability map
-    const int ph = heatmap.h + 4;  // pad by 2 on each side
+    const int ph = heatmap.h + 4; // pad by 2 on each side
     const int pw = heatmap.w + 4;
     std::vector<float> padded(static_cast<size_t>(ph) * static_cast<size_t>(pw), 0.0f);
 
@@ -252,7 +291,8 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
     for (int y = 0; y < heatmap.h; ++y) {
       for (int x = 0; x < heatmap.w; ++x) {
         float val = heatmap.at(y, x, part_id);
-        if (val < keypoint_score_threshold) val = 0.0f;
+        if (val < keypoint_score_threshold)
+          val = 0.0f;
         padded[static_cast<size_t>((y + 2) * pw + (x + 2))] = val;
       }
     }
@@ -268,7 +308,8 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
     for (int y = 2; y < ph - 2; ++y) {
       for (int x = 2; x < pw - 2; ++x) {
         const float center = padded[static_cast<size_t>(y * pw + x)];
-        if (center <= 0.0f) continue;
+        if (center <= 0.0f)
+          continue;
 
         // Strictly greater than all 4 neighbors (matching demo.py)
         const float left = padded[static_cast<size_t>(y * pw + (x - 1))];
@@ -290,9 +331,11 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
     // Spatial NMS: suppress peaks within nms_radius pixels
     std::vector<bool> suppressed(candidates.size(), false);
     for (size_t i = 0; i < candidates.size(); ++i) {
-      if (suppressed[i]) continue;
+      if (suppressed[i])
+        continue;
       for (size_t j = i + 1; j < candidates.size(); ++j) {
-        if (suppressed[j]) continue;
+        if (suppressed[j])
+          continue;
         const float dx = static_cast<float>(candidates[i].x - candidates[j].x);
         const float dy = static_cast<float>(candidates[i].y - candidates[j].y);
         if (std::hypot(dx, dy) < static_cast<float>(nms_radius)) {
@@ -303,7 +346,8 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
 
     // Collect surviving keypoints
     for (size_t i = 0; i < candidates.size(); ++i) {
-      if (suppressed[i]) continue;
+      if (suppressed[i])
+        continue;
       Keypoint kp;
       kp.id = kpt_id++;
       kp.x = static_cast<float>(candidates[i].x) * stride_x;
@@ -322,14 +366,15 @@ std::vector<Keypoint> extract_keypoints(const TensorHWC& heatmap, int infer_size
 // ---------------------------------------------------------------------------
 // PAF score: line integral between two keypoints
 // ---------------------------------------------------------------------------
-float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint& b,
-                        int paf_x_idx, int paf_y_idx, float paf_score_threshold,
-                        float paf_success_ratio, int paf_num_samples) {
+float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint& b, int paf_x_idx,
+                        int paf_y_idx, float paf_score_threshold, float paf_success_ratio,
+                        int paf_num_samples) {
   const float dx = static_cast<float>(b.grid_x - a.grid_x);
   const float dy = static_cast<float>(b.grid_y - a.grid_y);
   const float distance = std::hypot(dx, dy);
 
-  if (distance < 1e-5f) return 0.0f;
+  if (distance < 1e-5f)
+    return 0.0f;
 
   const float vec_x = dx / distance;
   const float vec_y = dy / distance;
@@ -339,10 +384,10 @@ float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint&
 
   for (int s = 0; s < paf_num_samples; ++s) {
     const float t = static_cast<float>(s) / static_cast<float>(paf_num_samples - 1);
-    int sx = static_cast<int>(std::round(
-        static_cast<float>(a.grid_x) + t * static_cast<float>(b.grid_x - a.grid_x)));
-    int sy = static_cast<int>(std::round(
-        static_cast<float>(a.grid_y) + t * static_cast<float>(b.grid_y - a.grid_y)));
+    int sx = static_cast<int>(
+        std::round(static_cast<float>(a.grid_x) + t * static_cast<float>(b.grid_x - a.grid_x)));
+    int sy = static_cast<int>(
+        std::round(static_cast<float>(a.grid_y) + t * static_cast<float>(b.grid_y - a.grid_y)));
 
     sx = std::clamp(sx, 0, paf.w - 1);
     sy = std::clamp(sy, 0, paf.h - 1);
@@ -369,10 +414,10 @@ float compute_paf_score(const TensorHWC& paf, const Keypoint& a, const Keypoint&
 // ---------------------------------------------------------------------------
 // Group keypoints into people using greedy tree forward-propagation
 // ---------------------------------------------------------------------------
-std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints,
-                                    const TensorHWC& paf, float paf_score_threshold,
-                                    float paf_success_ratio, int paf_num_samples,
-                                    int min_valid_joints, float min_avg_person_score) {
+std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints, const TensorHWC& paf,
+                                    float paf_score_threshold, float paf_success_ratio,
+                                    int paf_num_samples, int min_valid_joints,
+                                    float min_avg_person_score) {
   // Bucket keypoints by part_id
   std::array<std::vector<int>, kNumParts> kpts_by_part;
   for (size_t i = 0; i < keypoints.size(); ++i) {
@@ -386,7 +431,8 @@ std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints,
     const auto& cands_a = kpts_by_part[part_a];
     const auto& cands_b = kpts_by_part[part_b];
 
-    if (cands_a.empty() || cands_b.empty()) continue;
+    if (cands_a.empty() || cands_b.empty())
+      continue;
 
     const auto [paf_x_idx, paf_y_idx] = kPafChannels[pair_idx];
 
@@ -469,7 +515,8 @@ std::vector<Person> group_keypoints(const std::vector<Keypoint>& keypoints,
   // Filter: require >= 3 joints and average score >= 0.2
   std::vector<Person> final_people;
   for (const auto& p : people) {
-    if (p.valid_joints_count < min_valid_joints) continue;
+    if (p.valid_joints_count < min_valid_joints)
+      continue;
     if ((p.total_score / static_cast<float>(p.valid_joints_count)) >= min_avg_person_score) {
       final_people.push_back(p);
     }
@@ -495,9 +542,11 @@ void draw_poses(cv::Mat& frame, const std::vector<Person>& people,
   for (const auto& person : people) {
     // Draw bones
     for (int pair_idx = 0; pair_idx < kNumPairs; ++pair_idx) {
-      if (pair_idx == 17 || pair_idx == 18) continue;  // hide ear connections
+      if (pair_idx == 17 || pair_idx == 18)
+        continue; // hide ear connections
       const auto [part_a, part_b] = kPosePairs[pair_idx];
-      if (!person.has(part_a) || !person.has(part_b)) continue;
+      if (!person.has(part_a) || !person.has(part_b))
+        continue;
 
       const auto& ka = keypoints[person.kpt_indices[part_a]];
       const auto& kb = keypoints[person.kpt_indices[part_b]];
@@ -509,7 +558,8 @@ void draw_poses(cv::Mat& frame, const std::vector<Person>& people,
 
     // Draw joints
     for (int part_id = 0; part_id < kNumParts; ++part_id) {
-      if (!person.has(part_id)) continue;
+      if (!person.has(part_id))
+        continue;
       const auto& kp = keypoints[person.kpt_indices[part_id]];
       const auto& col = kKpColors[part_id % kNumParts];
       const cv::Point center(static_cast<int>(kp.x), static_cast<int>(kp.y));
@@ -519,7 +569,7 @@ void draw_poses(cv::Mat& frame, const std::vector<Person>& people,
   }
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv) {
   using namespace simple_pose_estimation_overlay_pipeline;
@@ -592,11 +642,11 @@ int main(int argc, char** argv) {
 
   try {
     simaai::neat::Model::Options model_opt;
-    model_opt.media_type = "video/x-raw";
-    model_opt.format = "BGR";
-    model_opt.input_max_width = cfg.runtime.infer_size;
-    model_opt.input_max_height = cfg.runtime.infer_size;
-    model_opt.input_max_depth = 3;
+    model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
+    model_opt.preprocess.input_max_width = cfg.runtime.infer_size;
+    model_opt.preprocess.input_max_height = cfg.runtime.infer_size;
+    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
 
@@ -604,19 +654,18 @@ int main(int argc, char** argv) {
     session.add(model.session());
     std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
 
-    cv::Mat dummy_bgr(
-        cfg.runtime.infer_size, cfg.runtime.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor dummy = simaai::neat::from_cv_mat(
-        dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
-    auto run = session.build(dummy, simaai::neat::RunMode::Sync);
+    cv::Mat dummy_bgr(cfg.runtime.infer_size, cfg.runtime.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
+    simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
+        dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, simaai::neat::TensorMemory::EV74);
+    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
 
     int processed = 0;
     double total_e2e_time = 0.0;
     double total_infer_time = 0.0;
-    
+
     for (const auto& image_path : images) {
       auto e2e_start = std::chrono::high_resolution_clock::now();
-      
+
       cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
       if (bgr.empty()) {
         std::cerr << "Skipping unreadable: " << image_path.filename() << "\n";
@@ -625,14 +674,22 @@ int main(int argc, char** argv) {
 
       auto lb = letterbox(bgr, cfg.runtime.infer_size);
 
-      simaai::neat::Tensor input = simaai::neat::from_cv_mat(
-          lb.img, simaai::neat::ImageSpec::PixelFormat::BGR, /*read_only=*/true);
+      simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
+          lb.img, simaai::neat::ImageSpec::PixelFormat::BGR, simaai::neat::TensorMemory::EV74);
 
       auto infer_start = std::chrono::high_resolution_clock::now();
-      simaai::neat::Sample out = run.push_and_pull(input, cfg.runtime.timeout_ms);
+      if (!run.push(simaai::neat::TensorList{input})) {
+        std::cerr << "Push failed for: " << image_path.filename() << "\n";
+        continue;
+      }
+      auto out = run.pull(cfg.runtime.timeout_ms);
       auto infer_end = std::chrono::high_resolution_clock::now();
+      if (!out.has_value()) {
+        std::cerr << "Pull timeout for: " << image_path.filename() << "\n";
+        continue;
+      }
 
-      const auto tensors = collect_tensors(out);
+      const auto tensors = collect_tensors(*out);
       if (tensors.size() < 2) {
         std::cerr << "Expected at least 2 tensors, got " << tensors.size() << "\n";
         continue;
@@ -647,18 +704,12 @@ int main(int argc, char** argv) {
 
       // Extract keypoints and group into people
       std::vector<Keypoint> raw_kpts =
-          extract_keypoints(heatmap,
-                            cfg.runtime.infer_size,
-                            static_cast<float>(cfg.decode.keypoint_score),
-                            cfg.decode.nms_radius);
-      std::vector<Person> people =
-          group_keypoints(raw_kpts,
-                          paf,
-                          static_cast<float>(cfg.decode.paf_score),
-                          static_cast<float>(cfg.decode.paf_success_ratio),
-                          cfg.decode.paf_samples,
-                          cfg.decode.min_valid_joints,
-                          static_cast<float>(cfg.decode.min_avg_person_score));
+          extract_keypoints(heatmap, cfg.runtime.infer_size,
+                            static_cast<float>(cfg.decode.keypoint_score), cfg.decode.nms_radius);
+      std::vector<Person> people = group_keypoints(
+          raw_kpts, paf, static_cast<float>(cfg.decode.paf_score),
+          static_cast<float>(cfg.decode.paf_success_ratio), cfg.decode.paf_samples,
+          cfg.decode.min_valid_joints, static_cast<float>(cfg.decode.min_avg_person_score));
 
       // Scale keypoints back to original image coordinates
       scale_keypoints(raw_kpts, lb.ratio, lb.pad_left, lb.pad_top);
@@ -674,7 +725,8 @@ int main(int argc, char** argv) {
 
       auto e2e_end = std::chrono::high_resolution_clock::now();
       double e2e_time = std::chrono::duration<double, std::milli>(e2e_end - e2e_start).count();
-      double infer_time = std::chrono::duration<double, std::milli>(infer_end - infer_start).count();
+      double infer_time =
+          std::chrono::duration<double, std::milli>(infer_end - infer_start).count();
       total_e2e_time += e2e_time;
       total_infer_time += infer_time;
 
@@ -682,8 +734,8 @@ int main(int argc, char** argv) {
       std::cout << "[" << processed << "/" << images.size() << "] " << image_path.filename()
                 << " -> " << out_path.filename() << " (" << people.size() << " detections)";
       if (enable_profile) {
-        std::cout << std::fixed << std::setprecision(2) 
-                  << " | e2e=" << e2e_time << "ms infer=" << infer_time << "ms";
+        std::cout << std::fixed << std::setprecision(2) << " | e2e=" << e2e_time
+                  << "ms infer=" << infer_time << "ms";
       }
       std::cout << "\n";
     }
@@ -694,7 +746,8 @@ int main(int argc, char** argv) {
       std::cout << std::fixed << std::setprecision(2)
                 << "[PROFILE] Average end-to-end: " << (total_e2e_time / processed) << "ms\n";
       std::cout << std::fixed << std::setprecision(2)
-                << "[PROFILE] Average model inference: " << (total_infer_time / processed) << "ms\n";
+                << "[PROFILE] Average model inference: " << (total_infer_time / processed)
+                << "ms\n";
     }
     return 0;
   } catch (const std::exception& e) {
