@@ -2,7 +2,7 @@ source:
   rtsp_url: rtsp://192.168.2.1:8554/src5
 
 model:
-  path: assets/models/yolo_v8l_mpk.tar.gz
+  path: assets/models/yolo_v8s_mpk.tar.gz
   labels: examples/object-detection/simple-object-detection-overlay-pipeline/common/coco_label.txt
 
 inference:

@@ -9,7 +9,7 @@
 | Languages | Python |
 | Status | experimental |
 | Binary Name | yolov8-detections-to-gemma3 |
-| Model | YOLOv8 + Gemma3 |
+| Model | yolo_v8s |
 
 ## Concept
 This example decodes an RTSP stream, runs YOLOv8 detection with internal box decode, and sends video plus object-detection metadata to Insight. When OpenAI is enabled, the highest-score detected person is cropped and sent to the configured OpenAI-compatible Gemma server from a bounded background worker, so the detection and Insight loop keeps running.
