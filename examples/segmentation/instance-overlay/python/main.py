@@ -7,6 +7,9 @@ import math
 import sys
 from pathlib import Path
 
+import cv2
+import numpy as np
+import pyneat
 import yaml
 
 MASK_ALPHA = 0.65
@@ -249,11 +252,6 @@ def main() -> int:
     default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
     parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
     args = parser.parse_args()
-
-    global cv2, np, pyneat
-    import cv2
-    import numpy as np
-    import pyneat
 
     with args.config.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
