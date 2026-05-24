@@ -64,7 +64,10 @@ if(DEFINED _SYSROOT)
   endforeach()
   string(STRIP "${_SYSROOT_RPATH_LINK_FLAGS}" _SYSROOT_RPATH_LINK_FLAGS)
   if(_SYSROOT_RPATH_LINK_FLAGS)
-    set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} ${_SYSROOT_RPATH_LINK_FLAGS}")
+    # Modalix target shared libraries can carry runtime-only transitive
+    # dependencies that are not present on the host link path. Keep app/static
+    # symbols strict while allowing unresolved symbols from those shared libs.
+    set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} ${_SYSROOT_RPATH_LINK_FLAGS} -Wl,--allow-shlib-undefined")
     set(CMAKE_SHARED_LINKER_FLAGS_INIT "${CMAKE_SHARED_LINKER_FLAGS_INIT} ${_SYSROOT_RPATH_LINK_FLAGS}")
     set(CMAKE_MODULE_LINKER_FLAGS_INIT "${CMAKE_MODULE_LINKER_FLAGS_INIT} ${_SYSROOT_RPATH_LINK_FLAGS}")
   endif()
