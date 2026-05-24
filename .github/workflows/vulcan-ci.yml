@@ -186,6 +186,14 @@ jobs:
       artifact_glob: "*"
       min_artifact_count: 4
 
+  resolve-portal-publish-config:
+    name: Resolve Portal Publish Config
+    needs: resolve-vulcan-config
+    if: ${{ github.ref_type == 'branch' }}
+    uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
+    with:
+      vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
+
   test-runtime:
     name: Test Apps Runtime
     needs:
@@ -278,6 +286,61 @@ jobs:
         if: ${{ always() }}
         run: |
           rm -rf _vulcan-test
+
+  build-portal:
+    name: Build Apps Portal
+    if: ${{ github.ref_type == 'branch' }}
+    needs:
+      - resolve-portal-publish-config
+      - test-runtime
+    runs-on: ubuntu-latest
+    env:
+      PORTAL_BASE_URL: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_base_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install portal dependencies
+        working-directory: portal
+        run: npm ci
+
+      - name: Build portal
+        working-directory: portal
+        run: npm run build
+
+      - name: Upload portal artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-portal
+          path: portal/dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-portal:
+    name: Publish Apps Portal
+    if: ${{ github.ref_type == 'branch' }}
+    needs:
+      - resolve-portal-publish-config
+      - build-portal
+    uses: sima-neat/.github/.github/workflows/vulcan-publish-static-site.yml@main
+    with:
+      aws_region: ${{ needs.resolve-portal-publish-config.outputs.aws_region }}
+      environment_name: ${{ needs.resolve-portal-publish-config.outputs.vulcan_env }}
+      site_key: APPS_PORTAL
+      bucket: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_bucket }}
+      role_to_assume: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_publisher_role_arn }}
+      sse_kms_key_id: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_kms_key_id }}
+      cloudfront_distribution_id: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_cloudfront_distribution_id }}
+      artifact_pattern: neat-apps-portal
+      cloudfront_paths: "/ /index.html /catalog.json"
 
   promote-latest-tag:
     name: Promote Vulcan latest tag
