@@ -47,6 +47,7 @@ jobs:
       artifact_retention_days: 3
       build_command: |
         set -euo pipefail
+        artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
 
         if [[ -n "${GITHUB_WORKSPACE:-}" && -d "${GITHUB_WORKSPACE}" && "${GITHUB_WORKSPACE}" != "/" ]]; then
           find "${GITHUB_WORKSPACE}" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
@@ -71,6 +72,7 @@ jobs:
           -e GITHUB_SHA="${{ github.sha }}" \
           -e NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}" \
           -e NEAT_APPS_ARTIFACT_SHORT_SHA="${{ github.sha }}" \
+          -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
           -e NEAT_CORE_INSTALL_MODE="vulcan" \
           -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
           "${sdk_container}" \
