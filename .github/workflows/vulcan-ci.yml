@@ -87,16 +87,23 @@ jobs:
             sima-cli neat install --help >/dev/null
             sima-cli packages build --help >/dev/null
 
+            packages=()
             if ! command -v npm >/dev/null 2>&1; then
+              packages+=(nodejs npm)
+            fi
+            if ! command -v rg >/dev/null 2>&1; then
+              packages+=(ripgrep)
+            fi
+            if [[ "${#packages[@]}" -gt 0 ]]; then
               export DEBIAN_FRONTEND=noninteractive
               if command -v apt-get >/dev/null 2>&1; then
                 apt-get update
-                apt-get install -y --no-install-recommends nodejs npm
+                apt-get install -y --no-install-recommends "${packages[@]}"
               elif command -v sudo >/dev/null 2>&1; then
                 sudo apt-get update
-                sudo apt-get install -y --no-install-recommends nodejs npm
+                sudo apt-get install -y --no-install-recommends "${packages[@]}"
               else
-                echo "npm is required to build the apps portal, but apt-get is unavailable." >&2
+                echo "Required build tools are missing, but apt-get is unavailable: ${packages[*]}" >&2
                 exit 1
               fi
             fi
