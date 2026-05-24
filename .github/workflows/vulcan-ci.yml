@@ -241,7 +241,9 @@ jobs:
             sima-cli neat install --env "${NEAT_VULCAN_ENV}" -d _vulcan-test/install "${package_spec}" -f
 
             cd _vulcan-test/install/neat-apps/neat-apps-runtime
-            python3 -m pip install pytest
+            python3 -m pip install pytest numpy
+            sysroot="${SYSROOT:-/opt/toolchain/aarch64/modalix}"
+            export LD_LIBRARY_PATH="${sysroot}/usr/lib/aarch64-linux-gnu:${sysroot}/usr/lib:${sysroot}/lib/aarch64-linux-gnu:${sysroot}/lib:${sysroot}/usr/lib/aarch64-linux-gnu/neat/runtime:${sysroot}/usr/lib/aarch64-linux-gnu/neat/gst-plugins:${sysroot}/usr/lib/sima-neat/gst-plugins:${LD_LIBRARY_PATH:-}"
             PYTHON_TEST_BIN=python3 ./tests/test.sh --unit
           '
 
