@@ -218,6 +218,7 @@ jobs:
           -e GITHUB_HEAD_REF="${{ github.head_ref }}" \
           -e GITHUB_REF_NAME="${{ github.ref_name }}" \
           -e GITHUB_SHA="${{ github.sha }}" \
+          -e NEAT_APPS_SKIP_MODEL_DOWNLOAD=1 \
           -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
           "${sdk_container}" \
           bash -lc '

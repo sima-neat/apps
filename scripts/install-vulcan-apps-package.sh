@@ -103,7 +103,10 @@ echo "  Version    : ${NEAT_CORE_VERSION}"
   "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
 
 DOWNLOAD_MODELS_SCRIPT="${RUNTIME_DST}/scripts/download_models.sh"
-if [[ -x "${DOWNLOAD_MODELS_SCRIPT}" || -f "${DOWNLOAD_MODELS_SCRIPT}" ]]; then
+if [[ "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}" == "1" ]]; then
+  echo
+  echo "Skipping model downloads because NEAT_APPS_SKIP_MODEL_DOWNLOAD=1."
+elif [[ -x "${DOWNLOAD_MODELS_SCRIPT}" || -f "${DOWNLOAD_MODELS_SCRIPT}" ]]; then
   echo
   echo "Downloading models referenced by packaged README metadata ..."
   (
