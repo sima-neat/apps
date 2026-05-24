@@ -265,7 +265,7 @@ jobs:
             if [[ "${#pyneat_wheels[@]}" -gt 0 ]]; then
               "${test_python}" -m pip install --force-reinstall "${pyneat_wheels[0]}"
             fi
-            "${test_python}" -m pip install pytest numpy
+            "${test_python}" -m pip install pytest numpy "opencv-python-headless<4.12" PyYAML
             "${test_python}" -c "import pyneat; print(\"Using pyneat:\", pyneat.__file__)"
             PYTHON_TEST_BIN="${test_python}" ./tests/test.sh --unit
           '
