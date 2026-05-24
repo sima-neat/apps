@@ -87,6 +87,20 @@ jobs:
             sima-cli neat install --help >/dev/null
             sima-cli packages build --help >/dev/null
 
+            if ! command -v npm >/dev/null 2>&1; then
+              export DEBIAN_FRONTEND=noninteractive
+              if command -v apt-get >/dev/null 2>&1; then
+                apt-get update
+                apt-get install -y --no-install-recommends nodejs npm
+              elif command -v sudo >/dev/null 2>&1; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends nodejs npm
+              else
+                echo "npm is required to build the apps portal, but apt-get is unavailable." >&2
+                exit 1
+              fi
+            fi
+
             cd /workspace
             chmod +x build.sh scripts/ci/check_public_includes.sh scripts/install-vulcan-apps-package.sh
             ./build.sh --all --clean
