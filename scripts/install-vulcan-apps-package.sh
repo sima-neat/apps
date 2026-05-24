@@ -52,8 +52,15 @@ PY
 }
 
 if [[ ! -d "${RUNTIME_SRC}" ]]; then
-  echo "ERROR: ${RUNTIME_SRC} was not extracted from the apps package." >&2
-  exit 1
+  mapfile -t runtime_candidates < <(find . -mindepth 1 -maxdepth 3 -type d -name "${RUNTIME_SRC}" | sort)
+  if [[ "${#runtime_candidates[@]}" -eq 1 ]]; then
+    RUNTIME_SRC="${runtime_candidates[0]}"
+  else
+    echo "ERROR: ${RUNTIME_SRC} was not extracted from the apps package." >&2
+    printf 'Found candidates:\n' >&2
+    printf '  %s\n' "${runtime_candidates[@]}" >&2
+    exit 1
+  fi
 fi
 
 rm -rf "${DEST_DIR}"
