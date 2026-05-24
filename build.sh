@@ -50,6 +50,8 @@ Environment:
                             Dependency branch for empty manifest neat_core
   NEAT_INSTALLER_URL        Hosted branch installer URL
   NEAT_ARTIFACTS_BASE_URL   Hosted NEAT core artifact index
+  NEAT_CORE_INSTALL_MODE    legacy or vulcan. Defaults to vulcan when NEAT_VULCAN_ENV is set.
+  NEAT_VULCAN_ENV           Vulcan artifact environment for sima-cli core installs
   CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
   SYSROOT                   Target sysroot (used by the default cross toolchain file)
 EOF
@@ -412,6 +414,30 @@ download_text() {
   return 1
 }
 
+resolve_sima_cli_bin() {
+  if [[ -n "${SIMA_CLI_BIN:-}" && -x "${SIMA_CLI_BIN}" ]]; then
+    printf '%s\n' "${SIMA_CLI_BIN}"
+    return 0
+  fi
+  if command -v sima-cli >/dev/null 2>&1; then
+    command -v sima-cli
+    return 0
+  fi
+  local candidate
+  for candidate in \
+    /data/sima-cli/.venv/bin/sima-cli \
+    "${HOME}/.local/bin/sima-cli" \
+    "${HOME}/sima-cli/.venv/bin/sima-cli" \
+    /opt/sima-cli/.venv/bin/sima-cli \
+    /opt/bin/sima-cli; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 resolve_latest_version() {
   local branch="$1"
   local branch_key cache_key cache_path missing_path latest_url
@@ -571,11 +597,19 @@ load_neat_core_target() {
 }
 
 ensure_neat_core() {
-  local branch version
+  local branch version install_mode sima_cli_bin vulcan_env
   mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
   load_neat_core_target
   branch="${NEAT_CORE_TARGET_BRANCH}"
   version="${NEAT_CORE_TARGET_VERSION}"
+  install_mode="${NEAT_CORE_INSTALL_MODE:-}"
+  if [[ -z "${install_mode}" ]]; then
+    if [[ -n "${NEAT_VULCAN_ENV:-}" ]]; then
+      install_mode="vulcan"
+    else
+      install_mode="legacy"
+    fi
+  fi
 
   # Resolve "latest" to the actual commit tag so the marker is precise.
   if [[ "${version}" == "latest" ]]; then
@@ -595,6 +629,29 @@ ensure_neat_core() {
   fi
 
   echo "Installing NEAT core (${expected_tag})..."
+
+  if [[ "${install_mode}" == "vulcan" ]]; then
+    if ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
+      echo "ERROR: NEAT_CORE_INSTALL_MODE=vulcan requires sima-cli on PATH or SIMA_CLI_BIN." >&2
+      exit 1
+    fi
+    vulcan_env="${NEAT_VULCAN_ENV:-dev}"
+    echo "Installing NEAT core from Vulcan env ${vulcan_env} using sima-cli."
+    "${sima_cli_bin}" neat install \
+      --env "${vulcan_env}" \
+      -d "${ROOT_DIR}" \
+      -t all \
+      "core@${branch}:${version}"
+
+    printf '%s\n' "${expected_tag}" > "${NEAT_CORE_MARKER}"
+    echo "NEAT core installed successfully (${expected_tag})."
+    return 0
+  fi
+
+  if [[ "${install_mode}" != "legacy" ]]; then
+    echo "ERROR: unsupported NEAT_CORE_INSTALL_MODE: ${install_mode}" >&2
+    exit 1
+  fi
 
   # Remove stale artifacts from previous installs so the upstream installer
   # downloads fresh copies and is not tripped by corrupted cached files.
