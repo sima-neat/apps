@@ -241,6 +241,12 @@ jobs:
             sima-cli neat install --env "${NEAT_VULCAN_ENV}" -d _vulcan-test/install "${package_spec}" -f
 
             cd _vulcan-test/install/neat-apps/neat-apps-runtime
+            export DEBIAN_FRONTEND=noninteractive
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y --no-install-recommends libgphoto2-port12
+            fi
+
             sysroot="${SYSROOT:-/opt/toolchain/aarch64/modalix}"
             mapfile -t sysroot_lib_dirs < <(find "${sysroot}" -type f -name "*.so*" -printf "%h\n" | sort -u)
             if [[ "${#sysroot_lib_dirs[@]}" -gt 0 ]]; then
@@ -255,7 +261,12 @@ jobs:
             if [[ ! -x "${test_python}" ]]; then
               test_python="python3"
             fi
+            mapfile -t pyneat_wheels < <(find /workspace/_vulcan-test/install -type f -name "pyneat-*.whl" | sort)
+            if [[ "${#pyneat_wheels[@]}" -gt 0 ]]; then
+              "${test_python}" -m pip install --force-reinstall "${pyneat_wheels[0]}"
+            fi
             "${test_python}" -m pip install pytest numpy
+            "${test_python}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
             PYTHON_TEST_BIN="${test_python}" ./tests/test.sh --unit
           '
 
