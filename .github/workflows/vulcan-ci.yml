@@ -191,84 +191,93 @@ jobs:
     needs:
       - resolve-vulcan-config
       - publish-vulcan-artifacts
-    uses: sima-neat/.github/.github/workflows/vulcan-build.yml@main
-    with:
-      vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
-      sdk_cache: ${{ needs.resolve-vulcan-config.outputs.sdk_cache }}
-      capacity: ${{ needs.resolve-vulcan-config.outputs.capacity }}
-      fetch_depth: 1
-      checkout_submodules: "false"
-      ensure_sdk_container: true
-      sdk_setup_args: "-y -n --minimal --workspace /mnt/vulcan/workspace --no-model-sdk --no-insight"
-      build_command: |
-        set -euo pipefail
+    runs-on: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+    env:
+      VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+      SIMA_CLI_CHECK_FOR_UPDATE: "0"
+      NEAT_APPS_SKIP_MODEL_DOWNLOAD: "1"
 
-        sdk_container="$(docker ps --filter 'ancestor=ghcr.io/sima-neat/sdk:latest' --format '{{.Names}}' | head -n 1)"
-        if [[ -z "${sdk_container}" ]]; then
-          sdk_container="$(docker ps --filter 'name=sdk' --format '{{.Names}}' | head -n 1)"
-        fi
-        if [[ -z "${sdk_container}" ]]; then
-          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-          echo "Could not find running SDK container." >&2
-          exit 1
-        fi
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+          fetch-depth: 1
 
-        docker exec \
-          -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
-          -e GITHUB_HEAD_REF="${{ github.head_ref }}" \
-          -e GITHUB_REF_NAME="${{ github.ref_name }}" \
-          -e GITHUB_SHA="${{ github.sha }}" \
-          -e NEAT_APPS_SKIP_MODEL_DOWNLOAD=1 \
-          -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
-          "${sdk_container}" \
-          bash -lc '
-            set -euo pipefail
-            export SIMA_CLI_CHECK_FOR_UPDATE=0
-            curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
-            python3 sima-cli-install.py main latest --noninteractive
-            rm -f sima-cli-install.py
-            export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
-            sima-cli version
+      - name: Clean test workspace
+        run: |
+          rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
+          rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh neat-core.json
 
-            cd /workspace
-            rm -rf _vulcan-test
-            mkdir -p _vulcan-test/install
-            ref_name="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-            short_sha="$(printf "%.12s" "${GITHUB_SHA}")"
-            package_spec="apps@${ref_name}:${short_sha}"
+      - name: Fix devkit runtime
+        run: |
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
 
-            echo "Installing ${package_spec} from Vulcan env ${NEAT_VULCAN_ENV}"
-            sima-cli neat install --env "${NEAT_VULCAN_ENV}" -d _vulcan-test/install "${package_spec}" -f
+      - name: Install apps runtime from Vulcan artifact
+        run: |
+          if ! command -v sima-cli >/dev/null 2>&1; then
+            echo "sima-cli not found on test runner." >&2
+            exit 1
+          fi
 
-            cd _vulcan-test/install/neat-apps/neat-apps-runtime
-            export DEBIAN_FRONTEND=noninteractive
-            if command -v apt-get >/dev/null 2>&1; then
-              apt-get update
-              apt-get install -y --no-install-recommends libgphoto2-port12
-            fi
+          REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          SHORT_SHA="$(printf "%.12s" "${GITHUB_SHA}")"
+          PACKAGE_SPEC="apps@${REF_NAME}:${SHORT_SHA}"
 
-            sysroot="${SYSROOT:-/opt/toolchain/aarch64/modalix}"
-            mapfile -t sysroot_lib_dirs < <(find "${sysroot}" -type f -name "*.so*" -printf "%h\n" | sort -u)
-            if [[ "${#sysroot_lib_dirs[@]}" -gt 0 ]]; then
-              sysroot_ld_path="$(IFS=:; printf "%s" "${sysroot_lib_dirs[*]}")"
-              export LD_LIBRARY_PATH="${sysroot_ld_path}:${LD_LIBRARY_PATH:-}"
-            fi
+          mkdir -p _vulcan-test/install
+          echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
+          sima-cli neat install --env "${VULCAN_ENV}" -d _vulcan-test/install "${PACKAGE_SPEC}" -f
 
-            test_python="${HOME}/pyneat/bin/python3"
-            if [[ ! -x "${test_python}" ]]; then
-              test_python="/opt/pyneat/bin/python3"
-            fi
-            if [[ ! -x "${test_python}" ]]; then
-              test_python="python3"
-            fi
-            mapfile -t pyneat_wheels < <(find /workspace/_vulcan-test/install -type f -name "pyneat-*.whl" | sort)
-            if [[ "${#pyneat_wheels[@]}" -gt 0 ]]; then
-              "${test_python}" -m pip install --force-reinstall "${pyneat_wheels[0]}"
-            fi
-            "${test_python}" -m pip install pytest numpy "opencv-python-headless<4.12" PyYAML
-            "${test_python}" -c "import pyneat; print(\"Using pyneat:\", pyneat.__file__)"
-            PYTHON_TEST_BIN="${test_python}" ./tests/test.sh --unit
-          '
+      - name: Locate installed apps runtime
+        run: |
+          mapfile -t runtime_dirs < <(find _vulcan-test/install -type d -path '*/neat-apps/neat-apps-runtime' | sort)
+          if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
+            printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
+            find _vulcan-test/install -maxdepth 4 -mindepth 1 -type d -printf '  %p\n' | sort >&2 || true
+            exit 1
+          fi
+          printf '%s\n' "${runtime_dirs[0]}" > _vulcan-test/apps_runtime_dir.txt
+          echo "Using apps runtime: ${runtime_dirs[0]}"
+
+      - name: Locate pyneat
+        run: |
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          else
+            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
+            exit 1
+          fi
+
+      - name: Install Python test dependencies
+        run: |
+          source "${PYNEAT_ACTIVATE}"
+          echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+          "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
+
+      - name: Run apps unit tests on devkit
+        env:
+          SIMANEAT_APPS_TEST_RTSP_URL: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URL }}
+          SIMANEAT_APPS_TEST_RTSP_URLS: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URLS }}
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --unit
+
+      - name: Cleanup test workspace tmp artifacts
+        if: ${{ always() }}
+        run: |
+          rm -rf _vulcan-test
 
   promote-latest-tag:
     name: Promote Vulcan latest tag
