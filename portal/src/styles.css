@@ -1,7 +1,8 @@
-@import url("https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap");
-
 :root {
   color-scheme: light;
+  --ifm-font-family-base: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --ifm-font-family-monospace: "IBM Plex Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --ifm-heading-font-family: var(--ifm-font-family-base);
   --bg: #ffffff;
   --bg-alt: #f7f8fa;
   --panel: #ffffff;
@@ -40,8 +41,8 @@ html, body, #root {
 
 body {
   margin: 0;
-  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-size: 15px;
+  font-family: var(--ifm-font-family-base);
+  font-size: 16px;
   color: var(--text);
   background: var(--bg);
 }
@@ -234,9 +235,9 @@ select {
 .hero h1,
 .detail-hero h1 {
   margin: 0;
-  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--ifm-heading-font-family);
   font-size: clamp(1.85rem, 3vw, 2.7rem);
-  font-weight: 500;
+  font-weight: 700;
   line-height: 1.12;
   letter-spacing: 0;
 }
@@ -413,9 +414,9 @@ select {
 
 .download-modal-header h2 {
   margin: 0;
-  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--ifm-heading-font-family);
   font-size: clamp(1.35rem, 2.4vw, 1.85rem);
-  font-weight: 500;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -550,7 +551,7 @@ select {
   width: 100%;
   height: 100%;
   padding: 18px;
-  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--ifm-font-family-base);
   font-size: 1rem;
   font-weight: 500;
   text-transform: uppercase;
@@ -592,9 +593,9 @@ select {
 
 .card-body h2 {
   margin: 0 0 10px;
-  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--ifm-heading-font-family);
   font-size: 1.12rem;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.18;
 }
 
@@ -904,7 +905,7 @@ select {
 }
 
 .markdown-body pre code {
-  font-family: "IBM Plex Mono", monospace;
+  font-family: var(--ifm-font-family-monospace);
 }
 
 .markdown-body pre code {
@@ -946,8 +947,8 @@ select {
 .section-header h2,
 .empty-state h2 {
   margin-top: 0;
-  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-weight: 500;
+  font-family: var(--ifm-heading-font-family);
+  font-weight: 700;
 }
 
 .section-header h2 {
