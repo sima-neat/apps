@@ -90,11 +90,78 @@ function readInitialTheme() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+function ensureDeveloperCenterShellStylesheet() {
+  const href = "/developer-center-shell.css";
+  if (document.querySelector(`link[href="${href}"]`)) {
+    return;
+  }
+
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+function ensureDeveloperCenterShellScript(onLoad) {
+  const src = "/developer-center-shell.js";
+  const existing = document.querySelector(`script[src="${src}"]`);
+  if (window.DeveloperCenterShell) {
+    onLoad();
+    return undefined;
+  }
+
+  if (existing) {
+    existing.addEventListener("load", onLoad, { once: true });
+    return () => existing.removeEventListener("load", onLoad);
+  }
+
+  const script = document.createElement("script");
+  script.src = src;
+  script.async = true;
+  script.addEventListener("load", onLoad, { once: true });
+  script.addEventListener("error", () => {
+    console.warn("Developer Center shell runtime is unavailable.");
+  }, { once: true });
+  document.head.appendChild(script);
+  return () => script.removeEventListener("load", onLoad);
+}
+
+function useDeveloperCenterShell(setTheme) {
+  useEffect(() => {
+    if (!SHOW_DEVELOPER_CENTER_NAV) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    ensureDeveloperCenterShellStylesheet();
+
+    const mountShell = () => {
+      if (!cancelled) {
+        window.DeveloperCenterShell?.mount("#developer-center-shell", { active: "examples" });
+      }
+    };
+    const cleanupScriptListener = ensureDeveloperCenterShellScript(mountShell);
+    const syncTheme = (event) => {
+      const theme = normalizeTheme(event.detail?.theme);
+      if (theme) {
+        setTheme(theme);
+      }
+    };
+
+    window.addEventListener("developer-center-theme-change", syncTheme);
+    return () => {
+      cancelled = true;
+      cleanupScriptListener?.();
+      window.removeEventListener("developer-center-theme-change", syncTheme);
+    };
+  }, [setTheme]);
+}
+
 function App() {
   const [catalog, setCatalog] = useState(null);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(readInitialTheme);
-  const toggleTheme = () => setTheme((current) => (current === "light" ? "dark" : "light"));
+  useDeveloperCenterShell(setTheme);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +205,7 @@ function App() {
 
   if (error) {
     return (
-      <AppFrame theme={theme} onToggleTheme={toggleTheme}>
+      <AppFrame>
         <div className="portal-shell">
           <div className="state-panel error-panel">{error}</div>
         </div>
@@ -148,7 +215,7 @@ function App() {
 
   if (!catalog) {
     return (
-      <AppFrame theme={theme} onToggleTheme={toggleTheme}>
+      <AppFrame>
         <div className="portal-shell">
           <div className="state-panel">Loading app catalog...</div>
         </div>
@@ -157,7 +224,7 @@ function App() {
   }
 
   return (
-    <AppFrame theme={theme} onToggleTheme={toggleTheme}>
+    <AppFrame>
       <Routes>
         <Route path="/" element={<CatalogPage catalog={catalog} />} />
         <Route path="/app/*" element={<DetailPage catalog={catalog} />} />
@@ -166,39 +233,12 @@ function App() {
   );
 }
 
-function AppFrame({ children, theme, onToggleTheme }) {
+function AppFrame({ children }) {
   return (
     <>
-      {SHOW_DEVELOPER_CENTER_NAV ? (
-        <DevCenterNav theme={theme} onToggleTheme={onToggleTheme} />
-      ) : null}
+      {SHOW_DEVELOPER_CENTER_NAV ? <div id="developer-center-shell" /> : null}
       {children}
     </>
-  );
-}
-
-function DevCenterNav({ theme, onToggleTheme }) {
-  return (
-    <header className="navbar dev-center-navbar">
-      <div className="navbar__inner">
-        <div className="navbar__items">
-          <a className="navbar__brand" href="/" aria-label="Developer Center home">
-            <span className="navbar__logo">
-              <img src={portalAssetUrl("sima-logo.png")} alt="" />
-            </span>
-            <span className="navbar__title">Developer Center</span>
-          </a>
-          <a className="navbar__item navbar__link" href="/hardware">Hardware</a>
-          <a className="navbar__item navbar__link" href="/software/">Software</a>
-          <a className="navbar__item navbar__link navbar__link--active" href="/examples/">Examples</a>
-          <a className="navbar__item navbar__link" href="https://huggingface.co/simaai" target="_blank" rel="noreferrer">Models</a>
-          <a className="navbar__item navbar__link" href="https://developer.sima.ai" target="_blank" rel="noreferrer">Community</a>
-        </div>
-        <div className="navbar__items navbar__items--right">
-          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-        </div>
-      </div>
-    </header>
   );
 }
 
@@ -225,7 +265,7 @@ function CatalogPage({ catalog }) {
             <img className="brand-logo" src={portalAssetUrl("sima-logo.png")} alt="SiMa.ai" />
             <p className="eyebrow">Examples</p>
           </div>
-          <h1>Neat app examples</h1>
+          <h1>Neat examples</h1>
           <p className="hero-text">
             Search reference applications by category, model, tag, and runtime notes.
           </p>
@@ -596,23 +636,6 @@ function FilterGroup({ label, value, options, onChange }) {
         ))}
       </select>
     </label>
-  );
-}
-
-function ThemeToggle({ theme, onToggle }) {
-  return (
-    <button
-      className="theme-toggle"
-      type="button"
-      onClick={onToggle}
-      aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-      title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-    >
-      <span className={`theme-toggle-track ${theme === "dark" ? "dark" : ""}`}>
-        <span className="theme-toggle-label">{theme === "light" ? "Light" : "Dark"}</span>
-        <span className="theme-toggle-thumb" />
-      </span>
-    </button>
   );
 }
 
