@@ -22,6 +22,7 @@ function App() {
   const [catalog, setCatalog] = useState(null);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(readInitialTheme);
+  const toggleTheme = () => setTheme((current) => (current === "light" ? "dark" : "light"));
 
   useEffect(() => {
     let cancelled = false;
@@ -48,30 +49,59 @@ function App() {
 
   if (error) {
     return (
-      <div className="portal-shell">
-        <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
-        <div className="state-panel error-panel">{error}</div>
-      </div>
+      <AppFrame theme={theme} onToggleTheme={toggleTheme}>
+        <div className="portal-shell">
+          <div className="state-panel error-panel">{error}</div>
+        </div>
+      </AppFrame>
     );
   }
 
   if (!catalog) {
     return (
-      <div className="portal-shell">
-        <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
-        <div className="state-panel">Loading app catalog...</div>
-      </div>
+      <AppFrame theme={theme} onToggleTheme={toggleTheme}>
+        <div className="portal-shell">
+          <div className="state-panel">Loading app catalog...</div>
+        </div>
+      </AppFrame>
     );
   }
 
   return (
-    <>
-      <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
+    <AppFrame theme={theme} onToggleTheme={toggleTheme}>
       <Routes>
         <Route path="/" element={<CatalogPage catalog={catalog} />} />
         <Route path="/app/:appId" element={<DetailPage catalog={catalog} />} />
       </Routes>
+    </AppFrame>
+  );
+}
+
+function AppFrame({ children, theme, onToggleTheme }) {
+  return (
+    <>
+      <DevCenterNav theme={theme} onToggleTheme={onToggleTheme} />
+      {children}
     </>
+  );
+}
+
+function DevCenterNav({ theme, onToggleTheme }) {
+  return (
+    <header className="dev-center-nav">
+      <a className="dev-center-brand" href="/" aria-label="Developer Center home">
+        <img className="dev-center-logo" src="./sima-logo.png" alt="" />
+        <span>Developer Center</span>
+      </a>
+      <nav className="dev-center-links" aria-label="Developer Center sections">
+        <a href="/docs/hardware">Hardware</a>
+        <a href="/software/">Software</a>
+        <a className="active" href="/examples/">Examples</a>
+        <a href="https://huggingface.co/simaai" target="_blank" rel="noreferrer">Models</a>
+        <a href="https://developer.sima.ai" target="_blank" rel="noreferrer">Community</a>
+      </nav>
+      <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+    </header>
   );
 }
 

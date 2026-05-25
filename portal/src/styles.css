@@ -66,6 +66,66 @@ select {
   font: inherit;
 }
 
+.dev-center-nav {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  min-height: 72px;
+  padding: 0 24px;
+  border-bottom: 1px solid rgba(47, 33, 20, 0.12);
+  background: rgba(255, 252, 247, 0.92);
+  backdrop-filter: blur(18px);
+}
+
+:root[data-theme="dark"] .dev-center-nav {
+  border-bottom-color: rgba(236, 226, 212, 0.14);
+  background: rgba(13, 16, 17, 0.9);
+}
+
+.dev-center-brand {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 12px;
+  color: var(--text);
+  font-size: 1.35rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.dev-center-brand:hover,
+.dev-center-links a:hover {
+  color: var(--accent);
+}
+
+.dev-center-logo {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+}
+
+.dev-center-links {
+  display: flex;
+  align-items: center;
+  gap: clamp(16px, 2vw, 30px);
+  min-width: 0;
+}
+
+.dev-center-links a {
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dev-center-links a.active {
+  color: var(--accent);
+}
+
 .portal-shell,
 .detail-shell {
   width: min(1400px, calc(100vw - 32px));
@@ -74,10 +134,7 @@ select {
 }
 
 .theme-toggle {
-  position: fixed;
-  top: 18px;
-  right: 18px;
-  z-index: 20;
+  margin-left: auto;
   padding: 0;
   border: none;
   background: transparent;
@@ -877,6 +934,25 @@ select {
 }
 
 @media (max-width: 1040px) {
+  .dev-center-nav {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px 16px;
+  }
+
+  .dev-center-links {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .theme-toggle {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+  }
+
   .hero,
   .detail-hero,
   .portal-layout,
@@ -910,9 +986,14 @@ select {
 }
 
 @media (max-width: 640px) {
-  .theme-toggle {
-    top: 12px;
-    right: 12px;
+  .dev-center-brand {
+    max-width: calc(100% - 112px);
+    font-size: 1.12rem;
+  }
+
+  .dev-center-logo {
+    width: 38px;
+    height: 38px;
   }
 
   .portal-shell,
