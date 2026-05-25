@@ -377,6 +377,7 @@ jobs:
       sse_kms_key_id: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_kms_key_id }}
       cloudfront_distribution_id: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_cloudfront_distribution_id }}
       artifact_pattern: neat-apps-portal
+      delete_removed: false
       cloudfront_paths: "/ /index.html /catalog.json"
 
   publish-sysdoc-examples:
