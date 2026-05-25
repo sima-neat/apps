@@ -12,13 +12,63 @@ import {
 
 marked.setOptions({ breaks: true });
 
+const THEME_COOKIE = "sima-neat-theme";
+const THEME_KEYS = ["portal-theme", "theme"];
+const VALID_THEMES = new Set(["light", "dark"]);
+
+function normalizeTheme(value) {
+  return VALID_THEMES.has(value) ? value : null;
+}
+
+function readCookieTheme() {
+  const entry = document.cookie
+    .split("; ")
+    .find((cookie) => cookie.startsWith(`${THEME_COOKIE}=`));
+  return normalizeTheme(entry ? decodeURIComponent(entry.split("=").slice(1).join("=")) : null);
+}
+
+function cookieDomain() {
+  const { hostname } = window.location;
+  if (hostname === "localhost" || /^[\d.]+$/.test(hostname)) {
+    return "";
+  }
+
+  if (hostname.endsWith(".neat.sima.ai") || hostname.endsWith(".neat.paconsultings.com")) {
+    const parts = hostname.split(".");
+    return parts.length > 3 ? parts.slice(1).join(".") : hostname;
+  }
+
+  return "";
+}
+
+function writeCookieTheme(theme) {
+  const domain = cookieDomain();
+  const domainPart = domain ? `; Domain=.${domain}` : "";
+  const securePart = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${THEME_COOKIE}=${encodeURIComponent(theme)}; Path=/; Max-Age=31536000; SameSite=Lax${securePart}${domainPart}`;
+}
+
+function readStoredTheme() {
+  for (const key of THEME_KEYS) {
+    const value = normalizeTheme(window.localStorage.getItem(key));
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function writeStoredTheme(theme) {
+  THEME_KEYS.forEach((key) => window.localStorage.setItem(key, theme));
+}
+
 function readInitialTheme() {
   if (typeof window === "undefined") {
     return "light";
   }
 
-  const savedTheme = window.localStorage.getItem("portal-theme");
-  if (savedTheme === "light" || savedTheme === "dark") {
+  const savedTheme = readCookieTheme() || readStoredTheme();
+  if (savedTheme) {
     return savedTheme;
   }
 
@@ -51,8 +101,25 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem("portal-theme", theme);
+    writeStoredTheme(theme);
+    writeCookieTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    const syncTheme = () => {
+      const cookieTheme = readCookieTheme();
+      if (cookieTheme) {
+        setTheme(cookieTheme);
+      }
+    };
+
+    window.addEventListener("focus", syncTheme);
+    document.addEventListener("visibilitychange", syncTheme);
+    return () => {
+      window.removeEventListener("focus", syncTheme);
+      document.removeEventListener("visibilitychange", syncTheme);
+    };
+  }, []);
 
   if (error) {
     return (
