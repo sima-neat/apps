@@ -15,6 +15,7 @@ marked.setOptions({ breaks: true });
 const THEME_COOKIE = "sima-neat-theme";
 const THEME_KEYS = ["portal-theme", "theme"];
 const VALID_THEMES = new Set(["light", "dark"]);
+const SHOW_DEVELOPER_CENTER_NAV = import.meta.env.BASE_URL.replace(/\/+$/, "") === "/examples";
 
 function normalizeTheme(value) {
   return VALID_THEMES.has(value) ? value : null;
@@ -168,7 +169,9 @@ function App() {
 function AppFrame({ children, theme, onToggleTheme }) {
   return (
     <>
-      <DevCenterNav theme={theme} onToggleTheme={onToggleTheme} />
+      {SHOW_DEVELOPER_CENTER_NAV ? (
+        <DevCenterNav theme={theme} onToggleTheme={onToggleTheme} />
+      ) : null}
       {children}
     </>
   );
@@ -185,7 +188,7 @@ function DevCenterNav({ theme, onToggleTheme }) {
             </span>
             <span className="navbar__title">Developer Center</span>
           </a>
-          <a className="navbar__item navbar__link" href="/docs/hardware">Hardware</a>
+          <a className="navbar__item navbar__link" href="/hardware">Hardware</a>
           <a className="navbar__item navbar__link" href="/software/">Software</a>
           <a className="navbar__item navbar__link navbar__link--active" href="/examples/">Examples</a>
           <a className="navbar__item navbar__link" href="https://huggingface.co/simaai" target="_blank" rel="noreferrer">Models</a>
