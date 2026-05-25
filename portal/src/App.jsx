@@ -401,7 +401,9 @@ function DetailPage({ catalog }) {
   const decodedId = decodeURIComponent(appPath);
   const example = findExample(catalog, decodedId);
   const githubUrl = githubUrlForExample(example);
-  const sections = (example?.sections || []).filter((section) => section.slug !== "metadata");
+  const sections = (example?.sections || []).filter(
+    (section) => !["metadata", "concept"].includes(section.slug),
+  );
   const displayName = example?.name || example?.binary_name || decodedId;
   const binaryLabel = example?.binary_name || "";
   const modelLabel = example?.model || "";
