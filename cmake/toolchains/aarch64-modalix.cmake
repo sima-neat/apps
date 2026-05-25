@@ -49,28 +49,6 @@ if(DEFINED _SYSROOT)
     )
   endif()
   set(ENV{PKG_CONFIG_DIR} "")
-
-  set(_SYSROOT_LINK_DIRS
-    "${_SYSROOT}/usr/lib/aarch64-linux-gnu"
-    "${_SYSROOT}/usr/lib"
-    "${_SYSROOT}/lib/aarch64-linux-gnu"
-    "${_SYSROOT}/lib"
-  )
-  set(_SYSROOT_RPATH_LINK_FLAGS "")
-  foreach(_link_dir IN LISTS _SYSROOT_LINK_DIRS)
-    if(EXISTS "${_link_dir}")
-      string(APPEND _SYSROOT_RPATH_LINK_FLAGS " -Wl,-rpath-link,${_link_dir}")
-    endif()
-  endforeach()
-  string(STRIP "${_SYSROOT_RPATH_LINK_FLAGS}" _SYSROOT_RPATH_LINK_FLAGS)
-  if(_SYSROOT_RPATH_LINK_FLAGS)
-    # Modalix target shared libraries can carry runtime-only transitive
-    # dependencies that are not present on the host link path. Keep app/static
-    # symbols strict while allowing unresolved symbols from those shared libs.
-    set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} ${_SYSROOT_RPATH_LINK_FLAGS} -Wl,--allow-shlib-undefined")
-    set(CMAKE_SHARED_LINKER_FLAGS_INIT "${CMAKE_SHARED_LINKER_FLAGS_INIT} ${_SYSROOT_RPATH_LINK_FLAGS}")
-    set(CMAKE_MODULE_LINKER_FLAGS_INIT "${CMAKE_MODULE_LINKER_FLAGS_INIT} ${_SYSROOT_RPATH_LINK_FLAGS}")
-  endif()
 endif()
 
 if(NOT DEFINED PKG_CONFIG_EXECUTABLE OR PKG_CONFIG_EXECUTABLE STREQUAL "")

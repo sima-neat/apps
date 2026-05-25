@@ -1,12 +1,7 @@
 const GITHUB_REPO_ROOT = "https://github.com/sima-neat/apps/tree/main";
-const PORTAL_BASE_PATH = import.meta.env.BASE_URL;
-
-export function portalAssetUrl(path) {
-  return `${PORTAL_BASE_PATH}${path.replace(/^\/+/, "")}`;
-}
 
 export async function loadCatalog() {
-  const response = await fetch(portalAssetUrl("catalog.json"));
+  const response = await fetch("./catalog.json");
   if (!response.ok) {
     throw new Error(`Failed to load catalog.json (${response.status})`);
   }
