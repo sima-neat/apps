@@ -368,6 +368,7 @@ bash /tmp/install.sh`}</code>
 
 function ExampleCard({ example }) {
   const fallbackImage = portalAssetUrl(`category-assets/${slugTone(example.category)}.svg`);
+  const cardImage = portalAssetUrl(example.image_path || `category-assets/${slugTone(example.category)}.svg`);
   const displayName = formatDisplayLabel(example.name || example.binary_name || example.id);
   const summaryHtml = marked.parseInline(example.summary || "No summary available.");
 
@@ -375,8 +376,14 @@ function ExampleCard({ example }) {
     <Link className="app-card" to={`/app/${encodeURIComponent(example.id)}`}>
       <div className="card-image">
         <img
-          src={fallbackImage}
+          src={cardImage}
           alt={displayName}
+          onError={(event) => {
+            if (event.currentTarget.dataset.fallbackApplied !== "true") {
+              event.currentTarget.dataset.fallbackApplied = "true";
+              event.currentTarget.src = fallbackImage;
+            }
+          }}
         />
       </div>
       <div className="card-body">
