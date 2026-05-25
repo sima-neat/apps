@@ -62,6 +62,20 @@ function writeStoredTheme(theme) {
   THEME_KEYS.forEach((key) => window.localStorage.setItem(key, theme));
 }
 
+function normalizeMarkdownAssetUrls(markdown = "") {
+  const assetPrefixes = ["example-assets", "category-assets"];
+  return assetPrefixes.reduce((content, prefix) => {
+    const assetUrl = portalAssetUrl(`${prefix}/`);
+    return content
+      .replace(new RegExp(`(\\]\\()(?:\\./)?${prefix}/`, "g"), `$1${assetUrl}`)
+      .replace(new RegExp(`(\\bsrc=["'])(?:\\./)?${prefix}/`, "g"), `$1${assetUrl}`);
+  }, markdown);
+}
+
+function renderMarkdown(markdown = "") {
+  return marked.parse(normalizeMarkdownAssetUrls(markdown));
+}
+
 function readInitialTheme() {
   if (typeof window === "undefined") {
     return "light";
@@ -518,7 +532,7 @@ function DetailPage({ catalog }) {
                   </header>
                   <div
                     className="markdown-body"
-                    dangerouslySetInnerHTML={{ __html: marked.parse(section.markdown || "") }}
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(section.markdown) }}
                   />
                 </section>
               ))}
