@@ -74,6 +74,9 @@ select {
   font-weight: 400;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
+  position: sticky;
+  top: 0;
+  z-index: 30;
   text-rendering: optimizelegibility;
 }
 
@@ -85,9 +88,6 @@ select {
 .developer-center-fallback-shell .navbar {
   align-items: center;
   display: flex;
-  position: sticky;
-  top: 0;
-  z-index: 30;
   height: var(--ifm-navbar-height);
   padding: var(--ifm-navbar-padding-vertical) var(--ifm-navbar-padding-horizontal);
   border-bottom: 1px solid var(--developer-center-shell-line);
