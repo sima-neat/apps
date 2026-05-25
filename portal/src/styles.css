@@ -1,33 +1,31 @@
-@import url("https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Condensed:wght@400;700&display=swap");
-
 :root {
   color-scheme: light;
-  --bg: #f3eee5;
-  --bg-alt: #fffaf1;
-  --panel: rgba(255, 248, 237, 0.88);
-  --panel-strong: #fff9ef;
-  --line: rgba(75, 48, 20, 0.12);
-  --text: #2f2114;
-  --muted: #75624f;
-  --accent: #0e7a6d;
-  --accent-soft: #d6efe7;
-  --warm: #d6782a;
-  --shadow: 0 18px 50px rgba(61, 40, 17, 0.12);
+  --bg: #ffffff;
+  --bg-alt: #f7f8fa;
+  --panel: #ffffff;
+  --panel-strong: #ffffff;
+  --line: rgba(28, 47, 58, 0.12);
+  --text: #1c1e21;
+  --muted: #606770;
+  --accent: #1d5f73;
+  --accent-soft: rgba(29, 95, 115, 0.1);
+  --warm: #1d5f73;
+  --shadow: none;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0d1011;
-  --bg-alt: #15191b;
-  --panel: rgba(20, 24, 26, 0.94);
-  --panel-strong: #181d1f;
-  --line: rgba(236, 226, 212, 0.14);
-  --text: #f7efe2;
-  --muted: #c8bcac;
-  --accent: #67c9b4;
-  --accent-soft: rgba(103, 201, 180, 0.16);
-  --warm: #f1a55d;
-  --shadow: 0 20px 48px rgba(0, 0, 0, 0.42);
+  --bg: #18191a;
+  --bg-alt: #242526;
+  --panel: #242526;
+  --panel-strong: #242526;
+  --line: rgba(240, 246, 252, 0.14);
+  --text: #f5f6f7;
+  --muted: #b0b3b8;
+  --accent: #71c1d4;
+  --accent-soft: rgba(113, 193, 212, 0.16);
+  --warm: #71c1d4;
+  --shadow: none;
 }
 
 * {
@@ -40,19 +38,9 @@ html, body, #root {
 
 body {
   margin: 0;
-  font-family: "Roboto", "Segoe UI", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   color: var(--text);
-  background:
-    radial-gradient(circle at top left, rgba(214, 120, 42, 0.18), transparent 26%),
-    radial-gradient(circle at top right, rgba(14, 122, 109, 0.16), transparent 24%),
-    linear-gradient(180deg, #f8f2e8, var(--bg));
-}
-
-:root[data-theme="dark"] body {
-  background:
-    radial-gradient(circle at top left, rgba(241, 165, 93, 0.12), transparent 26%),
-    radial-gradient(circle at top right, rgba(103, 201, 180, 0.1), transparent 24%),
-    linear-gradient(180deg, #121618, var(--bg));
+  background: var(--bg);
 }
 
 a {
@@ -73,14 +61,14 @@ select {
   height: 60px;
   padding: 0 1rem;
   border-bottom: 1px solid rgba(28, 47, 58, 0.1);
-  background: rgba(255, 252, 247, 0.94);
+  background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(18px);
   box-shadow: none;
 }
 
 :root[data-theme="dark"] .dev-center-navbar {
-  border-bottom-color: rgba(236, 226, 212, 0.14);
-  background: rgba(13, 16, 17, 0.9);
+  border-bottom-color: rgba(240, 246, 252, 0.14);
+  background: rgba(24, 25, 26, 0.94);
 }
 
 .navbar__inner {
@@ -142,13 +130,14 @@ select {
   align-items: center;
   padding: 0.25rem 0.75rem;
   font-size: 1rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
   white-space: nowrap;
 }
 
 .navbar__link--active {
   color: var(--accent);
+  font-weight: 600;
 }
 
 .portal-shell,
@@ -174,7 +163,6 @@ select {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-strong);
-  box-shadow: var(--shadow);
   overflow: hidden;
 }
 
@@ -204,8 +192,8 @@ select {
   gap: 24px;
   padding: 28px;
   border: 1px solid var(--line);
-  border-radius: 28px;
-  background: linear-gradient(135deg, rgba(255, 250, 241, 0.94), rgba(246, 239, 227, 0.9));
+  border-radius: 8px;
+  background: var(--panel);
   box-shadow: var(--shadow);
 }
 
@@ -241,15 +229,15 @@ select {
 .hero h1,
 .detail-hero h1 {
   margin: 0;
-  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(2.25rem, 5vw, 4.2rem);
-  line-height: 0.95;
-  letter-spacing: -0.04em;
+  line-height: 1;
+  letter-spacing: 0;
 }
 
 :root[data-theme="dark"] .hero h1,
 :root[data-theme="dark"] .detail-hero h1 {
-  color: #fff5e8;
+  color: var(--text);
 }
 
 .hero-text,
@@ -302,7 +290,7 @@ select {
 :root[data-theme="dark"] .hero-text,
 :root[data-theme="dark"] .search-meta,
 :root[data-theme="dark"] .detail-path {
-  color: #d5c7b5;
+  color: var(--muted);
 }
 
 .hero-search,
@@ -311,9 +299,9 @@ select {
   flex-direction: column;
   justify-content: center;
   padding: 22px;
-  border-radius: 22px;
+  border-radius: 8px;
   background: var(--panel-strong);
-  border: 1px solid rgba(14, 122, 109, 0.14);
+  border: 1px solid var(--line);
 }
 
 .search-label,
@@ -328,15 +316,15 @@ select {
 .filter-group select {
   width: 100%;
   padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(47, 33, 20, 0.14);
+  border-radius: 6px;
+  border: 1px solid var(--line);
   background: white;
 }
 
 :root[data-theme="dark"] .search-input,
 :root[data-theme="dark"] .filter-group select {
   border-color: rgba(243, 234, 220, 0.14);
-  background: rgba(15, 18, 19, 0.42);
+  background: var(--bg);
   color: var(--text);
 }
 
@@ -367,7 +355,7 @@ select {
 .search-input {
   padding: 14px 0 10px;
   border: none;
-  border-bottom: 2px solid rgba(47, 33, 20, 0.16);
+  border-bottom: 2px solid var(--line);
   border-radius: 0;
   background: transparent;
 }
@@ -405,8 +393,8 @@ select {
   width: min(680px, calc(100vw - 32px));
   padding: 28px;
   border: 1px solid var(--line);
-  border-radius: 28px;
-  background: linear-gradient(135deg, rgba(255, 250, 241, 0.98), rgba(246, 239, 227, 0.96));
+  border-radius: 8px;
+  background: var(--panel);
   box-shadow: var(--shadow);
 }
 
@@ -419,7 +407,7 @@ select {
 
 .download-modal-header h2 {
   margin: 0;
-  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(1.6rem, 3vw, 2.2rem);
   line-height: 1;
 }
@@ -433,7 +421,7 @@ select {
   margin: 0;
   padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 8px;
   background: var(--panel-strong);
   color: var(--text);
   white-space: pre-wrap;
@@ -474,14 +462,14 @@ select {
 .app-card {
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 26px;
-  background: rgba(255, 252, 247, 0.92);
+  border-radius: 8px;
+  background: var(--panel);
   box-shadow: var(--shadow);
   transition: transform 160ms ease, border-color 160ms ease;
 }
 
 :root[data-theme="dark"] .app-card {
-  background: rgba(24, 28, 30, 0.94);
+  background: var(--panel);
 }
 
 :root[data-theme="dark"] .hero-action,
@@ -533,13 +521,13 @@ select {
 
 .card-image {
   height: 180px;
-  background: #efe5d6;
+  background: var(--bg-alt);
   overflow: hidden;
   border-bottom: 1px solid var(--line);
 }
 
 :root[data-theme="dark"] .card-image {
-  background: #252b2d;
+  background: var(--bg-alt);
 }
 
 .card-image img,
@@ -555,7 +543,7 @@ select {
   width: 100%;
   height: 100%;
   padding: 18px;
-  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-size: 1rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -596,9 +584,9 @@ select {
 
 .card-body h2 {
   margin: 0 0 10px;
-  font-family: "Roboto Condensed", "Segoe UI", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-size: 1.45rem;
-  line-height: 1.05;
+  line-height: 1.15;
 }
 
 .card-summary {
@@ -718,7 +706,7 @@ select {
 .state-panel,
 .empty-state {
   border: 1px solid var(--line);
-  border-radius: 24px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
 }
@@ -947,7 +935,7 @@ select {
 .section-header h2,
 .empty-state h2 {
   margin-top: 0;
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 }
 
 .section-header h2 {
