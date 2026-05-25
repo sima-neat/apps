@@ -102,7 +102,7 @@ function ensureDeveloperCenterShellStylesheet() {
   document.head.appendChild(link);
 }
 
-function ensureDeveloperCenterShellScript(onLoad) {
+function ensureDeveloperCenterShellScript(onLoad, onError) {
   const src = "/developer-center-shell.js";
   const existing = document.querySelector(`script[src="${src}"]`);
   if (window.DeveloperCenterShell) {
@@ -121,12 +121,13 @@ function ensureDeveloperCenterShellScript(onLoad) {
   script.addEventListener("load", onLoad, { once: true });
   script.addEventListener("error", () => {
     console.warn("Developer Center shell runtime is unavailable.");
+    onError?.();
   }, { once: true });
   document.head.appendChild(script);
   return () => script.removeEventListener("load", onLoad);
 }
 
-function useDeveloperCenterShell(setTheme) {
+function useDeveloperCenterShell(setTheme, setUseShellFallback) {
   useEffect(() => {
     if (!SHOW_DEVELOPER_CENTER_NAV) {
       return undefined;
@@ -137,10 +138,24 @@ function useDeveloperCenterShell(setTheme) {
 
     const mountShell = () => {
       if (!cancelled) {
-        window.DeveloperCenterShell?.mount("#developer-center-shell", { active: "examples" });
+        if (window.DeveloperCenterShell) {
+          setUseShellFallback(false);
+          window.DeveloperCenterShell.mount("#developer-center-shell", { active: "examples" });
+        } else {
+          setUseShellFallback(true);
+        }
       }
     };
-    const cleanupScriptListener = ensureDeveloperCenterShellScript(mountShell);
+    const cleanupScriptListener = ensureDeveloperCenterShellScript(mountShell, () => {
+      if (!cancelled) {
+        setUseShellFallback(true);
+      }
+    });
+    const fallbackTimer = window.setTimeout(() => {
+      if (!cancelled && !window.DeveloperCenterShell) {
+        setUseShellFallback(true);
+      }
+    }, 1200);
     const syncTheme = (event) => {
       const theme = normalizeTheme(event.detail?.theme);
       if (theme) {
@@ -151,17 +166,20 @@ function useDeveloperCenterShell(setTheme) {
     window.addEventListener("developer-center-theme-change", syncTheme);
     return () => {
       cancelled = true;
+      window.clearTimeout(fallbackTimer);
       cleanupScriptListener?.();
       window.removeEventListener("developer-center-theme-change", syncTheme);
     };
-  }, [setTheme]);
+  }, [setTheme, setUseShellFallback]);
 }
 
 function App() {
   const [catalog, setCatalog] = useState(null);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(readInitialTheme);
-  useDeveloperCenterShell(setTheme);
+  const [useShellFallback, setUseShellFallback] = useState(false);
+  const toggleTheme = () => setTheme((current) => (current === "light" ? "dark" : "light"));
+  useDeveloperCenterShell(setTheme, setUseShellFallback);
 
   useEffect(() => {
     let cancelled = false;
@@ -205,7 +223,7 @@ function App() {
 
   if (error) {
     return (
-      <AppFrame>
+      <AppFrame theme={theme} onToggleTheme={toggleTheme} useShellFallback={useShellFallback}>
         <div className="portal-shell">
           <div className="state-panel error-panel">{error}</div>
         </div>
@@ -215,7 +233,7 @@ function App() {
 
   if (!catalog) {
     return (
-      <AppFrame>
+      <AppFrame theme={theme} onToggleTheme={toggleTheme} useShellFallback={useShellFallback}>
         <div className="portal-shell">
           <div className="state-panel">Loading app catalog...</div>
         </div>
@@ -224,7 +242,7 @@ function App() {
   }
 
   return (
-    <AppFrame>
+    <AppFrame theme={theme} onToggleTheme={toggleTheme} useShellFallback={useShellFallback}>
       <Routes>
         <Route path="/" element={<CatalogPage catalog={catalog} />} />
         <Route path="/app/*" element={<DetailPage catalog={catalog} />} />
@@ -233,12 +251,78 @@ function App() {
   );
 }
 
-function AppFrame({ children }) {
+function AppFrame({ children, theme, onToggleTheme, useShellFallback }) {
   return (
     <>
-      {SHOW_DEVELOPER_CENTER_NAV ? <div id="developer-center-shell" /> : null}
+      {SHOW_DEVELOPER_CENTER_NAV && !useShellFallback ? <div id="developer-center-shell" /> : null}
+      {SHOW_DEVELOPER_CENTER_NAV && useShellFallback ? (
+        <DeveloperCenterShellFallback theme={theme} onToggleTheme={onToggleTheme} />
+      ) : null}
       {children}
     </>
+  );
+}
+
+function DeveloperCenterShellFallback({ theme, onToggleTheme }) {
+  return (
+    <div className="developer-center-fallback-shell">
+      <header className="navbar dev-center-navbar">
+        <div className="navbar__inner">
+          <div className="navbar__items">
+            <a className="navbar__brand" href="/" aria-label="Developer Center home">
+              <span className="navbar__logo">
+                <img src="/img/sima-logo.png" alt="" />
+              </span>
+              <span className="navbar__title">Developer Center</span>
+            </a>
+            <div className="navbar__items navbar__items--desktop">
+              <div className="navbar__item">
+                <a className="navbar__link" href="/hardware">Hardware</a>
+              </div>
+              <div className="navbar__item">
+                <a className="navbar__link" href="/software">Software</a>
+              </div>
+              <div className="navbar__item">
+                <a className="navbar__link navbar__link--active" href="/examples">Examples</a>
+              </div>
+              <a className="navbar__item navbar__link" href="https://huggingface.co/simaai" target="_blank" rel="noreferrer">
+                Models
+                <svg width="13.5" height="13.5" viewBox="0 0 24 24" aria-label="(opens in new tab)" className="iconExternalLink">
+                  <path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z" />
+                </svg>
+              </a>
+              <a className="navbar__item navbar__link" href="https://developer.sima.ai" target="_blank" rel="noreferrer">
+                Community
+                <svg width="13.5" height="13.5" viewBox="0 0 24 24" aria-label="(opens in new tab)" className="iconExternalLink">
+                  <path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z" />
+                </svg>
+              </a>
+            </div>
+          </div>
+          <div className="navbar__items navbar__items--right">
+            <div className="color-mode-toggle">
+              <button
+                className="color-mode-toggle-button"
+                type="button"
+                aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                onClick={onToggleTheme}
+              >
+                {theme === "light" ? (
+                  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" className="color-mode-toggle-icon">
+                    <path fill="currentColor" d="M12 9c1.65 0 3 1.35 3 3s-1.35 3-3 3-3-1.35-3-3 1.35-3 3-3m0-2c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5ZM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1Zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1ZM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1Zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1ZM5.99 4.58a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41L5.99 4.58Zm12.37 12.37a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41l-1.06-1.06ZM19.42 5.99a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06ZM7.05 18.36a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06Z" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" className="color-mode-toggle-icon">
+                    <path fill="currentColor" d="M9.37 5.51A7.4 7.4 0 0 0 16.5 14.9c.68 0 1.35-.09 1.99-.27A7.03 7.03 0 0 1 12 19c-3.86 0-7-3.14-7-7 0-2.93 1.81-5.45 4.37-6.49ZM12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26 5.4 5.4 0 0 1-3.14-9.8A9.2 9.2 0 0 0 12 3Z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+    </div>
   );
 }
 
