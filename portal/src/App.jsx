@@ -71,7 +71,7 @@ function App() {
     <AppFrame theme={theme} onToggleTheme={toggleTheme}>
       <Routes>
         <Route path="/" element={<CatalogPage catalog={catalog} />} />
-        <Route path="/app/:appId" element={<DetailPage catalog={catalog} />} />
+        <Route path="/app/*" element={<DetailPage catalog={catalog} />} />
       </Routes>
     </AppFrame>
   );
@@ -296,9 +296,9 @@ function ExampleCard({ example }) {
 }
 
 function DetailPage({ catalog }) {
-  const { appId = "" } = useParams();
+  const { "*": appPath = "" } = useParams();
   const navigate = useNavigate();
-  const decodedId = decodeURIComponent(appId);
+  const decodedId = decodeURIComponent(appPath);
   const example = findExample(catalog, decodedId);
   const githubUrl = githubUrlForExample(example);
   const sections = (example?.sections || []).filter((section) => section.slug !== "metadata");
