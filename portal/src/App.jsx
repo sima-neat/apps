@@ -95,19 +95,25 @@ function AppFrame({ children, theme, onToggleTheme }) {
 
 function DevCenterNav({ theme, onToggleTheme }) {
   return (
-    <header className="dev-center-nav">
-      <a className="dev-center-brand" href="/" aria-label="Developer Center home">
-        <img className="dev-center-logo" src={portalAssetUrl("sima-logo.png")} alt="" />
-        <span>Developer Center</span>
-      </a>
-      <nav className="dev-center-links" aria-label="Developer Center sections">
-        <a href="/docs/hardware">Hardware</a>
-        <a href="/software/">Software</a>
-        <a className="active" href="/examples/">Examples</a>
-        <a href="https://huggingface.co/simaai" target="_blank" rel="noreferrer">Models</a>
-        <a href="https://developer.sima.ai" target="_blank" rel="noreferrer">Community</a>
-      </nav>
-      <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+    <header className="navbar dev-center-navbar">
+      <div className="navbar__inner">
+        <div className="navbar__items">
+          <a className="navbar__brand" href="/" aria-label="Developer Center home">
+            <span className="navbar__logo">
+              <img src={portalAssetUrl("sima-logo.png")} alt="" />
+            </span>
+            <b className="navbar__title">Developer Center</b>
+          </a>
+          <a className="navbar__item navbar__link" href="/docs/hardware">Hardware</a>
+          <a className="navbar__item navbar__link" href="/software/">Software</a>
+          <a className="navbar__item navbar__link navbar__link--active" href="/examples/">Examples</a>
+          <a className="navbar__item navbar__link" href="https://huggingface.co/simaai" target="_blank" rel="noreferrer">Models</a>
+          <a className="navbar__item navbar__link" href="https://developer.sima.ai" target="_blank" rel="noreferrer">Community</a>
+        </div>
+        <div className="navbar__items navbar__items--right">
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        </div>
+      </div>
     </header>
   );
 }
