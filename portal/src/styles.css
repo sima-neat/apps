@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap");
+
 :root {
   color-scheme: light;
   --bg: #ffffff;
@@ -38,7 +40,8 @@ html, body, #root {
 
 body {
   margin: 0;
-  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
   color: var(--text);
   background: var(--bg);
 }
@@ -118,8 +121,8 @@ select {
 }
 
 .navbar__title {
-  font-size: 1.1rem;
-  font-weight: 800;
+  font-size: 1.02rem;
+  font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -128,21 +131,21 @@ select {
   color: var(--text);
   display: inline-flex;
   align-items: center;
-  padding: 0.25rem 0.75rem;
-  font-size: 1rem;
-  font-weight: 600;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.92rem;
+  font-weight: 500;
   line-height: 1.25;
   white-space: nowrap;
 }
 
 .navbar__link--active {
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .portal-shell,
 .detail-shell {
-  width: min(1400px, calc(100vw - 32px));
+  width: min(1280px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 24px 0 48px;
 }
@@ -173,7 +176,7 @@ select {
 .theme-toggle-label {
   min-width: 40px;
   font-size: 0.8rem;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--muted);
 }
 
@@ -188,9 +191,10 @@ select {
 .hero,
 .detail-hero {
   display: grid;
-  grid-template-columns: 2.1fr 1fr;
-  gap: 24px;
-  padding: 28px;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  align-items: end;
+  gap: 22px;
+  padding: 24px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -198,9 +202,10 @@ select {
 }
 
 .eyebrow {
-  margin: 0 0 12px;
-  font-size: 0.82rem;
-  letter-spacing: 0.18em;
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--warm);
 }
@@ -217,8 +222,8 @@ select {
 }
 
 .brand-logo {
-  width: 40px;
-  height: 40px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   object-fit: contain;
   object-position: center;
@@ -229,9 +234,10 @@ select {
 .hero h1,
 .detail-hero h1 {
   margin: 0;
-  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(2.25rem, 5vw, 4.2rem);
-  line-height: 1;
+  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: clamp(1.85rem, 3vw, 2.7rem);
+  font-weight: 500;
+  line-height: 1.12;
   letter-spacing: 0;
 }
 
@@ -250,14 +256,14 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 22px;
+  margin-top: 18px;
 }
 
 .hero-action {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 11px 16px;
+  padding: 9px 14px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-strong);
@@ -298,7 +304,7 @@ select {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 22px;
+  padding: 18px;
   border-radius: 8px;
   background: var(--panel-strong);
   border: 1px solid var(--line);
@@ -307,9 +313,9 @@ select {
 .search-label,
 .filter-group span {
   display: block;
-  margin-bottom: 10px;
-  font-size: 0.88rem;
-  font-weight: 700;
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .search-input,
@@ -372,9 +378,9 @@ select {
 .portal-layout,
 .detail-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 280px;
   gap: 24px;
-  margin-top: 26px;
+  margin-top: 20px;
 }
 
 .modal-backdrop {
@@ -407,8 +413,9 @@ select {
 
 .download-modal-header h2 {
   margin: 0;
-  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: clamp(1.35rem, 2.4vw, 1.85rem);
+  font-weight: 500;
   line-height: 1;
 }
 
@@ -455,8 +462,8 @@ select {
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
 }
 
 .app-card {
@@ -520,7 +527,7 @@ select {
 }
 
 .card-image {
-  height: 180px;
+  height: 150px;
   background: var(--bg-alt);
   overflow: hidden;
   border-bottom: 1px solid var(--line);
@@ -543,9 +550,9 @@ select {
   width: 100%;
   height: 100%;
   padding: 18px;
-  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   font-size: 1rem;
-  font-weight: 700;
+  font-weight: 500;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.9);
 }
@@ -571,12 +578,13 @@ select {
 }
 
 .card-body {
-  padding: 20px;
+  padding: 16px;
 }
 
 .card-category {
   margin: 0 0 8px;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--accent);
@@ -584,14 +592,17 @@ select {
 
 .card-body h2 {
   margin: 0 0 10px;
-  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-size: 1.45rem;
-  line-height: 1.15;
+  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 1.12rem;
+  font-weight: 600;
+  line-height: 1.18;
 }
 
 .card-summary {
-  min-height: 76px;
+  min-height: 66px;
   margin: 0 0 16px;
+  font-size: 0.88rem;
+  line-height: 1.35;
   color: var(--muted);
 }
 
@@ -621,10 +632,10 @@ select {
 .tag-pill {
   display: inline-flex;
   align-items: center;
-  padding: 8px 10px;
+  padding: 7px 9px;
   border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.74rem;
+  font-weight: 500;
 }
 
 .chip-link {
@@ -714,7 +725,7 @@ select {
 .filter-panel {
   position: sticky;
   top: 24px;
-  padding: 20px;
+  padding: 16px;
   height: fit-content;
 }
 
@@ -731,9 +742,9 @@ select {
 
 .clear-button,
 .back-link {
-  padding: 12px 14px;
+  padding: 10px 13px;
   border: none;
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--accent);
   color: white;
 }
@@ -793,7 +804,7 @@ select {
 .toc-title {
   margin: 0 0 6px;
   font-size: 0.82rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--warm);
@@ -935,7 +946,8 @@ select {
 .section-header h2,
 .empty-state h2 {
   margin-top: 0;
-  font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: "Roboto", "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 500;
 }
 
 .section-header h2 {

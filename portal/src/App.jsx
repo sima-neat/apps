@@ -183,7 +183,7 @@ function DevCenterNav({ theme, onToggleTheme }) {
             <span className="navbar__logo">
               <img src={portalAssetUrl("sima-logo.png")} alt="" />
             </span>
-            <b className="navbar__title">Developer Center</b>
+            <span className="navbar__title">Developer Center</span>
           </a>
           <a className="navbar__item navbar__link" href="/docs/hardware">Hardware</a>
           <a className="navbar__item navbar__link" href="/software/">Software</a>
@@ -220,12 +220,11 @@ function CatalogPage({ catalog }) {
         <div className="hero-copy">
           <div className="brand-row">
             <img className="brand-logo" src={portalAssetUrl("sima-logo.png")} alt="SiMa.ai" />
-            <p className="eyebrow">SiMa.ai NEAT Apps Portal</p>
+            <p className="eyebrow">Examples</p>
           </div>
-          <h1>Discover SiMa.ai Neat reference examples that expedite the path from proof of concept to product.</h1>
+          <h1>Neat app examples</h1>
           <p className="hero-text">
-            Browse source-first applications, search across tags and models, and drill into structured
-            example documentation generated from the repo itself.
+            Search reference applications by category, model, tag, and runtime notes.
           </p>
           <div className="hero-actions">
             <a className="hero-action" href="https://github.com/sima-neat/apps" target="_blank" rel="noreferrer">
