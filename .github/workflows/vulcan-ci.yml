@@ -324,6 +324,43 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  build-sysdoc-examples:
+    name: Build SysDoc Examples Route
+    if: ${{ github.ref_type == 'branch' }}
+    needs:
+      - resolve-portal-publish-config
+      - test-runtime
+    runs-on: ubuntu-latest
+    env:
+      PORTAL_BASE_URL: ${{ format('{0}/examples', needs.resolve-portal-publish-config.outputs.sysdoc_base_url) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install portal dependencies
+        working-directory: portal
+        run: npm ci
+
+      - name: Build portal
+        working-directory: portal
+        run: npm run build
+
+      - name: Upload portal artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-sysdoc-examples
+          path: portal/dist/
+          if-no-files-found: error
+          retention-days: 3
+
   publish-portal:
     name: Publish Apps Portal
     if: ${{ github.ref_type == 'branch' }}
@@ -341,6 +378,25 @@ jobs:
       cloudfront_distribution_id: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_cloudfront_distribution_id }}
       artifact_pattern: neat-apps-portal
       cloudfront_paths: "/ /index.html /catalog.json"
+
+  publish-sysdoc-examples:
+    name: Publish SysDoc Examples Route
+    if: ${{ github.ref_type == 'branch' }}
+    needs:
+      - resolve-portal-publish-config
+      - build-sysdoc-examples
+    uses: sima-neat/.github/.github/workflows/vulcan-publish-static-site.yml@main
+    with:
+      aws_region: ${{ needs.resolve-portal-publish-config.outputs.aws_region }}
+      environment_name: ${{ needs.resolve-portal-publish-config.outputs.vulcan_env }}
+      site_key: APPS_PORTAL
+      bucket: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_bucket }}
+      role_to_assume: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_publisher_role_arn }}
+      sse_kms_key_id: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_kms_key_id }}
+      cloudfront_distribution_id: ${{ needs.resolve-portal-publish-config.outputs.sysdoc_cloudfront_distribution_id }}
+      artifact_pattern: neat-apps-sysdoc-examples
+      s3_prefix: examples
+      cloudfront_paths: "/examples /examples/*"
 
   promote-latest-tag:
     name: Promote Vulcan latest tag
