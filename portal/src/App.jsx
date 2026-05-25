@@ -1,7 +1,14 @@
 import { marked } from "marked";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
-import { extractFilterOptions, findExample, githubUrlForExample, loadCatalog, matchesFilters } from "./catalog";
+import {
+  extractFilterOptions,
+  findExample,
+  githubUrlForExample,
+  loadCatalog,
+  matchesFilters,
+  portalAssetUrl,
+} from "./catalog";
 
 marked.setOptions({ breaks: true });
 
@@ -90,7 +97,7 @@ function DevCenterNav({ theme, onToggleTheme }) {
   return (
     <header className="dev-center-nav">
       <a className="dev-center-brand" href="/" aria-label="Developer Center home">
-        <img className="dev-center-logo" src="./sima-logo.png" alt="" />
+        <img className="dev-center-logo" src={portalAssetUrl("sima-logo.png")} alt="" />
         <span>Developer Center</span>
       </a>
       <nav className="dev-center-links" aria-label="Developer Center sections">
@@ -125,7 +132,7 @@ function CatalogPage({ catalog }) {
       <header className="hero">
         <div className="hero-copy">
           <div className="brand-row">
-            <img className="brand-logo" src="./sima-logo.png" alt="SiMa.ai" />
+            <img className="brand-logo" src={portalAssetUrl("sima-logo.png")} alt="SiMa.ai" />
             <p className="eyebrow">SiMa.ai NEAT Apps Portal</p>
           </div>
           <h1>Discover SiMa.ai Neat reference examples that expedite the path from proof of concept to product.</h1>
@@ -274,7 +281,7 @@ bash /tmp/install.sh`}</code>
 }
 
 function ExampleCard({ example }) {
-  const fallbackImage = `./category-assets/${slugTone(example.category)}.svg`;
+  const fallbackImage = portalAssetUrl(`category-assets/${slugTone(example.category)}.svg`);
   const displayName = formatDisplayLabel(example.name || example.binary_name || example.id);
   const summaryHtml = marked.parseInline(example.summary || "No summary available.");
 
