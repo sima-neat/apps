@@ -1,7 +1,7 @@
 foreach(example IN ITEMS
-    single-image-object-detector
+    detr-object-detector
     single-stream-object-detector
-    image-folder-object-detector
+    yolov8-object-detector
     yolo26-object-detector
 )
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/cpp/CMakeLists.txt")

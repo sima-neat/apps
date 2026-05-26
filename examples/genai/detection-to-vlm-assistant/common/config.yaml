@@ -3,7 +3,7 @@ source:
 
 model:
   path: assets/models/yolo_v8s_mpk.tar.gz
-  labels: examples/object-detection/image-folder-object-detector/common/coco_label.txt
+  labels: examples/object-detection/yolov8-object-detector/common/coco_label.txt
 
 inference:
   frames: 0

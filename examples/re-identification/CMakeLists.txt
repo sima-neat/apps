@@ -1,1 +1,1 @@
-add_subdirectory(person-re-identifier/cpp person-re-identifier)
+add_subdirectory(person-re-identification/cpp person-re-identification)
