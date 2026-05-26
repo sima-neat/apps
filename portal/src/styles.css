@@ -10,9 +10,10 @@
   --line: rgba(28, 47, 58, 0.12);
   --text: #1c1e21;
   --muted: #606770;
-  --accent: #1d5f73;
-  --accent-soft: rgba(29, 95, 115, 0.1);
-  --warm: #1d5f73;
+  --accent: #5998dd;
+  --accent-soft: rgba(89, 152, 221, 0.12);
+  --accent-glow: #5998dd;
+  --warm: #5998dd;
   --shadow: none;
 }
 
@@ -25,9 +26,10 @@
   --line: rgba(240, 246, 252, 0.14);
   --text: #f5f6f7;
   --muted: #b0b3b8;
-  --accent: #71c1d4;
-  --accent-soft: rgba(113, 193, 212, 0.16);
-  --warm: #71c1d4;
+  --accent: #8fc0f0;
+  --accent-soft: rgba(143, 192, 240, 0.18);
+  --accent-glow: #8fc0f0;
+  --warm: #8fc0f0;
   --shadow: none;
 }
 
@@ -227,7 +229,14 @@ select {
 .detail-shell {
   width: min(1280px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 24px 0 48px;
+  padding: 32px 0 48px;
+}
+
+#developer-center-shell + .portal-shell,
+#developer-center-shell + .detail-shell,
+.developer-center-fallback-shell + .portal-shell,
+.developer-center-fallback-shell + .detail-shell {
+  padding-top: 44px;
 }
 
 .hero,
@@ -252,27 +261,6 @@ select {
   color: var(--warm);
 }
 
-.brand-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-
-.brand-row .eyebrow {
-  margin: 0;
-}
-
-.brand-logo {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  object-fit: contain;
-  object-position: center;
-  border-radius: 0;
-  display: block;
-}
-
 .hero h1,
 .detail-hero h1 {
   margin: 0;
@@ -288,9 +276,7 @@ select {
   color: var(--text);
 }
 
-.hero-text,
-.search-meta,
-.detail-path {
+.hero-text {
   color: var(--muted);
 }
 
@@ -306,10 +292,10 @@ select {
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
   border-radius: 999px;
-  background: var(--panel-strong);
-  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-strong));
+  color: var(--accent);
   box-shadow: var(--shadow);
   cursor: pointer;
   transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
@@ -317,8 +303,8 @@ select {
 
 .hero-action:hover {
   transform: translateY(-2px);
-  border-color: rgba(14, 122, 109, 0.28);
-  background: rgba(14, 122, 109, 0.08);
+  border-color: color-mix(in srgb, var(--accent) 58%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel-strong));
 }
 
 .hero-action-icon {
@@ -335,13 +321,11 @@ select {
   height: 18px;
 }
 
-:root[data-theme="dark"] .hero-text,
-:root[data-theme="dark"] .search-meta,
-:root[data-theme="dark"] .detail-path {
+:root[data-theme="dark"] .hero-text {
   color: var(--muted);
 }
 
-.hero-search,
+.hero-stat,
 .detail-hero-card {
   display: flex;
   flex-direction: column;
@@ -350,6 +334,23 @@ select {
   border-radius: 8px;
   background: var(--panel-strong);
   border: 1px solid var(--line);
+}
+
+.hero-stat {
+  align-items: flex-start;
+  min-height: 134px;
+}
+
+.hero-stat span {
+  font-size: clamp(2.35rem, 5vw, 4rem);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.hero-stat p {
+  margin: 10px 0 0;
+  color: var(--muted);
 }
 
 .search-label,
@@ -493,8 +494,8 @@ select {
 .modal-close:hover {
   transform: translateY(-1px);
   color: var(--text);
-  border-color: rgba(14, 122, 109, 0.28);
-  background: rgba(14, 122, 109, 0.08);
+  border-color: color-mix(in srgb, var(--accent) 46%, transparent);
+  background: var(--accent-soft);
 }
 
 .modal-close svg {
@@ -514,7 +515,7 @@ select {
   border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
-  transition: transform 160ms ease, border-color 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 :root[data-theme="dark"] .app-card {
@@ -558,14 +559,22 @@ select {
 :root[data-theme="dark"] .empty-state,
 :root[data-theme="dark"] .hero,
 :root[data-theme="dark"] .detail-hero,
-:root[data-theme="dark"] .hero-search,
+:root[data-theme="dark"] .hero-stat,
 :root[data-theme="dark"] .detail-hero-card {
   background: var(--panel);
 }
 
 .app-card:hover {
-  transform: translateY(-4px);
-  border-color: rgba(14, 122, 109, 0.35);
+  border-color: color-mix(in srgb, var(--accent-glow) 72%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-glow) 48%, transparent),
+    0 0 24px color-mix(in srgb, var(--accent-glow) 36%, transparent);
+}
+
+.app-card:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 4px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-glow) 48%, transparent),
+    0 0 24px color-mix(in srgb, var(--accent-glow) 36%, transparent);
 }
 
 .card-image {
@@ -691,8 +700,8 @@ select {
 }
 
 .chip-status {
-  background: rgba(14, 122, 109, 0.12);
-  color: #0d675d;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .chip-languages {
@@ -722,13 +731,13 @@ select {
 
 .chip-github:hover {
   transform: translateY(-1px);
-  background: rgba(14, 122, 109, 0.12);
+  background: var(--accent-soft);
 }
 
 .chip-link:hover {
   transform: translateY(-1px);
-  background: rgba(14, 122, 109, 0.12);
-  color: #0d675d;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 :root[data-theme="dark"] .chip-model,
@@ -749,8 +758,8 @@ select {
 }
 
 :root[data-theme="dark"] .chip-link:hover {
-  background: rgba(14, 122, 109, 0.22);
-  color: #eef8f5;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .filter-panel,
@@ -801,14 +810,14 @@ select {
   line-height: 1;
   background: transparent;
   color: var(--accent);
-  border: 1px solid rgba(14, 122, 109, 0.18);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   box-shadow: none;
 }
 
 .icon-link:hover {
   transform: translateY(-1px);
-  border-color: rgba(14, 122, 109, 0.38);
-  background: rgba(14, 122, 109, 0.08);
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  background: var(--accent-soft);
 }
 
 .detail-topbar {
@@ -816,10 +825,6 @@ select {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 18px;
-}
-
-.detail-path {
-  font-size: 0.92rem;
 }
 
 .detail-layout {

@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import {
   extractFilterOptions,
@@ -327,7 +327,6 @@ function DeveloperCenterShellFallback({ theme, onToggleTheme }) {
 }
 
 function CatalogPage({ catalog }) {
-  const [query, setQuery] = useState("");
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [filters, setFilters] = useState({
     category: "",
@@ -337,21 +336,16 @@ function CatalogPage({ catalog }) {
     model: "",
     tag: "",
   });
-  const deferredQuery = useDeferredValue(query);
   const options = extractFilterOptions(catalog.examples);
-  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters, deferredQuery));
+  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters, ""));
 
   return (
     <div className="portal-shell">
       <header className="hero">
         <div className="hero-copy">
-          <div className="brand-row">
-            <img className="brand-logo" src={portalAssetUrl("sima-logo.png")} alt="SiMa.ai" />
-            <p className="eyebrow">Examples</p>
-          </div>
-          <h1>Neat examples</h1>
+          <h1>Neat Examples</h1>
           <p className="hero-text">
-            Search reference applications by category, model, tag, and runtime notes.
+            Learn how to build production-grade applications by exploring these examples.
           </p>
           <div className="hero-actions">
             <a className="hero-action" href="https://github.com/sima-neat/apps" target="_blank" rel="noreferrer">
@@ -378,16 +372,9 @@ function CatalogPage({ catalog }) {
             </button>
           </div>
         </div>
-        <div className="hero-search">
-          <input
-            id="catalog-search"
-            className="search-input"
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by app name, tag, model, or category"
-          />
-          <p className="search-meta">{filtered.length} of {catalog.examples.length} examples</p>
+        <div className="hero-stat">
+          <span>{filtered.length}</span>
+          <p>{filtered.length === catalog.examples.length ? "examples" : `of ${catalog.examples.length} examples`}</p>
         </div>
       </header>
 
@@ -398,8 +385,8 @@ function CatalogPage({ catalog }) {
           ))}
           {filtered.length === 0 ? (
             <div className="empty-state">
-              <h2>No examples matched the current search.</h2>
-              <p>Try clearing a filter or using a broader search term.</p>
+              <h2>No examples matched the current filters.</h2>
+              <p>Try clearing a filter.</p>
             </div>
           ) : null}
         </main>
@@ -536,9 +523,6 @@ function DetailPage({ catalog }) {
   const modelLabel = example?.model || "";
   const modelUrl = example?.model_url || "";
   const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
-  const pathLabel = decodedId
-    .split("/")
-    .join(" / ");
   const docPanelRef = useRef(null);
   const [activeSection, setActiveSection] = useState(sections[0]?.slug || "");
 
@@ -620,7 +604,6 @@ function DetailPage({ catalog }) {
         >
           <span aria-hidden="true">⌂</span>
         </button>
-        <div className="detail-path">{pathLabel}</div>
       </div>
 
       <section className="detail-hero">
