@@ -1,1 +1,1 @@
-add_subdirectory(instance-overlay/cpp instance-overlay)
+add_subdirectory(instance-segmenter/cpp instance-segmenter)

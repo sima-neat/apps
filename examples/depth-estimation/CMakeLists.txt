@@ -1,1 +1,1 @@
-add_subdirectory(depth-map-generation/cpp depth-map-generation)
+add_subdirectory(image-folder-depth-estimator/cpp image-folder-depth-estimator)

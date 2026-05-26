@@ -1,0 +1,17 @@
+model:
+  path: assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz
+io:
+  image: assets/test_images/input.jpg
+  output: sandbox/face-detector/output.png
+decode:
+  confidence_threshold: 0.40
+  nms_iou: 0.90
+  top_k: 5000
+  keep_top_k: 750
+  max_draw: 50
+  landmarks: true
+runtime:
+  timeout_ms: 5000
+  profile: false
+  num_runs: 100
+  verbose: false
