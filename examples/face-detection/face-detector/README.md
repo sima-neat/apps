@@ -1,0 +1,165 @@
+# Face Detector
+
+## Metadata
+| Field | Value |
+| --- | --- |
+| Category | face-detection |
+| Difficulty | Beginner |
+| Tags | retinaface, face-detection |
+| Languages | C++, Python |
+| Status | experimental |
+| Binary Name | face-detector |
+| Model | retinaface_mobilenet25 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz] |
+
+## Concept
+This example demonstrates single-image face detection with **RetinaFace**, a one-stage dense detector designed for robust face localization across pose, scale, and occlusion conditions.
+
+RetinaFace predicts:
+- Face bounding boxes
+- Face confidence scores
+- Five facial landmarks (left eye, right eye, nose tip, left mouth corner, right mouth corner)
+
+Compared with generic object detectors, RetinaFace is specialized for facial geometry and alignment-sensitive tasks. Landmark outputs make it useful not only for drawing detection overlays, but also for downstream steps such as face alignment, tracking initialization, quality filtering, and recognition pre-processing.
+
+In this app, the compiled `retinaface_mobilenet25` package is run on an input image, raw outputs are decoded into candidate detections, low-confidence candidates are filtered, overlapping boxes are merged with Non-Maximum Suppression (NMS), and the final boxes/landmarks are rendered to an output image.
+
+## Preview
+Snippet from a pipeline run:
+
+![Face detector preview](../../../assets/portal/face-detection/face-detector/image.png)
+
+## Supported Models
+Validated with: `retinaface_mobilenet25`
+
+Download into `assets/models/`:
+- `./scripts/download_models.sh retinaface_mobilenet25`
+
+## Prerequisites
+- Installed Neat SDK.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Preferred download command: `./scripts/download_models.sh retinaface_mobilenet25`
+- Direct URL fallback:
+  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
+
+## Important Behavior
+- C++ and Python read runtime values from `common/config.yaml`.
+- Detection confidence and NMS IoU live under `decode`.
+- By default, detections include 5-point facial landmarks unless `decode.landmarks` is `false`.
+
+## Command-Line Options
+### C++
+- Invocation:
+  `./build/examples/face-detection/face-detector_cpp/face-detector [--config <path>]`
+- Optional arguments:
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+
+### Python
+- Invocation:
+  `python3 examples/face-detection/face-detector/python/main.py [--config <path>]`
+- Optional arguments:
+  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+
+## Build
+### Build From The Apps Repo
+```bash
+cd <apps-repo-root>
+./build.sh
+```
+
+Binary output:
+```bash
+./build/examples/face-detection/face-detector_cpp/face-detector
+```
+
+### Build This Example Directly With CMake
+```bash
+cd <apps-repo-root>/examples/face-detection/face-detector
+cmake -S cpp -B build
+cmake --build build -j
+```
+
+Binary output:
+```bash
+./build/face-detector
+```
+
+## Run
+### C++
+```bash
+./build/examples/face-detection/face-detector_cpp/face-detector
+```
+
+### Python
+```bash
+source ~/pyneat/bin/activate
+pip install -r examples/face-detection/face-detector/python/requirements.txt
+python3 examples/face-detection/face-detector/python/main.py
+```
+
+## Testing
+Run from the apps repository root:
+
+```bash
+cd <apps-repo-root>
+```
+
+### C++
+Unit test:
+```bash
+ctest --test-dir build/examples/face-detection/face-detector_cpp \
+  -R 'face-detector.unit' --output-on-failure -V
+```
+
+E2E test:
+```bash
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp \
+SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
+ctest --test-dir build/examples/face-detection/face-detector_cpp \
+  -R 'face-detector.e2e' --output-on-failure -V
+```
+
+### Python
+Unit test:
+```bash
+source ~/pyneat/bin/activate
+pip install -r examples/face-detection/face-detector/python/requirements.txt
+pip install pytest
+export PYTHONPATH="$PWD"
+pytest -c tests/pytest.ini --rootdir="$PWD" -m unit \
+  examples/face-detection/face-detector/python/tests/test_unit.py -v
+```
+
+E2E test:
+```bash
+source ~/pyneat/bin/activate
+pip install -r examples/face-detection/face-detector/python/requirements.txt
+pip install pytest
+export PYTHONPATH="$PWD"
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp/retinaface-python-e2e \
+SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
+SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
+pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
+  examples/face-detection/face-detector/python/tests/test_e2e.py -v
+```
+
+Notes:
+- Use an absolute path for `SIMANEAT_APPS_TEST_MODELS_DIR` in Python e2e. The test runs `main.py` with `cwd` set to the example directory.
+- `SIMANEAT_APPS_TEST_INPUT_DIR` is supported by both C++ and Python e2e tests.
+- If `SIMANEAT_APPS_TEST_INPUT_DIR` is not set, both e2e tests fall back to `assets/test_images`.
+- RetinaFace e2e prefers an image filename containing `face` when present, then falls back to the first available image in the input directory.
+
+## Debugging Notes
+- If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.
+- If no detections appear, lower `decode.confidence_threshold` and confirm the input actually contains faces.
+- If too many duplicate boxes appear, reduce `decode.nms_iou` and/or lower `decode.top_k`.
+- If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.
+
+## Source Files
+- C++ source: `cpp/main.cpp`
+- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- Python source: `python/main.py`
+- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`

@@ -1,1 +1,1 @@
-add_subdirectory(simple-re-identification-pipeline/cpp simple-re-identification-pipeline)
+add_subdirectory(person-re-identification/cpp person-re-identification)

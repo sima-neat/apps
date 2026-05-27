@@ -19,7 +19,7 @@ def _files_requiring_pinned_modelzoo_calls() -> list[Path]:
         APPS_ROOT
         / "examples"
         / "object-detection"
-        / "single-rtsp-object-detection-insight"
+        / "single-stream-object-detector"
         / "python"
         / "main.py"
     )
