@@ -329,7 +329,7 @@ preflight_e2e_env() {
   fi
   if [[ -z "${rtsp_url}" && -z "${rtsp_urls}" ]]; then
     echo "  [WARN] no RTSP env configured; RTSP e2e tests will skip."
-    echo "  [WARN] RTSP e2e tests: single-rtsp-object-detection-insight, multistream-object-detection-insight."
+    echo "  [WARN] RTSP e2e tests: single-stream-object-detector, multi-stream-object-detector."
     echo "  [WARN] make sure RTSP source(s) are running before e2e. If you want a quick setup, tool-mediasources on the host is one option:"
     echo "         sima-cli install gh:sima-ai/tool-mediasources"
     echo "         open preview.html"

@@ -115,7 +115,7 @@ export APPS_ROOT=/path/to/sima-neat/apps
 cd "${APPS_ROOT}/build"
 
 ctest -N
-ctest -R "single-rtsp-object-detection-insight\.metadata_json_e2e" --verbose
+ctest -R "single-stream-object-detector\.metadata_json_e2e" --verbose
 ```
 
 ### Python (pytest)
@@ -125,7 +125,7 @@ export APPS_ROOT=/path/to/sima-neat/apps
 cd "${APPS_ROOT}"
 
 python3 -m pytest \
-  examples/object-detection/multistream-object-detection-insight/python/tests/test_unit.py::TestMainEntrypoint::test_missing_config_file_fails_cleanly \
+  examples/object-detection/multi-stream-object-detector/python/tests/test_unit.py::TestMainEntrypoint::test_missing_config_file_fails_cleanly \
   -v
 ```
 
@@ -148,8 +148,8 @@ python3 -m pytest \
 
 RTSP e2e tests require live reachable RTSP streams at test time:
 
-- `single-rtsp-object-detection-insight` (C++/Python)
-- `multistream-object-detection-insight` (C++/Python)
+- `single-stream-object-detector` (C++/Python)
+- `multi-stream-object-detector` (C++/Python)
 
 Any RTSP source works. If streams are host-served, use the host IP in the RTSP
 URLs instead of `127.0.0.1`.

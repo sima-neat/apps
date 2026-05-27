@@ -1,5 +1,5 @@
 foreach(example IN ITEMS
-    yolov8-detections-to-gemma3
+    detection-to-vlm-assistant
 )
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/cpp/CMakeLists.txt")
     add_subdirectory(${example}/cpp ${example})
