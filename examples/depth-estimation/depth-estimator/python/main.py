@@ -101,7 +101,11 @@ def main() -> int:
         run_opt = pyneat.RunOptions()
         run_opt.queue_depth = queue_depth
         run_opt.overflow_policy = pyneat.OverflowPolicy.Block
-        runner = model.build(t_dummy, run_options=run_opt)
+        runner = model.build(
+            [t_dummy],
+            route_options=pyneat.ModelRouteOptions(),
+            run_options=run_opt,
+        )
 
         processed = 0
         for img_path in images:
@@ -115,7 +119,7 @@ def main() -> int:
             rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
             t_in = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
 
-            outputs = runner.run(t_in, timeout_ms=timeout_ms)
+            outputs = runner.run([t_in], timeout_ms=timeout_ms)
             if not outputs:
                 print(f"No output tensors for {img_path.name}", file=sys.stderr)
                 continue
