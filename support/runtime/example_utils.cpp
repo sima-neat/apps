@@ -355,11 +355,14 @@ bool probe_rtsp_decoded_dims(const std::string& url, const RtspProbeOptions& opt
   bool ok = false;
   for (int i = 0; i < tries; ++i) {
     auto out = run.pull(timeout_ms);
-    if (!out.has_value() || !out->tensor.has_value())
+    if (!out.has_value())
+      continue;
+    const auto tensors = simaai::neat::tensors_from_sample(*out, false);
+    if (tensors.empty())
       continue;
     int w = 0;
     int h = 0;
-    if (sima_examples::infer_dims(out->tensor.value(), w, h) && w > 0 && h > 0) {
+    if (sima_examples::infer_dims(tensors.front(), w, h) && w > 0 && h > 0) {
       out_w = w;
       out_h = h;
       ok = true;
