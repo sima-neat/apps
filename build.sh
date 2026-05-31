@@ -7,7 +7,7 @@ APPS_MANIFEST="${DEPS_DIR}/manifest.json"
 NEAT_DEBS_DIR="${DEPS_DIR}/debs"
 NEAT_CORE_MARKER="${DEPS_DIR}/.neat_core"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
-NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.sima-neat.com/core}"
+NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
 LATEST_TAG_CACHE_DIR="$(mktemp -d /tmp/neat-apps-latest.XXXXXX)"
 
 cleanup_latest_tag_cache() {
