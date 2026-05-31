@@ -3,7 +3,7 @@
 #include "asset_utils.h"
 #include "support/object_detection/obj_detection_utils.h"
 
-#include "neat/session.h"
+#include <neat.h>
 #include "neat/nodes.h"
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -259,7 +259,7 @@ bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
                             RtspStreamInfo& out) {
   out = RtspStreamInfo{};
 
-  simaai::neat::Session probe;
+  simaai::neat::Graph probe;
   probe.add(simaai::neat::nodes::RTSPInput(url, opt.latency_ms, opt.rtsp_tcp,
                                            /*drop_on_latency=*/true, /*buffer_mode=*/"none"));
   probe.add(simaai::neat::nodes::H264Depacketize(opt.payload_type,
@@ -294,7 +294,7 @@ bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
 
 bool probe_rtsp_encoded(const std::string& url, const RtspProbeOptions& opt, int fps, int w, int h,
                         int tries, int timeout_ms, bool enforce_caps) {
-  simaai::neat::Session probe;
+  simaai::neat::Graph probe;
   probe.add(simaai::neat::nodes::RTSPInput(url, opt.latency_ms, opt.rtsp_tcp,
                                            /*drop_on_latency=*/true, /*buffer_mode=*/"none"));
   probe.add(simaai::neat::nodes::H264Depacketize(opt.payload_type,
@@ -327,7 +327,7 @@ bool probe_rtsp_decoded_dims(const std::string& url, const RtspProbeOptions& opt
   out_w = 0;
   out_h = 0;
 
-  simaai::neat::Session probe;
+  simaai::neat::Graph probe;
   probe.add(simaai::neat::nodes::RTSPInput(url, opt.latency_ms, opt.rtsp_tcp,
                                            /*drop_on_latency=*/true, /*buffer_mode=*/"none"));
   probe.add(simaai::neat::nodes::H264Depacketize(opt.payload_type,
