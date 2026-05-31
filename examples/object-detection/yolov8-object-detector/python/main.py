@@ -155,7 +155,7 @@ def main() -> int:
                 memory=pyneat.TensorMemory.EV74,
             )
 
-            outputs = model.run(t_in, timeout_ms=timeout_ms)
+            outputs = model.run([t_in], timeout_ms=timeout_ms)
             if not outputs:
                 print(f"Model returned no output for {img_path.name}", file=sys.stderr)
                 continue
