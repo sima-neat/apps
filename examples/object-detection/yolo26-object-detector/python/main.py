@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import struct
 import sys
 import time
 from pathlib import Path
@@ -10,7 +11,6 @@ from pathlib import Path
 import yaml
 
 
-INFER_SIZE = 640
 MIN_SCORE = 0.25
 NMS_IOU = 0.45
 MAX_DET = 100
@@ -34,99 +34,36 @@ def load_labels(path: Path) -> list[str]:
     return labels
 
 
-def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
-    return np.asarray(t.to_numpy(copy=True))
+def extract_bbox_payload_from_tensors(tensors) -> bytes | None:
+    if len(tensors) != 1:
+        return None
+    for tensor in tensors:
+        try:
+            payload = tensor.copy_payload_bytes()
+        except Exception:
+            continue
+        if payload:
+            return payload
+    return None
 
 
-def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
-    arr = tensor_to_numpy(t).astype(np.float32)
-    if arr.ndim == 4 and arr.shape[0] == 1:
-        arr = arr[0]
-    if arr.ndim != 3:
-        raise ValueError(f"unexpected tensor rank {arr.ndim}")
-    return arr
-
-
-def nms_numpy(boxes_xyxy: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
-    """Vectorized NMS. boxes_xyxy shape (N,4), scores shape (N,). Returns kept indices."""
-    x1, y1, x2, y2 = boxes_xyxy[:, 0], boxes_xyxy[:, 1], boxes_xyxy[:, 2], boxes_xyxy[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
-        iou = inter / (areas[i] + areas[order[1:]] - inter)
-        order = order[1:][iou <= iou_threshold]
-    return np.array(keep, dtype=np.intp)
-
-
-def decode_yolo26m_boxes_from_tensors(
-    tensors, infer_size: int, min_score: float, nms_iou: float, max_detections: int,
-) -> list[dict]:
-    if len(tensors) < 6:
-        raise ValueError(f"expected at least 6 tensors, got {len(tensors)}")
-    regs = [tensor_to_hwc_f32(tensors[i]) for i in range(3)]
-    clss = [tensor_to_hwc_f32(tensors[i]) for i in range(3, 6)]
-
-    boxes_by_level = []
-    probs_by_level = []
-    for level, (reg, cls) in enumerate(zip(regs, clss)):
-        if reg.shape[2] != 4:
-            raise ValueError(f"expected 4-channel regression tensor, got {reg.shape[2]}")
-        if reg.shape[:2] != cls.shape[:2]:
-            raise ValueError("regression/class spatial mismatch")
-        boxes_by_level.append(reg.reshape(-1, reg.shape[2]))
-        probs_by_level.append(
-            np.clip(
-                cls.reshape(-1, cls.shape[2]),
-                0.0,
-                1.0,
-            )
-        )
-
-    all_boxes = np.concatenate(boxes_by_level, axis=0)
-    all_probs = np.concatenate(probs_by_level, axis=0)
-
-    # Vectorized confidence filter (scores are already post-sigmoid).
-    max_scores = all_probs.max(axis=1)
-    mask = max_scores > min_score
-    all_boxes = all_boxes[mask]
-    all_probs = all_probs[mask]
-    max_scores = max_scores[mask]
-
-    if len(all_boxes) == 0:
+def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, min_score: float) -> list[dict]:
+    if len(payload) < 4:
         return []
-
-    class_ids = all_probs.argmax(axis=1)
-
-    # (cx, cy, w, h) → (x1, y1, x2, y2)
-    boxes_xyxy = np.empty_like(all_boxes)
-    boxes_xyxy[:, 0] = all_boxes[:, 0] - all_boxes[:, 2] / 2.0
-    boxes_xyxy[:, 1] = all_boxes[:, 1] - all_boxes[:, 3] / 2.0
-    boxes_xyxy[:, 2] = all_boxes[:, 0] + all_boxes[:, 2] / 2.0
-    boxes_xyxy[:, 3] = all_boxes[:, 1] + all_boxes[:, 3] / 2.0
-    np.clip(boxes_xyxy[:, [0, 2]], 0, infer_size, out=boxes_xyxy[:, [0, 2]])
-    np.clip(boxes_xyxy[:, [1, 3]], 0, infer_size, out=boxes_xyxy[:, [1, 3]])
-
-    # Vectorized NMS.
-    keep_idx = nms_numpy(boxes_xyxy, max_scores, nms_iou)
-    if len(keep_idx) > max_detections:
-        keep_idx = keep_idx[:max_detections]
-
-    result = []
-    for i in keep_idx:
-        result.append(dict(
-            x1=float(boxes_xyxy[i, 0]), y1=float(boxes_xyxy[i, 1]),
-            x2=float(boxes_xyxy[i, 2]), y2=float(boxes_xyxy[i, 3]),
-            score=float(max_scores[i]), class_id=int(class_ids[i]),
-        ))
-    return result
+    count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24)
+    out = []
+    off = 4
+    for _ in range(count):
+        x, y, w, h, score, cls_id = struct.unpack_from("<iiiifi", payload, off)
+        off += 24
+        x1 = max(0.0, min(float(img_w), float(x)))
+        y1 = max(0.0, min(float(img_h), float(y)))
+        x2 = max(0.0, min(float(img_w), float(x + w)))
+        y2 = max(0.0, min(float(img_h), float(y + h)))
+        if x2 <= x1 or y2 <= y1 or float(score) < min_score:
+            continue
+        out.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(score), class_id=int(cls_id)))
+    return out
 
 
 def draw_boxes(frame: np.ndarray, boxes: list[dict], labels: list[str]) -> np.ndarray:
@@ -143,19 +80,6 @@ def draw_boxes(frame: np.ndarray, boxes: list[dict], labels: list[str]) -> np.nd
         cv2.rectangle(frame, (x1, y1 - th - 4), (x1 + tw, y1), color, -1)
         cv2.putText(frame, text, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
     return frame
-
-
-def scale_boxes(boxes: list[dict], from_size: int, to_w: int, to_h: int) -> list[dict]:
-    sx = to_w / float(from_size)
-    sy = to_h / float(from_size)
-    scaled = []
-    for b in boxes:
-        scaled.append(dict(
-            x1=b["x1"] * sx, y1=b["y1"] * sy,
-            x2=b["x2"] * sx, y2=b["y2"] * sy,
-            score=b["score"], class_id=b["class_id"],
-        ))
-    return scaled
 
 
 def load_config(path: Path) -> dict:
@@ -231,16 +155,22 @@ def main() -> int:
     try:
         opt = pyneat.ModelOptions()
         opt.preprocess.kind = pyneat.InputKind.Image
+        opt.preprocess.enable = pyneat.AutoFlag.On
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
-        opt.preprocess.input_max_width = INFER_SIZE
-        opt.preprocess.input_max_height = INFER_SIZE
-        opt.preprocess.input_max_depth = 3
+        opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+        opt.decode_type = pyneat.BoxDecodeType.YoloV26
+        opt.score_threshold = min_score
+        opt.nms_iou_threshold = nms_iou
+        opt.top_k = max_detections
         model = pyneat.Model(model_path, opt)
 
         # Warmup inference to stabilize timing before profiling.
-        dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
+        seed = cv2.imread(str(images[0]), cv2.IMREAD_COLOR)
+        if seed is None:
+            print(f"Error: failed to read build seed image: {images[0].name}", file=sys.stderr)
+            return 4
         t_dummy = pyneat.Tensor.from_numpy(
-            dummy,
+            np.ascontiguousarray(seed, dtype=np.uint8),
             copy=True,
             image_format=pyneat.PixelFormat.BGR,
             memory=pyneat.TensorMemory.EV74,
@@ -249,8 +179,12 @@ def main() -> int:
         run_opt.queue_depth = 8
         run_opt.overflow_policy = pyneat.OverflowPolicy.Block
         run_opt.preset = pyneat.RunPreset.Balanced
-        runner = model.build(t_dummy, run_options=run_opt)
-        runner.run(t_dummy, timeout_ms=timeout_ms)
+        runner = model.build(
+            [t_dummy],
+            route_options=pyneat.ModelRouteOptions(),
+            run_options=run_opt,
+        )
+        runner.run([t_dummy], timeout_ms=timeout_ms)
         print("[WARMUP] done")
 
         all_images = images * num_runs
@@ -269,25 +203,23 @@ def main() -> int:
                 continue
 
             orig_h, orig_w = bgr.shape[:2]
-            resized = cv2.resize(bgr, (INFER_SIZE, INFER_SIZE), interpolation=cv2.INTER_LINEAR)
-            resized = np.ascontiguousarray(resized, dtype=np.uint8)
             t_in = pyneat.Tensor.from_numpy(
-                resized,
+                np.ascontiguousarray(bgr, dtype=np.uint8),
                 copy=True,
                 image_format=pyneat.PixelFormat.BGR,
                 memory=pyneat.TensorMemory.EV74,
             )
 
             infer_start = time.perf_counter()
-            out = runner.run(t_in, timeout_ms=timeout_ms)
+            out = runner.run([t_in], timeout_ms=timeout_ms)
             infer_end = time.perf_counter()
 
-            boxes = decode_yolo26m_boxes_from_tensors(
-                out, INFER_SIZE, min_score, nms_iou, max_detections,
-            )
+            payload = extract_bbox_payload_from_tensors(out)
+            if not payload:
+                print(f"Model returned no BBOX payload for {img_path.name}", file=sys.stderr)
+                continue
+            boxes = parse_bbox_payload(payload, orig_w, orig_h, min_score)
             decode_end = time.perf_counter()
-
-            boxes = scale_boxes(boxes, INFER_SIZE, orig_w, orig_h)
 
             if overlay:
                 draw_boxes(bgr, boxes, labels)
