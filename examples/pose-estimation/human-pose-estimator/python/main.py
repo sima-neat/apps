@@ -31,22 +31,6 @@ def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
 
-def iter_tensors(sample: pyneat.Sample):
-    if isinstance(sample, (list, tuple)):
-        for item in sample:
-            yield from iter_tensors(item)
-        return
-    if isinstance(sample, pyneat.Tensor):
-        yield sample
-        return
-    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
-        yield sample.tensor
-    for tensor in getattr(sample, "tensors", []):
-        yield tensor
-    for field in getattr(sample, "fields", []):
-        yield from iter_tensors(field)
-
-
 def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
     arr = tensor_to_numpy(t).astype(np.float32)
     if arr.ndim == 4 and arr.shape[0] == 1:
@@ -54,6 +38,20 @@ def tensor_to_hwc_f32(t: pyneat.Tensor) -> np.ndarray:
     if arr.ndim != 3:
         raise ValueError(f"unexpected tensor rank {arr.ndim}")
     return arr
+
+
+def normalize_pose_decoder_tensors(
+    heatmap_tensor: np.ndarray, paf_tensor: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    body_heatmap_max = float(np.max(heatmap_tensor[:, :, :18]))
+    if body_heatmap_max > 0.0:
+        heatmap_tensor = heatmap_tensor / body_heatmap_max
+
+    paf_abs_max = float(np.max(np.abs(paf_tensor)))
+    if paf_abs_max > 0.0:
+        paf_tensor = paf_tensor / paf_abs_max
+
+    return heatmap_tensor, paf_tensor
 
 
 def letterbox(img: np.ndarray, new_shape: tuple[int, int], color=(128, 128, 128)):
@@ -73,7 +71,7 @@ def letterbox(img: np.ndarray, new_shape: tuple[int, int], color=(128, 128, 128)
     left = int(math.floor(pad_w / 2.0))
     right = pad_w - left
     
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
     return img, r, left, top
 
 
@@ -388,9 +386,11 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
 
         model = pyneat.Model(cfg.model.path, opt)
 
-        sess = pyneat.Session()
-        sess.add(model.session())
-        print(f"[BUILD] Pipeline:\n{sess.describe_backend()}")
+        route_options = pyneat.ModelRouteOptions()
+        route_options.include_input = True
+        route_options.include_output = True
+        graph = pyneat.Graph()
+        graph.add(model.graph(route_options))
 
         dummy = np.zeros((cfg.runtime.infer_size, cfg.runtime.infer_size, 3), dtype=np.uint8)
         t_dummy = pyneat.Tensor.from_numpy(
@@ -399,7 +399,9 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
             image_format=pyneat.PixelFormat.BGR,
             memory=pyneat.TensorMemory.EV74,
         )
-        run = sess.build(t_dummy, pyneat.RunMode.Async)
+        print("[BUILD] Building pipeline...")
+        run = graph.build([t_dummy], pyneat.RunMode.Async)
+        print("[BUILD] Pipeline built")
 
         processed = 0
         total_e2e_time = 0.0
@@ -413,8 +415,6 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
                 print(f"Skipping unreadable: {img_path.name}", file=sys.stderr)
                 continue
 
-            orig_h, orig_w = bgr.shape[:2]
-            
             resized, r, pad_l, pad_t = letterbox(
                 bgr, (cfg.runtime.infer_size, cfg.runtime.infer_size)
             )
@@ -428,13 +428,11 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
             )
 
             infer_start = time.perf_counter()
-            out_opt = run.run(t_in, timeout_ms=cfg.runtime.timeout_ms)
+            tensors = run.run([t_in], timeout_ms=cfg.runtime.timeout_ms)
             infer_end = time.perf_counter()
-            if out_opt is None:
+            if not tensors:
                 print(f"Inference failed for {img_path.name}", file=sys.stderr)
                 continue
-            
-            tensors = list(iter_tensors(out_opt))
             
             # Validate that the model output contains the expected tensors
             if len(tensors) < 2:
@@ -444,8 +442,12 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
                     file=sys.stderr,
                 )
                 continue
-            heatmap_tensor = tensor_to_hwc_f32(tensors[0])
-            paf_tensor = tensor_to_hwc_f32(tensors[1])
+            decoded_tensors = [tensor_to_hwc_f32(tensor) for tensor in tensors]
+            heatmap_tensor = next((tensor for tensor in decoded_tensors if tensor.shape[2] == 19), None)
+            paf_tensor = next((tensor for tensor in decoded_tensors if tensor.shape[2] == 38), None)
+            if heatmap_tensor is None or paf_tensor is None:
+                print("Expected heatmap and PAF tensors with 19 and 38 channels", file=sys.stderr)
+                continue
 
             heatmap_tensor = cv2.resize(
                 heatmap_tensor,
@@ -460,6 +462,9 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
                 fx=cfg.runtime.upsample_factor,
                 fy=cfg.runtime.upsample_factor,
                 interpolation=cv2.INTER_CUBIC,
+            )
+            heatmap_tensor, paf_tensor = normalize_pose_decoder_tensors(
+                heatmap_tensor, paf_tensor
             )
 
 

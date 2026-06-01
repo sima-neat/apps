@@ -11,10 +11,10 @@ runtime:
   upsample_factor: 4.0
 
 decode:
-  keypoint_score: 0.1
+  keypoint_score: 0.04
   nms_radius: 6
-  paf_score: 0.05
-  paf_success_ratio: 0.8
+  paf_score: 0.02
+  paf_success_ratio: 0.55
   paf_samples: 10
-  min_valid_joints: 3
-  min_avg_person_score: 0.2
+  min_valid_joints: 5
+  min_avg_person_score: 0.15

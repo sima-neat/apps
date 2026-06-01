@@ -21,7 +21,6 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
-#include <numeric>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -148,30 +147,6 @@ bool is_image(const fs::path& p) {
   return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp");
 }
 
-std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
-  if (sample.kind == simaai::neat::SampleKind::Tensor) {
-    if (!sample.tensor.has_value()) {
-      throw std::runtime_error("tensor sample missing payload");
-    }
-    return {*sample.tensor};
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
-    return sample.tensors;
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    std::vector<simaai::neat::Tensor> out;
-    for (const auto& field : sample.fields) {
-      auto child = collect_tensors(field);
-      out.insert(out.end(), child.begin(), child.end());
-    }
-    return out;
-  }
-
-  throw std::runtime_error("unexpected sample kind");
-}
-
 TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
   if (t.dtype != simaai::neat::TensorDType::Float32) {
     throw std::runtime_error("expected Float32 tensor");
@@ -268,6 +243,32 @@ TensorHWC upsample_tensor(const TensorHWC& src, float factor) {
   // Single bicubic resize over all channels.
   cv::resize(src_mat, dst_mat, dst_mat.size(), 0, 0, cv::INTER_CUBIC);
   return dst;
+}
+
+void normalize_pose_decoder_tensors(TensorHWC& heatmap, TensorHWC& paf) {
+  float body_heatmap_max = 0.0f;
+  for (int y = 0; y < heatmap.h; ++y) {
+    for (int x = 0; x < heatmap.w; ++x) {
+      for (int c = 0; c < kNumParts; ++c) {
+        body_heatmap_max = std::max(body_heatmap_max, heatmap.at(y, x, c));
+      }
+    }
+  }
+  if (body_heatmap_max > 0.0f) {
+    for (float& value : heatmap.data) {
+      value /= body_heatmap_max;
+    }
+  }
+
+  float paf_abs_max = 0.0f;
+  for (const float value : paf.data) {
+    paf_abs_max = std::max(paf_abs_max, std::abs(value));
+  }
+  if (paf_abs_max > 0.0f) {
+    for (float& value : paf.data) {
+      value /= paf_abs_max;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -650,14 +651,16 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(model_path, model_opt);
 
-    simaai::neat::Session session;
-    session.add(model.session());
-    std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
+    simaai::neat::Model::RouteOptions route_opt;
+    route_opt.include_input = true;
+    route_opt.include_output = true;
+    simaai::neat::Graph graph;
+    graph.add(model.graph(route_opt));
 
     cv::Mat dummy_bgr(cfg.runtime.infer_size, cfg.runtime.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
         dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, simaai::neat::TensorMemory::EV74);
-    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
+    auto run = graph.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
 
     int processed = 0;
     double total_e2e_time = 0.0;
@@ -674,33 +677,39 @@ int main(int argc, char** argv) {
 
       auto lb = letterbox(bgr, cfg.runtime.infer_size);
 
+      auto infer_start = std::chrono::high_resolution_clock::now();
       simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
           lb.img, simaai::neat::ImageSpec::PixelFormat::BGR, simaai::neat::TensorMemory::EV74);
-
-      auto infer_start = std::chrono::high_resolution_clock::now();
-      if (!run.push(simaai::neat::TensorList{input})) {
-        std::cerr << "Push failed for: " << image_path.filename() << "\n";
-        continue;
-      }
-      auto out = run.pull(cfg.runtime.timeout_ms);
+      const auto tensors = run.run(simaai::neat::TensorList{input}, cfg.runtime.timeout_ms);
       auto infer_end = std::chrono::high_resolution_clock::now();
-      if (!out.has_value()) {
-        std::cerr << "Pull timeout for: " << image_path.filename() << "\n";
-        continue;
-      }
-
-      const auto tensors = collect_tensors(*out);
       if (tensors.size() < 2) {
         std::cerr << "Expected at least 2 tensors, got " << tensors.size() << "\n";
         continue;
       }
 
-      TensorHWC heatmap = tensor_to_hwc_f32(tensors[0]);
-      TensorHWC paf = tensor_to_hwc_f32(tensors[1]);
+      TensorHWC heatmap;
+      TensorHWC paf;
+      bool has_heatmap = false;
+      bool has_paf = false;
+      for (const auto& tensor : tensors) {
+        TensorHWC decoded = tensor_to_hwc_f32(tensor);
+        if (decoded.c == 19) {
+          heatmap = std::move(decoded);
+          has_heatmap = true;
+        } else if (decoded.c == 38) {
+          paf = std::move(decoded);
+          has_paf = true;
+        }
+      }
+      if (!has_heatmap || !has_paf) {
+        std::cerr << "Expected heatmap and PAF tensors with 19 and 38 channels\n";
+        continue;
+      }
 
       // Upsample by configured factor using bicubic interpolation
       heatmap = upsample_tensor(heatmap, static_cast<float>(cfg.runtime.upsample_factor));
       paf = upsample_tensor(paf, static_cast<float>(cfg.runtime.upsample_factor));
+      normalize_pose_decoder_tensors(heatmap, paf);
 
       // Extract keypoints and group into people
       std::vector<Keypoint> raw_kpts =
