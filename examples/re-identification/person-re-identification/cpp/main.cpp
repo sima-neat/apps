@@ -17,7 +17,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -132,30 +131,6 @@ float read_elem(const uint8_t* data, size_t idx, simaai::neat::TensorDType dtype
     return static_cast<float>(reinterpret_cast<const double*>(data)[idx]);
   }
   return 0.0f;
-}
-
-std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
-  if (sample.kind == simaai::neat::SampleKind::Tensor) {
-    if (!sample.tensor.has_value()) {
-      throw std::runtime_error("tensor sample missing payload");
-    }
-    return {*sample.tensor};
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
-    return sample.tensors;
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    std::vector<simaai::neat::Tensor> out;
-    for (const auto& field : sample.fields) {
-      auto child = collect_tensors(field);
-      out.insert(out.end(), child.begin(), child.end());
-    }
-    return out;
-  }
-
-  throw std::runtime_error("unexpected sample kind");
 }
 
 std::vector<float> tensor_to_float_vector(const simaai::neat::Tensor& t) {
@@ -372,8 +347,9 @@ void print_profile(double infer_a_s, double infer_b_s, double total_s) {
             << total_s * 1000.0 << " ms\n";
 }
 
-std::vector<float> run_inference_embedding(simaai::neat::Run& run, const fs::path& image_path,
-                                           int timeout_ms, double& infer_time_s) {
+std::vector<float> run_inference_embedding(simaai::neat::Model::Runner& runner,
+                                           const fs::path& image_path, int timeout_ms,
+                                           double& infer_time_s) {
   cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
   if (bgr.empty()) {
     throw std::runtime_error("Cannot read image: " + image_path.string());
@@ -384,22 +360,14 @@ std::vector<float> run_inference_embedding(simaai::neat::Run& run, const fs::pat
       preprocessed, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
 
   const auto t0 = std::chrono::steady_clock::now();
-  if (!run.push(simaai::neat::TensorList{input})) {
-    throw std::runtime_error("run.push failed for: " + image_path.filename().string());
-  }
-  auto out = run.pull(timeout_ms);
+  const auto out = runner.run(simaai::neat::TensorList{input}, timeout_ms);
   const auto t1 = std::chrono::steady_clock::now();
   infer_time_s = std::chrono::duration<double>(t1 - t0).count();
-  if (!out.has_value()) {
-    throw std::runtime_error("run.pull timeout for: " + image_path.filename().string());
-  }
-
-  const auto tensors = collect_tensors(*out);
-  if (tensors.empty()) {
+  if (out.empty()) {
     throw std::runtime_error("No tensor output for: " + image_path.filename().string());
   }
 
-  return tensor_to_float_vector(tensors.front());
+  return tensor_to_float_vector(out.front());
 }
 
 } // namespace
@@ -440,20 +408,15 @@ int main(int argc, char** argv) {
     model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(args.model.string(), model_opt);
-    simaai::neat::Session session;
-    session.add(model.session());
 
     cv::Mat dummy_rgb(kInputH, kInputW, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
         dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
-    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
+    auto runner = model.build(simaai::neat::TensorList{dummy}, simaai::neat::Model::RouteOptions{});
 
     // Warmup run before any timed inference.
-    if (!run.push(simaai::neat::TensorList{dummy})) {
-      throw std::runtime_error("warmup push failed");
-    }
-    if (!run.pull(args.timeout_ms).has_value()) {
-      throw std::runtime_error("warmup pull timeout");
+    if (runner.run(simaai::neat::TensorList{dummy}, args.timeout_ms).empty()) {
+      throw std::runtime_error("warmup returned no output");
     }
     std::cout << "Model warmed up.\n";
 
@@ -461,12 +424,12 @@ int main(int argc, char** argv) {
     std::cout << "Processing: " << args.image1.filename().string() << "\n";
     double infer_a_s = 0.0;
     const std::vector<float> emb_a =
-        run_inference_embedding(run, args.image1, args.timeout_ms, infer_a_s);
+        run_inference_embedding(runner, args.image1, args.timeout_ms, infer_a_s);
 
     std::cout << "Processing: " << args.image2.filename().string() << "\n";
     double infer_b_s = 0.0;
     const std::vector<float> emb_b =
-        run_inference_embedding(run, args.image2, args.timeout_ms, infer_b_s);
+        run_inference_embedding(runner, args.image2, args.timeout_ms, infer_b_s);
 
     double score = 0.0;
     std::string decision;
@@ -503,7 +466,7 @@ int main(int argc, char** argv) {
       print_profile(infer_a_s, infer_b_s, total_s);
     }
 
-    run.close();
+    runner.close();
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n";

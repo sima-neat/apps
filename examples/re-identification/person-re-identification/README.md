@@ -12,7 +12,7 @@
 | Model | reid |
 
 ## Preview
-![Person re-identification preview](../../../assets/portal/re-identification/person-re-identification/image.png)
+![Person re-identification preview](../../../assets/portal/re-identification/person-re-identification/image.jpg)
 
 ## Concept
 This example performs pairwise person re-identification by computing embeddings for two input images and comparing them with a selectable metric. It is designed as a minimal synchronous pipeline that focuses on practical runtime behavior: model warmup, deterministic preprocessing, inference, score computation, threshold-based decision, and artifact output.
