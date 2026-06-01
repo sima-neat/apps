@@ -54,25 +54,20 @@ def normalize_pose_decoder_tensors(
     return heatmap_tensor, paf_tensor
 
 
-def letterbox(img: np.ndarray, new_shape: tuple[int, int], color=(128, 128, 128)):
-    shape = img.shape[:2]  
-    
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    if shape[::-1] != new_unpad:  
-        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-
-    pad_w = new_shape[1] - new_unpad[0]
-    pad_h = new_shape[0] - new_unpad[1]
-    
-    top = int(math.floor(pad_h / 2.0))
-    bottom = pad_h - top
+def letterbox(img: np.ndarray, target_size: int, color=(114, 114, 114)):
+    src_h, src_w = img.shape[:2]
+    r = min(target_size / src_h, target_size / src_w)
+    new_w = int(round(src_w * r))
+    new_h = int(round(src_h * r))
+    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    pad_w = target_size - new_w
+    pad_h = target_size - new_h
     left = int(math.floor(pad_w / 2.0))
-    right = pad_w - left
-    
-    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
-    return img, r, left, top
+    top = int(math.floor(pad_h / 2.0))
+    out = cv2.copyMakeBorder(
+        resized, top, pad_h - top, left, pad_w - left, cv2.BORDER_CONSTANT, value=color
+    )
+    return out, r, left, top
 
 
 def get_all_keypoints_without_grouping(
@@ -380,17 +375,8 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
         opt = pyneat.ModelOptions()
         opt.preprocess.kind = pyneat.InputKind.Image
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
-        opt.preprocess.input_max_width = cfg.runtime.infer_size
-        opt.preprocess.input_max_height = cfg.runtime.infer_size
-        opt.preprocess.input_max_depth = 3
 
         model = pyneat.Model(cfg.model.path, opt)
-
-        route_options = pyneat.ModelRouteOptions()
-        route_options.include_input = True
-        route_options.include_output = True
-        graph = pyneat.Graph()
-        graph.add(model.graph(route_options))
 
         dummy = np.zeros((cfg.runtime.infer_size, cfg.runtime.infer_size, 3), dtype=np.uint8)
         t_dummy = pyneat.Tensor.from_numpy(
@@ -400,7 +386,7 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
             memory=pyneat.TensorMemory.EV74,
         )
         print("[BUILD] Building pipeline...")
-        run = graph.build([t_dummy], pyneat.RunMode.Async)
+        run = model.build([t_dummy])
         print("[BUILD] Pipeline built")
 
         processed = 0
@@ -415,13 +401,11 @@ def run_app(cfg: AppConfig, enable_profile: bool) -> int:
                 print(f"Skipping unreadable: {img_path.name}", file=sys.stderr)
                 continue
 
-            resized, r, pad_l, pad_t = letterbox(
-                bgr, (cfg.runtime.infer_size, cfg.runtime.infer_size)
-            )
-            resized = np.ascontiguousarray(resized, dtype=np.uint8)
+            resized, r, pad_l, pad_t = letterbox(bgr, cfg.runtime.infer_size)
+            bgr_input = np.ascontiguousarray(resized, dtype=np.uint8)
 
             t_in = pyneat.Tensor.from_numpy(
-                resized,
+                bgr_input,
                 copy=True,
                 image_format=pyneat.PixelFormat.BGR,
                 memory=pyneat.TensorMemory.EV74,

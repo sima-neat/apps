@@ -180,9 +180,6 @@ TensorHWC tensor_to_hwc_f32(const simaai::neat::Tensor& t) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Letterbox: resize + pad to preserve aspect ratio
-// ---------------------------------------------------------------------------
 struct LetterboxResult {
   cv::Mat img;
   float ratio = 1.0f;
@@ -202,11 +199,7 @@ LetterboxResult letterbox(const cv::Mat& src, int target_size) {
   const int new_h = static_cast<int>(std::round(static_cast<float>(src_h) * result.ratio));
 
   cv::Mat resized;
-  if (new_w != src_w || new_h != src_h) {
-    cv::resize(src, resized, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR);
-  } else {
-    resized = src;
-  }
+  cv::resize(src, resized, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR);
 
   const int pad_w = target_size - new_w;
   const int pad_h = target_size - new_h;
@@ -217,7 +210,7 @@ LetterboxResult letterbox(const cv::Mat& src, int target_size) {
   const int right = pad_w - result.pad_left;
 
   cv::copyMakeBorder(resized, result.img, result.pad_top, bottom, result.pad_left, right,
-                     cv::BORDER_CONSTANT, cv::Scalar(128, 128, 128));
+                     cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
   return result;
 }
 
@@ -645,22 +638,13 @@ int main(int argc, char** argv) {
     simaai::neat::Model::Options model_opt;
     model_opt.preprocess.kind = simaai::neat::InputKind::Image;
     model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
-    model_opt.preprocess.input_max_width = cfg.runtime.infer_size;
-    model_opt.preprocess.input_max_height = cfg.runtime.infer_size;
-    model_opt.preprocess.input_max_depth = 3;
 
     simaai::neat::Model model(model_path, model_opt);
-
-    simaai::neat::Model::RouteOptions route_opt;
-    route_opt.include_input = true;
-    route_opt.include_output = true;
-    simaai::neat::Graph graph;
-    graph.add(model.graph(route_opt));
 
     cv::Mat dummy_bgr(cfg.runtime.infer_size, cfg.runtime.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy = simaai::neat::Tensor::from_cv_mat(
         dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR, simaai::neat::TensorMemory::EV74);
-    auto run = graph.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Async);
+    auto run = model.build(simaai::neat::TensorList{dummy});
 
     int processed = 0;
     double total_e2e_time = 0.0;
@@ -675,7 +659,7 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      auto lb = letterbox(bgr, cfg.runtime.infer_size);
+      const auto lb = letterbox(bgr, cfg.runtime.infer_size);
 
       auto infer_start = std::chrono::high_resolution_clock::now();
       simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
