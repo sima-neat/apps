@@ -166,11 +166,8 @@ def iter_tensors(sample: pyneat.Sample):
         yield from iter_tensors(field)
 
 
-def collect_tensors(samples: list[pyneat.Sample]) -> list[pyneat.Tensor]:
-    tensors: list[pyneat.Tensor] = []
-    for sample in samples:
-        tensors.extend(iter_tensors(sample))
-    return tensors
+def collect_tensors(sample: pyneat.Sample) -> list[pyneat.Tensor]:
+    return list(iter_tensors(sample))
 
 
 def tensor_from_hwc_f32(array: np.ndarray) -> pyneat.Tensor:
@@ -374,35 +371,35 @@ def load_tensor_model(model_path: Path) -> pyneat.Model:
     return pyneat.Model(str(model_path), opt)
 
 
-def build_session_runner(model: pyneat.Model) -> pyneat.Run:
-    sess = pyneat.Session()
-    sess.add(pyneat.nodes.input(model.input_appsrc_options(True)))
-    sess.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
-    sess.add(pyneat.groups.mla(model))
-    sess.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
-    sess.add(pyneat.nodes.output())
+def build_graph_runner(model: pyneat.Model) -> pyneat.Run:
+    graph = pyneat.Graph()
+    graph.add(pyneat.nodes.input(model.input_appsrc_options(True)))
+    graph.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
+    graph.add(pyneat.groups.mla(model))
+    graph.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
+    graph.add(pyneat.nodes.output())
 
     dummy = tensor_from_hwc_f32(np.zeros((FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.float32))
-    return sess.build(dummy, pyneat.RunMode.Async)
+    return graph.build([dummy], pyneat.RunMode.Async)
 
 
 def run_model_inference(model: pyneat.Model, preprocessed: np.ndarray) -> list[np.ndarray]:
-    runner = build_session_runner(model)
+    runner = build_graph_runner(model)
     tensor = tensor_from_hwc_f32(preprocessed)
     try:
-        if not runner.push_tensor(tensor):
-            raise RuntimeError("Run.push_tensor() failed")
-        samples = runner.pull_samples(timeout_ms=5000)
-        if not samples:
-            raise RuntimeError("Run.pull_samples() returned no samples")
-        return tensor_numpy_outputs(collect_tensors(samples))
+        if not runner.push([tensor]):
+            raise RuntimeError("Run.push() failed")
+        sample = runner.pull(timeout_ms=5000)
+        if sample is None:
+            raise RuntimeError("Run.pull() returned no sample")
+        return tensor_numpy_outputs(collect_tensors(sample))
     finally:
         runner.close()
 
 
 def build_model_runner(model: pyneat.Model, preprocessed: np.ndarray) -> tuple[pyneat.Run, pyneat.Tensor]:
     tensor = tensor_from_hwc_f32(preprocessed)
-    runner = build_session_runner(model)
+    runner = build_graph_runner(model)
     return runner, tensor
 
 
@@ -467,22 +464,22 @@ def main() -> int:
     if profile:
         try:
             runner, tensor = build_model_runner(model, preprocessed)
-            session_times: list[float] = []
+            graph_times: list[float] = []
             post_times: list[float] = []
             last_detections: list[dict[str, Any]] = []
 
             for _ in range(max(1, num_runs)):
                 t0 = time.perf_counter()
-                if not runner.push_tensor(tensor):
-                    print("Profiling failed: runner.push_tensor returned False", file=sys.stderr)
+                if not runner.push([tensor]):
+                    print("Profiling failed: runner.push returned False", file=sys.stderr)
                     break
-                samples = runner.pull_samples(timeout_ms=timeout_ms)
+                sample = runner.pull(timeout_ms=timeout_ms)
                 t1 = time.perf_counter()
-                if not samples:
-                    print("Profiling failed: runner.pull_samples returned no samples", file=sys.stderr)
+                if sample is None:
+                    print("Profiling failed: runner.pull returned no sample", file=sys.stderr)
                     break
 
-                arrays = tensor_numpy_outputs(collect_tensors(samples))
+                arrays = tensor_numpy_outputs(collect_tensors(sample))
                 logits, boxes = extract_logits_and_boxes(arrays)
                 t2 = time.perf_counter()
                 detections = process_detr_output(
@@ -494,21 +491,21 @@ def main() -> int:
                 )
                 t3 = time.perf_counter()
 
-                session_times.append(t1 - t0)
+                graph_times.append(t1 - t0)
                 post_times.append(t3 - t2)
                 last_detections = detections
 
             runner.close()
 
-            if not session_times:
+            if not graph_times:
                 print("Profiling aborted: no successful runs", file=sys.stderr)
                 return 4
 
-            total_times = [a + b for a, b in zip(session_times, post_times)]
-            print(f"Profiling over {len(session_times)} runs (image='{image_path}'):")
-            print(format_profile_stats("Session (push+pull)", session_times))
+            total_times = [a + b for a, b in zip(graph_times, post_times)]
+            print(f"Profiling over {len(graph_times)} runs (image='{image_path}'):")
+            print(format_profile_stats("Graph run (push+pull)", graph_times))
             print(format_profile_stats("Postprocessing (decode+NMS)", post_times))
-            print(format_profile_stats("Overall (session + post)", total_times))
+            print(format_profile_stats("Overall (graph + post)", total_times))
             print(f"Last run detections: {len(last_detections)}")
             for i, det in enumerate(last_detections[:20]):
                 box = det["box"]

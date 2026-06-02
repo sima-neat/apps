@@ -488,24 +488,24 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(args.model, model_opt);
 
-    simaai::neat::Session session;
-    session.add(simaai::neat::nodes::Input(model.input_appsrc_options(true)));
-    session.add(simaai::neat::nodes::QuantTess(simaai::neat::QuantTessOptions(model)));
-    session.add(simaai::neat::nodes::groups::MLA(model));
-    session.add(simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
-    session.add(simaai::neat::nodes::Output());
+    simaai::neat::Graph graph;
+    graph.add(simaai::neat::nodes::Input(model.input_appsrc_options(true)));
+    graph.add(simaai::neat::nodes::QuantTess(simaai::neat::QuantTessOptions(model)));
+    graph.add(simaai::neat::nodes::groups::MLA(model));
+    graph.add(simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
+    graph.add(simaai::neat::nodes::Output());
 
     cv::Mat dummy(kModelH, kModelW, CV_32FC3, cv::Scalar(0.0f, 0.0f, 0.0f));
-    auto run = session.build(simaai::neat::TensorList{tensor_from_hwc_f32(dummy)},
-                             simaai::neat::RunMode::Async);
+    auto run = graph.build(simaai::neat::TensorList{tensor_from_hwc_f32(dummy)},
+                           simaai::neat::RunMode::Async);
     simaai::neat::Tensor input_t = tensor_from_hwc_f32(input_f32);
 
     if (args.profile) {
       const int runs = std::max(1, args.num_runs);
-      std::vector<double> session_times;
+      std::vector<double> graph_times;
       std::vector<double> post_times;
       std::vector<Detection> last_dets;
-      session_times.reserve(runs);
+      graph_times.reserve(runs);
       post_times.reserve(runs);
 
       for (int i = 0; i < runs; ++i) {
@@ -525,24 +525,26 @@ int main(int argc, char** argv) {
         last_dets = decode_detr_outputs(logits, boxes, meta, args.conf, args.person_only);
         const auto t3 = std::chrono::steady_clock::now();
 
-        session_times.push_back(std::chrono::duration<double>(t1 - t0).count());
+        graph_times.push_back(std::chrono::duration<double>(t1 - t0).count());
         post_times.push_back(std::chrono::duration<double>(t3 - t2).count());
       }
 
-      const Stats sess = compute_stats(session_times);
+      const Stats graph_stats = compute_stats(graph_times);
       const Stats post = compute_stats(post_times);
-      const double runs_d = static_cast<double>(session_times.size());
-      const double total_sum = sess.sum + post.sum;
+      const double runs_d = static_cast<double>(graph_times.size());
+      const double total_sum = graph_stats.sum + post.sum;
 
-      std::cout << "Profiling over " << session_times.size() << " runs (image='"
+      std::cout << "Profiling over " << graph_times.size() << " runs (image='"
                 << args.image.string() << "'):\n";
-      std::cout << "  Session (push+pull): mean=" << sess.mean << "s, min=" << sess.min
-                << "s, max=" << sess.max << "s, FPS=" << (runs_d / sess.sum) << "\n";
+      std::cout << "  Graph run (push+pull): mean=" << graph_stats.mean
+                << "s, min=" << graph_stats.min << "s, max=" << graph_stats.max
+                << "s, FPS=" << (runs_d / graph_stats.sum) << "\n";
       std::cout << "  Postprocessing (decode+NMS): mean=" << post.mean << "s, min=" << post.min
                 << "s, max=" << post.max << "s, FPS=" << (runs_d / post.sum) << "\n";
-      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d)
-                << "s, min=" << (sess.min + post.min) << "s, max=" << (sess.max + post.max)
-                << "s, FPS=" << (runs_d / total_sum) << "\n";
+      std::cout << "  Overall (graph + post): mean=" << (total_sum / runs_d)
+                << "s, min=" << (graph_stats.min + post.min)
+                << "s, max=" << (graph_stats.max + post.max) << "s, FPS=" << (runs_d / total_sum)
+                << "\n";
       std::cout << "Last run detections: " << last_dets.size() << "\n";
       for (size_t i = 0; i < std::min<size_t>(last_dets.size(), 20); ++i) {
         const auto& d = last_dets[i];

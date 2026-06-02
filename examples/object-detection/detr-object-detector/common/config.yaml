@@ -1,10 +1,10 @@
 model:
   path: assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
 io:
-  image: assets/test_images/input.jpg
+  image: assets/test_images/image.png
   output: sandbox/detr-object-detector/output.png
 decode:
-  confidence_threshold: 0.50
+  confidence_threshold: 0.01
   max_draw: 50
   person_only: false
 runtime:
