@@ -1,7 +1,7 @@
 model:
   path: assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz
 io:
-  image: assets/test_images/input.jpg
+  image: assets/test_images/image.png
   output: sandbox/face-detector/output.png
 decode:
   confidence_threshold: 0.40

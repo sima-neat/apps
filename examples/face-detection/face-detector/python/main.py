@@ -2,7 +2,7 @@
 
 This script performs an end-to-end single-image RetinaFace pipeline:
   - Preprocesses the input image for the model (mean subtraction + pad + resize)
-  - Runs inference through a NEAT Session
+  - Runs inference through a NEAT Graph
   - Decodes RetinaFace outputs into face boxes, confidence scores, and landmarks
   - Applies confidence filtering and NMS
   - Optionally writes an annotated output image
@@ -66,11 +66,8 @@ def iter_tensors(sample: pyneat.Sample):
         yield from iter_tensors(field)
 
 
-def collect_tensors(samples: list[pyneat.Sample]) -> list[pyneat.Tensor]:
-    tensors: list[pyneat.Tensor] = []
-    for sample in samples:
-        tensors.extend(iter_tensors(sample))
-    return tensors
+def collect_tensors(sample: pyneat.Sample) -> list[pyneat.Tensor]:
+    return list(iter_tensors(sample))
 
 
 def tensor_from_hwc_f32(array: np.ndarray) -> pyneat.Tensor:
@@ -387,12 +384,12 @@ def draw_detections(image_bgr: np.ndarray, detections: list[dict[str, Any]]) -> 
     return out
 
 
-def prepare_session_and_frame(
+def prepare_graph_and_frame(
     model_path: Path,
     image_path: Path,
-) -> tuple[Any, pyneat.Tensor, np.ndarray, PreprocMeta, list[float]]:
-    """Prepare a reusable Session run object and preprocessed frame for repeated inference."""
-    _log(f"Preparing session and frame. model_path={model_path}, image_path={image_path}")
+) -> tuple[Any, pyneat.Tensor, np.ndarray, PreprocMeta]:
+    """Prepare a reusable Graph run object and preprocessed frame for repeated inference."""
+    _log(f"Preparing graph and frame. model_path={model_path}, image_path={image_path}")
     if not image_path.is_file():
         raise FileNotFoundError(f"Input image does not exist: {image_path}")
 
@@ -424,18 +421,18 @@ def prepare_session_and_frame(
     _log("Creating pyneat.Model")
     model = pyneat.Model(str(model_path), opt)
 
-    _log("Building Session pipeline: input -> quant_tess -> infer(MLA) -> detess_dequant -> output")
-    sess = pyneat.Session()
-    sess.add(pyneat.nodes.input(model.input_appsrc_options(True)))
-    sess.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
-    sess.add(pyneat.groups.mla(model))
-    sess.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
-    sess.add(pyneat.nodes.output())
-    _log(f"Session backend description:\n{sess.describe_backend()}")
+    _log("Building Graph pipeline: input -> quant_tess -> infer(MLA) -> detess_dequant -> output")
+    graph = pyneat.Graph()
+    graph.add(pyneat.nodes.input(model.input_appsrc_options(True)))
+    graph.add(pyneat.nodes.quant_tess(pyneat.QuantTessOptions(model)))
+    graph.add(pyneat.groups.mla(model))
+    graph.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
+    graph.add(pyneat.nodes.output())
+    _log(f"Graph backend description:\n{graph.describe_backend()}")
 
-    _log("Building run with dummy frame")
+    _log("Building Graph run with dummy frame")
     dummy = tensor_from_hwc_f32(np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32))
-    run = sess.build(dummy, pyneat.RunMode.Async)
+    run = graph.build([dummy], pyneat.RunMode.Async)
 
     return run, tensor_from_hwc_f32(resized), bgr, meta
 
@@ -446,16 +443,16 @@ def run_retinaface_inference(
     timeout_ms: int,
 ) -> tuple[list[pyneat.Tensor], np.ndarray, PreprocMeta]:
     _log(f"Starting inference. model_path={model_path}, image_path={image_path}")
-    run, input_tensor, bgr, meta = prepare_session_and_frame(model_path, image_path)
+    run, input_tensor, bgr, meta = prepare_graph_and_frame(model_path, image_path)
 
-    _log("Pushing preprocessed frame into Session")
-    if not run.push_tensor(input_tensor):
-        raise RuntimeError("Failed to push frame into Session pipeline")
+    _log("Pushing preprocessed frame into Graph")
+    if not run.push([input_tensor]):
+        raise RuntimeError("Failed to push frame into Graph pipeline")
 
-    _log("Pulling output samples from Session")
-    samples = run.pull_samples(timeout_ms=timeout_ms)
-    if not samples:
-        raise RuntimeError("Session.pull_samples() returned no samples")
+    _log("Pulling output sample from Graph")
+    sample = run.pull(timeout_ms=timeout_ms)
+    if sample is None:
+        raise RuntimeError("Graph.pull() returned None")
 
     _log(f"Inference complete. Original image size: {meta.orig_w}x{meta.orig_h}")
 
@@ -463,9 +460,9 @@ def run_retinaface_inference(
         run.close()
     except Exception as exc:
         # Best-effort cleanup: log and continue, do not mask inference result.
-        logger.debug("Failed to close RetinaFace session cleanly", exc_info=exc)
+        logger.debug("Failed to close RetinaFace graph run cleanly", exc_info=exc)
 
-    return collect_tensors(samples), bgr, meta
+    return collect_tensors(sample), bgr, meta
 
 
 def main() -> int:
@@ -507,33 +504,33 @@ def main() -> int:
         print(f"Model file does not exist: {model_path}", file=sys.stderr)
         return 2
 
-    # Profiling mode: reuse a single session/run and frame, and profile session vs postprocessing.
+    # Profiling mode: reuse a single graph run and frame, and profile graph vs postprocessing.
     if profile:
         try:
-            run, input_tensor, orig_bgr, meta = prepare_session_and_frame(
+            run, input_tensor, orig_bgr, meta = prepare_graph_and_frame(
                 model_path, image_path
             )
         except Exception as e:
-            print(f"Error during session preparation: {e}", file=sys.stderr)
+            print(f"Error during graph preparation: {e}", file=sys.stderr)
             return 3
 
-        session_times: list[float] = []
+        graph_times: list[float] = []
         post_times: list[float] = []
         total_runs = num_runs
         last_detections: list[dict[str, Any]] = []
 
         for i in range(total_runs):
             t0 = time.perf_counter()
-            if not run.push_tensor(input_tensor):
-                print(f"Run {i}: failed to push frame into Session pipeline", file=sys.stderr)
+            if not run.push([input_tensor]):
+                print(f"Run {i}: failed to push frame into Graph pipeline", file=sys.stderr)
                 break
-            samples = run.pull_samples(timeout_ms=timeout_ms)
+            sample = run.pull(timeout_ms=timeout_ms)
             t1 = time.perf_counter()
-            if not samples:
-                print(f"Run {i}: Session.pull_samples() returned no samples", file=sys.stderr)
+            if sample is None:
+                print(f"Run {i}: Graph.pull() returned None", file=sys.stderr)
                 break
 
-            tensors = collect_tensors(samples)
+            tensors = collect_tensors(sample)
             np_outs = tensor_numpy_outputs(tensors)
             bboxes, scores, landmarks = parse_retinaface_outputs(np_outs)
             t2 = time.perf_counter()
@@ -551,35 +548,35 @@ def main() -> int:
             )
             t3 = time.perf_counter()
 
-            session_times.append(t1 - t0)
+            graph_times.append(t1 - t0)
             post_times.append(t3 - t2)
             last_detections = detections
 
         try:
             run.close()
         except Exception as e:
-            print(f"Error while closing session: {e}", file=sys.stderr)
+            print(f"Error while closing graph run: {e}", file=sys.stderr)
 
-        if not session_times:
+        if not graph_times:
             print("Profiling aborted: no successful runs", file=sys.stderr)
             return 4
 
-        session_arr = np.array(session_times, dtype=np.float64)
+        graph_arr = np.array(graph_times, dtype=np.float64)
         post_arr = np.array(post_times, dtype=np.float64)
-        total_arr = session_arr + post_arr
+        total_arr = graph_arr + post_arr
 
-        runs = float(len(session_times))
-        session_fps = runs / session_arr.sum()
+        runs = float(len(graph_times))
+        graph_fps = runs / graph_arr.sum()
         post_fps = runs / post_arr.sum()
         overall_fps = runs / total_arr.sum()
 
-        print(f"Profiling over {len(session_times)} runs (image='{image_path}'):")
+        print(f"Profiling over {len(graph_times)} runs (image='{image_path}'):")
         print(
-            f"  Session (push+pull): "
-            f"mean={session_arr.mean():.6f}s, "
-            f"min={session_arr.min():.6f}s, "
-            f"max={session_arr.max():.6f}s, "
-            f"FPS={session_fps:.2f}"
+            f"  Graph run (push+pull): "
+            f"mean={graph_arr.mean():.6f}s, "
+            f"min={graph_arr.min():.6f}s, "
+            f"max={graph_arr.max():.6f}s, "
+            f"FPS={graph_fps:.2f}"
         )
         print(
             f"  Postprocessing (parse+decode+NMS): "
@@ -589,7 +586,7 @@ def main() -> int:
             f"FPS={post_fps:.2f}"
         )
         print(
-            f"  Overall (session + post): "
+            f"  Overall (graph + post): "
             f"mean={total_arr.mean():.6f}s, "
             f"min={total_arr.min():.6f}s, "
             f"max={total_arr.max():.6f}s, "
