@@ -298,7 +298,11 @@ def main() -> int:
         run_opt.queue_depth = queue_depth
         run_opt.overflow_policy = pyneat.OverflowPolicy.Block
         run_opt.preset = pyneat.RunPreset.Balanced
-        runner = model.build(dummy_tensor, run_options=run_opt)
+        runner = model.build(
+            [dummy_tensor],
+            route_options=pyneat.ModelRouteOptions(),
+            run_options=run_opt,
+        )
 
         print(f"Found {len(images)} images")
 
@@ -319,7 +323,7 @@ def main() -> int:
                 image_format=pyneat.PixelFormat.RGB,
                 memory=pyneat.TensorMemory.EV74,
             )
-            tensors = runner.run(input_tensor, timeout_ms=timeout_ms)
+            tensors = runner.run([input_tensor], timeout_ms=timeout_ms)
 
             try:
                 boxes, proto = decode_yolov8_instances(tensors, infer_size, score_thr, nms_iou, max_det)

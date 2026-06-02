@@ -77,30 +77,6 @@ Config parse_config(int argc, char** argv) {
   return load_config(config_path);
 }
 
-std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
-  if (sample.kind == simaai::neat::SampleKind::Tensor) {
-    if (!sample.tensor.has_value()) {
-      throw std::runtime_error("tensor sample missing payload");
-    }
-    return {*sample.tensor};
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
-    return sample.tensors;
-  }
-
-  if (sample.kind == simaai::neat::SampleKind::Bundle) {
-    std::vector<simaai::neat::Tensor> out;
-    for (const auto& field : sample.fields) {
-      auto part = collect_tensors(field);
-      out.insert(out.end(), part.begin(), part.end());
-    }
-    return out;
-  }
-
-  throw std::runtime_error("unexpected sample kind");
-}
-
 bool is_image(const fs::path& p) {
   std::string ext = p.extension().string();
   for (char& c : ext)
@@ -482,15 +458,6 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 
-    simaai::neat::Session session;
-    session.add(simaai::neat::nodes::Input(model.input_appsrc_options(false)));
-    session.add(simaai::neat::nodes::groups::Preprocess(model));
-    session.add(simaai::neat::nodes::groups::Infer(model));
-    session.add(simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
-    session.add(simaai::neat::nodes::Output());
-
-    std::cout << "Pipeline:\n" << session.describe_backend() << "\n";
-
     cv::Mat dummy_rgb(cfg.infer_size, cfg.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor input_tensor = simaai::neat::Tensor::from_cv_mat(
         dummy_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
@@ -500,8 +467,8 @@ int main(int argc, char** argv) {
     run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
     run_opt.preset = simaai::neat::RunPreset::Balanced;
 
-    auto run = session.build(simaai::neat::TensorList{input_tensor}, simaai::neat::RunMode::Async,
-                             run_opt);
+    auto runner = model.build(simaai::neat::TensorList{input_tensor},
+                              simaai::neat::Model::RouteOptions{}, run_opt);
     std::cout << "Found " << images.size() << " images\n";
 
     int processed = 0;
@@ -518,18 +485,9 @@ int main(int argc, char** argv) {
 
       simaai::neat::Tensor input = simaai::neat::Tensor::from_cv_mat(
           rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
-      if (!run.push(simaai::neat::TensorList{input})) {
-        std::cerr << "Push failed for: " << image_path.filename() << "\n";
-        continue;
-      }
 
-      auto out = run.pull(cfg.timeout_ms);
-      if (!out.has_value()) {
-        std::cerr << "Pull failed for: " << image_path.filename() << "\n";
-        continue;
-      }
-
-      const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out);
+      const simaai::neat::TensorList tensors =
+          runner.run(simaai::neat::TensorList{input}, cfg.timeout_ms);
       std::vector<Box> boxes;
       TensorHWC proto;
       try {
@@ -553,7 +511,7 @@ int main(int argc, char** argv) {
       ++processed;
     }
 
-    run.close();
+    runner.close();
     std::cout << "Processed " << processed << " / " << images.size() << " images\n";
     return 0;
   } catch (const std::exception& e) {
