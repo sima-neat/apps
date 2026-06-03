@@ -36,6 +36,7 @@ The default `common/config.yaml` expects:
 
 ```text
 assets/models/genai/gemma3-siglip448-a16w4
+assets/models/genai/gemma4-E2B-it
 ```
 
 ## Run
@@ -51,7 +52,7 @@ In another shell, ask either served model about the same image:
 ```bash
 python3 examples/genai/two-vlm-openai-server/python/ask_image.py \
   --config examples/genai/two-vlm-openai-server/common/config.yaml \
-  --model vlm_a \
+  --model vlm-1 \
   --image path/to/image.jpg \
   --prompt "Describe this image briefly."
 ```
@@ -59,7 +60,7 @@ python3 examples/genai/two-vlm-openai-server/python/ask_image.py \
 ```bash
 python3 examples/genai/two-vlm-openai-server/python/ask_image.py \
   --config examples/genai/two-vlm-openai-server/common/config.yaml \
-  --model vlm_b \
+  --model vlm-2 \
   --image path/to/image.jpg \
   --prompt "Describe this image briefly."
 ```

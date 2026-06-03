@@ -3,10 +3,10 @@ server:
   port: 9998
 
 models:
-  - name: vlm_a
+  - name: vlm-1
     path: assets/models/genai/gemma3-siglip448-a16w4
-  - name: vlm_b
-    path: assets/models/genai/gemma3-siglip448-a16w4
+  - name: vlm-2
+    path: assets/models/genai/gemma4-E2B-it
 
 request:
   max_tokens: 96

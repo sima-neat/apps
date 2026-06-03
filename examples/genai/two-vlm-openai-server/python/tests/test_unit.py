@@ -19,7 +19,7 @@ def test_load_config_requires_two_models(tmp_path: Path) -> None:
         textwrap.dedent(
             """
             models:
-              - name: vlm_a
+              - name: vlm-1
                 path: model-a
             """
         ),
@@ -43,9 +43,9 @@ def test_load_config_resolves_models_and_names(tmp_path: Path, monkeypatch) -> N
               host: 127.0.0.1
               port: 9999
             models:
-              - name: vlm_a
+              - name: vlm-1
                 path: model-a
-              - name: vlm_b
+              - name: vlm-2
                 path: /models/model-b
             request:
               max_tokens: 32
@@ -60,12 +60,12 @@ def test_load_config_resolves_models_and_names(tmp_path: Path, monkeypatch) -> N
 
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 9999
-    assert cfg.model_names() == ("vlm_a", "vlm_b")
+    assert cfg.model_names() == ("vlm-1", "vlm-2")
     assert cfg.models[0].path == work_dir / "model-a"
     assert cfg.models[1].path == Path("/models/model-b")
     assert cfg.max_tokens == 32
     assert cfg.system_prompt == "Use short answers."
-    assert cfg.require_model("vlm_b").name == "vlm_b"
+    assert cfg.require_model("vlm-2").name == "vlm-2"
 
 
 def test_load_config_rejects_duplicate_model_names(tmp_path: Path) -> None:
