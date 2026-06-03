@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,18 @@ import pyneat
 import yaml
 
 MASK_ALPHA = 0.65
+DQ_SCALES = [
+    11.110991093672158,
+    13.956323724394647,
+    14.356056332484277,
+    925.8771585551377,
+    343.5148027214258,
+    291.36864499455385,
+    50.265630377702685,
+    56.57840021254144,
+    54.44306583495789,
+    43.49836481362829,
+]
 
 MASK_COLOR_PALETTE = [
     (56, 56, 255),
@@ -106,6 +119,25 @@ def tensor_to_hwc_f32(tensor: pyneat.Tensor) -> np.ndarray:
     return arr
 
 
+def apply_dq_scale_squared_probe(arr: np.ndarray, tensor_index: int) -> np.ndarray:
+    scale = DQ_SCALES[tensor_index]
+    return arr / (scale * scale)
+
+
+def iter_tensors(sample: pyneat.Sample):
+    if sample.kind == pyneat.SampleKind.Tensor:
+        if sample.tensor is None:
+            raise RuntimeError("tensor sample missing payload")
+        yield sample.tensor
+    elif sample.kind == pyneat.SampleKind.TensorSet:
+        yield from sample.tensors
+    elif sample.kind == pyneat.SampleKind.Bundle:
+        for field in sample.fields:
+            yield from iter_tensors(field)
+    else:
+        raise RuntimeError(f"unexpected sample kind: {sample.kind}")
+
+
 def dfl_distance_16(logits: np.ndarray) -> float:
     maxv = logits.max()
     e = np.exp(logits - maxv)
@@ -116,7 +148,7 @@ def dfl_distance_16(logits: np.ndarray) -> float:
     return float(numer / denom)
 
 
-def decode_yolov8_instances(tensors, infer_size, conf_thr, nms_iou, max_det):
+def decode_yolov8_instances(tensors, infer_size, conf_thr, nms_iou, max_det, dq_scale_squared_probe=False):
     """Decode YOLOv8 boxes and mask coefficients from DetessDequant outputs."""
     if len(tensors) < 10:
         raise ValueError("expected at least 10 tensors for instance-seg decode")
@@ -130,6 +162,17 @@ def decode_yolov8_instances(tensors, infer_size, conf_thr, nms_iou, max_det):
     mk40 = tensor_to_hwc_f32(tensors[7])
     mk20 = tensor_to_hwc_f32(tensors[8])
     proto = tensor_to_hwc_f32(tensors[9])
+    if dq_scale_squared_probe:
+        reg80 = apply_dq_scale_squared_probe(reg80, 0)
+        reg40 = apply_dq_scale_squared_probe(reg40, 1)
+        reg20 = apply_dq_scale_squared_probe(reg20, 2)
+        cls80 = apply_dq_scale_squared_probe(cls80, 3)
+        cls40 = apply_dq_scale_squared_probe(cls40, 4)
+        cls20 = apply_dq_scale_squared_probe(cls20, 5)
+        mk80 = apply_dq_scale_squared_probe(mk80, 6)
+        mk40 = apply_dq_scale_squared_probe(mk40, 7)
+        mk20 = apply_dq_scale_squared_probe(mk20, 8)
+        proto = apply_dq_scale_squared_probe(proto, 9)
     if proto.shape[2] != 32:
         raise ValueError(f"unexpected proto channels: {proto.shape}")
 
@@ -269,6 +312,9 @@ def main() -> int:
     nms_iou = float(decode.get("nms_iou", 0.45))
     max_det = int(decode.get("max_detections", 200))
     mask_alpha = float(visualization.get("mask_alpha", MASK_ALPHA))
+    dq_scale_squared_probe = os.getenv("SIMANEAT_APPS_DQ_SCALE_SQUARED_PROBE", "") not in {"", "0"}
+    if dq_scale_squared_probe:
+        print("[DEBUG] Dividing detess outputs by dq_scale^2 from 0_postproc.json")
 
     if not input_dir.is_dir():
         raise RuntimeError(f"input directory does not exist: {input_dir}")
@@ -298,11 +344,14 @@ def main() -> int:
         run_opt.queue_depth = queue_depth
         run_opt.overflow_policy = pyneat.OverflowPolicy.Block
         run_opt.preset = pyneat.RunPreset.Balanced
-        runner = model.build(
-            [dummy_tensor],
-            route_options=pyneat.ModelRouteOptions(),
-            run_options=run_opt,
-        )
+        graph = pyneat.Graph()
+        graph.add(pyneat.nodes.input(model.input_appsrc_options(False)))
+        graph.add(model.preprocess())
+        graph.add(model.inference())
+        graph.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
+        graph.add(pyneat.nodes.output())
+
+        runner = graph.build([dummy_tensor], pyneat.RunMode.Async, run_opt)
 
         print(f"Found {len(images)} images")
 
@@ -323,10 +372,13 @@ def main() -> int:
                 image_format=pyneat.PixelFormat.RGB,
                 memory=pyneat.TensorMemory.EV74,
             )
-            tensors = runner.run([input_tensor], timeout_ms=timeout_ms)
+            output = runner.run([input_tensor], timeout_ms=timeout_ms)
+            tensors = list(iter_tensors(output)) if hasattr(output, "kind") else list(output)
 
             try:
-                boxes, proto = decode_yolov8_instances(tensors, infer_size, score_thr, nms_iou, max_det)
+                boxes, proto = decode_yolov8_instances(
+                    tensors, infer_size, score_thr, nms_iou, max_det, dq_scale_squared_probe
+                )
             except Exception as e:
                 print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
                 continue
