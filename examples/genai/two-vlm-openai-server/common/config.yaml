@@ -1,0 +1,14 @@
+server:
+  host: 0.0.0.0
+  port: 9998
+
+models:
+  - name: vlm_a
+    path: ../../../../assets/models/genai/gemma4-E2B-it
+  - name: vlm_b
+    path: ../../../../assets/models/genai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+
+request:
+  max_tokens: 96
+  system_prompt: >-
+    Answer from visual evidence only. Be concise.
