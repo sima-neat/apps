@@ -4,9 +4,9 @@ server:
 
 models:
   - name: vlm_a
-    path: ../../../../assets/models/genai/gemma4-E2B-it
+    path: assets/models/genai/gemma3-siglip448-a16w4
   - name: vlm_b
-    path: ../../../../assets/models/genai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+    path: assets/models/genai/gemma3-siglip448-a16w4
 
 request:
   max_tokens: 96

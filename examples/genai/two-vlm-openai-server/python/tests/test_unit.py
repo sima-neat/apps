@@ -30,8 +30,12 @@ def test_load_config_requires_two_models(tmp_path: Path) -> None:
         load_config(config)
 
 
-def test_load_config_resolves_models_and_names(tmp_path: Path) -> None:
-    config = tmp_path / "config.yaml"
+def test_load_config_resolves_models_and_names(tmp_path: Path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    config = config_dir / "config.yaml"
     config.write_text(
         textwrap.dedent(
             """
@@ -51,12 +55,13 @@ def test_load_config_resolves_models_and_names(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    monkeypatch.chdir(work_dir)
     cfg = load_config(config)
 
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 9999
     assert cfg.model_names() == ("vlm_a", "vlm_b")
-    assert cfg.models[0].path == tmp_path / "model-a"
+    assert cfg.models[0].path == work_dir / "model-a"
     assert cfg.models[1].path == Path("/models/model-b")
     assert cfg.max_tokens == 32
     assert cfg.system_prompt == "Use short answers."

@@ -37,7 +37,7 @@ def load_config(path: Path) -> Config:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     server = raw.get("server", {})
     request = raw.get("request", {})
-    models = tuple(_load_model(item, path.parent) for item in raw.get("models", []))
+    models = tuple(_load_model(item) for item in raw.get("models", []))
     if len(models) < 2:
         raise ValueError("config requires at least two models")
     names = [model.name for model in models]
@@ -54,7 +54,7 @@ def load_config(path: Path) -> Config:
     )
 
 
-def _load_model(raw: dict, config_dir: Path) -> ServedModel:
+def _load_model(raw: dict) -> ServedModel:
     name = str(raw.get("name", "")).strip()
     path_text = str(raw.get("path", "")).strip()
     if not name:
@@ -63,5 +63,5 @@ def _load_model(raw: dict, config_dir: Path) -> ServedModel:
         raise ValueError(f"model '{name}' requires a path")
     model_path = Path(path_text).expanduser()
     if not model_path.is_absolute():
-        model_path = (config_dir / model_path).resolve()
+        model_path = model_path.resolve()
     return ServedModel(name=name, path=model_path)

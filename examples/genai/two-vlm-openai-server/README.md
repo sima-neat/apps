@@ -27,16 +27,15 @@ Two served VLMs behind one OpenAI-compatible endpoint:
 
 ## Prerequisites
 - Installed Neat SDK with GenAI support.
-- Gemma4 and Qwen LLiMa VLM model directories available under
-  `assets/models/genai/`, or equivalent paths configured in `common/config.yaml`.
+- LLiMa VLM model directories available under `assets/models/genai/`, or
+  equivalent paths configured in `common/config.yaml`.
 - Python packages from `python/requirements.txt`.
 - A local image file to send in the prompt.
 
 The default `common/config.yaml` expects:
 
 ```text
-assets/models/genai/gemma4-E2B-it
-assets/models/genai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+assets/models/genai/gemma3-siglip448-a16w4
 ```
 
 ## Run
