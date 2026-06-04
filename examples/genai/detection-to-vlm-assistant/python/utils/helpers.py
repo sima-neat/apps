@@ -166,22 +166,48 @@ def ev74_rgb_tensor(frame: np.ndarray):
     )
 
 
-def iter_tensors(value):
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            yield from iter_tensors(item)
-        return
-    if getattr(value, "tensor", None) is not None:
-        yield value.tensor
-    yield from getattr(value, "tensors", [])
-    for field in getattr(value, "fields", []):
-        yield from iter_tensors(field)
+def is_tensor_like(value) -> bool:
+    return hasattr(value, "copy_payload_bytes") and hasattr(value, "to_numpy")
+
+
+def is_sample_like(value) -> bool:
+    return hasattr(value, "kind") and hasattr(value, "fields")
+
+
+def bbox_payload_from_tensors(tensors) -> bytes:
+    for tensor in tensors:
+        try:
+            payload = tensor.copy_payload_bytes()
+        except Exception:
+            continue
+        if payload:
+            return payload
+    return b""
 
 
 def bbox_payload(result) -> bytes:
-    for tensor in iter_tensors(result):
+    if isinstance(result, (list, tuple)) and all(is_tensor_like(item) for item in result):
+        return bbox_payload_from_tensors(result)
+
+    if not is_sample_like(result):
+        return b""
+
+    stack = [result]
+    while stack:
+        current = stack.pop()
+        stack.extend(reversed(list(current.fields)))
+        if current.kind == pyneat.SampleKind.TensorSet:
+            payload = bbox_payload_from_tensors(current.tensors)
+            if payload:
+                return payload
+            continue
+        if current.kind != pyneat.SampleKind.Tensor or current.tensor is None:
+            continue
+        fmt = (current.payload_tag or current.format or "").upper()
+        if fmt and fmt != "BBOX":
+            continue
         try:
-            payload = tensor.copy_payload_bytes()
+            payload = current.tensor.copy_payload_bytes()
         except Exception:
             continue
         if payload:
