@@ -32,6 +32,11 @@ constexpr int kDefaultProfileIntervalFrames = 200;
 
 using SteadyClock = std::chrono::steady_clock;
 
+std::mutex& graph_build_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
 struct StreamMetrics {
   int pulled = 0;
   int processed = 0;
@@ -164,8 +169,8 @@ struct StreamRuntime {
   std::string url;
   RtspProbe probe;
   GraphRun source;
-  GraphRun detect;
-  GraphRun video;
+  std::optional<GraphRun> detect;
+  std::optional<GraphRun> video;
   std::optional<simaai::neat::MetadataSender> metadata_sender;
   PeopleTracker tracker;
   StreamMetrics metrics;
@@ -185,8 +190,6 @@ std::int64_t now_unix_ms() {
 StreamRuntime create_stream_runtime(int index, const std::string& url, const AppConfig& cfg) {
   const RtspProbe probe = probe_rtsp(url);
   auto source = build_source_run(cfg, url, probe);
-  auto detect = build_detection_run(cfg, probe);
-  auto video = build_insight_video_run(cfg, probe, index);
   std::optional<simaai::neat::MetadataSender> sender;
   if (metadata_output_enabled(cfg)) {
     sender.emplace(build_insight_metadata_output(cfg, index));
@@ -197,8 +200,8 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
       url,
       probe,
       std::move(source),
-      std::move(detect),
-      std::move(video),
+      std::nullopt,
+      std::nullopt,
       std::move(sender),
       PeopleTracker(cfg.tracker_iou_threshold, cfg.tracker_max_missing),
   };
@@ -206,7 +209,19 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
 }
 
 void close_stream_runtime(StreamRuntime& stream) {
-  for (auto* run : {&stream.video.run, &stream.detect.run, &stream.source.run}) {
+  if (stream.video.has_value()) {
+    try {
+      stream.video->run.close();
+    } catch (...) {
+    }
+  }
+  if (stream.detect.has_value()) {
+    try {
+      stream.detect->run.close();
+    } catch (...) {
+    }
+  }
+  for (auto* run : {&stream.source.run}) {
     try {
       run->close();
     } catch (...) {
@@ -303,7 +318,8 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
   frame_queue.close();
 }
 
-void infer_thread(StreamRuntime& stream, KeepLatestQueue<FramePacket>& frame_queue,
+void infer_thread(StreamRuntime& stream, const AppConfig& cfg,
+                  KeepLatestQueue<FramePacket>& frame_queue,
                   KeepLatestQueue<ResultPacket>& result_queue, std::atomic<bool>& stop_event) {
   try {
     while (!stop_event.load()) {
@@ -319,11 +335,15 @@ void infer_thread(StreamRuntime& stream, KeepLatestQueue<FramePacket>& frame_que
       simaai::neat::Tensor input_tensor =
           simaai::neat::Tensor::from_cv_mat(packet.frame, simaai::neat::ImageSpec::PixelFormat::RGB,
                                             simaai::neat::TensorMemory::EV74);
-      if (!stream.detect.run.push(simaai::neat::TensorList{input_tensor})) {
+      if (!stream.detect.has_value()) {
+        std::lock_guard<std::mutex> lock(graph_build_mutex());
+        stream.detect.emplace(build_detection_run(cfg, stream.probe));
+      }
+      if (!stream.detect->run.push(simaai::neat::TensorList{input_tensor})) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " detector push failed");
       }
-      const simaai::neat::Sample det_sample = stream.detect.run.pull_samples(50000);
+      const simaai::neat::Sample det_sample = stream.detect->run.pull_samples(50000);
       const double roundtrip_elapsed = now_steady_s() - roundtrip_t0;
 
       ResultPacket result;
@@ -410,12 +430,15 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
 
 void print_power_metrics(const std::vector<StreamRuntime>& streams) {
   for (const auto& stream : streams) {
-    const auto power = stream.detect.run.power_summary();
+    if (!stream.detect.has_value()) {
+      continue;
+    }
+    const auto power = stream.detect->run.power_summary();
     if (!power.enabled) {
       continue;
     }
     std::cout << "\n[stream " << stream.index << "] detection run runtime metrics:\n"
-              << stream.detect.run.metrics_report();
+              << stream.detect->run.metrics_report();
   }
 }
 
@@ -474,7 +497,11 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       }
 
       const cv::Mat& video_frame = cfg.video_mode == VideoMode::Annotated ? overlay_frame : frame;
-      if (!stream.video.run.push(std::vector<cv::Mat>{video_frame})) {
+      if (!stream.video.has_value()) {
+        std::lock_guard<std::mutex> lock(graph_build_mutex());
+        stream.video.emplace(build_insight_video_run(cfg, stream.probe, stream.index));
+      }
+      if (!stream.video->run.push(std::vector<cv::Mat>{video_frame})) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " Insight video push failed");
       }
@@ -585,7 +612,7 @@ int run_app(const AppConfig& cfg) {
 
     worker_threads.emplace_back([&streams, index, &cfg, frame_queue, result_queue, &stop_event] {
       auto& stream = streams[index];
-      infer_thread(stream, *frame_queue, *result_queue, stop_event);
+      infer_thread(stream, cfg, *frame_queue, *result_queue, stop_event);
     });
     worker_threads.emplace_back([&streams, index, &cfg, result_queue, &stop_event] {
       auto& stream = streams[index];
