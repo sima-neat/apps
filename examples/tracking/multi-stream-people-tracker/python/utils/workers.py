@@ -20,6 +20,7 @@ from .pipeline import (
     _SOURCE_PULL_TIMEOUT_MS,
     _SOURCE_STARTUP_PULL_TIMEOUT_MS,
     _SOURCE_STARTUP_STAGGER_S,
+    GraphRun,
     RtspProbe,
     RuntimeModules,
     build_detection_run,
@@ -151,13 +152,9 @@ class StreamRuntime:
     url: str
     probe: RtspProbe
     runtime: RuntimeModules
-    # Keep sessions alive for as long as the runs built from them are in use.
-    source_session: Any
-    source_run: Any
-    detect_session: Any
-    detect_run: Any
-    video_session: Any
-    video_run: Any
+    source: GraphRun
+    detect: GraphRun
+    video: GraphRun
     metadata_sender: Any | None
     tracker: PeopleTracker
     metrics: StreamMetrics = field(default_factory=StreamMetrics)
@@ -201,9 +198,9 @@ def create_stream_runtime(
 ) -> StreamRuntime:
     runtime = load_runtime_modules()
     probe = probe_rtsp(url)
-    source_session, source_run = build_source_run(runtime, cfg, url, probe)
-    detect_session, detect_run = build_detection_run(runtime, cfg, probe)
-    video_session, video_run = build_insight_video_run(runtime, cfg, probe, index)
+    source = build_source_run(runtime, cfg, url, probe)
+    detect = build_detection_run(runtime, cfg, probe)
+    video = build_insight_video_run(runtime, cfg, probe, index)
     metadata_sender = None
     if metadata_output_enabled(cfg):
         metadata_sender = build_insight_metadata_output(runtime, cfg, index)
@@ -216,22 +213,18 @@ def create_stream_runtime(
         url=url,
         probe=probe,
         runtime=runtime,
-        source_session=source_session,
-        source_run=source_run,
-        detect_session=detect_session,
-        detect_run=detect_run,
-        video_session=video_session,
-        video_run=video_run,
+        source=source,
+        detect=detect,
+        video=video,
         metadata_sender=metadata_sender,
         tracker=tracker,
     )
 
 
 def close_stream_runtime(stream: StreamRuntime) -> None:
-    for run in (stream.video_run, stream.detect_run, stream.source_run):
+    for graph_run in (stream.video, stream.detect, stream.source):
         try:
-            if run is not None:
-                run.close()
+            graph_run.run.close()
         except Exception:
             pass
 
@@ -293,7 +286,7 @@ def producer_thread(
             pull_timeout_ms = (
                 _SOURCE_STARTUP_PULL_TIMEOUT_MS if frame_index == 0 else _SOURCE_PULL_TIMEOUT_MS
             )
-            sample = stream.source_run.pull(timeout_ms=pull_timeout_ms)
+            sample = stream.source.run.pull(timeout_ms=pull_timeout_ms)
             elapsed = time.perf_counter() - t0
             if sample is None:
                 empty_pulls += 1
@@ -363,7 +356,7 @@ def infer_thread(
     stop_event: threading.Event,
 ) -> None:
     runtime = stream.runtime
-    detect_run = stream.detect_run
+    detect_run = stream.detect.run
 
     try:
         while not stop_event.is_set():
@@ -385,14 +378,13 @@ def infer_thread(
             )
 
             roundtrip_t0 = time.perf_counter()
-            if not detect_run.push_tensor(input_tensor):
+            if not detect_run.push_tensors([input_tensor]):
                 raise RuntimeError(f"stream {stream.index} detector push failed")
-            det_samples = detect_run.pull_samples(timeout_ms=50000)
+            det_sample = detect_run.pull_samples(timeout_ms=50000)
             roundtrip_elapsed = time.perf_counter() - roundtrip_t0
 
-            if not det_samples:
+            if det_sample is None:
                 raise RuntimeError(f"stream {stream.index} detect run timed out")
-            det_sample = det_samples[0]
 
             bbox_payload = extract_bbox_payload(runtime.pyneat, det_sample)
             put_keep_latest(
@@ -471,7 +463,13 @@ def publish_thread(
 
             pyneat = runtime.pyneat
             video_frame = overlay if cfg.video_mode is VideoMode.ANNOTATED else pkt.frame
-            if not stream.video_run.push(video_frame, copy=True, image_format=pyneat.PixelFormat.RGB):
+            video_tensor = pyneat.Tensor.from_numpy(
+                video_frame,
+                copy=True,
+                image_format=pyneat.PixelFormat.RGB,
+                memory=pyneat.TensorMemory.EV74,
+            )
+            if not stream.video.run.push_tensors([video_tensor]):
                 raise RuntimeError(f"stream {stream.index} Insight video push failed")
 
             if metadata_output_enabled(cfg) and stream.metadata_sender is not None:

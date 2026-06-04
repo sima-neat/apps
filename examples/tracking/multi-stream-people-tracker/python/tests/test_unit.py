@@ -444,7 +444,7 @@ class TestPipelineBuilders:
         from utils.config import AppConfig
         from utils.pipeline import RtspProbe, RuntimeModules, build_detection_run
 
-        class FakeSession:
+        class FakeGraph:
             def __init__(self):
                 self.added = []
                 self.build_calls = []
@@ -507,10 +507,13 @@ class TestPipelineBuilders:
             class RunMode:
                 Async = "async"
 
+            class PayloadType:
+                Image = "image"
+
             Tensor = FakeTensor
 
             def __init__(self):
-                self.last_session = None
+                self.last_graph = None
                 self.nodes = SimpleNamespace(
                     input=lambda opt=None: ("input", opt),
                     sima_box_decode=lambda model, **kwargs: ("boxdecode", model, kwargs),
@@ -519,9 +522,10 @@ class TestPipelineBuilders:
                 self.groups = SimpleNamespace(mla=lambda model: ("mla", model))
                 self.models = []
 
-            def Session(self):
-                self.last_session = FakeSession()
-                return self.last_session
+            def Graph(self, name):
+                self.last_graph = FakeGraph()
+                self.last_graph.name = name
+                return self.last_graph
 
             def ModelOptions(self):
                 return FakeModelOptions()
@@ -565,13 +569,13 @@ class TestPipelineBuilders:
         probe = RtspProbe(width=1280, height=720, fps=16)
         runtime = RuntimeModules(cv2=None, np=FakeNp(), pyneat=FakePyneat())
 
-        _, run = build_detection_run(runtime, cfg, probe)
+        built = build_detection_run(runtime, cfg, probe)
 
-        added_kinds = [node[0] for node in runtime.pyneat.last_session.added]
-        assert run == "fake-run"
+        added_kinds = [node[0] for node in runtime.pyneat.last_graph.added]
+        assert built.run == "fake-run"
         assert added_kinds == ["input", "preprocess", "mla", "boxdecode", "output"]
         assert runtime.pyneat.models[0].options.preprocess.kind == runtime.pyneat.InputKind.Image
-        assert runtime.pyneat.last_session.build_calls
+        assert runtime.pyneat.last_graph.build_calls
 
     def test_build_insight_metadata_output_uses_per_stream_ports(self):
         from utils.config import AppConfig
@@ -715,9 +719,14 @@ class TestWorkers:
             def __init__(self):
                 self.calls = []
 
-            def push(self, frame, copy=False, image_format=None):
-                self.calls.append((frame, copy, image_format))
+            def push_tensors(self, tensors):
+                self.calls.append(tensors)
                 return True
+
+        class FakeTensor:
+            @staticmethod
+            def from_numpy(frame, **kwargs):
+                return SimpleNamespace(frame=frame, kwargs=kwargs)
 
         class FakeMetadataSender:
             def __init__(self):
@@ -753,7 +762,13 @@ class TestWorkers:
         frame = SimpleNamespace(shape=(24, 32, 3), label="clean-frame")
         stream = SimpleNamespace(
             index=0,
-            runtime=SimpleNamespace(pyneat=SimpleNamespace(PixelFormat=SimpleNamespace(RGB="rgb"))),
+            runtime=SimpleNamespace(
+                pyneat=SimpleNamespace(
+                    PixelFormat=SimpleNamespace(RGB="rgb"),
+                    TensorMemory=SimpleNamespace(EV74="ev74"),
+                    Tensor=FakeTensor,
+                )
+            ),
             tracker=SimpleNamespace(
                 update=lambda boxes, frame_index: [
                     TrackedDetection(
@@ -767,7 +782,7 @@ class TestWorkers:
                     )
                 ]
             ),
-            video_run=video_run,
+            video=SimpleNamespace(run=video_run),
             metadata_sender=sender,
             metrics=StreamMetrics(),
             error=None,
@@ -803,7 +818,14 @@ class TestWorkers:
 
         publish_thread(stream, cfg, result_q, stop_event)
 
-        assert video_run.calls == [(frame, True, "rgb")]
+        assert len(video_run.calls) == 1
+        video_tensor = video_run.calls[0][0]
+        assert video_tensor.frame is frame
+        assert video_tensor.kwargs == {
+            "copy": True,
+            "image_format": "rgb",
+            "memory": "ev74",
+        }
         assert len(sender.calls) == 1
         metadata_type, data_json, _, frame_id = sender.calls[0]
         assert metadata_type == "tracking"
@@ -819,9 +841,14 @@ class TestWorkers:
             def __init__(self):
                 self.calls = []
 
-            def push(self, frame, copy=False, image_format=None):
-                self.calls.append((frame, copy, image_format))
+            def push_tensors(self, tensors):
+                self.calls.append(tensors)
                 return True
+
+        class FakeTensor:
+            @staticmethod
+            def from_numpy(frame, **kwargs):
+                return SimpleNamespace(frame=frame, kwargs=kwargs)
 
         class FakeMetadataSender:
             def __init__(self):
@@ -862,7 +889,13 @@ class TestWorkers:
         )
         stream = SimpleNamespace(
             index=0,
-            runtime=SimpleNamespace(pyneat=SimpleNamespace(PixelFormat=SimpleNamespace(RGB="rgb"))),
+            runtime=SimpleNamespace(
+                pyneat=SimpleNamespace(
+                    PixelFormat=SimpleNamespace(RGB="rgb"),
+                    TensorMemory=SimpleNamespace(EV74="ev74"),
+                    Tensor=FakeTensor,
+                )
+            ),
             tracker=SimpleNamespace(
                 update=lambda boxes, frame_index: [
                     TrackedDetection(
@@ -876,7 +909,7 @@ class TestWorkers:
                     )
                 ]
             ),
-            video_run=video_run,
+            video=SimpleNamespace(run=video_run),
             metadata_sender=sender,
             metrics=StreamMetrics(),
             error=None,
@@ -907,8 +940,12 @@ class TestWorkers:
 
         publish_thread(stream, cfg, result_q, stop_event)
 
-        assert video_run.calls[0][0].label == "overlay-frame"
-        assert video_run.calls[0][1:] == (True, "rgb")
+        assert video_run.calls[0][0].frame.label == "overlay-frame"
+        assert video_run.calls[0][0].kwargs == {
+            "copy": True,
+            "image_format": "rgb",
+            "memory": "ev74",
+        }
         assert sender.calls == []
 
     def test_producer_thread_throttles_to_cfg_fps(self, monkeypatch):
@@ -963,7 +1000,7 @@ class TestWorkers:
         )
         stream = SimpleNamespace(
             index=0,
-            source_run=FakeSourceRun(),
+            source=SimpleNamespace(run=FakeSourceRun()),
             runtime=SimpleNamespace(),
             metrics=StreamMetrics(),
             error=None,
@@ -973,7 +1010,7 @@ class TestWorkers:
 
         producer_thread(stream, cfg, frame_q, stop_event)
 
-        assert stream.source_run.calls == 3
+        assert stream.source.run.calls == 3
         assert frame_q.qsize() == 2
         first = frame_q.get_nowait()
         second = frame_q.get_nowait()
@@ -1013,7 +1050,7 @@ class TestWorkers:
         stream = SimpleNamespace(
             index=0,
             runtime=SimpleNamespace(),
-            detect_run=SimpleNamespace(),
+            detect=SimpleNamespace(run=SimpleNamespace()),
             quant_preproc_state=SimpleNamespace(),
             metrics=StreamMetrics(),
             error=None,
@@ -1057,7 +1094,7 @@ class TestWorkers:
             index=0,
             runtime=SimpleNamespace(),
             tracker=SimpleNamespace(),
-            video_run=SimpleNamespace(),
+            video=SimpleNamespace(run=SimpleNamespace()),
             metadata_sender=SimpleNamespace(),
             metrics=StreamMetrics(),
             error=None,
