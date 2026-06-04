@@ -1,6 +1,7 @@
 #include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_process.h"
 
+#include <algorithm>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -46,6 +47,16 @@ int env_int_or_default(const char* key, int default_value) {
 bool child_exited(pid_t pid, int& status_out) {
   const pid_t rc = ::waitpid(pid, &status_out, WNOHANG);
   return rc == pid;
+}
+
+bool wait_for_child_exit(pid_t pid, int timeout_ms, int& status_out) {
+  const int attempts = std::max(1, timeout_ms / 100);
+  for (int i = 0; i < attempts; ++i) {
+    if (child_exited(pid, status_out))
+      return true;
+    ::usleep(100000);
+  }
+  return child_exited(pid, status_out);
 }
 
 void terminate_child(pid_t pid) {
@@ -128,16 +139,22 @@ int main(int argc, char** argv) {
     config_file << "source:\n"
                 << "  rtsp_url: " << rtsp_url << "\n"
                 << "  latency_ms: 200\n"
-                << "  udp: false\n"
+                << "  tcp: true\n"
                 << "model:\n"
                 << "  path: " << mpk_path << "\n"
+                << "inference:\n"
+                << "  frames: 10\n"
+                << "  min_score: 0.55\n"
+                << "  nms_iou: 0.50\n"
+                << "  max_detections: 100\n"
                 << "runtime:\n"
-                << "  frames: 300\n"
-                << "  debug: false\n"
-                << "insight:\n"
-                << "  host: 127.0.0.1\n"
-                << "  video_port: " << video_port << "\n"
-                << "  metadata_port: " << metadata_port << "\n";
+                << "  profile: false\n"
+                << "  profile_interval: 100\n"
+                << "output:\n"
+                << "  insight:\n"
+                << "    host: 127.0.0.1\n"
+                << "    video_port: " << video_port << "\n"
+                << "    metadata_port: " << metadata_port << "\n";
   }
 
   std::vector<std::string> arg_storage;
@@ -165,11 +182,24 @@ int main(int argc, char** argv) {
   }
 
   const auto result = listener.wait_for_messages();
-  terminate_child(pid);
+  if (!result.success) {
+    terminate_child(pid);
+    sima_examples::testing::remove_dir(output_dir);
+    std::cerr << "[ERR] no valid Insight metadata received: " << result.error << "\n";
+    return 1;
+  }
+
+  int child_status = 0;
+  if (!wait_for_child_exit(pid, timeout_ms, child_status)) {
+    terminate_child(pid);
+    sima_examples::testing::remove_dir(output_dir);
+    std::cerr << "[ERR] example did not exit cleanly after finite frame limit\n";
+    return 1;
+  }
   sima_examples::testing::remove_dir(output_dir);
 
-  if (!result.success) {
-    std::cerr << "[ERR] no valid Insight metadata received: " << result.error << "\n";
+  if (!WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0) {
+    std::cerr << "[ERR] example exited with status " << child_status << "\n";
     return 1;
   }
 
