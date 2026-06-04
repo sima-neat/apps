@@ -232,8 +232,9 @@ class TestPipelineHelpers:
         from utils.model_family import ModelFamily
         from utils.pipeline import RtspProbe, RuntimeModules, build_detection_run
 
-        class FakeSession:
-            def __init__(self):
+        class FakeGraph:
+            def __init__(self, name):
+                self.name = name
                 self.added = []
 
             def add(self, node):
@@ -280,7 +281,7 @@ class TestPipelineHelpers:
 
             def input_appsrc_options(self, tensor_mode):
                 class InputOpt:
-                    media_type = ""
+                    payload_type = ""
                     format = ""
                     width = 0
                     height = 0
@@ -339,6 +340,9 @@ class TestPipelineHelpers:
             class PixelFormat:
                 RGB = "rgb"
 
+            class PayloadType:
+                Image = "image"
+
             class TensorMemory:
                 EV74 = "ev74"
 
@@ -346,11 +350,11 @@ class TestPipelineHelpers:
             groups = FakeGroups()
 
             def __init__(self):
-                self.last_session = None
+                self.last_graph = None
 
-            def Session(self):
-                self.last_session = FakeSession()
-                return self.last_session
+            def Graph(self, name):
+                self.last_graph = FakeGraph(name)
+                return self.last_graph
 
             def Model(self, path, opt):
                 return FakeModel(path, opt)
@@ -372,7 +376,7 @@ class TestPipelineHelpers:
 
         built = build_detection_run(runtime, cfg, ModelFamily.YOLOV8, probe)
 
-        added_kinds = [node[0] for node in runtime.pyneat.last_session.added]
+        added_kinds = [node[0] for node in runtime.pyneat.last_graph.added]
         assert built.run == "fake-run"
         assert added_kinds == ["input", "model_preprocess", "mla", "boxdecode", "output"]
 

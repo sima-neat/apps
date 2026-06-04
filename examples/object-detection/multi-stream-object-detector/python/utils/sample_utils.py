@@ -30,12 +30,8 @@ def _sample_payload_tag_upper(sample: Any) -> str:
     tag = str(tag).upper()
     if tag:
         return tag
-    if getattr(sample, "tensors", []):
+    if extract_bbox_payload(sample):
         return _BBOX_PAYLOAD_TAG
-    for field in getattr(sample, "fields", []):
-        nested = _sample_payload_tag_upper(field)
-        if nested:
-            return nested
     return ""
 
 
@@ -54,15 +50,61 @@ def first_tensor(sample: Any) -> Any | None:
     return None
 
 
-def extract_bbox_payload(sample: Any) -> bytes:
-    for tensor in iter_tensors(sample):
-        try:
-            payload = tensor.copy_payload_bytes()
-        except Exception:
-            continue
+def _copy_tensor_payload(tensor: Any) -> bytes:
+    try:
+        return tensor.copy_payload_bytes()
+    except Exception:
+        return b""
+
+
+def _first_tensor_payload(tensors: Any) -> bytes:
+    for tensor in tensors:
+        payload = _copy_tensor_payload(tensor)
         if payload:
             return payload
     return b""
+
+
+def extract_bbox_payload(sample: Any) -> bytes:
+    if isinstance(sample, (list, tuple)):
+        for item in sample:
+            payload = extract_bbox_payload(item)
+            if payload:
+                return payload
+        return b""
+
+    stack = [sample]
+    fallback = b""
+    while stack:
+        current = stack.pop()
+        stack.extend(reversed(list(getattr(current, "fields", []) or [])))
+
+        tag = (
+            getattr(current, "payload_tag", "")
+            or getattr(current, "format", "")
+            or ""
+        )
+        tag = str(tag).upper()
+
+        tensors = list(getattr(current, "tensors", []) or [])
+        if tensors:
+            payload = _first_tensor_payload(tensors)
+            if payload and tag == _BBOX_PAYLOAD_TAG:
+                return payload
+            if payload and not tag and not fallback:
+                fallback = payload
+
+        tensor = getattr(current, "tensor", None)
+        if tensor is None:
+            continue
+        payload = _copy_tensor_payload(tensor)
+        if not payload:
+            continue
+        if tag == _BBOX_PAYLOAD_TAG:
+            return payload
+        if not tag and not fallback:
+            fallback = payload
+    return fallback
 
 
 def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict[str, float | int]]:

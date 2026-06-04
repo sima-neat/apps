@@ -1,6 +1,6 @@
 #include "sample_utils_api.cpp"
 
-#include "neat/session.h"
+#include "neat/runtime.h"
 #include "support/object_detection/obj_detection_utils.h"
 
 #include <opencv2/imgproc.hpp>

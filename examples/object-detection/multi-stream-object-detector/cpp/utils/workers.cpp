@@ -64,8 +64,8 @@ struct StreamRuntime {
   std::string url;
   ModelFamily family = ModelFamily::Auto;
   RtspProbe probe;
-  SessionRun source;
-  std::optional<SessionRun> video;
+  GraphRun source;
+  std::optional<GraphRun> video;
   bool video_enabled = true;
   std::optional<simaai::neat::MetadataSender> metadata_sender;
   bool metadata_enabled = true;
@@ -100,7 +100,7 @@ private:
 
 struct DetectorRuntime {
   DetectorRuntimeKey key;
-  SessionRun runtime;
+  GraphRun graph_run;
 };
 
 struct WorkerContext {
@@ -227,7 +227,7 @@ void close_stream_runtime(StreamRuntime& stream) {
 void close_worker_context(WorkerContext& context) {
   for (auto& detector : context.detectors) {
     try {
-      detector.runtime.run.close();
+      detector.graph_run.run.close();
     } catch (...) {
     }
   }
@@ -399,7 +399,7 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
   auto& detector = find_detector_runtime(worker_context, stream.family, stream.probe);
   const double detect_t0 = now_steady_s();
   const simaai::neat::Sample det_sample =
-      run_sample_input_once(detector.runtime.run, packet.decoded, 50000);
+      run_sample_input_once(detector.graph_run.run, packet.decoded, 50000);
   const double detect_elapsed = now_steady_s() - detect_t0;
   const double preproc_elapsed = 0.0;
 
@@ -427,7 +427,7 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
       }
     }
     if (cfg.video_mode == VideoMode::Clean) {
-      if (!stream.video->run.push(simaai::neat::SampleList{packet.decoded})) {
+      if (!stream.video->run.push(packet.decoded)) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " Insight clean video push failed");
       }
