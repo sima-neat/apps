@@ -358,6 +358,7 @@ struct FrameProfile {
   double bbox_parse_ms = 0.0;
   double video_input_ms = 0.0;
   double video_push_ms = 0.0;
+  double metadata_ms = 0.0;
   double e2e_ms = 0.0;
   int boxes = 0;
 };
@@ -376,6 +377,7 @@ struct ProfileWindow {
   TimingAccumulator bbox_parse;
   TimingAccumulator video_input;
   TimingAccumulator video_push;
+  TimingAccumulator metadata;
   TimingAccumulator e2e;
 
   void add(const FrameProfile& profile, int published_total) {
@@ -393,6 +395,7 @@ struct ProfileWindow {
     bbox_parse.add(profile.bbox_parse_ms);
     video_input.add(profile.video_input_ms);
     video_push.add(profile.video_push_ms);
+    metadata.add(profile.metadata_ms);
     e2e.add(profile.e2e_ms);
     if (frames >= interval)
       flush(published_total);
@@ -408,7 +411,8 @@ struct ProfileWindow {
               << " avg_yolo_ms=" << (yolo_push.avg() + yolo_pull.avg())
               << " avg_bbox_ms=" << (bbox_extract.avg() + bbox_parse.avg())
               << " avg_video_input_ms=" << video_input.avg()
-              << " avg_video_push_ms=" << video_push.avg() << " avg_e2e_ms=" << e2e.avg()
+              << " avg_video_push_ms=" << video_push.avg() << " avg_metadata_ms=" << metadata.avg()
+              << " avg_e2e_ms=" << e2e.avg()
               << " avg_boxes=" << (static_cast<double>(boxes) / static_cast<double>(frames))
               << " max_e2e_ms=" << e2e.max_ms << "\n";
     reset();
@@ -426,6 +430,7 @@ struct ProfileWindow {
     bbox_parse.reset();
     video_input.reset();
     video_push.reset();
+    metadata.reset();
     e2e.reset();
   }
 };
@@ -828,8 +833,12 @@ void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_r
     const std::string data_json =
         sima_examples::metadata_boxes_data_json("objects", metadata_boxes);
     std::string metadata_err;
-    if (!metadata_sender.send_metadata("object-detection", data_json, ts_ms, std::to_string(fid),
-                                       &metadata_err)) {
+    const double t_metadata0 = time_ms();
+    const bool metadata_ok = metadata_sender.send_metadata("object-detection", data_json, ts_ms,
+                                                           std::to_string(fid), &metadata_err);
+    const double t_metadata1 = time_ms();
+    frame_profile.metadata_ms = t_metadata1 - t_metadata0;
+    if (!metadata_ok) {
       std::cerr << "[warn] insight metadata send failed: " << metadata_err << "\n";
     }
 

@@ -169,6 +169,37 @@ def tensor_from_bgr_frame(frame: np.ndarray) -> pyneat.Tensor:
     )
 
 
+def blank_nv12_tensor(width: int, height: int) -> pyneat.Tensor:
+    """Create a CPU-backed blank NV12 tensor with explicit Y and UV plane metadata."""
+    if width <= 0 or height <= 0 or width % 2 != 0 or height % 2 != 0:
+        raise ValueError("NV12 requires positive even width and height")
+    payload = np.zeros((height * 3 // 2, width), dtype=np.uint8)
+    tensor = pyneat.Tensor.from_numpy(
+        payload,
+        copy=True,
+        layout=pyneat.TensorLayout.HW,
+        image_format=pyneat.PixelFormat.NV12,
+        memory=pyneat.TensorMemory.CPU,
+    )
+    tensor.shape = [height, width]
+    tensor.strides_bytes = [width, 1]
+
+    y_plane = pyneat.Plane()
+    y_plane.role = pyneat.PlaneRole.Y
+    y_plane.shape = [height, width]
+    y_plane.strides_bytes = [width, 1]
+    y_plane.byte_offset = 0
+
+    uv_plane = pyneat.Plane()
+    uv_plane.role = pyneat.PlaneRole.UV
+    uv_plane.shape = [height // 2, width]
+    uv_plane.strides_bytes = [width, 1]
+    uv_plane.byte_offset = width * height
+
+    tensor.planes = [y_plane, uv_plane]
+    return tensor
+
+
 def is_tensor_like(value) -> bool:
     return hasattr(value, "copy_payload_bytes") and hasattr(value, "to_numpy")
 
@@ -344,11 +375,15 @@ def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
     """Build the generic NEAT video sender used by this Insight-targeted example."""
     input_opt = pyneat.InputOptions()
     input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = "BGR"
+    input_opt.format = "NV12"
+    input_opt.width = width
+    input_opt.height = height
+    input_opt.fps_n = max(1, fps)
+    input_opt.fps_d = 1
+    input_opt.caps_override = (
+        f"video/x-raw,format=NV12,width={width},height={height},framerate={max(1, fps)}/1"
+    )
     input_opt.use_simaai_pool = False
-    input_opt.max_width = width
-    input_opt.max_height = height
-    input_opt.max_depth = 3
 
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
     sender_opt.host = cfg.insight.host
@@ -360,11 +395,7 @@ def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
     graph.add(pyneat.nodes.input(input_opt))
     graph.add(pyneat.groups.video_sender(sender_opt))
 
-    seed = pyneat.Tensor.from_numpy(
-        np.zeros((height, width, 3), dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.BGR,
-    )
+    seed = blank_nv12_tensor(width, height)
     return graph, graph.build([seed], pyneat.RunMode.Async)
 
 
@@ -693,7 +724,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("RTSP pull timed out / stream closed", file=sys.stderr)
                 break
 
-            frame = tensor_bgr_from_decoded(tensors[0])
+            decoded_frame = tensors[0]
+            frame = tensor_bgr_from_decoded(decoded_frame)
             infer_input = tensor_from_bgr_frame(frame)
 
             # Push/pull integration point: run model and parse the BBOX payload.
@@ -715,12 +747,18 @@ def main(argv: list[str] | None = None) -> int:
 
             # Contract: publish video first, then publish matching metadata.
             t_video0 = time.perf_counter()
-            if not video_run.push([frame], copy=True, image_format=pyneat.PixelFormat.BGR):
+            video_ok = video_run.push([decoded_frame])
+            if not video_ok:
                 raise RuntimeError("Insight video push failed")
             t_video1 = time.perf_counter()
             fid = str(processed)
             data_json = make_object_detection_data_json(boxes)
-            metadata_sender.send_metadata("object-detection", data_json, int(time.time() * 1000), fid)
+            metadata_sender.send_metadata(
+                "object-detection",
+                data_json,
+                int(time.time() * 1000),
+                fid,
+            )
 
             processed += 1
             profile_window.add(
