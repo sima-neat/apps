@@ -8,12 +8,14 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
 
 
-def _write_manifest(path: Path, neat_core: str = "", platform_version: str = "2.0.0") -> None:
+def _write_manifest(path: Path, neat_core: object = "", platform_version: str = "2.0.0") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -143,7 +145,7 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
 def _run_build(
     tmp_path: Path,
     *,
-    neat_core: str = "",
+    neat_core: object = "",
     platform_version: str = "2.0.0",
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
@@ -253,6 +255,18 @@ def test_empty_manifest_resolves_from_dependency_branch_and_platform_version(tmp
     assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
 
 
+def test_snap_manifest_resolves_from_dependency_branch(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        env={"NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
+
+
 def test_empty_manifest_custom_branch_uses_matching_core_artifact_once(tmp_path):
     proc = _run_build(
         tmp_path,
@@ -280,8 +294,35 @@ def test_empty_manifest_custom_branch_falls_back_to_develop(tmp_path):
     assert "using develop-latest" in proc.stderr
 
 
+def test_snap_manifest_custom_branch_falls_back_to_develop(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        env={"NEAT_APPS_DEPENDENCY_BRANCH": "zz-missing-core-artifact-for-test"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert "using develop-latest" in proc.stderr
+
+
 def test_explicit_manifest_uses_valid_branch_version(tmp_path):
     proc = _run_build(tmp_path, neat_core="zz-core-artifact-for-test-pinnedsha1")
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
+    assert (
+        "https://core.test/zz-core-artifact-for-test/pinnedsha1/metadata.json"
+        in _curl_log(tmp_path)
+    )
+
+
+@pytest.mark.parametrize("ref_key", ["branch", "ref"])
+def test_dependency_object_manifest_uses_valid_artifact(tmp_path, ref_key):
+    proc = _run_build(
+        tmp_path,
+        neat_core={ref_key: "zz-core-artifact-for-test", "spec": "pinnedsha1"},
+    )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
@@ -306,7 +347,25 @@ def test_protected_branch_rejects_explicit_manifest_value(tmp_path):
     )
 
     assert proc.returncode != 0
-    assert "must keep neat-core empty on main/develop" in proc.stderr
+    assert "must keep neat-core as policy=snap on main/develop" in proc.stderr
+
+
+def test_protected_branch_rejects_explicit_dependency_object_manifest(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"branch": "main", "spec": "mainsha1"},
+        env={"GITHUB_REF_NAME": "main"},
+    )
+
+    assert proc.returncode != 0
+    assert "must keep neat-core as policy=snap on main/develop" in proc.stderr
+
+
+def test_unsupported_manifest_object_fails(tmp_path):
+    proc = _run_build(tmp_path, neat_core={"policy": "latest"})
+
+    assert proc.returncode != 0
+    assert "unsupported neat-core.policy" in proc.stderr
 
 
 def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):
