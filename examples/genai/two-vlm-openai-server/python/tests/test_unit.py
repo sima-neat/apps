@@ -8,6 +8,8 @@ import textwrap
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.config import load_config  # noqa: E402
