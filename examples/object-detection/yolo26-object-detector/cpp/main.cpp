@@ -106,6 +106,23 @@ bool is_image(const fs::path& p) {
   return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp");
 }
 
+int clear_output_images(const fs::path& output_dir, const fs::path& input_dir) {
+  if (fs::weakly_canonical(output_dir) == fs::weakly_canonical(input_dir)) {
+    std::cerr << "Skipping output cleanup because output_dir matches input_dir: " << output_dir
+              << "\n";
+    return 0;
+  }
+
+  int removed = 0;
+  for (const auto& entry : fs::directory_iterator(output_dir)) {
+    if (entry.is_regular_file() && is_image(entry.path())) {
+      fs::remove(entry.path());
+      ++removed;
+    }
+  }
+  return removed;
+}
+
 std::vector<std::string> load_labels(const fs::path& labels_path) {
   std::ifstream in(labels_path);
   if (!in.good()) {
@@ -206,6 +223,10 @@ int main(int argc, char** argv) {
     return 2;
   }
   fs::create_directories(output_dir);
+  const int removed_outputs = clear_output_images(output_dir, input_dir);
+  if (removed_outputs > 0) {
+    std::cout << "Cleared " << removed_outputs << " stale output images\n";
+  }
 
   std::vector<std::string> labels;
   try {

@@ -87,6 +87,22 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(handle) or {}
 
 
+def clear_output_images(output_dir: Path, input_dir: Path) -> int:
+    if output_dir.resolve() == input_dir.resolve():
+        print(
+            f"Skipping output cleanup because output_dir matches input_dir: {output_dir}",
+            file=sys.stderr,
+        )
+        return 0
+
+    removed = 0
+    for path in output_dir.iterdir():
+        if path.is_file() and is_image(path):
+            path.unlink()
+            removed += 1
+    return removed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="yolo26m simple folder detection pipeline")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
@@ -140,6 +156,9 @@ def main() -> int:
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
     output_dir.mkdir(parents=True, exist_ok=True)
+    removed_outputs = clear_output_images(output_dir, input_dir)
+    if removed_outputs:
+        print(f"Cleared {removed_outputs} stale output images")
     try:
         labels = load_labels(labels_path)
     except Exception as e:
