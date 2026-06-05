@@ -106,7 +106,7 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
-neat_core = data.get("neat_core", {})
+neat_core = data.get("neat-core", {})
 branch = str(neat_core.get("branch", "")).strip()
 version = str(neat_core.get("version", "")).strip()
 

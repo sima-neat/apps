@@ -18,7 +18,7 @@ def _write_manifest(path: Path, neat_core: str = "", platform_version: str = "2.
     path.write_text(
         json.dumps(
             {
-                "neat_core": neat_core,
+                "neat-core": neat_core,
                 "platform-version": platform_version,
             },
             indent=2,
@@ -306,7 +306,7 @@ def test_protected_branch_rejects_explicit_manifest_value(tmp_path):
     )
 
     assert proc.returncode != 0
-    assert "must keep neat_core empty on main/develop" in proc.stderr
+    assert "must keep neat-core empty on main/develop" in proc.stderr
 
 
 def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):

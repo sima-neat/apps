@@ -42,13 +42,13 @@ Options:
   --portal-only             Build portal only and exit
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
   --neat-core-version <branch-version>
-                            Override deps/manifest.json neat_core for one run
+                            Override deps/manifest.json neat-core for one run
   -h, --help                Show help
 
 Environment:
   SIMA_CLI_BIN              Path to sima-cli binary (default: sima-cli)
   NEAT_APPS_DEPENDENCY_BRANCH
-                            Dependency branch for empty manifest neat_core
+                            Dependency branch for empty manifest neat-core
   NEAT_INSTALLER_URL        Hosted branch installer URL
   NEAT_ARTIFACTS_BASE_URL   Hosted NEAT core artifact index
   NEAT_APPS_CORE_INSTALL_DIR
@@ -131,7 +131,7 @@ import json
 import sys
 
 payload = {
-    "neat_core": {
+    "neat-core": {
         "branch": sys.argv[2],
         "version": sys.argv[3],
     }
@@ -253,11 +253,11 @@ except json.JSONDecodeError as exc:
     print(f"ERROR: Invalid JSON in {path}: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
-neat_core = data.get("neat_core")
+neat_core = data.get("neat-core")
 platform_version = data.get("platform-version")
 
 if not isinstance(neat_core, str):
-    print(f"ERROR: {path} must define neat_core as a string.", file=sys.stderr)
+    print(f"ERROR: {path} must define neat-core as a string.", file=sys.stderr)
     raise SystemExit(1)
 if not isinstance(platform_version, str) or not platform_version.strip():
     print(f"ERROR: {path} must define platform-version as a non-empty string.", file=sys.stderr)
@@ -607,15 +607,15 @@ resolve_neat_core_target() {
 
   if [[ -n "${manifest_core}" ]]; then
     if is_protected_manifest_context; then
-      echo "ERROR: ${APPS_MANIFEST} must keep neat_core empty on main/develop." >&2
+      echo "ERROR: ${APPS_MANIFEST} must keep neat-core empty on main/develop." >&2
       return 1
     fi
-    if ! ref_output="$(parse_core_ref "${manifest_core}" "${APPS_MANIFEST} neat_core")"; then
+    if ! ref_output="$(parse_core_ref "${manifest_core}" "${APPS_MANIFEST} neat-core")"; then
       return 1
     fi
     branch="$(first_line "${ref_output}")"
     version="$(second_line "${ref_output}")"
-    validate_explicit_core_ref "${branch}" "${version}" "${APPS_MANIFEST} neat_core" || return 1
+    validate_explicit_core_ref "${branch}" "${version}" "${APPS_MANIFEST} neat-core" || return 1
     printf '%s\n%s\n' "${branch}" "${version}"
     return 0
   fi
