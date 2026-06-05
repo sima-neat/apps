@@ -48,7 +48,7 @@ Options:
 Environment:
   SIMA_CLI_BIN              Path to sima-cli binary (default: sima-cli)
   NEAT_APPS_DEPENDENCY_BRANCH
-                            Dependency branch for empty manifest neat-core
+                            Dependency branch for snap manifest neat-core
   NEAT_INSTALLER_URL        Hosted branch installer URL
   NEAT_ARTIFACTS_BASE_URL   Hosted NEAT core artifact index
   NEAT_APPS_CORE_INSTALL_DIR
@@ -256,14 +256,35 @@ except json.JSONDecodeError as exc:
 neat_core = data.get("neat-core")
 platform_version = data.get("platform-version")
 
-if not isinstance(neat_core, str):
-    print(f"ERROR: {path} must define neat-core as a string.", file=sys.stderr)
-    raise SystemExit(1)
 if not isinstance(platform_version, str) or not platform_version.strip():
     print(f"ERROR: {path} must define platform-version as a non-empty string.", file=sys.stderr)
     raise SystemExit(1)
 
-print(neat_core.strip())
+if isinstance(neat_core, str):
+    print("__SNAP__" if not neat_core.strip() else neat_core.strip())
+elif isinstance(neat_core, dict):
+    policy = str(neat_core.get("policy", "")).strip().lower()
+    if policy == "snap":
+        print("__SNAP__")
+    elif policy:
+        print(f"ERROR: unsupported neat-core.policy in {path}: {policy!r}", file=sys.stderr)
+        raise SystemExit(1)
+    else:
+        spec = str(neat_core.get("spec", "")).strip()
+        branch = str(neat_core.get("branch", neat_core.get("ref", ""))).strip()
+        if not branch:
+            print(
+                f"ERROR: {path} neat-core object must define policy=snap or branch/ref.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(f"{branch}:{spec or 'latest'}")
+else:
+    print(
+        f"ERROR: {path} must define neat-core as a string or dependency object.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 print(platform_version.strip())
 PY
 }
@@ -605,24 +626,34 @@ resolve_neat_core_target() {
     return 0
   fi
 
-  if [[ -n "${manifest_core}" ]]; then
-    if is_protected_manifest_context; then
-      echo "ERROR: ${APPS_MANIFEST} must keep neat-core empty on main/develop." >&2
-      return 1
-    fi
-    if ! ref_output="$(parse_core_ref "${manifest_core}" "${APPS_MANIFEST} neat-core")"; then
-      return 1
-    fi
-    branch="$(first_line "${ref_output}")"
-    version="$(second_line "${ref_output}")"
-    validate_explicit_core_ref "${branch}" "${version}" "${APPS_MANIFEST} neat-core" || return 1
+  if [[ "${manifest_core}" == "__SNAP__" ]]; then
+    branch="$(resolve_empty_neat_core_branch)"
+    version="latest"
     printf '%s\n%s\n' "${branch}" "${version}"
     return 0
   fi
 
-  branch="$(resolve_empty_neat_core_branch)"
-  version="latest"
-  printf '%s\n%s\n' "${branch}" "${version}"
+  if [[ -n "${manifest_core}" ]]; then
+    if is_protected_manifest_context; then
+      echo "ERROR: ${APPS_MANIFEST} must keep neat-core as policy=snap on main/develop." >&2
+      return 1
+    fi
+
+    if [[ "${manifest_core}" == *":"* ]]; then
+      branch="${manifest_core%%:*}"
+      version="${manifest_core#*:}"
+    else
+      if ! ref_output="$(parse_core_ref "${manifest_core}" "${APPS_MANIFEST} neat-core")"; then
+        return 1
+      fi
+      branch="$(first_line "${ref_output}")"
+      version="$(second_line "${ref_output}")"
+    fi
+
+    validate_explicit_core_ref "${branch}" "${version}" "${APPS_MANIFEST} neat-core" || return 1
+    printf '%s\n%s\n' "${branch}" "${version}"
+    return 0
+  fi
 }
 
 load_neat_core_target() {

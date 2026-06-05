@@ -1,5 +1,7 @@
 {
-  "neat-core": "",
+  "neat-core": {
+    "policy": "snap"
+  },
   "sdk": {
     "channel": "main"
   },

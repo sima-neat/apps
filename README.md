@@ -176,10 +176,12 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 ## NEAT Core Dependency
 
 `deps/manifest.json` declares the Neat core dependency and the platform version.
-When `neat-core` is empty, `build.sh` resolves it from the dependency branch:
-`main` uses `main-latest`, `develop` uses `develop-latest`, and custom branches use
-a matching core branch when available or fall back to `develop-latest`. Explicit
-core pins use `branch-version`, matching the core repo's internals manifest shape.
+The normal value is `"neat-core": {"policy": "snap"}`. Snap resolves from the
+dependency branch: `main` uses `main-latest`, `develop` uses `develop-latest`,
+and custom branches use a matching core branch when available or fall back to
+`develop-latest`. Explicit manifest pins can use `{"branch": "...", "spec": "..."}`
+or `{"ref": "...", "spec": "..."}`. Legacy string pins and the
+`--neat-core-version <branch-version>` override remain supported.
 
 ## Support
 
