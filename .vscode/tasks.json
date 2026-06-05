@@ -2,6 +2,79 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Apps: Build All",
+      "type": "shell",
+      "command": "./build.sh",
+      "args": [
+        "--all",
+        "--clean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "NEAT_CORE_INSTALL_MODE": "vulcan",
+          "NEAT_VULCAN_ENV": "production"
+        }
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps Portal: Build and Preview",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "npm run build && npm run preview -- --host 0.0.0.0"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/portal"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps Portal: Run Dev Server",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "0.0.0.0"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/portal"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Apps: Test Unit C++",
       "type": "shell",
       "command": "bash",
