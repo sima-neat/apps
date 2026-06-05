@@ -13,7 +13,6 @@ tmp/
 sandbox/
 tests/.env.local
 .neat-core-installed
-deps/.neat_core
 deps/debs/
 portal/node_modules/
 portal/.vite/

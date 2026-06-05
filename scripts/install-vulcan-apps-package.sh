@@ -5,6 +5,8 @@ DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
 RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-neat-apps-runtime}"
 RUNTIME_DST="${DEST_DIR}/neat-apps-runtime"
 VULCAN_ENV="${NEAT_VULCAN_ENV:-${VULCAN_ENV:-dev}}"
+NEAT_CORE_INSTALL_DIR=""
+NEAT_CORE_INSTALL_DIR_OWNED=0
 
 resolve_sima_cli_bin() {
   if [[ -n "${SIMA_CLI_BIN:-}" && -x "${SIMA_CLI_BIN}" ]]; then
@@ -51,8 +53,53 @@ print(version)
 PY
 }
 
+prepare_vulcan_core_install_dir() {
+  NEAT_CORE_INSTALL_DIR_OWNED=0
+  if [[ -z "${NEAT_APPS_CORE_INSTALL_DIR:-}" ]]; then
+    NEAT_CORE_INSTALL_DIR="$(mktemp -d /tmp/neat-apps-core-install.XXXXXX)"
+    NEAT_CORE_INSTALL_DIR_OWNED=1
+    return 0
+  fi
+
+  NEAT_CORE_INSTALL_DIR="${NEAT_APPS_CORE_INSTALL_DIR}"
+  if [[ -z "${NEAT_CORE_INSTALL_DIR}" || "${NEAT_CORE_INSTALL_DIR}" == "/" ]]; then
+    echo "ERROR: unsafe NEAT_APPS_CORE_INSTALL_DIR: ${NEAT_CORE_INSTALL_DIR}" >&2
+    exit 1
+  fi
+  rm -rf "${NEAT_CORE_INSTALL_DIR}"
+  mkdir -p "${NEAT_CORE_INSTALL_DIR}"
+}
+
+cleanup_vulcan_core_install_dir() {
+  if [[ "${NEAT_CORE_INSTALL_DIR_OWNED}" == "1" && -n "${NEAT_CORE_INSTALL_DIR}" ]]; then
+    rm -rf "${NEAT_CORE_INSTALL_DIR}"
+  fi
+  NEAT_CORE_INSTALL_DIR=""
+  NEAT_CORE_INSTALL_DIR_OWNED=0
+}
+
+run_sima_cli_core_install() {
+  local sima_cli_bin="$1"
+  shift
+  local log_path
+  log_path="$(mktemp /tmp/neat-apps-sima-cli-install.XXXXXX.log)"
+  if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
+    rm -f "${log_path}"
+    return 1
+  fi
+  if grep -Fq "Installation script exited" "${log_path}"; then
+    echo "ERROR: sima-cli reported a NEAT core installer failure." >&2
+    rm -f "${log_path}"
+    return 1
+  fi
+  rm -f "${log_path}"
+}
+
 if [[ ! -d "${RUNTIME_SRC}" ]]; then
-  mapfile -t runtime_candidates < <(find . -mindepth 1 -maxdepth 3 -type d -name "${RUNTIME_SRC}" | sort)
+  runtime_candidates=()
+  while IFS= read -r candidate; do
+    runtime_candidates+=("${candidate}")
+  done < <(find . -mindepth 1 -maxdepth 3 -type d -name "${RUNTIME_SRC}" | sort)
   if [[ "${#runtime_candidates[@]}" -eq 1 ]]; then
     RUNTIME_SRC="${runtime_candidates[0]}"
   else
@@ -78,7 +125,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! mapfile -t NEAT_CORE_TARGET < <(extract_neat_core_target "${NEAT_CORE_JSON_PATH}"); then
+if ! NEAT_CORE_TARGET_OUTPUT="$(extract_neat_core_target "${NEAT_CORE_JSON_PATH}")"; then
   echo "ERROR: failed to parse NEAT core dependency from ${NEAT_CORE_JSON_PATH}." >&2
   exit 1
 fi
@@ -88,19 +135,29 @@ SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
   exit 1
 }
 
-NEAT_CORE_BRANCH="${NEAT_CORE_TARGET[0]}"
-NEAT_CORE_VERSION="${NEAT_CORE_TARGET[1]}"
+NEAT_CORE_BRANCH="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '1p')"
+NEAT_CORE_VERSION="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '2p')"
 
 echo
 echo "Installing matching NEAT core from Vulcan:"
 echo "  Environment: ${VULCAN_ENV}"
 echo "  Branch     : ${NEAT_CORE_BRANCH}"
 echo "  Version    : ${NEAT_CORE_VERSION}"
-"${SIMA_CLI_RESOLVED}" neat install \
-  --env "${VULCAN_ENV}" \
-  -d . \
-  -t all \
-  "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
+prepare_vulcan_core_install_dir
+echo "  Scratch dir: ${NEAT_CORE_INSTALL_DIR}"
+INSTALL_STATUS=0
+(
+  cd "${NEAT_CORE_INSTALL_DIR}"
+  run_sima_cli_core_install "${SIMA_CLI_RESOLVED}" \
+    --env "${VULCAN_ENV}" \
+    -d . \
+    -t minimal \
+    "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
+) || INSTALL_STATUS=$?
+cleanup_vulcan_core_install_dir
+if [[ "${INSTALL_STATUS}" -ne 0 ]]; then
+  exit "${INSTALL_STATUS}"
+fi
 
 DOWNLOAD_MODELS_SCRIPT="${RUNTIME_DST}/scripts/download_models.sh"
 if [[ "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}" == "1" ]]; then

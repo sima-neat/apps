@@ -30,7 +30,7 @@ def _write_manifest(path: Path, neat_core: str = "", platform_version: str = "2.
 
 def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     log_path = tmp_path / "curl.log"
     curl_path = bin_dir / "curl"
     curl_path.write_text(
@@ -120,6 +120,26 @@ def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
     return bin_dir, log_path
 
 
+def _write_fake_sima_cli(tmp_path: Path) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    sima_cli_path = bin_dir / "sima-cli"
+    sima_cli_path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\\n' "$PWD" > "${NEAT_APPS_TEST_SIMA_CLI_CWD}"
+            printf '%s\\n' "$*" > "${NEAT_APPS_TEST_SIMA_CLI_ARGS}"
+            touch sima-cli-ran.txt
+            """
+        ),
+        encoding="utf-8",
+    )
+    sima_cli_path.chmod(0o755)
+    return bin_dir
+
+
 def _run_build(
     tmp_path: Path,
     *,
@@ -187,6 +207,38 @@ def _curl_log(tmp_path: Path) -> list[str]:
     if not path.exists():
         return []
     return path.read_text(encoding="utf-8").splitlines()
+
+
+def _write_fake_neat_json(tmp_path: Path, *, channel: str, tag: str, env: str) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    neat_path = bin_dir / "neat"
+    payload = {
+        "components": {
+            "core": {
+                "channel": channel,
+                "tag": tag,
+                "provenance": {"vulcanEnvironment": env},
+            }
+        }
+    }
+    neat_path.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            if [[ "${{1:-}}" == "--json" ]]; then
+              cat <<'EOF'
+            {json.dumps(payload)}
+            EOF
+              exit 0
+            fi
+            exit 1
+            """
+        ),
+        encoding="utf-8",
+    )
+    neat_path.chmod(0o755)
+    return bin_dir
 
 
 def test_empty_manifest_resolves_from_dependency_branch_and_platform_version(tmp_path):
@@ -278,10 +330,56 @@ def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):
     assert installer_args.read_text(encoding="utf-8").strip() == (
         "--minimum scratch-core-for-test scratchsha1"
     )
-    assert (deps_dir / ".neat_core").read_text(encoding="utf-8").strip() == (
-        "scratch-core-for-test/scratchsha1"
-    )
     assert list((deps_dir / "debs").iterdir()) == []
     assert not (APPS_ROOT / "sima-neat-test-Linux-core.deb").exists()
     assert not (APPS_ROOT / "neat-test.deb").exists()
     assert not (APPS_ROOT / "pyneat-test.whl").exists()
+
+
+def test_vulcan_core_install_uses_minimal_temp_dir(tmp_path):
+    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
+    sima_cli_args = tmp_path / "sima-cli-args.txt"
+    _write_fake_sima_cli(tmp_path)
+
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    install_dir = Path(sima_cli_cwd.read_text(encoding="utf-8").strip())
+    assert str(install_dir).startswith("/tmp/neat-apps-core-install.")
+    assert sima_cli_args.read_text(encoding="utf-8").strip() == (
+        "neat install --env production -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1"
+    )
+    assert not install_dir.exists()
+
+
+def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env="prod",
+    )
+
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core already installed (scratch-core-for-test/scratchsha1)" in proc.stdout
