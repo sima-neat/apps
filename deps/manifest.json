@@ -1,4 +1,7 @@
 {
   "neat_core": "onat_handover_tmp-9c436d53b64b",
+  "sdk": {
+    "channel": "2.0.0"
+  },
   "platform-version": "2.0.0"
 }
