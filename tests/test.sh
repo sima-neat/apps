@@ -86,7 +86,7 @@ Combine flags for specific subsets:
 Environment:
   SIMANEAT_APPS_TEST_MODELS_DIR     Model directory (default: assets/models)
   SIMANEAT_APPS_TEST_INPUT_DIR      Input images directory (default: assets/test_images)
-  SIMANEAT_APPS_TEST_OUTPUT_DIR     E2E output root (default: sandbox/tests)
+  SIMANEAT_APPS_TEST_OUTPUT_DIR     E2E output root (default: sandbox/test-runs)
   SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE  Classification goldfish image path
   SIMANEAT_APPS_TEST_KEEP_OUTPUT    Keep e2e output dirs (1=yes, default: 1)
   SIMANEAT_APPS_TEST_RTSP_URL       Single RTSP stream URL
@@ -179,14 +179,14 @@ load_config_file() {
   restore_process_env_overrides
 }
 
-apply_test_env_defaults() {
+resolve_test_runtime_env() {
   if [[ -z "${APPS_ROOT:-}" ]]; then
     export APPS_ROOT="${ROOT_DIR}"
   fi
 
   export SIMANEAT_APPS_TEST_MODELS_DIR="${SIMANEAT_APPS_TEST_MODELS_DIR:-${APPS_ROOT}/assets/models}"
   export SIMANEAT_APPS_TEST_INPUT_DIR="${SIMANEAT_APPS_TEST_INPUT_DIR:-${APPS_ROOT}/assets/test_images}"
-  export SIMANEAT_APPS_TEST_OUTPUT_DIR="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${APPS_ROOT}/sandbox/tests}"
+  export SIMANEAT_APPS_TEST_OUTPUT_DIR="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${APPS_ROOT}/sandbox/test-runs}"
   export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE:-${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg}"
   export SIMANEAT_APPS_TEST_KEEP_OUTPUT="${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-1}"
   export SIMANEAT_APPS_TEST_TIMEOUT_MS="${SIMANEAT_APPS_TEST_TIMEOUT_MS:-180000}"
@@ -207,7 +207,7 @@ if [[ -n "${CONFIG_FILE}" ]]; then
   load_config_file "${CONFIG_FILE}"
 fi
 
-apply_test_env_defaults
+resolve_test_runtime_env
 
 if [[ "${STRICT_CLI}" -eq 1 || "${SIMANEAT_APPS_TEST_REQUIRE_E2E:-0}" == "1" ]]; then
   STRICT_MODE=1

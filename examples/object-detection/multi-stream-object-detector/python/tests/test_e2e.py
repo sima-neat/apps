@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import sys
-import textwrap
 
 import pytest
 
@@ -16,23 +15,14 @@ MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 
 @pytest.mark.e2e
 class TestE2E:
-    def test_validate_config_only_smoke_runs(self, tmp_output_dir: Path):
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            textwrap.dedent(
-                """
-                model:
-                  path: assets/models/yolo_v8m_mpk.tar.gz
-                streams:
-                  - rtsp://127.0.0.1:8554/src1
-                runtime:
-                  worker_count: 2
-                output:
-                  insight:
-                    host: 127.0.0.1
-                """
-            ).strip(),
-            encoding="utf-8",
+    def test_validate_config_only_smoke_runs(self, e2e_config_writer):
+        config_path = e2e_config_writer(
+            {
+                "model": {"path": "assets/models/yolo_v8m_mpk.tar.gz"},
+                "streams": ["rtsp://127.0.0.1:8554/src1"],
+                "runtime": {"worker_count": 2},
+                "output": {"insight": {"host": "127.0.0.1"}},
+            }
         )
 
         result = subprocess.run(

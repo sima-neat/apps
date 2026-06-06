@@ -23,7 +23,14 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
-        self, models_dir, tmp_output_dir, test_images_dir, test_timeout_ms, skip_unless_e2e_ready
+        self,
+        models_dir,
+        tmp_output_dir,
+        test_images_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
         model = _find_model(models_dir, "yolo_v8n")
         skip_unless_e2e_ready(model is not None, "yolo (non-seg) model not found in models_dir")
@@ -35,26 +42,13 @@ class TestE2E:
             "test_images_dir is missing or empty",
         )
 
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    f"  labels: {LABELS_FILE}",
-                    "io:",
-                    f"  input_dir: {test_images_dir}",
-                    f"  output_dir: {tmp_output_dir}",
-                    "decode:",
-                    "  score_threshold: 0.55",
-                    "  nms_iou: 0.50",
-                    "  max_detections: 100",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        decode = e2e_config_section("yolov8-object-detector", "decode")
+        config_path = e2e_config_writer(
+            {
+                "model": {"path": str(model), "labels": str(LABELS_FILE)},
+                "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
+                "decode": decode,
+            }
         )
 
         result = subprocess.run(

@@ -27,6 +27,10 @@ Run CI-like strict e2e validation:
 
 ## Local E2E Config
 
+Tracked, non-secret e2e semantic parameters live in `tests/e2e.yaml`.
+Use it for shared thresholds, NMS values, top-k limits, and validation
+expectations that should be identical between Python and C++ tests.
+
 Machine-specific values belong in a local config file, not in tracked scripts.
 `tests/.env.example` is the committed template. `tests/.env.local` is your
 ignored local copy with real board URLs and interpreter paths.
@@ -50,6 +54,30 @@ Use `--config <file>` to load a different config:
 ```
 
 Process environment variables override values loaded from the config file.
+
+## Test Layout
+
+```text
+tests/
+  test.sh            # local, VS Code, CI entrypoint
+  e2e.yaml           # tracked non-secret e2e thresholds and validation values
+  .env.example       # documented local runtime overrides
+  .env.local         # ignored local runtime overrides
+  conftest.py        # Python fixtures for env, e2e contract, and output dirs
+  pytest.ini         # pytest markers and discovery settings
+```
+
+Generated e2e artifacts are written under `sandbox/test-runs` by default:
+
+```text
+sandbox/test-runs/
+  python/<example>/<test>/
+    config.yaml
+    out/*
+  cpp/<example>/<test>/
+    config.yaml
+    out/*
+```
 
 ## Commands
 
@@ -135,13 +163,16 @@ python3 -m pytest \
 
 - `SIMANEAT_APPS_TEST_MODELS_DIR` (default: `${APPS_ROOT}/assets/models`)
 - `SIMANEAT_APPS_TEST_INPUT_DIR` (default: `${APPS_ROOT}/assets/test_images`)
-- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox/tests`)
+- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox/test-runs`)
 - `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg`)
 - `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `1`)
 - `SIMANEAT_APPS_TEST_RTSP_URL` (single RTSP stream URL)
 - `SIMANEAT_APPS_TEST_RTSP_URLS` (comma-separated RTSP URLs for multistream tests)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
 - `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
+- `SIMANEAT_APPS_TEST_LABELS_FILE` (optional labels file override)
+- `SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT` (optional Insight video port override)
+- `SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT` (optional Insight metadata port override)
 - `PYTHON_TEST_BIN` (optional Python interpreter override)
 
 ## RTSP E2E Prerequisites

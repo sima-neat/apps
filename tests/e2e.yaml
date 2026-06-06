@@ -1,0 +1,66 @@
+e2e:
+  image-classifier:
+    validation:
+      expected_class_id: 1
+      min_probability: 0.0
+
+  face-detector:
+    decode:
+      confidence_threshold: 0.40
+      nms_iou: 0.90
+      top_k: 5000
+      keep_top_k: 750
+
+  detr-object-detector:
+    decode:
+      confidence_threshold: 0.5
+
+  yolov8-object-detector:
+    decode:
+      score_threshold: 0.55
+      nms_iou: 0.50
+      max_detections: 100
+
+  yolo26-object-detector:
+    decode:
+      score_threshold: 0.25
+      nms_iou: 0.45
+      max_detections: 100
+
+  single-stream-object-detector:
+    inference:
+      min_score: 0.55
+      nms_iou: 0.50
+      max_detections: 100
+
+  instance-segmenter:
+    decode:
+      score_threshold: 0.60
+      nms_iou: 0.45
+      max_detections: 200
+
+  human-pose-estimator:
+    decode:
+      keypoint_score: 0.1
+      nms_radius: 6
+      paf_score: 0.05
+      paf_success_ratio: 0.8
+      paf_samples: 10
+      min_valid_joints: 3
+      min_avg_person_score: 0.2
+
+  person-re-identification:
+    comparison:
+      cosine:
+        threshold: 0.65
+      euclidean:
+        threshold: 25.0
+
+  multi-stream-people-tracker:
+    inference:
+      detection_threshold: 0.25
+      nms_iou_threshold: 0.5
+      top_k: 24
+    tracking:
+      iou_threshold: 0.3
+      max_missing_frames: 15

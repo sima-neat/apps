@@ -1,5 +1,6 @@
 // E2E test for person-re-identification.
 // Runs the binary with a real model and image pair, verifies output artifacts.
+#include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
 #include <nlohmann/json.hpp>
@@ -87,6 +88,10 @@ int main(int argc, char** argv) {
   const fs::path image_a = images[0];
   const fs::path image_b = images[1];
   const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+  const double cosine_threshold =
+      e2e_double("person-re-identification", "comparison.cosine", "threshold");
+  const double euclidean_threshold =
+      e2e_double("person-re-identification", "comparison.euclidean", "threshold");
 
   int failures = 0;
 
@@ -110,7 +115,7 @@ int main(int argc, char** argv) {
                   << "  type: both\n"
                   << "comparison:\n"
                   << "  metric: cosine\n"
-                  << "  threshold: 0.65\n"
+                  << "  threshold: " << cosine_threshold << "\n"
                   << "runtime:\n"
                   << "  timeout_ms: 5000\n"
                   << "  profile: false\n";
@@ -167,7 +172,7 @@ int main(int argc, char** argv) {
                   << "  type: json\n"
                   << "comparison:\n"
                   << "  metric: euclidean\n"
-                  << "  threshold: 25.0\n"
+                  << "  threshold: " << euclidean_threshold << "\n"
                   << "runtime:\n"
                   << "  timeout_ms: 5000\n"
                   << "  profile: false\n";

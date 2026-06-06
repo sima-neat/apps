@@ -168,12 +168,16 @@ ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::s
 
 std::string create_test_output_dir(const std::string& example_name, const std::string& test_name) {
   const char* out_root_raw = env_or_null("SIMANEAT_APPS_TEST_OUTPUT_DIR");
-  const std::string base_root = out_root_raw ? out_root_raw : "/tmp";
-  const fs::path out_dir = fs::path(base_root) / "cpp" / example_name / test_name;
+  const char* apps_root_raw = env_or_null("APPS_ROOT");
+  const fs::path base_root =
+      out_root_raw ? fs::path(out_root_raw)
+                   : fs::path(apps_root_raw ? apps_root_raw : ".") / "sandbox" / "test-runs";
+  const fs::path run_dir = base_root / "cpp" / example_name / test_name;
+  const fs::path out_dir = run_dir / "out";
   std::error_code ec;
-  fs::remove_all(out_dir, ec);
+  fs::remove_all(run_dir, ec);
   if (ec) {
-    std::cerr << "[ERR] failed to clear output directory '" << out_dir.string()
+    std::cerr << "[ERR] failed to clear output directory '" << run_dir.string()
               << "': " << ec.message() << "\n";
     return "";
   }
@@ -192,7 +196,8 @@ void remove_dir(const std::string& path) {
     return;
   }
   std::error_code ec;
-  fs::remove_all(path, ec);
+  const fs::path target(path);
+  fs::remove_all(target.filename() == "out" ? target.parent_path() : target, ec);
 }
 
 namespace {

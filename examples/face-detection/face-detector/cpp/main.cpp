@@ -445,6 +445,13 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
       (max_draw > 0) ? std::min(dets.size(), static_cast<size_t>(max_draw)) : dets.size();
   for (size_t i = 0; i < limit; ++i) {
     const auto& d = dets[i];
+    if (!std::isfinite(d.x1) || !std::isfinite(d.y1) || !std::isfinite(d.x2) ||
+        !std::isfinite(d.y2)) {
+      throw std::runtime_error("non-finite face detection box at index " + std::to_string(i));
+    }
+    if (!std::isfinite(d.score)) {
+      throw std::runtime_error("non-finite face detection score at index " + std::to_string(i));
+    }
     const cv::Point p1(static_cast<int>(std::lround(d.x1)), static_cast<int>(std::lround(d.y1)));
     const cv::Point p2(static_cast<int>(std::lround(d.x2)), static_cast<int>(std::lround(d.y2)));
     cv::rectangle(bgr, p1, p2, cv::Scalar(0, 255, 0), 2);
@@ -452,10 +459,15 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
                 cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
     if (d.landmarks.has_value()) {
       const auto& lm = *d.landmarks;
-      for (int i = 0; i < 10; i += 2) {
+      for (int j = 0; j < 10; j += 2) {
+        if (!std::isfinite(lm[static_cast<size_t>(j)]) ||
+            !std::isfinite(lm[static_cast<size_t>(j + 1)])) {
+          throw std::runtime_error("non-finite face landmark at detection index " +
+                                   std::to_string(i));
+        }
         cv::circle(bgr,
-                   cv::Point(static_cast<int>(std::lround(lm[static_cast<size_t>(i)])),
-                             static_cast<int>(std::lround(lm[static_cast<size_t>(i + 1)]))),
+                   cv::Point(static_cast<int>(std::lround(lm[static_cast<size_t>(j)])),
+                             static_cast<int>(std::lround(lm[static_cast<size_t>(j + 1)]))),
                    2, cv::Scalar(0, 0, 255), -1);
       }
     }

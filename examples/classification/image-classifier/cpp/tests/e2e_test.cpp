@@ -1,6 +1,7 @@
 // E2E test for image-classifier.
 // Runs the binary with a real model and local test image, verifies it exits successfully.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <filesystem>
 #include <fstream>
@@ -57,6 +58,8 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
+  const int expected_class_id = e2e_int("image-classifier", "validation", "expected_class_id");
+  const double min_probability = e2e_double("image-classifier", "validation", "min_probability");
   const std::string config_path = (fs::path(out_dir).parent_path() / "config.yaml").string();
   {
     std::ofstream config(config_path);
@@ -70,8 +73,8 @@ int main(int argc, char** argv) {
            << "  input_height: 224\n"
            << "  timeout_ms: 2000\n"
            << "validation:\n"
-           << "  expected_class_id: 1\n"
-           << "  min_probability: 0.0\n";
+           << "  expected_class_id: " << expected_class_id << "\n"
+           << "  min_probability: " << min_probability << "\n";
   }
 
   auto r = spawn_and_wait(binary, {"--config", config_path}, timeout);

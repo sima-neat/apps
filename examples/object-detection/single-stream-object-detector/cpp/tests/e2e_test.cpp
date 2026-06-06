@@ -1,4 +1,5 @@
 #include "support/testing/metadata_json_listener.h"
+#include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
 #include <algorithm>
@@ -134,6 +135,12 @@ int main(int argc, char** argv) {
     return 1;
   }
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
+  const double min_score =
+      sima_examples::testing::e2e_double("single-stream-object-detector", "inference", "min_score");
+  const double nms_iou =
+      sima_examples::testing::e2e_double("single-stream-object-detector", "inference", "nms_iou");
+  const int max_detections = sima_examples::testing::e2e_int("single-stream-object-detector",
+                                                             "inference", "max_detections");
   {
     std::ofstream config_file(config_path);
     config_file << "source:\n"
@@ -144,9 +151,9 @@ int main(int argc, char** argv) {
                 << "  path: " << mpk_path << "\n"
                 << "inference:\n"
                 << "  frames: 10\n"
-                << "  min_score: 0.55\n"
-                << "  nms_iou: 0.50\n"
-                << "  max_detections: 100\n"
+                << "  min_score: " << min_score << "\n"
+                << "  nms_iou: " << nms_iou << "\n"
+                << "  max_detections: " << max_detections << "\n"
                 << "runtime:\n"
                 << "  profile: false\n"
                 << "  profile_interval: 100\n"

@@ -39,11 +39,12 @@ ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::s
                              int timeout_ms = 30000);
 
 // Create a deterministic per-test output directory under
-// SIMANEAT_APPS_TEST_OUTPUT_DIR/cpp/<example>/<test> (or /tmp/cpp/... if unset).
-// The directory is cleared before each run so repeated tests overwrite artifacts.
+// SIMANEAT_APPS_TEST_OUTPUT_DIR/cpp/<example>/<test>/out
+// (or sandbox/test-runs/cpp/.../out if unset).
+// The per-test run directory is cleared before each run.
 std::string create_test_output_dir(const std::string& example_name, const std::string& test_name);
 
-// Remove a directory tree.
+// Remove a directory tree. Passing a generated out/ path removes its parent run directory.
 void remove_dir(const std::string& path);
 
 // Count regular output files in a directory, excluding the test config file.

@@ -1,3 +1,4 @@
+#include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
@@ -93,6 +94,15 @@ int main(int argc, char** argv) {
   }
 
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
+  const double detection_threshold =
+      e2e_double("multi-stream-people-tracker", "inference", "detection_threshold");
+  const double nms_iou_threshold =
+      e2e_double("multi-stream-people-tracker", "inference", "nms_iou_threshold");
+  const int top_k = e2e_int("multi-stream-people-tracker", "inference", "top_k");
+  const double tracker_iou_threshold =
+      e2e_double("multi-stream-people-tracker", "tracking", "iou_threshold");
+  const int tracker_max_missing =
+      e2e_int("multi-stream-people-tracker", "tracking", "max_missing_frames");
   {
     std::ofstream out(config_path);
     out << "model: " << model_path
@@ -108,14 +118,14 @@ int main(int argc, char** argv) {
            "  bitrate_kbps: 2500\n"
            "  profile: false\n"
            "  person_class_id: 0\n"
-           "  detection_threshold: null\n"
-           "  nms_iou_threshold: null\n"
-           "  top_k: null\n"
-           "\n"
+        << "  detection_threshold: " << detection_threshold << "\n"
+        << "  nms_iou_threshold: " << nms_iou_threshold << "\n"
+        << "  top_k: " << top_k << "\n"
+        << "\n"
            "tracking:\n"
-           "  iou_threshold: 0.3\n"
-           "  max_missing_frames: 15\n"
-           "\n"
+        << "  iou_threshold: " << tracker_iou_threshold << "\n"
+        << "  max_missing_frames: " << tracker_max_missing << "\n"
+        << "\n"
            "output:\n"
            "  insight:\n"
            "    host: 127.0.0.1\n"

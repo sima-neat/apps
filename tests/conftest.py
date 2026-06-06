@@ -3,8 +3,10 @@
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 APPS_ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,10 +26,48 @@ def _require_env(key: str, description: str) -> str:
     pytest.skip(f"set {key} ({description}) to run this test")
 
 
+def _required_mapping(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        pytest.fail(f"tests/e2e.yaml missing mapping: {name}")
+    return value
+
+
+def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 @pytest.fixture
 def apps_root() -> Path:
     """Return the apps/ repository root."""
     return APPS_ROOT
+
+
+@pytest.fixture(scope="session")
+def e2e_test_config() -> dict[str, Any]:
+    """Return tracked non-secret e2e semantic parameters."""
+    config_path = APPS_ROOT / "tests" / "e2e.yaml"
+    with config_path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    return _required_mapping(raw.get("e2e"), "e2e")
+
+
+@pytest.fixture
+def e2e_config_section(e2e_test_config):
+    """Return one section from tests/e2e.yaml, failing if it is absent."""
+
+    def _get(example_name: str, section: str) -> dict[str, Any]:
+        example = _required_mapping(e2e_test_config.get(example_name), f"e2e.{example_name}")
+        value = example
+        for part in section.split("."):
+            value = _required_mapping(value.get(part), f"e2e.{example_name}.{section}")
+        return value
+
+    return _get
 
 
 @pytest.fixture
@@ -56,28 +96,47 @@ def rtsp_urls() -> list[str]:
 
 @pytest.fixture
 def tmp_output_dir(request) -> Path:
-    """Provide a stable per-test output directory, cleared before each run."""
-    base_raw = os.environ.get("SIMANEAT_APPS_TEST_OUTPUT_DIR", "").strip() or "/tmp"
+    """Provide a stable per-test out/ directory, cleared before each run."""
+    base_raw = os.environ.get("SIMANEAT_APPS_TEST_OUTPUT_DIR", "").strip()
+    base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox" / "test-runs"
     keep_output = os.environ.get("SIMANEAT_APPS_TEST_KEEP_OUTPUT", "").strip() == "1"
-    out: Path
     cleanup_needed = not keep_output
     # python/tests/test_e2e.py -> example directory is parents[2]
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
-    base = Path(base_raw) / "python"
-    base.mkdir(parents=True, exist_ok=True)
     test_name = request.node.name.replace("/", "_")
-    out = base / example_name / test_name
+    run_dir = base_root / "python" / example_name / test_name
+    out = run_dir / "out"
 
     # Keep output paths stable and readable by replacing previous run artifacts.
-    shutil.rmtree(out, ignore_errors=True)
+    shutil.rmtree(run_dir, ignore_errors=True)
     out.mkdir(parents=True, exist_ok=True)
 
     try:
         yield out
     finally:
         if cleanup_needed:
-            shutil.rmtree(out, ignore_errors=True)
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def e2e_config_writer(request, tmp_output_dir):
+    """Write a per-test config by overlaying overrides onto common/config.yaml."""
+
+    def _write(overrides: dict[str, Any]) -> Path:
+        test_file = Path(str(request.node.fspath))
+        common_config = test_file.parents[2] / "common" / "config.yaml"
+        with common_config.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+
+        config_path = tmp_output_dir.parent / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(_deep_update(config, overrides), sort_keys=False),
+            encoding="utf-8",
+        )
+        return config_path
+
+    return _write
 
 
 @pytest.fixture

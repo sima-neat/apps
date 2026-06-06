@@ -48,6 +48,8 @@ class TestE2E:
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
         model = _find_model(models_dir, "retinaface_mobilenet25")
         skip_unless_e2e_ready(model is not None, "retinaface model not found in models_dir")
@@ -60,31 +62,14 @@ class TestE2E:
         )
 
         out_path = tmp_output_dir / "retinaface_output.png"
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image: {image}",
-                    f"  output: {out_path}",
-                    "decode:",
-                    "  confidence_threshold: 0.40",
-                    "  nms_iou: 0.90",
-                    "  top_k: 5000",
-                    "  keep_top_k: 750",
-                    "  max_draw: 50",
-                    "  landmarks: true",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "  profile: false",
-                    "  num_runs: 1",
-                    "  verbose: false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        decode = e2e_config_section("face-detector", "decode")
+        config_path = e2e_config_writer(
+            {
+                "model": {"path": str(model)},
+                "io": {"image": str(image), "output": str(out_path)},
+                "decode": decode,
+                "runtime": {"num_runs": 1},
+            }
         )
 
         result = subprocess.run(

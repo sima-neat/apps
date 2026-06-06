@@ -2,6 +2,7 @@
 // Runs the binary with a real DETR model and a local image, and verifies it exits successfully
 // and produces an annotated output image.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -58,13 +59,14 @@ int main(int argc, char** argv) {
     return kSkipCode;
   }
 
-  const std::string out_dir =
-      create_test_output_dir("detr-object-detector", "test_full_pipeline");
+  const std::string out_dir = create_test_output_dir("detr-object-detector", "test_full_pipeline");
   if (out_dir.empty()) {
     return 1;
   }
 
   fs::path out_image = fs::path(out_dir) / "detr_output.png";
+  const double confidence_threshold =
+      e2e_double("detr-object-detector", "decode", "confidence_threshold");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
@@ -74,7 +76,7 @@ int main(int argc, char** argv) {
                 << "  image: " << image_candidates.front().string() << "\n"
                 << "  output: " << out_image.string() << "\n"
                 << "decode:\n"
-                << "  confidence_threshold: 0.5\n"
+                << "  confidence_threshold: " << confidence_threshold << "\n"
                 << "  max_draw: 50\n"
                 << "  person_only: false\n"
                 << "runtime:\n"
@@ -100,7 +102,6 @@ int main(int argc, char** argv) {
   }
 
   remove_dir(out_dir);
-  std::cout << "[OK] detr-object-detector pipeline completed successfully: " << out_image
-            << "\n";
+  std::cout << "[OK] detr-object-detector pipeline completed successfully: " << out_image << "\n";
   return 0;
 }

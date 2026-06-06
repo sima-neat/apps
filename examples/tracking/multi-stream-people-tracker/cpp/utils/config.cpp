@@ -172,7 +172,7 @@ double parse_double(const std::string& value, const std::string& error_name) {
   std::size_t index = 0;
   const double parsed = std::stod(value, &index);
   if (index != value.size()) {
-    throw std::runtime_error(error_name + " must be numeric or null");
+    throw std::runtime_error(error_name + " must be numeric");
   }
   return parsed;
 }
@@ -222,14 +222,22 @@ std::optional<double> optional_double_or_none(const RawConfig& raw, const std::s
   return parse_double(*value, error_name);
 }
 
-std::optional<int> optional_positive_int_or_none(const RawConfig& raw, const std::string& key,
-                                                 const std::string& error_name) {
+double required_double(const RawConfig& raw, const std::string& key,
+                       const std::string& error_name) {
   const auto value = lookup_scalar(raw, key);
   if (!value.has_value() || is_nullish(*value)) {
-    return std::nullopt;
+    throw std::runtime_error(error_name + " must be numeric");
   }
-  const int parsed = parse_int(*value, error_name);
-  return parsed;
+  return parse_double(*value, error_name);
+}
+
+int required_positive_int(const RawConfig& raw, const std::string& key,
+                          const std::string& error_name) {
+  const auto value = lookup_scalar(raw, key);
+  if (!value.has_value() || is_nullish(*value)) {
+    throw std::runtime_error(error_name + " must be an integer");
+  }
+  return parse_int(*value, error_name);
 }
 
 } // namespace
@@ -280,11 +288,11 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   cfg.profile = optional_bool(raw, "inference.profile", false, "inference.profile");
   cfg.person_class_id =
       optional_int(raw, "inference.person_class_id", 0, "inference.person_class_id");
-  cfg.detection_threshold = optional_double_or_none(raw, "inference.detection_threshold",
-                                                    "inference.detection_threshold");
+  cfg.detection_threshold =
+      required_double(raw, "inference.detection_threshold", "inference.detection_threshold");
   cfg.nms_iou_threshold =
-      optional_double_or_none(raw, "inference.nms_iou_threshold", "inference.nms_iou_threshold");
-  cfg.top_k = optional_positive_int_or_none(raw, "inference.top_k", "inference.top_k");
+      required_double(raw, "inference.nms_iou_threshold", "inference.nms_iou_threshold");
+  cfg.top_k = required_positive_int(raw, "inference.top_k", "inference.top_k");
   cfg.tracker_iou_threshold = static_cast<float>(
       optional_double_or_none(raw, "tracking.iou_threshold", "tracking.iou_threshold")
           .value_or(0.3));
@@ -325,15 +333,13 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   if (cfg.tracker_iou_threshold < 0.0f || cfg.tracker_iou_threshold > 1.0f) {
     throw std::runtime_error("tracking.iou_threshold must be between 0 and 1");
   }
-  if (cfg.detection_threshold.has_value() &&
-      (*cfg.detection_threshold < 0.0 || *cfg.detection_threshold > 1.0)) {
+  if (cfg.detection_threshold < 0.0 || cfg.detection_threshold > 1.0) {
     throw std::runtime_error("inference.detection_threshold must be between 0 and 1");
   }
-  if (cfg.nms_iou_threshold.has_value() &&
-      (*cfg.nms_iou_threshold < 0.0 || *cfg.nms_iou_threshold > 1.0)) {
+  if (cfg.nms_iou_threshold < 0.0 || cfg.nms_iou_threshold > 1.0) {
     throw std::runtime_error("inference.nms_iou_threshold must be between 0 and 1");
   }
-  if (cfg.top_k.has_value() && *cfg.top_k <= 0) {
+  if (cfg.top_k <= 0) {
     throw std::runtime_error("inference.top_k must be > 0");
   }
 

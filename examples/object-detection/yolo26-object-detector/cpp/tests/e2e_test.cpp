@@ -1,6 +1,7 @@
 // E2E test for yolo26-object-detector.
 // Runs the binary with a real model, labels, and test images, verifies outputs.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <filesystem>
 #include <fstream>
@@ -69,6 +70,9 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
+  const double score_threshold = e2e_double("yolo26-object-detector", "decode", "score_threshold");
+  const double nms_iou = e2e_double("yolo26-object-detector", "decode", "nms_iou");
+  const int max_detections = e2e_int("yolo26-object-detector", "decode", "max_detections");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
@@ -79,9 +83,9 @@ int main(int argc, char** argv) {
                 << "  input_dir: " << input_dir << "\n"
                 << "  output_dir: " << out_dir << "\n"
                 << "decode:\n"
-                << "  score_threshold: 0.25\n"
-                << "  nms_iou: 0.45\n"
-                << "  max_detections: 100\n"
+                << "  score_threshold: " << score_threshold << "\n"
+                << "  nms_iou: " << nms_iou << "\n"
+                << "  max_detections: " << max_detections << "\n"
                 << "runtime:\n"
                 << "  timeout_ms: 5000\n"
                 << "  num_runs: 1\n"

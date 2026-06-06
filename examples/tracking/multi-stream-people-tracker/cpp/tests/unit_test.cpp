@@ -75,9 +75,9 @@ bool test_load_app_config_parses_dynamic_stream_list() {
          "  bitrate_kbps: 2500\n"
          "  profile: true\n"
          "  person_class_id: 0\n"
-         "  detection_threshold: null\n"
-         "  nms_iou_threshold: null\n"
-         "  top_k: null\n"
+         "  detection_threshold: 0.25\n"
+         "  nms_iou_threshold: 0.5\n"
+         "  top_k: 24\n"
          "tracking:\n"
          "  iou_threshold: 0.3\n"
          "  max_missing_frames: 15\n"
@@ -110,6 +110,10 @@ bool test_load_app_config_parses_dynamic_stream_list() {
         expect_true(!metadata_output_enabled(cfg), "annotated video mode disables metadata output");
     ok &= expect_true(cfg.tcp, "config parser keeps tcp=true");
     ok &= expect_true(cfg.save_every == 0, "config parser keeps save_every");
+    ok &=
+        expect_near(cfg.detection_threshold, 0.25, 1e-6, "config parser keeps detection threshold");
+    ok &= expect_near(cfg.nms_iou_threshold, 0.5, 1e-6, "config parser keeps nms iou threshold");
+    ok &= expect_true(cfg.top_k == 24, "config parser keeps top_k");
     ok &= expect_true(cfg.rtsp_urls ==
                           std::vector<std::string>{
                               "rtsp://192.168.0.235:8554/src1",
@@ -136,7 +140,10 @@ bool test_load_app_config_defaults_to_clean_video_mode() {
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
-         "inference: {}\n"
+         "inference:\n"
+         "  detection_threshold: 0.25\n"
+         "  nms_iou_threshold: 0.5\n"
+         "  top_k: 24\n"
          "tracking: {}\n"
          "output:\n"
          "  insight:\n"
@@ -176,7 +183,10 @@ bool test_load_app_config_rejects_invalid_video_mode() {
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
-         "inference: {}\n"
+         "inference:\n"
+         "  detection_threshold: 0.25\n"
+         "  nms_iou_threshold: 0.5\n"
+         "  top_k: 24\n"
          "tracking: {}\n"
          "output:\n"
          "  insight:\n"

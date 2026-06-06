@@ -49,9 +49,9 @@ inference:
   bitrate_kbps: 2500
   profile: true
   person_class_id: 0
-  detection_threshold: null
-  nms_iou_threshold: null
-  top_k: null
+  detection_threshold: 0.25
+  nms_iou_threshold: 0.5
+  top_k: 24
 tracking:
   iou_threshold: 0.3
   max_missing_frames: 15
@@ -81,6 +81,9 @@ streams:
         assert metadata_output_enabled(cfg) is False
         assert cfg.tcp is True
         assert cfg.save_every == 0
+        assert cfg.detection_threshold == pytest.approx(0.25)
+        assert cfg.nms_iou_threshold == pytest.approx(0.5)
+        assert cfg.top_k == 24
         assert cfg.rtsp_urls == [
             "rtsp://192.168.0.235:8554/src1",
             "rtsp://192.168.0.235:8554/src2",
@@ -95,7 +98,10 @@ streams:
             """
 model: assets/models/yolo_v8m_mpk.tar.gz
 input: {}
-inference: {}
+inference:
+  detection_threshold: 0.25
+  nms_iou_threshold: 0.5
+  top_k: 24
 tracking: {}
 output:
   insight:
@@ -119,7 +125,10 @@ output:
             """
 model: assets/models/yolo_v8m_mpk.tar.gz
 input: {}
-inference: {}
+inference:
+  detection_threshold: 0.25
+  nms_iou_threshold: 0.5
+  top_k: 24
 tracking: {}
 output:
   insight:
@@ -558,9 +567,9 @@ class TestPipelineBuilders:
             save_every=30,
             profile=False,
             person_class_id=0,
-            detection_threshold=None,
-            nms_iou_threshold=None,
-            top_k=None,
+            detection_threshold=0.25,
+            nms_iou_threshold=0.5,
+            top_k=24,
             tracker_iou_threshold=0.3,
             tracker_max_missing=15,
             latency_ms=200,
@@ -749,9 +758,9 @@ class TestWorkers:
             save_every=30,
             profile=False,
             person_class_id=0,
-            detection_threshold=None,
-            nms_iou_threshold=None,
-            top_k=None,
+            detection_threshold=0.25,
+            nms_iou_threshold=0.5,
+            top_k=24,
             tracker_iou_threshold=0.3,
             tracker_max_missing=15,
             latency_ms=200,
@@ -871,9 +880,9 @@ class TestWorkers:
             save_every=0,
             profile=False,
             person_class_id=0,
-            detection_threshold=None,
-            nms_iou_threshold=None,
-            top_k=None,
+            detection_threshold=0.25,
+            nms_iou_threshold=0.5,
+            top_k=24,
             tracker_iou_threshold=0.3,
             tracker_max_missing=15,
             latency_ms=200,
@@ -990,9 +999,9 @@ class TestWorkers:
             save_every=0,
             profile=False,
             person_class_id=0,
-            detection_threshold=None,
-            nms_iou_threshold=None,
-            top_k=None,
+            detection_threshold=0.25,
+            nms_iou_threshold=0.5,
+            top_k=24,
             tracker_iou_threshold=0.3,
             tracker_max_missing=15,
             latency_ms=200,
@@ -1036,9 +1045,9 @@ class TestWorkers:
             save_every=0,
             profile=False,
             person_class_id=0,
-            detection_threshold=None,
-            nms_iou_threshold=None,
-            top_k=None,
+            detection_threshold=0.25,
+            nms_iou_threshold=0.5,
+            top_k=24,
             tracker_iou_threshold=0.3,
             tracker_max_missing=15,
             latency_ms=200,
@@ -1080,9 +1089,9 @@ class TestWorkers:
             save_every=0,
             profile=False,
             person_class_id=0,
-            detection_threshold=None,
-            nms_iou_threshold=None,
-            top_k=None,
+            detection_threshold=0.25,
+            nms_iou_threshold=0.5,
+            top_k=24,
             tracker_iou_threshold=0.3,
             tracker_max_missing=15,
             latency_ms=200,

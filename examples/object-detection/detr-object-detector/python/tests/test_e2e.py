@@ -45,6 +45,8 @@ class TestE2E:
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
         model = _find_model(models_dir, "detr_resnet50_modified_class_embed_bbox_embed")
         skip_unless_e2e_ready(model is not None, "detr model not found in models_dir")
@@ -57,28 +59,14 @@ class TestE2E:
         )
 
         out_path = tmp_output_dir / "detr_output.png"
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image: {image}",
-                    f"  output: {out_path}",
-                    "decode:",
-                    "  confidence_threshold: 0.5",
-                    "  max_draw: 50",
-                    "  person_only: false",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "  profile: false",
-                    "  num_runs: 1",
-                    "  verbose: false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        decode = e2e_config_section("detr-object-detector", "decode")
+        config_path = e2e_config_writer(
+            {
+                "model": {"path": str(model)},
+                "io": {"image": str(image), "output": str(out_path)},
+                "decode": decode,
+                "runtime": {"num_runs": 1},
+            }
         )
         result = subprocess.run(
             [

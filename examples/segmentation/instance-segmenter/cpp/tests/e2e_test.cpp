@@ -1,6 +1,7 @@
 // E2E test for instance-segmenter.
 // Runs the binary with a real model and test images, verifies overlay outputs.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <filesystem>
 #include <fstream>
@@ -46,6 +47,9 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
+  const double score_threshold = e2e_double("instance-segmenter", "decode", "score_threshold");
+  const double nms_iou = e2e_double("instance-segmenter", "decode", "nms_iou");
+  const int max_detections = e2e_int("instance-segmenter", "decode", "max_detections");
   const std::string config_path = (fs::path(out_dir).parent_path() / "config.yaml").string();
   {
     std::ofstream config(config_path);
@@ -59,9 +63,9 @@ int main(int argc, char** argv) {
            << "  timeout_ms: 3000\n"
            << "  queue_depth: 8\n"
            << "decode:\n"
-           << "  score_threshold: 0.60\n"
-           << "  nms_iou: 0.45\n"
-           << "  max_detections: 200\n"
+           << "  score_threshold: " << score_threshold << "\n"
+           << "  nms_iou: " << nms_iou << "\n"
+           << "  max_detections: " << max_detections << "\n"
            << "visualization:\n"
            << "  mask_alpha: 0.65\n";
   }

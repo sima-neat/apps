@@ -11,14 +11,6 @@
 #include <vector>
 
 namespace multi_stream_people_tracker {
-namespace {
-
-constexpr double kYoloV8DefaultDetectionThreshold = 0.6;
-constexpr double kYoloV8DefaultNmsIouThreshold = 0.5;
-constexpr int kYoloV8DefaultTopK = 24;
-
-} // namespace
-
 int insight_video_port_for_stream(int port_base, int stream_index) {
   return port_base + stream_index;
 }
@@ -98,10 +90,9 @@ GraphRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
   model_options.preprocess.input_max_height = probe.height;
   model_options.preprocess.input_max_depth = 3;
   model_options.decode_type = simaai::neat::BoxDecodeType::YoloV8;
-  model_options.score_threshold =
-      cfg.detection_threshold.value_or(kYoloV8DefaultDetectionThreshold);
-  model_options.nms_iou_threshold = cfg.nms_iou_threshold.value_or(kYoloV8DefaultNmsIouThreshold);
-  model_options.top_k = cfg.top_k.value_or(kYoloV8DefaultTopK);
+  model_options.score_threshold = cfg.detection_threshold;
+  model_options.nms_iou_threshold = cfg.nms_iou_threshold;
+  model_options.top_k = cfg.top_k;
   model_options.boxdecode_original_width = probe.width;
   model_options.boxdecode_original_height = probe.height;
   runtime.model = std::make_shared<simaai::neat::Model>(cfg.model, model_options);
@@ -116,11 +107,8 @@ GraphRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
   runtime.graph.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
   runtime.graph.add(simaai::neat::nodes::groups::Infer(*runtime.model));
   runtime.graph.add(simaai::neat::nodes::SimaBoxDecode(
-      *runtime.model, simaai::neat::BoxDecodeType::YoloV8,
-      cfg.detection_threshold.value_or(kYoloV8DefaultDetectionThreshold),
-      cfg.nms_iou_threshold.value_or(kYoloV8DefaultNmsIouThreshold),
-      cfg.top_k.value_or(kYoloV8DefaultTopK), "", std::nullopt, std::nullopt, probe.width,
-      probe.height));
+      *runtime.model, simaai::neat::BoxDecodeType::YoloV8, cfg.detection_threshold,
+      cfg.nms_iou_threshold, cfg.top_k, "", std::nullopt, std::nullopt, probe.width, probe.height));
   runtime.graph.add(simaai::neat::nodes::Output());
 
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);

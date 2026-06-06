@@ -114,7 +114,9 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   find_package(nlohmann_json REQUIRED)
 
   add_library(sima_neat_apps_support_testing STATIC
+    "${apps_root}/support/runtime/config_utils.cpp"
     "${apps_root}/support/testing/metadata_json_listener.cpp"
+    "${apps_root}/support/testing/test_config.cpp"
     "${apps_root}/support/testing/test_process.cpp"
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)

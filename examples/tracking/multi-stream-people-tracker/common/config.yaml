@@ -21,9 +21,9 @@ inference:  # Detector and runtime settings.
   bitrate_kbps: 2500          # H.264 bitrate for Insight video output.
   profile: true               # Print per-stream profiling information.
   person_class_id: 0          # Class id to keep from detector output (ID: 0 -> person).
-  detection_threshold: 0.25   # Optional score threshold override.
-  nms_iou_threshold: 0.5      # Optional NMS IoU override.
-  top_k: 24                   # Optional top-k override.
+  detection_threshold: 0.25   # Score threshold passed to detector decode.
+  nms_iou_threshold: 0.5      # NMS IoU passed to detector decode.
+  top_k: 24                   # Top-k passed to detector decode.
 
 tracking:  # Tracker settings.
   iou_threshold: 0.3      # Minimum IoU to match an existing track.

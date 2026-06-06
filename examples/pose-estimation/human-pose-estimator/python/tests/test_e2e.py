@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 WORKSPACE_DIR = Path(__file__).resolve().parent.parent
 MAIN_PY = WORKSPACE_DIR / "main.py"
@@ -19,10 +18,18 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
             return f
     return None
 
+
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
-        self, models_dir, tmp_output_dir, test_images_dir, test_timeout_ms, skip_unless_e2e_ready
+        self,
+        models_dir,
+        tmp_output_dir,
+        test_images_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
         model = _find_model(models_dir, "pose")
         skip_unless_e2e_ready(model is not None, "pose model not found in models_dir")
@@ -32,32 +39,13 @@ class TestE2E:
             "test_images_dir is missing or empty",
         )
 
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump(
-                {
-                    "model": {"path": str(model)},
-                    "io": {
-                        "input_dir": str(test_images_dir),
-                        "output_dir": str(tmp_output_dir),
-                    },
-                    "runtime": {
-                        "infer_size": 640,
-                        "timeout_ms": 1000,
-                        "upsample_factor": 4.0,
-                    },
-                    "decode": {
-                        "keypoint_score": 0.1,
-                        "nms_radius": 6,
-                        "paf_score": 0.05,
-                        "paf_success_ratio": 0.8,
-                        "paf_samples": 10,
-                        "min_valid_joints": 3,
-                        "min_avg_person_score": 0.2,
-                    },
-                }
-            ),
-            encoding="utf-8",
+        decode = e2e_config_section("human-pose-estimator", "decode")
+        config_path = e2e_config_writer(
+            {
+                "model": {"path": str(model)},
+                "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
+                "decode": decode,
+            }
         )
 
         result = subprocess.run(

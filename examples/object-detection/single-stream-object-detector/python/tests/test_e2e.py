@@ -1,5 +1,6 @@
 """E2E tests for single-stream-object-detector (Python)."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,41 +20,44 @@ def _find_model(models_dir: Path, pattern: str) -> Path | None:
     return None
 
 
+def _env_int_or_default(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else default
+
+
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
-        self, models_dir, rtsp_url, tmp_output_dir, test_timeout_ms, skip_unless_e2e_ready
+        self,
+        models_dir,
+        rtsp_url,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
         model = _find_model(models_dir, "yolo_v8s")
         skip_unless_e2e_ready(model is not None, "yolo (non-seg) model not found in models_dir")
 
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "source:",
-                    f"  rtsp_url: {rtsp_url}",
-                    "  latency_ms: 200",
-                    "  tcp: true",
-                    "model:",
-                    f"  path: {model}",
-                    "inference:",
-                    "  frames: 10",
-                    "  min_score: 0.55",
-                    "  nms_iou: 0.50",
-                    "  max_detections: 100",
-                    "runtime:",
-                    "  profile: false",
-                    "  profile_interval: 100",
-                    "output:",
-                    "  insight:",
-                    "    host: 127.0.0.1",
-                    "    video_port: 9000",
-                    "    metadata_port: 9100",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        inference = e2e_config_section("single-stream-object-detector", "inference")
+        config_path = e2e_config_writer(
+            {
+                "source": {"rtsp_url": rtsp_url, "latency_ms": 200, "tcp": True},
+                "model": {"path": str(model)},
+                "inference": {"frames": 10, **inference},
+                "runtime": {"profile": False, "profile_interval": 100},
+                "output": {
+                    "insight": {
+                        "host": "127.0.0.1",
+                        "video_port": _env_int_or_default(
+                            "SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000
+                        ),
+                        "metadata_port": _env_int_or_default(
+                            "SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100
+                        ),
+                    }
+                },
+            }
         )
         cmd = [
             sys.executable, str(MAIN_PY),
