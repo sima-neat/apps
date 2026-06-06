@@ -8,8 +8,8 @@ source:
 
 inference:
   frames: 0  # Frame limit. 0 means run continuously.
-  min_score: 0.35  # Detection score threshold.
-  nms_iou: 0.60  # NMS IoU threshold.
+  min_score: 0.65  # Detection score threshold.
+  nms_iou: 0.50  # NMS IoU threshold.
   max_detections: 24  # Max detections to keep per frame.
 
 runtime:
@@ -17,6 +17,7 @@ runtime:
   profile_interval: 100  # Rolling profile window in published frames.
 
 output:
+  save_dir: ""  # Optional directory for annotated frames.
   insight:
     host: 192.168.2.1  # Host running the Insight receiver/viewer.
     video_port: 9000  # UDP video port.

@@ -22,6 +22,8 @@
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
+#include <opencv2/imgcodecs.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -84,6 +86,7 @@ struct AppConfig {
   InferenceConfig inference;
   RuntimeConfig runtime;
   InsightConfig insight;
+  fs::path save_dir;
 };
 
 struct CliOptions {
@@ -145,6 +148,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.insight.host = raw.string_or("output.insight.host", "");
   cfg.insight.video_port = raw.int_or("output.insight.video_port", 9000);
   cfg.insight.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
+  cfg.save_dir = raw.string_or("output.save_dir", "");
   validate_config(cfg);
   return cfg;
 }
@@ -736,7 +740,8 @@ void producer_worker(simaai::neat::Run& source_run, simaai::neat::Tensor first_f
 void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_run,
                      simaai::neat::MetadataSender& metadata_sender,
                      const std::vector<std::string>& insight_labels, int frame_w, int frame_h,
-                     int max_detections, WorkerSharedState& state) {
+                     int max_detections, double min_score, const fs::path& save_dir,
+                     WorkerSharedState& state) {
   state.consumer_start_ms = time_ms();
   int out_pulls = 0;
   while (!state.stop.load() &&
@@ -841,6 +846,14 @@ void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_r
     if (!metadata_ok) {
       std::cerr << "[warn] insight metadata send failed: " << metadata_err << "\n";
     }
+    if (!save_dir.empty()) {
+      cv::Mat annotated = detector_input.clone();
+      objdet::draw_boxes(annotated, detections, min_score, cv::Scalar(0, 255, 0), "");
+      const fs::path out_path = save_dir / ("frame_" + std::to_string(pending.index) + ".jpg");
+      if (!cv::imwrite(out_path.string(), annotated)) {
+        std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
+      }
+    }
 
     frame_profile.e2e_ms = output_ts - pending.pull_ts_ms;
 
@@ -862,6 +875,9 @@ int main(int argc, char** argv) {
     if (cli.validate_config_only) {
       std::cout << "Config validated: " << cli.config_path << "\n";
       return 0;
+    }
+    if (!cfg.save_dir.empty()) {
+      fs::create_directories(cfg.save_dir);
     }
 
     enable_insight_diagnostics(cfg.runtime.profile);
@@ -906,7 +922,8 @@ int main(int argc, char** argv) {
         consumer_worker, std::ref(detector_runtime.detector_run),
         std::ref(insight_runtime.video_run), std::ref(*insight_runtime.metadata_sender),
         std::cref(insight_runtime.labels), rtsp_runtime.frame_w, rtsp_runtime.frame_h,
-        cfg.inference.max_detections, std::ref(worker_state));
+        cfg.inference.max_detections, cfg.inference.min_score, std::cref(cfg.save_dir),
+        std::ref(worker_state));
 
     if (producer_thread.joinable())
       producer_thread.join();

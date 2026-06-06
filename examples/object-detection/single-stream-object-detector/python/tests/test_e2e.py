@@ -31,6 +31,7 @@ class TestE2E:
         self,
         models_dir,
         rtsp_url,
+        tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
         e2e_config_section,
@@ -47,6 +48,7 @@ class TestE2E:
                 "inference": {"frames": 10, **inference},
                 "runtime": {"profile": False, "profile_interval": 100},
                 "output": {
+                    "save_dir": str(tmp_output_dir),
                     "insight": {
                         "host": "127.0.0.1",
                         "video_port": _env_int_or_default(
@@ -78,3 +80,6 @@ class TestE2E:
             f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+        output_files = [path for path in tmp_output_dir.iterdir() if path.is_file()]
+        assert output_files, "Expected saved output frames but output directory is empty"
+        assert all(path.stat().st_size > 0 for path in output_files)

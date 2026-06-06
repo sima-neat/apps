@@ -158,6 +158,7 @@ int main(int argc, char** argv) {
                 << "  profile: false\n"
                 << "  profile_interval: 100\n"
                 << "output:\n"
+                << "  save_dir: " << output_dir << "\n"
                 << "  insight:\n"
                 << "    host: 127.0.0.1\n"
                 << "    video_port: " << video_port << "\n"
@@ -203,10 +204,20 @@ int main(int argc, char** argv) {
     std::cerr << "[ERR] example did not exit cleanly after finite frame limit\n";
     return 1;
   }
-  sima_examples::testing::remove_dir(output_dir);
 
   if (!WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0) {
+    sima_examples::testing::remove_dir(output_dir);
     std::cerr << "[ERR] example exited with status " << child_status << "\n";
+    return 1;
+  }
+  if (sima_examples::testing::count_output_files(output_dir) == 0) {
+    sima_examples::testing::remove_dir(output_dir);
+    std::cerr << "[ERR] expected saved output frames but output directory is empty\n";
+    return 1;
+  }
+  if (!sima_examples::testing::all_output_files_nonempty(output_dir)) {
+    sima_examples::testing::remove_dir(output_dir);
+    std::cerr << "[ERR] saved output frame is empty\n";
     return 1;
   }
 
@@ -215,5 +226,6 @@ int main(int argc, char** argv) {
     std::cout << " " << port;
   }
   std::cout << "\n";
+  sima_examples::testing::remove_dir(output_dir);
   return 0;
 }

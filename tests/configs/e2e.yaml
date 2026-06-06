@@ -23,13 +23,13 @@ e2e:
 
   yolo26-object-detector:
     decode:
-      score_threshold: 0.25
+      score_threshold: 0.65
       nms_iou: 0.45
       max_detections: 100
 
   single-stream-object-detector:
     inference:
-      min_score: 0.55
+      min_score: 0.65
       nms_iou: 0.50
       max_detections: 100
 

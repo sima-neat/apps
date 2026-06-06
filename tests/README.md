@@ -62,13 +62,14 @@ tests/
   test.sh              # local, VS Code, CI entrypoint
   README.md            # test workflow documentation
   pytest.ini           # pytest markers and discovery settings
-  conftest.py          # pytest fixture wiring
+  conftest.py          # pytest fixture registration hook
   configs/
     e2e.yaml           # tracked non-secret e2e thresholds and validation values
     .env.example       # documented local runtime overrides
     .env.local         # ignored local runtime overrides
   utils/
     e2e_config.py      # shared Python config and output helpers
+    pytest_fixtures.py # shared pytest fixture implementations
   scripts/
     testing/           # VS Code / DevKit task helpers
 ```
