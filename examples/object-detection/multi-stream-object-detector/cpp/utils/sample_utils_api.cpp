@@ -2,7 +2,7 @@
 
 #include "model_family_api.cpp"
 
-#include "neat/session.h"
+#include "neat/runtime.h"
 #include "support/runtime/example_utils.h"
 
 #include <opencv2/core/mat.hpp>

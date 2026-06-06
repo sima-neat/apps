@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
 
   std::cout << "[BUILD] Building pipeline...\n";
   auto runner = model.build(simaai::neat::TensorList{dummy_input},
-                            simaai::neat::Model::SessionOptions{}, run_opt);
+                            simaai::neat::Model::RouteOptions{}, run_opt);
   std::cout << "[BUILD] Pipeline built\n";
 
   int processed = 0;

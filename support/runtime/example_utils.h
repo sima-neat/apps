@@ -1,6 +1,6 @@
 #pragma once
 
-#include "neat/session.h"
+#include <neat.h>
 #include "neat/nodes.h"
 #include "neat/models.h"
 

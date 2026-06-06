@@ -125,6 +125,28 @@ struct TensorHWC {
   std::vector<float> data;
 };
 
+bool env_flag_enabled(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0' && std::string(value) != "0";
+}
+
+void apply_dq_scale_squared_probe(TensorHWC& tensor, size_t tensor_index) {
+  static constexpr std::array<float, 10> kDqScales = {
+      11.110991f,  13.956324f, 14.356056f, 925.877159f, 343.514803f,
+      291.368645f, 50.265630f, 56.578400f, 54.443066f,  43.498365f};
+  if (tensor_index >= kDqScales.size()) {
+    return;
+  }
+  const float scale = kDqScales[tensor_index];
+  const float divisor = scale * scale;
+  if (divisor <= 0.0f) {
+    return;
+  }
+  for (float& value : tensor.data) {
+    value /= divisor;
+  }
+}
+
 const std::vector<std::string>& coco_labels() {
   static const std::vector<std::string> kLabels = {
       "person",        "bicycle",      "car",
@@ -257,20 +279,32 @@ float dfl_distance_16(const float* logits) {
 std::vector<Box>
 decode_yolov8_instances_from_detess(const std::vector<simaai::neat::Tensor>& tensors,
                                     int infer_size, float conf_thr, float nms_iou, int max_det,
-                                    TensorHWC& proto) {
+                                    bool dq_scale_squared_probe, TensorHWC& proto) {
   if (tensors.size() < 10) {
     throw std::runtime_error("expected at least 10 tensors for instance-seg decode");
   }
-  const TensorHWC reg80 = tensor_to_hwc_f32(tensors[0]);
-  const TensorHWC reg40 = tensor_to_hwc_f32(tensors[1]);
-  const TensorHWC reg20 = tensor_to_hwc_f32(tensors[2]);
-  const TensorHWC cls80 = tensor_to_hwc_f32(tensors[3]);
-  const TensorHWC cls40 = tensor_to_hwc_f32(tensors[4]);
-  const TensorHWC cls20 = tensor_to_hwc_f32(tensors[5]);
-  const TensorHWC mk80 = tensor_to_hwc_f32(tensors[6]);
-  const TensorHWC mk40 = tensor_to_hwc_f32(tensors[7]);
-  const TensorHWC mk20 = tensor_to_hwc_f32(tensors[8]);
+  TensorHWC reg80 = tensor_to_hwc_f32(tensors[0]);
+  TensorHWC reg40 = tensor_to_hwc_f32(tensors[1]);
+  TensorHWC reg20 = tensor_to_hwc_f32(tensors[2]);
+  TensorHWC cls80 = tensor_to_hwc_f32(tensors[3]);
+  TensorHWC cls40 = tensor_to_hwc_f32(tensors[4]);
+  TensorHWC cls20 = tensor_to_hwc_f32(tensors[5]);
+  TensorHWC mk80 = tensor_to_hwc_f32(tensors[6]);
+  TensorHWC mk40 = tensor_to_hwc_f32(tensors[7]);
+  TensorHWC mk20 = tensor_to_hwc_f32(tensors[8]);
   proto = tensor_to_hwc_f32(tensors[9]);
+  if (dq_scale_squared_probe) {
+    apply_dq_scale_squared_probe(reg80, 0);
+    apply_dq_scale_squared_probe(reg40, 1);
+    apply_dq_scale_squared_probe(reg20, 2);
+    apply_dq_scale_squared_probe(cls80, 3);
+    apply_dq_scale_squared_probe(cls40, 4);
+    apply_dq_scale_squared_probe(cls20, 5);
+    apply_dq_scale_squared_probe(mk80, 6);
+    apply_dq_scale_squared_probe(mk40, 7);
+    apply_dq_scale_squared_probe(mk20, 8);
+    apply_dq_scale_squared_probe(proto, 9);
+  }
   if (proto.c != 32) {
     throw std::runtime_error("unexpected prototype channels");
   }
@@ -456,6 +490,10 @@ int main(int argc, char** argv) {
 
   try {
     const Config cfg = parse_config(argc, argv);
+    const bool dq_scale_squared_probe = env_flag_enabled("SIMANEAT_APPS_DQ_SCALE_SQUARED_PROBE");
+    if (dq_scale_squared_probe) {
+      std::cout << "[DEBUG] Dividing detess outputs by dq_scale^2 from 0_postproc.json\n";
+    }
 
     if (!fs::is_directory(cfg.input_dir)) {
       throw std::runtime_error("input directory does not exist: " + cfg.input_dir.string());
@@ -482,14 +520,14 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 
-    simaai::neat::Session session;
-    session.add(simaai::neat::nodes::Input(model.input_appsrc_options(false)));
-    session.add(simaai::neat::nodes::groups::Preprocess(model));
-    session.add(simaai::neat::nodes::groups::Infer(model));
-    session.add(simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
-    session.add(simaai::neat::nodes::Output());
+    simaai::neat::Graph graph;
+    graph.add(simaai::neat::nodes::Input(model.input_appsrc_options(false)));
+    graph.add(simaai::neat::nodes::groups::Preprocess(model));
+    graph.add(simaai::neat::nodes::groups::Infer(model));
+    graph.add(simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
+    graph.add(simaai::neat::nodes::Output());
 
-    std::cout << "Pipeline:\n" << session.describe_backend() << "\n";
+    std::cout << "Pipeline:\n" << graph.describe_backend() << "\n";
 
     cv::Mat dummy_rgb(cfg.infer_size, cfg.infer_size, CV_8UC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor input_tensor = simaai::neat::Tensor::from_cv_mat(
@@ -500,8 +538,8 @@ int main(int argc, char** argv) {
     run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
     run_opt.preset = simaai::neat::RunPreset::Balanced;
 
-    auto run = session.build(simaai::neat::TensorList{input_tensor}, simaai::neat::RunMode::Async,
-                             run_opt);
+    auto run =
+        graph.build(simaai::neat::TensorList{input_tensor}, simaai::neat::RunMode::Async, run_opt);
     std::cout << "Found " << images.size() << " images\n";
 
     int processed = 0;
@@ -534,7 +572,8 @@ int main(int argc, char** argv) {
       TensorHWC proto;
       try {
         boxes = decode_yolov8_instances_from_detess(tensors, cfg.infer_size, cfg.score_threshold,
-                                                    cfg.nms_iou, cfg.max_detections, proto);
+                                                    cfg.nms_iou, cfg.max_detections,
+                                                    dq_scale_squared_probe, proto);
       } catch (const std::exception& e) {
         std::cerr << "Decode failed for " << image_path.filename() << ": " << e.what() << "\n";
         continue;

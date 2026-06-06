@@ -5,7 +5,6 @@
  * Usage: yolo26-object-detector [--config <path>]
  */
 #include "neat.h"
-#include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -16,8 +15,6 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
-#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -30,7 +27,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr int kInferSize = 640;
 constexpr float kDefaultMinScore = 0.25f;
 constexpr float kDefaultNmsIou = 0.45f;
 constexpr int kMaxDet = 100;
@@ -110,6 +106,23 @@ bool is_image(const fs::path& p) {
   return (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp");
 }
 
+int clear_output_images(const fs::path& output_dir, const fs::path& input_dir) {
+  if (fs::weakly_canonical(output_dir) == fs::weakly_canonical(input_dir)) {
+    std::cerr << "Skipping output cleanup because output_dir matches input_dir: " << output_dir
+              << "\n";
+    return 0;
+  }
+
+  int removed = 0;
+  for (const auto& entry : fs::directory_iterator(output_dir)) {
+    if (entry.is_regular_file() && is_image(entry.path())) {
+      fs::remove(entry.path());
+      ++removed;
+    }
+  }
+  return removed;
+}
+
 std::vector<std::string> load_labels(const fs::path& labels_path) {
   std::ifstream in(labels_path);
   if (!in.good()) {
@@ -129,144 +142,20 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
   return labels;
 }
 
-// Return tensor data as a flat float32 vector plus (H, W, C) dims.
-// Expects rank-3 (H,W,C) or rank-4 (1,H,W,C) float32 tensors.
-struct HWCTensor {
-  int h = 0;
-  int w = 0;
-  int c = 0;
-  std::vector<float> data;
-};
-
-HWCTensor tensor_to_hwc(const simaai::neat::Tensor& t) {
-  if (t.dtype != simaai::neat::TensorDType::Float32) {
-    throw std::runtime_error("expected Float32 tensor");
+std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList& outputs,
+                                                 int image_width, int image_height,
+                                                 int max_detections) {
+  if (outputs.empty()) {
+    throw std::runtime_error("model returned no detection tensors");
   }
-  HWCTensor out;
-  if (t.shape.size() == 4 && t.shape[0] == 1) {
-    out.h = static_cast<int>(t.shape[1]);
-    out.w = static_cast<int>(t.shape[2]);
-    out.c = static_cast<int>(t.shape[3]);
-  } else if (t.shape.size() == 3) {
-    out.h = static_cast<int>(t.shape[0]);
-    out.w = static_cast<int>(t.shape[1]);
-    out.c = static_cast<int>(t.shape[2]);
-  } else {
-    throw std::runtime_error("unexpected tensor rank");
-  }
-  const size_t elems = static_cast<size_t>(out.h) * out.w * out.c;
-  const auto bytes = t.copy_dense_bytes_tight();
-  out.data.resize(elems);
-  std::memcpy(out.data.data(), bytes.data(), elems * sizeof(float));
-  return out;
-}
-
-float iou_xyxy(const objdet::Box& a, const objdet::Box& b) {
-  const float xx1 = std::max(a.x1, b.x1);
-  const float yy1 = std::max(a.y1, b.y1);
-  const float xx2 = std::min(a.x2, b.x2);
-  const float yy2 = std::min(a.y2, b.y2);
-  const float inter = std::max(0.0f, xx2 - xx1) * std::max(0.0f, yy2 - yy1);
-  const float area_a = std::max(0.0f, a.x2 - a.x1) * std::max(0.0f, a.y2 - a.y1);
-  const float area_b = std::max(0.0f, b.x2 - b.x1) * std::max(0.0f, b.y2 - b.y1);
-  const float den = area_a + area_b - inter;
-  return den > 0.0f ? (inter / den) : 0.0f;
-}
-
-float class_confidence(float value) {
-  return std::clamp(value, 0.0f, 1.0f);
-}
-
-// Decode YOLO26 detess/dequant output into the package's postprocess contract:
-// 3 regression tensors as absolute (cx,cy,w,h) in 640x640 model space, plus
-// 3 class-probability tensors.
-std::vector<objdet::Box> decode_yolo26_boxes(const simaai::neat::TensorList& tensors,
-                                             float min_score, float nms_iou, int max_detections) {
-  if (tensors.size() < 6) {
-    throw std::runtime_error("expected at least 6 tensors, got " + std::to_string(tensors.size()));
-  }
-  const std::array<HWCTensor, 3> regs = {tensor_to_hwc(tensors[0]), tensor_to_hwc(tensors[1]),
-                                         tensor_to_hwc(tensors[2])};
-  const std::array<HWCTensor, 3> clss = {tensor_to_hwc(tensors[3]), tensor_to_hwc(tensors[4]),
-                                         tensor_to_hwc(tensors[5])};
-
-  std::vector<objdet::Box> candidates;
-  for (size_t lvl = 0; lvl < regs.size(); ++lvl) {
-    const auto& reg = regs[lvl];
-    const auto& cls = clss[lvl];
-    if (reg.c != 4) {
-      throw std::runtime_error("expected 4-channel regression (cx,cy,w,h), got c=" +
-                               std::to_string(reg.c));
-    }
-    if (reg.h != cls.h || reg.w != cls.w) {
-      throw std::runtime_error("reg/cls spatial mismatch");
-    }
-    for (int y = 0; y < reg.h; ++y) {
-      for (int x = 0; x < reg.w; ++x) {
-        const size_t cls_base = (static_cast<size_t>(y) * reg.w + x) * cls.c;
-        int best_class = -1;
-        float best_score = 0.0f;
-        for (int c = 0; c < cls.c; ++c) {
-          const float s = class_confidence(cls.data[cls_base + c]);
-          if (s > best_score) {
-            best_score = s;
-            best_class = c;
-          }
-        }
-        if (best_score < min_score || best_class < 0)
-          continue;
-
-        const size_t reg_base = (static_cast<size_t>(y) * reg.w + x) * 4U;
-        const float bcx = reg.data[reg_base + 0];
-        const float bcy = reg.data[reg_base + 1];
-        const float bw = reg.data[reg_base + 2];
-        const float bh = reg.data[reg_base + 3];
-        objdet::Box box;
-        box.x1 = std::max(0.0f, bcx - bw * 0.5f);
-        box.y1 = std::max(0.0f, bcy - bh * 0.5f);
-        box.x2 = std::min(static_cast<float>(kInferSize), bcx + bw * 0.5f);
-        box.y2 = std::min(static_cast<float>(kInferSize), bcy + bh * 0.5f);
-        box.score = best_score;
-        box.class_id = best_class;
-        if (box.x2 > box.x1 && box.y2 > box.y1) {
-          candidates.push_back(box);
-        }
-      }
-    }
+  if (outputs.size() != 1) {
+    throw std::runtime_error("expected one BBOX tensor from model-managed BoxDecode, got " +
+                             std::to_string(outputs.size()));
   }
 
-  // Per-class NMS, highest-score-first.
-  std::sort(candidates.begin(), candidates.end(),
-            [](const objdet::Box& a, const objdet::Box& b) { return a.score > b.score; });
-  std::vector<objdet::Box> keep;
-  keep.reserve(static_cast<size_t>(max_detections));
-  for (const auto& b : candidates) {
-    bool suppressed = false;
-    for (const auto& k : keep) {
-      if (k.class_id == b.class_id && iou_xyxy(k, b) > nms_iou) {
-        suppressed = true;
-        break;
-      }
-    }
-    if (!suppressed) {
-      keep.push_back(b);
-      if (static_cast<int>(keep.size()) >= max_detections)
-        break;
-    }
-  }
-  return keep;
-}
-
-std::vector<objdet::Box> scale_boxes_to_original(const std::vector<objdet::Box>& boxes, int out_w,
-                                                 int out_h) {
-  const float sx = static_cast<float>(out_w) / static_cast<float>(kInferSize);
-  const float sy = static_cast<float>(out_h) / static_cast<float>(kInferSize);
-  std::vector<objdet::Box> out;
-  out.reserve(boxes.size());
-  for (const auto& b : boxes) {
-    out.push_back(objdet::Box{b.x1 * sx, b.y1 * sy, b.x2 * sx, b.y2 * sy, b.score, b.class_id});
-  }
-  return out;
+  return simaai::neat::decode_bbox_tensor(outputs.front(), image_width, image_height,
+                                          max_detections, /*strict=*/false)
+      .boxes;
 }
 
 std::string class_name(const std::vector<std::string>& labels, int class_id) {
@@ -285,7 +174,7 @@ cv::Scalar class_color(int class_id) {
   return kColors[idx];
 }
 
-void draw_boxes(cv::Mat& frame, const std::vector<objdet::Box>& boxes,
+void draw_boxes(cv::Mat& frame, const std::vector<simaai::neat::Box>& boxes,
                 const std::vector<std::string>& labels) {
   for (const auto& b : boxes) {
     const int x1 = std::max(0, std::min(frame.cols - 1, static_cast<int>(std::round(b.x1))));
@@ -334,6 +223,10 @@ int main(int argc, char** argv) {
     return 2;
   }
   fs::create_directories(output_dir);
+  const int removed_outputs = clear_output_images(output_dir, input_dir);
+  if (removed_outputs > 0) {
+    std::cout << "Cleared " << removed_outputs << " stale output images\n";
+  }
 
   std::vector<std::string> labels;
   try {
@@ -360,25 +253,27 @@ int main(int argc, char** argv) {
   try {
     simaai::neat::Model::Options model_opt;
     model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+    model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
     model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
-    model_opt.preprocess.input_max_width = kInferSize;
-    model_opt.preprocess.input_max_height = kInferSize;
-    model_opt.preprocess.input_max_depth = 3;
+    model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+    model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
+    model_opt.score_threshold = cfg.min_score;
+    model_opt.nms_iou_threshold = cfg.nms_iou;
+    model_opt.top_k = cfg.max_detections;
     model_opt.processcvu.post_run_target = "A65";
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 
-    simaai::neat::Session session;
-    session.add(model.session());
-    std::cout << "[BUILD] Pipeline:\n" << session.describe_backend() << "\n";
-
-    cv::Mat dummy_bgr(kInferSize, kInferSize, CV_8UC3, cv::Scalar(0, 0, 0));
-    simaai::neat::Tensor dummy =
-        simaai::neat::Tensor::from_cv_mat(dummy_bgr, simaai::neat::ImageSpec::PixelFormat::BGR);
-    auto run = session.build(simaai::neat::TensorList{dummy}, simaai::neat::RunMode::Sync);
+    cv::Mat seed_bgr = cv::imread(images.front().string(), cv::IMREAD_COLOR);
+    if (seed_bgr.empty()) {
+      throw std::runtime_error("failed to read build seed image: " + images.front().string());
+    }
+    std::cout << "[BUILD] Building pipeline...\n";
+    auto runner = model.build(std::vector<cv::Mat>{seed_bgr}, simaai::neat::Model::RouteOptions{});
+    std::cout << "[BUILD] Pipeline built\n";
 
     // Warmup inference to stabilize timing before profiling.
-    run.run(simaai::neat::TensorList{dummy}, cfg.timeout_ms);
+    runner.run(std::vector<cv::Mat>{seed_bgr}, cfg.timeout_ms);
     std::cout << "[WARMUP] done\n";
 
     const int total_images = static_cast<int>(images.size()) * cfg.num_runs;
@@ -400,26 +295,16 @@ int main(int argc, char** argv) {
           continue;
         }
 
-        const int orig_w = bgr.cols;
-        const int orig_h = bgr.rows;
-
-        cv::Mat resized;
-        cv::resize(bgr, resized, cv::Size(kInferSize, kInferSize), 0, 0, cv::INTER_LINEAR);
-        simaai::neat::Tensor input =
-            simaai::neat::Tensor::from_cv_mat(resized, simaai::neat::ImageSpec::PixelFormat::BGR);
-
         const auto infer_start = std::chrono::steady_clock::now();
-        simaai::neat::TensorList out = run.run(simaai::neat::TensorList{input}, cfg.timeout_ms);
+        simaai::neat::TensorList out = runner.run(std::vector<cv::Mat>{bgr}, cfg.timeout_ms);
         const auto infer_end = std::chrono::steady_clock::now();
 
-        const std::vector<objdet::Box> boxes_infer =
-            decode_yolo26_boxes(out, cfg.min_score, cfg.nms_iou, cfg.max_detections);
+        const std::vector<simaai::neat::Box> boxes =
+            decode_detections(out, bgr.cols, bgr.rows, cfg.max_detections);
         const auto decode_end = std::chrono::steady_clock::now();
 
-        const auto boxes_orig = scale_boxes_to_original(boxes_infer, orig_w, orig_h);
-
         if (cfg.overlay) {
-          draw_boxes(bgr, boxes_orig, labels);
+          draw_boxes(bgr, boxes, labels);
           const fs::path out_path = output_dir / (image_path.stem().string() + ".png");
           if (!cv::imwrite(out_path.string(), bgr)) {
             std::cerr << "Failed to write: " << out_path << "\n";
@@ -432,10 +317,10 @@ int main(int argc, char** argv) {
         if (cfg.overlay) {
           std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
                     << " -> " << image_path.stem().string() << ".png"
-                    << " (" << boxes_orig.size() << " detections)\n";
+                    << " (" << boxes.size() << " detections)\n";
         } else {
           std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
-                    << " (" << boxes_orig.size() << " detections)\n";
+                    << " (" << boxes.size() << " detections)\n";
         }
 
         if (cfg.profile) {
@@ -455,7 +340,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    run.close();
+    runner.close();
 
     if (cfg.profile && processed > 0) {
       const auto pipeline_end = std::chrono::steady_clock::now();

@@ -194,12 +194,19 @@ jobs:
     with:
       vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
 
+  resolve-test-runner:
+    name: Resolve Test Runner
+    uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
+
   test-runtime:
     name: Test Apps Runtime
     needs:
       - resolve-vulcan-config
+      - resolve-test-runner
       - publish-vulcan-artifacts
-    runs-on: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+    runs-on:
+      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+      labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
     env:
       VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
       SIMA_CLI_CHECK_FOR_UPDATE: "0"

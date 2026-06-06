@@ -5,9 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS_DIR="${NEAT_APPS_TEST_DEPS_DIR:-${ROOT_DIR}/deps}"
 APPS_MANIFEST="${DEPS_DIR}/manifest.json"
 NEAT_DEBS_DIR="${DEPS_DIR}/debs"
-NEAT_CORE_MARKER="${DEPS_DIR}/.neat_core"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
-NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.sima-neat.com/core}"
+NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
+NEAT_CORE_INSTALL_DIR=""
+NEAT_CORE_INSTALL_DIR_OWNED=0
 LATEST_TAG_CACHE_DIR="$(mktemp -d /tmp/neat-apps-latest.XXXXXX)"
 
 cleanup_latest_tag_cache() {
@@ -41,15 +42,18 @@ Options:
   --portal-only             Build portal only and exit
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
   --neat-core-version <branch-version>
-                            Override deps/manifest.json neat_core for one run
+                            Override deps/manifest.json neat-core for one run
   -h, --help                Show help
 
 Environment:
   SIMA_CLI_BIN              Path to sima-cli binary (default: sima-cli)
   NEAT_APPS_DEPENDENCY_BRANCH
-                            Dependency branch for empty manifest neat_core
+                            Dependency branch for snap manifest neat-core
   NEAT_INSTALLER_URL        Hosted branch installer URL
   NEAT_ARTIFACTS_BASE_URL   Hosted NEAT core artifact index
+  NEAT_APPS_CORE_INSTALL_DIR
+                            Scratch directory override for Vulcan core installs
+                            (default: fresh /tmp/neat-apps-core-install.XXXXXX)
   NEAT_CORE_INSTALL_MODE    legacy or vulcan. Defaults to vulcan when NEAT_VULCAN_ENV is set.
   NEAT_VULCAN_ENV           Vulcan artifact environment for sima-cli core installs
   CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
@@ -127,7 +131,7 @@ import json
 import sys
 
 payload = {
-    "neat_core": {
+    "neat-core": {
         "branch": sys.argv[2],
         "version": sys.argv[3],
     }
@@ -249,17 +253,38 @@ except json.JSONDecodeError as exc:
     print(f"ERROR: Invalid JSON in {path}: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
-neat_core = data.get("neat_core")
+neat_core = data.get("neat-core")
 platform_version = data.get("platform-version")
 
-if not isinstance(neat_core, str):
-    print(f"ERROR: {path} must define neat_core as a string.", file=sys.stderr)
-    raise SystemExit(1)
 if not isinstance(platform_version, str) or not platform_version.strip():
     print(f"ERROR: {path} must define platform-version as a non-empty string.", file=sys.stderr)
     raise SystemExit(1)
 
-print(neat_core.strip())
+if isinstance(neat_core, str):
+    print("__SNAP__" if not neat_core.strip() else neat_core.strip())
+elif isinstance(neat_core, dict):
+    policy = str(neat_core.get("policy", "")).strip().lower()
+    if policy == "snap":
+        print("__SNAP__")
+    elif policy:
+        print(f"ERROR: unsupported neat-core.policy in {path}: {policy!r}", file=sys.stderr)
+        raise SystemExit(1)
+    else:
+        spec = str(neat_core.get("spec", "")).strip()
+        branch = str(neat_core.get("branch", neat_core.get("ref", ""))).strip()
+        if not branch:
+            print(
+                f"ERROR: {path} neat-core object must define policy=snap or branch/ref.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(f"{branch}:{spec or 'latest'}")
+else:
+    print(
+        f"ERROR: {path} must define neat-core as a string or dependency object.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 print(platform_version.strip())
 PY
 }
@@ -352,37 +377,74 @@ core_artifact_version_exists() {
   download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch_key}/${version}/metadata.json" >/dev/null 2>&1
 }
 
-neat_core_available() {
-  # Prefer an actual package/config probe over the repo-local marker file so a
-  # reused checkout does not incorrectly skip install in a fresh container.
-  if [[ -f "${ROOT_DIR}/../core/build/libsima_neat.a" && -d "${ROOT_DIR}/../core/include" ]]; then
-    return 0
-  fi
+normalize_vulcan_env() {
+  local env_name="$1"
+  case "${env_name}" in
+    production|prod|prd) printf '%s\n' "prod" ;;
+    staging|stg) printf '%s\n' "stg" ;;
+    development|dev) printf '%s\n' "dev" ;;
+    *) printf '%s\n' "${env_name}" ;;
+  esac
+}
 
-  if ! command -v cmake >/dev/null 2>&1; then
+neat_core_installed_matches() {
+  local expected_branch="$1"
+  local expected_version="$2"
+  local expected_env="${3:-}"
+  local expected_branch_key expected_env_key status_json
+
+  if ! command -v neat >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
     return 1
   fi
 
-  local probe_dir
-  probe_dir="$(mktemp -d /tmp/simaneat-probe.XXXXXX)"
-  cat > "${probe_dir}/CMakeLists.txt" <<'EOF'
-cmake_minimum_required(VERSION 3.16)
-project(SimaNeatProbe LANGUAGES CXX)
-find_package(SimaNeat CONFIG QUIET)
-if (TARGET SimaNeat::sima_neat)
-  message(STATUS "SimaNeat package found")
-else()
-  message(FATAL_ERROR "SimaNeat package not found")
-endif()
-EOF
+  expected_branch_key="$(sanitize_branch_key "${expected_branch}")"
+  expected_env_key="$(normalize_vulcan_env "${expected_env}")"
+  status_json="$(neat --json 2>/dev/null)" || return 1
 
-  if cmake -S "${probe_dir}" -B "${probe_dir}/build" >/dev/null 2>&1; then
-    rm -rf "${probe_dir}"
-    return 0
+  if ! NEAT_STATUS_JSON="${status_json}" python3 - "${expected_branch}" "${expected_branch_key}" "${expected_version}" "${expected_env_key}" <<'PY'
+import json
+import os
+import sys
+
+expected_branch = sys.argv[1]
+expected_branch_key = sys.argv[2]
+expected_version = sys.argv[3]
+expected_env = sys.argv[4]
+
+try:
+    data = json.loads(os.environ["NEAT_STATUS_JSON"])
+except json.JSONDecodeError:
+    raise SystemExit(1)
+
+core = data.get("components", {}).get("core", {})
+channel = str(core.get("channel", "")).strip()
+tag = str(core.get("tag", "")).strip()
+actual_env = str(core.get("provenance", {}).get("vulcanEnvironment", "")).strip()
+
+def normalize_env(value: str) -> str:
+    if value in {"production", "prod", "prd"}:
+        return "prod"
+    if value in {"staging", "stg"}:
+        return "stg"
+    if value in {"development", "dev"}:
+        return "dev"
+    return value
+
+if channel not in {expected_branch, expected_branch_key}:
+    raise SystemExit(1)
+if tag != expected_version:
+    raise SystemExit(1)
+if expected_env and normalize_env(actual_env) != expected_env:
+    raise SystemExit(1)
+PY
+  then
+    return 1
   fi
 
-  rm -rf "${probe_dir}"
-  return 1
+  return 0
 }
 
 download_file() {
@@ -564,24 +626,34 @@ resolve_neat_core_target() {
     return 0
   fi
 
-  if [[ -n "${manifest_core}" ]]; then
-    if is_protected_manifest_context; then
-      echo "ERROR: ${APPS_MANIFEST} must keep neat_core empty on main/develop." >&2
-      return 1
-    fi
-    if ! ref_output="$(parse_core_ref "${manifest_core}" "${APPS_MANIFEST} neat_core")"; then
-      return 1
-    fi
-    branch="$(first_line "${ref_output}")"
-    version="$(second_line "${ref_output}")"
-    validate_explicit_core_ref "${branch}" "${version}" "${APPS_MANIFEST} neat_core" || return 1
+  if [[ "${manifest_core}" == "__SNAP__" ]]; then
+    branch="$(resolve_empty_neat_core_branch)"
+    version="latest"
     printf '%s\n%s\n' "${branch}" "${version}"
     return 0
   fi
 
-  branch="$(resolve_empty_neat_core_branch)"
-  version="latest"
-  printf '%s\n%s\n' "${branch}" "${version}"
+  if [[ -n "${manifest_core}" ]]; then
+    if is_protected_manifest_context; then
+      echo "ERROR: ${APPS_MANIFEST} must keep neat-core as policy=snap on main/develop." >&2
+      return 1
+    fi
+
+    if [[ "${manifest_core}" == *":"* ]]; then
+      branch="${manifest_core%%:*}"
+      version="${manifest_core#*:}"
+    else
+      if ! ref_output="$(parse_core_ref "${manifest_core}" "${APPS_MANIFEST} neat-core")"; then
+        return 1
+      fi
+      branch="$(first_line "${ref_output}")"
+      version="$(second_line "${ref_output}")"
+    fi
+
+    validate_explicit_core_ref "${branch}" "${version}" "${APPS_MANIFEST} neat-core" || return 1
+    printf '%s\n%s\n' "${branch}" "${version}"
+    return 0
+  fi
 }
 
 load_neat_core_target() {
@@ -594,6 +666,48 @@ load_neat_core_target() {
   fi
   NEAT_CORE_TARGET_BRANCH="$(first_line "${target_output}")"
   NEAT_CORE_TARGET_VERSION="$(second_line "${target_output}")"
+}
+
+prepare_vulcan_core_install_dir() {
+  NEAT_CORE_INSTALL_DIR_OWNED=0
+  if [[ -z "${NEAT_APPS_CORE_INSTALL_DIR:-}" ]]; then
+    NEAT_CORE_INSTALL_DIR="$(mktemp -d /tmp/neat-apps-core-install.XXXXXX)"
+    NEAT_CORE_INSTALL_DIR_OWNED=1
+    return 0
+  fi
+
+  NEAT_CORE_INSTALL_DIR="${NEAT_APPS_CORE_INSTALL_DIR}"
+  if [[ -z "${NEAT_CORE_INSTALL_DIR}" || "${NEAT_CORE_INSTALL_DIR}" == "/" ]]; then
+    echo "ERROR: unsafe NEAT_APPS_CORE_INSTALL_DIR: ${NEAT_CORE_INSTALL_DIR}" >&2
+    exit 1
+  fi
+  rm -rf "${NEAT_CORE_INSTALL_DIR}"
+  mkdir -p "${NEAT_CORE_INSTALL_DIR}"
+}
+
+cleanup_vulcan_core_install_dir() {
+  if [[ "${NEAT_CORE_INSTALL_DIR_OWNED}" == "1" && -n "${NEAT_CORE_INSTALL_DIR}" ]]; then
+    rm -rf "${NEAT_CORE_INSTALL_DIR}"
+  fi
+  NEAT_CORE_INSTALL_DIR=""
+  NEAT_CORE_INSTALL_DIR_OWNED=0
+}
+
+run_sima_cli_core_install() {
+  local sima_cli_bin="$1"
+  shift
+  local log_path
+  log_path="$(mktemp /tmp/neat-apps-sima-cli-install.XXXXXX.log)"
+  if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
+    rm -f "${log_path}"
+    return 1
+  fi
+  if grep -Fq "Installation script exited" "${log_path}"; then
+    echo "ERROR: sima-cli reported a NEAT core installer failure." >&2
+    rm -f "${log_path}"
+    return 1
+  fi
+  rm -f "${log_path}"
 }
 
 ensure_neat_core() {
@@ -610,40 +724,46 @@ ensure_neat_core() {
       install_mode="legacy"
     fi
   fi
+  if [[ "${install_mode}" == "vulcan" ]]; then
+    vulcan_env="${NEAT_VULCAN_ENV:-dev}"
+  fi
 
-  # Resolve "latest" to the actual commit tag so the marker is precise.
+  # Resolve "latest" to an exact tag before checking installed state.
   if [[ "${version}" == "latest" ]]; then
     version="$(resolve_latest_version "${branch}")"
   fi
 
-  # Check marker file — but only trust it if the current environment can also
-  # resolve a usable SimaNeat package/build.
   local expected_tag="${branch}/${version}"
-  if [[ -f "${NEAT_CORE_MARKER}" ]]; then
-    local current_tag
-    current_tag="$(tr -d '[:space:]' < "${NEAT_CORE_MARKER}")"
-    if [[ "${current_tag}" == "${expected_tag}" ]] && neat_core_available; then
-      echo "NEAT core already installed (${expected_tag}). Skipping install."
-      return 0
-    fi
+  if neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
+    echo "NEAT core already installed (${expected_tag}). Skipping install."
+    return 0
   fi
 
   echo "Installing NEAT core (${expected_tag})..."
 
   if [[ "${install_mode}" == "vulcan" ]]; then
+    local install_status
     if ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
       echo "ERROR: NEAT_CORE_INSTALL_MODE=vulcan requires sima-cli on PATH or SIMA_CLI_BIN." >&2
       exit 1
     fi
-    vulcan_env="${NEAT_VULCAN_ENV:-dev}"
     echo "Installing NEAT core from Vulcan env ${vulcan_env} using sima-cli."
-    "${sima_cli_bin}" neat install \
-      --env "${vulcan_env}" \
-      -d "${ROOT_DIR}" \
-      -t all \
-      "core@${branch}:${version}"
+    prepare_vulcan_core_install_dir
+    echo "  Scratch dir: ${NEAT_CORE_INSTALL_DIR}"
+    install_status=0
+    (
+      cd "${NEAT_CORE_INSTALL_DIR}"
+      run_sima_cli_core_install "${sima_cli_bin}" \
+        --env "${vulcan_env}" \
+        -d . \
+        -t minimal \
+        "core@${branch}:${version}"
+    ) || install_status=$?
+    cleanup_vulcan_core_install_dir
+    if [[ "${install_status}" -ne 0 ]]; then
+      exit "${install_status}"
+    fi
 
-    printf '%s\n' "${expected_tag}" > "${NEAT_CORE_MARKER}"
     echo "NEAT core installed successfully (${expected_tag})."
     return 0
   fi
@@ -672,8 +792,6 @@ ensure_neat_core() {
   trap - RETURN
   find "${NEAT_DEBS_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
-  # Write marker on success.
-  printf '%s\n' "${expected_tag}" > "${NEAT_CORE_MARKER}"
   echo "NEAT core installed successfully (${expected_tag})."
 }
 

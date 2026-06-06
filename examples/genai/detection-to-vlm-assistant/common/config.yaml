@@ -7,7 +7,7 @@ model:
 
 inference:
   frames: 0
-  min_score: 0.4
+  min_score: 0.2
   nms_iou: 0.60
   max_detections: 24
   # classes:
@@ -28,7 +28,7 @@ openai:
   enabled: true
   host: 127.0.0.1
   port: 9998
-  model: gemma3
+  model: gemma4
   max_tokens: 128
   interval_seconds: 3
   timeout_seconds: 30

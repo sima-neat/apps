@@ -43,10 +43,10 @@ def make_rgb_tensor(image: np.ndarray) -> pyneat.Tensor:
     )
 
 
-def warmup_model(runner: pyneat.Run, timeout_ms: int) -> None:
+def warmup_model(runner: pyneat.ModelRunner, timeout_ms: int) -> None:
     """Run one dummy inference to initialize the hardware pipeline before timing."""
     dummy = np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)
-    runner.run(make_rgb_tensor(dummy), timeout_ms=timeout_ms)
+    runner.run([make_rgb_tensor(dummy)], timeout_ms=timeout_ms)
     print("Model warmed up.")
 
 
@@ -87,7 +87,9 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 def euclidean_distance(a: np.ndarray, b: np.ndarray) -> float:
     return float(euclidean(a.flatten(), b.flatten()))
 
-def run_inference(runner: pyneat.Run, image_path: Path, timeout_ms: int) -> tuple[np.ndarray, float]:
+def run_inference(
+    runner: pyneat.ModelRunner, image_path: Path, timeout_ms: int
+) -> tuple[np.ndarray, float]:
     """Run inference on a single image. Returns (embedding, inference_time_s)."""
     bgr_image = cv2.imread(str(image_path))
     if bgr_image is None:
@@ -96,7 +98,7 @@ def run_inference(runner: pyneat.Run, image_path: Path, timeout_ms: int) -> tupl
     image = preprocess_image(bgr_image)
 
     t0 = time.perf_counter()
-    out = runner.run(make_rgb_tensor(image), timeout_ms=timeout_ms)
+    out = runner.run([make_rgb_tensor(image)], timeout_ms=timeout_ms)
     infer_time_s = time.perf_counter() - t0
 
     out_tensor = find_first_tensor(out)
@@ -267,7 +269,10 @@ def main() -> int:
         opt.preprocess.input_max_height = INPUT_H
         opt.preprocess.input_max_depth = 3
         model = pyneat.Model(str(model_path), opt)
-        runner = model.build(make_rgb_tensor(np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)))
+        runner = model.build(
+            [make_rgb_tensor(np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8))],
+            route_options=pyneat.ModelRouteOptions(),
+        )
         warmup_model(runner, timeout_ms)
 
         t_start = time.perf_counter()

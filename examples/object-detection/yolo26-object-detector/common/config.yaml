@@ -1,5 +1,5 @@
 model:
-  path: assets/models/yolo26m_mod_mpk.tar.gz
+  path: assets/models/yolo26n_boxdecode_bf16_tess/yolo26n_boxdecode_mpk.tar.gz
   labels: examples/object-detection/yolo26-object-detector/common/coco_label.txt
 io:
   input_dir: assets/test_images

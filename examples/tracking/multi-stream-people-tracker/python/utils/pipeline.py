@@ -25,6 +25,13 @@ class RuntimeModules:
 
 
 @dataclass(frozen=True)
+class GraphRun:
+    graph: Any
+    run: Any
+    model: Any | None = None
+
+
+@dataclass(frozen=True)
 class QuantTessCpuPreproc:
     width: int
     height: int
@@ -94,16 +101,6 @@ def probe_rtsp(url: str) -> RtspProbe:
     return RtspProbe(width=width, height=height, fps=max(0, fps))
 
 
-def load_detector_model(runtime: RuntimeModules, cfg: AppConfig):
-    # Load the model pack in tensor mode because CPU preproc produces the
-    # FP32 image tensor consumed by QuantTess in the explicit detector graph.
-    pyneat = runtime.pyneat
-    opt = pyneat.ModelOptions()
-    opt.media_type = "application/vnd.simaai.tensor"
-    opt.format = ""
-    return pyneat.Model(cfg.model, opt)
-
-
 def read_preproc_contract(runtime: RuntimeModules, model: Any) -> QuantTessCpuPreproc:
     # Reuse the packaged preproc geometry even though preprocessing happens on CPU.
     pyneat = runtime.pyneat
@@ -119,7 +116,17 @@ def read_preproc_contract(runtime: RuntimeModules, model: Any) -> QuantTessCpuPr
     )
 
 
-def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: RtspProbe):
+def _set_optional_input_limits(input_opt: Any, width: int, height: int, depth: int) -> None:
+    for attr, value in (
+        ("max_width", width),
+        ("max_height", height),
+        ("max_depth", depth),
+    ):
+        if hasattr(input_opt, attr):
+            setattr(input_opt, attr, value)
+
+
+def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: RtspProbe) -> GraphRun:
     pyneat = runtime.pyneat
     ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
@@ -128,6 +135,7 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
     ro.payload_type = 96
     ro.insert_queue = True
     ro.auto_caps_from_stream = True
+    ro.sync_mode = False
     ro.sima_allocator_type = 2
     ro.decoder_raw_output = False
     ro.use_videoconvert = False
@@ -143,15 +151,15 @@ def build_source_run(runtime: RuntimeModules, cfg: AppConfig, url: str, probe: R
         ro.output_caps.fps = probe.fps
     ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
-    session = pyneat.Session()
-    session.add(pyneat.groups.rtsp_decoded_input(ro))
-    session.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
+    graph = pyneat.Graph("rtsp_source")
+    graph.add(pyneat.groups.rtsp_decoded_input(ro))
+    graph.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 4
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
-    run = session.build(run_opt)
-    return session, run
+    run = graph.build(run_opt)
+    return GraphRun(graph=graph, run=run)
 
 
 def build_detection_run(
@@ -187,24 +195,18 @@ def build_detection_run(
     model = pyneat.Model(cfg.model, model_opt)
 
     input_opt = model.input_appsrc_options(False)
-    input_opt.media_type = "video/x-raw"
+    input_opt.payload_type = pyneat.PayloadType.Image
     input_opt.format = "RGB"
     input_opt.width = probe.width
     input_opt.height = probe.height
     input_opt.depth = 3
-    for attr, value in (
-        ("max_width", probe.width),
-        ("max_height", probe.height),
-        ("max_depth", 3),
-    ):
-        if hasattr(input_opt, attr):
-            setattr(input_opt, attr, value)
+    _set_optional_input_limits(input_opt, probe.width, probe.height, 3)
 
-    session = pyneat.Session()
-    session.add(pyneat.nodes.input(input_opt))
-    session.add(model.preprocess())
-    session.add(pyneat.groups.mla(model))
-    session.add(
+    graph = pyneat.Graph("detector")
+    graph.add(pyneat.nodes.input(input_opt))
+    graph.add(model.preprocess())
+    graph.add(pyneat.groups.mla(model))
+    graph.add(
         pyneat.nodes.sima_box_decode(
             model,
             decode_type=pyneat.BoxDecodeType.YoloV8,
@@ -223,7 +225,7 @@ def build_detection_run(
             top_k=cfg.top_k if cfg.top_k is not None else _YOLOV8_BOXDECODE_DEFAULTS["topk"],
         )
     )
-    session.add(pyneat.nodes.output())
+    graph.add(pyneat.nodes.output())
 
     seed = pyneat.Tensor.from_numpy(
         np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
@@ -236,8 +238,8 @@ def build_detection_run(
     run_opt.queue_depth = 1
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
-    run = session.build(seed, pyneat.RunMode.Async, run_opt)
-    return session, run
+    run = graph.build([seed], pyneat.RunMode.Async, run_opt)
+    return GraphRun(graph=graph, run=run, model=model)
 
 
 def build_insight_video_run(
@@ -250,15 +252,16 @@ def build_insight_video_run(
     np = runtime.np
 
     input_opt = pyneat.InputOptions()
-    input_opt.media_type = "video/x-raw"
+    input_opt.payload_type = pyneat.PayloadType.Image
     input_opt.format = "RGB"
+    input_opt.width = probe.width
+    input_opt.height = probe.height
+    input_opt.depth = 3
     input_opt.use_simaai_pool = False
-    input_opt.max_width = probe.width
-    input_opt.max_height = probe.height
-    input_opt.max_depth = 3
+    _set_optional_input_limits(input_opt, probe.width, probe.height, 3)
 
-    session = pyneat.Session()
-    session.add(pyneat.nodes.input(input_opt))
+    graph = pyneat.Graph("insight_video")
+    graph.add(pyneat.nodes.input(input_opt))
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(
         probe.width,
         probe.height,
@@ -274,7 +277,7 @@ def build_insight_video_run(
     sender_opt.encoder.bitrate_kbps = cfg.bitrate_kbps
     sender_opt.encoder.profile = "baseline"
     sender_opt.encoder.level = "4.1"
-    session.add(pyneat.groups.video_sender(sender_opt))
+    graph.add(pyneat.groups.video_sender(sender_opt))
 
     seed = pyneat.Tensor.from_numpy(
         np.zeros((probe.height, probe.width, 3), dtype=np.uint8),
@@ -285,8 +288,8 @@ def build_insight_video_run(
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 2
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run = session.build(seed, pyneat.RunMode.Async, run_opt)
-    return session, run
+    run = graph.build([seed], pyneat.RunMode.Async, run_opt)
+    return GraphRun(graph=graph, run=run)
 
 
 def build_insight_metadata_output(

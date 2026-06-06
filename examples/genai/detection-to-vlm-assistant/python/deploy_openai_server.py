@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 DEFAULT_MODELS = [
-    ("/media/nvme/llima/models/gemma3-siglip448-a16w4", "gemma3"),
+    ("/workspace/sima-neat/apps/assets/models/genai/gemma4-E2B-it", "gemma4"),
 ]
 
 

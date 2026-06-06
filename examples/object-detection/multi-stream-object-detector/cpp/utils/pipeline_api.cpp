@@ -7,7 +7,7 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "neat/session.h"
+#include "neat/runtime.h"
 #include <nodes/io/MetadataSender.h>
 
 #include <opencv2/core/mat.hpp>
@@ -24,8 +24,8 @@ struct RtspProbe {
   int fps = 0;
 };
 
-struct SessionRun {
-  simaai::neat::Session session;
+struct GraphRun {
+  simaai::neat::Graph graph;
   simaai::neat::Run run;
   std::shared_ptr<simaai::neat::Model> model;
 };
@@ -40,11 +40,11 @@ build_source_input_group_options(const AppConfig& cfg, const std::string& url,
                                  const RtspProbe& probe);
 RtspProbe probe_rtsp(const AppConfig& cfg, const std::string& url);
 std::vector<std::string> detector_stage_names(ModelFamily family);
-SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe);
-SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const RtspProbe& probe);
+GraphRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe);
+GraphRun build_detection_run(const AppConfig& cfg, ModelFamily family, const RtspProbe& probe);
 simaai::neat::Sample run_sample_input_once(simaai::neat::Run& run,
                                            const simaai::neat::Sample& input, int timeout_ms);
-SessionRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index);
+GraphRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index);
 simaai::neat::MetadataSender build_insight_metadata_output(const AppConfig& cfg, int stream_index);
 
 } // namespace multi_stream_object_detector

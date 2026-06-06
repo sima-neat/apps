@@ -40,7 +40,7 @@ For more information regarding Insight, please refer to this [page](https://docs
 The sample is split into three independent runtime stages:
 
 1. `RTSP ingest and decode`
-   The application first probes the RTSP source to learn the decoded frame size, then builds a decode session that outputs NV12 frames. This avoids hardcoding `640x480` and makes the example more robust when the source changes resolution.
+   The application first probes the RTSP source to learn the decoded frame size, then builds a decode graph that outputs NV12 frames. This avoids hardcoding `640x480` and makes the example more robust when the source changes resolution.
 
 2. `YOLO inference`
    Decoded NV12 frames are pushed into a dedicated YOLO pipeline:
@@ -53,7 +53,7 @@ The sample is split into three independent runtime stages:
 
 ## Neat API Usage
 
-- RTSP ingest: `RtspDecodedInputOptions` -> `Session.add(rtsp_decoded_input)` -> `Session.build(...)`
+- RTSP ingest: `RtspDecodedInputOptions` -> `Graph.add(rtsp_decoded_input)` -> `Graph.build(...)`
 - YOLO path:
   C++ graph uses `Input -> Preprocess -> Infer -> SimaBoxDecode -> Output`
   Python path uses `Model.build(...)`/`Model.run(...)` with packed BBOX parsing first and manual decode fallback.
@@ -63,10 +63,10 @@ The sample is split into three independent runtime stages:
 ## Lifecycle
 The example uses a producer/consumer design:
 
-- the producer thread pulls decoded frames from the RTSP session and places them into a bounded queue
+- the producer thread pulls decoded frames from the RTSP graph and places them into a bounded queue
 - the consumer thread pulls frames from that queue, submits them to YOLO, converts detection results to Insight objects, and publishes both video and metadata
 
-This separation keeps the RTSP session from being tightly coupled to the inference latency of each frame and makes timing/debug output easier to interpret.
+This separation keeps the RTSP graph from being tightly coupled to the inference latency of each frame and makes profile output easier to interpret.
 
 ## Prerequisites
 - Installed Neat framework and Insight on the DevKit
@@ -84,11 +84,14 @@ This separation keeps the RTSP session from being tightly coupled to the inferen
 - This example feeds raw decoded frames to `VideoSender` with the raw-frame option. If an upstream pipeline already produces H.264, `VideoSender` also supports the encoded-input option, where it parses, packetizes, and sends without re-encoding.
 - `model.path` must point to a valid YOLO compiled model package file.
 - `source.rtsp_url` must be set before running.
-- If `runtime.frames` is empty or zero, the sample runs continuously.
+- If `inference.frames` is zero, the sample runs continuously.
+- If `runtime.profile` is true, the sample prints aggregate profile summaries every `runtime.profile_interval` published frames.
 
 ## Command-Line Options
 - `--config <path>`
   Optional. YAML config path. Defaults to `common/config.yaml`.
+- `--validate-config-only`
+  Validate YAML config and exit without opening the RTSP stream.
 
 ## Build
 This example can be built in either of these environments:
@@ -164,10 +167,22 @@ Set the RTSP source and Insight destination in the config:
 ```yaml
 source:
   rtsp_url: rtsp://<host>:8554/<stream>
+  tcp: true
 model:
   path: assets/models/yolo_v8s_mpk.tar.gz
-insight:
-  host: <insight-host>
+inference:
+  frames: 0
+  min_score: 0.55
+  nms_iou: 0.50
+  max_detections: 100
+runtime:
+  profile: false
+  profile_interval: 100
+output:
+  insight:
+    host: <insight-host>
+    video_port: 9000
+    metadata_port: 9100
 ```
 
 ### Python Implementation

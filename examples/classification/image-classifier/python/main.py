@@ -132,7 +132,7 @@ def main() -> int:
     # Run inference
     t = pyneat.Tensor.from_numpy(rgb, copy=True, image_format=pyneat.PixelFormat.RGB)
     try:
-        outputs = model.run(t, timeout_ms=timeout_ms)
+        outputs = model.run([t], timeout_ms=timeout_ms)
         if not outputs:
             print("Model run returned empty output", file=sys.stderr)
             return 6

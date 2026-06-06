@@ -32,6 +32,11 @@ constexpr int kDefaultProfileIntervalFrames = 200;
 
 using SteadyClock = std::chrono::steady_clock;
 
+std::mutex& graph_build_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
 struct StreamMetrics {
   int pulled = 0;
   int processed = 0;
@@ -62,13 +67,13 @@ struct StreamMetrics {
 };
 
 struct FramePacket {
-  simaai::neat::Sample decoded;
+  cv::Mat frame;
   int frame_index = 0;
   double source_time_s = 0.0;
 };
 
 struct ResultPacket {
-  simaai::neat::Sample decoded;
+  cv::Mat frame;
   int frame_index = 0;
   std::vector<std::uint8_t> bbox_payload;
   double source_time_s = 0.0;
@@ -163,13 +168,9 @@ struct StreamRuntime {
   int index = 0;
   std::string url;
   RtspProbe probe;
-  simaai::neat::Session source_session;
-  simaai::neat::Run source_run;
-  simaai::neat::Session detect_session;
-  simaai::neat::Run detect_run;
-  std::shared_ptr<simaai::neat::Model> detect_model;
-  simaai::neat::Session video_session;
-  simaai::neat::Run video_run;
+  GraphRun source;
+  std::optional<GraphRun> detect;
+  std::optional<GraphRun> video;
   std::optional<simaai::neat::MetadataSender> metadata_sender;
   PeopleTracker tracker;
   StreamMetrics metrics;
@@ -189,8 +190,6 @@ std::int64_t now_unix_ms() {
 StreamRuntime create_stream_runtime(int index, const std::string& url, const AppConfig& cfg) {
   const RtspProbe probe = probe_rtsp(url);
   auto source = build_source_run(cfg, url, probe);
-  auto detect = build_detection_run(cfg, probe, index == 0);
-  auto video = build_insight_video_run(cfg, probe, index);
   std::optional<simaai::neat::MetadataSender> sender;
   if (metadata_output_enabled(cfg)) {
     sender.emplace(build_insight_metadata_output(cfg, index));
@@ -200,13 +199,9 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
       index,
       url,
       probe,
-      std::move(source.session),
-      std::move(source.run),
-      std::move(detect.session),
-      std::move(detect.run),
-      std::move(detect.model),
-      std::move(video.session),
-      std::move(video.run),
+      std::move(source),
+      std::nullopt,
+      std::nullopt,
       std::move(sender),
       PeopleTracker(cfg.tracker_iou_threshold, cfg.tracker_max_missing),
   };
@@ -214,7 +209,19 @@ StreamRuntime create_stream_runtime(int index, const std::string& url, const App
 }
 
 void close_stream_runtime(StreamRuntime& stream) {
-  for (auto* run : {&stream.video_run, &stream.detect_run, &stream.source_run}) {
+  if (stream.video.has_value()) {
+    try {
+      stream.video->run.close();
+    } catch (...) {
+    }
+  }
+  if (stream.detect.has_value()) {
+    try {
+      stream.detect->run.close();
+    } catch (...) {
+    }
+  }
+  for (auto* run : {&stream.source.run}) {
     try {
       run->close();
     } catch (...) {
@@ -265,7 +272,7 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
       const double t0 = now_steady_s();
       const int pull_timeout_ms =
           frame_index == 0 ? kSourceStartupPullTimeoutMs : kSourcePullTimeoutMs;
-      const auto sample = stream.source_run.pull(pull_timeout_ms);
+      const auto sample = stream.source.run.pull(pull_timeout_ms);
       const double elapsed = now_steady_s() - t0;
       if (!sample.has_value()) {
         empty_pulls += 1;
@@ -291,7 +298,7 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
       }
 
       FramePacket packet;
-      packet.decoded = *sample;
+      packet.frame = tensor_rgb_from_sample(*sample);
       packet.frame_index = frame_index;
       packet.source_time_s = elapsed;
       put_keep_latest(frame_queue, std::move(packet), stream, "frame");
@@ -311,7 +318,8 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
   frame_queue.close();
 }
 
-void infer_thread(StreamRuntime& stream, KeepLatestQueue<FramePacket>& frame_queue,
+void infer_thread(StreamRuntime& stream, const AppConfig& cfg,
+                  KeepLatestQueue<FramePacket>& frame_queue,
                   KeepLatestQueue<ResultPacket>& result_queue, std::atomic<bool>& stop_event) {
   try {
     while (!stop_event.load()) {
@@ -324,12 +332,22 @@ void infer_thread(StreamRuntime& stream, KeepLatestQueue<FramePacket>& frame_que
       }
 
       const double roundtrip_t0 = now_steady_s();
-      const simaai::neat::Sample det_sample =
-          run_sample_input_once(stream.detect_run, packet.decoded, 50000);
+      simaai::neat::Tensor input_tensor =
+          simaai::neat::Tensor::from_cv_mat(packet.frame, simaai::neat::ImageSpec::PixelFormat::RGB,
+                                            simaai::neat::TensorMemory::EV74);
+      if (!stream.detect.has_value()) {
+        std::lock_guard<std::mutex> lock(graph_build_mutex());
+        stream.detect.emplace(build_detection_run(cfg, stream.probe));
+      }
+      if (!stream.detect->run.push(simaai::neat::TensorList{input_tensor})) {
+        throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                 " detector push failed");
+      }
+      const simaai::neat::Sample det_sample = stream.detect->run.pull_samples(50000);
       const double roundtrip_elapsed = now_steady_s() - roundtrip_t0;
 
       ResultPacket result;
-      result.decoded = std::move(packet.decoded);
+      result.frame = std::move(packet.frame);
       result.frame_index = packet.frame_index;
       result.bbox_payload = extract_bbox_payload(det_sample);
       result.source_time_s = packet.source_time_s;
@@ -412,12 +430,15 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
 
 void print_power_metrics(const std::vector<StreamRuntime>& streams) {
   for (const auto& stream : streams) {
-    const auto power = stream.detect_run.power_summary();
+    if (!stream.detect.has_value()) {
+      continue;
+    }
+    const auto power = stream.detect->run.power_summary();
     if (!power.enabled) {
       continue;
     }
     std::cout << "\n[stream " << stream.index << "] detection run runtime metrics:\n"
-              << stream.detect_run.metrics_report();
+              << stream.detect->run.metrics_report();
   }
 }
 
@@ -453,7 +474,7 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       stream.metrics.interval_pull_s += packet.pull_wait_s;
       stream.metrics.pulled += 1;
 
-      cv::Mat frame = tensor_rgb_from_sample(packet.decoded);
+      const cv::Mat& frame = packet.frame;
       std::vector<Detection> boxes =
           parse_bbox_payload(packet.bbox_payload, frame.cols, frame.rows);
       boxes = filter_person_detections(boxes, cfg.person_class_id);
@@ -476,7 +497,11 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       }
 
       const cv::Mat& video_frame = cfg.video_mode == VideoMode::Annotated ? overlay_frame : frame;
-      if (!stream.video_run.push(std::vector<cv::Mat>{video_frame})) {
+      if (!stream.video.has_value()) {
+        std::lock_guard<std::mutex> lock(graph_build_mutex());
+        stream.video.emplace(build_insight_video_run(cfg, stream.probe, stream.index));
+      }
+      if (!stream.video->run.push(std::vector<cv::Mat>{video_frame})) {
         throw std::runtime_error("stream " + std::to_string(stream.index) +
                                  " Insight video push failed");
       }
@@ -587,7 +612,7 @@ int run_app(const AppConfig& cfg) {
 
     worker_threads.emplace_back([&streams, index, &cfg, frame_queue, result_queue, &stop_event] {
       auto& stream = streams[index];
-      infer_thread(stream, *frame_queue, *result_queue, stop_event);
+      infer_thread(stream, cfg, *frame_queue, *result_queue, stop_event);
     });
     worker_threads.emplace_back([&streams, index, &cfg, result_queue, &stop_event] {
       auto& stream = streams[index];

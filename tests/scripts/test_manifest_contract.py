@@ -8,17 +8,19 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
 
 
-def _write_manifest(path: Path, neat_core: str = "", platform_version: str = "2.0.0") -> None:
+def _write_manifest(path: Path, neat_core: object = "", platform_version: str = "2.0.0") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
-                "neat_core": neat_core,
+                "neat-core": neat_core,
                 "platform-version": platform_version,
             },
             indent=2,
@@ -30,7 +32,7 @@ def _write_manifest(path: Path, neat_core: str = "", platform_version: str = "2.
 
 def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     log_path = tmp_path / "curl.log"
     curl_path = bin_dir / "curl"
     curl_path.write_text(
@@ -120,10 +122,30 @@ def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
     return bin_dir, log_path
 
 
+def _write_fake_sima_cli(tmp_path: Path) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    sima_cli_path = bin_dir / "sima-cli"
+    sima_cli_path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\\n' "$PWD" > "${NEAT_APPS_TEST_SIMA_CLI_CWD}"
+            printf '%s\\n' "$*" > "${NEAT_APPS_TEST_SIMA_CLI_ARGS}"
+            touch sima-cli-ran.txt
+            """
+        ),
+        encoding="utf-8",
+    )
+    sima_cli_path.chmod(0o755)
+    return bin_dir
+
+
 def _run_build(
     tmp_path: Path,
     *,
-    neat_core: str = "",
+    neat_core: object = "",
     platform_version: str = "2.0.0",
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
@@ -189,6 +211,38 @@ def _curl_log(tmp_path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+def _write_fake_neat_json(tmp_path: Path, *, channel: str, tag: str, env: str) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    neat_path = bin_dir / "neat"
+    payload = {
+        "components": {
+            "core": {
+                "channel": channel,
+                "tag": tag,
+                "provenance": {"vulcanEnvironment": env},
+            }
+        }
+    }
+    neat_path.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            if [[ "${{1:-}}" == "--json" ]]; then
+              cat <<'EOF'
+            {json.dumps(payload)}
+            EOF
+              exit 0
+            fi
+            exit 1
+            """
+        ),
+        encoding="utf-8",
+    )
+    neat_path.chmod(0o755)
+    return bin_dir
+
+
 def test_empty_manifest_resolves_from_dependency_branch_and_platform_version(tmp_path):
     proc = _run_build(
         tmp_path,
@@ -197,6 +251,18 @@ def test_empty_manifest_resolves_from_dependency_branch_and_platform_version(tmp
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "Platform version      : 2.0.0" in proc.stdout
+    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
+
+
+def test_snap_manifest_resolves_from_dependency_branch(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        env={"NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core target      : develop:devsha1" in proc.stdout
     assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
 
@@ -228,8 +294,35 @@ def test_empty_manifest_custom_branch_falls_back_to_develop(tmp_path):
     assert "using develop-latest" in proc.stderr
 
 
+def test_snap_manifest_custom_branch_falls_back_to_develop(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "snap"},
+        env={"NEAT_APPS_DEPENDENCY_BRANCH": "zz-missing-core-artifact-for-test"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert "using develop-latest" in proc.stderr
+
+
 def test_explicit_manifest_uses_valid_branch_version(tmp_path):
     proc = _run_build(tmp_path, neat_core="zz-core-artifact-for-test-pinnedsha1")
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
+    assert (
+        "https://core.test/zz-core-artifact-for-test/pinnedsha1/metadata.json"
+        in _curl_log(tmp_path)
+    )
+
+
+@pytest.mark.parametrize("ref_key", ["branch", "ref"])
+def test_dependency_object_manifest_uses_valid_artifact(tmp_path, ref_key):
+    proc = _run_build(
+        tmp_path,
+        neat_core={ref_key: "zz-core-artifact-for-test", "spec": "pinnedsha1"},
+    )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
@@ -254,7 +347,25 @@ def test_protected_branch_rejects_explicit_manifest_value(tmp_path):
     )
 
     assert proc.returncode != 0
-    assert "must keep neat_core empty on main/develop" in proc.stderr
+    assert "must keep neat-core as policy=snap on main/develop" in proc.stderr
+
+
+def test_protected_branch_rejects_explicit_dependency_object_manifest(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"branch": "main", "spec": "mainsha1"},
+        env={"GITHUB_REF_NAME": "main"},
+    )
+
+    assert proc.returncode != 0
+    assert "must keep neat-core as policy=snap on main/develop" in proc.stderr
+
+
+def test_unsupported_manifest_object_fails(tmp_path):
+    proc = _run_build(tmp_path, neat_core={"policy": "latest"})
+
+    assert proc.returncode != 0
+    assert "unsupported neat-core.policy" in proc.stderr
 
 
 def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):
@@ -278,10 +389,56 @@ def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):
     assert installer_args.read_text(encoding="utf-8").strip() == (
         "--minimum scratch-core-for-test scratchsha1"
     )
-    assert (deps_dir / ".neat_core").read_text(encoding="utf-8").strip() == (
-        "scratch-core-for-test/scratchsha1"
-    )
     assert list((deps_dir / "debs").iterdir()) == []
     assert not (APPS_ROOT / "sima-neat-test-Linux-core.deb").exists()
     assert not (APPS_ROOT / "neat-test.deb").exists()
     assert not (APPS_ROOT / "pyneat-test.whl").exists()
+
+
+def test_vulcan_core_install_uses_minimal_temp_dir(tmp_path):
+    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
+    sima_cli_args = tmp_path / "sima-cli-args.txt"
+    _write_fake_sima_cli(tmp_path)
+
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    install_dir = Path(sima_cli_cwd.read_text(encoding="utf-8").strip())
+    assert str(install_dir).startswith("/tmp/neat-apps-core-install.")
+    assert sima_cli_args.read_text(encoding="utf-8").strip() == (
+        "neat install --env production -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1"
+    )
+    assert not install_dir.exists()
+
+
+def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env="prod",
+    )
+
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "NEAT core already installed (scratch-core-for-test/scratchsha1)" in proc.stdout

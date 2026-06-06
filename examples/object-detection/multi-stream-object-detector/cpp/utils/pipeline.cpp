@@ -121,26 +121,26 @@ void apply_runtime_env_defaults() {
   set_env_if_unset("SIMA_PULL_TIMEOUT_DIAG", "0");
 }
 
-SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
-  SessionRun runtime;
-  runtime.session.add(simaai::neat::nodes::groups::RtspDecodedInput(
+GraphRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
+  GraphRun runtime;
+  runtime.graph.add(simaai::neat::nodes::groups::RtspDecodedInput(
       build_source_input_group_options(cfg, url, probe)));
-  runtime.session.add(
+  runtime.graph.add(
       simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(kSourceOutputEveryN)));
 
   simaai::neat::RunOptions run_options;
   run_options.queue_depth = kSourceRunQueueDepth;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
-  runtime.run = runtime.session.build(run_options);
+  runtime.run = runtime.graph.build(run_options);
   return runtime;
 }
 
-SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const RtspProbe& probe) {
+GraphRun build_detection_run(const AppConfig& cfg, ModelFamily family, const RtspProbe& probe) {
   static_cast<void>(detector_stage_names(family));
   apply_runtime_env_defaults();
 
-  SessionRun runtime;
+  GraphRun runtime;
 
   simaai::neat::Model::Options model_options;
   model_options.preprocess.kind = simaai::neat::InputKind::Image;
@@ -157,18 +157,18 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
   runtime.model = std::make_shared<simaai::neat::Model>(cfg.model.path, model_options);
 
   auto input_options = runtime.model->input_appsrc_options(false);
-  input_options.media_type = "video/x-raw";
+  input_options.payload_type = simaai::neat::PayloadType::Image;
   input_options.format = "RGB";
   input_options.width = probe.width;
   input_options.height = probe.height;
   input_options.depth = 3;
-  runtime.session.add(simaai::neat::nodes::Input(input_options));
-  runtime.session.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
-  runtime.session.add(simaai::neat::nodes::groups::Infer(*runtime.model));
+  runtime.graph.add(simaai::neat::nodes::Input(input_options));
+  runtime.graph.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
+  runtime.graph.add(simaai::neat::nodes::groups::Infer(*runtime.model));
 
   switch (family) {
   case ModelFamily::YoloV8:
-    runtime.session.add(simaai::neat::nodes::SimaBoxDecode(
+    runtime.graph.add(simaai::neat::nodes::SimaBoxDecode(
         *runtime.model, simaai::neat::BoxDecodeType::YoloV8, cfg.min_score, cfg.nms_iou,
         cfg.max_detections, "", std::nullopt, std::nullopt, probe.width, probe.height));
     break;
@@ -176,7 +176,7 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
     throw std::invalid_argument("unsupported model family for detector graph");
   }
 
-  runtime.session.add(simaai::neat::nodes::Output());
+  runtime.graph.add(simaai::neat::nodes::Output());
 
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
   simaai::neat::RunOptions run_options;
@@ -185,32 +185,35 @@ SessionRun build_detection_run(const AppConfig& cfg, ModelFamily family, const R
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
   runtime.run =
-      runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
+      runtime.graph.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 
 simaai::neat::Sample run_sample_input_once(simaai::neat::Run& run,
                                            const simaai::neat::Sample& input, int timeout_ms) {
-  auto outputs = run.run(simaai::neat::SampleList{input}, timeout_ms);
+  auto outputs = run.run(input, timeout_ms);
   if (outputs.empty()) {
     throw std::runtime_error("detector run produced no samples");
   }
   return std::move(outputs.front());
 }
 
-SessionRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index) {
+GraphRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index) {
   const int writer_fps = effective_writer_fps(cfg, probe);
 
   simaai::neat::InputOptions input_options;
-  input_options.media_type = "video/x-raw";
+  input_options.payload_type = simaai::neat::PayloadType::Image;
   input_options.format = "RGB";
+  input_options.width = probe.width;
+  input_options.height = probe.height;
+  input_options.depth = 3;
   input_options.use_simaai_pool = false;
   input_options.max_width = probe.width;
   input_options.max_height = probe.height;
   input_options.max_depth = 3;
 
-  SessionRun runtime;
-  runtime.session.add(simaai::neat::nodes::Input(input_options));
+  GraphRun runtime;
+  runtime.graph.add(simaai::neat::nodes::Input(input_options));
   auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
       probe.width, probe.height, writer_fps);
   video_options.host = cfg.insight_host;
@@ -223,7 +226,7 @@ SessionRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe,
   video_options.encoder.bitrate_kbps = 2500;
   video_options.encoder.profile = "baseline";
   video_options.encoder.level = "4.1";
-  runtime.session.add(simaai::neat::nodes::groups::VideoSender(video_options));
+  runtime.graph.add(simaai::neat::nodes::groups::VideoSender(video_options));
 
   simaai::neat::RunOptions run_options;
   run_options.preset = kRealtimeRunPreset;
@@ -231,7 +234,7 @@ SessionRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe,
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
   runtime.run =
-      runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
+      runtime.graph.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 

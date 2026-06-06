@@ -1,6 +1,6 @@
 #pragma once
 
-#include "neat/session.h"
+#include <neat.h>
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>

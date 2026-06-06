@@ -28,9 +28,6 @@ import time
 from pathlib import Path
 import yaml
 
-MIN_SCORE = 0.55
-NMS_IOU = 0.50
-MAX_DET = 100
 DEFAULT_FPS = 30
 SOURCE_RUN_QUEUE_DEPTH = 4
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
@@ -58,16 +55,45 @@ COCO80_NAMES = [
 ]
 
 @dataclass(frozen=True)
-class AppConfig:
-    rtsp: str
-    model: str
-    frames: int
-    insight_host: str
-    insight_video_port: int
-    insight_metadata_port: int
+class ModelConfig:
+    path: str
+
+
+@dataclass(frozen=True)
+class SourceConfig:
+    rtsp_url: str
     latency_ms: int
-    udp: bool
-    debug: bool
+    tcp: bool
+
+
+@dataclass(frozen=True)
+class InferenceConfig:
+    frames: int
+    min_score: float
+    nms_iou: float
+    max_detections: int
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    profile: bool
+    profile_interval: int
+
+
+@dataclass(frozen=True)
+class InsightConfig:
+    host: str
+    video_port: int
+    metadata_port: int
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    model: ModelConfig
+    source: SourceConfig
+    inference: InferenceConfig
+    runtime: RuntimeConfig
+    insight: InsightConfig
 
 
 def load_runtime_dependencies() -> None:
@@ -143,6 +169,37 @@ def tensor_from_bgr_frame(frame: np.ndarray) -> pyneat.Tensor:
     )
 
 
+def blank_nv12_tensor(width: int, height: int) -> pyneat.Tensor:
+    """Create a CPU-backed blank NV12 tensor with explicit Y and UV plane metadata."""
+    if width <= 0 or height <= 0 or width % 2 != 0 or height % 2 != 0:
+        raise ValueError("NV12 requires positive even width and height")
+    payload = np.zeros((height * 3 // 2, width), dtype=np.uint8)
+    tensor = pyneat.Tensor.from_numpy(
+        payload,
+        copy=True,
+        layout=pyneat.TensorLayout.HW,
+        image_format=pyneat.PixelFormat.NV12,
+        memory=pyneat.TensorMemory.CPU,
+    )
+    tensor.shape = [height, width]
+    tensor.strides_bytes = [width, 1]
+
+    y_plane = pyneat.Plane()
+    y_plane.role = pyneat.PlaneRole.Y
+    y_plane.shape = [height, width]
+    y_plane.strides_bytes = [width, 1]
+    y_plane.byte_offset = 0
+
+    uv_plane = pyneat.Plane()
+    uv_plane.role = pyneat.PlaneRole.UV
+    uv_plane.shape = [height // 2, width]
+    uv_plane.strides_bytes = [width, 1]
+    uv_plane.byte_offset = width * height
+
+    tensor.planes = [y_plane, uv_plane]
+    return tensor
+
+
 def is_tensor_like(value) -> bool:
     return hasattr(value, "copy_payload_bytes") and hasattr(value, "to_numpy")
 
@@ -198,7 +255,7 @@ def extract_bbox_payload(result) -> bytes | None:
     return None
 
 
-def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
+def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, max_detections: int) -> list[dict]:
     """Decode the packed BBOX payload format used by NEAT samples."""
     if len(payload) < 4:
         return []
@@ -208,7 +265,7 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict]:
     #
     # Guard the parsed count against truncated payloads so we never read past
     # the actual buffer contents.
-    count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24)
+    count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24, max_detections)
     boxes = []
     off = 4
     for _ in range(count):
@@ -264,8 +321,8 @@ def build_rtsp_run(
     fps: int,
     latency_ms: int,
     tcp: bool,
-) -> tuple[pyneat.Session, pyneat.Run]:
-    """Build a decoded RTSP input session that yields decoded frame tensors."""
+) -> tuple[pyneat.Graph, pyneat.Run]:
+    """Build a decoded RTSP input graph that yields decoded frame tensors."""
     ro = pyneat.RtspDecodedInputOptions()
     ro.url = url
     ro.latency_ms = latency_ms
@@ -286,19 +343,19 @@ def build_rtsp_run(
     ro.output_caps.fps = fps
     ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
-    sess = pyneat.Session()
-    sess.add(pyneat.groups.rtsp_decoded_input(ro))
-    sess.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
+    graph = pyneat.Graph()
+    graph.add(pyneat.groups.rtsp_decoded_input(ro))
+    graph.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
 
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = SOURCE_RUN_QUEUE_DEPTH
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
-    run = sess.build(run_opt)
-    return sess, run
+    run = graph.build(run_opt)
+    return graph, run
 
 
-def build_model(model_path: str, width: int, height: int) -> pyneat.Model:
+def build_model(model_path: str, width: int, height: int, inference: InferenceConfig) -> pyneat.Model:
     """Create the YOLO model with input bounds derived from the live stream."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
@@ -306,9 +363,9 @@ def build_model(model_path: str, width: int, height: int) -> pyneat.Model:
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV8
-    opt.score_threshold = MIN_SCORE
-    opt.nms_iou_threshold = NMS_IOU
-    opt.top_k = MAX_DET
+    opt.score_threshold = inference.min_score
+    opt.nms_iou_threshold = inference.nms_iou
+    opt.top_k = inference.max_detections
     opt.boxdecode_original_width = width
     opt.boxdecode_original_height = height
     return pyneat.Model(model_path, opt)
@@ -317,36 +374,36 @@ def build_model(model_path: str, width: int, height: int) -> pyneat.Model:
 def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
     """Build the generic NEAT video sender used by this Insight-targeted example."""
     input_opt = pyneat.InputOptions()
-    input_opt.media_type = "video/x-raw"
-    input_opt.format = "BGR"
+    input_opt.payload_type = pyneat.PayloadType.Image
+    input_opt.format = "NV12"
+    input_opt.width = width
+    input_opt.height = height
+    input_opt.fps_n = max(1, fps)
+    input_opt.fps_d = 1
+    input_opt.caps_override = (
+        f"video/x-raw,format=NV12,width={width},height={height},framerate={max(1, fps)}/1"
+    )
     input_opt.use_simaai_pool = False
-    input_opt.max_width = width
-    input_opt.max_height = height
-    input_opt.max_depth = 3
 
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
-    sender_opt.host = cfg.insight_host
+    sender_opt.host = cfg.insight.host
     sender_opt.channel = 0
-    sender_opt.video_port_base = cfg.insight_video_port
+    sender_opt.video_port_base = cfg.insight.video_port
     sender_opt.encoder.bitrate_kbps = 4000
 
-    session = pyneat.Session()
-    session.add(pyneat.nodes.input(input_opt))
-    session.add(pyneat.groups.video_sender(sender_opt))
+    graph = pyneat.Graph()
+    graph.add(pyneat.nodes.input(input_opt))
+    graph.add(pyneat.groups.video_sender(sender_opt))
 
-    seed = pyneat.Tensor.from_numpy(
-        np.zeros((height, width, 3), dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.BGR,
-    )
-    return session, session.build(seed, pyneat.RunMode.Async)
+    seed = blank_nv12_tensor(width, height)
+    return graph, graph.build([seed], pyneat.RunMode.Async)
 
 
 def build_metadata_sender(cfg: AppConfig):
     options = pyneat.MetadataSenderOptions()
-    options.host = cfg.insight_host
+    options.host = cfg.insight.host
     options.channel = 0
-    options.metadata_port_base = cfg.insight_metadata_port
+    options.metadata_port_base = cfg.insight.metadata_port
     return pyneat.MetadataSender(options)
 
 
@@ -376,28 +433,175 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Expose only the small set of controls needed for this reference flow."""
     parser = argparse.ArgumentParser(description="Single-camera RTSP YOLOv8 Insight example")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
+    parser.add_argument(
+        "--validate-config-only",
+        action="store_true",
+        help="Validate config and exit without opening the RTSP stream.",
+    )
     return parser
 
 
-def parse_config(argv: list[str] | None = None) -> AppConfig:
-    args = build_arg_parser().parse_args(argv)
-    with args.config.open("r", encoding="utf-8") as handle:
+def _mapping(value, name: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a mapping")
+    return value
+
+
+def _required_string(mapping: dict, key: str, section: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{section}.{key} must be a non-empty string")
+    return value
+
+
+def _optional_int(mapping: dict, key: str, default: int) -> int:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer")
+    return int(value)
+
+
+def _optional_float(mapping: dict, key: str, default: float) -> float:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be numeric")
+    return float(value)
+
+
+def _optional_bool(mapping: dict, key: str, default: bool) -> bool:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be true or false")
+    return bool(value)
+
+
+def load_app_config(config_path: Path) -> AppConfig:
+    with config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
-    source_cfg = raw.get("source", {})
-    model_cfg = raw.get("model", {})
-    runtime_cfg = raw.get("runtime", {})
-    insight_cfg = raw.get("insight", {})
-    return AppConfig(
-        rtsp=source_cfg.get("rtsp_url", ""),
-        model=model_cfg.get("path", ""),
-        frames=int(runtime_cfg.get("frames", 0)),
-        insight_host=insight_cfg.get("host", "127.0.0.1") or "127.0.0.1",
-        insight_video_port=int(insight_cfg.get("video_port", 9000)),
-        insight_metadata_port=int(insight_cfg.get("metadata_port", 9100)),
-        latency_ms=int(source_cfg.get("latency_ms", 200)),
-        udp=bool(source_cfg.get("udp", False)),
-        debug=bool(runtime_cfg.get("debug", False)),
+
+    if not isinstance(raw, dict):
+        raise ValueError("config root must be a mapping")
+
+    model_cfg = _mapping(raw.get("model"), "model")
+    source_cfg = _mapping(raw.get("source"), "source")
+    inference_cfg = _mapping(raw.get("inference"), "inference")
+    runtime_cfg = _mapping(raw.get("runtime"), "runtime")
+    output_cfg = _mapping(raw.get("output"), "output")
+    insight_cfg = _mapping(output_cfg.get("insight"), "output.insight")
+
+    cfg = AppConfig(
+        model=ModelConfig(path=_required_string(model_cfg, "path", "model")),
+        source=SourceConfig(
+            rtsp_url=_required_string(source_cfg, "rtsp_url", "source"),
+            latency_ms=_optional_int(source_cfg, "latency_ms", 200),
+            tcp=_optional_bool(source_cfg, "tcp", True),
+        ),
+        inference=InferenceConfig(
+            frames=_optional_int(inference_cfg, "frames", 0),
+            min_score=_optional_float(inference_cfg, "min_score", 0.55),
+            nms_iou=_optional_float(inference_cfg, "nms_iou", 0.50),
+            max_detections=_optional_int(inference_cfg, "max_detections", 100),
+        ),
+        runtime=RuntimeConfig(
+            profile=_optional_bool(runtime_cfg, "profile", False),
+            profile_interval=_optional_int(runtime_cfg, "profile_interval", 100),
+        ),
+        insight=InsightConfig(
+            host=_required_string(insight_cfg, "host", "output.insight"),
+            video_port=_optional_int(insight_cfg, "video_port", 9000),
+            metadata_port=_optional_int(insight_cfg, "metadata_port", 9100),
+        ),
     )
+
+    if cfg.source.latency_ms < 0:
+        raise ValueError("source.latency_ms must be >= 0")
+    if cfg.inference.frames < 0:
+        raise ValueError("inference.frames must be >= 0")
+    if not 0.0 <= cfg.inference.min_score <= 1.0:
+        raise ValueError("inference.min_score must be between 0 and 1")
+    if not 0.0 <= cfg.inference.nms_iou <= 1.0:
+        raise ValueError("inference.nms_iou must be between 0 and 1")
+    if cfg.inference.max_detections <= 0:
+        raise ValueError("inference.max_detections must be > 0")
+    if cfg.runtime.profile_interval <= 0:
+        raise ValueError("runtime.profile_interval must be > 0")
+    if cfg.insight.video_port <= 0:
+        raise ValueError("output.insight.video_port must be > 0")
+    if cfg.insight.metadata_port <= 0:
+        raise ValueError("output.insight.metadata_port must be > 0")
+
+    return cfg
+
+
+class ProfileWindow:
+    def __init__(self, enabled: bool, interval: int) -> None:
+        self.enabled = enabled
+        self.interval = interval
+        self.reset()
+
+    def reset(self) -> None:
+        self.frames = 0
+        self.boxes = 0
+        self.started = 0.0
+        self.rtsp_pull_ms = 0.0
+        self.infer_ms = 0.0
+        self.bbox_ms = 0.0
+        self.video_push_ms = 0.0
+        self.e2e_ms = 0.0
+        self.max_e2e_ms = 0.0
+
+    def add(
+        self,
+        *,
+        rtsp_pull_ms: float,
+        infer_ms: float,
+        bbox_ms: float,
+        video_push_ms: float,
+        e2e_ms: float,
+        boxes: int,
+        published_total: int,
+    ) -> None:
+        if not self.enabled:
+            return
+        if self.frames == 0:
+            self.started = time.perf_counter()
+        self.frames += 1
+        self.boxes += boxes
+        self.rtsp_pull_ms += rtsp_pull_ms
+        self.infer_ms += infer_ms
+        self.bbox_ms += bbox_ms
+        self.video_push_ms += video_push_ms
+        self.e2e_ms += e2e_ms
+        self.max_e2e_ms = max(self.max_e2e_ms, e2e_ms)
+        if self.frames >= self.interval:
+            self.flush(published_total)
+
+    def flush(self, published_total: int) -> None:
+        if not self.enabled or self.frames == 0:
+            return
+        elapsed = max(time.perf_counter() - self.started, 1e-6)
+        frames = float(self.frames)
+        print(
+            f"[profile] frames={self.frames} published={published_total} "
+            f"fps={self.frames / elapsed:.2f} "
+            f"avg_rtsp_pull_ms={self.rtsp_pull_ms / frames:.2f} "
+            f"avg_infer_ms={self.infer_ms / frames:.2f} "
+            f"avg_bbox_ms={self.bbox_ms / frames:.2f} "
+            f"avg_video_push_ms={self.video_push_ms / frames:.2f} "
+            f"avg_e2e_ms={self.e2e_ms / frames:.2f} "
+            f"avg_boxes={self.boxes / frames:.2f} "
+            f"max_e2e_ms={self.max_e2e_ms:.2f}",
+            flush=True,
+        )
+        self.reset()
 
 
 def resolve_yolov8s_model(root: Path) -> str:
@@ -460,51 +664,58 @@ def resolve_yolov8s_model(root: Path) -> str:
     return ""
 
 
-def main() -> int:
-    cfg = parse_config()
-    if not cfg.rtsp:
-        print("Missing source.rtsp_url in config.", file=sys.stderr)
+def main(argv: list[str] | None = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    try:
+        cfg = load_app_config(args.config)
+    except Exception as exc:
+        print(f"Error: failed to load config {args.config}: {exc}", file=sys.stderr)
         return 2
+    if args.validate_config_only:
+        print(f"Config validated: {args.config}")
+        return 0
+
     load_runtime_dependencies()
-    model_path = cfg.model or resolve_yolov8s_model(Path.cwd())
+    model_path = cfg.model.path or resolve_yolov8s_model(Path.cwd())
     if not model_path or not Path(model_path).is_file():
         print("Failed to locate yolo_v8s compiled model package.", file=sys.stderr)
         print("Set model.path or run 'sima-cli modelzoo -v 2.0.0 get yolo_v8s'.", file=sys.stderr)
         return 2
 
-    rtsp_session = None
+    rtsp_graph = None
     rtsp_run = None
-    video_session = None
+    video_graph = None
     video_run = None
     metadata_sender = None
     try:
         # Probe first so decode, inference, and VideoSender all agree on the
         # same live frame dimensions.
-        frame_w, frame_h, fps = probe_rtsp(cfg.rtsp)
+        frame_w, frame_h, fps = probe_rtsp(cfg.source.rtsp_url)
         print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
 
         # NEAT boundary: build YOLO model runtime from the resolved compiled model package.
-        model = build_model(model_path, frame_w, frame_h)
+        model = build_model(model_path, frame_w, frame_h, cfg.inference)
         # NEAT boundary: build RTSP decode runtime used by pull_tensors().
-        rtsp_session, rtsp_run = build_rtsp_run(
-            cfg.rtsp,
+        rtsp_graph, rtsp_run = build_rtsp_run(
+            cfg.source.rtsp_url,
             frame_w,
             frame_h,
             fps,
-            cfg.latency_ms,
-            tcp=not cfg.udp,
+            cfg.source.latency_ms,
+            tcp=cfg.source.tcp,
         )
         # NEAT boundary: build VideoSender and MetadataSender.
-        video_session, video_run = build_video_sender_run(cfg, frame_w, frame_h, fps)
+        video_graph, video_run = build_video_sender_run(cfg, frame_w, frame_h, fps)
         metadata_sender = build_metadata_sender(cfg)
 
-        print(f"insight host={cfg.insight_host} video_port={cfg.insight_video_port} "
+        print(f"insight host={cfg.insight.host} video_port={cfg.insight.video_port} "
               f"metadata_port={metadata_sender.metadata_port()} channel=0")
 
         processed = 0
         started = time.perf_counter()
+        profile_window = ProfileWindow(cfg.runtime.profile, cfg.runtime.profile_interval)
         # Contract: single-threaded frame order is pull -> infer -> publish video -> publish metadata.
-        while cfg.frames <= 0 or processed < cfg.frames:
+        while cfg.inference.frames <= 0 or processed < cfg.inference.frames:
             # Push/pull integration point: pull one decoded frame from RTSP run.
             t_pull0 = time.perf_counter()
             tensors = rtsp_run.pull_tensors(timeout_ms=5000)
@@ -513,36 +724,57 @@ def main() -> int:
                 print("RTSP pull timed out / stream closed", file=sys.stderr)
                 break
 
-            frame = tensor_bgr_from_decoded(tensors[0])
+            decoded_frame = tensors[0]
+            frame = tensor_bgr_from_decoded(decoded_frame)
             infer_input = tensor_from_bgr_frame(frame)
 
             # Push/pull integration point: run model and parse the BBOX payload.
             t_inf0 = time.perf_counter()
-            result = model.run(infer_input, timeout_ms=5000)
+            result = model.run([infer_input], timeout_ms=5000)
             t_inf1 = time.perf_counter()
 
             payload = extract_bbox_payload(result)
             if not payload:
                 raise RuntimeError("model returned no BBOX payload")
-            boxes = parse_bbox_payload(payload, frame.shape[1], frame.shape[0])
+            t_bbox0 = time.perf_counter()
+            boxes = parse_bbox_payload(
+                payload,
+                frame.shape[1],
+                frame.shape[0],
+                cfg.inference.max_detections,
+            )
+            t_bbox1 = time.perf_counter()
 
             # Contract: publish video first, then publish matching metadata.
-            if not video_run.push(frame, copy=True, image_format=pyneat.PixelFormat.BGR):
+            t_video0 = time.perf_counter()
+            video_ok = video_run.push([decoded_frame])
+            if not video_ok:
                 raise RuntimeError("Insight video push failed")
+            t_video1 = time.perf_counter()
             fid = str(processed)
             data_json = make_object_detection_data_json(boxes)
-            metadata_sender.send_metadata("object-detection", data_json, int(time.time() * 1000), fid)
+            metadata_sender.send_metadata(
+                "object-detection",
+                data_json,
+                int(time.time() * 1000),
+                fid,
+            )
 
             processed += 1
-            if cfg.debug and (processed <= 5 or processed % 30 == 0):
-                print(
-                    f"[debug] frame={processed} pull_ms={(t_pull1 - t_pull0) * 1000.0:.2f} "
-                    f"infer_ms={(t_inf1 - t_inf0) * 1000.0:.2f} boxes={len(boxes)}"
-                )
+            profile_window.add(
+                rtsp_pull_ms=(t_pull1 - t_pull0) * 1000.0,
+                infer_ms=(t_inf1 - t_inf0) * 1000.0,
+                bbox_ms=(t_bbox1 - t_bbox0) * 1000.0,
+                video_push_ms=(t_video1 - t_video0) * 1000.0,
+                e2e_ms=(t_video1 - t_pull1) * 1000.0,
+                boxes=len(boxes),
+                published_total=processed,
+            )
 
         elapsed = max(time.perf_counter() - started, 1e-6)
+        profile_window.flush(processed)
         print(f"processed={processed} fps={processed / elapsed:.2f} "
-              f"video_sender={cfg.insight_host}:{cfg.insight_video_port}")
+              f"video_sender={cfg.insight.host}:{cfg.insight.video_port}")
         return 0 if processed > 0 else 3
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

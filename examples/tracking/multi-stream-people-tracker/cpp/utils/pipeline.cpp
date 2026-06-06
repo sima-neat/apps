@@ -19,15 +19,6 @@ constexpr int kYoloV8DefaultTopK = 24;
 
 } // namespace
 
-simaai::neat::Sample run_sample_input_once(simaai::neat::Run& run,
-                                           const simaai::neat::Sample& input, int timeout_ms) {
-  auto outputs = run.run(simaai::neat::SampleList{input}, timeout_ms);
-  if (outputs.empty()) {
-    throw std::runtime_error("detector run produced no samples");
-  }
-  return std::move(outputs.front());
-}
-
 int insight_video_port_for_stream(int port_base, int stream_index) {
   return port_base + stream_index;
 }
@@ -57,13 +48,14 @@ RtspProbe probe_rtsp(const std::string& url) {
   return RtspProbe{width, height, std::max(0, fps)};
 }
 
-SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
+GraphRun build_source_run(const AppConfig& cfg, const std::string& url, const RtspProbe& probe) {
   simaai::neat::nodes::groups::RtspDecodedInputOptions options;
   options.url = url;
   options.latency_ms = cfg.latency_ms;
   options.tcp = cfg.tcp;
   options.payload_type = 96;
   options.insert_queue = true;
+  options.sync_mode = false;
   options.out_format = "RGB";
   options.decoder_raw_output = false;
   options.auto_caps_from_stream = true;
@@ -71,6 +63,7 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
   options.use_videoscale = true;
   options.fallback_h264_width = probe.width;
   options.fallback_h264_height = probe.height;
+  options.sima_allocator_type = 2;
   if (probe.fps > 0) {
     options.fallback_h264_fps = probe.fps;
   }
@@ -83,21 +76,20 @@ SessionRun build_source_run(const AppConfig& cfg, const std::string& url, const 
   }
   options.output_caps.memory = simaai::neat::CapsMemory::SystemMemory;
 
-  SessionRun runtime;
-  runtime.session.add(simaai::neat::nodes::groups::RtspDecodedInput(options));
-  runtime.session.add(simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(1)));
+  GraphRun runtime;
+  runtime.graph.add(simaai::neat::nodes::groups::RtspDecodedInput(options));
+  runtime.graph.add(simaai::neat::nodes::Output(simaai::neat::OutputOptions::EveryFrame(1)));
 
   simaai::neat::RunOptions run_options;
   run_options.queue_depth = 4;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
-  runtime.run = runtime.session.build(run_options);
+  runtime.run = runtime.graph.build(run_options);
   return runtime;
 }
 
-SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe,
-                               bool enable_power_monitor) {
-  SessionRun runtime;
+GraphRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
+  GraphRun runtime;
 
   simaai::neat::Model::Options model_options;
   model_options.preprocess.kind = simaai::neat::InputKind::Image;
@@ -115,21 +107,21 @@ SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe,
   runtime.model = std::make_shared<simaai::neat::Model>(cfg.model, model_options);
 
   auto input_options = runtime.model->input_appsrc_options(false);
-  input_options.media_type = "video/x-raw";
+  input_options.payload_type = simaai::neat::PayloadType::Image;
   input_options.format = "RGB";
   input_options.width = probe.width;
   input_options.height = probe.height;
   input_options.depth = 3;
-  runtime.session.add(simaai::neat::nodes::Input(input_options));
-  runtime.session.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
-  runtime.session.add(simaai::neat::nodes::groups::Infer(*runtime.model));
-  runtime.session.add(simaai::neat::nodes::SimaBoxDecode(
+  runtime.graph.add(simaai::neat::nodes::Input(input_options));
+  runtime.graph.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
+  runtime.graph.add(simaai::neat::nodes::groups::Infer(*runtime.model));
+  runtime.graph.add(simaai::neat::nodes::SimaBoxDecode(
       *runtime.model, simaai::neat::BoxDecodeType::YoloV8,
       cfg.detection_threshold.value_or(kYoloV8DefaultDetectionThreshold),
       cfg.nms_iou_threshold.value_or(kYoloV8DefaultNmsIouThreshold),
       cfg.top_k.value_or(kYoloV8DefaultTopK), "", std::nullopt, std::nullopt, probe.width,
       probe.height));
-  runtime.session.add(simaai::neat::nodes::Output());
+  runtime.graph.add(simaai::neat::nodes::Output());
 
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
   simaai::neat::RunOptions run_options;
@@ -137,25 +129,25 @@ SessionRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe,
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
-  if (enable_power_monitor) {
-    run_options.enable_board_power(100);
-  }
   runtime.run =
-      runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
+      runtime.graph.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 
-SessionRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index) {
+GraphRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, int stream_index) {
   simaai::neat::InputOptions input_options;
-  input_options.media_type = "video/x-raw";
+  input_options.payload_type = simaai::neat::PayloadType::Image;
   input_options.format = "RGB";
+  input_options.width = probe.width;
+  input_options.height = probe.height;
+  input_options.depth = 3;
   input_options.use_simaai_pool = false;
   input_options.max_width = probe.width;
   input_options.max_height = probe.height;
   input_options.max_depth = 3;
 
-  SessionRun runtime;
-  runtime.session.add(simaai::neat::nodes::Input(input_options));
+  GraphRun runtime;
+  runtime.graph.add(simaai::neat::nodes::Input(input_options));
   auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
       probe.width, probe.height, effective_writer_fps(cfg, probe));
   video_options.host = cfg.insight_host;
@@ -168,14 +160,14 @@ SessionRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe,
   video_options.encoder.bitrate_kbps = cfg.bitrate_kbps;
   video_options.encoder.profile = "baseline";
   video_options.encoder.level = "4.1";
-  runtime.session.add(simaai::neat::nodes::groups::VideoSender(video_options));
+  runtime.graph.add(simaai::neat::nodes::groups::VideoSender(video_options));
 
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);
   simaai::neat::RunOptions run_options;
   run_options.queue_depth = 2;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   runtime.run =
-      runtime.session.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
+      runtime.graph.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
   return runtime;
 }
 

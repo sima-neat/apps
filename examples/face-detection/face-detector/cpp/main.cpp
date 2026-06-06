@@ -565,26 +565,25 @@ int main(int argc, char** argv) {
 
     simaai::neat::Model model(args.model, model_opt);
 
-    simaai::neat::Session session;
-    session.add(simaai::neat::nodes::Input(model.input_appsrc_options(true)));
-    session.add(simaai::neat::nodes::QuantTess(simaai::neat::QuantTessOptions(model)));
-    session.add(simaai::neat::nodes::groups::MLA(model));
-    session.add(simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
-    session.add(simaai::neat::nodes::Output());
+    simaai::neat::Graph graph;
+    graph.add(simaai::neat::nodes::Input(model.input_appsrc_options(true)));
+    graph.add(simaai::neat::nodes::QuantTess(simaai::neat::QuantTessOptions(model)));
+    graph.add(simaai::neat::nodes::groups::MLA(model));
+    graph.add(simaai::neat::nodes::DetessDequant(simaai::neat::DetessDequantOptions(model)));
+    graph.add(simaai::neat::nodes::Output());
 
-    // Build run with dummy tensor
     cv::Mat dummy(kInferH, kInferW, CV_32FC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy_t = tensor_from_hwc_f32(dummy);
-    auto run = session.build(simaai::neat::TensorList{dummy_t}, simaai::neat::RunMode::Async);
+    auto run = graph.build(simaai::neat::TensorList{dummy_t}, simaai::neat::RunMode::Async);
 
     simaai::neat::Tensor input_t = tensor_from_hwc_f32(resized);
     std::vector<Detection> dets;
 
     if (args.profile) {
       const int runs = std::max(1, args.num_runs);
-      std::vector<double> session_times;
+      std::vector<double> graph_times;
       std::vector<double> post_times;
-      session_times.reserve(runs);
+      graph_times.reserve(runs);
       post_times.reserve(runs);
 
       for (int i = 0; i < runs; ++i) {
@@ -605,9 +604,9 @@ int main(int argc, char** argv) {
                        args.landmarks);
         const auto t3 = std::chrono::steady_clock::now();
 
-        const std::chrono::duration<double> dt_session = t1 - t0;
+        const std::chrono::duration<double> dt_graph = t1 - t0;
         const std::chrono::duration<double> dt_post = t3 - t2;
-        session_times.push_back(dt_session.count());
+        graph_times.push_back(dt_graph.count());
         post_times.push_back(dt_post.count());
       }
 
@@ -630,24 +629,25 @@ int main(int argc, char** argv) {
         return s;
       };
 
-      const auto sess = stats(session_times);
+      const auto graph_stats = stats(graph_times);
       const auto post = stats(post_times);
 
-      const double runs_d = static_cast<double>(session_times.size());
-      const double fps_session = runs_d / sess.sum;
+      const double runs_d = static_cast<double>(graph_times.size());
+      const double fps_graph = runs_d / graph_stats.sum;
       const double fps_post = runs_d / post.sum;
-      const double total_sum = sess.sum + post.sum;
+      const double total_sum = graph_stats.sum + post.sum;
       const double fps_overall = runs_d / total_sum;
 
-      std::cout << "Profiling over " << session_times.size() << " runs (image='"
+      std::cout << "Profiling over " << graph_times.size() << " runs (image='"
                 << args.image.string() << "'):\n";
-      std::cout << "  Session (push+pull): mean=" << sess.mean << "s, min=" << sess.min
-                << "s, max=" << sess.max << "s, FPS=" << fps_session << "\n";
+      std::cout << "  Graph run (push+pull): mean=" << graph_stats.mean
+                << "s, min=" << graph_stats.min << "s, max=" << graph_stats.max
+                << "s, FPS=" << fps_graph << "\n";
       std::cout << "  Postprocessing (decode+NMS): mean=" << post.mean << "s, min=" << post.min
                 << "s, max=" << post.max << "s, FPS=" << fps_post << "\n";
-      std::cout << "  Overall (session + post): mean=" << (total_sum / runs_d)
-                << "s, min=" << (sess.min + post.min) << "s, max=" << (sess.max + post.max)
-                << "s, FPS=" << fps_overall << "\n";
+      std::cout << "  Overall (graph + post): mean=" << (total_sum / runs_d)
+                << "s, min=" << (graph_stats.min + post.min)
+                << "s, max=" << (graph_stats.max + post.max) << "s, FPS=" << fps_overall << "\n";
 
       std::cout << "Last run detections: " << dets.size() << "\n";
       for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
@@ -689,6 +689,7 @@ int main(int argc, char** argv) {
       if (!args.output.empty()) {
         cv::Mat overlay = bgr_u8.clone();
         draw_detections(overlay, dets, args.max_draw);
+        fs::create_directories(args.output.parent_path());
         if (!cv::imwrite(args.output.string(), overlay)) {
           throw std::runtime_error("failed to write: " + args.output.string());
         }

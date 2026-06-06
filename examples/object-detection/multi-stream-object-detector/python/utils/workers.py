@@ -18,7 +18,7 @@ from .model_family import ModelFamily
 from .pipeline import (
     RtspProbe,
     RuntimeModules,
-    SessionRun,
+    GraphRun,
     build_detection_run,
     build_insight_metadata_output,
     build_insight_video_run,
@@ -101,8 +101,8 @@ class StreamRuntime:
     family: ModelFamily = ModelFamily.AUTO
     runtime: RuntimeModules | None = None
     probe: RtspProbe | None = None
-    source: SessionRun | None = None
-    video: SessionRun | None = None
+    source: GraphRun | None = None
+    video: GraphRun | None = None
     video_enabled: bool = True
     metadata_sender: Any | None = None
     metadata_enabled: bool = True
@@ -118,7 +118,7 @@ class StreamRuntime:
 @dataclass
 class DetectorRuntime:
     key: DetectorRuntimeKey
-    runtime: SessionRun
+    graph_run: GraphRun
 
 
 @dataclass
@@ -294,7 +294,7 @@ def _build_worker_context(
         context.detectors.append(
             DetectorRuntime(
                 key=key,
-                runtime=build_detection_run(runtime, cfg, key.family, probe),
+                graph_run=build_detection_run(runtime, cfg, key.family, probe),
             )
         )
     return context
@@ -324,7 +324,7 @@ def _close_stream_runtime(stream: StreamRuntime) -> None:
 def _close_worker_context(context: WorkerContext) -> None:
     for detector in context.detectors:
         try:
-            detector.runtime.run.close()
+            detector.graph_run.run.close()
         except Exception:
             pass
 
@@ -380,13 +380,12 @@ def _process_frame(
         memory=stream.runtime.pyneat.TensorMemory.EV74,
     )
     detect_t0 = _now_steady_s()
-    if not detector.runtime.run.push_tensor(input_tensor):
+    if not detector.graph_run.run.push_tensors([input_tensor]):
         raise RuntimeError(f"stream {stream.index} detector push failed")
-    det_samples = detector.runtime.run.pull_samples(timeout_ms=50000)
+    det_sample = detector.graph_run.run.pull_samples(timeout_ms=50000)
     detect_elapsed = _now_steady_s() - detect_t0
-    if not det_samples:
+    if not det_sample:
         raise RuntimeError(f"stream {stream.index} detect run timed out")
-    det_sample = det_samples[0]
 
     preproc_elapsed = 0.0
     detections = detections_from_detector_sample(
@@ -420,10 +419,14 @@ def _process_frame(
                 raise RuntimeError(format_video_build_error(stream.index, cfg.video_mode, str(exc)))
 
         video_frame = packet.frame if cfg.video_mode is VideoMode.CLEAN else frame_out
-        if not stream.video.run.push(
+        video_tensor = stream.runtime.pyneat.Tensor.from_numpy(
             video_frame,
             copy=True,
             image_format=stream.runtime.pyneat.PixelFormat.RGB,
+            memory=stream.runtime.pyneat.TensorMemory.EV74,
+        )
+        if not stream.video.run.push_tensors(
+            [video_tensor],
         ):
             if cfg.video_mode is VideoMode.CLEAN:
                 raise RuntimeError(f"stream {stream.index} Insight clean video push failed")

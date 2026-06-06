@@ -26,7 +26,7 @@ sima_neat_apps_module(
 if (BUILD_TESTING)
   add_test(
     NAME single-stream-object-detector.requires_rtsp
-    COMMAND $<TARGET_FILE:${YOLOV8_ONE_RTSP_INSIGHT_TARGET}>
+    COMMAND $<TARGET_FILE:${YOLOV8_ONE_RTSP_INSIGHT_TARGET}> --config /nonexistent/single-rtsp-config.yaml
   )
   set_tests_properties(single-stream-object-detector.requires_rtsp PROPERTIES
     WILL_FAIL TRUE
