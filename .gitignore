@@ -12,6 +12,7 @@ assets/models/
 tmp/
 sandbox/
 tests/.env.local
+tests/configs/.env.local
 .neat-core-installed
 deps/debs/
 portal/node_modules/

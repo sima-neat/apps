@@ -27,26 +27,26 @@ Run CI-like strict e2e validation:
 
 ## Local E2E Config
 
-Tracked, non-secret e2e semantic parameters live in `tests/e2e.yaml`.
+Tracked, non-secret e2e semantic parameters live in `tests/configs/e2e.yaml`.
 Use it for shared thresholds, NMS values, top-k limits, and validation
 expectations that should be identical between Python and C++ tests.
 
 Machine-specific values belong in a local config file, not in tracked scripts.
-`tests/.env.example` is the committed template. `tests/.env.local` is your
+`tests/configs/.env.example` is the committed template. `tests/configs/.env.local` is your
 ignored local copy with real board URLs and interpreter paths.
 
 ```bash
-cp tests/.env.example tests/.env.local
+cp tests/configs/.env.example tests/configs/.env.local
 ```
 
-Edit `tests/.env.local`:
+Edit `tests/configs/.env.local`:
 
 ```bash
 SIMANEAT_APPS_TEST_RTSP_URL=rtsp://<host>:<port>/<stream>
 SIMANEAT_APPS_TEST_RTSP_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
 ```
 
-`tests/.env.local` is ignored by git and is auto-loaded by `tests/test.sh`.
+`tests/configs/.env.local` is ignored by git and is auto-loaded by `tests/test.sh`.
 Use `--config <file>` to load a different config:
 
 ```bash
@@ -59,12 +59,18 @@ Process environment variables override values loaded from the config file.
 
 ```text
 tests/
-  test.sh            # local, VS Code, CI entrypoint
-  e2e.yaml           # tracked non-secret e2e thresholds and validation values
-  .env.example       # documented local runtime overrides
-  .env.local         # ignored local runtime overrides
-  conftest.py        # Python fixtures for env, e2e contract, and output dirs
-  pytest.ini         # pytest markers and discovery settings
+  test.sh              # local, VS Code, CI entrypoint
+  README.md            # test workflow documentation
+  pytest.ini           # pytest markers and discovery settings
+  conftest.py          # pytest fixture wiring
+  configs/
+    e2e.yaml           # tracked non-secret e2e thresholds and validation values
+    .env.example       # documented local runtime overrides
+    .env.local         # ignored local runtime overrides
+  utils/
+    e2e_config.py      # shared Python config and output helpers
+  scripts/
+    testing/           # VS Code / DevKit task helpers
 ```
 
 Generated e2e artifacts are written under `sandbox/test-runs` by default:
@@ -115,7 +121,7 @@ The selected interpreter must have `pytest` installed:
 ${PYTHON_TEST_BIN:-python3} -m pip install pytest
 ```
 
-For a persistent local override, set `PYTHON_TEST_BIN` in `tests/.env.local`.
+For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.local`.
 
 ## VS Code From SDK
 
@@ -129,7 +135,7 @@ bash tests/scripts/testing/run_vscode_test_task.sh --all
 bash tests/scripts/testing/run_vscode_test_task.sh --all --strict
 ```
 
-The same `tests/.env.local` file is visible to the board when the workspace is
+The same `tests/configs/.env.local` file is visible to the board when the workspace is
 shared under `/workspace`.
 
 ## Run Individual Tests

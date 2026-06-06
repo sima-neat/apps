@@ -75,7 +75,7 @@ Options:
   -h, --help          Show help
 
 Config:
-  tests/.env.local is auto-loaded when present.
+  tests/configs/.env.local is auto-loaded when present.
   Use --config <file> to load a different local config.
   Process environment variables override config file values.
 
@@ -198,8 +198,8 @@ if [[ -z "${APPS_ROOT:-}" ]]; then
   export APPS_ROOT="${ROOT_DIR}"
 fi
 
-if [[ -z "${CONFIG_FILE}" && -f "${ROOT_DIR}/tests/.env.local" ]]; then
-  CONFIG_FILE="${ROOT_DIR}/tests/.env.local"
+if [[ -z "${CONFIG_FILE}" && -f "${ROOT_DIR}/tests/configs/.env.local" ]]; then
+  CONFIG_FILE="${ROOT_DIR}/tests/configs/.env.local"
 fi
 
 if [[ -n "${CONFIG_FILE}" ]]; then
@@ -337,7 +337,7 @@ preflight_e2e_env() {
     echo "         export SIMANEAT_APPS_TEST_RTSP_URLS=<rtsp-url-0>,<rtsp-url-1>"
     if [[ "${strict}" == "1" ]]; then
       echo "  [FAIL] strict mode requires RTSP config."
-      echo "         Local: cp tests/.env.example tests/.env.local and set RTSP URLs."
+      echo "         Local: cp tests/configs/.env.example tests/configs/.env.local and set RTSP URLs."
       echo "         CI   : set SIMANEAT_APPS_TEST_RTSP_URL and SIMANEAT_APPS_TEST_RTSP_URLS."
       preflight_fail=1
     fi
@@ -611,7 +611,7 @@ if [[ "${RUN_PYTHON}" -eq 1 ]]; then
     else
       echo "  Set PYTHON_TEST_BIN to a Python interpreter with pip and pytest available."
     fi
-    echo "  You can also set PYTHON_TEST_BIN in tests/.env.local."
+    echo "  You can also set PYTHON_TEST_BIN in tests/configs/.env.local."
     OVERALL_RC=1
     PYTHON_READY=0
   fi
