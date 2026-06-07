@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 from tests.utils.test_scope import load_scope
-from tests.utils.test_scope import scoped_model_files, validate_scope
+from tests.utils.test_scope import scoped_model_files, scoped_models, validate_scope
 
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
@@ -137,6 +137,36 @@ def test_scoped_model_files_returns_selected_model_file():
 
     assert scoped_model_files(_scope(example_key), "cpp", "e2e") == [
         (example_key, "demo_model_mpk.tar.gz")
+    ]
+
+
+def test_scoped_models_keeps_per_example_model_id_local():
+    def entry(file_name: str) -> dict:
+        return {
+            "models": {
+                "default": {
+                    "source": "modelzoo",
+                    "name": file_name.removesuffix("_mpk.tar.gz"),
+                    "file": file_name,
+                }
+            },
+            "unit": {"python": False, "cpp": False},
+            "e2e": {
+                "python": {"enabled": False, "models": []},
+                "cpp": {"enabled": True, "models": ["default"]},
+            },
+        }
+
+    scope = {
+        "examples": {
+            "classification/first-example": entry("first_model_mpk.tar.gz"),
+            "classification/second-example": entry("second_model_mpk.tar.gz"),
+        }
+    }
+
+    assert [model["file"] for _, model in scoped_models(scope, ["cpp"], "e2e")] == [
+        "first_model_mpk.tar.gz",
+        "second_model_mpk.tar.gz",
     ]
 
 

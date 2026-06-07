@@ -247,15 +247,25 @@ def scoped_models(
     if kind == "unit":
         return []
 
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[tuple[str, str, str, str, str, str, str], tuple[str, dict[str, Any]]] = {}
     for example_key, entry in sorted(scope["examples"].items()):
         models = entry.get("models", {})
         for language in languages:
             if not is_enabled(entry, language, "e2e"):
                 continue
             for model_id in enabled_models(entry, language):
-                result.setdefault(model_id, models[model_id])
-    return sorted(result.items())
+                model = models[model_id]
+                identity = (
+                    model_id,
+                    model_field(model, "source"),
+                    model_field(model, "name"),
+                    model_field(model, "url"),
+                    model_field(model, "file"),
+                    model_field(model, "repo"),
+                    model_field(model, "path"),
+                )
+                result.setdefault(identity, (model_id, model))
+    return [item for _, item in sorted(result.items())]
 
 
 def scoped_model_files(scope: dict[str, Any], language: str, kind: str) -> list[tuple[str, str]]:
