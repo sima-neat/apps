@@ -1,0 +1,23 @@
+assets/*.onnx
+ffmpeg-build
+server.log
+__pycache__/
+.venv/
+uploads/
+*.wav
+.milvus*
+milvus.db*
+.cache/*
+.venv-*/*
+*.tar.gz
+eui/build/*
+console.log
+app.log
+mla-rt
+sima_lmm
+gte-small-local
+# Default image path for CLI mode
+images/*
+.vscode/
+.codex/
+.claude/
