@@ -344,9 +344,9 @@ ProcessResult spawn_until_output_files(const std::string& binary,
 std::string create_test_output_dir(const std::string& example_name, const std::string& test_name) {
   const char* out_root_raw = env_or_null("SIMANEAT_APPS_TEST_OUTPUT_DIR");
   const char* apps_root_raw = env_or_null("APPS_ROOT");
-  const fs::path base_root =
-      out_root_raw ? fs::path(out_root_raw)
-                   : fs::path(apps_root_raw ? apps_root_raw : ".") / "sandbox" / "test-runs";
+  const fs::path base_root = out_root_raw
+                                 ? fs::path(out_root_raw)
+                                 : fs::path(apps_root_raw ? apps_root_raw : ".") / "sandbox-test";
   const fs::path run_dir = base_root / "cpp" / example_name / test_name;
   const fs::path out_dir = run_dir / "out";
   std::error_code ec;

@@ -93,10 +93,10 @@ tests/
     testing/           # VS Code / DevKit task helpers
 ```
 
-Generated e2e artifacts are written under `sandbox/test-runs` by default:
+Generated e2e artifacts are written under `sandbox-test` by default:
 
 ```text
-sandbox/test-runs/
+sandbox-test/
   summary/
     cpp-e2e.log
     cpp-unit.log
@@ -120,7 +120,7 @@ Each e2e run directory contains the generated config passed to the example, the
 command that was run, captured logs, and any produced output artifacts. The
 generated config is derived from the example's `common/config.yaml`, with only
 the local test harness values patched in. Unit-test scratch files are not kept in
-`sandbox/test-runs`.
+`sandbox-test`.
 
 ## Commands
 
@@ -163,8 +163,8 @@ For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.lo
 ## VS Code From SDK
 
 Launch the VS Code tasks from the eLxr SDK workspace under `/workspace`.
-The task wrapper builds in the SDK, recovers the board through `dk`, then calls
-`tests/test.sh` on the board-side workspace.
+The task wrapper builds in the SDK, then calls `tests/test.sh` on the
+board-side workspace through `dk`.
 
 ```bash
 bash tests/scripts/testing/run_vscode_test_task.sh --unit
@@ -207,7 +207,7 @@ python3 -m pytest \
 - `SIMANEAT_APPS_TEST_MODELS_DIR` (default: `${APPS_ROOT}/assets/models`)
 - `SIMANEAT_APPS_TEST_SCOPE_FILE` (default: `${APPS_ROOT}/tests/configs/test-scope.yaml`)
 - `SIMANEAT_APPS_TEST_INPUT_DIR` (default: `${APPS_ROOT}/assets/test_images`)
-- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox/test-runs`)
+- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox-test`)
 - `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg`)
 - `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `1`)
 - `SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS` (`1` writes summary logs, default: `1`)

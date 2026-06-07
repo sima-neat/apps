@@ -82,7 +82,7 @@ def rtsp_urls() -> list[str]:
 def tmp_output_dir(request) -> Path:
     """Provide a stable per-test out/ directory, cleared before each run."""
     base_raw = os.environ.get("SIMANEAT_APPS_TEST_OUTPUT_DIR", "").strip()
-    base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox" / "test-runs"
+    base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox-test"
     keep_output = os.environ.get("SIMANEAT_APPS_TEST_KEEP_OUTPUT", "").strip() == "1"
     cleanup_needed = not keep_output
     # python/tests/test_e2e.py -> example directory is parents[2]
@@ -121,7 +121,7 @@ def e2e_subprocess_artifacts(request, monkeypatch):
 
     write_logs = os.environ.get("SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS", "1").strip() != "0"
     base_raw = os.environ.get("SIMANEAT_APPS_TEST_OUTPUT_DIR", "").strip()
-    base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox" / "test-runs"
+    base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox-test"
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
     test_name = request.node.name.replace("/", "_")
@@ -195,7 +195,7 @@ def run_until_output_files(request):
 
     write_logs = os.environ.get("SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS", "1").strip() != "0"
     base_raw = os.environ.get("SIMANEAT_APPS_TEST_OUTPUT_DIR", "").strip()
-    base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox" / "test-runs"
+    base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox-test"
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
     test_name = request.node.name.replace("/", "_")

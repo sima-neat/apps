@@ -233,7 +233,7 @@ python3 examples/${category}/${example_name}/python/main.py
 
 ## Source Files
 - C++: \`cpp/main.cpp\`
-- C++ tests: \`cpp/tests/unit_test.cpp\`, \`cpp/tests/e2e_test.cpp\`
+- C++ tests: \`cpp/tests/test_unit.cpp\`, \`cpp/tests/test_e2e.cpp\`
 - Python: \`python/main.py\`
 - Python tests: \`python/tests/test_unit.py\`, \`python/tests/test_e2e.py\`
 - Shared assets: \`common/\`
@@ -267,8 +267,8 @@ create_example() {
   render_cpp_main "${example_name}" > "${module_dir}/cpp/main.cpp"
   render_cpp_cmakelists "${example_name}" > "${module_dir}/cpp/CMakeLists.txt"
   render_cpp_test_cmakelists > "${module_dir}/cpp/tests/CMakeLists.txt"
-  render_cpp_unit_test > "${module_dir}/cpp/tests/unit_test.cpp"
-  render_cpp_e2e_test > "${module_dir}/cpp/tests/e2e_test.cpp"
+  render_cpp_unit_test > "${module_dir}/cpp/tests/test_unit.cpp"
+  render_cpp_e2e_test > "${module_dir}/cpp/tests/test_e2e.cpp"
 
   render_python_main "${example_name}" > "${module_dir}/python/main.py"
   render_python_requirements > "${module_dir}/python/requirements.txt"

@@ -92,7 +92,7 @@ Combine flags for specific subsets:
 Environment:
   SIMANEAT_APPS_TEST_MODELS_DIR     Model directory (default: assets/models)
   SIMANEAT_APPS_TEST_INPUT_DIR      Input images directory (default: assets/test_images)
-  SIMANEAT_APPS_TEST_OUTPUT_DIR     E2E output root (default: sandbox/test-runs)
+  SIMANEAT_APPS_TEST_OUTPUT_DIR     E2E output root (default: sandbox-test)
   SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE  Classification goldfish image path
   SIMANEAT_APPS_TEST_KEEP_OUTPUT    Keep e2e output dirs (1=yes, default: 1)
   SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS    Write summary logs (1=yes, default: 1)
@@ -196,7 +196,7 @@ resolve_test_runtime_env() {
 
   export SIMANEAT_APPS_TEST_MODELS_DIR="${SIMANEAT_APPS_TEST_MODELS_DIR:-${APPS_ROOT}/assets/models}"
   export SIMANEAT_APPS_TEST_INPUT_DIR="${SIMANEAT_APPS_TEST_INPUT_DIR:-${APPS_ROOT}/assets/test_images}"
-  export SIMANEAT_APPS_TEST_OUTPUT_DIR="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${APPS_ROOT}/sandbox/test-runs}"
+  export SIMANEAT_APPS_TEST_OUTPUT_DIR="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${APPS_ROOT}/sandbox-test}"
   export SIMANEAT_APPS_TEST_SCOPE_FILE="${SIMANEAT_APPS_TEST_SCOPE_FILE:-${APPS_ROOT}/tests/configs/test-scope.yaml}"
   export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE:-${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg}"
   export SIMANEAT_APPS_TEST_KEEP_OUTPUT="${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-1}"
@@ -225,7 +225,7 @@ start_summary_log() {
     mktemp
     return
   fi
-  local output_root="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${ROOT_DIR}/sandbox/test-runs}"
+  local output_root="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${ROOT_DIR}/sandbox-test}"
   local summary_dir="${output_root}/summary"
   mkdir -p "${summary_dir}"
   local summary_file="${summary_dir}/${language}-${marker}.log"
