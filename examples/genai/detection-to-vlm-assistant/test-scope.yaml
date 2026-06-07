@@ -1,0 +1,21 @@
+models:
+  yolo_v8s:
+    source: modelzoo
+    name: yolo_v8s
+    file: yolo_v8s_mpk.tar.gz
+  gemma4-openai-server:
+    source: huggingface
+    repo: TBD
+    path: TBD
+unit:
+  python: false
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: GenAI model assets and runtime coverage are not enabled for GA yet.
+    models: []
+  cpp:
+    enabled: false
+    reason: No C++ test coverage for this Python-only GenAI example.
+    models: []

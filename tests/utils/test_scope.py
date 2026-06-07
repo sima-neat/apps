@@ -15,11 +15,78 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 VALID_SOURCES = {"modelzoo", "url", "huggingface"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
+SCOPE_FILE_NAME = "test-scope.yaml"
 
 
-def load_scope(path: Path) -> dict[str, Any]:
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a mapping")
+    return payload
+
+
+def examples_root_from_source(path: Path, apps_root: Path) -> Path:
+    if path.name == "examples":
+        return path
+    if (path / "examples").is_dir():
+        return path / "examples"
+    return apps_root / "examples"
+
+
+def example_key_from_scope_file(path: Path, examples_root: Path) -> str:
+    try:
+        relative = path.parent.relative_to(examples_root)
+    except ValueError as exc:
+        raise ValueError(f"{path} is not under {examples_root}") from exc
+    parts = relative.parts
+    if len(parts) != 2:
+        raise ValueError(f"{path} must be at examples/<category>/<example>/{SCOPE_FILE_NAME}")
+    return str(relative)
+
+
+def scope_entry_from_file(path: Path, examples_root: Path) -> tuple[str, dict[str, Any]]:
+    payload = load_yaml_mapping(path)
+    example_key = example_key_from_scope_file(path, examples_root)
+    if "examples" in payload:
+        entries = payload.get("examples")
+        if not isinstance(entries, dict):
+            raise ValueError(f"{path} examples must be a mapping")
+        if set(entries) != {example_key}:
+            raise ValueError(f"{path} examples must contain only {example_key}")
+        entry = entries[example_key]
+    else:
+        entry = payload
+    if not isinstance(entry, dict):
+        raise ValueError(f"{path} scope entry must be a mapping")
+    return example_key, entry
+
+
+def discover_scope(scope_source: Path, apps_root: Path = APPS_ROOT) -> dict[str, Any]:
+    examples_root = examples_root_from_source(scope_source, apps_root)
+    scope_files = sorted(examples_root.glob(f"*/*/{SCOPE_FILE_NAME}"))
+    if not scope_files:
+        raise FileNotFoundError(f"no {SCOPE_FILE_NAME} files found under {examples_root}")
+
+    examples: dict[str, Any] = {}
+    for scope_file in scope_files:
+        example_key, entry = scope_entry_from_file(scope_file, examples_root)
+        if example_key in examples:
+            raise ValueError(f"duplicate scope entry for examples/{example_key}")
+        examples[example_key] = entry
+    return {"examples": examples}
+
+
+def load_scope(path: Path, apps_root: Path = APPS_ROOT) -> dict[str, Any]:
+    path = path if path.is_absolute() else (Path.cwd() / path).resolve()
+    if path.is_dir():
+        return discover_scope(path, apps_root)
+    examples_root = apps_root / "examples"
+    if path.name == SCOPE_FILE_NAME and path.is_relative_to(examples_root):
+        example_key, entry = scope_entry_from_file(path, examples_root)
+        return {"examples": {example_key: entry}}
+
+    payload = load_yaml_mapping(path)
     if not isinstance(payload, dict) or not isinstance(payload.get("examples"), dict):
         raise ValueError(f"{path} must contain an examples mapping")
     return payload
@@ -216,11 +283,13 @@ def model_field(model: dict[str, Any], key: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scope-file", type=Path, default=APPS_ROOT / "tests/configs/test-scope.yaml")
+    parser.add_argument("--scope-file", type=Path, default=APPS_ROOT / "examples")
     sub = parser.add_subparsers(dest="command", required=True)
 
     validate = sub.add_parser("validate")
     validate.add_argument("--quiet", action="store_true")
+
+    sub.add_parser("generate")
 
     py_files = sub.add_parser("python-files")
     py_files.add_argument("--kind", choices=sorted(VALID_KINDS), required=True)
@@ -241,7 +310,7 @@ def main() -> int:
     model_files.add_argument("--language", choices=sorted(VALID_LANGUAGES), required=True)
 
     args = parser.parse_args()
-    scope = load_scope(args.scope_file)
+    scope = load_scope(args.scope_file, APPS_ROOT)
     errors = validate_scope(scope, APPS_ROOT)
     if errors:
         for error in errors:
@@ -251,6 +320,9 @@ def main() -> int:
     if args.command == "validate":
         if not args.quiet:
             print(f"validated {args.scope_file}")
+        return 0
+    if args.command == "generate":
+        print(yaml.safe_dump(scope, sort_keys=False), end="")
         return 0
     if args.command == "python-files":
         for path in python_files(scope, args.kind):

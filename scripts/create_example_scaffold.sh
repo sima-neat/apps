@@ -184,6 +184,24 @@ def test_e2e_placeholder() -> None:
 EOF_PY
 }
 
+render_test_scope() {
+  cat <<'EOF_YAML'
+models: {}
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: TODO: select an e2e model and implement runtime coverage.
+    models: []
+  cpp:
+    enabled: false
+    reason: TODO: select an e2e model and implement runtime coverage.
+    models: []
+EOF_YAML
+}
+
 render_readme() {
   local example_name="$1"
   local category="$2"
@@ -232,6 +250,7 @@ python3 examples/${category}/${example_name}/python/main.py
 \`\`\`
 
 ## Source Files
+- Test scope: \`test-scope.yaml\`
 - C++: \`cpp/main.cpp\`
 - C++ tests: \`cpp/tests/test_unit.cpp\`, \`cpp/tests/test_e2e.cpp\`
 - Python: \`python/main.py\`
@@ -276,6 +295,7 @@ create_example() {
   render_python_e2e_test > "${module_dir}/python/tests/test_e2e.py"
 
   render_readme "${example_name}" "${category}" > "${module_dir}/README.md"
+  render_test_scope > "${module_dir}/test-scope.yaml"
 
   chmod +x \
     "${module_dir}/python/main.py" \

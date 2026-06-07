@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Download model artifacts required by the enabled apps test scope.
 #
-# Default behavior reads tests/configs/test-scope.yaml and downloads models for
+# Default behavior reads examples/*/*/test-scope.yaml and downloads models for
 # enabled Python and C++ e2e tests. Explicit positional arguments are treated as
 # modelzoo names for manual one-off downloads.
 #
 # Usage:
 #   ./scripts/download_models.sh
 #   ./scripts/download_models.sh --language python --language cpp
-#   ./scripts/download_models.sh --scope-file tests/configs/test-scope.yaml --kind e2e
+#   ./scripts/download_models.sh --scope-file examples --kind e2e
 #   ./scripts/download_models.sh resnet_50
 
 set -euo pipefail
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODELS_DIR="${MODELS_DIR:-$ROOT/assets/models}"
 SIMA_CLI_BIN="${SIMA_CLI_BIN:-}"
-SCOPE_FILE="${ROOT}/tests/configs/test-scope.yaml"
+SCOPE_FILE="${ROOT}/examples"
 KIND="e2e"
 LANGUAGES=()
 POSITIONAL_MODELS=()
@@ -31,7 +31,7 @@ Usage:
   scripts/download_models.sh <modelzoo-name> [...]
 
 Options:
-  --scope-file <path>   Test scope file (default: tests/configs/test-scope.yaml)
+  --scope-file <path>   Test scope source file or directory (default: examples)
   --kind <kind>         Scope kind to resolve (default: e2e)
   --language <lang>     Scope language to include; repeatable (python, cpp)
   -h, --help            Show help
@@ -259,7 +259,7 @@ download_scoped_models() {
     fi
 
     echo "Models directory: $MODELS_DIR"
-    echo "Scope file: $SCOPE_FILE"
+    echo "Scope source: $SCOPE_FILE"
     echo "Models to download:"
     printf '  %s\n' "${rows[@]%%$'\t'*}"
     echo ""

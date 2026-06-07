@@ -1,0 +1,17 @@
+models:
+  reid:
+    source: modelzoo
+    name: reid
+    file: reid_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - reid
+  cpp:
+    enabled: true
+    models:
+    - reid

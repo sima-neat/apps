@@ -98,6 +98,7 @@ python3 examples/<category>/<name>/python/main.py <args>
 - Confirm output directories are writable.
 
 ## Source Files
+- Test scope: `test-scope.yaml`
 - C++ source: `cpp/main.cpp`
 - C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python source: `python/main.py`

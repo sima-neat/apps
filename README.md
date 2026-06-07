@@ -54,6 +54,7 @@ Examples are organized under `examples/<category>/<example>`. Each example is so
 | Path | Purpose |
 | --- | --- |
 | `examples/<category>/<example>/README.md` | Example-specific usage and setup instructions |
+| `examples/<category>/<example>/test-scope.yaml` | Internal test selection and e2e model source metadata |
 | `examples/<category>/<example>/cpp/CMakeLists.txt` | C++ example build configuration |
 | `examples/<category>/<example>/cpp/main.cpp` | C++ entrypoint with visible Neat API flow |
 | `examples/<category>/<example>/cpp/tests/CMakeLists.txt` | C++ test build configuration |

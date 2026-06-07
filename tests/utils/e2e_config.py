@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from tests.utils.test_scope import load_scope
+
 APPS_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -101,14 +103,14 @@ def resolve_scoped_model_path(common_config: Path, models_dir: Path) -> Path | N
         str(
             os.environ.get(
                 "SIMANEAT_APPS_TEST_SCOPE_FILE",
-                APPS_ROOT / "tests" / "configs" / "test-scope.yaml",
+                APPS_ROOT / "examples",
             )
         )
     )
     if not scope_file.exists():
         return None
 
-    scope = load_yaml_mapping(scope_file)
+    scope = load_scope(scope_file, APPS_ROOT)
     examples = required_mapping(scope.get("examples"), "examples")
     example_dir = common_config.parents[1]
     example_key = f"{example_dir.parent.name}/{example_dir.name}"

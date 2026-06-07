@@ -1,0 +1,17 @@
+models:
+  detr_resnet50_modified_class_embed_bbox_embed:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+    file: detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - detr_resnet50_modified_class_embed_bbox_embed
+  cpp:
+    enabled: true
+    models:
+    - detr_resnet50_modified_class_embed_bbox_embed

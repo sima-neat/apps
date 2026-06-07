@@ -1,0 +1,17 @@
+models:
+  depth_anything_v2_vits:
+    source: modelzoo
+    name: depth_anything_v2_vits
+    file: depth_anything_v2_vits_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - depth_anything_v2_vits
+  cpp:
+    enabled: true
+    models:
+    - depth_anything_v2_vits

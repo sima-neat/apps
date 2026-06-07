@@ -1,0 +1,17 @@
+models:
+  yolo_v8m:
+    source: modelzoo
+    name: yolo_v8m
+    file: yolo_v8m_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo_v8m
+  cpp:
+    enabled: true
+    models:
+    - yolo_v8m

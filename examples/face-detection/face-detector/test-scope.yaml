@@ -1,0 +1,17 @@
+models:
+  retinaface_mobilenet25:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
+    file: retinaface_mobilenet25_mod_0_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: RetinaFace e2e is blocked by the current detess/dequant issue.
+    models: []
+  cpp:
+    enabled: false
+    reason: RetinaFace e2e is blocked by the current detess/dequant issue.
+    models: []

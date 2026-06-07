@@ -57,13 +57,13 @@ Use `--config <file>` to load a different config:
 
 Process environment variables override values loaded from the config file.
 
-E2E runs ensure the models selected by `tests/configs/test-scope.yaml` are
+E2E runs ensure the models selected by each example's `test-scope.yaml` are
 available by calling `scripts/download_models.sh`, which skips models already
 present under `SIMANEAT_APPS_TEST_MODELS_DIR`. Set
 `NEAT_APPS_SKIP_MODEL_DOWNLOAD=1` to disable this step.
 
 The README `Model` row remains customer-facing metadata. Test selection and
-test model downloads are controlled by `tests/configs/test-scope.yaml`, so large
+test model downloads are controlled by `examples/*/*/test-scope.yaml`, so large
 or blocked examples can stay documented without blocking CI. If a test is
 enabled in the scope file but the matching Python or C++ test file is missing,
 `tests/test.sh` fails before running tests. If a test is disabled, it is skipped
@@ -84,13 +84,15 @@ tests/
   configs/
     .env.example       # documented local runtime overrides
     .env.local         # ignored local runtime overrides
-    test-scope.yaml    # enabled tests and test model download sources
   utils/
     e2e_config.py      # shared example-config and output helpers
     pytest_fixtures.py # shared pytest fixture implementations
     test_scope.py      # test-scope validation and query helper
   scripts/
     testing/           # VS Code / DevKit task helpers
+
+examples/<category>/<example>/
+  test-scope.yaml      # enabled tests and test model download sources
 ```
 
 Generated e2e artifacts are written under `sandbox-test` by default:
@@ -205,7 +207,7 @@ python3 -m pytest \
 `tests/test.sh` reads these variables:
 
 - `SIMANEAT_APPS_TEST_MODELS_DIR` (default: `${APPS_ROOT}/assets/models`)
-- `SIMANEAT_APPS_TEST_SCOPE_FILE` (default: `${APPS_ROOT}/tests/configs/test-scope.yaml`)
+- `SIMANEAT_APPS_TEST_SCOPE_FILE` (default: `${APPS_ROOT}/examples`)
 - `SIMANEAT_APPS_TEST_INPUT_DIR` (default: `${APPS_ROOT}/assets/test_images`)
 - `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox-test`)
 - `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg`)
