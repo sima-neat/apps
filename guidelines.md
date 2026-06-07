@@ -13,6 +13,7 @@ Every example under `examples/<category>/<example>` must follow:
 ```text
 <example>/
   README.md
+  test-scope.yaml
   cpp/
     CMakeLists.txt
     main.cpp
@@ -32,6 +33,7 @@ Every example under `examples/<category>/<example>` must follow:
 Notes:
 - Do not keep legacy paths (`main.py`, `main.cpp`, `tests/python`, `tests/cpp`) at example root.
 - Keep shared labels/config/assets in `common/` so both C++ and Python use the same files.
+- Keep test enablement and e2e model source metadata in the example-local `test-scope.yaml`.
 
 ## Templates and Scaffolding
 Use these sources of truth:
@@ -42,7 +44,8 @@ To add a new example:
 1. Run `scripts/create_example_scaffold.sh`.
 2. Fill in both implementations (`cpp/main.cpp`, `python/main.py`).
 3. Replace scaffold placeholder tests with real unit/e2e tests.
-4. Update `README.md` using `examples/TEMPLATE_README.md` sections.
+4. Update `test-scope.yaml` to select enabled tests and e2e model artifacts.
+5. Update `README.md` using `examples/TEMPLATE_README.md` sections.
 
 ## Implementation Expectations
 - Prefer implementing both C++ and Python paths for each example.

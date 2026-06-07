@@ -282,7 +282,6 @@ elif [[ -x "${DOWNLOAD_MODELS_SCRIPT}" || -f "${DOWNLOAD_MODELS_SCRIPT}" ]]; the
       cd "${RUNTIME_DIR}"
       chmod +x scripts/download_models.sh
       SIMA_CLI_BIN="${SIMA_CLI_RESOLVED}" bash scripts/download_models.sh \
-        --scope-file tests/configs/test-scope.yaml \
         --kind e2e \
         --language python \
         --language cpp

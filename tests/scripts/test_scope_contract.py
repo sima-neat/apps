@@ -7,7 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.utils.test_scope import scoped_model_files, validate_scope
+import yaml
+
+from tests.utils.test_scope import load_scope
+from tests.utils.test_scope import scoped_model_files, scoped_models, validate_scope
 
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +45,10 @@ def _scope(example_key: str) -> dict:
     }
 
 
+def _scope_entry(example_key: str) -> dict:
+    return _scope(example_key)["examples"][example_key]
+
+
 def test_validate_scope_accepts_cpp_source_tests(tmp_path):
     example_key = _write_example(tmp_path)
     tests_dir = tmp_path / "examples" / example_key / "cpp" / "tests"
@@ -50,6 +57,36 @@ def test_validate_scope_accepts_cpp_source_tests(tmp_path):
     (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
 
     assert validate_scope(_scope(example_key), tmp_path) == []
+
+
+def test_load_scope_discovers_per_example_scope_files(tmp_path):
+    example_key = _write_example(tmp_path)
+    tests_dir = tmp_path / "examples" / example_key / "cpp" / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    scope_file = tmp_path / "examples" / example_key / "test-scope.yaml"
+    scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
+
+    scope = load_scope(tmp_path / "examples", tmp_path)
+
+    assert scope == _scope(example_key)
+    assert validate_scope(scope, tmp_path) == []
+
+
+def test_load_scope_accepts_single_per_example_scope_file(tmp_path):
+    example_key = _write_example(tmp_path)
+    tests_dir = tmp_path / "examples" / example_key / "cpp" / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    scope_file = tmp_path / "examples" / example_key / "test-scope.yaml"
+    scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
+
+    scope = load_scope(scope_file, tmp_path)
+
+    assert scope == _scope(example_key)
+    assert validate_scope(scope, tmp_path) == []
 
 
 def test_validate_scope_accepts_cpp_packaged_test_binaries(tmp_path):
@@ -100,6 +137,36 @@ def test_scoped_model_files_returns_selected_model_file():
 
     assert scoped_model_files(_scope(example_key), "cpp", "e2e") == [
         (example_key, "demo_model_mpk.tar.gz")
+    ]
+
+
+def test_scoped_models_keeps_per_example_model_id_local():
+    def entry(file_name: str) -> dict:
+        return {
+            "models": {
+                "default": {
+                    "source": "modelzoo",
+                    "name": file_name.removesuffix("_mpk.tar.gz"),
+                    "file": file_name,
+                }
+            },
+            "unit": {"python": False, "cpp": False},
+            "e2e": {
+                "python": {"enabled": False, "models": []},
+                "cpp": {"enabled": True, "models": ["default"]},
+            },
+        }
+
+    scope = {
+        "examples": {
+            "classification/first-example": entry("first_model_mpk.tar.gz"),
+            "classification/second-example": entry("second_model_mpk.tar.gz"),
+        }
+    }
+
+    assert [model["file"] for _, model in scoped_models(scope, ["cpp"], "e2e")] == [
+        "first_model_mpk.tar.gz",
+        "second_model_mpk.tar.gz",
     ]
 
 

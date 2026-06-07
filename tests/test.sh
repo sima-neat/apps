@@ -101,7 +101,7 @@ Environment:
   SIMANEAT_APPS_TEST_RTSP_URLS      Comma-separated RTSP URLs (multistream)
   SIMANEAT_APPS_TEST_TIMEOUT_MS     Timeout in ms (default: 180000)
   SIMANEAT_APPS_TEST_REQUIRE_E2E    Backward-compatible strict e2e env flag
-  SIMANEAT_APPS_TEST_SCOPE_FILE     Test scope contract (default: tests/configs/test-scope.yaml)
+  SIMANEAT_APPS_TEST_SCOPE_FILE     Test scope source (default: examples)
   NEAT_APPS_SKIP_MODEL_DOWNLOAD     Skip e2e model download (1=yes, default: 0)
 EOF
 }
@@ -197,7 +197,7 @@ resolve_test_runtime_env() {
   export SIMANEAT_APPS_TEST_MODELS_DIR="${SIMANEAT_APPS_TEST_MODELS_DIR:-${APPS_ROOT}/assets/models}"
   export SIMANEAT_APPS_TEST_INPUT_DIR="${SIMANEAT_APPS_TEST_INPUT_DIR:-${APPS_ROOT}/assets/test_images}"
   export SIMANEAT_APPS_TEST_OUTPUT_DIR="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${APPS_ROOT}/sandbox-test}"
-  export SIMANEAT_APPS_TEST_SCOPE_FILE="${SIMANEAT_APPS_TEST_SCOPE_FILE:-${APPS_ROOT}/tests/configs/test-scope.yaml}"
+  export SIMANEAT_APPS_TEST_SCOPE_FILE="${SIMANEAT_APPS_TEST_SCOPE_FILE:-${APPS_ROOT}/examples}"
   export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE:-${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg}"
   export SIMANEAT_APPS_TEST_KEEP_OUTPUT="${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-1}"
   export SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS="${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-1}"
@@ -335,7 +335,7 @@ validate_test_scope() {
   echo ""
   echo "  Validating test scope"
   echo "  $(printf '%.0s-' {1..50})"
-  echo "  Scope file: ${SIMANEAT_APPS_TEST_SCOPE_FILE}"
+  echo "  Scope source: ${SIMANEAT_APPS_TEST_SCOPE_FILE}"
   scope_tool validate --quiet
 }
 
@@ -369,7 +369,7 @@ preflight_e2e_env() {
   local rtsp_urls="${SIMANEAT_APPS_TEST_RTSP_URLS:-}"
   local models_dir="${models_dir_raw:-${ROOT_DIR}/assets/models}"
   local input_dir="${input_dir_raw:-${ROOT_DIR}/assets/test_images}"
-  local scope_file="${scope_file_raw:-${ROOT_DIR}/tests/configs/test-scope.yaml}"
+  local scope_file="${scope_file_raw:-${ROOT_DIR}/examples}"
   local output_dir="${output_dir_raw:-/tmp}"
   local class_image="${class_image_raw:-${ROOT_DIR}/assets/test_images_classification/goldfish.jpeg}"
 
@@ -450,8 +450,8 @@ preflight_e2e_env() {
       preflight_fail=1
     fi
   fi
-  if [[ ! -f "${scope_file}" ]]; then
-    echo "  [FAIL] test scope file does not exist: ${scope_file}"
+  if [[ ! -e "${scope_file}" ]]; then
+    echo "  [FAIL] test scope source does not exist: ${scope_file}"
     preflight_fail=1
   fi
   if [[ ! -f "${class_image}" ]]; then

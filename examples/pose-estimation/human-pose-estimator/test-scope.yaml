@@ -1,0 +1,17 @@
+models:
+  open_pose:
+    source: modelzoo
+    name: open_pose
+    file: open_pose_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - open_pose
+  cpp:
+    enabled: true
+    models:
+    - open_pose
