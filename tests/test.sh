@@ -624,11 +624,12 @@ run_packaged_cpp_tests() {
 
   cpp_test_bins=()
   while IFS= read -r test_bin; do
-    local rel category rest example_key
+    local rel category rest packaged_example example_key
     rel="${test_bin#${ROOT_DIR}/examples/}"
     category="${rel%%/*}"
     rest="${rel#*/}"
-    example_key="${category}/${rest%%/*}"
+    packaged_example="${rest%%/*}"
+    example_key="${category}/${packaged_example%_cpp}"
     local enabled=0
     local scoped
     for scoped in "${enabled_examples[@]}"; do
@@ -664,8 +665,8 @@ run_packaged_cpp_tests() {
     example_name="${example_name%${suffix}}"
     test_dir="$(dirname "${test_bin}")"
     # Packaged layout:
-    # examples/<category>/<example>/cpp/tests/<example>_{unit,e2e}_test
-    # examples/<category>/<example>/<example>
+    # examples/<category>/<example>[/_cpp]/cpp/tests/<example>_{unit,e2e}_test
+    # examples/<category>/<example>[/_cpp]/<example>
     example_bin="${test_dir}/../../${example_name}"
 
     echo "  [RUN] ${test_bin#${ROOT_DIR}/}"

@@ -44,15 +44,13 @@ def test_source_path(apps_root: Path, example_key: str, language: str, kind: str
     return apps_root / "examples" / example_key / "cpp" / "tests" / filename
 
 
-def cpp_packaged_test_path(apps_root: Path, example_key: str, kind: str) -> Path:
-    return (
-        apps_root
-        / "examples"
-        / example_key
-        / "cpp"
-        / "tests"
-        / f"{example_name(example_key)}_{kind}_test"
-    )
+def cpp_packaged_test_paths(apps_root: Path, example_key: str, kind: str) -> list[Path]:
+    category, name = example_key.split("/", 1)
+    binary = f"{name}_{kind}_test"
+    return [
+        apps_root / "examples" / example_key / "cpp" / "tests" / binary,
+        apps_root / "examples" / category / f"{name}_cpp" / "cpp" / "tests" / binary,
+    ]
 
 
 def test_artifact_paths(
@@ -61,7 +59,7 @@ def test_artifact_paths(
     source_path = test_source_path(apps_root, example_key, language, kind)
     if language == "python":
         return [source_path]
-    return [source_path, cpp_packaged_test_path(apps_root, example_key, kind)]
+    return [source_path, *cpp_packaged_test_paths(apps_root, example_key, kind)]
 
 
 def format_expected_paths(apps_root: Path, paths: list[Path]) -> str:
