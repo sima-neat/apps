@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-from tests.utils.test_scope import validate_scope
+from tests.utils.test_scope import scoped_model_files, validate_scope
+
+
+APPS_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_example(root: Path) -> str:
@@ -73,3 +79,39 @@ def test_validate_scope_rejects_enabled_cpp_test_without_artifact(tmp_path):
             "examples/classification/demo-example/cpp/tests/demo-example_unit_test"
         ),
     ]
+
+
+def test_scoped_model_files_returns_selected_model_file():
+    example_key = "classification/demo-example"
+
+    assert scoped_model_files(_scope(example_key), "cpp", "e2e") == [
+        (example_key, "demo_model_mpk.tar.gz")
+    ]
+
+
+def test_download_models_fails_when_scope_resolution_fails(tmp_path):
+    bad_scope = tmp_path / "bad-scope.yaml"
+    bad_scope.write_text("examples: []\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--scope-file",
+            str(bad_scope),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(tmp_path / "models"),
+            "TEST_SCOPE_PYTHON_BIN": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "failed to resolve scoped models" in result.stderr
+    assert "No scoped models are required" not in result.stdout

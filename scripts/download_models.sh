@@ -243,10 +243,16 @@ download_scoped_models() {
         args+=(--language "$lang")
     done
 
+    local scope_output
+    if ! scope_output="$("$SCOPE_PYTHON" "$ROOT/tests/utils/test_scope.py" "${args[@]}")"; then
+        echo "[error] failed to resolve scoped models from ${SCOPE_FILE}" >&2
+        return 1
+    fi
+
     local rows=()
-    while IFS= read -r row; do
-        rows+=("$row")
-    done < <("$SCOPE_PYTHON" "$ROOT/tests/utils/test_scope.py" "${args[@]}")
+    if [[ -n "$scope_output" ]]; then
+        mapfile -t rows <<<"$scope_output"
+    fi
     if [[ "${#rows[@]}" -eq 0 ]]; then
         echo "No scoped models are required for kind=${KIND} language(s): ${LANGUAGES[*]}"
         return 0

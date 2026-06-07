@@ -124,7 +124,8 @@ def e2e_subprocess_artifacts(request, monkeypatch):
     base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox" / "test-runs"
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
-    run_dir = base_root / "python" / example_name
+    test_name = request.node.name.replace("/", "_")
+    run_dir = base_root / "python" / example_name / test_name
     real_run = subprocess.run
 
     def _format_command(args: Any) -> str:
@@ -197,7 +198,8 @@ def run_until_output_files(request):
     base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox" / "test-runs"
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
-    run_dir = base_root / "python" / example_name
+    test_name = request.node.name.replace("/", "_")
+    run_dir = base_root / "python" / example_name / test_name
 
     def _format_command(args: list[str]) -> str:
         return " ".join(shlex.quote(str(part)) for part in args)

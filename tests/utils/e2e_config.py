@@ -168,8 +168,7 @@ def materialize_repo_paths(config: dict[str, Any]) -> None:
 
 
 def prepare_output_dir(base_root: Path, language: str, example_name: str, test_name: str) -> Path:
-    del test_name
-    run_dir = base_root / language / example_name
+    run_dir = base_root / language / example_name / test_name
     out_dir = run_dir / "out"
     shutil.rmtree(run_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -49,7 +49,7 @@ ProcessResult spawn_until_output_files(const std::string& binary,
                                        int timeout_ms = 30000);
 
 // Create a deterministic e2e output directory under
-// SIMANEAT_APPS_TEST_OUTPUT_DIR/cpp/<example>/out
+// SIMANEAT_APPS_TEST_OUTPUT_DIR/cpp/<example>/<test>/out
 // (or sandbox/test-runs/cpp/.../out if unset).
 // The example run directory is cleared before each run.
 std::string create_test_output_dir(const std::string& example_name, const std::string& test_name);

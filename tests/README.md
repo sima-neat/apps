@@ -102,13 +102,13 @@ sandbox/test-runs/
     cpp-unit.log
     python-e2e.log
     python-unit.log
-  python/<example>/
+  python/<example>/<test>/
     command.txt
     config.yaml
     stdout.log
     stderr.log
     out/*
-  cpp/<example>/
+  cpp/<example>/<test>/
     command.txt
     config.yaml
     stdout.log

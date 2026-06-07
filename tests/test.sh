@@ -339,6 +339,19 @@ validate_test_scope() {
   scope_tool validate --quiet
 }
 
+export_cpp_model_files() {
+  local label="$1"
+  if [[ "${label}" != "e2e" ]]; then
+    return 0
+  fi
+
+  local model_files
+  if ! model_files="$(scope_tool model-files --kind "${label}" --language cpp)"; then
+    return 1
+  fi
+  export SIMANEAT_APPS_TEST_MODEL_FILES="${model_files}"
+}
+
 preflight_e2e_env() {
   local strict="${STRICT_MODE}"
   local models_dir_raw="${SIMANEAT_APPS_TEST_MODELS_DIR:-}"
@@ -602,6 +615,11 @@ run_packaged_cpp_tests() {
   label_upper="$(echo "${label}" | tr '[:lower:]' '[:upper:]')"
   suffix="_${label}_test"
 
+  if ! export_cpp_model_files "${label}"; then
+    OVERALL_RC=1
+    return 0
+  fi
+
   mapfile -t enabled_examples < <(scope_tool enabled-examples --kind "${label}" --language cpp)
 
   cpp_test_bins=()
@@ -703,6 +721,11 @@ run_ctest() {
 
   local log_file
   local test_regex
+  if ! export_cpp_model_files "${label}"; then
+    OVERALL_RC=1
+    return 0
+  fi
+
   test_regex="$(scope_tool ctest-regex --kind "${label}")" || {
     OVERALL_RC=1
     return 0

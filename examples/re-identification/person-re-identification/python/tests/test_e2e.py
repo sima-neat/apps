@@ -34,6 +34,7 @@ class TestE2E:
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
         e2e_config_writer,
     ):
         pair = _find_image_pair(test_images_dir)
@@ -86,6 +87,7 @@ class TestE2E:
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
         e2e_config_writer,
     ):
         pair = _find_image_pair(test_images_dir)

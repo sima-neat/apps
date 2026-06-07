@@ -193,6 +193,25 @@ def scoped_models(
     return sorted(result.items())
 
 
+def scoped_model_files(scope: dict[str, Any], language: str, kind: str) -> list[tuple[str, str]]:
+    if kind == "unit":
+        return []
+
+    result: list[tuple[str, str]] = []
+    for example_key, entry in sorted(scope["examples"].items()):
+        if not is_enabled(entry, language, "e2e"):
+            continue
+        models = entry.get("models", {})
+        selected = enabled_models(entry, language)
+        if not selected:
+            continue
+        model = models[selected[0]]
+        file_name = model_field(model, "file")
+        if file_name:
+            result.append((example_key, file_name))
+    return result
+
+
 def model_field(model: dict[str, Any], key: str) -> str:
     return str(model.get(key, "") or "").replace("\t", " ")
 
@@ -218,6 +237,10 @@ def main() -> int:
     models = sub.add_parser("models")
     models.add_argument("--kind", choices=sorted(VALID_KINDS), default="e2e")
     models.add_argument("--language", choices=sorted(VALID_LANGUAGES), action="append", required=True)
+
+    model_files = sub.add_parser("model-files")
+    model_files.add_argument("--kind", choices=sorted(VALID_KINDS), default="e2e")
+    model_files.add_argument("--language", choices=sorted(VALID_LANGUAGES), required=True)
 
     args = parser.parse_args()
     scope = load_scope(args.scope_file)
@@ -254,6 +277,10 @@ def main() -> int:
                 model_field(model, "path"),
             ]
             print("\t".join(fields))
+        return 0
+    if args.command == "model-files":
+        for example_key, file_name in scoped_model_files(scope, args.language, args.kind):
+            print(f"{example_key}\t{file_name}")
         return 0
     raise AssertionError(args.command)
 
