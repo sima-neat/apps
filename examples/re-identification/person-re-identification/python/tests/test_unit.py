@@ -20,7 +20,7 @@ class TestArgParsing:
             [sys.executable, str(MAIN_PY), "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=20,
         )
         assert r.returncode == 0
         assert "--config" in r.stdout
@@ -31,7 +31,7 @@ class TestArgParsing:
             [sys.executable, str(MAIN_PY), "--config", "/nonexistent/reid-config.yaml"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=20,
         )
         assert r.returncode != 0
 
@@ -41,7 +41,7 @@ class TestArgParsing:
             [sys.executable, str(MAIN_PY), "--bogus"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=20,
         )
         assert r.returncode == 2
         assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()

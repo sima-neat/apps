@@ -87,6 +87,7 @@ struct AppConfig {
   RuntimeConfig runtime;
   InsightConfig insight;
   fs::path save_dir;
+  int save_every = 0;
 };
 
 struct CliOptions {
@@ -130,6 +131,7 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.runtime.profile_interval > 0, "runtime.profile_interval must be > 0");
   sima_examples::require(cfg.insight.video_port > 0, "output.insight.video_port must be > 0");
   sima_examples::require(cfg.insight.metadata_port > 0, "output.insight.metadata_port must be > 0");
+  sima_examples::require(cfg.save_every >= 0, "output.save_every must be >= 0");
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
@@ -149,6 +151,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.insight.video_port = raw.int_or("output.insight.video_port", 9000);
   cfg.insight.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
   cfg.save_dir = raw.string_or("output.save_dir", "");
+  cfg.save_every = raw.int_or("output.save_every", 0);
   validate_config(cfg);
   return cfg;
 }
@@ -523,7 +526,7 @@ RtspRuntime build_rtsp_runtime(const AppConfig& cfg) {
   const double first_pull_start = time_ms();
   simaai::neat::Sample first_sample;
   simaai::neat::PullError first_pull_error;
-  const auto first_pull_status = runtime.source_run.pull(5000, first_sample, &first_pull_error);
+  const auto first_pull_status = runtime.source_run.pull(20000, first_sample, &first_pull_error);
   if (first_pull_status != simaai::neat::PullStatus::Ok) {
     if (first_pull_status == simaai::neat::PullStatus::Timeout) {
       throw std::runtime_error(
@@ -740,7 +743,7 @@ void producer_worker(simaai::neat::Run& source_run, simaai::neat::Tensor first_f
 void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_run,
                      simaai::neat::MetadataSender& metadata_sender,
                      const std::vector<std::string>& insight_labels, int frame_w, int frame_h,
-                     int max_detections, double min_score, const fs::path& save_dir,
+                     int max_detections, double min_score, const fs::path& save_dir, int save_every,
                      WorkerSharedState& state) {
   state.consumer_start_ms = time_ms();
   int out_pulls = 0;
@@ -846,7 +849,7 @@ void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_r
     if (!metadata_ok) {
       std::cerr << "[warn] insight metadata send failed: " << metadata_err << "\n";
     }
-    if (!save_dir.empty()) {
+    if (!save_dir.empty() && save_every > 0 && (state.published.load() + 1) % save_every == 0) {
       cv::Mat annotated = detector_input.clone();
       objdet::draw_boxes(annotated, detections, min_score, cv::Scalar(0, 255, 0), "");
       const fs::path out_path = save_dir / ("frame_" + std::to_string(pending.index) + ".jpg");
@@ -923,7 +926,7 @@ int main(int argc, char** argv) {
         std::ref(insight_runtime.video_run), std::ref(*insight_runtime.metadata_sender),
         std::cref(insight_runtime.labels), rtsp_runtime.frame_w, rtsp_runtime.frame_h,
         cfg.inference.max_detections, cfg.inference.min_score, std::cref(cfg.save_dir),
-        std::ref(worker_state));
+        cfg.save_every, std::ref(worker_state));
 
     if (producer_thread.joinable())
       producer_thread.join();

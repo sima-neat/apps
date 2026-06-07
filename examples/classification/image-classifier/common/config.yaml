@@ -1,5 +1,5 @@
 model:
-  path: assets/models/resnet_50_mpk.tar.gz
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
 
 io:
   image: null
@@ -8,7 +8,7 @@ io:
 runtime:
   input_width: 224
   input_height: 224
-  timeout_ms: 2000
+  timeout_ms: 20000
 
 validation:
   expected_class_id: 1

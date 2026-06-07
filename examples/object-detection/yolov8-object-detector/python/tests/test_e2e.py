@@ -8,46 +8,27 @@ import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
-LABELS_FILE = EXAMPLE_DIR / "common" / "coco_label.txt"
-
-
-def _find_model(models_dir: Path, pattern: str) -> Path | None:
-    if not models_dir.exists():
-        return None
-    for f in models_dir.iterdir():
-        if pattern in f.name and "seg" not in f.name and f.name.endswith(".tar.gz"):
-            return f
-    return None
 
 
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
         self,
-        models_dir,
+        e2e_model_path,
         tmp_output_dir,
         test_images_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
-        e2e_config_section,
         e2e_config_writer,
     ):
-        model = _find_model(models_dir, "yolo_v8n")
-        skip_unless_e2e_ready(model is not None, "yolo (non-seg) model not found in models_dir")
-
-        skip_unless_e2e_ready(LABELS_FILE.exists(), f"Labels file not found: {LABELS_FILE}")
-
         skip_unless_e2e_ready(
             test_images_dir.exists() and any(test_images_dir.iterdir()),
             "test_images_dir is missing or empty",
         )
 
-        decode = e2e_config_section("yolov8-object-detector", "decode")
         config_path = e2e_config_writer(
             {
-                "model": {"path": str(model), "labels": str(LABELS_FILE)},
                 "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
-                "decode": decode,
             }
         )
 
@@ -72,4 +53,5 @@ class TestE2E:
             for path in tmp_output_dir.iterdir()
             if path.is_file() and path.name != "config.yaml"
         ]
-        assert len(output_files) > 0, "Expected output files but output directory is empty"
+        assert output_files, "Expected output files but output directory is empty"
+        assert all(path.stat().st_size > 0 for path in output_files)

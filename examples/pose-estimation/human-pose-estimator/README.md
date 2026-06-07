@@ -133,7 +133,7 @@ io:
 
 runtime:
   infer_size: 768
-  timeout_ms: 5000
+  timeout_ms: 20000
   upsample_factor: 2.0
 
 decode:
@@ -182,5 +182,5 @@ Use the `--profile` flag to measure performance:
 - Python source: `python/main.py`
 - Python config loader: `python/utils/config.py`
 - Shared config: `common/config.yaml`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`

@@ -1,203 +1,305 @@
 #!/usr/bin/env bash
-# Download all models required by the examples into ./assets/models.
-# Parses the "Model" field from each example's README.md metadata table.
-# The metadata supports either:
-#   | Model | modelzoo_name |
-#   | Model | model_label [https://host/path/model_mpk.tar.gz] |
-# Skips models that are already downloaded.
+# Download model artifacts required by the enabled apps test scope.
+#
+# Default behavior reads tests/configs/test-scope.yaml and downloads models for
+# enabled Python and C++ e2e tests. Explicit positional arguments are treated as
+# modelzoo names for manual one-off downloads.
 #
 # Usage:
-#   ./scripts/download_models.sh          # download all
-#   ./scripts/download_models.sh resnet50  # download specific model(s)
+#   ./scripts/download_models.sh
+#   ./scripts/download_models.sh --language python --language cpp
+#   ./scripts/download_models.sh --scope-file tests/configs/test-scope.yaml --kind e2e
+#   ./scripts/download_models.sh resnet_50
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODELS_DIR="${MODELS_DIR:-$ROOT/assets/models}"
-EXAMPLES_DIR="$ROOT/examples"
-SIMA_CLI_BIN="${SIMA_CLI_BIN:-sima-cli}"
+SIMA_CLI_BIN="${SIMA_CLI_BIN:-}"
+SCOPE_FILE="${ROOT}/tests/configs/test-scope.yaml"
+KIND="e2e"
+LANGUAGES=()
+POSITIONAL_MODELS=()
+SCOPE_PYTHON="${TEST_SCOPE_PYTHON_BIN:-${PYTHON_TEST_BIN:-python3}}"
+export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  scripts/download_models.sh [options]
+  scripts/download_models.sh <modelzoo-name> [...]
+
+Options:
+  --scope-file <path>   Test scope file (default: tests/configs/test-scope.yaml)
+  --kind <kind>         Scope kind to resolve (default: e2e)
+  --language <lang>     Scope language to include; repeatable (python, cpp)
+  -h, --help            Show help
+EOF
+}
+
+resolve_sima_cli_bin() {
+    if [[ -n "${SIMA_CLI_BIN:-}" ]]; then
+        if [[ -x "${SIMA_CLI_BIN}" ]]; then
+            printf '%s\n' "${SIMA_CLI_BIN}"
+            return 0
+        fi
+        if command -v "${SIMA_CLI_BIN}" >/dev/null 2>&1; then
+            command -v "${SIMA_CLI_BIN}"
+            return 0
+        fi
+    fi
+    if command -v sima-cli >/dev/null 2>&1; then
+        command -v sima-cli
+        return 0
+    fi
+    local candidate
+    for candidate in \
+        /data/sima-cli/.venv/bin/sima-cli \
+        "${HOME}/.local/bin/sima-cli" \
+        "${HOME}/sima-cli/.venv/bin/sima-cli" \
+        /opt/sima-cli/.venv/bin/sima-cli \
+        /opt/bin/sima-cli; do
+        if [[ -x "${candidate}" ]]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_sima_cli_bin() {
+    if SIMA_CLI_BIN="$(resolve_sima_cli_bin)"; then
+        return 0
+    fi
+    echo "sima-cli was not found. Set SIMA_CLI_BIN or install sima-cli." >&2
+    return 1
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --scope-file)
+            SCOPE_FILE="$2"
+            shift 2
+            ;;
+        --kind)
+            KIND="$2"
+            shift 2
+            ;;
+        --language)
+            LANGUAGES+=("$2")
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            while [[ $# -gt 0 ]]; do
+                POSITIONAL_MODELS+=("$1")
+                shift
+            done
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            POSITIONAL_MODELS+=("$1")
+            shift
+            ;;
+    esac
+done
 
 mkdir -p "$MODELS_DIR"
 
-declare -A MODEL_URLS=()
-declare -a ALL_MODELS=()
-
-# Extract unique model labels and optional URLs from README metadata tables.
-load_model_specs() {
-    python3 - "$EXAMPLES_DIR" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-examples_dir = Path(sys.argv[1])
-field_re = re.compile(r"^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$")
-model_re = re.compile(r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$")
-
-
-def parse_metadata(readme: Path) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    in_table = False
-    for line in readme.read_text().splitlines():
-        stripped = line.strip()
-        if stripped.startswith("## Metadata"):
-            in_table = True
-            continue
-        if in_table:
-            if stripped.startswith("##") or (stripped and not stripped.startswith("|")):
-                break
-            match = field_re.match(stripped)
-            if not match:
-                continue
-            key = match.group(1).strip()
-            value = match.group(2).strip()
-            if key in {"Field", "---"}:
-                continue
-            fields[key] = value
-    return fields
-
-
-seen: dict[str, str] = {}
-for readme in sorted(examples_dir.glob("*/*/README.md")):
-    raw = parse_metadata(readme).get("Model", "").strip()
-    if not raw:
-        continue
-    match = model_re.fullmatch(raw)
-    if not match:
-        print(f"warning: invalid Model metadata in {readme}: {raw}", file=sys.stderr)
-        continue
-    label = match.group("label").strip()
-    url = (match.group("url") or "").strip()
-    if label in seen and seen[label] != url:
-        print(f"warning: conflicting model URLs for {label}; keeping first value", file=sys.stderr)
-        continue
-    seen[label] = url
-
-for label in sorted(seen):
-    print(f"{label}\t{seen[label]}")
-PY
+LOCK_DIR="${MODELS_DIR}/.download.lock"
+acquire_lock() {
+    local waited=0
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        if [[ "$waited" -eq 0 ]]; then
+            echo "Waiting for model download lock: $LOCK_DIR"
+        fi
+        waited=$((waited + 2))
+        sleep 2
+    done
+    trap 'rm -rf "$LOCK_DIR"' EXIT
 }
 
-while IFS=$'\t' read -r model_label model_url; do
-    [ -n "$model_label" ] || continue
-    MODEL_URLS["$model_label"]="$model_url"
-    ALL_MODELS+=("$model_label")
-done < <(load_model_specs)
-
-# Check if a model MPK already exists (handles naming variations).
 model_exists() {
     local model_name="$1"
-    # Try exact match and common variations
-    local base="${model_name##*/}"  # strip category/ prefix if any
+    local expected_file="${2:-}"
+    if [[ -n "$expected_file" && -f "${MODELS_DIR}/${expected_file}" ]]; then
+        return 0
+    fi
+
+    local base="${model_name##*/}"
+    local pattern
     for pattern in \
         "${base}_mpk.tar.gz" \
         "${base}-mpk.tar.gz" \
         "${base}"*_mpk.tar.gz \
         "${base}"*-mpk.tar.gz \
         "${base}.tar.gz"; do
-        [ -f "$MODELS_DIR/$pattern" ] && return 0
+        compgen -G "${MODELS_DIR}/${pattern}" >/dev/null && return 0
     done
-    # Also check with underscores replaced by different separators
+
     local alt="${base//_/-}"
     for pattern in "${alt}_mpk.tar.gz" "${alt}-mpk.tar.gz" "${alt}"*_mpk.tar.gz "${alt}"*-mpk.tar.gz; do
-        [ -f "$MODELS_DIR/$pattern" ] && return 0
+        compgen -G "${MODELS_DIR}/${pattern}" >/dev/null && return 0
     done
     return 1
 }
 
-download_model_from_url() {
-    local model_name="$1"
-    local model_url="$2"
-    local tmpdir
-    local downloaded_files=()
-    tmpdir="$(mktemp -d)"
+download_modelzoo_model() {
+    local model_id="$1"
+    local model_name="$2"
+    local expected_file="$3"
+    if model_exists "$model_name" "$expected_file"; then
+        echo "[skip] $model_id already exists"
+        return 0
+    fi
+    ensure_sima_cli_bin
 
-    echo "[download] $model_name (direct URL)"
-    if ! (cd "$tmpdir" && "$SIMA_CLI_BIN" download "$model_url"); then
-        echo "[warn] direct URL download failed, trying legacy syntax" >&2
-        (cd "$tmpdir" && "$SIMA_CLI_BIN" download url "$model_url")
+    local before
+    before=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
+    echo "[download] $model_id (modelzoo: $model_name)"
+    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v 2.0.0 get "$model_name")
+
+    local after
+    after=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
+    if [[ "$after" -gt "$before" || -z "$expected_file" || -f "${MODELS_DIR}/${expected_file}" ]]; then
+        echo "[ok] $model_id"
+        return 0
     fi
 
-    mapfile -t downloaded_files < <(find "$tmpdir" -maxdepth 1 -type f | sort)
-    if [ ${#downloaded_files[@]} -eq 0 ]; then
+    echo "[error] $model_id: no expected model artifact after download" >&2
+    return 1
+}
+
+download_url_model() {
+    local model_id="$1"
+    local url="$2"
+    local expected_file="$3"
+    local tmpdir
+    local downloaded_files=()
+
+    if model_exists "$model_id" "$expected_file"; then
+        echo "[skip] $model_id already exists"
+        return 0
+    fi
+    ensure_sima_cli_bin
+
+    tmpdir="$(mktemp -d)"
+    echo "[download] $model_id (url)"
+    if ! (cd "$tmpdir" && "$SIMA_CLI_BIN" download "$url"); then
+        echo "[warn] direct URL download failed, trying legacy syntax" >&2
+        (cd "$tmpdir" && "$SIMA_CLI_BIN" download url "$url")
+    fi
+
+    while IFS= read -r file; do
+        downloaded_files+=("$file")
+    done < <(find "$tmpdir" -maxdepth 1 -type f | sort)
+    if [[ "${#downloaded_files[@]}" -eq 0 ]]; then
         rm -rf "$tmpdir"
-        echo "[error] $model_name: no file downloaded from $model_url" >&2
+        echo "[error] $model_id: no file downloaded from $url" >&2
         return 1
     fi
 
+    local file
     for file in "${downloaded_files[@]}"; do
         mv "$file" "$MODELS_DIR/"
     done
     rm -rf "$tmpdir"
 
-    if model_exists "$model_name"; then
-        echo "[ok] $model_name"
+    if model_exists "$model_id" "$expected_file"; then
+        echo "[ok] $model_id"
         return 0
     fi
 
-    echo "[warn] $model_name downloaded from URL but filename did not match expected patterns" >&2
-    return 0
+    echo "[error] $model_id downloaded but filename did not match expected patterns" >&2
+    return 1
 }
 
-download_model() {
-    local model_name="$1"
-    local model_url="${MODEL_URLS[$model_name]:-}"
+download_huggingface_model() {
+    local model_id="$1"
+    local repo="$2"
+    local path="$3"
+    echo "[error] $model_id uses Hugging Face source, but Hugging Face downloads are not implemented yet." >&2
+    echo "        repo=${repo:-TBD} path=${path:-TBD}" >&2
+    return 1
+}
 
-    if model_exists "$model_name"; then
-        echo "[skip] $model_name already exists"
+download_scoped_models() {
+    if [[ "${#LANGUAGES[@]}" -eq 0 ]]; then
+        LANGUAGES=(python cpp)
+    fi
+
+    local args=(--scope-file "$SCOPE_FILE" models --kind "$KIND")
+    local lang
+    for lang in "${LANGUAGES[@]}"; do
+        args+=(--language "$lang")
+    done
+
+    local rows=()
+    while IFS= read -r row; do
+        rows+=("$row")
+    done < <("$SCOPE_PYTHON" "$ROOT/tests/utils/test_scope.py" "${args[@]}")
+    if [[ "${#rows[@]}" -eq 0 ]]; then
+        echo "No scoped models are required for kind=${KIND} language(s): ${LANGUAGES[*]}"
         return 0
     fi
 
-    if [ -n "$model_url" ]; then
-        download_model_from_url "$model_name" "$model_url"
-        return $?
-    fi
+    echo "Models directory: $MODELS_DIR"
+    echo "Scope file: $SCOPE_FILE"
+    echo "Models to download:"
+    printf '  %s\n' "${rows[@]%%$'\t'*}"
+    echo ""
 
-    local before
-    before=$(ls "$MODELS_DIR"/*.tar.gz 2>/dev/null | wc -l)
+    acquire_lock
 
-    echo "[download] $model_name"
-    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v 2.0.0 get "$model_name")
-
-    local after
-    after=$(ls "$MODELS_DIR"/*.tar.gz 2>/dev/null | wc -l)
-
-    if [ "$after" -gt "$before" ]; then
-        echo "[ok] $model_name"
-    else
-        echo "[error] $model_name: no new file after download" >&2
-        return 1
-    fi
+    local failed=0
+    local row model_id source name url expected_file repo path
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r model_id source name url expected_file repo path <<<"$row"
+        case "$source" in
+            modelzoo)
+                download_modelzoo_model "$model_id" "${name:-$model_id}" "$expected_file" || failed=1
+                ;;
+            url)
+                download_url_model "$model_id" "$url" "$expected_file" || failed=1
+                ;;
+            huggingface)
+                download_huggingface_model "$model_id" "$repo" "$path" || failed=1
+                ;;
+            *)
+                echo "[error] $model_id has unsupported source: $source" >&2
+                failed=1
+                ;;
+        esac
+    done
+    return "$failed"
 }
 
-# If specific models are requested, download those. Otherwise download all.
-if [ $# -gt 0 ]; then
-    models=("$@")
+download_positional_models() {
+    echo "Models directory: $MODELS_DIR"
+    echo "Modelzoo models to download: ${POSITIONAL_MODELS[*]}"
+    echo ""
+
+    acquire_lock
+
+    local failed=0
+    local model
+    for model in "${POSITIONAL_MODELS[@]}"; do
+        download_modelzoo_model "$model" "$model" "" || failed=1
+    done
+    return "$failed"
+}
+
+if [[ "${#POSITIONAL_MODELS[@]}" -gt 0 ]]; then
+    download_positional_models
 else
-    models=("${ALL_MODELS[@]}")
+    download_scoped_models
 fi
-
-if [ ${#models[@]} -eq 0 ]; then
-    echo "No models found in README metadata." >&2
-    exit 1
-fi
-
-echo "Models directory: $MODELS_DIR"
-echo "Models to download: ${models[*]}"
-echo ""
-
-failed=0
-for model in "${models[@]}"; do
-    download_model "$model" || ((failed++))
-done
-
-echo ""
-ls -lh "$MODELS_DIR"/*.tar.gz 2>/dev/null
-echo ""
-
-if [ $failed -gt 0 ]; then
-    echo "$failed model(s) failed to download." >&2
-    exit 1
-fi
-
-echo "All models downloaded to $MODELS_DIR"

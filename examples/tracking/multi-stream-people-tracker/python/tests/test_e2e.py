@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -19,52 +18,44 @@ def _runtime_deps_ready() -> bool:
     return all(importlib.util.find_spec(name) is not None for name in ("cv2", "numpy", "pyneat"))
 
 
-def _find_model(models_dir: Path, pattern: str) -> Path | None:
-    if not models_dir.exists():
-        return None
-    for model in models_dir.iterdir():
-        if pattern in model.name and "seg" not in model.name and model.name.endswith(".tar.gz"):
-            return model
-    return None
-
-
 def _env_int_or_default(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     return int(raw) if raw else default
+
+
+def _env_str_or_default(name: str, default: str) -> str:
+    return os.environ.get(name, "").strip() or default
 
 
 @pytest.mark.e2e
 class TestE2E:
     def test_multi_stream_insight_and_save_pipeline(
         self,
-        models_dir,
+        e2e_model_path,
         tmp_output_dir,
         rtsp_urls,
         test_timeout_ms,
         skip_unless_e2e_ready,
-        e2e_config_section,
         e2e_config_writer,
+        e2e_config_section,
+        run_until_output_files,
     ):
         skip_unless_e2e_ready(
             _runtime_deps_ready(),
             "python runtime dependencies (cv2, numpy, pyneat) are not available",
         )
-        model = _find_model(models_dir, "yolo_v8")
-        skip_unless_e2e_ready(model is not None, "yolo detector model not found in models_dir")
         skip_unless_e2e_ready(len(rtsp_urls) >= 2, "need at least two RTSP URLs for multistream e2e")
+        output_cfg = e2e_config_section("multi-stream-people-tracker", "testing.e2e.output")
+        total_saved_frames = int(output_cfg["total_saved_frames"])
 
-        inference = e2e_config_section("multi-stream-people-tracker", "inference")
-        tracking = e2e_config_section("multi-stream-people-tracker", "tracking")
         config_path = e2e_config_writer(
             {
-                "model": str(model),
                 "streams": rtsp_urls[:2],
-                "input": {"tcp": True, "latency_ms": 200},
-                "inference": {"frames": 10, "profile": False, **inference},
-                "tracking": tracking,
                 "output": {
                     "insight": {
-                        "host": "127.0.0.1",
+                        "host": _env_str_or_default(
+                            "SIMANEAT_APPS_TEST_INSIGHT_HOST", "127.0.0.1"
+                        ),
                         "video_port_base": _env_int_or_default(
                             "SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000
                         ),
@@ -73,7 +64,6 @@ class TestE2E:
                         ),
                     },
                     "debug_dir": str(tmp_output_dir),
-                    "save_every": 2,
                 },
             }
         )
@@ -85,11 +75,11 @@ class TestE2E:
             str(config_path),
         ]
 
-        result = subprocess.run(
+        result = run_until_output_files(
             cmd,
-            capture_output=True,
-            text=True,
-            timeout=test_timeout_ms / 1000,
+            tmp_output_dir,
+            total_saved_frames,
+            test_timeout_ms / 1000,
             cwd=str(EXAMPLE_DIR),
         )
 
@@ -103,4 +93,7 @@ class TestE2E:
             for path in tmp_output_dir.rglob("*")
             if path.is_file() and path.name != "config.yaml"
         ]
-        assert files, "Expected sampled output files but output directory is empty"
+        assert len(files) >= total_saved_frames, (
+            f"Expected at least {total_saved_frames} sampled output files, got {len(files)}"
+        )
+        assert all(path.stat().st_size > 0 for path in files)

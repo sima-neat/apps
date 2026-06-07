@@ -33,7 +33,7 @@ namespace {
 
 constexpr int kModelW = 1333;
 constexpr int kModelH = 800;
-constexpr int kDefaultTimeoutMs = 5000;
+constexpr int kDefaultTimeoutMs = 20000;
 constexpr int kPersonClassId = 1;
 
 constexpr std::array<std::string_view, 91> kDetrCocoLabels = {

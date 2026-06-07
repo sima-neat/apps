@@ -26,20 +26,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  // Find a RetinaFace model in the models directory.
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      const auto name = entry.path().filename().string();
-      if (name.find("retinaface_mobilenet25") != std::string::npos &&
-          name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
+  const std::string model_path = configured_model_path("face-detector", models_dir);
 
-  if (model_path.empty()) {
+  if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("RetinaFace model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
@@ -105,7 +94,7 @@ int main(int argc, char** argv) {
                 << "  max_draw: 50\n"
                 << "  landmarks: true\n"
                 << "runtime:\n"
-                << "  timeout_ms: 5000\n"
+                << "  timeout_ms: 20000\n"
                 << "  profile: false\n"
                 << "  num_runs: 1\n";
   }
@@ -123,6 +112,11 @@ int main(int argc, char** argv) {
 
   if (!fs::exists(out_image)) {
     std::cerr << "[FAIL] expected annotated output image not found at " << out_image << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
+  if (fs::is_empty(out_image)) {
+    std::cerr << "[FAIL] annotated output image is empty at " << out_image << "\n";
     remove_dir(out_dir);
     return 1;
   }

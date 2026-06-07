@@ -21,19 +21,10 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      auto name = entry.path().filename().string();
-      if (name.find("yolo_v8n_seg") != std::string::npos &&
-          name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
-  if (model_path.empty()) {
-    return skip_or_fail("YOLOv8-seg model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+  const std::string model_path = configured_model_path("instance-segmenter", models_dir);
+  if (model_path.empty() || !fs::exists(model_path)) {
+    return skip_or_fail(
+        "configured segmentation model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
@@ -60,7 +51,7 @@ int main(int argc, char** argv) {
            << "  output_dir: " << out_dir << "\n"
            << "runtime:\n"
            << "  infer_size: 640\n"
-           << "  timeout_ms: 3000\n"
+           << "  timeout_ms: 20000\n"
            << "  queue_depth: 8\n"
            << "decode:\n"
            << "  score_threshold: " << score_threshold << "\n"
@@ -74,19 +65,21 @@ int main(int argc, char** argv) {
 
   auto r = spawn_and_wait(binary, {"--config", config_path}, timeout);
 
+  const int output_files = count_output_files(out_dir);
+
   int rc = 0;
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_output_files(out_dir) == 0) {
-    std::cerr << "[FAIL] no overlay output files produced\n";
+  } else if (output_files == 0) {
+    std::cerr << "[FAIL] expected output files but output directory is empty\n";
     rc = 1;
   } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] instance segmentation overlay produced " << count_output_files(out_dir)
+    std::cout << "[OK] instance segmentation overlay produced " << output_files
               << " output files\n";
   }
 

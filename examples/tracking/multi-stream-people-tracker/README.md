@@ -180,7 +180,7 @@ Notes:
 - C++ pipeline builders: `cpp/utils/pipeline_api.cpp`, `cpp/utils/pipeline.cpp`
 - C++ image helpers: `cpp/utils/image_utils_api.cpp`, `cpp/utils/image_utils.cpp`
 - C++ worker orchestration: `cpp/utils/workers_api.cpp`, `cpp/utils/workers.cpp`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python source: `python/main.py`
 - Example config: `common/config.yaml`
 - Python utilities: `python/utils/`

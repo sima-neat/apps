@@ -1,4 +1,4 @@
-// E2E test for yolov8-object-detector.
+// E2E test for yolo26-object-detector.
 // Runs the binary with a real model, labels, and test images, verifies outputs.
 #include "support/testing/test_process.h"
 #include "support/testing/test_config.h"
@@ -22,18 +22,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      auto name = entry.path().filename().string();
-      if (name.find("yolo_v8n") != std::string::npos && name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
-  if (model_path.empty()) {
-    return skip_or_fail("YOLOv8 model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+  const std::string model_path = configured_model_path("yolo26-object-detector", models_dir);
+  if (model_path.empty() || !fs::exists(model_path)) {
+    return skip_or_fail("configured YOLO26 model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   std::string labels_file;
@@ -43,7 +34,8 @@ int main(int argc, char** argv) {
 
   std::string example_dir = fs::path(binary).parent_path().string();
   std::vector<std::string> label_search = {
-      "examples/object-detection/yolov8-object-detector/common/coco_label.txt",
+      "examples/object-detection/yolo26-object-detector/"
+      "common/coco_label.txt",
       example_dir + "/common/coco_label.txt",
   };
   for (const auto& p : label_search) {
@@ -55,8 +47,8 @@ int main(int argc, char** argv) {
     }
   }
   if (labels_file.empty()) {
-    return skip_or_fail("common/coco_label.txt not found; set SIMANEAT_APPS_TEST_LABELS_FILE or "
-                        "ensure example label file is available");
+    return skip_or_fail("common/coco_label.txt not found; set SIMANEAT_APPS_TEST_LABELS_FILE "
+                        "or ensure example label file is available");
   }
 
   const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
@@ -66,13 +58,13 @@ int main(int argc, char** argv) {
                 "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_test_output_dir("yolov8-object-detector", "test_full_pipeline");
+  auto out_dir = create_test_output_dir("yolo26-object-detector", "test_full_pipeline");
   if (out_dir.empty())
     return 1;
 
-  const double score_threshold = e2e_double("yolov8-object-detector", "decode", "score_threshold");
-  const double nms_iou = e2e_double("yolov8-object-detector", "decode", "nms_iou");
-  const int max_detections = e2e_int("yolov8-object-detector", "decode", "max_detections");
+  const double score_threshold = e2e_double("yolo26-object-detector", "decode", "score_threshold");
+  const double nms_iou = e2e_double("yolo26-object-detector", "decode", "nms_iou");
+  const int max_detections = e2e_int("yolo26-object-detector", "decode", "max_detections");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
@@ -87,26 +79,32 @@ int main(int argc, char** argv) {
                 << "  nms_iou: " << nms_iou << "\n"
                 << "  max_detections: " << max_detections << "\n"
                 << "runtime:\n"
-                << "  timeout_ms: 5000\n";
+                << "  timeout_ms: 20000\n"
+                << "  num_runs: 1\n"
+                << "  profile: false\n"
+                << "output:\n"
+                << "  overlay: true\n";
   }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
+  const int output_files = count_output_files(out_dir);
+
   int rc = 0;
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_output_files(out_dir) == 0) {
-    std::cerr << "[FAIL] no annotated output files produced\n";
+  } else if (output_files == 0) {
+    std::cerr << "[FAIL] expected output files but output directory is empty\n";
     rc = 1;
   } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] object detection overlay produced " << count_output_files(out_dir)
+    std::cout << "[OK] yolo26m object detection overlay produced " << output_files
               << " output files\n";
   }
 

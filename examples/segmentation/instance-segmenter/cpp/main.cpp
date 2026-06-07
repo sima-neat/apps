@@ -34,7 +34,7 @@ struct Config {
   fs::path input_dir;
   fs::path output_dir;
   int infer_size = 640;
-  int timeout_ms = 3000;
+  int timeout_ms = 20000;
   int queue_depth = 8;
   float score_threshold = 0.6f;
   float nms_iou = 0.45f;
@@ -49,7 +49,7 @@ Config load_config(const fs::path& path) {
   cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/instance-segmenter");
   cfg.infer_size = raw.int_or("runtime.infer_size", 640);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 3000);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", 8);
   cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.6));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.45));

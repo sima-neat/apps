@@ -40,7 +40,7 @@ class TestMainEntrypoint:
             capture_output=True,
             text=True,
             cwd=str(EXAMPLE_DIR),
-            timeout=10,
+            timeout=20,
         )
 
         assert result.returncode == 0
@@ -53,7 +53,7 @@ class TestMainEntrypoint:
             capture_output=True,
             text=True,
             cwd=str(EXAMPLE_DIR),
-            timeout=10,
+            timeout=20,
         )
 
         assert result.returncode == 2

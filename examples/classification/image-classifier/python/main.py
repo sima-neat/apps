@@ -94,7 +94,7 @@ def main() -> int:
     )
     input_width = int(runtime.get("input_width", 224))
     input_height = int(runtime.get("input_height", 224))
-    timeout_ms = int(runtime.get("timeout_ms", 2000))
+    timeout_ms = int(runtime.get("timeout_ms", 20000))
     expected_class_id = int(validation.get("expected_class_id", 1))
     min_probability = float(validation.get("min_probability", 0.2))
 

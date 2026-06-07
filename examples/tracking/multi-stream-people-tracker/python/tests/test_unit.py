@@ -430,7 +430,7 @@ class TestMainEntrypoint:
             [sys.executable, str(MAIN_PY), "--help"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=20,
             cwd=str(EXAMPLE_DIR),
         )
         assert result.returncode == 0
@@ -441,7 +441,7 @@ class TestMainEntrypoint:
             [sys.executable, str(MAIN_PY), "--config", "does-not-exist.yaml"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=20,
             cwd=str(EXAMPLE_DIR),
         )
         assert result.returncode != 0

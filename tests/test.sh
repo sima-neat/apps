@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-build}"
 CONFIG_FILE=""
 STRICT_CLI=0
+ORIGINAL_ARGS=("$@")
 
 RUN_UNIT=0
 RUN_E2E=0
@@ -18,15 +19,20 @@ CONFIG_ENV_VARS=(
   SIMANEAT_APPS_TEST_MODELS_DIR
   SIMANEAT_APPS_TEST_INPUT_DIR
   SIMANEAT_APPS_TEST_OUTPUT_DIR
+  SIMANEAT_APPS_TEST_SCOPE_FILE
   SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE
   SIMANEAT_APPS_TEST_KEEP_OUTPUT
+  SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS
+  SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS
   SIMANEAT_APPS_TEST_RTSP_URL
   SIMANEAT_APPS_TEST_RTSP_URLS
   SIMANEAT_APPS_TEST_TIMEOUT_MS
   SIMANEAT_APPS_TEST_REQUIRE_E2E
   SIMANEAT_APPS_TEST_LABELS_FILE
+  SIMANEAT_APPS_TEST_INSIGHT_HOST
   SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT
   SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT
+  NEAT_APPS_SKIP_MODEL_DOWNLOAD
 )
 
 PROCESS_ENV_WAS_SET=()
@@ -89,10 +95,14 @@ Environment:
   SIMANEAT_APPS_TEST_OUTPUT_DIR     E2E output root (default: sandbox/test-runs)
   SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE  Classification goldfish image path
   SIMANEAT_APPS_TEST_KEEP_OUTPUT    Keep e2e output dirs (1=yes, default: 1)
+  SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS    Write summary logs (1=yes, default: 1)
+  SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS    Write command/stdout/stderr logs (1=yes, default: 1)
   SIMANEAT_APPS_TEST_RTSP_URL       Single RTSP stream URL
   SIMANEAT_APPS_TEST_RTSP_URLS      Comma-separated RTSP URLs (multistream)
   SIMANEAT_APPS_TEST_TIMEOUT_MS     Timeout in ms (default: 180000)
   SIMANEAT_APPS_TEST_REQUIRE_E2E    Backward-compatible strict e2e env flag
+  SIMANEAT_APPS_TEST_SCOPE_FILE     Test scope contract (default: tests/configs/test-scope.yaml)
+  NEAT_APPS_SKIP_MODEL_DOWNLOAD     Skip e2e model download (1=yes, default: 0)
 EOF
 }
 
@@ -187,11 +197,46 @@ resolve_test_runtime_env() {
   export SIMANEAT_APPS_TEST_MODELS_DIR="${SIMANEAT_APPS_TEST_MODELS_DIR:-${APPS_ROOT}/assets/models}"
   export SIMANEAT_APPS_TEST_INPUT_DIR="${SIMANEAT_APPS_TEST_INPUT_DIR:-${APPS_ROOT}/assets/test_images}"
   export SIMANEAT_APPS_TEST_OUTPUT_DIR="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${APPS_ROOT}/sandbox/test-runs}"
+  export SIMANEAT_APPS_TEST_SCOPE_FILE="${SIMANEAT_APPS_TEST_SCOPE_FILE:-${APPS_ROOT}/tests/configs/test-scope.yaml}"
   export SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE="${SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE:-${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg}"
   export SIMANEAT_APPS_TEST_KEEP_OUTPUT="${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-1}"
+  export SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS="${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-1}"
+  export SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS="${SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS:-1}"
   export SIMANEAT_APPS_TEST_TIMEOUT_MS="${SIMANEAT_APPS_TEST_TIMEOUT_MS:-180000}"
   export SIMANEAT_APPS_TEST_RTSP_URL="${SIMANEAT_APPS_TEST_RTSP_URL:-}"
   export SIMANEAT_APPS_TEST_RTSP_URLS="${SIMANEAT_APPS_TEST_RTSP_URLS:-}"
+  export SIMANEAT_APPS_TEST_INSIGHT_HOST="${SIMANEAT_APPS_TEST_INSIGHT_HOST:-127.0.0.1}"
+  export NEAT_APPS_SKIP_MODEL_DOWNLOAD="${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}"
+}
+
+test_invocation() {
+  printf './tests/test.sh'
+  local arg
+  for arg in "${ORIGINAL_ARGS[@]}"; do
+    printf ' %q' "${arg}"
+  done
+  printf '\n'
+}
+
+start_summary_log() {
+  local language="$1"
+  local marker="$2"
+  if [[ "${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-1}" != "1" ]]; then
+    mktemp
+    return
+  fi
+  local output_root="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-${ROOT_DIR}/sandbox/test-runs}"
+  local summary_dir="${output_root}/summary"
+  mkdir -p "${summary_dir}"
+  local summary_file="${summary_dir}/${language}-${marker}.log"
+  {
+    echo "command: $(test_invocation)"
+    echo "cwd: ${ROOT_DIR}"
+    echo "mode: ${language} ${marker}"
+    echo "date_utc: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo ""
+  } >"${summary_file}"
+  printf '%s\n' "${summary_file}"
 }
 
 if [[ -z "${APPS_ROOT:-}" ]]; then
@@ -239,18 +284,79 @@ is_absolute_path() {
   [[ -z "${value}" || "${value}" == /* ]]
 }
 
+SCOPE_PYTHON_BIN=""
+
+python_executable_exists() {
+  local cand="$1"
+  if [[ "${cand}" == */* ]]; then
+    [[ -x "${cand}" ]]
+  else
+    command -v "${cand}" >/dev/null 2>&1
+  fi
+}
+
+resolve_scope_python() {
+  if [[ -n "${SCOPE_PYTHON_BIN}" ]]; then
+    return 0
+  fi
+
+  local candidates=()
+  if [[ -n "${PYTHON_TEST_BIN:-}" ]]; then
+    candidates+=("${PYTHON_TEST_BIN}")
+  fi
+  candidates+=("python3")
+  candidates+=("${HOME}/pyneat/bin/python3")
+  candidates+=("/media/nvme/pyneat/bin/python3")
+  candidates+=("${HOME}/.pyneat/bin/python3")
+
+  local cand
+  for cand in "${candidates[@]}"; do
+    if ! python_executable_exists "${cand}"; then
+      continue
+    fi
+    if "${cand}" -c "import yaml" >/dev/null 2>&1; then
+      SCOPE_PYTHON_BIN="${cand}"
+      return 0
+    fi
+  done
+
+  echo "  [FAIL] test-scope.yaml requires a Python interpreter with PyYAML." >&2
+  echo "         Install PyYAML into pyneat or set PYTHON_TEST_BIN." >&2
+  return 1
+}
+
+scope_tool() {
+  resolve_scope_python || return 1
+  "${SCOPE_PYTHON_BIN}" "${APPS_ROOT}/tests/utils/test_scope.py" \
+    --scope-file "${SIMANEAT_APPS_TEST_SCOPE_FILE}" "$@"
+}
+
+validate_test_scope() {
+  echo ""
+  echo "  Validating test scope"
+  echo "  $(printf '%.0s-' {1..50})"
+  echo "  Scope file: ${SIMANEAT_APPS_TEST_SCOPE_FILE}"
+  scope_tool validate --quiet
+}
+
 preflight_e2e_env() {
   local strict="${STRICT_MODE}"
   local models_dir_raw="${SIMANEAT_APPS_TEST_MODELS_DIR:-}"
   local input_dir_raw="${SIMANEAT_APPS_TEST_INPUT_DIR:-}"
+  local scope_file_raw="${SIMANEAT_APPS_TEST_SCOPE_FILE:-}"
   local timeout_raw="${SIMANEAT_APPS_TEST_TIMEOUT_MS:-180000}"
   local output_dir_raw="${SIMANEAT_APPS_TEST_OUTPUT_DIR:-}"
   local class_image_raw="${SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE:-}"
   local keep_output_raw="${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-0}"
+  local write_summary_raw="${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-1}"
+  local write_process_raw="${SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS:-1}"
+  local insight_host_raw="${SIMANEAT_APPS_TEST_INSIGHT_HOST:-}"
+  local skip_model_download_raw="${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}"
   local rtsp_url="${SIMANEAT_APPS_TEST_RTSP_URL:-}"
   local rtsp_urls="${SIMANEAT_APPS_TEST_RTSP_URLS:-}"
   local models_dir="${models_dir_raw:-${ROOT_DIR}/assets/models}"
   local input_dir="${input_dir_raw:-${ROOT_DIR}/assets/test_images}"
+  local scope_file="${scope_file_raw:-${ROOT_DIR}/tests/configs/test-scope.yaml}"
   local output_dir="${output_dir_raw:-/tmp}"
   local class_image="${class_image_raw:-${ROOT_DIR}/assets/test_images_classification/goldfish.jpeg}"
 
@@ -266,9 +372,14 @@ preflight_e2e_env() {
   echo "  Test config file            : $(format_env_value "${CONFIG_FILE}")"
   echo "  SIMANEAT_APPS_TEST_MODELS_DIR  : $(format_env_status "${models_dir_raw}") -> ${models_dir} (${model_count} model tar.gz files)"
   echo "  SIMANEAT_APPS_TEST_INPUT_DIR   : $(format_env_status "${input_dir_raw}") -> ${input_dir}"
+  echo "  SIMANEAT_APPS_TEST_SCOPE_FILE  : $(format_env_status "${scope_file_raw}") -> ${scope_file}"
   echo "  SIMANEAT_APPS_TEST_OUTPUT_DIR  : $(format_env_status "${output_dir_raw}") -> ${output_dir}"
   echo "  SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE : $(format_env_status "${class_image_raw}") -> ${class_image}"
   echo "  SIMANEAT_APPS_TEST_KEEP_OUTPUT : $(format_env_status "${SIMANEAT_APPS_TEST_KEEP_OUTPUT:-}") -> ${keep_output_raw}"
+  echo "  SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS : $(format_env_status "${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-}") -> ${write_summary_raw}"
+  echo "  SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS : $(format_env_status "${SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS:-}") -> ${write_process_raw}"
+  echo "  SIMANEAT_APPS_TEST_INSIGHT_HOST : $(format_env_status "${insight_host_raw}") -> $(format_env_value "${insight_host_raw}")"
+  echo "  NEAT_APPS_SKIP_MODEL_DOWNLOAD : $(format_env_status "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-}") -> ${skip_model_download_raw}"
   echo "  SIMANEAT_APPS_TEST_TIMEOUT_MS  : $(format_env_status "${SIMANEAT_APPS_TEST_TIMEOUT_MS:-}") -> ${timeout_raw}"
   echo "  SIMANEAT_APPS_TEST_RTSP_URL    : $(format_env_status "${rtsp_url}") -> $(format_env_value "${rtsp_url}")"
   echo "  SIMANEAT_APPS_TEST_RTSP_URLS   : $(format_env_status "${rtsp_urls}") -> $(format_env_value "${rtsp_urls}")"
@@ -282,12 +393,28 @@ preflight_e2e_env() {
     echo "  [FAIL] SIMANEAT_APPS_TEST_KEEP_OUTPUT must be 0 or 1."
     preflight_fail=1
   fi
+  if [[ "${write_summary_raw}" != "0" && "${write_summary_raw}" != "1" ]]; then
+    echo "  [FAIL] SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS must be 0 or 1."
+    preflight_fail=1
+  fi
+  if [[ "${write_process_raw}" != "0" && "${write_process_raw}" != "1" ]]; then
+    echo "  [FAIL] SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS must be 0 or 1."
+    preflight_fail=1
+  fi
+  if [[ "${skip_model_download_raw}" != "0" && "${skip_model_download_raw}" != "1" ]]; then
+    echo "  [FAIL] NEAT_APPS_SKIP_MODEL_DOWNLOAD must be 0 or 1."
+    preflight_fail=1
+  fi
   if ! is_absolute_path "${models_dir_raw}"; then
     echo "  [FAIL] SIMANEAT_APPS_TEST_MODELS_DIR must be an absolute path."
     preflight_fail=1
   fi
   if ! is_absolute_path "${input_dir_raw}"; then
     echo "  [FAIL] SIMANEAT_APPS_TEST_INPUT_DIR must be an absolute path."
+    preflight_fail=1
+  fi
+  if ! is_absolute_path "${scope_file_raw}"; then
+    echo "  [FAIL] SIMANEAT_APPS_TEST_SCOPE_FILE must be an absolute path."
     preflight_fail=1
   fi
   if ! is_absolute_path "${output_dir_raw}"; then
@@ -309,6 +436,10 @@ preflight_e2e_env() {
     if [[ "${strict}" == "1" ]]; then
       preflight_fail=1
     fi
+  fi
+  if [[ ! -f "${scope_file}" ]]; then
+    echo "  [FAIL] test scope file does not exist: ${scope_file}"
+    preflight_fail=1
   fi
   if [[ ! -f "${class_image}" ]]; then
     echo "  [WARN] classification image does not exist: ${class_image}"
@@ -356,6 +487,40 @@ preflight_e2e_env() {
   fi
 
   return "${preflight_fail}"
+}
+
+ensure_e2e_models() {
+  if [[ "${RUN_E2E}" -ne 1 ]]; then
+    return 0
+  fi
+  if [[ "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}" == "1" ]]; then
+    echo ""
+    echo "  Skipping e2e model download because NEAT_APPS_SKIP_MODEL_DOWNLOAD=1."
+    return 0
+  fi
+  local downloader="${APPS_ROOT}/scripts/download_models.sh"
+  if [[ ! -f "${downloader}" ]]; then
+    echo ""
+    echo "  Skipping e2e model download because ${downloader} was not found."
+    return 0
+  fi
+
+  local language_args=()
+  if [[ "${RUN_PYTHON}" -eq 1 ]]; then
+    language_args+=(--language python)
+  fi
+  if [[ "${RUN_CPP}" -eq 1 ]]; then
+    language_args+=(--language cpp)
+  fi
+
+  echo ""
+  echo "  Ensuring scoped e2e models are available"
+  echo "  $(printf '%.0s-' {1..50})"
+  TEST_SCOPE_PYTHON_BIN="${SCOPE_PYTHON_BIN}" \
+    MODELS_DIR="${SIMANEAT_APPS_TEST_MODELS_DIR}" bash "${downloader}" \
+    --scope-file "${SIMANEAT_APPS_TEST_SCOPE_FILE}" \
+    --kind e2e \
+    "${language_args[@]}"
 }
 
 PYTEST_CHECKED_CANDIDATES=()
@@ -412,7 +577,13 @@ resolve_pytest_python() {
   return 1
 }
 
+if ! validate_test_scope; then
+  echo "  [FAIL] test scope validation failed."
+  exit 1
+fi
+
 if [[ "${RUN_E2E}" -eq 1 ]]; then
+  ensure_e2e_models
   if ! preflight_e2e_env; then
     echo "  [FAIL] e2e preflight failed."
     exit 1
@@ -427,18 +598,36 @@ run_packaged_cpp_tests() {
   local label_upper
   local suffix
   local skipped_count=0
+  local enabled_examples=()
   label_upper="$(echo "${label}" | tr '[:lower:]' '[:upper:]')"
   suffix="_${label}_test"
 
+  mapfile -t enabled_examples < <(scope_tool enabled-examples --kind "${label}" --language cpp)
+
   cpp_test_bins=()
   while IFS= read -r test_bin; do
-    cpp_test_bins+=("${test_bin}")
+    local rel category rest example_key
+    rel="${test_bin#${ROOT_DIR}/examples/}"
+    category="${rel%%/*}"
+    rest="${rel#*/}"
+    example_key="${category}/${rest%%/*}"
+    local enabled=0
+    local scoped
+    for scoped in "${enabled_examples[@]}"; do
+      if [[ "${scoped}" == "${example_key}" ]]; then
+        enabled=1
+        break
+      fi
+    done
+    if [[ "${enabled}" -eq 1 ]]; then
+      cpp_test_bins+=("${test_bin}")
+    fi
   done < <(find "${ROOT_DIR}/examples" -type f -path '*/cpp/tests/*' -name "*${suffix}" | sort)
 
   if [[ "${#cpp_test_bins[@]}" -eq 0 ]]; then
-    echo "  [SKIP] No packaged C++ ${label} test binaries found under ${ROOT_DIR}/examples."
+    echo "  [SKIP] No enabled packaged C++ ${label} tests found under ${ROOT_DIR}/examples."
     if [[ "${STRICT_MODE}" == "1" && "${label}" == "e2e" ]]; then
-      echo "  [FAIL] Strict mode is enabled but no packaged C++ e2e tests were found."
+      echo "  [FAIL] Strict mode is enabled but no packaged C++ e2e tests were enabled."
       OVERALL_RC=1
     fi
     return 0
@@ -447,6 +636,8 @@ run_packaged_cpp_tests() {
   echo ""
   echo "  C++ ${label_upper} tests (packaged binaries)"
   echo "  $(printf '%.0s-' {1..50})"
+  local summary_file
+  summary_file="$(start_summary_log "cpp" "${label}")"
 
   local test_bin
   for test_bin in "${cpp_test_bins[@]}"; do
@@ -460,17 +651,18 @@ run_packaged_cpp_tests() {
     example_bin="${test_dir}/../../${example_name}"
 
     echo "  [RUN] ${test_bin#${ROOT_DIR}/}"
+    echo "[RUN] ${test_bin#${ROOT_DIR}/}" >>"${summary_file}"
     if [[ ! -x "${example_bin}" ]]; then
       echo "  [ERR] example binary not found for test: ${example_bin}"
+      echo "[ERR] example binary not found for test: ${example_bin}" >>"${summary_file}"
       OVERALL_RC=1
       continue
     fi
 
-    if "${test_bin}" "${example_bin}"; then
-      rc=0
-    else
-      rc=$?
-    fi
+    set +e
+    "${test_bin}" "${example_bin}" 2>&1 | tee -a "${summary_file}"
+    rc=${PIPESTATUS[0]}
+    set -e
 
     if [[ "${rc}" -eq 77 ]]; then
       echo "  [SKIP] ${test_bin#${ROOT_DIR}/} (exit 77)"
@@ -510,8 +702,22 @@ run_ctest() {
   echo "  $(printf '%.0s-' {1..50})"
 
   local log_file
-  log_file="$(mktemp)"
-  if ! ctest --test-dir "${build_path}" -L "${label}" --output-on-failure | tee "${log_file}"; then
+  local test_regex
+  test_regex="$(scope_tool ctest-regex --kind "${label}")" || {
+    OVERALL_RC=1
+    return 0
+  }
+  if [[ -z "${test_regex}" ]]; then
+    echo "  [SKIP] No enabled C++ ${label} tests in ${SIMANEAT_APPS_TEST_SCOPE_FILE}."
+    if [[ "${STRICT_MODE}" == "1" && "${label}" == "e2e" ]]; then
+      echo "  [FAIL] Strict mode is enabled but no C++ e2e tests were enabled."
+      OVERALL_RC=1
+    fi
+    return 0
+  fi
+
+  log_file="$(start_summary_log "cpp" "${label}")"
+  if ! ctest --test-dir "${build_path}" -L "${label}" -R "${test_regex}" --output-on-failure | tee -a "${log_file}"; then
     OVERALL_RC=1
   fi
   if [[ "${STRICT_MODE}" == "1" && "${label}" == "e2e" ]]; then
@@ -520,7 +726,6 @@ run_ctest() {
       OVERALL_RC=1
     fi
   fi
-  rm -f "${log_file}"
 }
 
 if [[ "${RUN_CPP}" -eq 1 ]]; then
@@ -538,13 +743,11 @@ fi
 run_pytest() {
   local marker="$1"
   local marker_upper
-  local test_file_name
   local skipped_count=0
   marker_upper="$(echo "${marker}" | tr '[:lower:]' '[:upper:]')"
 
   case "${marker}" in
-    unit) test_file_name="test_unit.py" ;;
-    e2e) test_file_name="test_e2e.py" ;;
+    unit|e2e) ;;
     *)
       echo "  [FAIL] unsupported python test marker: ${marker}"
       OVERALL_RC=1
@@ -555,16 +758,16 @@ run_pytest() {
   echo ""
   echo "  Python ${marker_upper} tests (isolated pytest per example)"
   echo "  $(printf '%.0s-' {1..50})"
+  local summary_file
+  summary_file="$(start_summary_log "python" "${marker}")"
 
   python_test_files=()
-  while IFS= read -r test_file; do
-    python_test_files+=("${test_file}")
-  done < <(find "${ROOT_DIR}/examples" -type f -path "*/python/tests/${test_file_name}" | sort)
+  mapfile -t python_test_files < <(scope_tool python-files --kind "${marker}")
 
   if [[ "${#python_test_files[@]}" -eq 0 ]]; then
-    echo "  [SKIP] No Python ${marker} tests found under ${ROOT_DIR}/examples."
+    echo "  [SKIP] No enabled Python ${marker} tests found in ${SIMANEAT_APPS_TEST_SCOPE_FILE}."
     if [[ "${STRICT_MODE}" == "1" && "${marker}" == "e2e" ]]; then
-      echo "  [FAIL] Strict mode is enabled but no Python e2e tests were found."
+      echo "  [FAIL] Strict mode is enabled but no Python e2e tests were enabled."
       OVERALL_RC=1
     fi
     return 0
@@ -576,9 +779,10 @@ run_pytest() {
     log_file="$(mktemp)"
 
     echo "  [RUN] ${test_file#${ROOT_DIR}/}"
+    echo "[RUN] ${test_file#${ROOT_DIR}/}" >>"${summary_file}"
     set +e
     "${PYTHON_TEST_BIN}" -m pytest -c "${ROOT_DIR}/tests/pytest.ini" -m "${marker}" \
-      --rootdir="${ROOT_DIR}" -v "${test_file}" | tee "${log_file}"
+      --rootdir="${ROOT_DIR}" -v "${test_file}" | tee "${log_file}" | tee -a "${summary_file}"
     rc=${PIPESTATUS[0]}
     set -e
 

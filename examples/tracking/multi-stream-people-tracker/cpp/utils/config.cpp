@@ -159,6 +159,14 @@ std::string require_non_empty_string(const RawConfig& raw, const std::string& ke
   return *value;
 }
 
+std::string require_model_path(const RawConfig& raw) {
+  if (const auto mapped = lookup_scalar(raw, "model.path");
+      mapped.has_value() && !trim_copy(*mapped).empty() && !is_nullish(*mapped)) {
+    return *mapped;
+  }
+  return require_non_empty_string(raw, "model", "model.path");
+}
+
 int parse_int(const std::string& value, const std::string& error_name) {
   std::size_t index = 0;
   const int parsed = std::stoi(value, &index);
@@ -272,7 +280,7 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   }
 
   AppConfig cfg;
-  cfg.model = require_non_empty_string(raw, "model", "model");
+  cfg.model = require_model_path(raw);
   cfg.rtsp_urls = raw.streams;
   cfg.insight_host = require_non_empty_string(raw, "output.insight.host", "output.insight.host");
   cfg.insight_video_port_base =

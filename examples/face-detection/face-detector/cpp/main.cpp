@@ -486,7 +486,7 @@ struct Config {
   bool landmarks = true;
   bool profile = false;
   int num_runs = 100;
-  int timeout_ms = 5000;
+  int timeout_ms = 20000;
 };
 
 static Config load_config(const fs::path& path) {
@@ -503,7 +503,7 @@ static Config load_config(const fs::path& path) {
   cfg.landmarks = raw.bool_or("decode.landmarks", true);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.num_runs = raw.int_or("runtime.num_runs", 100);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   if (cfg.conf < 0.0f || cfg.conf > 1.0f) {
     throw std::runtime_error("decode.confidence_threshold must be in [0.0, 1.0]");
   }

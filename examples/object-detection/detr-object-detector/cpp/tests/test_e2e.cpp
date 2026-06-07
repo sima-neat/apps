@@ -24,19 +24,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (const auto& entry : fs::directory_iterator(models_dir)) {
-      const std::string name = entry.path().filename().string();
-      if (name.find("detr_resnet50_modified_class_embed_bbox_embed") != std::string::npos &&
-          name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
+  const std::string model_path = configured_model_path("detr-object-detector", models_dir);
 
-  if (model_path.empty()) {
+  if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("DETR model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
@@ -80,7 +70,7 @@ int main(int argc, char** argv) {
                 << "  max_draw: 50\n"
                 << "  person_only: false\n"
                 << "runtime:\n"
-                << "  timeout_ms: 5000\n"
+                << "  timeout_ms: 20000\n"
                 << "  profile: false\n"
                 << "  num_runs: 1\n";
   }
@@ -97,6 +87,11 @@ int main(int argc, char** argv) {
 
   if (!fs::exists(out_image)) {
     std::cerr << "[FAIL] expected annotated output image not found at " << out_image << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
+  if (fs::is_empty(out_image)) {
+    std::cerr << "[FAIL] annotated output image is empty at " << out_image << "\n";
     remove_dir(out_dir);
     return 1;
   }

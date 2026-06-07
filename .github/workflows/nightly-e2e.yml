@@ -47,7 +47,7 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest
+          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
 
       - name: Run nightly e2e tests from installed apps runtime
         shell: bash
@@ -89,7 +89,7 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest
+          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
 
       - name: Run manual e2e tests from installed apps runtime
         shell: bash

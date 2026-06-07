@@ -1,5 +1,5 @@
 model:
-  path: assets/models/open_pose_mpk.tar.gz
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
 
 io:
   input_dir: assets/test_images
@@ -7,7 +7,7 @@ io:
 
 runtime:
   infer_size: 480
-  timeout_ms: 5000
+  timeout_ms: 20000
   upsample_factor: 4.0
 
 decode:

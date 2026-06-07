@@ -454,11 +454,12 @@ def _process_frame(
             raise RuntimeError(f"stream {stream.index} Insight metadata send failed")
         metadata_elapsed = _now_steady_s() - metadata_t0
 
+    processed_frame_index = stream.metrics.processed + 1
     if frame_out is not None and needs_saved_frame:
         if save_debug_frame(
             cfg.output_dir,
             stream.index,
-            packet.frame_index,
+            processed_frame_index,
             frame_out,
             cfg.save_every,
             runtime=stream.runtime,

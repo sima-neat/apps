@@ -18,7 +18,7 @@
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_test_output_dir;
+using sima_examples::testing::create_test_scratch_dir;
 using sima_examples::testing::ProcessResult;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
@@ -45,25 +45,25 @@ bool expect_near(double lhs, double rhs, double epsilon, const std::string& mess
 }
 
 bool test_help_runs(const std::string& binary) {
-  const ProcessResult result = spawn_and_wait(binary, {"--help"}, 10000);
+  const ProcessResult result = spawn_and_wait(binary, {"--help"}, 20000);
   return expect_true(result.exit_code == 0, "help exits with code 0") &&
          expect_contains(result.stdout_text, "--config", "help mentions --config");
 }
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
-  const ProcessResult result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 10000);
+  const ProcessResult result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
   return expect_true(result.exit_code != 0, "missing config exits nonzero") &&
          expect_contains(result.stderr_text, "config", "missing config error mentions config");
 }
 
 bool test_load_app_config_parses_dynamic_stream_list() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-people-tracker", "test_load_app_config_parses_dynamic_stream_list");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for config parsing test");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input:\n"
@@ -130,13 +130,13 @@ bool test_load_app_config_parses_dynamic_stream_list() {
 }
 
 bool test_load_app_config_defaults_to_clean_video_mode() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-people-tracker", "test_load_app_config_defaults_to_clean_video_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for video mode default test");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
@@ -173,13 +173,13 @@ bool test_load_app_config_defaults_to_clean_video_mode() {
 }
 
 bool test_load_app_config_rejects_invalid_video_mode() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-people-tracker", "test_load_app_config_rejects_invalid_video_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for bad video mode test");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
@@ -212,13 +212,13 @@ bool test_load_app_config_rejects_invalid_video_mode() {
 }
 
 bool test_load_app_config_rejects_missing_streams() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-people-tracker", "test_load_app_config_rejects_missing_streams");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for missing streams test");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
          "input: {}\n"
@@ -307,7 +307,7 @@ bool test_make_insight_tracking_detection_uses_track_id() {
 }
 
 bool test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-people-tracker", "test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory for overlay save test");

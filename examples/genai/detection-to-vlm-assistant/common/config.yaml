@@ -1,8 +1,8 @@
 source:
-  rtsp_url: rtsp://192.168.2.1:8554/src5
+  rtsp_url: <rtsp-url-1>  # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
 
 model:
-  path: assets/models/yolo_v8s_mpk.tar.gz
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
   labels: examples/object-detection/yolov8-object-detector/common/coco_label.txt
 
 inference:
@@ -19,7 +19,7 @@ runtime:
   timeout_ms: 50000
 
 insight:
-  host: 192.168.2.1
+  host: <insight-host-ip>  # Host running the Insight receiver/viewer.
   video_port: 9000
   metadata_port: 9100
   channel: 0

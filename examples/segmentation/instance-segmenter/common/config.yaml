@@ -1,5 +1,5 @@
 model:
-  path: assets/models/yolo_v8n_seg_mpk.tar.gz
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
 
 io:
   input_dir: assets/test_images
@@ -7,7 +7,7 @@ io:
 
 runtime:
   infer_size: 640
-  timeout_ms: 3000
+  timeout_ms: 20000
   queue_depth: 8
 
 decode:

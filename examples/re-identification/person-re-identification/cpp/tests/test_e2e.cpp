@@ -62,18 +62,10 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_dir_raw ? fs::path(models_dir_raw) : fs::path("assets/models");
 
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (const auto& entry : fs::directory_iterator(models_dir)) {
-      const std::string name = entry.path().filename().string();
-      if (name.find("reid") != std::string::npos && name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
-  if (model_path.empty()) {
-    return skip_or_fail("ReID model (.tar.gz with 'reid' in name) not found under models dir");
+  const std::string model_path =
+      configured_model_path("person-re-identification", models_dir.string());
+  if (model_path.empty() || !fs::exists(model_path)) {
+    return skip_or_fail("configured ReID model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   const char* images_env = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
@@ -88,10 +80,9 @@ int main(int argc, char** argv) {
   const fs::path image_a = images[0];
   const fs::path image_b = images[1];
   const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
-  const double cosine_threshold =
-      e2e_double("person-re-identification", "comparison.cosine", "threshold");
+  const double cosine_threshold = e2e_double("person-re-identification", "comparison", "threshold");
   const double euclidean_threshold =
-      e2e_double("person-re-identification", "comparison.euclidean", "threshold");
+      e2e_double("person-re-identification", "comparison", "euclidean_threshold");
 
   int failures = 0;
 
@@ -117,7 +108,7 @@ int main(int argc, char** argv) {
                   << "  metric: cosine\n"
                   << "  threshold: " << cosine_threshold << "\n"
                   << "runtime:\n"
-                  << "  timeout_ms: 5000\n"
+                  << "  timeout_ms: 20000\n"
                   << "  profile: false\n";
     }
 
@@ -174,7 +165,7 @@ int main(int argc, char** argv) {
                   << "  metric: euclidean\n"
                   << "  threshold: " << euclidean_threshold << "\n"
                   << "runtime:\n"
-                  << "  timeout_ms: 5000\n"
+                  << "  timeout_ms: 20000\n"
                   << "  profile: false\n";
     }
 

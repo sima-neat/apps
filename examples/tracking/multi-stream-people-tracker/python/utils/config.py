@@ -97,8 +97,12 @@ def load_app_config(path: str | Path) -> AppConfig:
         raise ValueError("config root must be a mapping")
 
     model = raw.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise ValueError("model must be a non-empty string")
+    if isinstance(model, dict):
+        model_path = _required_string(model, "path", "model")
+    elif isinstance(model, str) and model.strip():
+        model_path = model
+    else:
+        raise ValueError("model.path must be a non-empty string")
 
     input_cfg = _mapping(raw.get("input"), "input")
     inference = _mapping(raw.get("inference"), "inference")
@@ -116,7 +120,7 @@ def load_app_config(path: str | Path) -> AppConfig:
         rtsp_urls.append(stream)
 
     cfg = AppConfig(
-        model=model,
+        model=model_path,
         rtsp_urls=rtsp_urls,
         output_dir=output.get("debug_dir"),
         frames=_optional_int(inference, "frames", 0),

@@ -21,6 +21,9 @@ const char* env_or_null(const char* key);
 // Read an integer environment variable, returning default_value if unset.
 int env_int_or_default(const char* key, int default_value);
 
+// Read SIMANEAT_APPS_TEST_RTSP_URLS, falling back to SIMANEAT_APPS_TEST_RTSP_URL.
+std::vector<std::string> rtsp_urls_from_env();
+
 // Read a required environment variable.  If unset and
 // SIMANEAT_APPS_TEST_REQUIRE_E2E=1, print an error and exit(1).
 // Otherwise print a skip message and exit(77).
@@ -38,16 +41,26 @@ int skip_or_fail(const std::string& reason);
 ProcessResult spawn_and_wait(const std::string& binary, const std::vector<std::string>& args,
                              int timeout_ms = 30000);
 
-// Create a deterministic per-test output directory under
-// SIMANEAT_APPS_TEST_OUTPUT_DIR/cpp/<example>/<test>/out
+// Spawn a process, wait until output_dir contains expected_files, then terminate it.
+// Returns exit_code 0 when the output condition is reached before timeout.
+ProcessResult spawn_until_output_files(const std::string& binary,
+                                       const std::vector<std::string>& args,
+                                       const std::string& output_dir, int expected_files,
+                                       int timeout_ms = 30000);
+
+// Create a deterministic e2e output directory under
+// SIMANEAT_APPS_TEST_OUTPUT_DIR/cpp/<example>/out
 // (or sandbox/test-runs/cpp/.../out if unset).
-// The per-test run directory is cleared before each run.
+// The example run directory is cleared before each run.
 std::string create_test_output_dir(const std::string& example_name, const std::string& test_name);
+
+// Create a deterministic scratch directory for C++ unit tests.
+std::string create_test_scratch_dir(const std::string& example_name, const std::string& test_name);
 
 // Remove a directory tree. Passing a generated out/ path removes its parent run directory.
 void remove_dir(const std::string& path);
 
-// Count regular output files in a directory, excluding the test config file.
+// Count regular output files in a directory tree, excluding the test config file.
 int count_output_files(const std::string& dir);
 
 // Return true if every regular output file in dir is non-empty.

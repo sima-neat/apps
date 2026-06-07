@@ -95,6 +95,7 @@ class AppConfig:
     runtime: RuntimeConfig
     insight: InsightConfig
     save_dir: str
+    save_every: int
 
 
 def load_runtime_dependencies() -> None:
@@ -559,12 +560,15 @@ def load_app_config(config_path: Path) -> AppConfig:
             metadata_port=_optional_int(insight_cfg, "metadata_port", 9100),
         ),
         save_dir=_optional_string(output_cfg, "save_dir", ""),
+        save_every=_optional_int(output_cfg, "save_every", 0),
     )
 
     if cfg.source.latency_ms < 0:
         raise ValueError("source.latency_ms must be >= 0")
     if cfg.inference.frames < 0:
         raise ValueError("inference.frames must be >= 0")
+    if cfg.save_every < 0:
+        raise ValueError("output.save_every must be >= 0")
     if not 0.0 <= cfg.inference.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.inference.nms_iou <= 1.0:
@@ -761,7 +765,7 @@ def main(argv: list[str] | None = None) -> int:
         while cfg.inference.frames <= 0 or processed < cfg.inference.frames:
             # Push/pull integration point: pull one decoded frame from RTSP run.
             t_pull0 = time.perf_counter()
-            tensors = rtsp_run.pull_tensors(timeout_ms=5000)
+            tensors = rtsp_run.pull_tensors(timeout_ms=20000)
             t_pull1 = time.perf_counter()
             if not tensors:
                 print("RTSP pull timed out / stream closed", file=sys.stderr)
@@ -773,7 +777,7 @@ def main(argv: list[str] | None = None) -> int:
 
             # Push/pull integration point: run model and parse the BBOX payload.
             t_inf0 = time.perf_counter()
-            result = model.run([infer_input], timeout_ms=5000)
+            result = model.run([infer_input], timeout_ms=20000)
             t_inf1 = time.perf_counter()
 
             payload = extract_bbox_payload(result)
@@ -802,7 +806,12 @@ def main(argv: list[str] | None = None) -> int:
                 int(time.time() * 1000),
                 fid,
             )
-            if save_dir is not None:
+            should_save = (
+                save_dir is not None
+                and cfg.save_every > 0
+                and (processed + 1) % cfg.save_every == 0
+            )
+            if should_save:
                 save_annotated_frame(
                     frame,
                     boxes,

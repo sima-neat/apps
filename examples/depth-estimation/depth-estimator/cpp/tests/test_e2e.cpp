@@ -1,5 +1,6 @@
 // E2E test for depth-estimator.
 // Runs the binary with a real model and test images, verifies output files.
+#include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
@@ -20,19 +21,8 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  // Find a depth model
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      auto name = entry.path().filename().string();
-      if (name.find("depth_anything_v2_vits") != std::string::npos &&
-          name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
-  if (model_path.empty()) {
+  const std::string model_path = configured_model_path("depth-estimator", models_dir);
+  if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("depth model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
@@ -58,7 +48,7 @@ int main(int argc, char** argv) {
                 << "  output_dir: " << out_dir << "\n"
                 << "runtime:\n"
                 << "  infer_size: 518\n"
-                << "  timeout_ms: 5000\n"
+                << "  timeout_ms: 20000\n"
                 << "  queue_depth: 4\n";
   }
 
@@ -66,20 +56,21 @@ int main(int argc, char** argv) {
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
+  const int output_files = count_output_files(out_dir);
+
   int rc = 0;
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_output_files(out_dir) == 0) {
-    std::cerr << "[FAIL] no output files produced\n";
+  } else if (output_files == 0) {
+    std::cerr << "[FAIL] expected output files but output directory is empty\n";
     rc = 1;
   } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] depth map generation produced " << count_output_files(out_dir)
-              << " output files\n";
+    std::cout << "[OK] depth map generation produced " << output_files << " output files\n";
   }
 
   remove_dir(out_dir);

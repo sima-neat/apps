@@ -306,7 +306,7 @@ def main() -> int:
     input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/instance-segmenter"))
     infer_size = int(runtime.get("infer_size", 640))
-    timeout_ms = int(runtime.get("timeout_ms", 3000))
+    timeout_ms = int(runtime.get("timeout_ms", 20000))
     queue_depth = int(runtime.get("queue_depth", 8))
     score_thr = float(decode.get("score_threshold", 0.6))
     nms_iou = float(decode.get("nms_iou", 0.45))

@@ -30,7 +30,7 @@ namespace {
 constexpr float kDefaultMinScore = 0.25f;
 constexpr float kDefaultNmsIou = 0.45f;
 constexpr int kMaxDet = 100;
-constexpr int kTimeoutMs = 5000;
+constexpr int kTimeoutMs = 20000;
 
 struct Config {
   std::string model_path;
@@ -49,7 +49,7 @@ struct Config {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model_path = raw.string_or("model.path", "assets/models/yolo26m_mod_mpk.tar.gz");
+  cfg.model_path = raw.string_or("model.path", "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz");
   cfg.labels_path = raw.string_or(
       "model.labels", "examples/object-detection/yolo26-object-detector/common/coco_label.txt");
   cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");

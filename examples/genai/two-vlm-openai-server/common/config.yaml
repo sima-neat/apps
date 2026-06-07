@@ -4,9 +4,9 @@ server:
 
 models:
   - name: vlm-1
-    path: assets/models/genai/gemma3-siglip448-a16w4
+    path: <model-path-1>  # Example: assets/models/genai/<model-directory>
   - name: vlm-2
-    path: assets/models/genai/gemma4-E2B-it
+    path: <model-path-2>  # Example: assets/models/genai/<model-directory>
 
 request:
   max_tokens: 96

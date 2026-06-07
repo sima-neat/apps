@@ -169,7 +169,7 @@ source:
   rtsp_url: rtsp://<host>:8554/<stream>
   tcp: true
 model:
-  path: assets/models/yolo_v8s_mpk.tar.gz
+  path: <model-path>
 inference:
   frames: 0
   min_score: 0.55
@@ -179,8 +179,10 @@ runtime:
   profile: false
   profile_interval: 100
 output:
+  save_dir: ""
+  save_every: 0
   insight:
-    host: <insight-host>
+    host: <insight-host-ip>
     video_port: 9000
     metadata_port: 9100
 ```
@@ -223,7 +225,7 @@ Python-specific notes:
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python source: `python/main.py`
 - Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
 - Insight documentation: <https://docs.sima.ai/pages/insight/main.html>
