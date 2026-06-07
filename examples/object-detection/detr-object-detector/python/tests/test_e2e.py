@@ -11,15 +11,6 @@ EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 
 
-def _find_model(models_dir: Path, pattern: str) -> Path | None:
-    if not models_dir.exists():
-        return None
-    for f in models_dir.iterdir():
-        if pattern in f.name and f.name.endswith(".tar.gz"):
-            return f
-    return None
-
-
 def _find_image(input_dir: Path) -> Path | None:
     if not input_dir.exists():
         return None
@@ -40,15 +31,13 @@ def _resolve_input_dir(default_dir: Path) -> Path:
 class TestE2E:
     def test_full_pipeline(
         self,
-        models_dir,
+        e2e_model_path,
         test_images_dir,
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_writer,
     ):
-        model = _find_model(models_dir, "detr_resnet50_modified_class_embed_bbox_embed")
-        skip_unless_e2e_ready(model is not None, "detr model not found in models_dir")
-
         input_dir = _resolve_input_dir(test_images_dir)
         image = _find_image(input_dir)
         skip_unless_e2e_ready(
@@ -57,28 +46,11 @@ class TestE2E:
         )
 
         out_path = tmp_output_dir / "detr_output.png"
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image: {image}",
-                    f"  output: {out_path}",
-                    "decode:",
-                    "  confidence_threshold: 0.5",
-                    "  max_draw: 50",
-                    "  person_only: false",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "  profile: false",
-                    "  num_runs: 1",
-                    "  verbose: false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        config_path = e2e_config_writer(
+            {
+                "io": {"image": str(image), "output": str(out_path)},
+                "runtime": {"num_runs": 1},
+            }
         )
         result = subprocess.run(
             [

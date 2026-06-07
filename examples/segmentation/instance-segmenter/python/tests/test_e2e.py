@@ -10,50 +10,25 @@ EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 
 
-def _find_model(models_dir: Path, pattern: str) -> Path | None:
-    if not models_dir.exists():
-        return None
-    for f in models_dir.iterdir():
-        if pattern in f.name and f.name.endswith(".tar.gz"):
-            return f
-    return None
-
-
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
-        self, models_dir, tmp_output_dir, test_images_dir, test_timeout_ms, skip_unless_e2e_ready
+        self,
+        e2e_model_path,
+        tmp_output_dir,
+        test_images_dir,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
     ):
-        model = _find_model(models_dir, "yolo_v8n_seg")
-        skip_unless_e2e_ready(model is not None, "yolo seg model not found in models_dir")
-
         skip_unless_e2e_ready(
             test_images_dir.exists() and any(test_images_dir.iterdir()),
             "test_images_dir is missing or empty",
         )
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  input_dir: {test_images_dir}",
-                    f"  output_dir: {tmp_output_dir}",
-                    "runtime:",
-                    "  infer_size: 640",
-                    "  timeout_ms: 3000",
-                    "  queue_depth: 8",
-                    "decode:",
-                    "  score_threshold: 0.60",
-                    "  nms_iou: 0.45",
-                    "  max_detections: 200",
-                    "visualization:",
-                    "  mask_alpha: 0.65",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        config_path = e2e_config_writer(
+            {
+                "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
+            }
         )
 
         result = subprocess.run(
@@ -77,4 +52,5 @@ class TestE2E:
             for path in tmp_output_dir.iterdir()
             if path.is_file() and path.name != "config.yaml"
         ]
-        assert len(output_files) > 0, "Expected output files but output directory is empty"
+        assert output_files, "Expected output files but output directory is empty"
+        assert all(path.stat().st_size > 0 for path in output_files)

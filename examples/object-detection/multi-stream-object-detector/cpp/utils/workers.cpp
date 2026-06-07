@@ -459,9 +459,9 @@ void process_frame(WorkerContext& worker_context, StreamRuntime& stream, const A
     metadata_elapsed = now_steady_s() - metadata_t0;
   }
 
-  if (needs_saved_frame &&
-      save_debug_frame(cfg.output_dir, stream.index, narrow_frame_index_for_api(packet.frame_index),
-                       frame_out, cfg.save_every)) {
+  const int processed_frame_index = stream.metrics.processed + 1;
+  if (needs_saved_frame && save_debug_frame(cfg.output_dir, stream.index, processed_frame_index,
+                                            frame_out, cfg.save_every)) {
     stream.metrics.saved += 1;
   }
 

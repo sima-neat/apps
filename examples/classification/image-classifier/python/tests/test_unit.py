@@ -17,7 +17,7 @@ class TestArgParsing:
         """--help should print usage."""
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=20,
         )
         assert r.returncode == 0
         assert "usage" in r.stdout.lower()
@@ -26,7 +26,7 @@ class TestArgParsing:
         """A missing config should produce a nonzero exit."""
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", "/nonexistent/config.yaml"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=20,
         )
         assert r.returncode != 0
 
@@ -34,7 +34,7 @@ class TestArgParsing:
         """An unrecognized flag should cause argparse to exit with code 2."""
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--bogus"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=20,
         )
         assert r.returncode == 2
         assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()

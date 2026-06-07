@@ -27,22 +27,28 @@ Run CI-like strict e2e validation:
 
 ## Local E2E Config
 
+E2E tests validate the shipped examples. Semantic values such as model path,
+thresholds, NMS, top-k, and validation expectations live in each example's
+`common/config.yaml`. Python and C++ e2e tests read those values and only
+override harness-specific values such as input paths, output paths, finite frame
+counts, RTSP URLs, and local ports.
+
 Machine-specific values belong in a local config file, not in tracked scripts.
-`tests/.env.example` is the committed template. `tests/.env.local` is your
+`tests/configs/.env.example` is the committed template. `tests/configs/.env.local` is your
 ignored local copy with real board URLs and interpreter paths.
 
 ```bash
-cp tests/.env.example tests/.env.local
+cp tests/configs/.env.example tests/configs/.env.local
 ```
 
-Edit `tests/.env.local`:
+Edit `tests/configs/.env.local`:
 
 ```bash
 SIMANEAT_APPS_TEST_RTSP_URL=rtsp://<host>:<port>/<stream>
 SIMANEAT_APPS_TEST_RTSP_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
 ```
 
-`tests/.env.local` is ignored by git and is auto-loaded by `tests/test.sh`.
+`tests/configs/.env.local` is ignored by git and is auto-loaded by `tests/test.sh`.
 Use `--config <file>` to load a different config:
 
 ```bash
@@ -50,6 +56,71 @@ Use `--config <file>` to load a different config:
 ```
 
 Process environment variables override values loaded from the config file.
+
+E2E runs ensure the models selected by `tests/configs/test-scope.yaml` are
+available by calling `scripts/download_models.sh`, which skips models already
+present under `SIMANEAT_APPS_TEST_MODELS_DIR`. Set
+`NEAT_APPS_SKIP_MODEL_DOWNLOAD=1` to disable this step.
+
+The README `Model` row remains customer-facing metadata. Test selection and
+test model downloads are controlled by `tests/configs/test-scope.yaml`, so large
+or blocked examples can stay documented without blocking CI. If a test is
+enabled in the scope file but the matching Python or C++ test file is missing,
+`tests/test.sh` fails before running tests. If a test is disabled, it is skipped
+even if a test file exists.
+
+Package installation does not download models by default. Use
+`NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL=1` only when an install step should also
+preload the scoped e2e models.
+
+## Test Layout
+
+```text
+tests/
+  test.sh              # local, VS Code, CI entrypoint
+  README.md            # test workflow documentation
+  pytest.ini           # pytest markers and discovery settings
+  conftest.py          # pytest fixture registration hook
+  configs/
+    .env.example       # documented local runtime overrides
+    .env.local         # ignored local runtime overrides
+    test-scope.yaml    # enabled tests and test model download sources
+  utils/
+    e2e_config.py      # shared example-config and output helpers
+    pytest_fixtures.py # shared pytest fixture implementations
+    test_scope.py      # test-scope validation and query helper
+  scripts/
+    testing/           # VS Code / DevKit task helpers
+```
+
+Generated e2e artifacts are written under `sandbox-test` by default:
+
+```text
+sandbox-test/
+  summary/
+    cpp-e2e.log
+    cpp-unit.log
+    python-e2e.log
+    python-unit.log
+  python/<example>/<test>/
+    command.txt
+    config.yaml
+    stdout.log
+    stderr.log
+    out/*
+  cpp/<example>/<test>/
+    command.txt
+    config.yaml
+    stdout.log
+    stderr.log
+    out/*
+```
+
+Each e2e run directory contains the generated config passed to the example, the
+command that was run, captured logs, and any produced output artifacts. The
+generated config is derived from the example's `common/config.yaml`, with only
+the local test harness values patched in. Unit-test scratch files are not kept in
+`sandbox-test`.
 
 ## Commands
 
@@ -81,19 +152,19 @@ Python tests run through `PYTHON_TEST_BIN`. If it is unset, `tests/test.sh`
 uses common pyneat locations first, then the active virtual environment, then
 system `python3`.
 
-The selected interpreter must have `pytest` installed:
+The selected interpreter must have `pytest` and `PyYAML` installed:
 
 ```bash
-${PYTHON_TEST_BIN:-python3} -m pip install pytest
+${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML
 ```
 
-For a persistent local override, set `PYTHON_TEST_BIN` in `tests/.env.local`.
+For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.local`.
 
 ## VS Code From SDK
 
 Launch the VS Code tasks from the eLxr SDK workspace under `/workspace`.
-The task wrapper builds in the SDK, recovers the board through `dk`, then calls
-`tests/test.sh` on the board-side workspace.
+The task wrapper builds in the SDK, then calls `tests/test.sh` on the
+board-side workspace through `dk`.
 
 ```bash
 bash tests/scripts/testing/run_vscode_test_task.sh --unit
@@ -101,7 +172,7 @@ bash tests/scripts/testing/run_vscode_test_task.sh --all
 bash tests/scripts/testing/run_vscode_test_task.sh --all --strict
 ```
 
-The same `tests/.env.local` file is visible to the board when the workspace is
+The same `tests/configs/.env.local` file is visible to the board when the workspace is
 shared under `/workspace`.
 
 ## Run Individual Tests
@@ -134,14 +205,22 @@ python3 -m pytest \
 `tests/test.sh` reads these variables:
 
 - `SIMANEAT_APPS_TEST_MODELS_DIR` (default: `${APPS_ROOT}/assets/models`)
+- `SIMANEAT_APPS_TEST_SCOPE_FILE` (default: `${APPS_ROOT}/tests/configs/test-scope.yaml`)
 - `SIMANEAT_APPS_TEST_INPUT_DIR` (default: `${APPS_ROOT}/assets/test_images`)
-- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox/tests`)
+- `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox-test`)
 - `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg`)
 - `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `1`)
+- `SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS` (`1` writes summary logs, default: `1`)
+- `SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS` (`1` writes per-example command/stdout/stderr logs, default: `1`)
 - `SIMANEAT_APPS_TEST_RTSP_URL` (single RTSP stream URL)
 - `SIMANEAT_APPS_TEST_RTSP_URLS` (comma-separated RTSP URLs for multistream tests)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
 - `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
+- `SIMANEAT_APPS_TEST_LABELS_FILE` (optional labels file override)
+- `SIMANEAT_APPS_TEST_INSIGHT_HOST` (default: `127.0.0.1`)
+- `SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT` (optional Insight video port override)
+- `SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT` (optional Insight metadata port override)
+- `NEAT_APPS_SKIP_MODEL_DOWNLOAD` (`1` skips model download before e2e, default: `0`)
 - `PYTHON_TEST_BIN` (optional Python interpreter override)
 
 ## RTSP E2E Prerequisites

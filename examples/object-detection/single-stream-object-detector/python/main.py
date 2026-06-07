@@ -94,6 +94,8 @@ class AppConfig:
     inference: InferenceConfig
     runtime: RuntimeConfig
     insight: InsightConfig
+    save_dir: str
+    save_every: int
 
 
 def load_runtime_dependencies() -> None:
@@ -429,6 +431,35 @@ def make_object_detection_data_json(boxes: list[dict]) -> str:
     return json.dumps({"objects": objects}, separators=(",", ":"))
 
 
+def save_annotated_frame(frame: np.ndarray, boxes: list[dict], min_score: float, out_path: Path) -> None:
+    """Write one BGR frame with detection boxes for e2e/debug inspection."""
+    annotated = frame.copy()
+    for box in boxes:
+        score = float(box["score"])
+        if score < min_score:
+            continue
+        cls_id = int(box["class_id"])
+        label = COCO80_NAMES[cls_id] if 0 <= cls_id < len(COCO80_NAMES) else "unknown"
+        x1 = int(round(box["x1"]))
+        y1 = int(round(box["y1"]))
+        x2 = int(round(box["x2"]))
+        y2 = int(round(box["y2"]))
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(
+            annotated,
+            f"{label} {score:.2f}",
+            (x1, max(0, y1 - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA,
+        )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(out_path), annotated):
+        raise RuntimeError(f"failed to write output frame: {out_path}")
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Expose only the small set of controls needed for this reference flow."""
     parser = argparse.ArgumentParser(description="Single-camera RTSP YOLOv8 Insight example")
@@ -483,6 +514,15 @@ def _optional_bool(mapping: dict, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def _optional_string(mapping: dict, key: str, default: str) -> str:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
 def load_app_config(config_path: Path) -> AppConfig:
     with config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
@@ -519,12 +559,16 @@ def load_app_config(config_path: Path) -> AppConfig:
             video_port=_optional_int(insight_cfg, "video_port", 9000),
             metadata_port=_optional_int(insight_cfg, "metadata_port", 9100),
         ),
+        save_dir=_optional_string(output_cfg, "save_dir", ""),
+        save_every=_optional_int(output_cfg, "save_every", 0),
     )
 
     if cfg.source.latency_ms < 0:
         raise ValueError("source.latency_ms must be >= 0")
     if cfg.inference.frames < 0:
         raise ValueError("inference.frames must be >= 0")
+    if cfg.save_every < 0:
+        raise ValueError("output.save_every must be >= 0")
     if not 0.0 <= cfg.inference.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.inference.nms_iou <= 1.0:
@@ -714,11 +758,14 @@ def main(argv: list[str] | None = None) -> int:
         processed = 0
         started = time.perf_counter()
         profile_window = ProfileWindow(cfg.runtime.profile, cfg.runtime.profile_interval)
+        save_dir = Path(cfg.save_dir) if cfg.save_dir else None
+        if save_dir is not None:
+            save_dir.mkdir(parents=True, exist_ok=True)
         # Contract: single-threaded frame order is pull -> infer -> publish video -> publish metadata.
         while cfg.inference.frames <= 0 or processed < cfg.inference.frames:
             # Push/pull integration point: pull one decoded frame from RTSP run.
             t_pull0 = time.perf_counter()
-            tensors = rtsp_run.pull_tensors(timeout_ms=5000)
+            tensors = rtsp_run.pull_tensors(timeout_ms=20000)
             t_pull1 = time.perf_counter()
             if not tensors:
                 print("RTSP pull timed out / stream closed", file=sys.stderr)
@@ -730,7 +777,7 @@ def main(argv: list[str] | None = None) -> int:
 
             # Push/pull integration point: run model and parse the BBOX payload.
             t_inf0 = time.perf_counter()
-            result = model.run([infer_input], timeout_ms=5000)
+            result = model.run([infer_input], timeout_ms=20000)
             t_inf1 = time.perf_counter()
 
             payload = extract_bbox_payload(result)
@@ -759,6 +806,18 @@ def main(argv: list[str] | None = None) -> int:
                 int(time.time() * 1000),
                 fid,
             )
+            should_save = (
+                save_dir is not None
+                and cfg.save_every > 0
+                and (processed + 1) % cfg.save_every == 0
+            )
+            if should_save:
+                save_annotated_frame(
+                    frame,
+                    boxes,
+                    cfg.inference.min_score,
+                    save_dir / f"frame_{processed:06d}.jpg",
+                )
 
             processed += 1
             profile_window.add(

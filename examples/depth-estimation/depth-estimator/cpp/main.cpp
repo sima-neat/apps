@@ -28,7 +28,7 @@ struct Config {
   fs::path input_dir;
   fs::path output_dir;
   int infer_size = 518;
-  int timeout_ms = 5000;
+  int timeout_ms = 20000;
   int queue_depth = 4;
 };
 
@@ -39,7 +39,7 @@ static Config load_config(const fs::path& path) {
   cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/depth-estimator");
   cfg.infer_size = raw.int_or("runtime.infer_size", 518);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", 4);
   return cfg;
 }

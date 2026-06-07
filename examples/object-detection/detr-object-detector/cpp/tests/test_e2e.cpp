@@ -2,6 +2,7 @@
 // Runs the binary with a real DETR model and a local image, and verifies it exits successfully
 // and produces an annotated output image.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -23,19 +24,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (const auto& entry : fs::directory_iterator(models_dir)) {
-      const std::string name = entry.path().filename().string();
-      if (name.find("detr_resnet50_modified_class_embed_bbox_embed") != std::string::npos &&
-          name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
+  const std::string model_path = configured_model_path("detr-object-detector", models_dir);
 
-  if (model_path.empty()) {
+  if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("DETR model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
@@ -58,13 +49,14 @@ int main(int argc, char** argv) {
     return kSkipCode;
   }
 
-  const std::string out_dir =
-      create_test_output_dir("detr-object-detector", "test_full_pipeline");
+  const std::string out_dir = create_test_output_dir("detr-object-detector", "test_full_pipeline");
   if (out_dir.empty()) {
     return 1;
   }
 
   fs::path out_image = fs::path(out_dir) / "detr_output.png";
+  const double confidence_threshold =
+      e2e_double("detr-object-detector", "decode", "confidence_threshold");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
@@ -74,11 +66,11 @@ int main(int argc, char** argv) {
                 << "  image: " << image_candidates.front().string() << "\n"
                 << "  output: " << out_image.string() << "\n"
                 << "decode:\n"
-                << "  confidence_threshold: 0.5\n"
+                << "  confidence_threshold: " << confidence_threshold << "\n"
                 << "  max_draw: 50\n"
                 << "  person_only: false\n"
                 << "runtime:\n"
-                << "  timeout_ms: 5000\n"
+                << "  timeout_ms: 20000\n"
                 << "  profile: false\n"
                 << "  num_runs: 1\n";
   }
@@ -98,9 +90,13 @@ int main(int argc, char** argv) {
     remove_dir(out_dir);
     return 1;
   }
+  if (fs::is_empty(out_image)) {
+    std::cerr << "[FAIL] annotated output image is empty at " << out_image << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
 
   remove_dir(out_dir);
-  std::cout << "[OK] detr-object-detector pipeline completed successfully: " << out_image
-            << "\n";
+  std::cout << "[OK] detr-object-detector pipeline completed successfully: " << out_image << "\n";
   return 0;
 }

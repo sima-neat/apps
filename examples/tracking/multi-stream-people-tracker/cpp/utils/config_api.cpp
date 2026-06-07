@@ -26,9 +26,9 @@ struct AppConfig {
   VideoMode video_mode = VideoMode::Clean;
   bool profile = false;
   int person_class_id = 0;
-  std::optional<double> detection_threshold;
-  std::optional<double> nms_iou_threshold;
-  std::optional<int> top_k;
+  double detection_threshold = 0.0;
+  double nms_iou_threshold = 0.0;
+  int top_k = 0;
   float tracker_iou_threshold = 0.3f;
   int tracker_max_missing = 15;
   int latency_ms = 200;

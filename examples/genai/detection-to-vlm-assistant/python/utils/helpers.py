@@ -59,7 +59,7 @@ def load_config(path: Path) -> Config:
         nms_iou=float(inference.get("nms_iou", 0.50)),
         max_detections=int(inference.get("max_detections", 24)),
         classes=class_filter(inference.get("classes")),
-        timeout_ms=int(runtime.get("timeout_ms", 5000)),
+        timeout_ms=int(runtime.get("timeout_ms", 20000)),
         debug=bool(runtime.get("debug", False)),
         insight_host=insight.get("host", "127.0.0.1") or "127.0.0.1",
         video_port=int(insight.get("video_port", 9000)),

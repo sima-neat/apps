@@ -240,7 +240,7 @@ def main() -> int:
     output_type = output_cfg.get("type", "both")
     metric = comparison_cfg.get("metric", "cosine")
     threshold = float(comparison_cfg.get("threshold", 0.65 if metric == "cosine" else 25.0))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
     profile = bool(runtime_cfg.get("profile", False))
 
     if metric not in {"cosine", "euclidean"}:

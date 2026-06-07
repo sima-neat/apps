@@ -8,7 +8,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(CTest)
 
 option(SIMANEAT_APPS_BUILD_CPP "Build C++ examples" ON)
-option(SIMANEAT_APPS_BUILD_PYTHON "Build Python tooling" OFF)
 option(SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT "Build legacy OptiView support library" OFF)
 
 function(_sima_neat_apps_ensure_neat_target)
@@ -52,7 +51,6 @@ endfunction()
 
 message(STATUS "Configuring SimaNeatApps")
 message(STATUS "  Build C++ examples      : ${SIMANEAT_APPS_BUILD_CPP}")
-message(STATUS "  Build Python tooling    : ${SIMANEAT_APPS_BUILD_PYTHON}")
 message(STATUS "  Build legacy OptiView support: ${SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT}")
 
 if (SIMANEAT_APPS_BUILD_CPP)
@@ -60,8 +58,4 @@ if (SIMANEAT_APPS_BUILD_CPP)
   find_package(nlohmann_json REQUIRED)
   add_subdirectory(support)
   add_subdirectory(examples)
-endif()
-
-if (SIMANEAT_APPS_BUILD_PYTHON)
-  message(STATUS "Python tooling placeholder — not yet implemented.")
 endif()

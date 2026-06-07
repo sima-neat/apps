@@ -32,7 +32,7 @@ namespace {
 
 constexpr int kInputW = 128;
 constexpr int kInputH = 256;
-constexpr int kTimeoutMs = 5000;
+constexpr int kTimeoutMs = 20000;
 
 struct Config {
   fs::path image1;

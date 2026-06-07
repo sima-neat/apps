@@ -1,8 +1,8 @@
-model:  # Detector model selection.
-  path: assets/models/yolo_v8m_mpk.tar.gz  # Path to the YOLOv8 model pack.
+model:                       # Detector model selection.
+  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
-streams:  # RTSP inputs, one entry per camera.
-  - <rtsp-url-1>
+streams:                     # RTSP inputs, one entry per camera.
+  - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
   - <rtsp-url-2>
   - <rtsp-url-3>
   - <rtsp-url-4>
@@ -19,28 +19,35 @@ streams:  # RTSP inputs, one entry per camera.
   # - <rtsp-url-15>
   # - <rtsp-url-16>
 
-input:  # RTSP input transport settings.
-  tcp: true  # Use TCP for RTSP transport.
-  latency_ms: 100  # RTSP receive latency in milliseconds.
+input:                       # RTSP input transport settings.
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
 
-runtime:  # Shared worker and profiling settings.
-  worker_count: 4  # Number of detector workers shared across streams.
-  mailbox_depth: 1  # Keep-latest queue depth per stream.
-  profile: true  # Print per-stream timing summaries.
+runtime:                     # Shared worker and profiling settings.
+  worker_count: 4            # Number of detector workers shared across streams.
+  mailbox_depth: 1           # Keep-latest queue depth per stream.
+  profile: true              # Print per-stream timing summaries.
 
-inference:  # Detection controls.
-  frames: 0  # Frame limit per stream. 0 means unlimited.
-  fps: 0  # Max per-stream processing and output FPS. 0 means use source FPS and aim for maximum throughput.
-  min_score: 0.60  # Detection score threshold.
-  nms_iou: 0.50  # NMS IoU threshold.
-  max_detections: 24  # Max detections to keep per frame after NMS.
+inference:                   # Detection controls.
+  frames: 0                  # Frame limit per stream. 0 means unlimited.
+  fps: 0                     # Max per-stream processing and output FPS. 0 means use source FPS.
+  min_score: 0.40            # Detection score threshold.
+  nms_iou: 0.60              # NMS IoU threshold.
+  max_detections: 24         # Max detections to keep per frame after NMS.
 
-output:  # Insight output plus optional local debug saves.
-  insight:  # Live video and metadata destination.
-    host: <insight-host>  # Host running the Insight receiver/viewer.
-    video_port_base: 9000  # Base UDP port for video channels.
-    metadata_port_base: 9100  # Base UDP port for metadata channels.
-  video_enabled: true  # Disable to publish metadata only.
-  video_mode: annotated  # clean encodes decoded frames + metadata; annotated draws detections before encode.
-  debug_dir: null  # Optional directory for periodic debug frame saves.
-  save_every: 0  # Save every Nth debug frame. 0 disables saving.
+output:                      # Insight output plus optional local debug saves.
+  insight:                   # Live video and metadata destination.
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port_base: 9000    # Base UDP port for video channels.
+    metadata_port_base: 9100 # Base UDP port for metadata channels.
+  video_enabled: true        # Disable to publish metadata only.
+  video_mode: annotated      # clean encodes decoded frames + metadata; annotated draws detections before encode.
+  debug_dir: null            # Optional directory for periodic debug frame saves.
+  save_every: 0              # Save every Nth debug frame. 0 disables saving.
+
+# Test harness settings only. Normal example runs ignore this section.
+testing:
+  e2e:
+    output:
+      save_every: 10
+      total_saved_frames: 20

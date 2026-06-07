@@ -16,7 +16,7 @@ struct IoConfig {
 
 struct RuntimeConfig {
   int infer_size = 640;
-  int timeout_ms = 1000;
+  int timeout_ms = 20000;
   double upsample_factor = 4.0;
 };
 

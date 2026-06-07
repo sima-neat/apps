@@ -21,6 +21,7 @@ struct Config {
   std::string fallback_image_url;
   int input_width = 224;
   int input_height = 224;
+  int timeout_ms = 20000;
   int expected_class_id = 1;
   float min_probability = 0.2f;
 };
@@ -36,6 +37,7 @@ Config load_config(const fs::path& path) {
                     "n01443537_goldfish.JPEG");
   cfg.input_width = raw.int_or("runtime.input_width", 224);
   cfg.input_height = raw.int_or("runtime.input_height", 224);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   cfg.expected_class_id = raw.int_or("validation.expected_class_id", 1);
   cfg.min_probability = static_cast<float>(raw.double_or("validation.min_probability", 0.2));
   return cfg;
@@ -107,7 +109,7 @@ int main(int argc, char** argv) {
   try {
     const auto input =
         simaai::neat::Tensor::from_cv_mat(rgb, simaai::neat::ImageSpec::PixelFormat::RGB);
-    const auto outputs = model.run(simaai::neat::TensorList{input});
+    const auto outputs = model.run(simaai::neat::TensorList{input}, cfg.timeout_ms);
     if (outputs.empty()) {
       std::cerr << "Model run returned empty output\n";
       return 6;

@@ -1,6 +1,7 @@
 // E2E test for image-classifier.
 // Runs the binary with a real model and local test image, verifies it exits successfully.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <filesystem>
 #include <fstream>
@@ -21,21 +22,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  // Find a resnet model in the models directory
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      auto name = entry.path().filename().string();
-      if ((name.find("resnet_50") != std::string::npos ||
-           name.find("resnet50") != std::string::npos) &&
-          name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
+  const std::string model_path = configured_model_path("image-classifier", models_dir);
 
-  if (model_path.empty()) {
+  if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("ResNet model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
@@ -57,6 +46,8 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
+  const int expected_class_id = e2e_int("image-classifier", "validation", "expected_class_id");
+  const double min_probability = e2e_double("image-classifier", "validation", "min_probability");
   const std::string config_path = (fs::path(out_dir).parent_path() / "config.yaml").string();
   {
     std::ofstream config(config_path);
@@ -68,10 +59,10 @@ int main(int argc, char** argv) {
            << "runtime:\n"
            << "  input_width: 224\n"
            << "  input_height: 224\n"
-           << "  timeout_ms: 2000\n"
+           << "  timeout_ms: 20000\n"
            << "validation:\n"
-           << "  expected_class_id: 1\n"
-           << "  min_probability: 0.0\n";
+           << "  expected_class_id: " << expected_class_id << "\n"
+           << "  min_probability: " << min_probability << "\n";
   }
 
   auto r = spawn_and_wait(binary, {"--config", config_path}, timeout);

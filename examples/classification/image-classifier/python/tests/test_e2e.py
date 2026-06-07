@@ -11,23 +11,16 @@ EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 
 
-def _find_model(models_dir: Path, pattern: str) -> Path | None:
-    if not models_dir.exists():
-        return None
-    for f in models_dir.iterdir():
-        if pattern in f.name and f.name.endswith(".tar.gz"):
-            return f
-    return None
-
-
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline(
-        self, models_dir, apps_root, tmp_output_dir, test_timeout_ms, skip_unless_e2e_ready
+        self,
+        e2e_model_path,
+        apps_root,
+        test_timeout_ms,
+        skip_unless_e2e_ready,
+        e2e_config_writer,
     ):
-        model = _find_model(models_dir, "resnet")
-        skip_unless_e2e_ready(model is not None, "resnet model not found in models_dir")
-
         image_env = Path(
             os.environ.get(
                 "SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
@@ -38,26 +31,10 @@ class TestE2E:
             image_env.exists(),
             "classification image missing; set SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
         )
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image: {image_env}",
-                    "  fallback_image_url: null",
-                    "runtime:",
-                    "  input_width: 224",
-                    "  input_height: 224",
-                    "  timeout_ms: 2000",
-                    "validation:",
-                    "  expected_class_id: 1",
-                    "  min_probability: 0.0",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        config_path = e2e_config_writer(
+            {
+                "io": {"image": str(image_env), "fallback_image_url": None},
+            }
         )
 
         result = subprocess.run(

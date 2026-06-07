@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
 
   // Test 1: help should exit 0 and mention --config
   {
-    auto r = spawn_and_wait(binary, {"--help"}, 10000);
+    auto r = spawn_and_wait(binary, {"--help"}, 20000);
     if (r.exit_code != 0) {
       std::cerr << "[FAIL] help: expected exit 0, got " << r.exit_code << "\n";
       ++failures;
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
 
   // Test 2: missing config file should exit 2
   {
-    auto r = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 10000);
+    auto r = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
     if (r.exit_code != 2) {
       std::cerr << "[FAIL] missing config: expected exit 2, got " << r.exit_code << "\n";
       ++failures;
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
 
   // Test 3: unknown arg should exit 2
   {
-    auto r = spawn_and_wait(binary, {"--bogus"}, 10000);
+    auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
     if (r.exit_code != 2) {
       std::cerr << "[FAIL] unknown flag: expected exit 2, got " << r.exit_code << "\n";
       ++failures;

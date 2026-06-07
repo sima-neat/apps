@@ -12,15 +12,6 @@ EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
 
 
-def _find_model(models_dir: Path, pattern: str) -> Path | None:
-    if not models_dir.exists():
-        return None
-    for f in models_dir.iterdir():
-        if pattern in f.name and f.name.endswith(".tar.gz"):
-            return f
-    return None
-
-
 def _find_image_pair(images_dir: Path) -> tuple[Path, Path] | None:
     """Find two distinct images to use as a pair."""
     if not images_dir.exists():
@@ -33,45 +24,34 @@ def _find_image_pair(images_dir: Path) -> tuple[Path, Path] | None:
         return None
     return images[0], images[1]
 
+
 @pytest.mark.e2e
 class TestE2E:
     def test_full_pipeline_cosine(
         self,
-        models_dir,
+        e2e_model_path,
         test_images_dir,
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
-        model = _find_model(models_dir, "reid")
-        skip_unless_e2e_ready(model is not None, "reid model not found in models_dir")
-
         pair = _find_image_pair(test_images_dir)
         skip_unless_e2e_ready(pair is not None, f"no images found in {test_images_dir}")
 
         image_a, image_b = pair
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image1: {image_a}",
-                    f"  image2: {image_b}",
-                    f"  output_dir: {tmp_output_dir}",
-                    "output:",
-                    "  type: both",
-                    "comparison:",
-                    "  metric: cosine",
-                    "  threshold: 0.65",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "  profile: false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        comparison = e2e_config_section("person-re-identification", "comparison")
+        config_path = e2e_config_writer(
+            {
+                "io": {
+                    "image1": str(image_a),
+                    "image2": str(image_b),
+                    "output_dir": str(tmp_output_dir),
+                },
+                "output": {"type": "both"},
+                "comparison": {"metric": "cosine"},
+            }
         )
 
         result = subprocess.run(
@@ -97,45 +77,36 @@ class TestE2E:
         payload = json.loads(result_json.read_text(encoding="utf-8"))
         assert payload["metric"] == "cosine"
         assert isinstance(payload["score"], float)
-        assert payload["threshold"] == 0.65
+        assert payload["threshold"] == comparison["threshold"]
         assert payload["decision"] in {"SAME", "DIFFERENT"}
 
     def test_full_pipeline_euclidean(
         self,
-        models_dir,
+        e2e_model_path,
         test_images_dir,
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
-        model = _find_model(models_dir, "reid")
-        skip_unless_e2e_ready(model is not None, "reid model not found in models_dir")
-
         pair = _find_image_pair(test_images_dir)
         skip_unless_e2e_ready(pair is not None, f"need at least 2 images in {test_images_dir}")
         image_a, image_b = pair
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image1: {image_a}",
-                    f"  image2: {image_b}",
-                    f"  output_dir: {tmp_output_dir}",
-                    "output:",
-                    "  type: both",
-                    "comparison:",
-                    "  metric: euclidean",
-                    "  threshold: 25.0",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "  profile: false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        comparison = e2e_config_section("person-re-identification", "comparison")
+        config_path = e2e_config_writer(
+            {
+                "io": {
+                    "image1": str(image_a),
+                    "image2": str(image_b),
+                    "output_dir": str(tmp_output_dir),
+                },
+                "output": {"type": "both"},
+                "comparison": {
+                    "metric": "euclidean",
+                    "threshold": comparison["euclidean_threshold"],
+                },
+            }
         )
 
         result = subprocess.run(
@@ -165,44 +136,31 @@ class TestE2E:
 
     def test_output_dir_is_created(
         self,
-        models_dir,
+        e2e_model_path,
         test_images_dir,
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
         """Output directory should be created automatically if it does not exist."""
-        model = _find_model(models_dir, "reid")
-        skip_unless_e2e_ready(model is not None, "reid model not found in models_dir")
-
         pair = _find_image_pair(test_images_dir)
         skip_unless_e2e_ready(pair is not None, f"need at least 2 images in {test_images_dir}")
         image_a, image_b = pair
 
         new_out_dir = tmp_output_dir / "brand_new_dir"
         assert not new_out_dir.exists()
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image1: {image_a}",
-                    f"  image2: {image_b}",
-                    f"  output_dir: {new_out_dir}",
-                    "output:",
-                    "  type: both",
-                    "comparison:",
-                    "  metric: cosine",
-                    "  threshold: 0.65",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "  profile: false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        config_path = e2e_config_writer(
+            {
+                "io": {
+                    "image1": str(image_a),
+                    "image2": str(image_b),
+                    "output_dir": str(new_out_dir),
+                },
+                "output": {"type": "both"},
+                "comparison": {"metric": "cosine"},
+            }
         )
 
         result = subprocess.run(
@@ -221,42 +179,29 @@ class TestE2E:
 
     def test_output_type_json_only(
         self,
-        models_dir,
+        e2e_model_path,
         test_images_dir,
         tmp_output_dir,
         test_timeout_ms,
         skip_unless_e2e_ready,
+        e2e_config_section,
+        e2e_config_writer,
     ):
-        model = _find_model(models_dir, "reid")
-        skip_unless_e2e_ready(model is not None, "reid model not found in models_dir")
-
         pair = _find_image_pair(test_images_dir)
         skip_unless_e2e_ready(pair is not None, f"need at least 2 images in {test_images_dir}")
         image_a, image_b = pair
 
         out_dir = tmp_output_dir / "json_only"
-        config_path = tmp_output_dir.parent / "config.yaml"
-        config_path.write_text(
-            "\n".join(
-                [
-                    "model:",
-                    f"  path: {model}",
-                    "io:",
-                    f"  image1: {image_a}",
-                    f"  image2: {image_b}",
-                    f"  output_dir: {out_dir}",
-                    "output:",
-                    "  type: json",
-                    "comparison:",
-                    "  metric: cosine",
-                    "  threshold: 0.65",
-                    "runtime:",
-                    "  timeout_ms: 5000",
-                    "  profile: false",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        config_path = e2e_config_writer(
+            {
+                "io": {
+                    "image1": str(image_a),
+                    "image2": str(image_b),
+                    "output_dir": str(out_dir),
+                },
+                "output": {"type": "json"},
+                "comparison": {"metric": "cosine"},
+            }
         )
 
         result = subprocess.run(

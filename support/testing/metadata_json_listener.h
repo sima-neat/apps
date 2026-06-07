@@ -16,7 +16,7 @@ struct MetadataJsonListenerOptions {
   std::string host = "127.0.0.1";
   int base_port = 9100;
   int num_ports = 1;
-  int timeout_ms = 10000;
+  int timeout_ms = 20000;
   // When false, any valid JSON message on any configured port is enough.
   // When true, each configured port must receive at least one valid message.
   bool require_all_ports = false;

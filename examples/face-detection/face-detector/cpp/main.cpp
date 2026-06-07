@@ -445,6 +445,13 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
       (max_draw > 0) ? std::min(dets.size(), static_cast<size_t>(max_draw)) : dets.size();
   for (size_t i = 0; i < limit; ++i) {
     const auto& d = dets[i];
+    if (!std::isfinite(d.x1) || !std::isfinite(d.y1) || !std::isfinite(d.x2) ||
+        !std::isfinite(d.y2)) {
+      throw std::runtime_error("non-finite face detection box at index " + std::to_string(i));
+    }
+    if (!std::isfinite(d.score)) {
+      throw std::runtime_error("non-finite face detection score at index " + std::to_string(i));
+    }
     const cv::Point p1(static_cast<int>(std::lround(d.x1)), static_cast<int>(std::lround(d.y1)));
     const cv::Point p2(static_cast<int>(std::lround(d.x2)), static_cast<int>(std::lround(d.y2)));
     cv::rectangle(bgr, p1, p2, cv::Scalar(0, 255, 0), 2);
@@ -452,10 +459,15 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
                 cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
     if (d.landmarks.has_value()) {
       const auto& lm = *d.landmarks;
-      for (int i = 0; i < 10; i += 2) {
+      for (int j = 0; j < 10; j += 2) {
+        if (!std::isfinite(lm[static_cast<size_t>(j)]) ||
+            !std::isfinite(lm[static_cast<size_t>(j + 1)])) {
+          throw std::runtime_error("non-finite face landmark at detection index " +
+                                   std::to_string(i));
+        }
         cv::circle(bgr,
-                   cv::Point(static_cast<int>(std::lround(lm[static_cast<size_t>(i)])),
-                             static_cast<int>(std::lround(lm[static_cast<size_t>(i + 1)]))),
+                   cv::Point(static_cast<int>(std::lround(lm[static_cast<size_t>(j)])),
+                             static_cast<int>(std::lround(lm[static_cast<size_t>(j + 1)]))),
                    2, cv::Scalar(0, 0, 255), -1);
       }
     }
@@ -474,7 +486,7 @@ struct Config {
   bool landmarks = true;
   bool profile = false;
   int num_runs = 100;
-  int timeout_ms = 5000;
+  int timeout_ms = 20000;
 };
 
 static Config load_config(const fs::path& path) {
@@ -491,7 +503,7 @@ static Config load_config(const fs::path& path) {
   cfg.landmarks = raw.bool_or("decode.landmarks", true);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.num_runs = raw.int_or("runtime.num_runs", 100);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   if (cfg.conf < 0.0f || cfg.conf > 1.0f) {
     throw std::runtime_error("decode.confidence_threshold must be in [0.0, 1.0]");
   }

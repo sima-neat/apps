@@ -29,9 +29,9 @@ class AppConfig:
     save_every: int
     profile: bool
     person_class_id: int
-    detection_threshold: float | None
-    nms_iou_threshold: float | None
-    top_k: int | None
+    detection_threshold: float
+    nms_iou_threshold: float
+    top_k: int
     tracker_iou_threshold: float
     tracker_max_missing: int
     latency_ms: int
@@ -61,13 +61,18 @@ def _optional_int(mapping: dict[str, Any], key: str, default: int) -> int:
     return value
 
 
-def _optional_float_or_none(mapping: dict[str, Any], key: str) -> float | None:
+def _required_float(mapping: dict[str, Any], key: str, section: str) -> float:
     value = mapping.get(key)
-    if value is None:
-        return None
     if not isinstance(value, (int, float)):
-        raise ValueError(f"{key} must be numeric or null")
+        raise ValueError(f"{section}.{key} must be numeric")
     return float(value)
+
+
+def _required_int(mapping: dict[str, Any], key: str, section: str) -> int:
+    value = mapping.get(key)
+    if not isinstance(value, int):
+        raise ValueError(f"{section}.{key} must be an integer")
+    return value
 
 
 def _parse_video_mode(value: str | None) -> VideoMode:
@@ -92,8 +97,12 @@ def load_app_config(path: str | Path) -> AppConfig:
         raise ValueError("config root must be a mapping")
 
     model = raw.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise ValueError("model must be a non-empty string")
+    if isinstance(model, dict):
+        model_path = _required_string(model, "path", "model")
+    elif isinstance(model, str) and model.strip():
+        model_path = model
+    else:
+        raise ValueError("model.path must be a non-empty string")
 
     input_cfg = _mapping(raw.get("input"), "input")
     inference = _mapping(raw.get("inference"), "inference")
@@ -111,7 +120,7 @@ def load_app_config(path: str | Path) -> AppConfig:
         rtsp_urls.append(stream)
 
     cfg = AppConfig(
-        model=model,
+        model=model_path,
         rtsp_urls=rtsp_urls,
         output_dir=output.get("debug_dir"),
         frames=_optional_int(inference, "frames", 0),
@@ -124,9 +133,9 @@ def load_app_config(path: str | Path) -> AppConfig:
         video_mode=_parse_video_mode(output.get("video_mode")),
         profile=bool(inference.get("profile", False)),
         person_class_id=_optional_int(inference, "person_class_id", 0),
-        detection_threshold=_optional_float_or_none(inference, "detection_threshold"),
-        nms_iou_threshold=_optional_float_or_none(inference, "nms_iou_threshold"),
-        top_k=inference.get("top_k"),
+        detection_threshold=_required_float(inference, "detection_threshold", "inference"),
+        nms_iou_threshold=_required_float(inference, "nms_iou_threshold", "inference"),
+        top_k=_required_int(inference, "top_k", "inference"),
         tracker_iou_threshold=float(tracking.get("iou_threshold", 0.3)),
         tracker_max_missing=_optional_int(tracking, "max_missing_frames", 15),
         latency_ms=_optional_int(input_cfg, "latency_ms", 200),
@@ -151,15 +160,12 @@ def load_app_config(path: str | Path) -> AppConfig:
         raise ValueError("tracking.max_missing_frames must be >= 0")
     if not 0.0 <= cfg.tracker_iou_threshold <= 1.0:
         raise ValueError("tracking.iou_threshold must be between 0 and 1")
-    if cfg.detection_threshold is not None and not 0.0 <= cfg.detection_threshold <= 1.0:
+    if not 0.0 <= cfg.detection_threshold <= 1.0:
         raise ValueError("inference.detection_threshold must be between 0 and 1")
-    if cfg.nms_iou_threshold is not None and not 0.0 <= cfg.nms_iou_threshold <= 1.0:
+    if not 0.0 <= cfg.nms_iou_threshold <= 1.0:
         raise ValueError("inference.nms_iou_threshold must be between 0 and 1")
-    if cfg.top_k is not None:
-        if not isinstance(cfg.top_k, int):
-            raise ValueError("inference.top_k must be an integer or null")
-        if cfg.top_k <= 0:
-            raise ValueError("inference.top_k must be > 0")
+    if cfg.top_k <= 0:
+        raise ValueError("inference.top_k must be > 0")
     if cfg.output_dir is not None and not isinstance(cfg.output_dir, str):
         raise ValueError("output.debug_dir must be a string or null")
 

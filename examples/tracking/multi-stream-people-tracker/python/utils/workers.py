@@ -451,8 +451,11 @@ def publish_thread(
             stream.metrics.detections += len(tracked)
 
             write_t0 = time.perf_counter()
+            processed_frame_index = stream.metrics.processed + 1
             should_save_overlay = (
-                output_dir is not None and cfg.save_every > 0 and pkt.frame_index % cfg.save_every == 0
+                output_dir is not None
+                and cfg.save_every > 0
+                and processed_frame_index % cfg.save_every == 0
             )
             should_render_overlay = cfg.video_mode is VideoMode.ANNOTATED or should_save_overlay
             overlay = None
@@ -490,7 +493,7 @@ def publish_thread(
                     runtime,
                     output_dir,
                     stream.index,
-                    pkt.frame_index,
+                    processed_frame_index,
                     overlay,
                     cfg.save_every,
                 ):

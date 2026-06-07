@@ -120,7 +120,7 @@ def main() -> int:
     runtime_cfg = raw.get("runtime", {})
     output_cfg = raw.get("output", {})
 
-    model_path = model_cfg.get("path", "assets/models/yolo26m_mod_mpk.tar.gz")
+    model_path = model_cfg.get("path", "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz")
     labels_path = Path(
         model_cfg.get(
             "labels",
@@ -132,7 +132,7 @@ def main() -> int:
     min_score = float(decode_cfg.get("score_threshold", MIN_SCORE))
     nms_iou = float(decode_cfg.get("nms_iou", NMS_IOU))
     max_detections = int(decode_cfg.get("max_detections", MAX_DET))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
     num_runs = int(runtime_cfg.get("num_runs", 1))
     profile = bool(runtime_cfg.get("profile", False))
     overlay = bool(output_cfg.get("overlay", True))

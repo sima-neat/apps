@@ -33,7 +33,7 @@ struct Config {
   float score_threshold = 0.55f;
   float nms_iou = 0.50f;
   int max_detections = 100;
-  int timeout_ms = 5000;
+  int timeout_ms = 20000;
 };
 
 Config load_config(const fs::path& path) {
@@ -48,7 +48,7 @@ Config load_config(const fs::path& path) {
   cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.55));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.50));
   cfg.max_detections = raw.int_or("decode.max_detections", 100);
-  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 5000);
+  cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   return cfg;
 }
 

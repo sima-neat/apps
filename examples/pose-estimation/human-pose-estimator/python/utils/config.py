@@ -100,7 +100,7 @@ def load_app_config(path: str | Path) -> AppConfig:
         ),
         runtime=RuntimeConfig(
             infer_size=_optional_int(runtime, "infer_size", 640, "runtime"),
-            timeout_ms=_optional_int(runtime, "timeout_ms", 5000, "runtime"),
+            timeout_ms=_optional_int(runtime, "timeout_ms", 20000, "runtime"),
             upsample_factor=_optional_float(runtime, "upsample_factor", 4.0, "runtime"),
         ),
         decode=DecodeConfig(

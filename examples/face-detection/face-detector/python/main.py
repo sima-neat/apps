@@ -493,7 +493,7 @@ def main() -> int:
     landmarks = bool(decode_cfg.get("landmarks", True))
     profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 100))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
 
     global VERBOSE
     VERBOSE = bool(runtime_cfg.get("verbose", False))

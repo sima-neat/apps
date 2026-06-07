@@ -389,7 +389,7 @@ def run_model_inference(model: pyneat.Model, preprocessed: np.ndarray) -> list[n
     try:
         if not runner.push([tensor]):
             raise RuntimeError("Run.push() failed")
-        sample = runner.pull(timeout_ms=5000)
+        sample = runner.pull(timeout_ms=20000)
         if sample is None:
             raise RuntimeError("Run.pull() returned no sample")
         return tensor_numpy_outputs(collect_tensors(sample))
@@ -441,7 +441,7 @@ def main() -> int:
     person_only = bool(decode_cfg.get("person_only", False))
     profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 100))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
 
     global VERBOSE
     VERBOSE = bool(runtime_cfg.get("verbose", False))

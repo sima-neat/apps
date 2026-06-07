@@ -41,12 +41,6 @@ class QuantTessCpuPreproc:
 
 _RUNTIME_MODULES: RuntimeModules | None = None
 
-_YOLOV8_BOXDECODE_DEFAULTS = {
-    "detection_threshold": 0.6,
-    "nms_iou_threshold": 0.5,
-    "topk": 24,
-}
-
 _SOURCE_STARTUP_PULL_TIMEOUT_MS = 50000
 _SOURCE_PULL_TIMEOUT_MS = 10000
 _SOURCE_STARTUP_STAGGER_S = 0.5
@@ -177,19 +171,9 @@ def build_detection_run(
     model_opt.preprocess.input_max_height = probe.height
     model_opt.preprocess.input_max_depth = 3
     model_opt.decode_type = pyneat.BoxDecodeType.YoloV8
-    model_opt.score_threshold = (
-        cfg.detection_threshold
-        if cfg.detection_threshold is not None
-        else _YOLOV8_BOXDECODE_DEFAULTS["detection_threshold"]
-    )
-    model_opt.nms_iou_threshold = (
-        cfg.nms_iou_threshold
-        if cfg.nms_iou_threshold is not None
-        else _YOLOV8_BOXDECODE_DEFAULTS["nms_iou_threshold"]
-    )
-    model_opt.top_k = (
-        cfg.top_k if cfg.top_k is not None else _YOLOV8_BOXDECODE_DEFAULTS["topk"]
-    )
+    model_opt.score_threshold = cfg.detection_threshold
+    model_opt.nms_iou_threshold = cfg.nms_iou_threshold
+    model_opt.top_k = cfg.top_k
     model_opt.boxdecode_original_width = probe.width
     model_opt.boxdecode_original_height = probe.height
     model = pyneat.Model(cfg.model, model_opt)
@@ -212,17 +196,9 @@ def build_detection_run(
             decode_type=pyneat.BoxDecodeType.YoloV8,
             original_width=probe.width,
             original_height=probe.height,
-            detection_threshold=(
-                cfg.detection_threshold
-                if cfg.detection_threshold is not None
-                else _YOLOV8_BOXDECODE_DEFAULTS["detection_threshold"]
-            ),
-            nms_iou_threshold=(
-                cfg.nms_iou_threshold
-                if cfg.nms_iou_threshold is not None
-                else _YOLOV8_BOXDECODE_DEFAULTS["nms_iou_threshold"]
-            ),
-            top_k=cfg.top_k if cfg.top_k is not None else _YOLOV8_BOXDECODE_DEFAULTS["topk"],
+            detection_threshold=cfg.detection_threshold,
+            nms_iou_threshold=cfg.nms_iou_threshold,
+            top_k=cfg.top_k,
         )
     )
     graph.add(pyneat.nodes.output())

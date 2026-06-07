@@ -1,16 +1,20 @@
 model:
-  path: assets/models/yolo26n_boxdecode_bf16_tess/yolo26n_boxdecode_mpk.tar.gz
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
   labels: examples/object-detection/yolo26-object-detector/common/coco_label.txt
+
 io:
   input_dir: assets/test_images
   output_dir: sandbox/yolo26-object-detector
+
 decode:
-  score_threshold: 0.25
+  score_threshold: 0.65
   nms_iou: 0.45
   max_detections: 100
+
 runtime:
-  timeout_ms: 5000
+  timeout_ms: 20000
   num_runs: 1
   profile: false
+
 output:
   overlay: true

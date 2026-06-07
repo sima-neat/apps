@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
 
   // Test 1: --help exits successfully and prints usage.
   {
-    auto r = spawn_and_wait(binary, {"--help"}, 10000);
+    auto r = spawn_and_wait(binary, {"--help"}, 20000);
     if (r.exit_code != 0) {
       std::cerr << "[FAIL] --help: expected exit 0, got " << r.exit_code << "\n";
       ++failures;
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
 
   // Test 2: unknown flag is rejected.
   {
-    auto r = spawn_and_wait(binary, {"--bogus"}, 10000);
+    auto r = spawn_and_wait(binary, {"--bogus"}, 20000);
     if (r.exit_code == 0) {
       std::cerr << "[FAIL] --bogus: expected nonzero exit\n";
       ++failures;
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
 
   // Test 3: bad config path is rejected.
   {
-    auto r = spawn_and_wait(binary, {"--config", "/nonexistent_config.yaml"}, 10000);
+    auto r = spawn_and_wait(binary, {"--config", "/nonexistent_config.yaml"}, 20000);
     if (r.exit_code == 0) {
       std::cerr << "[FAIL] bad config: expected nonzero exit\n";
       ++failures;

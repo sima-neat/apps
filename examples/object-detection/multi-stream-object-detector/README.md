@@ -115,7 +115,7 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-str
 ## Source Files
 - C++: `cpp/main.cpp`
 - C++ runtime helpers: `cpp/utils/config.cpp`, `cpp/utils/pipeline.cpp`, `cpp/utils/sample_utils.cpp`, `cpp/utils/workers.cpp`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python: `python/main.py`
 - Python runtime helpers: `python/utils/config.py`, `python/utils/model_family.py`, `python/utils/pipeline.py`, `python/utils/sample_utils.py`, `python/utils/image_utils.py`, `python/utils/workers.py`
 - Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`

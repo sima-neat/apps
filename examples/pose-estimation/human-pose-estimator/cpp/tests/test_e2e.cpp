@@ -1,6 +1,7 @@
 // E2E test for human-pose-estimator.
 // Runs the binary with a real model and test images, verifies outputs.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <fstream>
 #include <filesystem>
@@ -21,18 +22,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      auto name = entry.path().filename().string();
-      if (name.find("pose") != std::string::npos && name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
-  if (model_path.empty()) {
-    return skip_or_fail("Pose model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+  const std::string model_path = configured_model_path("human-pose-estimator", models_dir);
+  if (model_path.empty() || !fs::exists(model_path)) {
+    return skip_or_fail("configured pose model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
@@ -47,6 +39,15 @@ int main(int argc, char** argv) {
     return 1;
 
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
+  const double keypoint_score = e2e_double("human-pose-estimator", "decode", "keypoint_score");
+  const int nms_radius = e2e_int("human-pose-estimator", "decode", "nms_radius");
+  const double paf_score = e2e_double("human-pose-estimator", "decode", "paf_score");
+  const double paf_success_ratio =
+      e2e_double("human-pose-estimator", "decode", "paf_success_ratio");
+  const int paf_samples = e2e_int("human-pose-estimator", "decode", "paf_samples");
+  const int min_valid_joints = e2e_int("human-pose-estimator", "decode", "min_valid_joints");
+  const double min_avg_person_score =
+      e2e_double("human-pose-estimator", "decode", "min_avg_person_score");
   {
     std::ofstream config_file(config_path);
     config_file << "model:\n";
@@ -56,36 +57,37 @@ int main(int argc, char** argv) {
     config_file << "  output_dir: " << out_dir << "\n";
     config_file << "runtime:\n";
     config_file << "  infer_size: 640\n";
-    config_file << "  timeout_ms: 5000\n";
+    config_file << "  timeout_ms: 20000\n";
     config_file << "  upsample_factor: 4.0\n";
     config_file << "decode:\n";
-    config_file << "  keypoint_score: 0.1\n";
-    config_file << "  nms_radius: 6\n";
-    config_file << "  paf_score: 0.05\n";
-    config_file << "  paf_success_ratio: 0.8\n";
-    config_file << "  paf_samples: 10\n";
-    config_file << "  min_valid_joints: 3\n";
-    config_file << "  min_avg_person_score: 0.2\n";
+    config_file << "  keypoint_score: " << keypoint_score << "\n";
+    config_file << "  nms_radius: " << nms_radius << "\n";
+    config_file << "  paf_score: " << paf_score << "\n";
+    config_file << "  paf_success_ratio: " << paf_success_ratio << "\n";
+    config_file << "  paf_samples: " << paf_samples << "\n";
+    config_file << "  min_valid_joints: " << min_valid_joints << "\n";
+    config_file << "  min_avg_person_score: " << min_avg_person_score << "\n";
   }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
+  const int output_files = count_output_files(out_dir);
+
   int rc = 0;
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_output_files(out_dir) == 0) {
-    std::cerr << "[FAIL] no annotated output files produced\n";
+  } else if (output_files == 0) {
+    std::cerr << "[FAIL] expected output files but output directory is empty\n";
     rc = 1;
   } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] pose estimation overlay produced " << count_output_files(out_dir)
-              << " output files\n";
+    std::cout << "[OK] pose estimation overlay produced " << output_files << " output files\n";
   }
 
   remove_dir(out_dir);

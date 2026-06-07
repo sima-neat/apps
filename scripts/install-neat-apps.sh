@@ -37,6 +37,12 @@ Environment:
   NEAT_APPS_INSTALL_DIR   Destination directory for extracted files
                           default: ./neat-apps
   NEAT_APPS_ARCHIVE       Use an already downloaded local apps archive
+  NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL
+                          Download test-scope models after install when set to 1
+                          default: 0
+  NEAT_APPS_SKIP_MODEL_DOWNLOAD
+                          Skip model downloads when set to 1
+                          default: 0
 USAGE
 }
 
@@ -262,14 +268,24 @@ if ! "${TMP_INSTALLER}" --minimum "${NEAT_CORE_BRANCH}" "${NEAT_CORE_VERSION}"; 
 fi
 
 DOWNLOAD_MODELS_SCRIPT="${RUNTIME_DIR}/scripts/download_models.sh"
-if [[ -x "${DOWNLOAD_MODELS_SCRIPT}" || -f "${DOWNLOAD_MODELS_SCRIPT}" ]]; then
+if [[ "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}" == "1" ]]; then
+  echo
+  echo "Skipping model downloads because NEAT_APPS_SKIP_MODEL_DOWNLOAD=1."
+elif [[ "${NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL:-0}" != "1" ]]; then
+  echo
+  echo "Skipping model downloads during install. Run neat-apps-runtime/scripts/download_models.sh or tests/test.sh when needed."
+elif [[ -x "${DOWNLOAD_MODELS_SCRIPT}" || -f "${DOWNLOAD_MODELS_SCRIPT}" ]]; then
   if SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)"; then
     echo
-    echo "Downloading models referenced by packaged README metadata ..."
+    echo "Downloading models required by packaged test scope ..."
     (
       cd "${RUNTIME_DIR}"
       chmod +x scripts/download_models.sh
-      SIMA_CLI_BIN="${SIMA_CLI_RESOLVED}" bash scripts/download_models.sh
+      SIMA_CLI_BIN="${SIMA_CLI_RESOLVED}" bash scripts/download_models.sh \
+        --scope-file tests/configs/test-scope.yaml \
+        --kind e2e \
+        --language python \
+        --language cpp
     )
   else
     echo

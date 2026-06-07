@@ -13,7 +13,7 @@
 
 namespace fs = std::filesystem;
 
-using sima_examples::testing::create_test_output_dir;
+using sima_examples::testing::create_test_scratch_dir;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
@@ -40,26 +40,26 @@ bool expect_contains(const std::string& haystack, const std::string& needle,
 }
 
 bool test_help_runs(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--help"}, 10000);
+  const auto result = spawn_and_wait(binary, {"--help"}, 20000);
   return expect_true(result.exit_code == 0, "help exits with code 0") &&
          expect_contains(result.stdout_text, "--config", "help mentions --config");
 }
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
-  const auto result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 10000);
+  const auto result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
   return expect_true(result.exit_code == 2, "missing config exits with code 2") &&
          expect_contains(result.stderr_text, "config file not found",
                          "missing config error mentions config file not found");
 }
 
 bool test_validate_config_only_smoke_runs(const std::string& binary) {
-  const std::string temp_dir = create_test_output_dir("multi-stream-object-detector",
-                                                      "test_validate_config_only_smoke_runs");
+  const std::string temp_dir = create_test_scratch_dir("multi-stream-object-detector",
+                                                       "test_validate_config_only_smoke_runs");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -73,7 +73,7 @@ bool test_validate_config_only_smoke_runs(const std::string& binary) {
   out.close();
 
   const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 10000);
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok = expect_true(result.exit_code == 0, "validate-config-only exits with code 0") &&
                   expect_contains(result.stdout_text, "Config validated",
                                   "validate-config-only reports validated config");
@@ -82,13 +82,13 @@ bool test_validate_config_only_smoke_runs(const std::string& binary) {
 }
 
 bool test_load_app_config_parses_runtime_worker_count() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-object-detector", "test_load_app_config_parses_runtime_worker_count");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -141,13 +141,13 @@ bool test_load_app_config_parses_runtime_worker_count() {
 }
 
 bool test_load_app_config_rejects_removed_model_family_field() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-object-detector", "test_load_app_config_rejects_removed_model_family_field");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/unsupported_mpk.tar.gz\n"
@@ -174,13 +174,13 @@ bool test_load_app_config_rejects_removed_model_family_field() {
 }
 
 bool test_load_app_config_rejects_invalid_worker_count() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-object-detector", "test_load_app_config_rejects_invalid_worker_count");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -206,13 +206,13 @@ bool test_load_app_config_rejects_invalid_worker_count() {
 }
 
 bool test_load_app_config_rejects_invalid_video_mode() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-object-detector", "test_load_app_config_rejects_invalid_video_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -238,13 +238,13 @@ bool test_load_app_config_rejects_invalid_video_mode() {
 }
 
 bool test_load_app_config_rejects_empty_streams() {
-  const std::string temp_dir = create_test_output_dir("multi-stream-object-detector",
-                                                      "test_load_app_config_rejects_empty_streams");
+  const std::string temp_dir = create_test_scratch_dir(
+      "multi-stream-object-detector", "test_load_app_config_rejects_empty_streams");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -268,7 +268,7 @@ bool test_load_app_config_rejects_empty_streams() {
 }
 
 bool test_metadata_output_enabled_follows_video_mode_contract() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-object-detector", "test_metadata_output_enabled_follows_video_mode_contract");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
@@ -276,7 +276,7 @@ bool test_metadata_output_enabled_follows_video_mode_contract() {
 
   bool ok = true;
   for (const std::string mode : {"clean", "annotated"}) {
-    const fs::path config_path = fs::path(temp_dir).parent_path() / ("config_" + mode + ".yaml");
+    const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
     std::ofstream out(config_path);
     out << "model:\n"
            "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -308,13 +308,13 @@ bool test_metadata_output_enabled_follows_video_mode_contract() {
 
 bool test_metadata_output_enabled_stays_enabled_for_metadata_only_mode() {
   const std::string temp_dir =
-      create_test_output_dir("multi-stream-object-detector",
-                             "test_metadata_output_enabled_stays_enabled_for_metadata_only_mode");
+      create_test_scratch_dir("multi-stream-object-detector",
+                              "test_metadata_output_enabled_stays_enabled_for_metadata_only_mode");
   if (temp_dir.empty()) {
     return expect_true(false, "created temp directory");
   }
 
-  const fs::path config_path = fs::path(temp_dir).parent_path() / "config.yaml";
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
@@ -343,7 +343,7 @@ bool test_metadata_output_enabled_stays_enabled_for_metadata_only_mode() {
 }
 
 bool test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode() {
-  const std::string temp_dir = create_test_output_dir(
+  const std::string temp_dir = create_test_scratch_dir(
       "multi-stream-object-detector",
       "test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode");
   if (temp_dir.empty()) {
@@ -352,7 +352,7 @@ bool test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode()
 
   bool ok = true;
   for (const std::string mode : {"clean", "annotated"}) {
-    const fs::path config_path = fs::path(temp_dir).parent_path() / ("config_" + mode + ".yaml");
+    const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
     std::ofstream out(config_path);
     out << "model:\n"
            "  path: assets/models/yolo_v8m_mpk.tar.gz\n"

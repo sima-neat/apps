@@ -1,5 +1,5 @@
 model:
-  path: assets/models/depth_anything_v2_vits_mpk.tar.gz
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
 
 io:
   input_dir: assets/test_images
@@ -7,5 +7,5 @@ io:
 
 runtime:
   infer_size: 518
-  timeout_ms: 5000
+  timeout_ms: 20000
   queue_depth: 4

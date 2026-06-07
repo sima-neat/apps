@@ -55,7 +55,7 @@ cd ../..
 - `output.video_mode: clean` publishes unannotated RGB frames through `VideoSender` and sends tracking metadata to `output.insight.metadata_port_base + i` for Insight-side overlay. `annotated` draws tracking boxes into RGB frames before `VideoSender` encodes them and suppresses metadata so Insight does not overlay twice.
 - `inference.frames: 0` runs indefinitely.
 - `output.debug_dir: null` and `output.save_every: 0` disable saved overlay frames while keeping live Insight output enabled.
-- `inference.detection_threshold`, `inference.nms_iou_threshold`, and `inference.top_k` are optional; if omitted, `SimaBoxDecode` keeps the model-pack defaults.
+- `inference.detection_threshold`, `inference.nms_iou_threshold`, and `inference.top_k` are explicit detector decode parameters in the checked-in config.
 - The example defaults to person class id `0`, and tracker behavior is configurable from the config file.
 - Both C++ and Python add the `VideoSender` nodegroup for video transport. They do not manually add lower-level color conversion, encoder, parser, packetizer, or UDP nodes outside `VideoSender`.
 - Because this example sends raw frames, it uses the raw-frame `VideoSender` option. If an upstream pipeline already produces H.264, `VideoSender` also supports an encoded-input option that parses, packetizes, and sends without re-encoding.
@@ -180,7 +180,7 @@ Notes:
 - C++ pipeline builders: `cpp/utils/pipeline_api.cpp`, `cpp/utils/pipeline.cpp`
 - C++ image helpers: `cpp/utils/image_utils_api.cpp`, `cpp/utils/image_utils.cpp`
 - C++ worker orchestration: `cpp/utils/workers_api.cpp`, `cpp/utils/workers.cpp`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python source: `python/main.py`
 - Example config: `common/config.yaml`
 - Python utilities: `python/utils/`

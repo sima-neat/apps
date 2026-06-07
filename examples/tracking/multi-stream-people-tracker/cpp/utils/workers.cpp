@@ -485,8 +485,9 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       stream.metrics.detections += static_cast<int>(tracked.size());
 
       const double write_t0 = now_steady_s();
+      const int processed_frame_index = stream.metrics.processed + 1;
       const bool should_save_overlay = output_dir.has_value() && cfg.save_every > 0 &&
-                                       (packet.frame_index % cfg.save_every) == 0;
+                                       (processed_frame_index % cfg.save_every) == 0;
       const bool should_render_overlay =
           cfg.video_mode == VideoMode::Annotated || should_save_overlay;
       cv::Mat overlay_frame;
@@ -520,7 +521,7 @@ void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
       }
 
       if (should_save_overlay) {
-        if (save_overlay_frame(output_dir, stream.index, packet.frame_index, overlay_frame,
+        if (save_overlay_frame(output_dir, stream.index, processed_frame_index, overlay_frame,
                                cfg.save_every)) {
           stream.metrics.saved += 1;
         }

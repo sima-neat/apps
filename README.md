@@ -57,8 +57,8 @@ Examples are organized under `examples/<category>/<example>`. Each example is so
 | `examples/<category>/<example>/cpp/CMakeLists.txt` | C++ example build configuration |
 | `examples/<category>/<example>/cpp/main.cpp` | C++ entrypoint with visible Neat API flow |
 | `examples/<category>/<example>/cpp/tests/CMakeLists.txt` | C++ test build configuration |
-| `examples/<category>/<example>/cpp/tests/unit_test.cpp` | C++ unit tests |
-| `examples/<category>/<example>/cpp/tests/e2e_test.cpp` | C++ end-to-end tests |
+| `examples/<category>/<example>/cpp/tests/test_unit.cpp` | C++ unit tests |
+| `examples/<category>/<example>/cpp/tests/test_e2e.cpp` | C++ end-to-end tests |
 | `examples/<category>/<example>/python/main.py` | Python entrypoint with visible Neat API flow |
 | `examples/<category>/<example>/python/requirements.txt` | Python example dependencies |
 | `examples/<category>/<example>/python/tests/test_unit.py` | Python unit tests |
@@ -119,7 +119,6 @@ Main `build.sh` args:
 - `--debug` / `--release`: build type
 - `--build-dir <dir>`: build directory
 - `--no-cpp`: skip C++ example build (layout/metadata only)
-- `--python`: enable Python tooling placeholder flag in CMake config
 
 When `--all` is used, the script also:
 

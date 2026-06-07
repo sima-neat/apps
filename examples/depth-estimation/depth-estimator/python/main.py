@@ -74,7 +74,7 @@ def main() -> int:
     input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/depth-estimator"))
     infer_size = int(runtime.get("infer_size", 518))
-    timeout_ms = int(runtime.get("timeout_ms", 5000))
+    timeout_ms = int(runtime.get("timeout_ms", 20000))
     queue_depth = int(runtime.get("queue_depth", 4))
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)

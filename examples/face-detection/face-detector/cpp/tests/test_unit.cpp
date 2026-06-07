@@ -1,4 +1,4 @@
-// Unit test for detr-object-detector: validates CLI arg handling.
+// Unit test for face-detector: validates CLI arg handling.
 #include "support/testing/test_process.h"
 
 #include <iostream>
@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
   int failures = 0;
 
   {
-    ProcessResult r = spawn_and_wait(binary, {"--help"}, 10000);
+    ProcessResult r = spawn_and_wait(binary, {"--help"}, 20000);
     if (r.exit_code != 0) {
       std::cerr << "[FAIL] help: expected exit 0, got " << r.exit_code << "\n";
       ++failures;
@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
   }
 
   {
-    ProcessResult r = spawn_and_wait(binary, {"--bogus"}, 10000);
+    ProcessResult r = spawn_and_wait(binary, {"--bogus"}, 20000);
     if (r.exit_code != 2) {
       std::cerr << "[FAIL] unknown flag: expected exit 2, got " << r.exit_code << "\n";
       ++failures;
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
   }
 
   {
-    ProcessResult r = spawn_and_wait(binary, {"--config"}, 10000);
+    ProcessResult r = spawn_and_wait(binary, {"--config"}, 20000);
     if (r.exit_code != 2) {
       std::cerr << "[FAIL] missing config path: expected exit 2, got " << r.exit_code << "\n";
       ++failures;
@@ -56,7 +56,8 @@ int main(int argc, char** argv) {
   }
 
   {
-    ProcessResult r = spawn_and_wait(binary, {"--config", "/nonexistent/detr-config.yaml"}, 10000);
+    ProcessResult r =
+        spawn_and_wait(binary, {"--config", "/nonexistent/retinaface-config.yaml"}, 20000);
     if (r.exit_code != 2) {
       std::cerr << "[FAIL] bad config: expected exit 2, got " << r.exit_code << "\n";
       ++failures;

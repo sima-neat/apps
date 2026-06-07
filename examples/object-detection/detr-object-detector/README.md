@@ -153,6 +153,6 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python source: `python/main.py`
 - Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`

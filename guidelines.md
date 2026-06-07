@@ -18,8 +18,8 @@ Every example under `examples/<category>/<example>` must follow:
     main.cpp
     tests/
       CMakeLists.txt
-      unit_test.cpp
-      e2e_test.cpp
+      test_unit.cpp
+      test_e2e.cpp
   python/
     main.py
     requirements.txt
@@ -57,7 +57,7 @@ For each example, both languages must have:
 
 Expected files:
 - Python: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
-- C++: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 
 Minimum quality bar:
 - Unit tests validate CLI and argument/error behavior.
@@ -78,9 +78,10 @@ python3 scripts/validate_readmes.py
 `build.sh` compiles examples and tests. `tests/test.sh` is the single test
 entrypoint and owns test defaults.
 
-For local e2e config, copy `tests/.env.example` to `tests/.env.local`.
-`tests/.env.example` is the committed template; `tests/.env.local` is ignored
-and should contain local RTSP URLs and `PYTHON_TEST_BIN`.
+For local e2e config, copy `tests/configs/.env.example` to
+`tests/configs/.env.local`. `tests/configs/.env.example` is the committed
+template; `tests/configs/.env.local` is ignored and should contain local RTSP
+URLs and `PYTHON_TEST_BIN`.
 
 ## README Requirements
 Each example README must be updated when paths or behavior-relevant commands change.

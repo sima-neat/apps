@@ -50,11 +50,13 @@
       "problemMatcher": []
     },
     {
-      "label": "Apps: Test Unit C++",
+      "label": "Apps: Test Unit C++ (Build + Run)",
       "type": "shell",
       "command": "bash",
       "args": [
         "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-unit-cpp",
         "--unit",
         "--cpp"
       ],
@@ -73,11 +75,13 @@
       "problemMatcher": []
     },
     {
-      "label": "Apps: Test Unit Python",
+      "label": "Apps: Test Unit Python (Build + Run)",
       "type": "shell",
       "command": "bash",
       "args": [
         "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-unit-python",
         "--unit",
         "--python"
       ],
@@ -96,11 +100,13 @@
       "problemMatcher": []
     },
     {
-      "label": "Apps: Test E2E C++",
+      "label": "Apps: Test E2E C++ (Build + Run)",
       "type": "shell",
       "command": "bash",
       "args": [
         "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-e2e-cpp",
         "--e2e",
         "--cpp"
       ],
@@ -119,11 +125,13 @@
       "problemMatcher": []
     },
     {
-      "label": "Apps: Test E2E Python",
+      "label": "Apps: Test E2E Python (Build + Run)",
       "type": "shell",
       "command": "bash",
       "args": [
         "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-e2e-python",
         "--e2e",
         "--python"
       ],
@@ -142,17 +150,16 @@
       "problemMatcher": []
     },
     {
-      "label": "Apps: Test All",
+      "label": "Apps: Build Tests",
       "type": "shell",
-      "command": "bash",
+      "command": "./build.sh",
       "args": [
-        "tests/scripts/testing/run_vscode_test_task.sh",
-        "--all"
+        "--build-dir",
+        "build-test/build-vscode-tests"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "group": "test",
       "presentation": {
         "reveal": "always",
         "focus": true,
@@ -161,6 +168,122 @@
         "clear": false,
         "close": false
       },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test Unit C++ (No Build)",
+      "hide": true,
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-tests",
+        "--skip-build",
+        "--unit",
+        "--cpp"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test Unit Python (No Build)",
+      "hide": true,
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-tests",
+        "--skip-build",
+        "--unit",
+        "--python"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test E2E C++ (No Build)",
+      "hide": true,
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-tests",
+        "--skip-build",
+        "--e2e",
+        "--cpp"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Apps: Test E2E Python (No Build)",
+      "hide": true,
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "tests/scripts/testing/run_vscode_test_task.sh",
+        "--build-dir",
+        "build-test/build-vscode-tests",
+        "--skip-build",
+        "--e2e",
+        "--python"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": false,
+        "close": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Unit/E2E Python/C++ Tests Parallel w/o Build",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "Apps: Test Unit Python (No Build)",
+        "Apps: Test Unit C++ (No Build)",
+        "Apps: Test E2E Python (No Build)",
+        "Apps: Test E2E C++ (No Build)"
+      ],
+      "group": "test",
       "problemMatcher": []
     }
   ]

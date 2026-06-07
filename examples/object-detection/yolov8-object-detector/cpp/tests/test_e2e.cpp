@@ -1,6 +1,7 @@
 // E2E test for yolov8-object-detector.
 // Runs the binary with a real model, labels, and test images, verifies outputs.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <filesystem>
 #include <fstream>
@@ -21,18 +22,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      auto name = entry.path().filename().string();
-      if (name.find("yolo_v8n") != std::string::npos && name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
-  if (model_path.empty()) {
-    return skip_or_fail("YOLOv8 model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+  const std::string model_path = configured_model_path("yolov8-object-detector", models_dir);
+  if (model_path.empty() || !fs::exists(model_path)) {
+    return skip_or_fail("configured YOLOv8 model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   std::string labels_file;
@@ -69,6 +61,9 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
+  const double score_threshold = e2e_double("yolov8-object-detector", "decode", "score_threshold");
+  const double nms_iou = e2e_double("yolov8-object-detector", "decode", "nms_iou");
+  const int max_detections = e2e_int("yolov8-object-detector", "decode", "max_detections");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
@@ -79,31 +74,32 @@ int main(int argc, char** argv) {
                 << "  input_dir: " << input_dir << "\n"
                 << "  output_dir: " << out_dir << "\n"
                 << "decode:\n"
-                << "  score_threshold: 0.55\n"
-                << "  nms_iou: 0.50\n"
-                << "  max_detections: 100\n"
+                << "  score_threshold: " << score_threshold << "\n"
+                << "  nms_iou: " << nms_iou << "\n"
+                << "  max_detections: " << max_detections << "\n"
                 << "runtime:\n"
-                << "  timeout_ms: 5000\n";
+                << "  timeout_ms: 20000\n";
   }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
+  const int output_files = count_output_files(out_dir);
+
   int rc = 0;
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_output_files(out_dir) == 0) {
-    std::cerr << "[FAIL] no annotated output files produced\n";
+  } else if (output_files == 0) {
+    std::cerr << "[FAIL] expected output files but output directory is empty\n";
     rc = 1;
   } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] object detection overlay produced " << count_output_files(out_dir)
-              << " output files\n";
+    std::cout << "[OK] object detection overlay produced " << output_files << " output files\n";
   }
 
   remove_dir(out_dir);

@@ -110,7 +110,7 @@ def main() -> int:
     min_score = float(decode_cfg.get("score_threshold", 0.55))
     nms_iou = float(decode_cfg.get("nms_iou", 0.50))
     max_det = int(decode_cfg.get("max_detections", 100))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 5000))
+    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
 
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)

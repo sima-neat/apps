@@ -20,7 +20,6 @@ BUILD_DIR="${BUILD_DIR:-build}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 CLEAN=0
 BUILD_CPP=ON
-BUILD_PYTHON=OFF
 INSTALL_CORE=0
 ONLY_INSTALL=0
 PORTAL_ONLY=0
@@ -37,7 +36,6 @@ Options:
   --release                 Use Release build (default)
   --clean                   Remove build directory before configure
   --no-cpp                  Skip C++ example build (layout/metadata only)
-  --python                  Enable Python tooling (placeholder)
   --all                     Install NEAT core SDK, build apps, build portal, then package
   --portal-only             Build portal only and exit
   --only-install-neat-core  Install NEAT core SDK and exit (no build)
@@ -223,7 +221,6 @@ while [[ $# -gt 0 ]]; do
     --release) BUILD_TYPE=Release; shift ;;
     --clean) CLEAN=1; shift ;;
     --no-cpp) BUILD_CPP=OFF; shift ;;
-    --python) BUILD_PYTHON=ON; shift ;;
     --all) INSTALL_CORE=1; shift ;;
     --portal-only) PORTAL_ONLY=1; shift ;;
     --only-install-neat-core) INSTALL_CORE=1; ONLY_INSTALL=1; shift ;;
@@ -822,11 +819,13 @@ if ! manifest_output="$(read_app_manifest "${APPS_MANIFEST}")"; then
   exit 1
 fi
 PLATFORM_VERSION="$(second_line "${manifest_output}")"
-load_neat_core_target
-NEAT_CORE_DISPLAY_BRANCH="${NEAT_CORE_TARGET_BRANCH}"
-NEAT_CORE_DISPLAY_VERSION="${NEAT_CORE_TARGET_VERSION}"
-if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
-  NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"
+if [[ "${INSTALL_CORE}" -eq 1 ]]; then
+  load_neat_core_target
+  NEAT_CORE_DISPLAY_BRANCH="${NEAT_CORE_TARGET_BRANCH}"
+  NEAT_CORE_DISPLAY_VERSION="${NEAT_CORE_TARGET_VERSION}"
+  if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
+    NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"
+  fi
 fi
 
 echo ""
@@ -838,7 +837,11 @@ echo "  Build C++ examples    : ${BUILD_CPP}"
 echo "  Build portal          : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF"; fi)"
 echo "  Install NEAT core     : $(if [[ "${INSTALL_CORE}" -eq 1 ]]; then echo "ON"; else echo "OFF (use --all to enable)"; fi)"
 echo "  Platform version      : ${PLATFORM_VERSION}"
-echo "  NEAT core target      : ${NEAT_CORE_DISPLAY_BRANCH}:${NEAT_CORE_DISPLAY_VERSION}"
+if [[ "${INSTALL_CORE}" -eq 1 ]]; then
+  echo "  NEAT core target      : ${NEAT_CORE_DISPLAY_BRANCH}:${NEAT_CORE_DISPLAY_VERSION}"
+else
+  echo "  NEAT core target      : installed SDK core (not resolved during local build)"
+fi
 echo "  NEAT core override    : ${NEAT_CORE_OVERRIDE:-"(from deps/manifest.json)"}"
 echo ""
 
@@ -865,14 +868,12 @@ if [[ -n "${TOOLCHAIN_FILE}" ]]; then
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
     -DBUILD_TESTING=ON \
     -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}" \
-    -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}" \
     -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
 else
   cmake -S . -B "${BUILD_DIR}" \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
     -DBUILD_TESTING=ON \
-    -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}" \
-    -DSIMANEAT_APPS_BUILD_PYTHON="${BUILD_PYTHON}"
+    -DSIMANEAT_APPS_BUILD_CPP="${BUILD_CPP}"
 fi
 
 if [[ "${BUILD_CPP}" == "ON" ]]; then

@@ -2,6 +2,7 @@
 // Runs the binary with a real RetinaFace model and a local face image, and verifies it exits
 // successfully and produces an annotated output image.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <algorithm>
 #include <cctype>
@@ -25,20 +26,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  // Find a RetinaFace model in the models directory.
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    for (auto& entry : fs::directory_iterator(models_dir)) {
-      const auto name = entry.path().filename().string();
-      if (name.find("retinaface_mobilenet25") != std::string::npos &&
-          name.find(".tar.gz") != std::string::npos) {
-        model_path = entry.path().string();
-        break;
-      }
-    }
-  }
+  const std::string model_path = configured_model_path("face-detector", models_dir);
 
-  if (model_path.empty()) {
+  if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("RetinaFace model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
@@ -84,6 +74,10 @@ int main(int argc, char** argv) {
     return 1;
   }
   fs::path out_image = fs::path(out_dir) / "retinaface_output.png";
+  const double confidence_threshold = e2e_double("face-detector", "decode", "confidence_threshold");
+  const double nms_iou = e2e_double("face-detector", "decode", "nms_iou");
+  const int top_k = e2e_int("face-detector", "decode", "top_k");
+  const int keep_top_k = e2e_int("face-detector", "decode", "keep_top_k");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
@@ -93,14 +87,14 @@ int main(int argc, char** argv) {
                 << "  image: " << image_path << "\n"
                 << "  output: " << out_image.string() << "\n"
                 << "decode:\n"
-                << "  confidence_threshold: 0.40\n"
-                << "  nms_iou: 0.90\n"
-                << "  top_k: 5000\n"
-                << "  keep_top_k: 750\n"
+                << "  confidence_threshold: " << confidence_threshold << "\n"
+                << "  nms_iou: " << nms_iou << "\n"
+                << "  top_k: " << top_k << "\n"
+                << "  keep_top_k: " << keep_top_k << "\n"
                 << "  max_draw: 50\n"
                 << "  landmarks: true\n"
                 << "runtime:\n"
-                << "  timeout_ms: 5000\n"
+                << "  timeout_ms: 20000\n"
                 << "  profile: false\n"
                 << "  num_runs: 1\n";
   }
@@ -118,6 +112,11 @@ int main(int argc, char** argv) {
 
   if (!fs::exists(out_image)) {
     std::cerr << "[FAIL] expected annotated output image not found at " << out_image << "\n";
+    remove_dir(out_dir);
+    return 1;
+  }
+  if (fs::is_empty(out_image)) {
+    std::cerr << "[FAIL] annotated output image is empty at " << out_image << "\n";
     remove_dir(out_dir);
     return 1;
   }

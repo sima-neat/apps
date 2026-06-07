@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolo26-object-detector |
-| Model | yolo26m_mod [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26m_mod_mpk.tar.gz] |
+| Model | yolo26m-det-bf16-mla_tess-b1 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz] |
 
 ## Concept
 Minimal image-folder object detection pipeline using yolo26m, the newest iteration of the YOLO model family. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the NEAT API for model loading, inference, and result decoding.
@@ -22,17 +22,17 @@ Snippet from a pipeline run:
 ![YOLO26 object detector preview](../../../assets/portal/object-detection/yolo26-object-detector/image.png)
 
 ## Supported Models
-Validated with: `yolo26m_mod`
+Validated with: `yolo26m-det-bf16-mla_tess-b1`
 
 Download into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26m_mod_mpk.tar.gz && cd ../..`
+- `./scripts/download_models.sh yolo26m-det-bf16-mla_tess-b1`
 
 ## Prerequisites
 - Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - yolo26m is not yet published in the SiMa modelzoo. Use the direct download URL below until a modelzoo entry is available.
 - Direct URL download:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26m_mod_mpk.tar.gz && cd ../..`
+  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz && cd ../..`
 - Labels file: `examples/object-detection/yolo26-object-detector/common/coco_label.txt`
 
 ## Important Behavior
@@ -137,14 +137,14 @@ pytest examples/object-detection/yolo26-object-detector/python/tests/test_e2e.py
 
 ## Debugging Notes
 - If detections are missing, validate label file ordering and score thresholds.
-- If model load fails, verify `assets/models/yolo26m_mod_mpk.tar.gz` exists.
+- If model load fails, verify `assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz` exists.
 - Ensure input folder contains supported image extensions (`.jpg`, `.jpeg`, `.png`, `.bmp`).
 - Use `--profile` to identify bottlenecks in the pipeline.
 - Use `decode.score_threshold` and `decode.nms_iou` to tune detection sensitivity.
 
 ## Source Files
 - C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
+- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
 - Python source: `python/main.py`
 - Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
 - Shared assets: `common/coco_label.txt`

@@ -1,6 +1,7 @@
 // E2E test for yolo26-object-detector.
 // Runs the binary with a real model, labels, and test images, verifies outputs.
 #include "support/testing/test_process.h"
+#include "support/testing/test_config.h"
 
 #include <filesystem>
 #include <fstream>
@@ -21,17 +22,9 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  const std::string kExpectedModel = "yolo26m_mod_mpk.tar.gz";
-  std::string model_path;
-  if (fs::exists(models_dir)) {
-    fs::path candidate = fs::path(models_dir) / kExpectedModel;
-    if (fs::exists(candidate)) {
-      model_path = candidate.string();
-    }
-  }
-  if (model_path.empty()) {
-    return skip_or_fail("expected model '" + kExpectedModel +
-                        "' not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+  const std::string model_path = configured_model_path("yolo26-object-detector", models_dir);
+  if (model_path.empty() || !fs::exists(model_path)) {
+    return skip_or_fail("configured YOLO26 model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
   std::string labels_file;
@@ -69,6 +62,9 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
+  const double score_threshold = e2e_double("yolo26-object-detector", "decode", "score_threshold");
+  const double nms_iou = e2e_double("yolo26-object-detector", "decode", "nms_iou");
+  const int max_detections = e2e_int("yolo26-object-detector", "decode", "max_detections");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
   {
     std::ofstream config_file(config_path);
@@ -79,11 +75,11 @@ int main(int argc, char** argv) {
                 << "  input_dir: " << input_dir << "\n"
                 << "  output_dir: " << out_dir << "\n"
                 << "decode:\n"
-                << "  score_threshold: 0.25\n"
-                << "  nms_iou: 0.45\n"
-                << "  max_detections: 100\n"
+                << "  score_threshold: " << score_threshold << "\n"
+                << "  nms_iou: " << nms_iou << "\n"
+                << "  max_detections: " << max_detections << "\n"
                 << "runtime:\n"
-                << "  timeout_ms: 5000\n"
+                << "  timeout_ms: 20000\n"
                 << "  num_runs: 1\n"
                 << "  profile: false\n"
                 << "output:\n"
@@ -94,19 +90,21 @@ int main(int argc, char** argv) {
 
   auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
+  const int output_files = count_output_files(out_dir);
+
   int rc = 0;
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
     std::cerr << "stderr:\n" << r.stderr_text << "\n";
     rc = 1;
-  } else if (count_output_files(out_dir) == 0) {
-    std::cerr << "[FAIL] no annotated output files produced\n";
+  } else if (output_files == 0) {
+    std::cerr << "[FAIL] expected output files but output directory is empty\n";
     rc = 1;
   } else if (!all_output_files_nonempty(out_dir)) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] yolo26m object detection overlay produced " << count_output_files(out_dir)
+    std::cout << "[OK] yolo26m object detection overlay produced " << output_files
               << " output files\n";
   }
 

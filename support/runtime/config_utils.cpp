@@ -100,6 +100,7 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 
   ScalarConfig config;
   std::vector<std::pair<int, std::string>> stack;
+  int list_block_indent = -1;
   std::string raw_line;
   while (std::getline(input, raw_line)) {
     const std::string without_comment = strip_inline_comment(raw_line);
@@ -115,8 +116,15 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     }
 
     const std::string line = trim_copy(without_comment);
+    if (list_block_indent >= 0) {
+      if (indent > list_block_indent) {
+        continue;
+      }
+      list_block_indent = -1;
+    }
     if (line.rfind("- ", 0) == 0) {
-      throw std::runtime_error("lists are not supported in scalar configs");
+      list_block_indent = indent;
+      continue;
     }
 
     const std::size_t colon = line.find(':');
