@@ -44,6 +44,30 @@ def test_source_path(apps_root: Path, example_key: str, language: str, kind: str
     return apps_root / "examples" / example_key / "cpp" / "tests" / filename
 
 
+def cpp_packaged_test_path(apps_root: Path, example_key: str, kind: str) -> Path:
+    return (
+        apps_root
+        / "examples"
+        / example_key
+        / "cpp"
+        / "tests"
+        / f"{example_name(example_key)}_{kind}_test"
+    )
+
+
+def test_artifact_paths(
+    apps_root: Path, example_key: str, language: str, kind: str
+) -> list[Path]:
+    source_path = test_source_path(apps_root, example_key, language, kind)
+    if language == "python":
+        return [source_path]
+    return [source_path, cpp_packaged_test_path(apps_root, example_key, kind)]
+
+
+def format_expected_paths(apps_root: Path, paths: list[Path]) -> str:
+    return ", ".join(str(path.relative_to(apps_root)) for path in paths)
+
+
 def e2e_config(entry: dict[str, Any], language: str) -> dict[str, Any]:
     e2e = entry.get("e2e", {})
     config = e2e.get(language, {})
@@ -104,8 +128,13 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                 except ValueError as exc:
                     errors.append(f"{example_key}: {exc}")
                     continue
-                if enabled and not test_source_path(apps_root, example_key, language, kind).exists():
-                    errors.append(f"{example_key}: {language} {kind} is enabled but test file is missing")
+                artifact_paths = test_artifact_paths(apps_root, example_key, language, kind)
+                if enabled and not any(path.exists() for path in artifact_paths):
+                    errors.append(
+                        f"{example_key}: {language} {kind} is enabled but no test "
+                        f"artifact exists; expected one of: "
+                        f"{format_expected_paths(apps_root, artifact_paths)}"
+                    )
             try:
                 for model_id in enabled_models(entry, language):
                     if model_id not in models:
