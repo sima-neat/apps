@@ -1,4 +1,5 @@
 assets/*.onnx
+assets/*.onnx.json
 ffmpeg-build
 server.log
 __pycache__/
