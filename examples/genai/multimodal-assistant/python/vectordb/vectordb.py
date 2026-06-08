@@ -184,6 +184,15 @@ class RagDbClient:
 app = Flask(__name__)
 ragdb: VectorDB = None
 
+@app.route("/", methods=["GET"])
+def index_endpoint():
+    return jsonify({
+        "service": "rag-vectordb",
+        "message": "This is the RAG VectorDB API, not the Multimodal Assistant UI.",
+        "search": "/search?query=<text>&k=3&min_score=-1",
+    })
+
+
 def initialize_db():
     global ragdb
     db_path = os.environ.get("VECTOR_DB_PATH", RAG_DB_PATH)
@@ -210,9 +219,11 @@ def search_endpoint():
         abort(500, description=str(e))
 
 def main():
-    app.run(host=os.environ.get("HOST", DEFAULT_VDB_HOST),
-            port=int(os.environ.get("PORT", DEFAULT_VDB_PORT)),
-            debug=False)
+    host = os.environ.get("HOST", DEFAULT_VDB_HOST)
+    port = int(os.environ.get("PORT", DEFAULT_VDB_PORT))
+    log.info("RAG VectorDB API: http://127.0.0.1:%s/search", port)
+    log.info("Multimodal Assistant UI runs on the Flask app port, not this service.")
+    app.run(host=host, port=port, debug=False)
 
 
 def start_service():

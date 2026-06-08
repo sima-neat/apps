@@ -44,34 +44,28 @@ ttfs = 0
 vectodb_proc = None
 rag_db_client = None
 RAG_DB_PATH = None
-upload_and_process_file = None
-is_rag_fps_available = None
 start_service = None
+create_markdown_vectordb = None
 
 def ensure_rag_modules_loaded():
     global rag_db_client
     global RAG_DB_PATH
-    global upload_and_process_file
-    global is_rag_fps_available
     global start_service
+    global create_markdown_vectordb
 
     if rag_db_client is not None:
         return rag_db_client
 
-    from vectordb.gradioclient import (
-        upload_and_process_file as _upload_and_process_file,
-        is_rag_fps_available as _is_rag_fps_available,
-    )
     from vectordb.vectordb import (
         RAG_DB_PATH as _RAG_DB_PATH,
         start_service as _start_service,
         RagDbClient,
     )
+    from vectordb.create_db import create_markdown_vectordb as _create_markdown_vectordb
 
-    upload_and_process_file = _upload_and_process_file
-    is_rag_fps_available = _is_rag_fps_available
     RAG_DB_PATH = _RAG_DB_PATH
     start_service = _start_service
+    create_markdown_vectordb = _create_markdown_vectordb
     rag_db_client = RagDbClient()
     return rag_db_client
 
@@ -456,6 +450,7 @@ class AppContext:
         self.asr_model_name = "whisper-small"
         self.max_tokens = None
         self.rag_enabled = True
+        self.rag_embedding_model_dir = ""
         self.vision_image_size = None
 
         # Conversation history for OpenAI-style chat
@@ -645,6 +640,9 @@ class AppContext:
         self.asr_model_name = app_cfg.asr_model.name
         self.max_tokens = app_cfg.request.max_tokens
         self.rag_enabled = app_cfg.rag.enabled
+        self.rag_embedding_model_dir = app_cfg.rag.embedding_model_dir
+        if self.rag_embedding_model_dir:
+            os.environ["VDB_EMBED_MODEL_DIR"] = self.rag_embedding_model_dir
         self.update_settings(
             camidx=None,
             model_server_ip=model_server,
@@ -669,6 +667,8 @@ class AppContext:
         self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
         self.app.config['MAX_TOKENS'] = self.max_tokens
         self.app.config['RAG_ENABLED'] = self.rag_enabled
+        self.app.config['RAG_FILE_PROCESSING_URL'] = self.ragserver or ""
+        self.app.config['RAG_EMBEDDING_MODEL_DIR'] = self.rag_embedding_model_dir
         self.app.config['VISION_IMAGE_SIZE'] = self.vision_image_size
 
     def get_config(self):
@@ -931,10 +931,15 @@ class AppContext:
                 query_str = AppConstants.DEFAULT_MODEL_QUERY_STR
 
             full_query_str = query_str
+            rag_used = False
+            rag_hits = 0
 
             # if we have the query and search_rag flag is on, search the rag database
             if search_rag and self.rag_enabled and len(full_query_str) > 0:
+                ensure_rag_modules_loaded()
                 rag = rag_db_client.search(query_str)
+                rag_used = True
+                rag_hits = len(rag)
                 full_query_str = f"{query_str}\n\nThe context is:\n\n{[entry['content'] for entry in rag]}"
 
             # Add user message to conversation history (detect if image is present)
@@ -972,14 +977,18 @@ class AppContext:
             )
             thread.start()
 
-            return {'question': query_str, 'ttt': elapsed_time}
+            return {
+                'question': query_str,
+                'ttt': elapsed_time,
+                'rag_used': rag_used,
+                'rag_hits': rag_hits,
+            }
 
         @self.app.route('/raghealth', methods=['GET'])
         def check_rag_server():
             if not self.rag_enabled:
                 return {
                     "rag_db": "disabled",
-                    "rag_fps": "disabled",
                     "message": "RAG is disabled"
                 }, 200
 
@@ -990,22 +999,14 @@ class AppContext:
                 logging.error(f"Exception checking RAG DB server: {e}")
                 rag_db_status = False
 
-            try:
-                rag_fps_status = is_rag_fps_available(self.ragserver)
-            except Exception as e:
-                logging.warning(f"Optional RAG File Processing Server check failed: {e}")
-                rag_fps_status = False
-
             if rag_db_status:
                 return {
                     "rag_db": "ok",
-                    "rag_fps": "ok" if rag_fps_status else "unavailable",
                     "message": "RAG DB is available"
                 }, 200
             else:
                 return {
                     "rag_db": "unavailable",
-                    "rag_fps": "ok" if rag_fps_status else "unavailable",
                     "message": "RAG DB is not available"
                 }, 503
 
@@ -1120,30 +1121,31 @@ class AppContext:
                 return "No file provided", 400
 
             filename = secure_filename(uploaded_file.filename)
-            if not filename.lower().endswith((".pdf", ".txt", ".md", ".xml")):
-                return "Unsupported file type. Only PDF and TXT are allowed.", 400
+            if not filename.lower().endswith(".md"):
+                return "Only Markdown RAG upload is supported locally.", 400
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
                 uploaded_file.save(tmp)
                 tmp_path = tmp.name
 
             def stream_response():
+                global vectodb_proc
                 yield "⏳ Starting...\n"
                 try:
                     ensure_rag_modules_loaded()
-                    for line in upload_and_process_file(tmp_path, self.ragserver):
-                        yield line + "\n"
+                    yield "🛑 Stopping existing vectordb service...\n"
+                    stop_service()
 
-                        if 'Database synchronized' in line:
-                            time.sleep(2)
-                            yield "🛑 Stopping existing vectordb service...\n"
-                            stop_service()
-                            time.sleep(5)
+                    yield "📚 Creating VectorDB from Markdown...\n"
+                    create_markdown_vectordb(
+                        input_path=tmp_path,
+                        output_db=RAG_DB_PATH,
+                        embedding_model=self.rag_embedding_model_dir,
+                    )
 
-                            yield "🚀 Starting vectordb service with new database...\n"
-                            global vectodb_proc
-                            vectodb_proc = start_service()
-                            time.sleep(20)
+                    yield "🚀 Starting vectordb service with new database...\n"
+                    vectodb_proc = start_service()
+                    yield "✅ Markdown RAG database is ready.\n"
 
                 except Exception as e:
                     yield f"❌ {str(e)}\n"

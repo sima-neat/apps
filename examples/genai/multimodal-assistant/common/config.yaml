@@ -5,13 +5,14 @@ server:
 
   models:
     chat:
-      - name: gemma4
-        path: assets/models/genai/gemma4-E2B-it
-      - name: qwen3-vl-2b
-        path: assets/models/genai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+      # The first chat model is selected by default in the UI.
+      - name: <primary-chat-model-name>
+        path: <path-to-primary-chat-model-dir>
+      - name: <secondary-chat-model-name>
+        path: <path-to-secondary-chat-model-dir>
     asr:
-      name: whisper-small
-      path: assets/models/genai/whisper-small-a16w8
+      name: <asr-model-name>
+      path: <path-to-asr-model-dir>
 
 app:
   openai:
@@ -30,3 +31,4 @@ app:
 
   rag:
     enabled: false
+    embedding_model_dir: <path-to-embedding-model-dir>

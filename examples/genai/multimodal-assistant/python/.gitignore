@@ -8,6 +8,7 @@ uploads/
 *.wav
 .milvus*
 milvus.db*
+milvus.meta.json
 .cache/*
 .venv-*/*
 *.tar.gz

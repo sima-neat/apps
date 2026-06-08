@@ -1164,6 +1164,12 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
       });
       const data = await response.json();
       displayResult(data.question || resultMessage, 'static/sample_audio.wav', data.ttt);
+      const ragStatus = document.getElementById("ragStatus");
+      if (isRagEnabled() && ragStatus) {
+        ragStatus.textContent = data.rag_used
+          ? `RAG used: yes, hits: ${data.rag_hits || 0}`
+          : "RAG used: no";
+      }
     } catch (error) {
       activeGeneration = false;
       console.error('Error uploading files:', error);
@@ -1593,8 +1599,15 @@ function initializeVoiceSync() {
   }
 }
 
+function setRagControls(dbReady) {
+  const importButton = document.getElementById("importRagDatabaseButton");
+  const uploadButton = document.getElementById("uploadToRagButton");
+  if (importButton) importButton.disabled = !dbReady;
+  if (uploadButton) uploadButton.disabled = false;
+}
+
 // Initialize RAG health check
-function initializeRagHealth() {
+function initializeRagHealth(attempt = 1) {
   if (!isRagEnabled()) {
     return;
   }
@@ -1603,13 +1616,10 @@ function initializeRagHealth() {
     .then(res => res.json().then(data => ({ status: res.status, data })))
     .then(({ status, data }) => {
       const dbStatus = data.rag_db === "ok";
-      const fpsStatus = data.rag_fps === "ok";
 
       // Update status message
-      if (dbStatus && fpsStatus) {
-        ragServerStatusText = "✅ RAG Database and RAG File Processing Server are online.";
-      } else if (dbStatus && !fpsStatus) {
-        ragServerStatusText = "✅ RAG Database is online. ⚠️ RAG File Processing Server is unavailable.";
+      if (dbStatus) {
+        ragServerStatusText = "✅ RAG Database is online.";
       } else {
         ragServerStatusText = "❌ RAG Database is not ready yet, please wait...";
       }
@@ -1618,11 +1628,10 @@ function initializeRagHealth() {
       const ragStatus = document.getElementById("ragStatus");
       if (ragStatus) ragStatus.textContent = ragServerStatusText;
 
-      // Enable/disable buttons accordingly
-      const importButton = document.getElementById("importRagDatabaseButton");
-      const uploadButton = document.getElementById("uploadToRagButton");
-      if (importButton) importButton.disabled = !dbStatus;
-      if (uploadButton) uploadButton.disabled = !fpsStatus;
+      setRagControls(dbStatus);
+      if (!dbStatus && attempt < 15) {
+        setTimeout(() => initializeRagHealth(attempt + 1), 2000);
+      }
     })
     .catch(err => {
       ragServerStatusText = "❌ Error checking RAG server health.";
@@ -1630,11 +1639,10 @@ function initializeRagHealth() {
       const ragStatus = document.getElementById("ragStatus");
       if (ragStatus) ragStatus.textContent = ragServerStatusText;
 
-      // Disable both buttons on error
-      const importButton = document.getElementById("importRagDatabaseButton");
-      const uploadButton = document.getElementById("uploadToRagButton");
-      if (importButton) importButton.disabled = true;
-      if (uploadButton) uploadButton.disabled = true;
+      setRagControls(false);
+      if (attempt < 15) {
+        setTimeout(() => initializeRagHealth(attempt + 1), 2000);
+      }
     });
 }
 
@@ -1784,7 +1792,7 @@ document.getElementById("uploadToRagButton").addEventListener("click", async () 
 
   const fileInput = document.createElement("input");
   fileInput.type = "file";
-  fileInput.accept = ".pdf,.txt.,.md";
+  fileInput.accept = ".md";
   fileInput.click();
 
   fileInput.onchange = async () => {
@@ -1792,7 +1800,7 @@ document.getElementById("uploadToRagButton").addEventListener("click", async () 
     if (!file) return;
 
     const messageBox = document.getElementById("settingsMessage");
-    messageBox.textContent = "⏳ Uploading file to RAG server...";
+    messageBox.textContent = "⏳ Creating RAG database from Markdown...";
 
     try {
       const formData = new FormData();
