@@ -14,7 +14,7 @@
 ## Concept
 This example hosts SiMa-supported GenAI models through Neat's OpenAI-compatible server and uses the imported Flask demo UI as the interactive assistant surface.
 
-The phase-1 target is one configured chat model, one configured ASR model, image/text chat, audio transcription, Piper TTS, system prompt control, chat history, voice selection, and abort.
+The example supports one or more configured chat models, one configured ASR model, image/text chat, audio transcription, Piper TTS, system prompt control, chat history, voice selection, and abort.
 
 The demo runs as two processes. `python/serve_models.py` reads the `server`
 section of `common/config.yaml` and starts the Neat OpenAI-compatible server.
@@ -28,11 +28,10 @@ Runtime ownership is split deliberately:
 - Neat hosts the OpenAI-compatible `/v1/audio/transcriptions` endpoint for ASR.
 - The Flask app owns UI state, system prompt handling, chat history, abort
   requests, uploaded images, microphone recordings, and Piper TTS playback.
-- Piper TTS is app-side and part of phase 1. The default requirements install
-  Piper; TTS produces audio when the configured voice assets are present under
-  `python/assets/`.
+- Piper TTS is app-side. The default requirements install Piper; TTS produces
+  audio when the configured voice assets are present under `python/assets/`.
 - RAG source is preserved from the sandbox import, but RAG is disabled by
-  default in phase 1 through `common/config.yaml`.
+  default through `common/config.yaml`.
 
 ## Preview
 Multimodal assistant web UI:
@@ -43,7 +42,7 @@ Multimodal assistant web UI:
 - Installed Neat runtime with GenAI and `pyneat` support.
 - A VLM or LLM model directory configured in `common/config.yaml`.
 - A Whisper ASR model directory configured in `common/config.yaml`.
-- Phase-1 Python packages from `python/requirements.txt`.
+- Python packages from `python/requirements.txt`.
 
 Model directories must contain `devkit/` and `elf_files/`. Chat models use `devkit/vlm_config.json`; ASR models use `devkit/whisper_config.json`.
 
@@ -92,7 +91,7 @@ python3 examples/genai/multimodal-assistant/python/serve_web.py \
   --config examples/genai/multimodal-assistant/common/config.yaml
 ```
 
-The supported phase-1 entrypoints are `python/serve_models.py` for model hosting and
+The supported entrypoints are `python/serve_models.py` for model hosting and
 `python/serve_web.py` for the UI. The imported sandbox scripts under `python/`
 are kept as source provenance during migration.
 

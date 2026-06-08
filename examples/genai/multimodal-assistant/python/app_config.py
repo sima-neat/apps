@@ -142,19 +142,7 @@ def _load_required_chat_models(models: dict, apps_root: Path) -> tuple[ServedMod
             for index, entry in enumerate(raw)
         )
 
-    if not isinstance(raw, dict):
-        return (_load_required_model(models, "chat", apps_root),)
-
-    entries = raw.get("entries")
-    if entries is None:
-        return (_load_required_model(models, "chat", apps_root),)
-    if not isinstance(entries, list) or not entries:
-        raise ValueError("models.chat.entries must be a non-empty list")
-
-    return tuple(
-        _load_required_model_entry(entry, f"models.chat.entries[{index}]", apps_root)
-        for index, entry in enumerate(entries)
-    )
+    return (_load_required_model(models, "chat", apps_root),)
 
 
 def _load_required_model(models: dict, key: str, apps_root: Path) -> ServedModel:
@@ -181,15 +169,7 @@ def _load_required_model_entry(raw: object, label: str, apps_root: Path) -> Serv
 
 def _load_chat_model_names(models: dict) -> tuple[ServedModel, ...]:
     raw = models.get("chat", {})
-
-    if isinstance(raw, dict):
-        entries = raw.get("entries")
-        if entries is None:
-            entries = [raw.get("name", "")]
-    elif isinstance(raw, list):
-        entries = raw
-    else:
-        entries = [raw]
+    entries = raw if isinstance(raw, list) else [raw]
 
     names = tuple(_load_model_entry_name(entry) for entry in entries)
     names = tuple(name for name in names if name)
