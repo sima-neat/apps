@@ -397,6 +397,9 @@ class AppContext:
         self.llm_only = False
         self.system_prompt = None
         self.model_display_name = ""
+        self.chat_model_name = "model"
+        self.asr_model_name = "whisper-small"
+        self.max_tokens = None
         self.vision_image_size = None
 
         # Conversation history for OpenAI-style chat
@@ -572,6 +575,9 @@ class AppContext:
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
+        self.chat_model_name = app_cfg.chat_model.name
+        self.asr_model_name = app_cfg.asr_model.name
+        self.max_tokens = app_cfg.request.max_tokens
         self.update_settings(
             camidx=None,
             model_server_ip=model_server,
@@ -591,6 +597,9 @@ class AppContext:
         self.app.config['SIMAAI_IP_PORT'] =  AppConstants.DEFAULT_HTTP_PORT
         self.app.config['UPLOAD_FOLDER'] = AppConstants.DEFAULT_UPLOADS_DIR
         self.app.config['MODEL_DISPLAY_NAME'] = self.model_display_name
+        self.app.config['CHAT_MODEL_NAME'] = self.chat_model_name
+        self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
+        self.app.config['MAX_TOKENS'] = self.max_tokens
         self.app.config['VISION_IMAGE_SIZE'] = self.vision_image_size
 
     def get_config(self):
@@ -878,7 +887,7 @@ class AppContext:
 
             thread = threading.Thread(
                 target=stream_chat_request,
-                args=[conversation_history, cfg.get('MODEL_DISPLAY_NAME', 'model'), cfg, generation_id]
+                args=[conversation_history, cfg.get('CHAT_MODEL_NAME', 'model'), cfg, generation_id]
             )
             thread.start()
 
@@ -993,7 +1002,7 @@ class AppContext:
                 conversation_history = self.get_conversation_history()
                 thread = threading.Thread(
                     target=stream_chat_request,
-                    args=[conversation_history, cfg.get('MODEL_DISPLAY_NAME', 'model'), cfg, generation_id]
+                    args=[conversation_history, cfg.get('CHAT_MODEL_NAME', 'model'), cfg, generation_id]
                 )
                 thread.start()
                 return {'question' : query_str}
@@ -1122,6 +1131,9 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
         "messages": messages,
         "stream": True
     }
+    max_tokens = config.get('MAX_TOKENS')
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
     
     try:
         if not genai_app.start_assistant_response(generation_id):
@@ -1208,7 +1220,8 @@ def post_audio_to_mla(audio_bytes, language="en"):
         'file': ('audio.wav', audio_bytes, 'audio/wav')
     }
     data = {
-         'language': language
+        'model': cfg.get('ASR_MODEL_NAME', 'whisper-small'),
+        'language': language
     }
 
     logging.debug(f'Posting AUDIO to SIMA model server at {url}')
