@@ -30,8 +30,6 @@ from collections import deque
 import wave
 import traceback
 from pathlib import Path
-from vectordb.gradioclient import upload_and_process_file, is_rag_fps_available
-from vectordb.vectordb import RAG_DB_PATH, start_service, RagDbClient
 from werkzeug.utils import secure_filename
 import tempfile
 import atexit
@@ -42,9 +40,40 @@ APP_DIR = Path(__file__).resolve().parent
 
 genai_app = None
 ttfs = 0
-rag_db_client = RagDbClient()
 
 vectodb_proc = None
+rag_db_client = None
+RAG_DB_PATH = None
+upload_and_process_file = None
+is_rag_fps_available = None
+start_service = None
+
+def ensure_rag_modules_loaded():
+    global rag_db_client
+    global RAG_DB_PATH
+    global upload_and_process_file
+    global is_rag_fps_available
+    global start_service
+
+    if rag_db_client is not None:
+        return rag_db_client
+
+    from vectordb.gradioclient import (
+        upload_and_process_file as _upload_and_process_file,
+        is_rag_fps_available as _is_rag_fps_available,
+    )
+    from vectordb.vectordb import (
+        RAG_DB_PATH as _RAG_DB_PATH,
+        start_service as _start_service,
+        RagDbClient,
+    )
+
+    upload_and_process_file = _upload_and_process_file
+    is_rag_fps_available = _is_rag_fps_available
+    RAG_DB_PATH = _RAG_DB_PATH
+    start_service = _start_service
+    rag_db_client = RagDbClient()
+    return rag_db_client
 
 def stop_service():
     global vectodb_proc
@@ -935,7 +964,8 @@ class AppContext:
                 }, 200
 
             try:
-                rag_db_status = rag_db_client.is_server_up()
+                client = ensure_rag_modules_loaded()
+                rag_db_status = client.is_server_up()
             except Exception as e:
                 logging.error(f"Exception checking RAG DB server: {e}")
                 rag_db_status = False
@@ -1075,6 +1105,7 @@ class AppContext:
             def stream_response():
                 yield "⏳ Starting...\n"
                 try:
+                    ensure_rag_modules_loaded()
                     for line in upload_and_process_file(tmp_path, self.ragserver):
                         yield line + "\n"
 
@@ -1109,6 +1140,7 @@ class AppContext:
 
                 yield "📥 Uploading database file...\n"
                 try:
+                    ensure_rag_modules_loaded()
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
                         db_file.save(tmp)
                         tmp_path = tmp.name
@@ -1316,6 +1348,7 @@ def run_app(app_cfg):
 
     if not genai_app.apionly and genai_app.rag_enabled:
         logging.info("Starting RAG database service")
+        ensure_rag_modules_loaded()
         vectodb_proc = start_service()
     elif not genai_app.apionly:
         logging.info("RAG database service disabled")
@@ -1388,6 +1421,7 @@ if __name__ == '__main__':
 
     if not args.apionly:
         logging.info("Starting RAG database service")
+        ensure_rag_modules_loaded()
         vectodb_proc = start_service()
     
 
