@@ -48,6 +48,7 @@ class WebConfig:
 @dataclass(frozen=True)
 class RagConfig:
     enabled: bool
+    embedding_model_dir: str
 
 
 @dataclass(frozen=True)
@@ -94,11 +95,11 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = APP
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
         ),
-        rag=RagConfig(enabled=_load_bool(rag.get("enabled", False))),
+        rag=_load_rag_config(rag, apps_root),
     )
 
 
-def load_web_config(path: Path = DEFAULT_WEB_CONFIG) -> AppConfig:
+def load_web_config(path: Path = DEFAULT_WEB_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = config.get("app", config)
     server = config.get("server", {})
@@ -128,7 +129,7 @@ def load_web_config(path: Path = DEFAULT_WEB_CONFIG) -> AppConfig:
             port=int(web.get("port", 5000)),
             https=_load_bool(web.get("https", True)),
         ),
-        rag=RagConfig(enabled=_load_bool(rag.get("enabled", False))),
+        rag=_load_rag_config(rag, apps_root),
     )
 
 
@@ -192,6 +193,25 @@ def _load_model_name(models: dict, key: str) -> ServedModel:
     if not name:
         raise ValueError(f"models.{key} is required")
     return ServedModel(name=name, path=None)
+
+
+def _load_rag_config(raw: object, apps_root: Path) -> RagConfig:
+    rag = raw if isinstance(raw, dict) else {}
+    return RagConfig(
+        enabled=_load_bool(rag.get("enabled", False)),
+        embedding_model_dir=_load_optional_path(rag.get("embedding_model_dir", ""), apps_root),
+    )
+
+
+def _load_optional_path(value: object, apps_root: Path) -> str:
+    path_text = str(value or "").strip()
+    if not path_text:
+        return ""
+
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = apps_root / path
+    return str(path)
 
 
 def _load_bool(value: object) -> bool:
