@@ -400,6 +400,7 @@ class AppContext:
         self.chat_model_name = "model"
         self.asr_model_name = "whisper-small"
         self.max_tokens = None
+        self.rag_enabled = True
         self.vision_image_size = None
 
         # Conversation history for OpenAI-style chat
@@ -578,6 +579,7 @@ class AppContext:
         self.chat_model_name = app_cfg.chat_model.name
         self.asr_model_name = app_cfg.asr_model.name
         self.max_tokens = app_cfg.request.max_tokens
+        self.rag_enabled = app_cfg.rag.enabled
         self.update_settings(
             camidx=None,
             model_server_ip=model_server,
@@ -600,6 +602,7 @@ class AppContext:
         self.app.config['CHAT_MODEL_NAME'] = self.chat_model_name
         self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
         self.app.config['MAX_TOKENS'] = self.max_tokens
+        self.app.config['RAG_ENABLED'] = self.rag_enabled
         self.app.config['VISION_IMAGE_SIZE'] = self.vision_image_size
 
     def get_config(self):
@@ -628,6 +631,7 @@ class AppContext:
             js = (
                 "window.SIMA_CONFIG=window.SIMA_CONFIG||{};"
                 f"window.SIMA_CONFIG.llmOnly='{llm_only_val}';"
+                f"window.SIMA_CONFIG.ragEnabled='{str(self.rag_enabled).lower()}';"
                 f"window.SIMA_CONFIG.visionImageHeight='{height_val}';"
                 f"window.SIMA_CONFIG.visionImageWidth='{width_val}';"
             )
@@ -654,7 +658,7 @@ class AppContext:
         self.interrupt_active_generation(preserve_partial=True)
 
         try:
-            success = post_stop_to_sima()
+            success = post_stop_to_sima(self.chat_model_name)
             if not success:
                 return jsonify({'status': 'error', 'message': 'Failed to send stop signal to SiMa.ai server.'}), 500
         except Exception as e:
@@ -752,7 +756,9 @@ class AppContext:
         @self.app.route('/stop', methods=['POST'])
         def stop_processing():
             logging.info('Received /stop request. Attempting to stop processing...')
-            self.run_stop()
+            result = self.run_stop()
+            if result is not None:
+                return result
             return jsonify({'status': 'stopped'}), 200
 
         @self.app.route('/clear-history', methods=['POST'])
@@ -795,6 +801,7 @@ class AppContext:
             chat = request.form.get('textchat', '').strip()
             search_rag = request.form.get('searchRag', 'false').lower() == 'true'
             include_chat_history = request.form.get('includeChatHistory', 'true').lower() == 'true'
+            cfg = genai_app.get_config()
             self.talk_ctrl.reset()
             self.talk_ctrl.set_language(language)
             had_active_generation = self.interrupt_active_generation(
@@ -802,11 +809,9 @@ class AppContext:
             )
             if had_active_generation:
                 try:
-                    post_stop_to_sima()
+                    post_stop_to_sima(cfg.get('CHAT_MODEL_NAME'))
                 except Exception as e:
                     logging.error(f"Failed to stop previous generation before new request: {e}")
-
-            cfg = genai_app.get_config()
 
             # Save image if available and convert to base64
             image_path = None
@@ -852,7 +857,7 @@ class AppContext:
             full_query_str = query_str
 
             # if we have the query and search_rag flag is on, search the rag database
-            if search_rag and len(full_query_str) > 0:
+            if search_rag and self.rag_enabled and len(full_query_str) > 0:
                 rag = rag_db_client.search(query_str)
                 full_query_str = f"{query_str}\n\nThe context is:\n\n{[entry['content'] for entry in rag]}"
 
@@ -895,6 +900,13 @@ class AppContext:
 
         @self.app.route('/raghealth', methods=['GET'])
         def check_rag_server():
+            if not self.rag_enabled:
+                return {
+                    "rag_db": "disabled",
+                    "rag_fps": "disabled",
+                    "message": "RAG is disabled"
+                }, 200
+
             try:
                 rag_db_status = rag_db_client.is_server_up()
             except Exception as e:
@@ -980,7 +992,7 @@ class AppContext:
                 had_active_generation = self.interrupt_active_generation(preserve_partial=True)
                 if had_active_generation:
                     try:
-                        post_stop_to_sima()
+                        post_stop_to_sima(cfg.get('CHAT_MODEL_NAME'))
                     except Exception as e:
                         logging.error(f"Failed to stop previous generation before image request: {e}")
 
@@ -1014,6 +1026,9 @@ class AppContext:
 
         @self.app.route("/upload-to-rag", methods=["POST"])
         def upload_to_rag():
+            if not self.rag_enabled:
+                return "RAG is disabled", 403
+
             uploaded_file = request.files.get("file")
             if not uploaded_file:
                 return "No file provided", 400
@@ -1052,6 +1067,9 @@ class AppContext:
         
         @self.app.route("/import-rag-db", methods=["POST"])
         def import_rag_db():
+            if not self.rag_enabled:
+                return "RAG is disabled", 403
+
             def _stream():
                 db_file = request.files.get("dbfile")
                 if not db_file:
@@ -1195,13 +1213,17 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
         # genai_app.emit('error', str(e))
         return None
 
-def post_stop_to_sima():
+def post_stop_to_sima(model_name=None):
     cfg = genai_app.get_config()
     url = f"http://{str(cfg['SIMAAI_IP_ADDR']).strip()}/stop"
+    normalized_model = str(model_name).strip() if model_name else ""
+    request_kwargs = {"timeout": 5}
+    if normalized_model:
+        request_kwargs["json"] = {"model": normalized_model}
 
-    logging.debug(f'Posting STOP signal to SIMA model server at {url}')
+    logging.debug(f'Posting STOP signal to SIMA model server at {url} for model {normalized_model or "*"}')
     try:
-        response = requests.post(url, timeout=5)
+        response = requests.post(url, **request_kwargs)
         response.raise_for_status()
         logging.info("Successfully sent stop signal to SiMa.ai server.")
         return True
@@ -1261,9 +1283,11 @@ def run_app(app_cfg):
     genai_app.setup_router()
     cleanup()
 
-    if not genai_app.apionly:
+    if not genai_app.apionly and genai_app.rag_enabled:
         logging.info("Starting RAG database service")
         vectodb_proc = start_service()
+    elif not genai_app.apionly:
+        logging.info("RAG database service disabled")
 
     genai_app.run()
 

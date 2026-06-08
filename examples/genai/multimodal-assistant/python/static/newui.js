@@ -47,6 +47,25 @@ function isLlmOnlyMode() {
   return document.body.classList.contains('llm-only');
 }
 
+function isRagEnabled() {
+  const config = window.SIMA_CONFIG || {};
+  return config.ragEnabled === true || config.ragEnabled === 'true';
+}
+
+function hideRagControlsIfDisabled() {
+  if (isRagEnabled()) return;
+
+  const ragContainer = document.querySelector('.settings-right-container');
+  const ragCheckbox = document.getElementById('toggleRAG');
+
+  if (ragContainer) {
+    ragContainer.style.display = 'none';
+  }
+  if (ragCheckbox) {
+    ragCheckbox.checked = false;
+  }
+}
+
 function getVisionImageSize() {
   const config = window.SIMA_CONFIG || {};
   const height = parseInt(config.visionImageHeight, 10);
@@ -345,7 +364,10 @@ window.onload = function () {
 
   // Initialize dashboard functionality
   initializeVoiceSync();
-  initializeRagHealth();
+  hideRagControlsIfDisabled();
+  if (isRagEnabled()) {
+    initializeRagHealth();
+  }
   fetchSystemPrompt();
 
   // Show settings rows that are hidden by default
@@ -1095,7 +1117,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
     formData.append('textchat', 'Describe what you see in the picture.');
   }
 
-  formData.append('searchRag', searchRag.checked);
+  formData.append('searchRag', isRagEnabled() && searchRag ? searchRag.checked : false);
   formData.append('includeChatHistory', includeChatHistory ? includeChatHistory.checked : true);
 
   const sendRequest = async () => {
@@ -1539,6 +1561,9 @@ function initializeVoiceSync() {
 
 // Initialize RAG health check
 function initializeRagHealth() {
+  if (!isRagEnabled()) {
+    return;
+  }
 
   fetch("/raghealth")
     .then(res => res.json().then(data => ({ status: res.status, data })))
@@ -1720,8 +1745,9 @@ function toggleCameraDisplay(imageEnabled) {
   }
 }
 
-
 document.getElementById("uploadToRagButton").addEventListener("click", async () => {
+  if (!isRagEnabled()) return;
+
   const fileInput = document.createElement("input");
   fileInput.type = "file";
   fileInput.accept = ".pdf,.txt.,.md";
@@ -1786,6 +1812,8 @@ function clearMessageLater() {
 }
 
 document.getElementById("importRagDatabaseButton").addEventListener("click", async () => {
+  if (!isRagEnabled()) return;
+
   const fileInput = document.createElement("input");
   fileInput.type = "file";
   fileInput.accept = ".db";
