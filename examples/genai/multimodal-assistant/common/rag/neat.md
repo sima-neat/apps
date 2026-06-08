@@ -61,5 +61,5 @@ because speech transcription does not depend on the selected chat model.
 - The Multimodal Assistant uses Flask for the web UI.
 - The GenAI model server is started separately from the web app.
 - The RAG database file is named `milvus.db`.
-- Markdown RAG upload creates the vector database locally without RAGFPS.
+- Markdown RAG upload creates the vector database locally.
 - Piper provides text-to-speech playback when voice assets are installed.
