@@ -1,0 +1,21 @@
+models:
+  gemma4:
+    source: huggingface
+    repo: TBD
+    path: TBD
+  whisper-small:
+    source: huggingface
+    repo: TBD
+    path: TBD
+unit:
+  python: false
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: GenAI model assets and runtime coverage are not enabled for GA yet.
+    models: []
+  cpp:
+    enabled: false
+    reason: No C++ implementation exists for this Python-only example.
+    models: []
