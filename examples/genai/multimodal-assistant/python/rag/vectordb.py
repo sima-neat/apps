@@ -80,18 +80,13 @@ class VectorDB:
 
     def _resolve_local_model_path(self) -> str:
         configured_dir = os.environ.get("VDB_EMBED_MODEL_DIR")
-        candidate_dirs = []
-        if configured_dir:
-            candidate_dirs.append(Path(configured_dir))
-        candidate_dirs.extend(
-            [
-                PROJECT_ROOT / "models" / "gte-small-local",
-                PROJECT_ROOT.parent / "models" / "gte-small-local",
-                SCRIPT.parent / "models" / "gte-small-local",
-                PROJECT_ROOT / "gte-small-local",
-                Path("gte-small-local"),
-            ]
-        )
+        if not configured_dir:
+            raise FileNotFoundError(
+                "Embedding model directory is not configured.\n"
+                "Set app.rag.embedding_model_dir in common/config.yaml."
+            )
+
+        candidate_dirs = [Path(configured_dir)]
 
         for candidate in candidate_dirs:
             if candidate.is_dir():
@@ -99,9 +94,9 @@ class VectorDB:
 
         searched = ", ".join(str(p) for p in candidate_dirs)
         raise FileNotFoundError(
-            "Embedding model directory 'gte-small-local' was not found.\n"
+            "Embedding model directory was not found.\n"
             f"Searched: {searched}\n"
-            "Set VDB_EMBED_MODEL_DIR to the local model directory."
+            "Set app.rag.embedding_model_dir in common/config.yaml."
         )
 
     def _load_vector_store(self):

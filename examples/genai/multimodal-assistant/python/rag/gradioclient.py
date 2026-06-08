@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Generator, Optional
 from urllib.parse import urlparse, urlunparse
-from vectordb.vectordb import RAG_DB_PATH
+from rag.vectordb import RAG_DB_PATH
 
 # ---------------- Utility Functions ----------------
 
@@ -287,7 +287,7 @@ def main():
     parser.add_argument("--download-url", default=None, help="Optional DB download endpoint (GET)")
     args = parser.parse_args()
 
-    from vectordb.gradioclient import upload_and_process_file  # if defined in another file
+    from rag.gradioclient import upload_and_process_file  # if defined in another file
 
     for message in upload_and_process_file(
         file_path=args.file_path,

@@ -56,12 +56,12 @@ def ensure_rag_modules_loaded():
     if rag_db_client is not None:
         return rag_db_client
 
-    from vectordb.vectordb import (
+    from rag.vectordb import (
         RAG_DB_PATH as _RAG_DB_PATH,
         start_service as _start_service,
         RagDbClient,
     )
-    from vectordb.create_db import create_markdown_vectordb as _create_markdown_vectordb
+    from rag.create_db import create_markdown_vectordb as _create_markdown_vectordb
 
     RAG_DB_PATH = _RAG_DB_PATH
     start_service = _start_service
@@ -449,6 +449,8 @@ class AppContext:
         self.active_chat_model_name = "model"
         self.asr_model_name = "whisper-small"
         self.max_tokens = None
+        self.web_host = "0.0.0.0"
+        self.web_port = 5000
         self.rag_enabled = True
         self.rag_embedding_model_dir = ""
         self.vision_image_size = None
@@ -639,6 +641,8 @@ class AppContext:
         self.active_chat_model_name = self.chat_model_name
         self.asr_model_name = app_cfg.asr_model.name
         self.max_tokens = app_cfg.request.max_tokens
+        self.web_host = app_cfg.web.host
+        self.web_port = app_cfg.web.port
         self.rag_enabled = app_cfg.rag.enabled
         self.rag_embedding_model_dir = app_cfg.rag.embedding_model_dir
         if self.rag_embedding_model_dir:
@@ -714,11 +718,11 @@ class AppContext:
                 str(APP_DIR / 'certs/server.crt'),
                 str(APP_DIR / 'certs/server.key')
             )
-            self.socketio.run(self.app, host='0.0.0.0', port="5000",
+            self.socketio.run(self.app, host=self.web_host, port=self.web_port,
                             ssl_context=ssl_context,
                             debug=False, allow_unsafe_werkzeug=True)
         else:
-            self.socketio.run(self.app, host='0.0.0.0', port="5000",
+            self.socketio.run(self.app, host=self.web_host, port=self.web_port,
                             debug=False, allow_unsafe_werkzeug=True)
             
     def run_stop(self):
@@ -1380,7 +1384,10 @@ def run_app(app_cfg):
     elif not genai_app.apionly:
         logging.info("RAG database service disabled")
 
-    genai_app.run()
+    try:
+        genai_app.run()
+    finally:
+        stop_service()
 
 if __name__ == '__main__':
     configure_logging()

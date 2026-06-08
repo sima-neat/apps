@@ -205,7 +205,7 @@ def main() -> int:
 
     print("\n[step] initializing VectorDB...")
     try:
-        from vectordb.vectordb import VectorDB
+        from rag.vectordb import VectorDB
         ragdb = VectorDB(db_path=str(db_path), collection_name=selected_collection)
     except ModuleNotFoundError as exc:
         print(f"error: missing dependency during import: {exc}")
