@@ -14,6 +14,7 @@ if [[ -z "${PYNEAT_PYTHON:-}" ]]; then
 fi
 
 APP_PYTHON="${APP_PYTHON:-python3}"
+SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 
 if [[ ! -f "${CONFIG_PATH}" ]]; then
   echo "config does not exist: ${CONFIG_PATH}" >&2
@@ -22,11 +23,33 @@ fi
 
 pids=()
 
+any_child_running() {
+  local running_pids
+  running_pids="$(jobs -r -p || true)"
+  for pid in "${pids[@]}"; do
+    if grep -qx "${pid}" <<<"${running_pids}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 cleanup() {
   trap - EXIT INT TERM
   for pid in "${pids[@]}"; do
     if kill -0 "${pid}" 2>/dev/null; then
-      kill "${pid}" 2>/dev/null || true
+      kill -INT "${pid}" 2>/dev/null || true
+    fi
+  done
+
+  local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
+  while any_child_running && [[ "${SECONDS}" -lt "${deadline}" ]]; do
+    sleep 1
+  done
+
+  for pid in "${pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -TERM "${pid}" 2>/dev/null || true
     fi
   done
   for pid in "${pids[@]}"; do

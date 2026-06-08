@@ -29,5 +29,5 @@ app:
     https: true
 
   rag:
-    enabled: true
+    enabled: false
     embedding_model_dir: assets/models/genai/gte-small
