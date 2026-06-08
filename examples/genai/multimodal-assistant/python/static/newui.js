@@ -47,6 +47,25 @@ function isLlmOnlyMode() {
   return document.body.classList.contains('llm-only');
 }
 
+function isRagEnabled() {
+  const config = window.SIMA_CONFIG || {};
+  return config.ragEnabled === true || config.ragEnabled === 'true';
+}
+
+function hideRagControlsIfDisabled() {
+  if (isRagEnabled()) return;
+
+  const ragContainer = document.querySelector('.settings-right-container');
+  const ragCheckbox = document.getElementById('toggleRAG');
+
+  if (ragContainer) {
+    ragContainer.style.display = 'none';
+  }
+  if (ragCheckbox) {
+    ragCheckbox.checked = false;
+  }
+}
+
 function getVisionImageSize() {
   const config = window.SIMA_CONFIG || {};
   const height = parseInt(config.visionImageHeight, 10);
@@ -345,7 +364,10 @@ window.onload = function () {
 
   // Initialize dashboard functionality
   initializeVoiceSync();
-  initializeRagHealth();
+  hideRagControlsIfDisabled();
+  if (isRagEnabled()) {
+    initializeRagHealth();
+  }
   fetchSystemPrompt();
 
   // Show settings rows that are hidden by default
@@ -364,16 +386,16 @@ window.onload = function () {
     if (isLlmOnly) {
       // LLM-only mode: enable history by default
       chatHistoryCheckbox.checked = true;
-      addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history is enabled.", false);
+      addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history is enabled.", false);
     } else {
       // VLM mode: disable history by default (multi-image history is slow)
       chatHistoryCheckbox.checked = false;
-      addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
+      addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
     }
     chatHistoryCheckbox.addEventListener('change', handleChatHistoryToggle);
   } else {
     // Fallback if checkbox doesn't exist
-    addChatMessage("Hi, this is the SiMa GenAI Demo!", false);
+    addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you?", false);
   }
 };
 
@@ -755,7 +777,7 @@ function handleChatHistoryToggle(event) {
       });
 
     // Add info message
-    addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
+    addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
   } else {
     // Checkbox was re-enabled - keep user conversation, update info message if no conversation
     console.log('Chat history enabled - conversations will accumulate');
@@ -766,7 +788,7 @@ function handleChatHistoryToggle(event) {
       // No user conversation - clear info messages and show new status
       const allMessages = chatMessages.querySelectorAll('.message');
       allMessages.forEach(message => message.remove());
-      addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history enabled. Conversations will be remembered.", false);
+      addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history enabled. Conversations will be remembered.", false);
     }
     // If there are user messages, keep them and don't add any info message
   }
@@ -799,7 +821,7 @@ function newChat() {
   showSettingsRows();
 
   // Re-add welcome message
-  addChatMessage("Hi, this is the SiMa GenAI Demo!", false);
+  addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you?", false);
 
   // Hide abort button if visible
   hideAbortButton();
@@ -1095,7 +1117,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
     formData.append('textchat', 'Describe what you see in the picture.');
   }
 
-  formData.append('searchRag', searchRag.checked);
+  formData.append('searchRag', isRagEnabled() && searchRag ? searchRag.checked : false);
   formData.append('includeChatHistory', includeChatHistory ? includeChatHistory.checked : true);
 
   const sendRequest = async () => {
@@ -1539,6 +1561,9 @@ function initializeVoiceSync() {
 
 // Initialize RAG health check
 function initializeRagHealth() {
+  if (!isRagEnabled()) {
+    return;
+  }
 
   fetch("/raghealth")
     .then(res => res.json().then(data => ({ status: res.status, data })))
@@ -1720,8 +1745,9 @@ function toggleCameraDisplay(imageEnabled) {
   }
 }
 
-
 document.getElementById("uploadToRagButton").addEventListener("click", async () => {
+  if (!isRagEnabled()) return;
+
   const fileInput = document.createElement("input");
   fileInput.type = "file";
   fileInput.accept = ".pdf,.txt.,.md";
@@ -1786,6 +1812,8 @@ function clearMessageLater() {
 }
 
 document.getElementById("importRagDatabaseButton").addEventListener("click", async () => {
+  if (!isRagEnabled()) return;
+
   const fileInput = document.createElement("input");
   fileInput.type = "file";
   fileInput.accept = ".db";

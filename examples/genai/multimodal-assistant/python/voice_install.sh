@@ -19,7 +19,12 @@ VOICES=(
   "en_US-hfc_male-medium"
   "en_US-kristin-medium"
   "en_GB-northern_english_male-medium"
-  # "de_DE-thorsten-medium"
+  "de_DE-thorsten-medium"
+  "es_ES-davefx-medium"
+  "fr_FR-siwis-medium"
+  "it_IT-paola-medium"
+  "zh_CN-huayan-medium"
+  "no_NO-talesyntese-medium"
 )
 
 if [[ ${#VOICES[@]} -eq 0 ]]; then
@@ -38,7 +43,7 @@ for entry in "${VOICES[@]}"; do
 
   language="${lang_country:0:2}"
   onnx_file="${lang_country}-${voice}-${quality}.onnx"
-  base_url="https://huggingface.co/rhasspsy/piper-voices/resolve/v1.0.0/${language}/${lang_country}/${voice}/${quality}"
+  base_url="https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/${language}/${lang_country}/${voice}/${quality}"
 
   target_onnx="${ASSETS_DIR}/${onnx_file}"
   target_json="${ASSETS_DIR}/${onnx_file}.json"
@@ -46,7 +51,7 @@ for entry in "${VOICES[@]}"; do
   url_onnx="${base_url}/${onnx_file}?download=true"
   url_json="${base_url}/${onnx_file}.json?download=true"
 
-  echo "\n📦 Voice: ${entry}"
+  printf "\n📦 Voice: %s\n" "${entry}"
 
   if [[ -f "$target_json" ]]; then
     echo "✅ JSON exists: ${target_json}"
@@ -64,4 +69,4 @@ for entry in "${VOICES[@]}"; do
 
 done
 
-echo "\n✅ Done. Voices are available in '${ASSETS_DIR}/'." 
+printf "\n✅ Done. Voices are available in '%s/'.\n" "${ASSETS_DIR}"

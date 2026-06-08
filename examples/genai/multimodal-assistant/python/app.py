@@ -30,19 +30,50 @@ from collections import deque
 import wave
 import traceback
 from pathlib import Path
-from vectordb.gradioclient import upload_and_process_file, is_rag_fps_available
-from vectordb.vectordb import RAG_DB_PATH, start_service, RagDbClient
 from werkzeug.utils import secure_filename
 import tempfile
 import atexit
 import signal
 import subprocess
 
+APP_DIR = Path(__file__).resolve().parent
+
 genai_app = None
 ttfs = 0
-rag_db_client = RagDbClient()
 
 vectodb_proc = None
+rag_db_client = None
+RAG_DB_PATH = None
+upload_and_process_file = None
+is_rag_fps_available = None
+start_service = None
+
+def ensure_rag_modules_loaded():
+    global rag_db_client
+    global RAG_DB_PATH
+    global upload_and_process_file
+    global is_rag_fps_available
+    global start_service
+
+    if rag_db_client is not None:
+        return rag_db_client
+
+    from vectordb.gradioclient import (
+        upload_and_process_file as _upload_and_process_file,
+        is_rag_fps_available as _is_rag_fps_available,
+    )
+    from vectordb.vectordb import (
+        RAG_DB_PATH as _RAG_DB_PATH,
+        start_service as _start_service,
+        RagDbClient,
+    )
+
+    upload_and_process_file = _upload_and_process_file
+    is_rag_fps_available = _is_rag_fps_available
+    RAG_DB_PATH = _RAG_DB_PATH
+    start_service = _start_service
+    rag_db_client = RagDbClient()
+    return rag_db_client
 
 def stop_service():
     global vectodb_proc
@@ -102,6 +133,7 @@ class TalkController:
         self.totalk = ''
         self.talk = []
         self.pipers = {}
+        self.missing_voice_warnings = set()
         self._init_pipers_threaded(supported_langs or ['en'])
         
         self.lock = threading.Lock()
@@ -175,6 +207,23 @@ class TalkController:
 
         for t in threads:
             t.join()
+
+    def _get_piper(self, language):
+        if language in self.pipers:
+            return language, self.pipers[language]
+        if language != 'en' and 'en' in self.pipers:
+            return 'en', self.pipers['en']
+        return None, None
+
+    def has_voice(self, language='en'):
+        _, piper = self._get_piper(language)
+        return piper is not None
+
+    def _warn_missing_voice_once(self, language):
+        if language in self.missing_voice_warnings:
+            return
+        self.missing_voice_warnings.add(language)
+        logging.warning(f"No Piper voice loaded for language '{language}'. Skipping TTS audio.")
 
     def _reset_tps_counters(self):
         self.tps = 0.0
@@ -287,22 +336,26 @@ class TalkController:
                     if self.chunk_count < self.permissive_chunks and len(sanitized_sentence) < self.min_chars_first_chunks:
                         # Not enough content yet; keep buffering
                         return
-                    buffer = self.pipers.get(self.current_language).synthesize(sanitized_sentence)
-                    if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                        return
-                    self.full_response.append(sanitized_sentence)
+                    _, piper = self._get_piper(self.current_language)
+                    if piper is None:
+                        self._warn_missing_voice_once(self.current_language)
+                    else:
+                        buffer = piper.synthesize(sanitized_sentence)
+                        if generation_id is not None and not genai_app.is_generation_current(generation_id):
+                            return
+                        self.full_response.append(sanitized_sentence)
 
-                    elapsed_time = time.time() - start_time
-                    audio_duration = self._get_wav_duration(buffer)
-                    rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
-                    logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                    genai_app.emit('audio_chunk', {
-                        'text': sanitized_sentence.strip(),
-                        'audio': buffer.getvalue(),
-                        'tps': round(self.tps, 2),
-                        'rtf': round(rtf, 2)
-                    })
-                    self.chunk_count += 1
+                        elapsed_time = time.time() - start_time
+                        audio_duration = self._get_wav_duration(buffer)
+                        rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                        logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
+                        genai_app.emit('audio_chunk', {
+                            'text': sanitized_sentence.strip(),
+                            'audio': buffer.getvalue(),
+                            'tps': round(self.tps, 2),
+                            'rtf': round(rtf, 2)
+                        })
+                        self.chunk_count += 1
 
                 self.talk = []
                 if self._next is not None:
@@ -369,10 +422,12 @@ class TalkController:
             raise ValueError("No text provided for TTS synthesis.")
 
         start_time = time.time()
-        language = language if language in self.pipers else 'en'
+        language, piper = self._get_piper(language)
+        if piper is None:
+            raise RuntimeError("No Piper TTS voice model is loaded. Install Piper .onnx voice assets under assets/.")
 
         sanitized_text = self._sanitize_for_tts(text)
-        buffer = self.pipers.get(language).synthesize(sanitized_text)
+        buffer = piper.synthesize(sanitized_text)
         elapsed_time = time.time() - start_time
         audio_duration = self._get_wav_duration(buffer)
         rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
@@ -395,6 +450,10 @@ class AppContext:
         self.llm_only = False
         self.system_prompt = None
         self.model_display_name = ""
+        self.chat_model_name = "model"
+        self.asr_model_name = "whisper-small"
+        self.max_tokens = None
+        self.rag_enabled = True
         self.vision_image_size = None
 
         # Conversation history for OpenAI-style chat
@@ -568,12 +627,35 @@ class AppContext:
         if not self.apionly:
             self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh']) 
 
+    def update_from_config(self, app_cfg):
+        model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
+        self.chat_model_name = app_cfg.chat_model.name
+        self.asr_model_name = app_cfg.asr_model.name
+        self.max_tokens = app_cfg.request.max_tokens
+        self.rag_enabled = app_cfg.rag.enabled
+        self.update_settings(
+            camidx=None,
+            model_server_ip=model_server,
+            ragserver=None,
+            httponly=not app_cfg.web.https,
+            apionly=False,
+            llm_only=False,
+            model_name=app_cfg.chat_model.name,
+            vision_image_size=None
+        )
+        if app_cfg.request.system_prompt:
+            self.set_system_prompt(app_cfg.request.system_prompt)
+
     def update_config(self):
         self.app.config['CAMERA_IDX'] = self.camidx
         self.app.config['SIMAAI_IP_ADDR'] = self.model_server_ip
         self.app.config['SIMAAI_IP_PORT'] =  AppConstants.DEFAULT_HTTP_PORT
         self.app.config['UPLOAD_FOLDER'] = AppConstants.DEFAULT_UPLOADS_DIR
         self.app.config['MODEL_DISPLAY_NAME'] = self.model_display_name
+        self.app.config['CHAT_MODEL_NAME'] = self.chat_model_name
+        self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
+        self.app.config['MAX_TOKENS'] = self.max_tokens
+        self.app.config['RAG_ENABLED'] = self.rag_enabled
         self.app.config['VISION_IMAGE_SIZE'] = self.vision_image_size
 
     def get_config(self):
@@ -602,6 +684,7 @@ class AppContext:
             js = (
                 "window.SIMA_CONFIG=window.SIMA_CONFIG||{};"
                 f"window.SIMA_CONFIG.llmOnly='{llm_only_val}';"
+                f"window.SIMA_CONFIG.ragEnabled='{str(self.rag_enabled).lower()}';"
                 f"window.SIMA_CONFIG.visionImageHeight='{height_val}';"
                 f"window.SIMA_CONFIG.visionImageWidth='{width_val}';"
             )
@@ -612,8 +695,12 @@ class AppContext:
 
     def run(self):
         if not self.httponly:
+            ssl_context = (
+                str(APP_DIR / 'certs/server.crt'),
+                str(APP_DIR / 'certs/server.key')
+            )
             self.socketio.run(self.app, host='0.0.0.0', port="5000",
-                            ssl_context=('certs/server.crt', 'certs/server.key'),
+                            ssl_context=ssl_context,
                             debug=False, allow_unsafe_werkzeug=True)
         else:
             self.socketio.run(self.app, host='0.0.0.0', port="5000",
@@ -624,7 +711,7 @@ class AppContext:
         self.interrupt_active_generation(preserve_partial=True)
 
         try:
-            success = post_stop_to_sima()
+            success = post_stop_to_sima(self.chat_model_name)
             if not success:
                 return jsonify({'status': 'error', 'message': 'Failed to send stop signal to SiMa.ai server.'}), 500
         except Exception as e:
@@ -678,6 +765,9 @@ class AppContext:
         @self.app.route('/voices/select', methods=['POST'])
         def select_voice():
             try:
+                if self.talk_ctrl is None:
+                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+
                 data = request.get_json() or {}
                 lang = data.get('lang', 'en')
                 voice_id = data.get('voiceId')
@@ -722,7 +812,9 @@ class AppContext:
         @self.app.route('/stop', methods=['POST'])
         def stop_processing():
             logging.info('Received /stop request. Attempting to stop processing...')
-            self.run_stop()
+            result = self.run_stop()
+            if result is not None:
+                return result
             return jsonify({'status': 'stopped'}), 200
 
         @self.app.route('/clear-history', methods=['POST'])
@@ -765,6 +857,7 @@ class AppContext:
             chat = request.form.get('textchat', '').strip()
             search_rag = request.form.get('searchRag', 'false').lower() == 'true'
             include_chat_history = request.form.get('includeChatHistory', 'true').lower() == 'true'
+            cfg = genai_app.get_config()
             self.talk_ctrl.reset()
             self.talk_ctrl.set_language(language)
             had_active_generation = self.interrupt_active_generation(
@@ -772,11 +865,9 @@ class AppContext:
             )
             if had_active_generation:
                 try:
-                    post_stop_to_sima()
+                    post_stop_to_sima(cfg.get('CHAT_MODEL_NAME'))
                 except Exception as e:
                     logging.error(f"Failed to stop previous generation before new request: {e}")
-
-            cfg = genai_app.get_config()
 
             # Save image if available and convert to base64
             image_path = None
@@ -822,7 +913,7 @@ class AppContext:
             full_query_str = query_str
 
             # if we have the query and search_rag flag is on, search the rag database
-            if search_rag and len(full_query_str) > 0:
+            if search_rag and self.rag_enabled and len(full_query_str) > 0:
                 rag = rag_db_client.search(query_str)
                 full_query_str = f"{query_str}\n\nThe context is:\n\n{[entry['content'] for entry in rag]}"
 
@@ -857,7 +948,7 @@ class AppContext:
 
             thread = threading.Thread(
                 target=stream_chat_request,
-                args=[conversation_history, cfg.get('MODEL_DISPLAY_NAME', 'model'), cfg, generation_id]
+                args=[conversation_history, cfg.get('CHAT_MODEL_NAME', 'model'), cfg, generation_id]
             )
             thread.start()
 
@@ -865,8 +956,16 @@ class AppContext:
 
         @self.app.route('/raghealth', methods=['GET'])
         def check_rag_server():
+            if not self.rag_enabled:
+                return {
+                    "rag_db": "disabled",
+                    "rag_fps": "disabled",
+                    "message": "RAG is disabled"
+                }, 200
+
             try:
-                rag_db_status = rag_db_client.is_server_up()
+                client = ensure_rag_modules_loaded()
+                rag_db_status = client.is_server_up()
             except Exception as e:
                 logging.error(f"Exception checking RAG DB server: {e}")
                 rag_db_status = False
@@ -909,6 +1008,10 @@ class AppContext:
 
                 if not text:
                     return jsonify({'error': 'Missing "input" text field.'}), 400
+                if not self.talk_ctrl.has_voice(language):
+                    return jsonify({
+                        'error': 'No Piper TTS voice model is loaded. Install Piper .onnx voice assets under assets/.'
+                    }), 503
 
                 logging.info(f"Received TTS request: model={model}, voice={voice}, format={response_format}")
 
@@ -950,7 +1053,7 @@ class AppContext:
                 had_active_generation = self.interrupt_active_generation(preserve_partial=True)
                 if had_active_generation:
                     try:
-                        post_stop_to_sima()
+                        post_stop_to_sima(cfg.get('CHAT_MODEL_NAME'))
                     except Exception as e:
                         logging.error(f"Failed to stop previous generation before image request: {e}")
 
@@ -972,7 +1075,7 @@ class AppContext:
                 conversation_history = self.get_conversation_history()
                 thread = threading.Thread(
                     target=stream_chat_request,
-                    args=[conversation_history, cfg.get('MODEL_DISPLAY_NAME', 'model'), cfg, generation_id]
+                    args=[conversation_history, cfg.get('CHAT_MODEL_NAME', 'model'), cfg, generation_id]
                 )
                 thread.start()
                 return {'question' : query_str}
@@ -984,6 +1087,9 @@ class AppContext:
 
         @self.app.route("/upload-to-rag", methods=["POST"])
         def upload_to_rag():
+            if not self.rag_enabled:
+                return "RAG is disabled", 403
+
             uploaded_file = request.files.get("file")
             if not uploaded_file:
                 return "No file provided", 400
@@ -999,6 +1105,7 @@ class AppContext:
             def stream_response():
                 yield "⏳ Starting...\n"
                 try:
+                    ensure_rag_modules_loaded()
                     for line in upload_and_process_file(tmp_path, self.ragserver):
                         yield line + "\n"
 
@@ -1022,6 +1129,9 @@ class AppContext:
         
         @self.app.route("/import-rag-db", methods=["POST"])
         def import_rag_db():
+            if not self.rag_enabled:
+                return "RAG is disabled", 403
+
             def _stream():
                 db_file = request.files.get("dbfile")
                 if not db_file:
@@ -1030,6 +1140,7 @@ class AppContext:
 
                 yield "📥 Uploading database file...\n"
                 try:
+                    ensure_rag_modules_loaded()
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
                         db_file.save(tmp)
                         tmp_path = tmp.name
@@ -1101,6 +1212,9 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
         "messages": messages,
         "stream": True
     }
+    max_tokens = config.get('MAX_TOKENS')
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
     
     try:
         if not genai_app.start_assistant_response(generation_id):
@@ -1162,13 +1276,17 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
         # genai_app.emit('error', str(e))
         return None
 
-def post_stop_to_sima():
+def post_stop_to_sima(model_name=None):
     cfg = genai_app.get_config()
     url = f"http://{str(cfg['SIMAAI_IP_ADDR']).strip()}/stop"
+    normalized_model = str(model_name).strip() if model_name else ""
+    request_kwargs = {"timeout": 5}
+    if normalized_model:
+        request_kwargs["json"] = {"model": normalized_model}
 
-    logging.debug(f'Posting STOP signal to SIMA model server at {url}')
+    logging.debug(f'Posting STOP signal to SIMA model server at {url} for model {normalized_model or "*"}')
     try:
-        response = requests.post(url, timeout=5)
+        response = requests.post(url, **request_kwargs)
         response.raise_for_status()
         logging.info("Successfully sent stop signal to SiMa.ai server.")
         return True
@@ -1187,7 +1305,8 @@ def post_audio_to_mla(audio_bytes, language="en"):
         'file': ('audio.wav', audio_bytes, 'audio/wav')
     }
     data = {
-         'language': language
+        'model': cfg.get('ASR_MODEL_NAME', 'whisper-small'),
+        'language': language
     }
 
     logging.debug(f'Posting AUDIO to SIMA model server at {url}')
@@ -1203,8 +1322,9 @@ def post_audio_to_mla(audio_bytes, language="en"):
         logging.error(f"Failed to send audio for transcription: {e}")
         return None
 
-if __name__ == '__main__':
-    log_filename = 'server.log'
+def configure_logging(log_filename='server.log'):
+    if logging.getLogger().handlers:
+        return
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -1213,6 +1333,30 @@ if __name__ == '__main__':
             logging.StreamHandler(sys.stdout)
         ]
     )
+
+def run_app(app_cfg):
+    global genai_app
+    global vectodb_proc
+
+    configure_logging()
+    logging.info('Initializing multimodal assistant app (frontend and TTS) please wait....')
+    genai_app = AppContext()
+    genai_app.initialize()
+    genai_app.update_from_config(app_cfg)
+    genai_app.setup_router()
+    cleanup()
+
+    if not genai_app.apionly and genai_app.rag_enabled:
+        logging.info("Starting RAG database service")
+        ensure_rag_modules_loaded()
+        vectodb_proc = start_service()
+    elif not genai_app.apionly:
+        logging.info("RAG database service disabled")
+
+    genai_app.run()
+
+if __name__ == '__main__':
+    configure_logging()
     logging.info('Initializing genai-demo app (frontend and TTS) please wait....')
     genai_app = AppContext()
     genai_app.initialize()
@@ -1277,6 +1421,7 @@ if __name__ == '__main__':
 
     if not args.apionly:
         logging.info("Starting RAG database service")
+        ensure_rag_modules_loaded()
         vectodb_proc = start_service()
     
 
