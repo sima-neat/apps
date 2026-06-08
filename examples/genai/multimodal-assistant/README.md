@@ -53,10 +53,11 @@ environment where `pyneat` is available. The examples below assume:
 Visit the [SiMa.ai Hugging Face page](https://huggingface.co/simaai) to see the
 officially supported model artifacts. Download the chat/VLM and ASR artifacts
 you want to run, then update `common/config.yaml` so each model path points to
-the downloaded directory.
+the downloaded directory. Model paths can be absolute or relative to the `apps`
+repository root.
 
 ```bash
-hf download simaai/<model-repo> --local-dir assets/models/genai/<model-dir>
+hf download simaai/<model-repo> --local-dir <local-model-dir>
 ```
 
 Model directories must contain `devkit/` and `elf_files/`. Chat models use
@@ -187,7 +188,7 @@ Edit `examples/genai/multimodal-assistant/common/config.yaml`:
 app:
   rag:
     enabled: true
-    embedding_model_dir: assets/models/genai/gte-small
+    embedding_model_dir: <path-to-embedding-model-dir>
 ```
 
 ### 2. Install RAG Dependencies
@@ -202,10 +203,11 @@ python3 -m pip install -r examples/genai/multimodal-assistant/python/requirement
 
 ### 3. Download The Embedding Model
 Place the local embedding model at the path configured by
-`app.rag.embedding_model_dir`.
+`app.rag.embedding_model_dir`. The path can be absolute or relative to the
+`apps` repository root.
 
 ```bash
-hf download <embedding-model-repo> --local-dir assets/models/genai/gte-small
+hf download <embedding-model-repo> --local-dir <local-embedding-model-dir>
 ```
 
 ### 4. Create A RAG Database From Markdown
@@ -224,7 +226,7 @@ source ~/multimodal-assistant-app/bin/activate
 python vectordb/create_db.py \
   --input /workspace/sima-neat/apps/examples/genai/multimodal-assistant/common/rag/neat.md \
   --output ./milvus.db \
-  --embedding-model /workspace/sima-neat/apps/assets/models/genai/gte-small
+  --embedding-model <path-to-embedding-model-dir>
 ```
 
 Do not commit generated files:
