@@ -210,12 +210,12 @@ python3 -m pip install -r examples/genai/multimodal-assistant/python/requirement
 ### 3. Download The Embedding Model
 Place the local embedding model at the path configured by
 `app.rag.embedding_model_dir`. The path can be absolute or relative to the
-`apps` repository root.
+`apps` repository root. Use the full Hugging Face repository id.
 
 ```bash
 EMBED_REPO="<embedding-model-repo>"
 EMBED_DIR="/path/to/local/embedding-model-dir"
-hf download "simaai/${EMBED_REPO}" --local-dir "${EMBED_DIR}"
+hf download "${EMBED_REPO}" --local-dir "${EMBED_DIR}"
 ```
 
 ### 4. Create A RAG Database From Markdown
