@@ -104,6 +104,7 @@ class TalkController:
         self.totalk = ''
         self.talk = []
         self.pipers = {}
+        self.missing_voice_warnings = set()
         self._init_pipers_threaded(supported_langs or ['en'])
         
         self.lock = threading.Lock()
@@ -177,6 +178,23 @@ class TalkController:
 
         for t in threads:
             t.join()
+
+    def _get_piper(self, language):
+        if language in self.pipers:
+            return language, self.pipers[language]
+        if language != 'en' and 'en' in self.pipers:
+            return 'en', self.pipers['en']
+        return None, None
+
+    def has_voice(self, language='en'):
+        _, piper = self._get_piper(language)
+        return piper is not None
+
+    def _warn_missing_voice_once(self, language):
+        if language in self.missing_voice_warnings:
+            return
+        self.missing_voice_warnings.add(language)
+        logging.warning(f"No Piper voice loaded for language '{language}'. Skipping TTS audio.")
 
     def _reset_tps_counters(self):
         self.tps = 0.0
@@ -289,22 +307,26 @@ class TalkController:
                     if self.chunk_count < self.permissive_chunks and len(sanitized_sentence) < self.min_chars_first_chunks:
                         # Not enough content yet; keep buffering
                         return
-                    buffer = self.pipers.get(self.current_language).synthesize(sanitized_sentence)
-                    if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                        return
-                    self.full_response.append(sanitized_sentence)
+                    _, piper = self._get_piper(self.current_language)
+                    if piper is None:
+                        self._warn_missing_voice_once(self.current_language)
+                    else:
+                        buffer = piper.synthesize(sanitized_sentence)
+                        if generation_id is not None and not genai_app.is_generation_current(generation_id):
+                            return
+                        self.full_response.append(sanitized_sentence)
 
-                    elapsed_time = time.time() - start_time
-                    audio_duration = self._get_wav_duration(buffer)
-                    rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
-                    logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                    genai_app.emit('audio_chunk', {
-                        'text': sanitized_sentence.strip(),
-                        'audio': buffer.getvalue(),
-                        'tps': round(self.tps, 2),
-                        'rtf': round(rtf, 2)
-                    })
-                    self.chunk_count += 1
+                        elapsed_time = time.time() - start_time
+                        audio_duration = self._get_wav_duration(buffer)
+                        rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                        logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
+                        genai_app.emit('audio_chunk', {
+                            'text': sanitized_sentence.strip(),
+                            'audio': buffer.getvalue(),
+                            'tps': round(self.tps, 2),
+                            'rtf': round(rtf, 2)
+                        })
+                        self.chunk_count += 1
 
                 self.talk = []
                 if self._next is not None:
@@ -371,10 +393,12 @@ class TalkController:
             raise ValueError("No text provided for TTS synthesis.")
 
         start_time = time.time()
-        language = language if language in self.pipers else 'en'
+        language, piper = self._get_piper(language)
+        if piper is None:
+            raise RuntimeError("No Piper TTS voice model is loaded. Install Piper .onnx voice assets under assets/.")
 
         sanitized_text = self._sanitize_for_tts(text)
-        buffer = self.pipers.get(language).synthesize(sanitized_text)
+        buffer = piper.synthesize(sanitized_text)
         elapsed_time = time.time() - start_time
         audio_duration = self._get_wav_duration(buffer)
         rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
@@ -712,6 +736,9 @@ class AppContext:
         @self.app.route('/voices/select', methods=['POST'])
         def select_voice():
             try:
+                if self.talk_ctrl is None:
+                    return jsonify({'error': 'TTS engine not initialized, start the app with --apionly disabled.'}), 503
+
                 data = request.get_json() or {}
                 lang = data.get('lang', 'en')
                 voice_id = data.get('voiceId')
@@ -951,6 +978,10 @@ class AppContext:
 
                 if not text:
                     return jsonify({'error': 'Missing "input" text field.'}), 400
+                if not self.talk_ctrl.has_voice(language):
+                    return jsonify({
+                        'error': 'No Piper TTS voice model is loaded. Install Piper .onnx voice assets under assets/.'
+                    }), 503
 
                 logging.info(f"Received TTS request: model={model}, voice={voice}, format={response_format}")
 
