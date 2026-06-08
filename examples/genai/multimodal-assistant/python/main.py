@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 import time
@@ -77,16 +78,16 @@ def main() -> int:
     server = None
     try:
         server = start_openai_server(cfg)
-        if not args.server_only:
-            print(
-                "Flask UI wiring is added in the next phase-1 step. "
-                "Use --server-only for the current partial migration.",
-                file=sys.stderr,
-            )
-            return 2
+        if args.server_only:
+            while True:
+                time.sleep(1)
 
-        while True:
-            time.sleep(1)
+        app_dir = Path(__file__).resolve().parent
+        os.chdir(app_dir)
+        from app import run_app
+
+        run_app(cfg)
+        return 0
     except KeyboardInterrupt:
         print("\nstopping OpenAI-compatible API server...", flush=True)
         return 0

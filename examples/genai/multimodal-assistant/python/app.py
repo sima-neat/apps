@@ -38,6 +38,8 @@ import atexit
 import signal
 import subprocess
 
+APP_DIR = Path(__file__).resolve().parent
+
 genai_app = None
 ttfs = 0
 rag_db_client = RagDbClient()
@@ -568,6 +570,21 @@ class AppContext:
         if not self.apionly:
             self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh']) 
 
+    def update_from_config(self, app_cfg):
+        model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
+        self.update_settings(
+            camidx=None,
+            model_server_ip=model_server,
+            ragserver=None,
+            httponly=not app_cfg.web.https,
+            apionly=False,
+            llm_only=False,
+            model_name=app_cfg.chat_model.name,
+            vision_image_size=None
+        )
+        if app_cfg.request.system_prompt:
+            self.set_system_prompt(app_cfg.request.system_prompt)
+
     def update_config(self):
         self.app.config['CAMERA_IDX'] = self.camidx
         self.app.config['SIMAAI_IP_ADDR'] = self.model_server_ip
@@ -612,8 +629,12 @@ class AppContext:
 
     def run(self):
         if not self.httponly:
+            ssl_context = (
+                str(APP_DIR / 'certs/server.crt'),
+                str(APP_DIR / 'certs/server.key')
+            )
             self.socketio.run(self.app, host='0.0.0.0', port="5000",
-                            ssl_context=('certs/server.crt', 'certs/server.key'),
+                            ssl_context=ssl_context,
                             debug=False, allow_unsafe_werkzeug=True)
         else:
             self.socketio.run(self.app, host='0.0.0.0', port="5000",
@@ -1203,8 +1224,9 @@ def post_audio_to_mla(audio_bytes, language="en"):
         logging.error(f"Failed to send audio for transcription: {e}")
         return None
 
-if __name__ == '__main__':
-    log_filename = 'server.log'
+def configure_logging(log_filename='server.log'):
+    if logging.getLogger().handlers:
+        return
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -1213,6 +1235,27 @@ if __name__ == '__main__':
             logging.StreamHandler(sys.stdout)
         ]
     )
+
+def run_app(app_cfg):
+    global genai_app
+    global vectodb_proc
+
+    configure_logging()
+    logging.info('Initializing multimodal assistant app (frontend and TTS) please wait....')
+    genai_app = AppContext()
+    genai_app.initialize()
+    genai_app.update_from_config(app_cfg)
+    genai_app.setup_router()
+    cleanup()
+
+    if not genai_app.apionly:
+        logging.info("Starting RAG database service")
+        vectodb_proc = start_service()
+
+    genai_app.run()
+
+if __name__ == '__main__':
+    configure_logging()
     logging.info('Initializing genai-demo app (frontend and TTS) please wait....')
     genai_app = AppContext()
     genai_app.initialize()
