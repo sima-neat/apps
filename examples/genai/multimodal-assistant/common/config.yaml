@@ -5,8 +5,10 @@ server:
 
   models:
     chat:
-      name: gemma4
-      path: assets/models/genai/gemma4-E2B-it
+      - name: gemma4
+        path: assets/models/genai/gemma4-E2B-it
+      - name: qwen3-vl-2b
+        path: assets/models/genai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
     asr:
       name: whisper-small
       path: assets/models/genai/whisper-small-a16w8
@@ -15,10 +17,6 @@ app:
   openai:
     client_host: 127.0.0.1
     port: 9998
-
-  models:
-    chat: gemma4
-    asr: whisper-small
 
   request:
     max_tokens: 128

@@ -14,10 +14,10 @@
 ## Concept
 This example hosts SiMa-supported GenAI models through Neat's OpenAI-compatible server and uses the imported Flask demo UI as the interactive assistant surface.
 
-The phase-1 target is one configured chat model, one configured ASR model, image/text chat, audio transcription, Piper TTS, system prompt control, chat history, voice selection, and abort.
+The example supports one or more configured chat models, one configured ASR model, image/text chat, audio transcription, Piper TTS, system prompt control, chat history, voice selection, and abort.
 
-The demo runs as two processes. `python/main.py` reads the `server` section of
-`common/config.yaml` and starts the Neat OpenAI-compatible server.
+The demo runs as two processes. `python/serve_models.py` reads the `server`
+section of `common/config.yaml` and starts the Neat OpenAI-compatible server.
 `python/serve_web.py` reads the `app` section of `common/config.yaml` and starts
 the existing Flask UI.
 
@@ -28,11 +28,10 @@ Runtime ownership is split deliberately:
 - Neat hosts the OpenAI-compatible `/v1/audio/transcriptions` endpoint for ASR.
 - The Flask app owns UI state, system prompt handling, chat history, abort
   requests, uploaded images, microphone recordings, and Piper TTS playback.
-- Piper TTS is app-side and part of phase 1. The default requirements install
-  Piper; TTS produces audio when the configured voice assets are present under
-  `python/assets/`.
+- Piper TTS is app-side. The default requirements install Piper; TTS produces
+  audio when the configured voice assets are present under `python/assets/`.
 - RAG source is preserved from the sandbox import, but RAG is disabled by
-  default in phase 1 through `common/config.yaml`.
+  default through `common/config.yaml`.
 
 ## Preview
 Multimodal assistant web UI:
@@ -43,7 +42,7 @@ Multimodal assistant web UI:
 - Installed Neat runtime with GenAI and `pyneat` support.
 - A VLM or LLM model directory configured in `common/config.yaml`.
 - A Whisper ASR model directory configured in `common/config.yaml`.
-- Phase-1 Python packages from `python/requirements.txt`.
+- Python packages from `python/requirements.txt`.
 
 Model directories must contain `devkit/` and `elf_files/`. Chat models use `devkit/vlm_config.json`; ASR models use `devkit/whisper_config.json`.
 
@@ -81,9 +80,8 @@ the pyneat environment:
 
 ```bash
 source ~/pyneat/bin/activate
-python3 examples/genai/multimodal-assistant/python/main.py \
-  --config examples/genai/multimodal-assistant/common/config.yaml \
-  --server-only
+python3 examples/genai/multimodal-assistant/python/serve_models.py \
+  --config examples/genai/multimodal-assistant/common/config.yaml
 ```
 
 In a second terminal, start the Flask UI from the web environment:
@@ -93,7 +91,7 @@ python3 examples/genai/multimodal-assistant/python/serve_web.py \
   --config examples/genai/multimodal-assistant/common/config.yaml
 ```
 
-The supported phase-1 entrypoints are `python/main.py` for model hosting and
+The supported entrypoints are `python/serve_models.py` for model hosting and
 `python/serve_web.py` for the UI. The imported sandbox scripts under `python/`
 are kept as source provenance during migration.
 
@@ -113,9 +111,8 @@ http://127.0.0.1:9998
 To test only the Neat OpenAI-compatible server:
 
 ```bash
-python3 examples/genai/multimodal-assistant/python/main.py \
-  --config examples/genai/multimodal-assistant/common/config.yaml \
-  --server-only
+python3 examples/genai/multimodal-assistant/python/serve_models.py \
+  --config examples/genai/multimodal-assistant/common/config.yaml
 ```
 
 ## Configuration
@@ -130,8 +127,10 @@ server:
 
   models:
     chat:
-      name: gemma4
-      path: assets/models/genai/gemma4-E2B-it
+      - name: gemma4
+        path: assets/models/genai/gemma4-E2B-it
+      - name: qwen3-vl-2b
+        path: assets/models/genai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
     asr:
       name: whisper-small
       path: assets/models/genai/whisper-small-a16w8
@@ -146,10 +145,6 @@ app:
     client_host: 127.0.0.1
     port: 9998
 
-  models:
-    chat: gemma4
-    asr: whisper-small
-
   request:
     max_tokens: 128
     system_prompt: Answer clearly and concisely.
@@ -162,12 +157,13 @@ app:
     enabled: false
 ```
 
-The served model names in the `app` section must match the names registered by
-the `server` section. Server model paths are resolved relative to the apps
-repository root unless they are absolute paths.
+The Flask UI derives selectable chat models and the ASR model name from
+`server.models`. The first chat model is the default selected model. Server
+model paths are resolved relative to the apps repository root unless they are
+absolute paths.
 
 ## Source Files
-- Python source: `python/main.py`, `python/serve_web.py`, `python/app.py`, `python/app_config.py`, `python/pipertts.py`
+- Python source: `python/serve_models.py`, `python/serve_web.py`, `python/app.py`, `python/app_config.py`, `python/pipertts.py`
 - Python dependencies: `python/requirements.txt`
 - Web UI assets: `python/templates/`, `python/static/`, `python/assets/`, `python/certs/`
 - Shared config: `common/config.yaml`

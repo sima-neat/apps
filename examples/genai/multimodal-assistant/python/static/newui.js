@@ -52,6 +52,38 @@ function isRagEnabled() {
   return config.ragEnabled === true || config.ragEnabled === 'true';
 }
 
+function getConfiguredChatModels() {
+  const config = window.SIMA_CONFIG || {};
+  return Array.isArray(config.chatModels) ? config.chatModels.filter(Boolean) : [];
+}
+
+function getSelectedChatModel() {
+  const select = document.getElementById('chatModelSelect');
+  const models = getConfiguredChatModels();
+  return (select && select.value) || window.SIMA_CONFIG?.defaultChatModel || models[0] || '';
+}
+
+function initializeChatModelSelect() {
+  const row = document.getElementById('chatModelRow');
+  const select = document.getElementById('chatModelSelect');
+  const models = getConfiguredChatModels();
+
+  if (!row || !select || models.length === 0) return;
+
+  while (select.firstChild) {
+    select.removeChild(select.firstChild);
+  }
+  models.forEach(model => {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model;
+    select.appendChild(option);
+  });
+
+  select.value = window.SIMA_CONFIG?.defaultChatModel || models[0];
+  row.style.display = models.length > 1 ? 'block' : 'none';
+}
+
 function hideRagControlsIfDisabled() {
   if (isRagEnabled()) return;
 
@@ -364,6 +396,7 @@ window.onload = function () {
 
   // Initialize dashboard functionality
   initializeVoiceSync();
+  initializeChatModelSelect();
   hideRagControlsIfDisabled();
   if (isRagEnabled()) {
     initializeRagHealth();
@@ -1119,6 +1152,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
 
   formData.append('searchRag', isRagEnabled() && searchRag ? searchRag.checked : false);
   formData.append('includeChatHistory', includeChatHistory ? includeChatHistory.checked : true);
+  formData.append('chatModel', getSelectedChatModel());
 
   const sendRequest = async () => {
     activeGeneration = true;

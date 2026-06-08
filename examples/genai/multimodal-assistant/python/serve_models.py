@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 import sys
 import time
@@ -15,11 +14,6 @@ from app_config import AppConfig, DEFAULT_SERVER_CONFIG, load_server_config
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_SERVER_CONFIG)
-    parser.add_argument(
-        "--server-only",
-        action="store_true",
-        help="Start only the Neat OpenAI-compatible server and skip the Flask UI.",
-    )
     return parser
 
 
@@ -37,10 +31,11 @@ def start_openai_server(cfg: AppConfig):
     options.port = cfg.openai.port
 
     server = pyneat.OpenAIServer(options)
-    chat_name = server.add_model(cfg.chat_model.path, cfg.chat_model.name)
+    for model in cfg.chat_models:
+        chat_name = server.add_model(model.path, model.name)
+        print(f"added chat model: {chat_name} -> {model.path}", flush=True)
     asr_name = server.add_model(cfg.asr_model.path, cfg.asr_model.name)
 
-    print(f"added chat model: {chat_name} -> {cfg.chat_model.path}", flush=True)
     print(f"added ASR model: {asr_name} -> {cfg.asr_model.path}", flush=True)
     print(f"available models: {', '.join(server.model_names())}", flush=True)
     print(
@@ -66,7 +61,7 @@ def main() -> int:
 
     missing = [
         str(model.path)
-        for model in (cfg.chat_model, cfg.asr_model)
+        for model in (*cfg.chat_models, cfg.asr_model)
         if model.path is None or not model.path.is_dir()
     ]
     if missing:
@@ -78,16 +73,8 @@ def main() -> int:
     server = None
     try:
         server = start_openai_server(cfg)
-        if args.server_only:
-            while True:
-                time.sleep(1)
-
-        app_dir = Path(__file__).resolve().parent
-        os.chdir(app_dir)
-        from app import run_app
-
-        run_app(cfg)
-        return 0
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         print("\nstopping OpenAI-compatible API server...", flush=True)
         return 0
