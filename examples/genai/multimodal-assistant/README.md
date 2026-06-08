@@ -27,9 +27,9 @@ Runtime ownership is split deliberately:
 - Neat hosts the OpenAI-compatible `/v1/audio/transcriptions` endpoint for ASR.
 - The Flask app owns UI state, system prompt handling, chat history, abort
   requests, uploaded images, microphone recordings, and Piper TTS playback.
-- Piper TTS is app-side. It works when the configured voice assets are present
-  under `python/assets/`; missing voices do not prevent the chat or ASR paths
-  from starting.
+- Piper TTS is app-side and part of phase 1. The default requirements install
+  Piper; TTS produces audio when the configured voice assets are present under
+  `python/assets/`.
 - RAG source is preserved from the sandbox import, but RAG is disabled by
   default in phase 1 through `common/config.yaml`.
 
@@ -42,7 +42,7 @@ Multimodal assistant web UI:
 - Installed Neat runtime with GenAI and `pyneat` support.
 - A VLM or LLM model directory configured in `common/config.yaml`.
 - A Whisper ASR model directory configured in `common/config.yaml`.
-- Python packages from `python/requirements.txt`.
+- Phase-1 Python packages from `python/requirements.txt`.
 
 Model directories must contain `devkit/` and `elf_files/`. Chat models use `devkit/vlm_config.json`; ASR models use `devkit/whisper_config.json`.
 
@@ -54,9 +54,10 @@ assets/models/genai/whisper-small-a16w8
 ```
 
 Run from the Python environment created by the installed Neat runtime, then
-install the app-local packages into that environment:
+install the app packages into that environment:
 
 ```bash
+source ~/pyneat/bin/activate
 python3 -m pip install -r examples/genai/multimodal-assistant/python/requirements.txt
 ```
 
@@ -126,6 +127,7 @@ root unless they are absolute paths.
 
 ## Source Files
 - Python source: `python/main.py`, `python/app.py`, `python/app_config.py`, `python/pipertts.py`
+- Python dependencies: `python/requirements.txt`
 - Web UI assets: `python/templates/`, `python/static/`, `python/assets/`, `python/certs/`
 - Shared config: `common/config.yaml`
 - Test scope: `test-scope.yaml`
