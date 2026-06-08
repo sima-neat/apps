@@ -451,6 +451,8 @@ class AppContext:
         self.system_prompt = None
         self.model_display_name = ""
         self.chat_model_name = "model"
+        self.chat_model_names = ("model",)
+        self.active_chat_model_name = "model"
         self.asr_model_name = "whisper-small"
         self.max_tokens = None
         self.rag_enabled = True
@@ -579,11 +581,13 @@ class AppContext:
             self._active_generation_id = None
             return had_active_generation
 
-    def begin_generation(self):
+    def begin_generation(self, chat_model_name=None):
         with self._state_lock:
             self._generation_counter += 1
             generation_id = self._generation_counter
             self._active_generation_id = generation_id
+            if chat_model_name:
+                self.active_chat_model_name = chat_model_name
             self.current_response = ""
             return generation_id
 
@@ -603,6 +607,12 @@ class AppContext:
         if system_message:
             with self._state_lock:
                 self.conversation_history.insert(0, system_message)
+
+    def resolve_chat_model(self, requested_model=None):
+        model_name = str(requested_model or self.chat_model_name).strip()
+        if model_name in self.chat_model_names:
+            return model_name
+        raise ValueError(f"Unknown chat model: {model_name}")
 
     def get_conversation_history(self):
         """Get the current conversation history."""
@@ -629,7 +639,9 @@ class AppContext:
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
-        self.chat_model_name = app_cfg.chat_model.name
+        self.chat_model_names = tuple(model.name for model in app_cfg.chat_models)
+        self.chat_model_name = self.chat_model_names[0]
+        self.active_chat_model_name = self.chat_model_name
         self.asr_model_name = app_cfg.asr_model.name
         self.max_tokens = app_cfg.request.max_tokens
         self.rag_enabled = app_cfg.rag.enabled
@@ -653,6 +665,7 @@ class AppContext:
         self.app.config['UPLOAD_FOLDER'] = AppConstants.DEFAULT_UPLOADS_DIR
         self.app.config['MODEL_DISPLAY_NAME'] = self.model_display_name
         self.app.config['CHAT_MODEL_NAME'] = self.chat_model_name
+        self.app.config['CHAT_MODEL_NAMES'] = list(self.chat_model_names)
         self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
         self.app.config['MAX_TOKENS'] = self.max_tokens
         self.app.config['RAG_ENABLED'] = self.rag_enabled
@@ -685,6 +698,8 @@ class AppContext:
                 "window.SIMA_CONFIG=window.SIMA_CONFIG||{};"
                 f"window.SIMA_CONFIG.llmOnly='{llm_only_val}';"
                 f"window.SIMA_CONFIG.ragEnabled='{str(self.rag_enabled).lower()}';"
+                f"window.SIMA_CONFIG.chatModels={json.dumps(list(self.chat_model_names))};"
+                f"window.SIMA_CONFIG.defaultChatModel={json.dumps(self.chat_model_name)};"
                 f"window.SIMA_CONFIG.visionImageHeight='{height_val}';"
                 f"window.SIMA_CONFIG.visionImageWidth='{width_val}';"
             )
@@ -711,7 +726,7 @@ class AppContext:
         self.interrupt_active_generation(preserve_partial=True)
 
         try:
-            success = post_stop_to_sima(self.chat_model_name)
+            success = post_stop_to_sima(self.active_chat_model_name)
             if not success:
                 return jsonify({'status': 'error', 'message': 'Failed to send stop signal to SiMa.ai server.'}), 500
         except Exception as e:
@@ -858,6 +873,11 @@ class AppContext:
             search_rag = request.form.get('searchRag', 'false').lower() == 'true'
             include_chat_history = request.form.get('includeChatHistory', 'true').lower() == 'true'
             cfg = genai_app.get_config()
+            try:
+                selected_model = self.resolve_chat_model(request.form.get('chatModel'))
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
+
             self.talk_ctrl.reset()
             self.talk_ctrl.set_language(language)
             had_active_generation = self.interrupt_active_generation(
@@ -865,7 +885,7 @@ class AppContext:
             )
             if had_active_generation:
                 try:
-                    post_stop_to_sima(cfg.get('CHAT_MODEL_NAME'))
+                    post_stop_to_sima(self.active_chat_model_name)
                 except Exception as e:
                     logging.error(f"Failed to stop previous generation before new request: {e}")
 
@@ -920,7 +940,7 @@ class AppContext:
             # Add user message to conversation history (detect if image is present)
             has_image = image_file is not None
             self.add_user_message(full_query_str, has_image=has_image, image_base64=image_base64)
-            generation_id = self.begin_generation()
+            generation_id = self.begin_generation(selected_model)
 
             ttfs = 0
             logging.info(f"Query string: {full_query_str}")
@@ -948,7 +968,7 @@ class AppContext:
 
             thread = threading.Thread(
                 target=stream_chat_request,
-                args=[conversation_history, cfg.get('CHAT_MODEL_NAME', 'model'), cfg, generation_id]
+                args=[conversation_history, selected_model, cfg, generation_id]
             )
             thread.start()
 
@@ -1050,10 +1070,15 @@ class AppContext:
                     image_file = request.files['image_data']
 
                 cfg = genai_app.get_config()
+                try:
+                    selected_model = self.resolve_chat_model(request.form.get('chatModel'))
+                except ValueError as e:
+                    return jsonify({'error': str(e)}), 400
+
                 had_active_generation = self.interrupt_active_generation(preserve_partial=True)
                 if had_active_generation:
                     try:
-                        post_stop_to_sima(cfg.get('CHAT_MODEL_NAME'))
+                        post_stop_to_sima(self.active_chat_model_name)
                     except Exception as e:
                         logging.error(f"Failed to stop previous generation before image request: {e}")
 
@@ -1069,13 +1094,13 @@ class AppContext:
 
                 # Add to conversation history and start assistant response (always has image)
                 self.add_user_message(query_str, has_image=True, image_base64=image_base64)
-                generation_id = self.begin_generation()
+                generation_id = self.begin_generation(selected_model)
 
                 logging.info(f"Query string {query_str}")
                 conversation_history = self.get_conversation_history()
                 thread = threading.Thread(
                     target=stream_chat_request,
-                    args=[conversation_history, cfg.get('CHAT_MODEL_NAME', 'model'), cfg, generation_id]
+                    args=[conversation_history, selected_model, cfg, generation_id]
                 )
                 thread.start()
                 return {'question' : query_str}
