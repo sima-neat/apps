@@ -9,12 +9,12 @@ from pathlib import Path
 import sys
 import time
 
-from app_config import AppConfig, DEFAULT_CONFIG, load_config
+from app_config import AppConfig, DEFAULT_SERVER_CONFIG, load_server_config
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--config", type=Path, default=DEFAULT_SERVER_CONFIG)
     parser.add_argument(
         "--server-only",
         action="store_true",
@@ -59,7 +59,7 @@ def main() -> int:
         return 2
 
     try:
-        cfg = load_config(args.config)
+        cfg = load_server_config(args.config)
     except Exception as exc:
         print(f"invalid config: {exc}", file=sys.stderr)
         return 2
@@ -67,7 +67,7 @@ def main() -> int:
     missing = [
         str(model.path)
         for model in (cfg.chat_model, cfg.asr_model)
-        if not model.path.is_dir()
+        if model.path is None or not model.path.is_dir()
     ]
     if missing:
         print("model directory does not exist:", file=sys.stderr)
