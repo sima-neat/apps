@@ -386,16 +386,16 @@ window.onload = function () {
     if (isLlmOnly) {
       // LLM-only mode: enable history by default
       chatHistoryCheckbox.checked = true;
-      addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history is enabled.", false);
+      addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history is enabled.", false);
     } else {
       // VLM mode: disable history by default (multi-image history is slow)
       chatHistoryCheckbox.checked = false;
-      addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
+      addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
     }
     chatHistoryCheckbox.addEventListener('change', handleChatHistoryToggle);
   } else {
     // Fallback if checkbox doesn't exist
-    addChatMessage("Hi, this is the SiMa GenAI Demo!", false);
+    addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you?", false);
   }
 };
 
@@ -777,7 +777,7 @@ function handleChatHistoryToggle(event) {
       });
 
     // Add info message
-    addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
+    addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history disabled. Enable 'Include chat history' in settings for multi-turn conversations.", false);
   } else {
     // Checkbox was re-enabled - keep user conversation, update info message if no conversation
     console.log('Chat history enabled - conversations will accumulate');
@@ -788,7 +788,7 @@ function handleChatHistoryToggle(event) {
       // No user conversation - clear info messages and show new status
       const allMessages = chatMessages.querySelectorAll('.message');
       allMessages.forEach(message => message.remove());
-      addChatMessage("Hi, this is the SiMa GenAI Demo! Chat history enabled. Conversations will be remembered.", false);
+      addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you? Chat history enabled. Conversations will be remembered.", false);
     }
     // If there are user messages, keep them and don't add any info message
   }
@@ -821,7 +821,7 @@ function newChat() {
   showSettingsRows();
 
   // Re-add welcome message
-  addChatMessage("Hi, this is the SiMa GenAI Demo!", false);
+  addChatMessage("Hi, this is the Neat Multi-Modal Assistant! How can I help you?", false);
 
   // Hide abort button if visible
   hideAbortButton();
