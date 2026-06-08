@@ -18,7 +18,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--server-only",
         action="store_true",
-        help="Start only the Neat OpenAI-compatible server. Flask UI wiring is added in phase 1.",
+        help="Start only the Neat OpenAI-compatible server and skip the Flask UI.",
     )
     return parser
 

@@ -1,9 +1,9 @@
 models:
-  gemma4:
+  gemma4-E2B-it:
     source: huggingface
     repo: TBD
     path: TBD
-  whisper-small:
+  whisper-small-a16w8:
     source: huggingface
     repo: TBD
     path: TBD
