@@ -1,1 +1,1 @@
-add_subdirectory(depth-estimator/cpp depth-estimator)
+add_subdirectory(depth-estimator/src/cpp depth-estimator)

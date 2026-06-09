@@ -30,8 +30,8 @@ Detection metadata visualized in Insight:
 From the `apps` repository root:
 
 ```bash
-python3 examples/genai/detection-to-vlm-assistant/python/main.py \
-  --config examples/genai/detection-to-vlm-assistant/common/config.yaml
+python3 examples/genai/detection-to-vlm-assistant/src/python/main.py \
+  --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
 ```
 
 Set `openai.enabled: false` in the config to run only the detection and Insight path.
@@ -39,5 +39,5 @@ Set `openai.enabled: false` in the config to run only the detection and Insight 
 The OpenAI path checks `/v1/models` before sending a crop, waits at least `openai.interval_seconds` between attempts, and keeps at most `openai.max_pending_requests` queued or in-flight requests.
 
 ## Source Files
-- Python source: `python/main.py`, `python/utils/helpers.py`, `python/utils/openai_commenter.py`
-- Shared assets: `common/`
+- Python source: `src/python/main.py`, `src/python/utils/helpers.py`, `src/python/utils/openai_commenter.py`
+- Shared assets: `src/common/`

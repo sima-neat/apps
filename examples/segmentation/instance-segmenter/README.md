@@ -33,7 +33,7 @@ Download any variant into `assets/models/`:
 - Model path is positional and required.
 - Input directory is scanned for common image extensions.
 - Output images include per-instance mask overlays plus bounding boxes/class labels.
-- Runtime and decode settings live in `common/config.yaml`.
+- Runtime and decode settings live in `src/common/config.yaml`.
 - Inference runs on a resized model input, but saved overlays preserve the original image resolution.
 - Uses YOLOv8-seg tensors for box regression/class scores, mask coefficients, and prototype masks.
 - Masks, mask contours, and bounding boxes share the same vivid class-color palette.
@@ -43,15 +43,15 @@ Download any variant into `assets/models/`:
 - Invocation:
   `./build/examples/segmentation/instance-segmenter/instance-segmenter [--config <path>]`
 - Required arguments:
-  None. Defaults to `common/config.yaml`.
+  None. Defaults to `src/common/config.yaml`.
 - Optional arguments:
   `--config <path>`
 
 ### Python
 - Invocation:
-  `python3 examples/segmentation/instance-segmenter/python/main.py [--config <path>]`
+  `python3 examples/segmentation/instance-segmenter/src/python/main.py [--config <path>]`
 - Required arguments:
-  None. Defaults to `common/config.yaml`.
+  None. Defaults to `src/common/config.yaml`.
 - Optional arguments:
   `--config <path>`
 
@@ -83,15 +83,15 @@ Binary output:
 ### C++
 ```bash
 ./build/examples/segmentation/instance-segmenter/instance-segmenter \
-  --config examples/segmentation/instance-segmenter/common/config.yaml
+  --config examples/segmentation/instance-segmenter/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/segmentation/instance-segmenter/python/requirements.txt
-python3 examples/segmentation/instance-segmenter/python/main.py \
-  --config examples/segmentation/instance-segmenter/common/config.yaml
+pip install -r examples/segmentation/instance-segmenter/src/python/requirements.txt
+python3 examples/segmentation/instance-segmenter/src/python/main.py \
+  --config examples/segmentation/instance-segmenter/src/common/config.yaml
 ```
 
 ## Debugging Notes
@@ -100,6 +100,6 @@ python3 examples/segmentation/instance-segmenter/python/main.py \
 - Ensure output directory is writable.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- Python source: `python/main.py`
-- Shared config: `common/config.yaml`
+- C++ source: `src/cpp/main.cpp`
+- Python source: `src/python/main.py`
+- Shared config: `src/common/config.yaml`

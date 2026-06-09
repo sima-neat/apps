@@ -16,9 +16,9 @@ This example hosts SiMa-supported GenAI models through Neat's OpenAI-compatible 
 
 The example supports one or more configured chat models, one configured ASR model, image/text chat, audio transcription, Piper TTS, system prompt control, chat history, voice selection, and abort.
 
-The demo runs as two processes. `python/server/main.py` reads the `server`
-section of `common/config.yaml` and starts the Neat OpenAI-compatible server.
-`python/ui/main.py` reads the `app` section of `common/config.yaml` and starts
+The demo runs as two processes. `src/python/server/main.py` reads the `server`
+section of `src/common/config.yaml` and starts the Neat OpenAI-compatible server.
+`src/python/ui/main.py` reads the `app` section of `src/common/config.yaml` and starts
 the existing Flask UI.
 
 Runtime ownership is split deliberately:
@@ -29,7 +29,7 @@ Runtime ownership is split deliberately:
 - The Flask app owns UI state, system prompt handling, chat history, abort
   requests, uploaded images, microphone recordings, and Piper TTS playback.
 - Piper TTS is app-side. The default requirements install Piper; TTS produces
-  audio when the configured voice assets are present under `python/ui/assets/`.
+  audio when the configured voice assets are present under `src/python/ui/assets/`.
 - RAG is app-side and optional. It uses the Flask UI, local VectorDB service,
   and the same chat model hosted by the Neat OpenAI-compatible server.
 
@@ -52,7 +52,7 @@ environment where `pyneat` is available. The examples below assume:
 ### 2. Download Model Artifacts
 Visit the [SiMa.ai Hugging Face page](https://huggingface.co/simaai) to see the
 officially supported model artifacts. Download the chat/VLM and ASR artifacts
-you want to run, then update `common/config.yaml` so each model path points to
+you want to run, then update `src/common/config.yaml` so each model path points to
 the downloaded directory. Model paths can be absolute or relative to the `apps`
 repository root.
 
@@ -68,7 +68,7 @@ Model directories must contain `devkit/` and `elf_files/`. Chat models use
 `devkit/vlm_config.json`; ASR models use `devkit/whisper_config.json`.
 
 ### 3. Configure Models
-Edit `examples/genai/multimodal-assistant/common/config.yaml`:
+Edit `examples/genai/multimodal-assistant/src/common/config.yaml`:
 
 ```yaml
 server:
@@ -96,25 +96,25 @@ Keep the Flask UI dependencies separate from the `pyneat` environment:
 ```bash
 python3 -m venv ~/multimodal-assistant-app
 source ~/multimodal-assistant-app/bin/activate
-python3 -m pip install -r examples/genai/multimodal-assistant/python/requirements.txt
+python3 -m pip install -r examples/genai/multimodal-assistant/src/python/requirements.txt
 ```
 
 ### 5. Install Piper Voices For TTS
 If you need text-to-speech playback, install the Piper voice assets:
 
 ```bash
-cd examples/genai/multimodal-assistant/python
+cd examples/genai/multimodal-assistant/src/python
 bash voice_install.sh
 cd /workspace/sima-neat/apps
 ```
 
 The script downloads selected Piper `.onnx` voice models into
-`python/ui/assets/`.
+`src/python/ui/assets/`.
 Each voice needs both files:
 
 ```text
-python/ui/assets/<voice>.onnx
-python/ui/assets/<voice>.onnx.json
+src/python/ui/assets/<voice>.onnx
+src/python/ui/assets/<voice>.onnx.json
 ```
 
 ## Run
@@ -130,11 +130,11 @@ bash examples/genai/multimodal-assistant/run.sh
 
 `run.sh` is a convenience wrapper. It starts:
 
-- `python/server/main.py` with `PYNEAT_PYTHON`
-- `python/ui/main.py` with `APP_PYTHON`
+- `src/python/server/main.py` with `PYNEAT_PYTHON`
+- `src/python/ui/main.py` with `APP_PYTHON`
 
 Set `PYNEAT_PYTHON` to the Python interpreter that has `pyneat` installed. Set
-`APP_PYTHON` to the UI environment that has `python/requirements.txt`
+`APP_PYTHON` to the UI environment that has `src/python/requirements.txt`
 installed. If `PYNEAT_PYTHON` is not set, the script uses `~/pyneat/bin/python`
 when it exists. If `APP_PYTHON` is not set, it uses `python3`.
 
@@ -168,8 +168,8 @@ Terminal 1, model server:
 cd /workspace/sima-neat/apps
 source ~/pyneat/bin/activate
 
-python /workspace/sima-neat/apps/examples/genai/multimodal-assistant/python/server/main.py \
-  --config /workspace/sima-neat/apps/examples/genai/multimodal-assistant/common/config.yaml
+python /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/python/server/main.py \
+  --config /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/common/config.yaml
 ```
 
 Terminal 2, Flask UI:
@@ -178,18 +178,18 @@ Terminal 2, Flask UI:
 cd /workspace/sima-neat/apps
 source ~/multimodal-assistant-app/bin/activate
 
-python /workspace/sima-neat/apps/examples/genai/multimodal-assistant/python/ui/main.py \
-  --config /workspace/sima-neat/apps/examples/genai/multimodal-assistant/common/config.yaml
+python /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/python/ui/main.py \
+  --config /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/common/config.yaml
 ```
 
-The supported entrypoints are `python/server/main.py` for model hosting and
-`python/ui/main.py` for the UI.
+The supported entrypoints are `src/python/server/main.py` for model hosting and
+`src/python/ui/main.py` for the UI.
 
 ## Optional RAG Setup
 RAG is optional. If you do not need RAG, skip this section.
 
 ### 1. Enable RAG
-Edit `examples/genai/multimodal-assistant/common/config.yaml`:
+Edit `examples/genai/multimodal-assistant/src/common/config.yaml`:
 
 ```yaml
 app:
@@ -205,7 +205,7 @@ Install the RAG packages into the UI environment:
 cd /workspace/sima-neat/apps
 source ~/multimodal-assistant-app/bin/activate
 
-python3 -m pip install -r examples/genai/multimodal-assistant/python/requirements-rag.txt
+python3 -m pip install -r examples/genai/multimodal-assistant/src/python/requirements-rag.txt
 ```
 
 ### 3. Download The Embedding Model
@@ -223,18 +223,18 @@ hf download "${EMBED_REPO}" --local-dir "${EMBED_DIR}"
 The example includes a small Markdown document for smoke testing:
 
 ```text
-examples/genai/multimodal-assistant/common/rag/neat.md
+examples/genai/multimodal-assistant/src/common/rag/neat.md
 ```
 
 Create `milvus.db`:
 
 ```bash
-cd /workspace/sima-neat/apps/examples/genai/multimodal-assistant/python
+cd /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/python
 source ~/multimodal-assistant-app/bin/activate
 
 EMBED_DIR="/path/to/local/embedding-model-dir"
 python rag/create_db.py \
-  --input /workspace/sima-neat/apps/examples/genai/multimodal-assistant/common/rag/neat.md \
+  --input /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/common/rag/neat.md \
   --output ui/milvus.db \
   --embedding-model "${EMBED_DIR}"
 ```
@@ -242,8 +242,8 @@ python rag/create_db.py \
 Do not commit generated files:
 
 ```text
-examples/genai/multimodal-assistant/python/ui/milvus.db
-examples/genai/multimodal-assistant/python/ui/milvus.meta.json
+examples/genai/multimodal-assistant/src/python/ui/milvus.db
+examples/genai/multimodal-assistant/src/python/ui/milvus.meta.json
 ```
 
 ### 5. Run And Test RAG
@@ -333,15 +333,15 @@ Then test the browser UI:
 - select a Piper voice and confirm playback
 - change the system prompt and send a new prompt
 - press abort during generation
-- enable `Search RAG Database` and ask a question from `common/rag/neat.md`
+- enable `Search RAG Database` and ask a question from `src/common/rag/neat.md`
 
 ## Source Files
 - Run wrapper: `run.sh`
-- Python source: `python/server/main.py`, `python/ui/main.py`, `python/ui/flask_app.py`, `python/shared/config.py`, `python/ui/pipertts.py`
-- Python dependencies: `python/requirements.txt`, `python/requirements-rag.txt`
-- RAG helper: `python/rag/create_db.py`, `python/rag/vectordb.py`, `python/rag/vectordb_worker.py`
-- RAG sample document: `common/rag/neat.md`
-- UI assets: `python/ui/templates/`, `python/ui/static/`, `python/ui/assets/`, `python/ui/certs/`
-- Manual API scripts: `python/ui/apitest/`
-- Shared config: `common/config.yaml`
-- Test scope: `test-scope.yaml`
+- Python source: `src/python/server/main.py`, `src/python/ui/main.py`, `src/python/ui/flask_app.py`, `src/python/shared/config.py`, `src/python/ui/pipertts.py`
+- Python dependencies: `src/python/requirements.txt`, `src/python/requirements-rag.txt`
+- RAG helper: `src/python/rag/create_db.py`, `src/python/rag/vectordb.py`, `src/python/rag/vectordb_worker.py`
+- RAG sample document: `src/common/rag/neat.md`
+- UI assets: `src/python/ui/templates/`, `src/python/ui/static/`, `src/python/ui/assets/`, `src/python/ui/certs/`
+- Manual API scripts: `src/python/ui/apitest/`
+- Shared config: `src/common/config.yaml`
+- Test scope: `tests/test-scope.yaml`

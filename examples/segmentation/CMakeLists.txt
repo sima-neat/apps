@@ -1,1 +1,1 @@
-add_subdirectory(instance-segmenter/cpp instance-segmenter)
+add_subdirectory(instance-segmenter/src/cpp instance-segmenter)

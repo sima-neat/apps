@@ -20,6 +20,7 @@ def _files_requiring_pinned_modelzoo_calls() -> list[Path]:
         / "examples"
         / "object-detection"
         / "single-stream-object-detector"
+        / "src"
         / "python"
         / "main.py"
     )

@@ -25,13 +25,13 @@ std::string full_key(const std::string& example_name, const std::string& section
 
 void require_present(const ScalarConfig& config, const std::string& key) {
   if (!config.string_value(key).has_value()) {
-    throw std::runtime_error("common/config.yaml missing required key: " + key);
+    throw std::runtime_error("src/common/config.yaml missing required key: " + key);
   }
 }
 
 std::string example_key_for_name(const std::string& example_name) {
   const fs::path common_config = example_common_config_path(example_name);
-  const fs::path example_dir = common_config.parent_path().parent_path();
+  const fs::path example_dir = common_config.parent_path().parent_path().parent_path();
   return example_dir.parent_path().filename().string() + "/" + example_dir.filename().string();
 }
 
@@ -71,13 +71,13 @@ std::filesystem::path example_common_config_path(const std::string& example_name
     if (!category.is_directory()) {
       continue;
     }
-    const fs::path candidate = category.path() / example_name / "common" / "config.yaml";
+    const fs::path candidate = category.path() / example_name / "src" / "common" / "config.yaml";
     if (fs::exists(candidate)) {
       matches.push_back(candidate);
     }
   }
   if (matches.size() != 1) {
-    throw std::runtime_error("expected one common/config.yaml for example '" + example_name +
+    throw std::runtime_error("expected one src/common/config.yaml for example '" + example_name +
                              "', found " + std::to_string(matches.size()));
   }
   return matches.front();

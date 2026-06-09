@@ -33,10 +33,10 @@ Download into `assets/models/`:
 - yolo26m is not yet published in the SiMa modelzoo. Use the direct download URL below until a modelzoo entry is available.
 - Direct URL download:
   `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz && cd ../..`
-- Labels file: `examples/object-detection/yolo26-object-detector/common/coco_label.txt`
+- Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
 
 ## Important Behavior
-- C++ and Python read runtime values from `common/config.yaml`.
+- C++ and Python read runtime values from `src/common/config.yaml`.
 - Labels file is configured under `model.labels`.
 - Output images are written as `.png` files.
 - Use `runtime.profile` to print per-image and aggregate timing plus FPS.
@@ -48,13 +48,13 @@ Download into `assets/models/`:
 - Invocation:
   `./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector [--config <path>]`
 - Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
 
 ### Python
 - Invocation:
-  `python examples/object-detection/yolo26-object-detector/python/main.py [--config <path>]`
+  `python examples/object-detection/yolo26-object-detector/src/python/main.py [--config <path>]`
 - Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
 
 ## Build
 ### Build From The Apps Repo
@@ -89,8 +89,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/yolo26-object-detector/python/requirements.txt
-python examples/object-detection/yolo26-object-detector/python/main.py
+pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
+python examples/object-detection/yolo26-object-detector/src/python/main.py
 ```
 
 ## Testing
@@ -120,19 +120,19 @@ SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 Unit test:
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/yolo26-object-detector/python/requirements.txt
-pytest examples/object-detection/yolo26-object-detector/python/tests/test_unit.py -v
+pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
+pytest examples/object-detection/yolo26-object-detector/tests/python/test_unit.py -v
 ```
 
 E2E test:
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/yolo26-object-detector/python/requirements.txt
+pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
 SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
-pytest examples/object-detection/yolo26-object-detector/python/tests/test_e2e.py -v
+pytest examples/object-detection/yolo26-object-detector/tests/python/test_e2e.py -v
 ```
 
 ## Debugging Notes
@@ -143,8 +143,8 @@ pytest examples/object-detection/yolo26-object-detector/python/tests/test_e2e.py
 - Use `decode.score_threshold` and `decode.nms_iou` to tune detection sensitivity.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
-- Python source: `python/main.py`
-- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
-- Shared assets: `common/coco_label.txt`
+- C++ source: `src/cpp/main.cpp`
+- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+- Python source: `src/python/main.py`
+- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
+- Shared assets: `src/common/coco_label.txt`

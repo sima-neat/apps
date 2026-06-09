@@ -42,7 +42,7 @@ Download into `assets/models/`:
   `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
 
 ## Important Behavior
-- C++ and Python read runtime values from `common/config.yaml`.
+- C++ and Python read runtime values from `src/common/config.yaml`.
 - Detection confidence and NMS IoU live under `decode`.
 - By default, detections include 5-point facial landmarks unless `decode.landmarks` is `false`.
 
@@ -51,13 +51,13 @@ Download into `assets/models/`:
 - Invocation:
   `./build/examples/face-detection/face-detector_cpp/face-detector [--config <path>]`
 - Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
 
 ### Python
 - Invocation:
-  `python3 examples/face-detection/face-detector/python/main.py [--config <path>]`
+  `python3 examples/face-detection/face-detector/src/python/main.py [--config <path>]`
 - Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
 
 ## Build
 ### Build From The Apps Repo
@@ -92,8 +92,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/face-detection/face-detector/python/requirements.txt
-python3 examples/face-detection/face-detector/python/main.py
+pip install -r examples/face-detection/face-detector/src/python/requirements.txt
+python3 examples/face-detection/face-detector/src/python/main.py
 ```
 
 ## Testing
@@ -124,17 +124,17 @@ ctest --test-dir build/examples/face-detection/face-detector_cpp \
 Unit test:
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/face-detection/face-detector/python/requirements.txt
+pip install -r examples/face-detection/face-detector/src/python/requirements.txt
 pip install pytest
 export PYTHONPATH="$PWD"
 pytest -c tests/pytest.ini --rootdir="$PWD" -m unit \
-  examples/face-detection/face-detector/python/tests/test_unit.py -v
+  examples/face-detection/face-detector/tests/python/test_unit.py -v
 ```
 
 E2E test:
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/face-detection/face-detector/python/requirements.txt
+pip install -r examples/face-detection/face-detector/src/python/requirements.txt
 pip install pytest
 export PYTHONPATH="$PWD"
 SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
@@ -143,7 +143,7 @@ SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp/retinaface-python-e2e \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
 pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
-  examples/face-detection/face-detector/python/tests/test_e2e.py -v
+  examples/face-detection/face-detector/tests/python/test_e2e.py -v
 ```
 
 Notes:
@@ -158,7 +158,7 @@ Notes:
 - If output writing fails, ensure `io.output_dir` exists or can be created.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
-- Python source: `python/main.py`
-- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
+- C++ source: `src/cpp/main.cpp`
+- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+- Python source: `src/python/main.py`
+- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`

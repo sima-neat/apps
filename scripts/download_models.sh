@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download model artifacts required by the enabled apps test scope.
 #
-# Default behavior reads examples/*/*/test-scope.yaml and downloads models for
+# Default behavior reads examples/*/*/tests/test-scope.yaml and downloads models for
 # enabled Python and C++ e2e tests. Explicit positional arguments are treated as
 # modelzoo names for manual one-off downloads.
 #

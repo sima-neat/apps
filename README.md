@@ -47,24 +47,23 @@ This keeps examples editable and easy to customize.
 
 ## Example Structure
 
-Examples are organized under `examples/<category>/<example>`. Each example is source-first and meant to be readable from the entrypoints, with the main application flow visible in both `cpp/main.cpp` and `python/main.py`.
+Examples are organized under `examples/<category>/<example>`. Each example is source-first and meant to be readable from the entrypoints, with the main application flow visible in both `src/cpp/main.cpp` and `src/python/main.py`.
 
 ### Required Layout
 
 | Path | Purpose |
 | --- | --- |
 | `examples/<category>/<example>/README.md` | Example-specific usage and setup instructions |
-| `examples/<category>/<example>/test-scope.yaml` | Internal test selection and e2e model source metadata |
-| `examples/<category>/<example>/cpp/CMakeLists.txt` | C++ example build configuration |
-| `examples/<category>/<example>/cpp/main.cpp` | C++ entrypoint with visible Neat API flow |
-| `examples/<category>/<example>/cpp/tests/CMakeLists.txt` | C++ test build configuration |
-| `examples/<category>/<example>/cpp/tests/test_unit.cpp` | C++ unit tests |
-| `examples/<category>/<example>/cpp/tests/test_e2e.cpp` | C++ end-to-end tests |
-| `examples/<category>/<example>/python/main.py` | Python entrypoint with visible Neat API flow |
-| `examples/<category>/<example>/python/requirements.txt` | Python example dependencies |
-| `examples/<category>/<example>/python/tests/test_unit.py` | Python unit tests |
-| `examples/<category>/<example>/python/tests/test_e2e.py` | Python end-to-end tests |
-| `examples/<category>/<example>/common/` | Files shared by the C++ and Python implementations |
+| `examples/<category>/<example>/tests/test-scope.yaml` | Internal test selection and e2e model source metadata |
+| `examples/<category>/<example>/src/cpp/CMakeLists.txt` | C++ example build configuration |
+| `examples/<category>/<example>/src/cpp/main.cpp` | C++ entrypoint with visible Neat API flow |
+| `examples/<category>/<example>/tests/cpp/test_unit.cpp` | C++ unit tests |
+| `examples/<category>/<example>/tests/cpp/test_e2e.cpp` | C++ end-to-end tests |
+| `examples/<category>/<example>/src/python/main.py` | Python entrypoint with visible Neat API flow |
+| `examples/<category>/<example>/src/python/requirements.txt` | Python example dependencies |
+| `examples/<category>/<example>/tests/python/test_unit.py` | Python unit tests |
+| `examples/<category>/<example>/tests/python/test_e2e.py` | Python end-to-end tests |
+| `examples/<category>/<example>/src/common/` | Files shared by the C++ and Python implementations |
 
 > **IMPORTANT:** Use this structure when reading, extending, or adding examples.
 > Follow the instructions inside each example `README.md`, or visit the [SiMa.ai Neat Apps Portal](<https://apps.sima-neat.com/portal/index.html>).

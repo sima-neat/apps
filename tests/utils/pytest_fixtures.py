@@ -43,7 +43,7 @@ def apps_root() -> Path:
 
 @pytest.fixture
 def e2e_config_section():
-    """Return one section from an example's common/config.yaml."""
+    """Return one section from an example's src/common/config.yaml."""
 
     def _get(example_name: str, section: str) -> dict[str, Any]:
         try:
@@ -85,7 +85,7 @@ def tmp_output_dir(request) -> Path:
     base_root = Path(base_raw) if base_raw else APPS_ROOT / "sandbox-test"
     keep_output = os.environ.get("SIMANEAT_APPS_TEST_KEEP_OUTPUT", "").strip() == "1"
     cleanup_needed = not keep_output
-    # python/tests/test_e2e.py -> example directory is parents[2]
+    # tests/python/test_e2e.py -> example directory is parents[2]
     test_file = Path(str(request.node.fspath))
     example_name = test_file.parents[2].name
     test_name = request.node.name.replace("/", "_")
@@ -101,7 +101,7 @@ def tmp_output_dir(request) -> Path:
 
 @pytest.fixture
 def e2e_config_writer(request, tmp_output_dir, models_dir):
-    """Write a per-test config by overlaying overrides onto common/config.yaml."""
+    """Write a per-test config by overlaying overrides onto src/common/config.yaml."""
 
     def _write(overrides: dict[str, Any]) -> Path:
         test_file = Path(str(request.node.fspath))
@@ -179,7 +179,7 @@ def _has_output_files(output_dir: Path, expected_files: int) -> bool:
 
 @pytest.fixture
 def e2e_model_path(request, models_dir, skip_unless_e2e_ready) -> Path:
-    """Resolve the model path named by common/config.yaml under the active models dir."""
+    """Resolve the model path named by src/common/config.yaml under the active models dir."""
     test_file = Path(str(request.node.fspath))
     model_path = resolve_configured_model_path(common_config_path_for_test(test_file), models_dir)
     skip_unless_e2e_ready(
