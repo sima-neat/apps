@@ -8,12 +8,15 @@ import os
 from pathlib import Path
 import sys
 
-from app_config import DEFAULT_WEB_CONFIG, load_web_config
+PYTHON_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PYTHON_DIR))
+
+from shared.config import DEFAULT_UI_CONFIG, load_ui_config
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_WEB_CONFIG)
+    parser.add_argument("--config", type=Path, default=DEFAULT_UI_CONFIG)
     return parser
 
 
@@ -24,7 +27,7 @@ def main() -> int:
         return 2
 
     try:
-        cfg = load_web_config(args.config)
+        cfg = load_ui_config(args.config)
     except Exception as exc:
         print(f"invalid config: {exc}", file=sys.stderr)
         return 2
@@ -33,9 +36,9 @@ def main() -> int:
     os.chdir(app_dir)
 
     try:
-        from app import run_app
+        from flask_app import run_ui
 
-        run_app(cfg)
+        run_ui(cfg)
     except KeyboardInterrupt:
         print("\nstopping Flask UI...", flush=True)
     except Exception as exc:

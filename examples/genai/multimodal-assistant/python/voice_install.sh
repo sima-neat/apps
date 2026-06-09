@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Directory where voices are stored
-ASSETS_DIR="assets"
+ASSETS_DIR="ui/assets"
 
 # Edit this list with the voices you want to install.
 # Use the format: "<lang_COUNTRY>-<voice>-<quality>"

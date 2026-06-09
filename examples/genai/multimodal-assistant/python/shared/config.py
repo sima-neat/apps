@@ -8,11 +8,11 @@ from pathlib import Path
 import yaml
 
 
-APPS_ROOT = Path(__file__).resolve().parents[4]
-COMMON_DIR = Path(__file__).resolve().parents[1] / "common"
+APPS_ROOT = Path(__file__).resolve().parents[5]
+COMMON_DIR = Path(__file__).resolve().parents[2] / "common"
 DEFAULT_CONFIG = COMMON_DIR / "config.yaml"
 DEFAULT_SERVER_CONFIG = DEFAULT_CONFIG
-DEFAULT_WEB_CONFIG = DEFAULT_CONFIG
+DEFAULT_UI_CONFIG = DEFAULT_CONFIG
 
 
 @dataclass(frozen=True)
@@ -99,7 +99,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = APP
     )
 
 
-def load_web_config(path: Path = DEFAULT_WEB_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
+def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = config.get("app", config)
     server = config.get("server", {})

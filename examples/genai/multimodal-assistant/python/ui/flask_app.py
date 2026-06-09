@@ -8,7 +8,6 @@
 #
 # All rights reserved.
 #########################################################
-import argparse
 import base64
 import json
 import logging
@@ -89,36 +88,6 @@ class AppConstants:
     DEFAULT_MODEL_QUERY_STR='Describe what you see in the picture.'
     DEFAULT_HTTP_PORT = 8081
     DEFAULT_UPLOADS_DIR = 'uploads'
-
-def parse_vision_image_size(size_str):
-    if not size_str:
-        return None
-
-    normalized = str(size_str).strip().lower().replace(' ', '')
-    if not normalized:
-        return None
-
-    height = width = None
-
-    if 'x' in normalized:
-        parts = normalized.split('x', 1)
-        if len(parts) == 2:
-            try:
-                height = int(float(parts[0]))
-                width = int(float(parts[1]))
-            except ValueError:
-                return None
-    else:
-        try:
-            value = int(float(normalized))
-            height = width = value
-        except ValueError:
-            return None
-
-    if not height or not width or height <= 0 or width <= 0:
-        return None
-
-    return {'height': height, 'width': width}
 
 class TalkController:
     def __init__(self, supported_langs=None):
@@ -1365,7 +1334,7 @@ def configure_logging(log_filename='server.log'):
         ]
     )
 
-def run_app(app_cfg):
+def run_ui(app_cfg):
     global genai_app
     global vectodb_proc
 
@@ -1388,75 +1357,3 @@ def run_app(app_cfg):
         genai_app.run()
     finally:
         stop_service()
-
-if __name__ == '__main__':
-    configure_logging()
-    logging.info('Initializing genai-demo app (frontend and TTS) please wait....')
-    genai_app = AppContext()
-    genai_app.initialize()
-    
-    parser = argparse.ArgumentParser(description ='SiMa.ai GenAI demo application args')
-    parser.add_argument('--camidx', type=int, required=False)
-    parser.add_argument('--ip', type=str, required=False)
-    parser.add_argument('--ragserver', type=str, required=False)
-    parser.add_argument('--httponly', action='store_true', help='Run app server in http only')
-    parser.add_argument('--apionly', action='store_true', help='Run app server with only OpenAI APIs, so we disable UI and Piper TTS functionalities')
-    parser.add_argument('--llm-only', action='store_true', help='Disable vision features when using LLM-only models')
-    parser.add_argument('--system-prompt-file', type=str, required=False, help='Provide a text file containing custom system prompt')
-    parser.add_argument('--model-config', type=str, required=False, help='Path to model vlm_config.json')
-
-    args = parser.parse_args()
-    config_model_name = None
-    vision_image_size_arg = None
-
-    if args.model_config:
-        try:
-            with open(args.model_config, 'r', encoding='utf-8') as fh:
-                cfg = json.load(fh)
-            config_model_name = cfg.get('model_name')
-
-            if isinstance(config_model_name, str):
-                config_model_name = config_model_name.strip() or None
-            else:
-                config_model_name = None
-            if not args.llm_only:
-                raw_size = cfg.get('vm_cfg', {}).get('image_size')
-                if raw_size is not None:
-                    if isinstance(raw_size, int):
-                        vision_image_size_arg = f"{raw_size}x{raw_size}"
-                    elif isinstance(raw_size, (list, tuple)) and len(raw_size) == 2:
-                        vision_image_size_arg = f"{raw_size[0]}x{raw_size[1]}"
-        except Exception as exc:
-            logging.warning(f"Failed to read model config '{args.model_config}': {exc}")
-
-    vision_image_size = parse_vision_image_size(vision_image_size_arg)
-    genai_app.update_settings(
-        args.camidx,
-        args.ip,
-        args.ragserver,
-        args.httponly,
-        args.apionly,
-        args.llm_only,
-        config_model_name,
-        None if args.llm_only else vision_image_size
-    )
-
-    if args.system_prompt_file:
-        prompt_path = Path(args.system_prompt_file).expanduser()
-        try:
-            prompt_text = prompt_path.read_text(encoding='utf-8')
-            genai_app.set_system_prompt(prompt_text)
-        except Exception as exc:
-            logging.error(f"Failed to load system prompt file '{prompt_path}': {exc}")
-
-    # Setup routes after settings are configured
-    genai_app.setup_router()
-    cleanup()
-
-    if not args.apionly:
-        logging.info("Starting RAG database service")
-        ensure_rag_modules_loaded()
-        vectodb_proc = start_service()
-    
-
-    genai_app.run()

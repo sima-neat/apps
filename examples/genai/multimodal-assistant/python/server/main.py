@@ -9,7 +9,10 @@ import socket
 import sys
 import time
 
-from app_config import AppConfig, DEFAULT_SERVER_CONFIG, load_server_config
+PYTHON_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PYTHON_DIR))
+
+from shared.config import AppConfig, DEFAULT_SERVER_CONFIG, load_server_config
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
