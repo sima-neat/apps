@@ -1,8 +1,8 @@
-#include "../utils/config_api.cpp"
-#include "../utils/model_family_api.cpp"
-#include "../utils/pipeline_api.cpp"
-#include "../utils/sample_utils_api.cpp"
-#include "../utils/workers_api.cpp"
+#include "examples/object-detection/multi-stream-object-detector/src/cpp/utils/config_api.cpp"
+#include "examples/object-detection/multi-stream-object-detector/src/cpp/utils/model_family_api.cpp"
+#include "examples/object-detection/multi-stream-object-detector/src/cpp/utils/pipeline_api.cpp"
+#include "examples/object-detection/multi-stream-object-detector/src/cpp/utils/sample_utils_api.cpp"
+#include "examples/object-detection/multi-stream-object-detector/src/cpp/utils/workers_api.cpp"
 #include "support/testing/test_process.h"
 
 #include <filesystem>
