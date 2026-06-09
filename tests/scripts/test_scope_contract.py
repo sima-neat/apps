@@ -51,7 +51,7 @@ def _scope_entry(example_key: str) -> dict:
 
 def test_validate_scope_accepts_cpp_source_tests(tmp_path):
     example_key = _write_example(tmp_path)
-    tests_dir = tmp_path / "examples" / example_key / "cpp" / "tests"
+    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
     tests_dir.mkdir(parents=True)
     (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
     (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
@@ -61,11 +61,11 @@ def test_validate_scope_accepts_cpp_source_tests(tmp_path):
 
 def test_load_scope_discovers_per_example_scope_files(tmp_path):
     example_key = _write_example(tmp_path)
-    tests_dir = tmp_path / "examples" / example_key / "cpp" / "tests"
+    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
     tests_dir.mkdir(parents=True)
     (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
     (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    scope_file = tmp_path / "examples" / example_key / "test-scope.yaml"
+    scope_file = tmp_path / "examples" / example_key / "tests" / "test-scope.yaml"
     scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
 
     scope = load_scope(tmp_path / "examples", tmp_path)
@@ -76,11 +76,11 @@ def test_load_scope_discovers_per_example_scope_files(tmp_path):
 
 def test_load_scope_accepts_single_per_example_scope_file(tmp_path):
     example_key = _write_example(tmp_path)
-    tests_dir = tmp_path / "examples" / example_key / "cpp" / "tests"
+    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
     tests_dir.mkdir(parents=True)
     (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
     (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    scope_file = tmp_path / "examples" / example_key / "test-scope.yaml"
+    scope_file = tmp_path / "examples" / example_key / "tests" / "test-scope.yaml"
     scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
 
     scope = load_scope(scope_file, tmp_path)
@@ -91,7 +91,7 @@ def test_load_scope_accepts_single_per_example_scope_file(tmp_path):
 
 def test_validate_scope_accepts_cpp_packaged_test_binaries(tmp_path):
     example_key = _write_example(tmp_path)
-    tests_dir = tmp_path / "examples" / example_key / "cpp" / "tests"
+    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
     tests_dir.mkdir(parents=True)
     (tests_dir / "demo-example_unit_test").write_text("", encoding="utf-8")
     (tests_dir / "demo-example_e2e_test").write_text("", encoding="utf-8")
@@ -102,7 +102,7 @@ def test_validate_scope_accepts_cpp_packaged_test_binaries(tmp_path):
 def test_validate_scope_accepts_cpp_packaged_binary_dir_tests(tmp_path):
     example_key = _write_example(tmp_path)
     tests_dir = (
-        tmp_path / "examples" / "classification" / "demo-example_cpp" / "cpp" / "tests"
+        tmp_path / "examples" / "classification" / "demo-example_cpp" / "tests" / "cpp"
     )
     tests_dir.mkdir(parents=True)
     (tests_dir / "demo-example_unit_test").write_text("", encoding="utf-8")
@@ -119,15 +119,15 @@ def test_validate_scope_rejects_enabled_cpp_test_without_artifact(tmp_path):
     assert errors == [
         (
             "classification/demo-example: cpp e2e is enabled but no test artifact exists; "
-            "expected one of: examples/classification/demo-example/cpp/tests/test_e2e.cpp, "
-            "examples/classification/demo-example/cpp/tests/demo-example_e2e_test, "
-            "examples/classification/demo-example_cpp/cpp/tests/demo-example_e2e_test"
+            "expected one of: examples/classification/demo-example/tests/cpp/test_e2e.cpp, "
+            "examples/classification/demo-example/tests/cpp/demo-example_e2e_test, "
+            "examples/classification/demo-example_cpp/tests/cpp/demo-example_e2e_test"
         ),
         (
             "classification/demo-example: cpp unit is enabled but no test artifact exists; "
-            "expected one of: examples/classification/demo-example/cpp/tests/test_unit.cpp, "
-            "examples/classification/demo-example/cpp/tests/demo-example_unit_test, "
-            "examples/classification/demo-example_cpp/cpp/tests/demo-example_unit_test"
+            "expected one of: examples/classification/demo-example/tests/cpp/test_unit.cpp, "
+            "examples/classification/demo-example/tests/cpp/demo-example_unit_test, "
+            "examples/classification/demo-example_cpp/tests/cpp/demo-example_unit_test"
         ),
     ]
 

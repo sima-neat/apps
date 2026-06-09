@@ -30,7 +30,7 @@ Download into `assets/models/`:
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get resnet_50 && cd ../..`
 
 ## Important Behavior
-- Runtime settings live in `common/config.yaml`.
+- Runtime settings live in `src/common/config.yaml`.
 - If `io.image` is null, the example downloads a sample goldfish image automatically.
 - `validation.min_probability` controls the pass/fail threshold for the expected class probability.
 
@@ -39,15 +39,15 @@ Download into `assets/models/`:
 - Invocation:
   `./build/examples/classification/image-classifier/image-classifier [--config <path>]`
 - Required arguments:
-  None. Defaults to `common/config.yaml`.
+  None. Defaults to `src/common/config.yaml`.
 - Optional arguments:
   `--config <path>`
 
 ### Python
 - Invocation:
-  `python examples/classification/image-classifier/python/main.py [--config <path>]`
+  `python examples/classification/image-classifier/src/python/main.py [--config <path>]`
 - Required arguments:
-  None. Defaults to `common/config.yaml`.
+  None. Defaults to `src/common/config.yaml`.
 - Optional arguments:
   `--config <path>`
 
@@ -79,15 +79,15 @@ Binary output:
 ### C++
 ```bash
 ./build/examples/classification/image-classifier/image-classifier \
-  --config examples/classification/image-classifier/common/config.yaml
+  --config examples/classification/image-classifier/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/classification/image-classifier/python/requirements.txt
-python examples/classification/image-classifier/python/main.py \
-  --config examples/classification/image-classifier/common/config.yaml
+pip install -r examples/classification/image-classifier/src/python/requirements.txt
+python examples/classification/image-classifier/src/python/main.py \
+  --config examples/classification/image-classifier/src/common/config.yaml
 ```
 
 ## Debugging Notes
@@ -96,6 +96,6 @@ python examples/classification/image-classifier/python/main.py \
 - If top-1 validation fails, try lowering `validation.min_probability` for debug runs.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- Python source: `python/main.py`
-- Shared config: `common/config.yaml`
+- C++ source: `src/cpp/main.cpp`
+- Python source: `src/python/main.py`
+- Shared config: `src/common/config.yaml`

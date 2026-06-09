@@ -16,6 +16,7 @@ VALID_SOURCES = {"modelzoo", "url", "huggingface"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
 SCOPE_FILE_NAME = "test-scope.yaml"
+SCOPE_FILE_SUBPATH = Path("tests") / SCOPE_FILE_NAME
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -36,12 +37,14 @@ def examples_root_from_source(path: Path, apps_root: Path) -> Path:
 
 def example_key_from_scope_file(path: Path, examples_root: Path) -> str:
     try:
-        relative = path.parent.relative_to(examples_root)
+        if path.parent.name != "tests":
+            raise ValueError
+        relative = path.parent.parent.relative_to(examples_root)
     except ValueError as exc:
         raise ValueError(f"{path} is not under {examples_root}") from exc
     parts = relative.parts
     if len(parts) != 2:
-        raise ValueError(f"{path} must be at examples/<category>/<example>/{SCOPE_FILE_NAME}")
+        raise ValueError(f"{path} must be at examples/<category>/<example>/{SCOPE_FILE_SUBPATH}")
     return str(relative)
 
 
@@ -64,9 +67,9 @@ def scope_entry_from_file(path: Path, examples_root: Path) -> tuple[str, dict[st
 
 def discover_scope(scope_source: Path, apps_root: Path = APPS_ROOT) -> dict[str, Any]:
     examples_root = examples_root_from_source(scope_source, apps_root)
-    scope_files = sorted(examples_root.glob(f"*/*/{SCOPE_FILE_NAME}"))
+    scope_files = sorted(examples_root.glob(f"*/*/{SCOPE_FILE_SUBPATH}"))
     if not scope_files:
-        raise FileNotFoundError(f"no {SCOPE_FILE_NAME} files found under {examples_root}")
+        raise FileNotFoundError(f"no {SCOPE_FILE_SUBPATH} files found under {examples_root}")
 
     examples: dict[str, Any] = {}
     for scope_file in scope_files:
@@ -106,17 +109,17 @@ def example_name(example_key: str) -> str:
 def test_source_path(apps_root: Path, example_key: str, language: str, kind: str) -> Path:
     if language == "python":
         filename = "test_unit.py" if kind == "unit" else "test_e2e.py"
-        return apps_root / "examples" / example_key / "python" / "tests" / filename
+        return apps_root / "examples" / example_key / "tests" / "python" / filename
     filename = "test_unit.cpp" if kind == "unit" else "test_e2e.cpp"
-    return apps_root / "examples" / example_key / "cpp" / "tests" / filename
+    return apps_root / "examples" / example_key / "tests" / "cpp" / filename
 
 
 def cpp_packaged_test_paths(apps_root: Path, example_key: str, kind: str) -> list[Path]:
     category, name = example_key.split("/", 1)
     binary = f"{name}_{kind}_test"
     return [
-        apps_root / "examples" / example_key / "cpp" / "tests" / binary,
-        apps_root / "examples" / category / f"{name}_cpp" / "cpp" / "tests" / binary,
+        apps_root / "examples" / example_key / "tests" / "cpp" / binary,
+        apps_root / "examples" / category / f"{name}_cpp" / "tests" / "cpp" / binary,
     ]
 
 

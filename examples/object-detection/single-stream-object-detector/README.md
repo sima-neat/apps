@@ -89,7 +89,7 @@ This separation keeps the RTSP graph from being tightly coupled to the inference
 
 ## Command-Line Options
 - `--config <path>`
-  Optional. YAML config path. Defaults to `common/config.yaml`.
+  Optional. YAML config path. Defaults to `src/common/config.yaml`.
 - `--validate-config-only`
   Validate YAML config and exit without opening the RTSP stream.
 
@@ -153,13 +153,13 @@ If you use host-streamed sources from a board/devkit, use the host IP in the RTS
 ### Binary Built From The Apps Repo
 ```bash
 ./build/examples/object-detection/single-stream-object-detector/single-stream-object-detector \
-  --config examples/object-detection/single-stream-object-detector/common/config.yaml
+  --config examples/object-detection/single-stream-object-detector/src/common/config.yaml
 ```
 
 ### Binary Built Directly In The Example Folder
 ```bash
 ./build/single-stream-object-detector \
-  --config common/config.yaml
+  --config src/common/config.yaml
 ```
 
 Set the RTSP source and Insight destination in the config:
@@ -192,8 +192,8 @@ Run the Python sample directly from the example folder:
 
 ```bash
 cd <apps-repo-root>/examples/object-detection/single-stream-object-detector
-pip install -r python/requirements.txt
-python3 python/main.py --config common/config.yaml
+pip install -r src/python/requirements.txt
+python3 src/python/main.py --config src/common/config.yaml
 ```
 
 Example workflow:
@@ -208,8 +208,8 @@ Then start the Python app:
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r python/requirements.txt
-python3 python/main.py --config common/config.yaml
+pip install -r src/python/requirements.txt
+python3 src/python/main.py --config src/common/config.yaml
 ```
 
 Python-specific notes:
@@ -224,8 +224,8 @@ Python-specific notes:
 - If video and detections are both missing in Insight, verify the host and UDP ports first.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
-- Python source: `python/main.py`
-- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
+- C++ source: `src/cpp/main.cpp`
+- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+- Python source: `src/python/main.py`
+- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
 - Insight documentation: <https://docs.sima.ai/pages/insight/main.html>

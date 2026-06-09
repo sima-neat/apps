@@ -2,8 +2,8 @@
 set -euo pipefail
 
 EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_PATH="${CONFIG_PATH:-${EXAMPLE_DIR}/common/config.yaml}"
-PYTHON_DIR="${EXAMPLE_DIR}/python"
+CONFIG_PATH="${CONFIG_PATH:-${EXAMPLE_DIR}/src/common/config.yaml}"
+PYTHON_DIR="${EXAMPLE_DIR}/src/python"
 
 if [[ -z "${PYNEAT_PYTHON:-}" ]]; then
   if [[ -x "${HOME}/pyneat/bin/python" ]]; then

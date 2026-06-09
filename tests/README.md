@@ -29,7 +29,7 @@ Run CI-like strict e2e validation:
 
 E2E tests validate the shipped examples. Semantic values such as model path,
 thresholds, NMS, top-k, and validation expectations live in each example's
-`common/config.yaml`. Python and C++ e2e tests read those values and only
+`src/common/config.yaml`. Python and C++ e2e tests read those values and only
 override harness-specific values such as input paths, output paths, finite frame
 counts, RTSP URLs, and local ports.
 
@@ -57,13 +57,13 @@ Use `--config <file>` to load a different config:
 
 Process environment variables override values loaded from the config file.
 
-E2E runs ensure the models selected by each example's `test-scope.yaml` are
+E2E runs ensure the models selected by each example's `tests/test-scope.yaml` are
 available by calling `scripts/download_models.sh`, which skips models already
 present under `SIMANEAT_APPS_TEST_MODELS_DIR`. Set
 `NEAT_APPS_SKIP_MODEL_DOWNLOAD=1` to disable this step.
 
 The README `Model` row remains customer-facing metadata. Test selection and
-test model downloads are controlled by `examples/*/*/test-scope.yaml`, so large
+test model downloads are controlled by `examples/*/*/tests/test-scope.yaml`, so large
 or blocked examples can stay documented without blocking CI. If a test is
 enabled in the scope file but the matching Python or C++ test file is missing,
 `tests/test.sh` fails before running tests. If a test is disabled, it is skipped
@@ -92,7 +92,7 @@ tests/
     testing/           # VS Code / DevKit task helpers
 
 examples/<category>/<example>/
-  test-scope.yaml      # enabled tests and test model download sources
+  tests/test-scope.yaml      # enabled tests and test model download sources
 ```
 
 Generated e2e artifacts are written under `sandbox-test` by default:
@@ -120,7 +120,7 @@ sandbox-test/
 
 Each e2e run directory contains the generated config passed to the example, the
 command that was run, captured logs, and any produced output artifacts. The
-generated config is derived from the example's `common/config.yaml`, with only
+generated config is derived from the example's `src/common/config.yaml`, with only
 the local test harness values patched in. Unit-test scratch files are not kept in
 `sandbox-test`.
 
@@ -198,7 +198,7 @@ export APPS_ROOT=/path/to/sima-neat/apps
 cd "${APPS_ROOT}"
 
 python3 -m pytest \
-  examples/object-detection/multi-stream-object-detector/python/tests/test_unit.py::TestMainEntrypoint::test_missing_config_file_fails_cleanly \
+  examples/object-detection/multi-stream-object-detector/tests/python/test_unit.py::TestMainEntrypoint::test_missing_config_file_fails_cleanly \
   -v
 ```
 

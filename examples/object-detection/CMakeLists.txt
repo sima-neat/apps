@@ -3,8 +3,8 @@ foreach(example IN ITEMS
     single-stream-object-detector
     yolo26-object-detector
 )
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/cpp/CMakeLists.txt")
-    add_subdirectory(${example}/cpp ${example})
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/src/cpp/CMakeLists.txt")
+    add_subdirectory(${example}/src/cpp ${example})
   endif()
 endforeach()
-add_subdirectory(multi-stream-object-detector/cpp multi-stream-object-detector)
+add_subdirectory(multi-stream-object-detector/src/cpp multi-stream-object-detector)

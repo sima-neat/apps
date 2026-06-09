@@ -1,1 +1,1 @@
-add_subdirectory(image-classifier/cpp image-classifier)
+add_subdirectory(image-classifier/src/cpp image-classifier)

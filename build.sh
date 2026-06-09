@@ -147,7 +147,7 @@ PY
     rel="${exe#${build_path}/}"
     target_dir="${stage_dir}/$(dirname "${rel}")"
     if [[ "${exe}" == *_unit_test || "${exe}" == *_e2e_test ]]; then
-      target_dir="${target_dir}/cpp/tests"
+      target_dir="${target_dir}/tests/cpp"
     fi
     mkdir -p "${target_dir}"
     cp "${exe}" "${target_dir}/"
@@ -168,15 +168,19 @@ PY
     cp "${src_file}" "${target_dir}/"
   done < <(
     find "${ROOT_DIR}/examples" -type f \
-      \( -path '*/python/main.py' \
-         -o -path '*/python/utils/*.py' \
-         -o -name 'test-scope.yaml' \
+      ! -path '*/__pycache__/*' \
+      ! -name '*.pyc' \
+      ! -name '*.pyo' \
+      ! -name '*.onnx' \
+      ! -name '*.db' \
+      ! -name '*.lock' \
+      ! -name '*.log' \
+      \( -path '*/src/python/*' \
+         -o -path '*/tests/test-scope.yaml' \
          -o -name 'README.md' \
-         -o -path '*/python/tests/test_*.py' \
-         -o -path '*/python/requirements.txt' \
-         -o -path '*/common/*' \
-         -o -name 'coco_label.txt' \
-         -o -name '*.json' \
+         -o -path '*/tests/python/test_*.py' \
+         -o -path '*/src/common/*' \
+         -o -path '*/run.sh' \
       \) 2>/dev/null | sort
   )
 

@@ -320,7 +320,7 @@ resolve_scope_python() {
     fi
   done
 
-  echo "  [FAIL] test-scope.yaml requires a Python interpreter with PyYAML." >&2
+  echo "  [FAIL] tests/test-scope.yaml requires a Python interpreter with PyYAML." >&2
   echo "         Install PyYAML into pyneat or set PYTHON_TEST_BIN." >&2
   return 1
 }
@@ -641,7 +641,7 @@ run_packaged_cpp_tests() {
     if [[ "${enabled}" -eq 1 ]]; then
       cpp_test_bins+=("${test_bin}")
     fi
-  done < <(find "${ROOT_DIR}/examples" -type f -path '*/cpp/tests/*' -name "*${suffix}" | sort)
+  done < <(find "${ROOT_DIR}/examples" -type f -path '*/tests/cpp/*' -name "*${suffix}" | sort)
 
   if [[ "${#cpp_test_bins[@]}" -eq 0 ]]; then
     echo "  [SKIP] No enabled packaged C++ ${label} tests found under ${ROOT_DIR}/examples."
@@ -665,7 +665,7 @@ run_packaged_cpp_tests() {
     example_name="${example_name%${suffix}}"
     test_dir="$(dirname "${test_bin}")"
     # Packaged layout:
-    # examples/<category>/<example>[/_cpp]/cpp/tests/<example>_{unit,e2e}_test
+    # examples/<category>/<example>[/_cpp]/tests/cpp/<example>_{unit,e2e}_test
     # examples/<category>/<example>[/_cpp]/<example>
     example_bin="${test_dir}/../../${example_name}"
 

@@ -13,27 +13,28 @@ Every example under `examples/<category>/<example>` must follow:
 ```text
 <example>/
   README.md
-  test-scope.yaml
-  cpp/
-    CMakeLists.txt
-    main.cpp
-    tests/
+  src/
+    common/
+    cpp/
       CMakeLists.txt
+      main.cpp
+    python/
+      main.py
+      requirements.txt
+  tests/
+    test-scope.yaml
+    cpp/
       test_unit.cpp
       test_e2e.cpp
-  python/
-    main.py
-    requirements.txt
-    tests/
+    python/
       test_unit.py
       test_e2e.py
-  common/
 ```
 
 Notes:
-- Do not keep legacy paths (`main.py`, `main.cpp`, `tests/python`, `tests/cpp`) at example root.
-- Keep shared labels/config/assets in `common/` so both C++ and Python use the same files.
-- Keep test enablement and e2e model source metadata in the example-local `test-scope.yaml`.
+- Do not keep legacy paths (`main.py`, `main.cpp`, `common/`, `python/`, `cpp/`) at example root.
+- Keep shared labels/config/assets in `src/common/` so both C++ and Python use the same files.
+- Keep test enablement and e2e model source metadata in the example-local `tests/test-scope.yaml`.
 
 ## Templates and Scaffolding
 Use these sources of truth:
@@ -42,9 +43,9 @@ Use these sources of truth:
 
 To add a new example:
 1. Run `scripts/create_example_scaffold.sh`.
-2. Fill in both implementations (`cpp/main.cpp`, `python/main.py`).
+2. Fill in both implementations (`src/cpp/main.cpp`, `src/python/main.py`).
 3. Replace scaffold placeholder tests with real unit/e2e tests.
-4. Update `test-scope.yaml` to select enabled tests and e2e model artifacts.
+4. Update `tests/test-scope.yaml` to select enabled tests and e2e model artifacts.
 5. Update `README.md` using `examples/TEMPLATE_README.md` sections.
 
 ## Implementation Expectations
@@ -59,8 +60,8 @@ For each example, both languages must have:
 - End-to-end tests
 
 Expected files:
-- Python: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
-- C++: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
+- Python: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
+- C++: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
 
 Minimum quality bar:
 - Unit tests validate CLI and argument/error behavior.
@@ -101,15 +102,15 @@ At minimum, include:
 - Source files
 
 Path examples in README must use current layout:
-- `examples/<category>/<example>/python/main.py`
-- `examples/<category>/<example>/python/requirements.txt`
-- CMake direct build from `.../<example>/cpp`
+- `examples/<category>/<example>/src/python/main.py`
+- `examples/<category>/<example>/src/python/requirements.txt`
+- CMake direct build from `.../<example>/src/cpp`
 - Optional portal demo screenshots should live at `assets/portal/<category>/<example>/image.*`
 - When a screenshot is present, keep it in `## Preview` immediately after `## Concept`
 
 ## CMake and CI/CD Notes
-- Category CMake files must register examples via `<example>/cpp`.
-- Keep `cmake/ExampleModule.cmake` paths aligned with `cpp/tests/*`.
+- Category CMake files must register examples via `<example>/src/cpp`.
+- Keep `cmake/ExampleModule.cmake` paths aligned with `tests/cpp/*`.
 - If layout changes affect build/test/package scripts, update:
   - `build.sh`
   - `tests/test.sh`

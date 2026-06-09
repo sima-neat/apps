@@ -30,7 +30,7 @@ Download into `assets/models/`:
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
 
 ## Important Behavior
-- Runtime settings are read from `common/config.yaml` by default.
+- Runtime settings are read from `src/common/config.yaml` by default.
 - Input directory is scanned for common image extensions.
 - Output files are written to the configured output directory.
 
@@ -39,13 +39,13 @@ Download into `assets/models/`:
 - Invocation:
   `./build/examples/depth-estimation/depth-estimator/depth-estimator [--config <path>]`
 - Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
 
 ### Python
 - Invocation:
-  `python examples/depth-estimation/depth-estimator/python/main.py [--config <path>]`
+  `python examples/depth-estimation/depth-estimator/src/python/main.py [--config <path>]`
 - Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `common/config.yaml`.
+  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
 
 ## Build
 ### Build From The Apps Repo
@@ -72,7 +72,7 @@ Binary output:
 ```
 
 ## Run
-Edit `examples/depth-estimation/depth-estimator/common/config.yaml` to point at the model and image folder.
+Edit `examples/depth-estimation/depth-estimator/src/common/config.yaml` to point at the model and image folder.
 
 ### C++
 ```bash
@@ -82,8 +82,8 @@ Edit `examples/depth-estimation/depth-estimator/common/config.yaml` to point at 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/depth-estimation/depth-estimator/python/requirements.txt
-python examples/depth-estimation/depth-estimator/python/main.py
+pip install -r examples/depth-estimation/depth-estimator/src/python/requirements.txt
+python examples/depth-estimation/depth-estimator/src/python/main.py
 ```
 
 ## Debugging Notes
@@ -92,6 +92,6 @@ python examples/depth-estimation/depth-estimator/python/main.py
 - Check write permissions on `output_dir`.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- Python source: `python/main.py`
-- Shared config: `common/config.yaml`
+- C++ source: `src/cpp/main.cpp`
+- Python source: `src/python/main.py`
+- Shared config: `src/common/config.yaml`

@@ -35,16 +35,16 @@ def load_yaml_mapping(path: Path) -> dict[str, Any]:
 
 
 def common_config_path_for_example(example_name: str) -> Path:
-    matches = sorted(APPS_ROOT.glob(f"examples/*/{example_name}/common/config.yaml"))
+    matches = sorted(APPS_ROOT.glob(f"examples/*/{example_name}/src/common/config.yaml"))
     if len(matches) != 1:
         raise FileNotFoundError(
-            f"expected one common/config.yaml for example '{example_name}', found {len(matches)}"
+            f"expected one src/common/config.yaml for example '{example_name}', found {len(matches)}"
         )
     return matches[0]
 
 
 def common_config_path_for_test(test_file: Path) -> Path:
-    return test_file.parents[2] / "common" / "config.yaml"
+    return test_file.parents[2] / "src" / "common" / "config.yaml"
 
 
 def load_common_config(common_config: Path) -> dict[str, Any]:
@@ -112,7 +112,7 @@ def resolve_scoped_model_path(common_config: Path, models_dir: Path) -> Path | N
 
     scope = load_scope(scope_file, APPS_ROOT)
     examples = required_mapping(scope.get("examples"), "examples")
-    example_dir = common_config.parents[1]
+    example_dir = common_config.parents[2]
     example_key = f"{example_dir.parent.name}/{example_dir.name}"
     entry = examples.get(example_key)
     if not isinstance(entry, dict):

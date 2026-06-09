@@ -49,8 +49,8 @@ cd ../..
 
 ## Important Behavior
 - The Python and C++ implementations follow the same config-driven structure: config loading, pipeline builders, tracker helpers, image helpers, sample helpers, and worker orchestration.
-- The `streams:` list in `common/config.yaml` controls the number of cameras dynamically.
-- The checked-in `common/config.yaml` uses placeholder RTSP and Insight values; fill them with your own camera URLs and receiver host before running.
+- The `streams:` list in `src/common/config.yaml` controls the number of cameras dynamically.
+- The checked-in `src/common/config.yaml` uses placeholder RTSP and Insight values; fill them with your own camera URLs and receiver host before running.
 - Stream `i` publishes video to `output.insight.video_port_base + i`.
 - `output.video_mode: clean` publishes unannotated RGB frames through `VideoSender` and sends tracking metadata to `output.insight.metadata_port_base + i` for Insight-side overlay. `annotated` draws tracking boxes into RGB frames before `VideoSender` encodes them and suppresses metadata so Insight does not overlay twice.
 - `inference.frames: 0` runs indefinitely.
@@ -65,7 +65,7 @@ cd ../..
 - Invocation:
   ```bash
   ./build/examples/tracking/multi-stream-people-tracker/multi-stream-people-tracker \
-    --config examples/tracking/multi-stream-people-tracker/common/config.yaml
+    --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
   ```
 - Required arguments:
   None.
@@ -75,8 +75,8 @@ cd ../..
 ### Python
 - Invocation:
   ```bash
-  python3 examples/tracking/multi-stream-people-tracker/python/main.py \
-    --config examples/tracking/multi-stream-people-tracker/common/config.yaml
+  python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
+    --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
   ```
 - Required arguments:
   None.
@@ -98,7 +98,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>
-cmake -S examples/tracking/multi-stream-people-tracker/cpp -B build/multi-stream-people-tracker
+cmake -S examples/tracking/multi-stream-people-tracker/src/cpp -B build/multi-stream-people-tracker
 cmake --build build/multi-stream-people-tracker -j
 ```
 
@@ -108,7 +108,7 @@ Binary output:
 ```
 
 ## Run
-Before running either entrypoint, edit `examples/tracking/multi-stream-people-tracker/common/config.yaml` and replace the placeholder values in:
+Before running either entrypoint, edit `examples/tracking/multi-stream-people-tracker/src/common/config.yaml` and replace the placeholder values in:
 
 - `streams`
 - `output.insight.host`
@@ -116,7 +116,7 @@ Before running either entrypoint, edit `examples/tracking/multi-stream-people-tr
 ### C++
 ```bash
 ./build/examples/tracking/multi-stream-people-tracker/multi-stream-people-tracker \
-  --config examples/tracking/multi-stream-people-tracker/common/config.yaml
+  --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
 ```
 
 The C++ binary follows the same config contract and worker topology as the Python example.
@@ -126,10 +126,10 @@ Install the small Python-side dependencies:
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/tracking/multi-stream-people-tracker/python/requirements.txt
+pip install -r examples/tracking/multi-stream-people-tracker/src/python/requirements.txt
 ```
 
-Edit the example config in `common/config.yaml`, especially the placeholder values in:
+Edit the example config in `src/common/config.yaml`, especially the placeholder values in:
 
 - `streams`
 - `output.insight.host`
@@ -139,8 +139,8 @@ The `streams:` list controls the number of cameras dynamically.
 Run the Python example with that config:
 
 ```bash
-python3 examples/tracking/multi-stream-people-tracker/python/main.py \
-  --config examples/tracking/multi-stream-people-tracker/common/config.yaml
+python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
+  --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
 ```
 
 Notes:
@@ -173,16 +173,16 @@ Notes:
 - If you want saved overlay frames, set both `output.debug_dir` and `output.save_every`.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- C++ config loader: `cpp/utils/config_api.cpp`, `cpp/utils/config.cpp`
-- C++ tracker helpers: `cpp/utils/tracker_api.cpp`, `cpp/utils/tracker.cpp`
-- C++ sample helpers: `cpp/utils/sample_utils_api.cpp`, `cpp/utils/sample_utils.cpp`
-- C++ pipeline builders: `cpp/utils/pipeline_api.cpp`, `cpp/utils/pipeline.cpp`
-- C++ image helpers: `cpp/utils/image_utils_api.cpp`, `cpp/utils/image_utils.cpp`
-- C++ worker orchestration: `cpp/utils/workers_api.cpp`, `cpp/utils/workers.cpp`
-- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
-- Python source: `python/main.py`
-- Example config: `common/config.yaml`
-- Python utilities: `python/utils/`
-- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
-- Shared example data: `common/`
+- C++ source: `src/cpp/main.cpp`
+- C++ config loader: `src/cpp/utils/config_api.cpp`, `src/cpp/utils/config.cpp`
+- C++ tracker helpers: `src/cpp/utils/tracker_api.cpp`, `src/cpp/utils/tracker.cpp`
+- C++ sample helpers: `src/cpp/utils/sample_utils_api.cpp`, `src/cpp/utils/sample_utils.cpp`
+- C++ pipeline builders: `src/cpp/utils/pipeline_api.cpp`, `src/cpp/utils/pipeline.cpp`
+- C++ image helpers: `src/cpp/utils/image_utils_api.cpp`, `src/cpp/utils/image_utils.cpp`
+- C++ worker orchestration: `src/cpp/utils/workers_api.cpp`, `src/cpp/utils/workers.cpp`
+- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+- Python source: `src/python/main.py`
+- Example config: `src/common/config.yaml`
+- Python utilities: `src/python/utils/`
+- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
+- Shared example data: `src/common/`

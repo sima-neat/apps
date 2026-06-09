@@ -49,7 +49,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python3 examples/<category>/<name>/python/main.py <args>`
+  `python3 examples/<category>/<name>/src/python/main.py <args>`
 - Required arguments:
   `<required_arg_1> <required_arg_2>`
 - Optional arguments:
@@ -70,7 +70,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>
-cmake -S examples/<category>/<name>/cpp -B build/<name>
+cmake -S examples/<category>/<name>/src/cpp -B build/<name>
 cmake --build build/<name> -j
 ```
 
@@ -88,8 +88,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/<category>/<name>/python/requirements.txt
-python3 examples/<category>/<name>/python/main.py <args>
+pip install -r examples/<category>/<name>/src/python/requirements.txt
+python3 examples/<category>/<name>/src/python/main.py <args>
 ```
 
 ## Debugging Notes
@@ -98,9 +98,9 @@ python3 examples/<category>/<name>/python/main.py <args>
 - Confirm output directories are writable.
 
 ## Source Files
-- Test scope: `test-scope.yaml`
-- C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/test_unit.cpp`, `cpp/tests/test_e2e.cpp`
-- Python source: `python/main.py`
-- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
-- Shared assets: `common/`
+- Test scope: `tests/test-scope.yaml`
+- C++ source: `src/cpp/main.cpp`
+- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+- Python source: `src/python/main.py`
+- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
+- Shared assets: `src/common/`
