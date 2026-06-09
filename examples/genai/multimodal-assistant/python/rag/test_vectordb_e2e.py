@@ -26,8 +26,8 @@ if str(SCRIPT_DIR) in sys.path:
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from vectordb.gradioclient import upload_and_process_file
-from vectordb.vectordb import RagDbClient
+from rag.gradioclient import upload_and_process_file
+from rag.vectordb import RagDbClient
 
 
 USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None

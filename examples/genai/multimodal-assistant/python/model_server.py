@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import socket
 import sys
 import time
 
@@ -15,6 +16,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_SERVER_CONFIG)
     return parser
+
+
+def port_accepts_connections(host: str, port: int) -> bool:
+    probe_host = "127.0.0.1" if host in {"0.0.0.0", "::", ""} else host
+    try:
+        with socket.create_connection((probe_host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def start_openai_server(cfg: AppConfig):
@@ -30,21 +40,27 @@ def start_openai_server(cfg: AppConfig):
     options.host = cfg.openai.host
     options.port = cfg.openai.port
 
-    server = pyneat.OpenAIServer(options)
-    for model in cfg.chat_models:
-        chat_name = server.add_model(model.path, model.name)
-        print(f"added chat model: {chat_name} -> {model.path}", flush=True)
-    asr_name = server.add_model(cfg.asr_model.path, cfg.asr_model.name)
+    server = None
+    try:
+        server = pyneat.OpenAIServer(options)
+        for model in cfg.chat_models:
+            chat_name = server.add_model(model.path, model.name)
+            print(f"added chat model: {chat_name} -> {model.path}", flush=True)
+        asr_name = server.add_model(cfg.asr_model.path, cfg.asr_model.name)
 
-    print(f"added ASR model: {asr_name} -> {cfg.asr_model.path}", flush=True)
-    print(f"available models: {', '.join(server.model_names())}", flush=True)
-    print(
-        f"serving OpenAI-compatible API on http://{cfg.openai.host}:{cfg.openai.port}",
-        flush=True,
-    )
+        print(f"added ASR model: {asr_name} -> {cfg.asr_model.path}", flush=True)
+        print(f"available models: {', '.join(server.model_names())}", flush=True)
+        print(
+            f"serving OpenAI-compatible API on http://{cfg.openai.host}:{cfg.openai.port}",
+            flush=True,
+        )
 
-    server.start()
-    return server
+        server.start()
+        return server
+    except BaseException:
+        if server is not None:
+            server.stop()
+        raise
 
 
 def main() -> int:
@@ -72,6 +88,12 @@ def main() -> int:
 
     server = None
     try:
+        if port_accepts_connections(cfg.openai.host, cfg.openai.port):
+            raise RuntimeError(
+                f"port {cfg.openai.port} is already accepting connections. "
+                "Stop the old model server before starting a new one."
+            )
+
         server = start_openai_server(cfg)
         while True:
             time.sleep(1)
