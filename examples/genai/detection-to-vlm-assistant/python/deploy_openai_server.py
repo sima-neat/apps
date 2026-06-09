@@ -36,11 +36,11 @@ def main() -> None:
 
     import pyneat
 
-    options = pyneat.OpenAIServerOptions()
+    options = pyneat.GenAIServerOptions()
     options.host = args.host
     options.port = args.port
 
-    server = pyneat.OpenAIServer(options)
+    server = pyneat.GenAIServer(options)
     model_specs = args.model or DEFAULT_MODELS
     for model_dir, served_name in model_specs:
         path = Path(model_dir)
