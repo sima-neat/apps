@@ -1,4 +1,4 @@
-"""DETR single-image object detection example using manual tensor preprocessing."""
+"""DETR folder object detection example using manual tensor preprocessing."""
 
 from __future__ import annotations
 
@@ -124,6 +124,10 @@ BOX_COLORS = [
     (128, 255, 0),
     (255, 128, 0),
 ]
+
+
+def is_image(path: Path) -> bool:
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
 
 def _log(msg: str) -> None:
@@ -383,18 +387,14 @@ def build_graph_runner(model: pyneat.Model) -> pyneat.Run:
     return graph.build([dummy], pyneat.RunMode.Async)
 
 
-def run_model_inference(model: pyneat.Model, preprocessed: np.ndarray) -> list[np.ndarray]:
-    runner = build_graph_runner(model)
+def run_model_inference(runner: pyneat.Run, preprocessed: np.ndarray, timeout_ms: int) -> list[np.ndarray]:
     tensor = tensor_from_hwc_f32(preprocessed)
-    try:
-        if not runner.push([tensor]):
-            raise RuntimeError("Run.push() failed")
-        sample = runner.pull(timeout_ms=20000)
-        if sample is None:
-            raise RuntimeError("Run.pull() returned no sample")
-        return tensor_numpy_outputs(collect_tensors(sample))
-    finally:
-        runner.close()
+    if not runner.push([tensor]):
+        raise RuntimeError("Run.push() failed")
+    sample = runner.pull(timeout_ms=timeout_ms)
+    if sample is None:
+        raise RuntimeError("Run.pull() returned no sample")
+    return tensor_numpy_outputs(collect_tensors(sample))
 
 
 def build_model_runner(model: pyneat.Model, preprocessed: np.ndarray) -> tuple[pyneat.Run, pyneat.Tensor]:
@@ -417,7 +417,7 @@ def format_profile_stats(name: str, values: list[float]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DETR single-image object detection example")
+    parser = argparse.ArgumentParser(description="DETR folder object detection example")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     args = parser.parse_args()
 
@@ -433,9 +433,9 @@ def main() -> int:
     decode_cfg = raw.get("decode", {})
     runtime_cfg = raw.get("runtime", {})
 
-    image_path = Path(io_cfg.get("image", "assets/test_images/input.jpg"))
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
-    output_path = Path(io_cfg.get("output", "sandbox/detr-object-detector/output.png"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/detr-object-detector"))
     confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.5))
     max_draw = int(decode_cfg.get("max_draw", 50))
     person_only = bool(decode_cfg.get("person_only", False))
@@ -449,20 +449,26 @@ def main() -> int:
     if not model_path.is_file():
         print(f"Model file does not exist: {model_path}", file=sys.stderr)
         return 2
+    if not input_dir.is_dir():
+        print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
+        return 2
+
+    image_paths = sorted(path for path in input_dir.iterdir() if path.is_file() and is_image(path))
+    if not image_paths:
+        print(f"No images found in {input_dir}", file=sys.stderr)
+        return 3
 
     try:
-        orig_bgr, preprocessed, meta = prepare_input(image_path)
         model = load_tensor_model(model_path)
-    except FileNotFoundError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
     except Exception as exc:
-        logger.debug("Inference failure", exc_info=exc)
-        print(f"Error during inference: {exc}", file=sys.stderr)
+        logger.debug("Model loading failure", exc_info=exc)
+        print(f"Error loading model: {exc}", file=sys.stderr)
         return 3
 
     if profile:
+        image_path = image_paths[0]
         try:
+            orig_bgr, preprocessed, meta = prepare_input(image_path)
             runner, tensor = build_model_runner(model, preprocessed)
             graph_times: list[float] = []
             post_times: list[float] = []
@@ -519,49 +525,55 @@ def main() -> int:
             print(f"Error during profiling: {exc}", file=sys.stderr)
             return 4
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    processed = 0
     try:
-        arrays = run_model_inference(model, preprocessed)
+        runner = build_graph_runner(model)
     except Exception as exc:
-        logger.debug("Inference failure", exc_info=exc)
-        print(f"Error during inference: {exc}", file=sys.stderr)
+        logger.debug("Graph build failure", exc_info=exc)
+        print(f"Error building graph runner: {exc}", file=sys.stderr)
         return 3
 
-    if not arrays:
-        print("No tensors found in model output", file=sys.stderr)
-        return 4
-
-    print(f"Model produced {len(arrays)} tensor(s):")
-    for i, arr in enumerate(arrays):
-        print(f"  [{i}] shape={arr.shape}, dtype={arr.dtype}")
-
     try:
-        logits, boxes = extract_logits_and_boxes(arrays)
-        detections = process_detr_output(
-            boxes,
-            logits,
-            meta,
-            confidence_threshold=confidence_threshold,
-            detect_only_person=person_only,
-        )
-    except Exception as exc:
-        logger.debug("Decode failure", exc_info=exc)
-        print(f"Error during decode: {exc}", file=sys.stderr)
-        return 4
+        for image_path in image_paths:
+            try:
+                orig_bgr, preprocessed, meta = prepare_input(image_path)
+                arrays = run_model_inference(runner, preprocessed, timeout_ms)
+            except FileNotFoundError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            except Exception as exc:
+                logger.debug("Inference failure", exc_info=exc)
+                print(f"Error during inference for {image_path}: {exc}", file=sys.stderr)
+                return 3
 
-    print(f"Detections: {len(detections)}")
-    for i, det in enumerate(detections[:20]):
-        box = det["box"]
-        print(
-            f"  [{i}] class={class_name(det['class_id'])}({det['class_id']}) score={det['score']:.4f} "
-            f"box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]"
-        )
+            if not arrays:
+                print(f"No tensors found in model output for {image_path}", file=sys.stderr)
+                return 4
 
-    if str(output_path):
-        out_img = visualize_detections(orig_bgr, detections, max_draw=max_draw)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(output_path), out_img)
-        print(f"Wrote annotated image: {output_path}")
+            try:
+                logits, boxes = extract_logits_and_boxes(arrays)
+                detections = process_detr_output(
+                    boxes,
+                    logits,
+                    meta,
+                    confidence_threshold=confidence_threshold,
+                    detect_only_person=person_only,
+                )
+            except Exception as exc:
+                logger.debug("Decode failure", exc_info=exc)
+                print(f"Error during decode for {image_path}: {exc}", file=sys.stderr)
+                return 4
 
+            output_path = output_dir / f"{image_path.stem}_detr.png"
+            out_img = visualize_detections(orig_bgr, detections, max_draw=max_draw)
+            cv2.imwrite(str(output_path), out_img)
+            processed += 1
+            print(f"[{processed}/{len(image_paths)}] {image_path.name}: {len(detections)} detections -> {output_path.name}")
+    finally:
+        runner.close()
+
+    print(f"Done: {processed} images processed")
     return 0
 
 

@@ -1,6 +1,5 @@
 """E2E tests for detr-object-detector (Python)."""
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -9,22 +8,6 @@ import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
-
-
-def _find_image(input_dir: Path) -> Path | None:
-    if not input_dir.exists():
-        return None
-    images = sorted(f for f in input_dir.iterdir() if f.suffix.lower() in {".png", ".jpg", ".jpeg"})
-    if images:
-        return images[0]
-    return None
-
-
-def _resolve_input_dir(default_dir: Path) -> Path:
-    raw = os.environ.get("SIMANEAT_APPS_TEST_INPUT_DIR", "").strip()
-    if raw:
-        return Path(raw)
-    return default_dir
 
 
 @pytest.mark.e2e
@@ -38,17 +21,14 @@ class TestE2E:
         skip_unless_e2e_ready,
         e2e_config_writer,
     ):
-        input_dir = _resolve_input_dir(test_images_dir)
-        image = _find_image(input_dir)
         skip_unless_e2e_ready(
-            image is not None,
-            f"no suitable test image found in input_dir={input_dir}",
+            test_images_dir.exists() and any(test_images_dir.iterdir()),
+            f"test_images_dir is missing or empty: {test_images_dir}",
         )
 
-        out_path = tmp_output_dir / "detr_output.png"
         config_path = e2e_config_writer(
             {
-                "io": {"image": str(image), "output": str(out_path)},
+                "io": {"input_dir": str(test_images_dir), "output_dir": str(tmp_output_dir)},
                 "runtime": {"num_runs": 1},
             }
         )
@@ -69,4 +49,6 @@ class TestE2E:
             f"main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert out_path.exists(), "Expected an annotated output image to be written"
+        output_files = [path for path in tmp_output_dir.iterdir() if path.is_file()]
+        assert output_files, "Expected annotated output images to be written"
+        assert all(path.stat().st_size > 0 for path in output_files), "Output image is empty"

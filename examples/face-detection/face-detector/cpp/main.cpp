@@ -1,6 +1,6 @@
 /**
  * @example face-detector.cpp
- * Minimal RetinaFace pipeline (tensor input): run inference on one image and decode
+ * Minimal RetinaFace pipeline (tensor input): run inference on a folder and decode
  * boxes/landmarks.
  *
  * Usage: face-detector [--config <path>]
@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -475,9 +476,9 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
 }
 
 struct Config {
-  fs::path image;
+  fs::path input_dir;
   std::string model = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz";
-  fs::path output;
+  fs::path output_dir;
   float conf = 0.4f;
   float nms = 0.9f;
   int top_k = 5000;
@@ -489,12 +490,30 @@ struct Config {
   int timeout_ms = 20000;
 };
 
+static bool is_image_file(const fs::path& path) {
+  std::string ext = path.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
+}
+
+static std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
+  std::vector<fs::path> images;
+  for (const auto& entry : fs::directory_iterator(input_dir)) {
+    if (entry.is_regular_file() && is_image_file(entry.path())) {
+      images.push_back(entry.path());
+    }
+  }
+  std::sort(images.begin(), images.end());
+  return images;
+}
+
 static Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
   cfg.model = raw.string_or("model.path", "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz");
-  cfg.image = raw.string_or("io.image", "assets/test_images/input.jpg");
-  cfg.output = raw.string_or("io.output", "sandbox/face-detector/output.png");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/face-detector");
   cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.4));
   cfg.nms = static_cast<float>(raw.double_or("decode.nms_iou", 0.9));
   cfg.top_k = raw.int_or("decode.top_k", 5000);
@@ -549,25 +568,17 @@ int main(int argc, char** argv) {
 
   try {
     const Config args = parse_config(argc, argv);
-    if (!fs::exists(args.image)) {
-      throw std::runtime_error("image does not exist: " + args.image.string());
+    if (!fs::is_directory(args.input_dir)) {
+      throw std::runtime_error("input_dir does not exist: " + args.input_dir.string());
     }
     if (!fs::exists(args.model)) {
       throw std::runtime_error("model does not exist: " + args.model);
     }
 
-    cv::Mat bgr_u8 = cv::imread(args.image.string(), cv::IMREAD_COLOR);
-    if (bgr_u8.empty()) {
-      throw std::runtime_error("failed to read image: " + args.image.string());
+    const std::vector<fs::path> image_paths = image_paths_in_dir(args.input_dir);
+    if (image_paths.empty()) {
+      throw std::runtime_error("no images found in: " + args.input_dir.string());
     }
-
-    cv::Mat bgr_f32;
-    bgr_u8.convertTo(bgr_f32, CV_32FC3);
-    bgr_mean_subtract_inplace(bgr_f32);
-    auto [padded, meta] = pad_to_aspect(bgr_f32, kInferW, kInferH);
-
-    cv::Mat resized;
-    cv::resize(padded, resized, cv::Size(kInferW, kInferH), 0, 0, cv::INTER_LINEAR);
 
     simaai::neat::Model::Options model_opt;
     model_opt.preprocess.kind = simaai::neat::InputKind::Tensor;
@@ -588,10 +599,22 @@ int main(int argc, char** argv) {
     simaai::neat::Tensor dummy_t = tensor_from_hwc_f32(dummy);
     auto run = graph.build(simaai::neat::TensorList{dummy_t}, simaai::neat::RunMode::Async);
 
-    simaai::neat::Tensor input_t = tensor_from_hwc_f32(resized);
     std::vector<Detection> dets;
 
     if (args.profile) {
+      const fs::path& image_path = image_paths.front();
+      cv::Mat bgr_u8 = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+      if (bgr_u8.empty()) {
+        throw std::runtime_error("failed to read image: " + image_path.string());
+      }
+      cv::Mat bgr_f32;
+      bgr_u8.convertTo(bgr_f32, CV_32FC3);
+      bgr_mean_subtract_inplace(bgr_f32);
+      auto [padded, meta] = pad_to_aspect(bgr_f32, kInferW, kInferH);
+      cv::Mat resized;
+      cv::resize(padded, resized, cv::Size(kInferW, kInferH), 0, 0, cv::INTER_LINEAR);
+      simaai::neat::Tensor input_t = tensor_from_hwc_f32(resized);
+
       const int runs = std::max(1, args.num_runs);
       std::vector<double> graph_times;
       std::vector<double> post_times;
@@ -651,7 +674,7 @@ int main(int argc, char** argv) {
       const double fps_overall = runs_d / total_sum;
 
       std::cout << "Profiling over " << graph_times.size() << " runs (image='"
-                << args.image.string() << "'):\n";
+                << image_path.string() << "'):\n";
       std::cout << "  Graph run (push+pull): mean=" << graph_stats.mean
                 << "s, min=" << graph_stats.min << "s, max=" << graph_stats.max
                 << "s, FPS=" << fps_graph << "\n";
@@ -668,45 +691,64 @@ int main(int argc, char** argv) {
                   << d.x2 << "," << d.y2 << "]\n";
       }
     } else {
-      if (!run.push(simaai::neat::TensorList{input_t})) {
-        throw std::runtime_error("run.push failed");
-      }
-
-      auto out_sample = run.pull(args.timeout_ms);
-      if (!out_sample.has_value()) {
-        throw std::runtime_error("run.pull returned no sample");
-      }
-
-      const std::vector<simaai::neat::Tensor> out_tensors = collect_tensors(*out_sample);
-      std::cout << "Model produced " << out_tensors.size() << " tensor(s)\n";
-      for (size_t i = 0; i < out_tensors.size(); ++i) {
-        const auto& t = out_tensors[i];
-        std::cout << "  [" << i << "] dtype=" << static_cast<int>(t.dtype) << " shape=[";
-        for (size_t d = 0; d < t.shape.size(); ++d) {
-          std::cout << t.shape[d] << (d + 1 < t.shape.size() ? "," : "");
+      fs::create_directories(args.output_dir);
+      int processed = 0;
+      for (const fs::path& image_path : image_paths) {
+        cv::Mat bgr_u8 = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+        if (bgr_u8.empty()) {
+          throw std::runtime_error("failed to read image: " + image_path.string());
         }
-        std::cout << "]\n";
-      }
+        cv::Mat bgr_f32;
+        bgr_u8.convertTo(bgr_f32, CV_32FC3);
+        bgr_mean_subtract_inplace(bgr_f32);
+        auto [padded, meta] = pad_to_aspect(bgr_f32, kInferW, kInferH);
+        cv::Mat resized;
+        cv::resize(padded, resized, cv::Size(kInferW, kInferH), 0, 0, cv::INTER_LINEAR);
+        simaai::neat::Tensor input_t = tensor_from_hwc_f32(resized);
 
-      decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k,
-                     args.landmarks);
+        if (!run.push(simaai::neat::TensorList{input_t})) {
+          throw std::runtime_error("run.push failed");
+        }
 
-      std::cout << "Detections: " << dets.size() << "\n";
-      for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
-        const auto& d = dets[i];
-        std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << ","
-                  << d.x2 << "," << d.y2 << "]\n";
-      }
+        auto out_sample = run.pull(args.timeout_ms);
+        if (!out_sample.has_value()) {
+          throw std::runtime_error("run.pull returned no sample");
+        }
 
-      if (!args.output.empty()) {
+        const std::vector<simaai::neat::Tensor> out_tensors = collect_tensors(*out_sample);
+        std::cout << "Model produced " << out_tensors.size() << " tensor(s)\n";
+        for (size_t i = 0; i < out_tensors.size(); ++i) {
+          const auto& t = out_tensors[i];
+          std::cout << "  [" << i << "] dtype=" << static_cast<int>(t.dtype) << " shape=[";
+          for (size_t d = 0; d < t.shape.size(); ++d) {
+            std::cout << t.shape[d] << (d + 1 < t.shape.size() ? "," : "");
+          }
+          std::cout << "]\n";
+        }
+
+        decode_outputs(out_tensors, dets, meta, args.conf, args.nms, args.top_k, args.keep_top_k,
+                       args.landmarks);
+
+        std::cout << "Detections: " << dets.size() << "\n";
+        for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
+          const auto& d = dets[i];
+          std::cout << "  [" << i << "] score=" << d.score << " box=[" << d.x1 << "," << d.y1 << ","
+                    << d.x2 << "," << d.y2 << "]\n";
+        }
+
         cv::Mat overlay = bgr_u8.clone();
         draw_detections(overlay, dets, args.max_draw);
-        fs::create_directories(args.output.parent_path());
-        if (!cv::imwrite(args.output.string(), overlay)) {
-          throw std::runtime_error("failed to write: " + args.output.string());
+        const fs::path output_path =
+            args.output_dir / (image_path.stem().string() + "_retinaface.png");
+        if (!cv::imwrite(output_path.string(), overlay)) {
+          throw std::runtime_error("failed to write: " + output_path.string());
         }
-        std::cout << "Wrote annotated image: " << args.output << "\n";
+        ++processed;
+        std::cout << "[" << processed << "/" << image_paths.size() << "] "
+                  << image_path.filename().string() << ": " << dets.size() << " detections -> "
+                  << output_path.filename().string() << "\n";
       }
+      std::cout << "Done: " << processed << " images processed\n";
     }
 
     run.close();

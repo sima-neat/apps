@@ -5,16 +5,16 @@
 | --- | --- |
 | Category | object-detection |
 | Difficulty | Intermediate |
-| Tags | detr, object-detection, single-image, coco |
+| Tags | detr, object-detection, folder-input, coco |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | detr-object-detector |
 | Model | detr_resnet50_modified_class_embed_bbox_embed [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz] |
 
 ## Concept
-This example demonstrates single-image object detection with a compiled **DETR** model. The input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the NEAT pipeline, and then decoded into object boxes and class scores.
+This example demonstrates folder-based object detection with a compiled **DETR** model. Each input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the NEAT pipeline, and then decoded into object boxes and class scores.
 
-The model emits two raw tensors: classification logits and normalized bounding boxes for a fixed set of object queries. The example applies `softmax` over the class logits, `sigmoid` over the box outputs, filters by confidence, optionally keeps only the COCO `person` class, maps detections back onto the original image, and writes an annotated output image.
+The model emits two raw tensors: classification logits and normalized bounding boxes for a fixed set of object queries. The example applies `softmax` over the class logits, `sigmoid` over the box outputs, filters by confidence, optionally keeps only the COCO `person` class, maps detections back onto the original image, and writes annotated output images.
 
 ## Preview
 Snippet from a pipeline run:
@@ -37,7 +37,7 @@ Download into `assets/models/`:
   `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 
 ## Important Behavior
-- The example expects one input image.
+- The example expects an input folder with image files.
 - Input preprocessing preserves aspect ratio and center-pads into an `1333x800` model frame.
 - Output boxes are mapped back to the original image resolution before drawing.
 - By default all DETR foreground classes are considered; `--person-only` keeps only the DETR `person` class.
@@ -147,9 +147,9 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 ## Debugging Notes
 - If the model fails to load, verify `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` exists and is readable.
 - First-run model initialization can exceed 60 seconds on some setups. Increase `SIMANEAT_APPS_TEST_TIMEOUT_MS` (for example `180000`) for e2e runs.
-- If no detections appear, lower `decode.confidence_threshold` and confirm the input image contains supported COCO objects.
+- If no detections appear, lower `decode.confidence_threshold` and confirm the input images contain supported COCO objects.
 - If detections are visibly offset, verify the model frame assumptions (`1333x800`) still match the compiled package.
-- If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.
+- If output writing fails, ensure `io.output_dir` exists or can be created.
 
 ## Source Files
 - C++ source: `cpp/main.cpp`

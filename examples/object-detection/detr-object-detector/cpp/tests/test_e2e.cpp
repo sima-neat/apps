@@ -1,15 +1,13 @@
 // E2E test for detr-object-detector.
-// Runs the binary with a real DETR model and a local image, and verifies it exits successfully
-// and produces an annotated output image.
+// Runs the binary with a real DETR model and a local image folder, and verifies it exits
+// successfully and produces annotated output images.
 #include "support/testing/test_process.h"
 #include "support/testing/test_config.h"
 
-#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <vector>
 
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
@@ -33,17 +31,7 @@ int main(int argc, char** argv) {
   const char* input_dir_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
   const std::string input_dir = input_dir_raw ? input_dir_raw : "assets/test_images";
 
-  std::vector<fs::path> image_candidates;
-  if (fs::exists(input_dir)) {
-    for (const auto& entry : fs::directory_iterator(input_dir)) {
-      const auto ext = entry.path().extension().string();
-      if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
-        image_candidates.push_back(entry.path());
-      }
-    }
-  }
-  std::sort(image_candidates.begin(), image_candidates.end());
-  if (image_candidates.empty()) {
+  if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
                 "directory containing test images (defaults to assets/test_images)");
     return kSkipCode;
@@ -54,7 +42,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  fs::path out_image = fs::path(out_dir) / "detr_output.png";
   const double confidence_threshold =
       e2e_double("detr-object-detector", "decode", "confidence_threshold");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
@@ -63,8 +50,8 @@ int main(int argc, char** argv) {
     config_file << "model:\n"
                 << "  path: " << model_path << "\n"
                 << "io:\n"
-                << "  image: " << image_candidates.front().string() << "\n"
-                << "  output: " << out_image.string() << "\n"
+                << "  input_dir: " << input_dir << "\n"
+                << "  output_dir: " << out_dir << "\n"
                 << "decode:\n"
                 << "  confidence_threshold: " << confidence_threshold << "\n"
                 << "  max_draw: 50\n"
@@ -85,18 +72,19 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (!fs::exists(out_image)) {
-    std::cerr << "[FAIL] expected annotated output image not found at " << out_image << "\n";
+  const int output_files = count_output_files(out_dir);
+  if (output_files == 0) {
+    std::cerr << "[FAIL] expected annotated output images but output directory is empty\n";
     remove_dir(out_dir);
     return 1;
   }
-  if (fs::is_empty(out_image)) {
-    std::cerr << "[FAIL] annotated output image is empty at " << out_image << "\n";
+  if (!all_output_files_nonempty(out_dir)) {
+    std::cerr << "[FAIL] some annotated output images are empty\n";
     remove_dir(out_dir);
     return 1;
   }
 
   remove_dir(out_dir);
-  std::cout << "[OK] detr-object-detector pipeline completed successfully: " << out_image << "\n";
+  std::cout << "[OK] detr-object-detector pipeline produced " << output_files << " output files\n";
   return 0;
 }

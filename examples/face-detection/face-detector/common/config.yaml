@@ -2,8 +2,8 @@ model:
   path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
 
 io:
-  image: assets/test_images/image.png
-  output: sandbox/face-detector/output.png
+  input_dir: assets/test_images
+  output_dir: sandbox/face-detector
 
 decode:
   confidence_threshold: 0.40

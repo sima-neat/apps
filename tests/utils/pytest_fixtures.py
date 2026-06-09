@@ -261,7 +261,8 @@ def run_until_output_files(request):
 @pytest.fixture
 def test_images_dir() -> Path:
     """Return the path to bundled test images."""
-    return APPS_ROOT / "assets" / "test_images"
+    raw = os.environ.get("SIMANEAT_APPS_TEST_INPUT_DIR", "").strip()
+    return Path(raw) if raw else APPS_ROOT / "assets" / "test_images"
 
 
 @pytest.fixture

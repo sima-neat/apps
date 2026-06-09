@@ -1,6 +1,6 @@
 """RetinaFace face detection example using a compiled NEAT model.
 
-This script performs an end-to-end single-image RetinaFace pipeline:
+This script performs an end-to-end folder-based RetinaFace pipeline:
   - Preprocesses the input image for the model (mean subtraction + pad + resize)
   - Runs inference through a NEAT Graph
   - Decodes RetinaFace outputs into face boxes, confidence scores, and landmarks
@@ -42,6 +42,10 @@ CFG_MNET = {
     "variance": [0.1, 0.2],
     "clip": False,
 }
+
+
+def is_image(path: Path) -> bool:
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
 
 class PreprocMeta(NamedTuple):
@@ -384,33 +388,7 @@ def draw_detections(image_bgr: np.ndarray, detections: list[dict[str, Any]]) -> 
     return out
 
 
-def prepare_graph_and_frame(
-    model_path: Path,
-    image_path: Path,
-) -> tuple[Any, pyneat.Tensor, np.ndarray, PreprocMeta]:
-    """Prepare a reusable Graph run object and preprocessed frame for repeated inference."""
-    _log(f"Preparing graph and frame. model_path={model_path}, image_path={image_path}")
-    if not image_path.is_file():
-        raise FileNotFoundError(f"Input image does not exist: {image_path}")
-
-    _log("Reading input image with OpenCV")
-    bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        raise RuntimeError(f"Failed to read image: {image_path}")
-
-    orig_h, orig_w = bgr.shape[:2]
-
-    _log("Applying BGR mean subtraction")
-    img = bgr.astype(np.float32) - np.array([104.0, 117.0, 123.0], dtype=np.float32)
-
-    _log("Padding image to target aspect ratio before resize")
-    padded, meta = pad_image_bgr(img, orig_h, orig_w, INFER_WIDTH, INFER_HEIGHT)
-
-    _log("Resizing padded image to model input size (640x640)")
-    img = cv2.resize(padded, (INFER_WIDTH, INFER_HEIGHT), interpolation=cv2.INTER_LINEAR)
-
-    resized = np.ascontiguousarray(img, dtype=np.float32)
-
+def build_retinaface_runner(model_path: Path) -> Any:
     _log("Configuring pyneat.ModelOptions for tensor input (FP32)")
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Tensor
@@ -432,18 +410,41 @@ def prepare_graph_and_frame(
 
     _log("Building Graph run with dummy frame")
     dummy = tensor_from_hwc_f32(np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32))
-    run = graph.build([dummy], pyneat.RunMode.Async)
+    return graph.build([dummy], pyneat.RunMode.Async)
 
-    return run, tensor_from_hwc_f32(resized), bgr, meta
+
+def prepare_retinaface_frame(image_path: Path) -> tuple[pyneat.Tensor, np.ndarray, PreprocMeta]:
+    _log(f"Preparing frame. image_path={image_path}")
+    if not image_path.is_file():
+        raise FileNotFoundError(f"Input image does not exist: {image_path}")
+
+    _log("Reading input image with OpenCV")
+    bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise RuntimeError(f"Failed to read image: {image_path}")
+
+    orig_h, orig_w = bgr.shape[:2]
+
+    _log("Applying BGR mean subtraction")
+    img = bgr.astype(np.float32) - np.array([104.0, 117.0, 123.0], dtype=np.float32)
+
+    _log("Padding image to target aspect ratio before resize")
+    padded, meta = pad_image_bgr(img, orig_h, orig_w, INFER_WIDTH, INFER_HEIGHT)
+
+    _log("Resizing padded image to model input size (640x640)")
+    img = cv2.resize(padded, (INFER_WIDTH, INFER_HEIGHT), interpolation=cv2.INTER_LINEAR)
+    resized = np.ascontiguousarray(img, dtype=np.float32)
+
+    return tensor_from_hwc_f32(resized), bgr, meta
 
 
 def run_retinaface_inference(
-    model_path: Path,
+    run: Any,
     image_path: Path,
     timeout_ms: int,
 ) -> tuple[list[pyneat.Tensor], np.ndarray, PreprocMeta]:
-    _log(f"Starting inference. model_path={model_path}, image_path={image_path}")
-    run, input_tensor, bgr, meta = prepare_graph_and_frame(model_path, image_path)
+    _log(f"Starting inference. image_path={image_path}")
+    input_tensor, bgr, meta = prepare_retinaface_frame(image_path)
 
     _log("Pushing preprocessed frame into Graph")
     if not run.push([input_tensor]):
@@ -456,17 +457,11 @@ def run_retinaface_inference(
 
     _log(f"Inference complete. Original image size: {meta.orig_w}x{meta.orig_h}")
 
-    try:
-        run.close()
-    except Exception as exc:
-        # Best-effort cleanup: log and continue, do not mask inference result.
-        logger.debug("Failed to close RetinaFace graph run cleanly", exc_info=exc)
-
     return collect_tensors(sample), bgr, meta
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="RetinaFace face detection example")
+    parser = argparse.ArgumentParser(description="RetinaFace face detection folder example")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     args = parser.parse_args()
 
@@ -483,8 +478,8 @@ def main() -> int:
     runtime_cfg = raw.get("runtime", {})
 
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
-    image_path = Path(io_cfg.get("image", "assets/test_images/input.jpg"))
-    output_path = Path(io_cfg.get("output", "sandbox/face-detector/output.png"))
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/face-detector"))
     confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.4))
     nms_threshold = float(decode_cfg.get("nms_iou", 0.9))
     top_k = int(decode_cfg.get("top_k", 5000))
@@ -503,13 +498,21 @@ def main() -> int:
     if not model_path.is_file():
         print(f"Model file does not exist: {model_path}", file=sys.stderr)
         return 2
+    if not input_dir.is_dir():
+        print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
+        return 2
+
+    image_paths = sorted(path for path in input_dir.iterdir() if path.is_file() and is_image(path))
+    if not image_paths:
+        print(f"No images found in {input_dir}", file=sys.stderr)
+        return 3
 
     # Profiling mode: reuse a single graph run and frame, and profile graph vs postprocessing.
     if profile:
+        image_path = image_paths[0]
         try:
-            run, input_tensor, orig_bgr, meta = prepare_graph_and_frame(
-                model_path, image_path
-            )
+            run = build_retinaface_runner(model_path)
+            input_tensor, orig_bgr, meta = prepare_retinaface_frame(image_path)
         except Exception as e:
             print(f"Error during graph preparation: {e}", file=sys.stderr)
             return 3
@@ -603,47 +606,55 @@ def main() -> int:
         # Intentionally do NOT write an output image in profiling mode.
         return 0
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    processed = 0
     try:
-        _log("Invoking run_retinaface_inference()")
-        tensors, orig_bgr, meta = run_retinaface_inference(model_path, image_path, timeout_ms)
+        run = build_retinaface_runner(model_path)
     except Exception as e:
-        print(f"Error during inference: {e}", file=sys.stderr)
+        print(f"Error during graph preparation: {e}", file=sys.stderr)
         return 3
 
-    _log("Collecting tensors from output samples")
-    if not tensors:
-        print("No tensors found in model output", file=sys.stderr)
-        return 4
+    try:
+        for image_path in image_paths:
+            _log("Invoking run_retinaface_inference()")
+            try:
+                tensors, orig_bgr, meta = run_retinaface_inference(run, image_path, timeout_ms)
+            except Exception as e:
+                print(f"Error during inference for {image_path}: {e}", file=sys.stderr)
+                return 3
 
-    np_outs = tensor_numpy_outputs(tensors)
-    print(f"Model produced {len(np_outs)} tensor(s):")
-    for i, arr in enumerate(np_outs):
-        print(f"  [{i}] shape={arr.shape}, dtype={arr.dtype}")
+            _log("Collecting tensors from output samples")
+            if not tensors:
+                print(f"No tensors found in model output for {image_path}", file=sys.stderr)
+                return 4
 
-    _log("Running RetinaFace postprocessing")
-    bboxes, scores, landmarks = parse_retinaface_outputs(np_outs)
-    detections = postprocess_retinaface(
-        bboxes,
-        scores,
-        landmarks,
-        meta,
-        confidence_threshold=confidence_threshold,
-        nms_threshold=nms_threshold,
-        top_k=top_k,
-        keep_top_k=keep_top_k,
-        with_landmarks=landmarks is not None,
-    )
+            np_outs = tensor_numpy_outputs(tensors)
+            _log("Running RetinaFace postprocessing")
+            bboxes, scores, landmarks = parse_retinaface_outputs(np_outs)
+            detections = postprocess_retinaface(
+                bboxes,
+                scores,
+                landmarks,
+                meta,
+                confidence_threshold=confidence_threshold,
+                nms_threshold=nms_threshold,
+                top_k=top_k,
+                keep_top_k=keep_top_k,
+                with_landmarks=landmarks is not None,
+            )
 
-    print(f"Detections: {len(detections)}")
-    for i, det in enumerate(detections[:20]):
-        box = det["box"]
-        print(f"  [{i}] score={det['score']:.4f} box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]")
+            out_img = draw_detections(orig_bgr, detections)
+            output_path = output_dir / f"{image_path.stem}_retinaface.png"
+            cv2.imwrite(str(output_path), out_img)
+            processed += 1
+            print(f"[{processed}/{len(image_paths)}] {image_path.name}: {len(detections)} detections -> {output_path.name}")
+    finally:
+        try:
+            run.close()
+        except Exception as exc:
+            logger.debug("Failed to close RetinaFace graph run cleanly", exc_info=exc)
 
-    if str(output_path):
-        out_img = draw_detections(orig_bgr, detections)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(output_path), out_img)
-        print(f"Wrote annotated image: {output_path}")
+    print(f"Done: {processed} images processed")
     return 0
 
 
