@@ -62,13 +62,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 echo "Starting Neat OpenAI-compatible model server..."
-"${PYNEAT_PYTHON}" "${PYTHON_DIR}/model_server.py" --config "${CONFIG_PATH}" &
+"${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
 pids+=("$!")
 
 sleep "${MODEL_SERVER_START_DELAY:-2}"
 
 echo "Starting Multimodal Assistant Flask UI..."
-"${APP_PYTHON}" "${PYTHON_DIR}/web_app.py" --config "${CONFIG_PATH}" &
+"${APP_PYTHON}" "${PYTHON_DIR}/ui/main.py" --config "${CONFIG_PATH}" &
 pids+=("$!")
 
 echo "Multimodal Assistant is starting. Press Ctrl+C to stop both processes."
