@@ -12,9 +12,7 @@
 | Model | yolo26m-det-bf16-mla_tess-b1 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz] |
 
 ## Concept
-Minimal image-folder object detection pipeline using yolo26m, the newest iteration of the YOLO model family. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the NEAT API for model loading, inference, and result decoding.
-
-Compared to the older YOLOv8 variant, yolo26m outputs decoded box coordinates `(cx, cy, w, h)` directly (4-channel regression head) and post-sigmoid class scores. This simpler head is decoded via the NEAT hardware box decoder node (`SimaBoxDecode`) in the C++ graph; the Python implementation uses a vectorized NumPy decode path for clarity.
+Minimal image-folder object detection pipeline using yolo26m. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the NEAT API for model loading, inference, and result decoding.
 
 ## Preview
 Snippet from a pipeline run:
@@ -22,17 +20,23 @@ Snippet from a pipeline run:
 ![YOLO26 object detector preview](../../../assets/portal/object-detection/yolo26-object-detector/image.png)
 
 ## Supported Models
-Validated with: `yolo26m-det-bf16-mla_tess-b1`
+Supported model:
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
 
-Download into `assets/models/`:
-- `./scripts/download_models.sh yolo26m-det-bf16-mla_tess-b1`
+Download the supported model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+
+cd ../..
+```
 
 ## Prerequisites
 - Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- yolo26m is not yet published in the SiMa modelzoo. Use the direct download URL below until a modelzoo entry is available.
-- Direct URL download:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz && cd ../..`
 - Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
 
 ## Important Behavior

@@ -1,4 +1,4 @@
-"""Small data helpers for the YOLOv8 Insight example."""
+"""Small data helpers for the YOLO26 Insight example."""
 
 from __future__ import annotations
 

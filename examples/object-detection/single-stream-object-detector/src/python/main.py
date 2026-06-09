@@ -1,16 +1,16 @@
-"""Single-camera RTSP YOLOv8 Insight example using pyneat.
+"""Single-camera RTSP YOLO26 Insight example using pyneat.
 
 This mirrors the intent of the C++ reference sample in the same folder:
 
 - pull one decoded RTSP stream
-- run one YOLOv8 detector
+- run one YOLO26 detector
 - publish H.264 video plus detection metadata to Insight
 
 The implementation keeps those responsibilities loosely separated so the main
 runtime path is easy to reason about:
 
 1. RTSP probe/build
-2. YOLO inference and box extraction
+2. YOLO26 inference and box extraction
 3. Insight video/metadata publishing
 """
 
@@ -36,7 +36,7 @@ np = None
 pyneat = None
 DFL_BINS_16 = None
 
-# Standard COCO class order for the bundled YOLOv8 model used by this sample.
+# Standard COCO class order for the bundled YOLO26 detector model used by this sample.
 COCO80_NAMES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus",
     "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -357,20 +357,42 @@ def build_rtsp_run(
     return graph, run
 
 
-def build_model(model_path: str, width: int, height: int, inference: InferenceConfig) -> pyneat.Model:
-    """Create the YOLO model with input bounds derived from the live stream."""
+def build_model(model_path: str, inference: InferenceConfig) -> pyneat.Model:
+    """Create the YOLO model for model-managed YOLO26 preprocessing and decode."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-    opt.decode_type = pyneat.BoxDecodeType.YoloV8
+    opt.decode_type = pyneat.BoxDecodeType.YoloV26
     opt.score_threshold = inference.min_score
     opt.nms_iou_threshold = inference.nms_iou
     opt.top_k = inference.max_detections
-    opt.boxdecode_original_width = width
-    opt.boxdecode_original_height = height
     return pyneat.Model(model_path, opt)
+
+
+def build_detector_run(model_path: str, width: int, height: int, inference: InferenceConfig):
+    """Build the explicit YOLO26 detector graph used by the RTSP loop."""
+    model = build_model(model_path, inference)
+
+    input_opt = model.input_appsrc_options(False)
+    input_opt.payload_type = pyneat.PayloadType.Image
+    input_opt.format = "BGR"
+    input_opt.width = width
+    input_opt.height = height
+    input_opt.depth = 3
+
+    graph = pyneat.Graph()
+    graph.add(pyneat.nodes.input(input_opt))
+    graph.add(model.graph())
+    graph.add(pyneat.nodes.output())
+
+    seed = tensor_from_bgr_frame(np.zeros((height, width, 3), dtype=np.uint8))
+    run_opt = pyneat.RunOptions()
+    run_opt.queue_depth = 4
+    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_opt.output_memory = pyneat.OutputMemory.Owned
+    return model, graph, graph.build([seed], pyneat.RunMode.Async, run_opt)
 
 
 def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
@@ -462,7 +484,7 @@ def save_annotated_frame(frame: np.ndarray, boxes: list[dict], min_score: float,
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Expose only the small set of controls needed for this reference flow."""
-    parser = argparse.ArgumentParser(description="Single-camera RTSP YOLOv8 Insight example")
+    parser = argparse.ArgumentParser(description="Single-camera RTSP YOLO26 Insight example")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     parser.add_argument(
         "--validate-config-only",
@@ -648,14 +670,14 @@ class ProfileWindow:
         self.reset()
 
 
-def resolve_yolov8s_model(root: Path) -> str:
+def resolve_yolo26_model(root: Path) -> str:
     """Mirror the C++ sample's local-first model lookup strategy.
 
     Resolution order:
 
     1. explicit environment override
     2. local/common modelzoo directories
-    3. `sima-cli modelzoo -v 2.0.0 get yolo_v8s`
+    3. `sima-cli download <YOLO26 detector URL>`
     """
     env_path = os.environ.get("SIMA_YOLO_TAR", "")
     if env_path and Path(env_path).exists():
@@ -663,8 +685,13 @@ def resolve_yolov8s_model(root: Path) -> str:
 
     tmp_dir = root / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp_tar = tmp_dir / "yolo_v8s_mpk.tar.gz"
-    direct_tar = root / "yolo_v8s_mpk.tar.gz"
+    model_name = "yolo26m-det-bf16-mla_tess-b1.tar.gz"
+    model_url = (
+        "https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/"
+        f"yolo26-detection/{model_name}"
+    )
+    tmp_tar = tmp_dir / model_name
+    direct_tar = root / model_name
     if direct_tar.exists():
         return str(direct_tar)
     if tmp_tar.exists():
@@ -682,10 +709,7 @@ def resolve_yolov8s_model(root: Path) -> str:
         Path("/data/simaai/modelzoo"),
     ]
     names = [
-        "yolo_v8s_mpk.tar.gz",
-        "yolo-v8s_mpk.tar.gz",
-        "yolov8s_mpk.tar.gz",
-        "yolov8_s_mpk.tar.gz",
+        model_name,
     ]
     for directory in search_dirs:
         for name in names:
@@ -694,7 +718,7 @@ def resolve_yolov8s_model(root: Path) -> str:
                 return str(candidate)
 
     try:
-        subprocess.run(["sima-cli", "modelzoo", "get", "yolo_v8s"], check=True)
+        subprocess.run(["sima-cli", "download", model_url], cwd=str(tmp_dir), check=True)
     except Exception:
         return ""
 
@@ -720,14 +744,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     load_runtime_dependencies()
-    model_path = cfg.model.path or resolve_yolov8s_model(Path.cwd())
+    model_path = cfg.model.path or resolve_yolo26_model(Path.cwd())
     if not model_path or not Path(model_path).is_file():
-        print("Failed to locate yolo_v8s compiled model package.", file=sys.stderr)
-        print("Set model.path or run 'sima-cli modelzoo -v 2.0.0 get yolo_v8s'.", file=sys.stderr)
+        print("Failed to locate YOLO26 detector model package.", file=sys.stderr)
+        print("Set model.path or download a YOLO26 detector package with sima-cli.", file=sys.stderr)
         return 2
 
     rtsp_graph = None
     rtsp_run = None
+    detector_graph = None
+    detector_run = None
     video_graph = None
     video_run = None
     metadata_sender = None
@@ -737,8 +763,13 @@ def main(argv: list[str] | None = None) -> int:
         frame_w, frame_h, fps = probe_rtsp(cfg.source.rtsp_url)
         print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
 
-        # NEAT boundary: build YOLO model runtime from the resolved compiled model package.
-        model = build_model(model_path, frame_w, frame_h, cfg.inference)
+        # NEAT boundary: build YOLO detector graph from the resolved compiled model package.
+        model, detector_graph, detector_run = build_detector_run(
+            model_path,
+            frame_w,
+            frame_h,
+            cfg.inference,
+        )
         # NEAT boundary: build RTSP decode runtime used by pull_tensors().
         rtsp_graph, rtsp_run = build_rtsp_run(
             cfg.source.rtsp_url,
@@ -777,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
 
             # Push/pull integration point: run model and parse the BBOX payload.
             t_inf0 = time.perf_counter()
-            result = model.run([infer_input], timeout_ms=20000)
+            result = detector_run.run([infer_input], timeout_ms=20000)
             t_inf1 = time.perf_counter()
 
             payload = extract_bbox_payload(result)
@@ -843,6 +874,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if video_run is not None:
                 video_run.close()
+        except Exception:
+            pass
+        try:
+            if detector_run is not None:
+                detector_run.close()
         except Exception:
             pass
         try:

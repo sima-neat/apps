@@ -161,7 +161,7 @@ using sima_examples::make_blank_nv12_tensor;
 using sima_examples::nv12_copy_to_cpu_tensor;
 
 // This sample uses the standard 80-class COCO label order expected by the
-// bundled YOLOv8 model. Keeping the mapping local to the sample avoids baking
+// bundled YOLO26 detector model. Keeping the mapping local to the sample avoids baking
 // model-specific semantics into generic Insight helpers used by other models.
 std::vector<std::string> yolo_coco_labels() {
   return {
@@ -607,16 +607,13 @@ DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int fr
   // NEAT boundary: build model + async inference runtime.
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
+  model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
-  model_opt.preprocess.input_max_width = frame_w;
-  model_opt.preprocess.input_max_height = frame_h;
-  model_opt.preprocess.input_max_depth = 3;
-  model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV8;
+  model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+  model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
   model_opt.score_threshold = cfg.inference.min_score;
   model_opt.nms_iou_threshold = cfg.inference.nms_iou;
   model_opt.top_k = cfg.inference.max_detections;
-  model_opt.boxdecode_original_width = frame_w;
-  model_opt.boxdecode_original_height = frame_h;
   runtime.model = std::make_unique<simaai::neat::Model>(cfg.model.path, model_opt);
   std::cout << "[init] model configured for " << frame_w << "x" << frame_h << " BGR\n";
 
@@ -628,12 +625,7 @@ DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int fr
   appsrc_options.depth = 3;
 
   runtime.detector_graph.add(simaai::neat::nodes::Input(appsrc_options));
-  runtime.detector_graph.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
-  runtime.detector_graph.add(simaai::neat::nodes::groups::Infer(*runtime.model));
-  runtime.detector_graph.add(simaai::neat::nodes::SimaBoxDecode(
-      *runtime.model, simaai::neat::BoxDecodeType::YoloV8, cfg.inference.min_score,
-      cfg.inference.nms_iou, cfg.inference.max_detections, "", std::nullopt, std::nullopt, frame_w,
-      frame_h));
+  runtime.detector_graph.add(runtime.model->graph());
   runtime.detector_graph.add(simaai::neat::nodes::Output());
 
   simaai::neat::RunOptions detector_run_options;

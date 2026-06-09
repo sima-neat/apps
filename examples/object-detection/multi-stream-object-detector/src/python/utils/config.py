@@ -119,7 +119,7 @@ def load_app_config(path: str | Path) -> AppConfig:
         raise ValueError("streams must be a non-empty list")
     if "family" in model:
         raise ValueError(
-            "model.family is no longer supported; this example infers YOLOv8 from model.path"
+            "model.family is no longer supported; this example infers YOLO26 from model.path"
         )
     rtsp_urls: list[str] = []
     for index, stream in enumerate(streams_raw):

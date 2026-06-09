@@ -6,7 +6,7 @@ namespace multi_stream_object_detector {
 
 enum class ModelFamily {
   Auto,
-  YoloV8,
+  YoloV26,
 };
 
 std::string to_string(ModelFamily family);

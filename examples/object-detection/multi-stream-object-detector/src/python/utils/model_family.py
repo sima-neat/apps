@@ -7,7 +7,7 @@ from enum import Enum
 
 class ModelFamily(Enum):
     AUTO = "auto"
-    YOLOV8 = "yolov8"
+    YOLO26 = "yolo26"
 
 
 def to_string(family: ModelFamily) -> str:
@@ -21,6 +21,6 @@ def resolve_model_family(
         return hint
 
     lowered = str(model_path).lower()
-    if "yolo_v8" in lowered or "yolov8" in lowered:
-        return ModelFamily.YOLOV8
+    if "yolo26" in lowered:
+        return ModelFamily.YOLO26
     raise ValueError(f"unable to infer model family from model path: {model_path}")

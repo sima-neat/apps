@@ -256,7 +256,7 @@ AppConfig load_app_config(const std::filesystem::path& path) {
   }
   if (lookup_scalar(raw, "model.family").has_value()) {
     throw std::runtime_error(
-        "model.family is no longer supported; this example infers YOLOv8 from model.path");
+        "model.family is no longer supported; this example infers YOLO26 from model.path");
   }
 
   AppConfig cfg;

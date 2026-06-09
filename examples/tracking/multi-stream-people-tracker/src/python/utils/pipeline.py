@@ -31,14 +31,6 @@ class GraphRun:
     model: Any | None = None
 
 
-@dataclass(frozen=True)
-class QuantTessCpuPreproc:
-    width: int
-    height: int
-    aspect_ratio: bool
-    padding_type: str
-
-
 _RUNTIME_MODULES: RuntimeModules | None = None
 
 _SOURCE_STARTUP_PULL_TIMEOUT_MS = 50000
@@ -93,21 +85,6 @@ def probe_rtsp(url: str) -> RtspProbe:
     if width <= 0 or height <= 0:
         raise RuntimeError(f"failed to probe RTSP frame size: {url}")
     return RtspProbe(width=width, height=height, fps=max(0, fps))
-
-
-def read_preproc_contract(runtime: RuntimeModules, model: Any) -> QuantTessCpuPreproc:
-    # Reuse the packaged preproc geometry even though preprocessing happens on CPU.
-    pyneat = runtime.pyneat
-    pre = pyneat.PreprocOptions(model)
-    cfg_json = dict(getattr(pre, "config_json", None) or {})
-    width = int(cfg_json.get("output_width") or cfg_json.get("input_width") or 640)
-    height = int(cfg_json.get("output_height") or cfg_json.get("input_height") or 640)
-    return QuantTessCpuPreproc(
-        width=width,
-        height=height,
-        aspect_ratio=bool(cfg_json.get("aspect_ratio", False)),
-        padding_type=str(cfg_json.get("padding_type", "CENTER")).upper(),
-    )
 
 
 def _set_optional_input_limits(input_opt: Any, width: int, height: int, depth: int) -> None:
@@ -166,16 +143,13 @@ def build_detection_run(
 
     model_opt = pyneat.ModelOptions()
     model_opt.preprocess.kind = pyneat.InputKind.Image
+    model_opt.preprocess.enable = pyneat.AutoFlag.On
     model_opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-    model_opt.preprocess.input_max_width = probe.width
-    model_opt.preprocess.input_max_height = probe.height
-    model_opt.preprocess.input_max_depth = 3
-    model_opt.decode_type = pyneat.BoxDecodeType.YoloV8
+    model_opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+    model_opt.decode_type = pyneat.BoxDecodeType.YoloV26
     model_opt.score_threshold = cfg.detection_threshold
     model_opt.nms_iou_threshold = cfg.nms_iou_threshold
     model_opt.top_k = cfg.top_k
-    model_opt.boxdecode_original_width = probe.width
-    model_opt.boxdecode_original_height = probe.height
     model = pyneat.Model(cfg.model, model_opt)
 
     input_opt = model.input_appsrc_options(False)
@@ -188,19 +162,7 @@ def build_detection_run(
 
     graph = pyneat.Graph("detector")
     graph.add(pyneat.nodes.input(input_opt))
-    graph.add(model.preprocess())
-    graph.add(pyneat.groups.mla(model))
-    graph.add(
-        pyneat.nodes.sima_box_decode(
-            model,
-            decode_type=pyneat.BoxDecodeType.YoloV8,
-            original_width=probe.width,
-            original_height=probe.height,
-            detection_threshold=cfg.detection_threshold,
-            nms_iou_threshold=cfg.nms_iou_threshold,
-            top_k=cfg.top_k,
-        )
-    )
+    graph.add(model.graph())
     graph.add(pyneat.nodes.output())
 
     seed = pyneat.Tensor.from_numpy(

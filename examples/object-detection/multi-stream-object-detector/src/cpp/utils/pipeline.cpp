@@ -106,8 +106,8 @@ RtspProbe probe_rtsp(const AppConfig& cfg, const std::string& url) {
 
 std::vector<std::string> detector_stage_names(ModelFamily family) {
   switch (family) {
-  case ModelFamily::YoloV8:
-    return {"input", "preproc", "mla", "sima_box_decode", "output"};
+  case ModelFamily::YoloV26:
+    return {"input", "model_graph", "output"};
   case ModelFamily::Auto:
     break;
   }
@@ -144,16 +144,13 @@ GraphRun build_detection_run(const AppConfig& cfg, ModelFamily family, const Rts
 
   simaai::neat::Model::Options model_options;
   model_options.preprocess.kind = simaai::neat::InputKind::Image;
+  model_options.preprocess.enable = simaai::neat::AutoFlag::On;
   model_options.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
-  model_options.preprocess.input_max_width = probe.width;
-  model_options.preprocess.input_max_height = probe.height;
-  model_options.preprocess.input_max_depth = 3;
-  model_options.decode_type = simaai::neat::BoxDecodeType::YoloV8;
+  model_options.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+  model_options.decode_type = simaai::neat::BoxDecodeType::YoloV26;
   model_options.score_threshold = cfg.min_score;
   model_options.nms_iou_threshold = cfg.nms_iou;
   model_options.top_k = cfg.max_detections;
-  model_options.boxdecode_original_width = probe.width;
-  model_options.boxdecode_original_height = probe.height;
   runtime.model = std::make_shared<simaai::neat::Model>(cfg.model.path, model_options);
 
   auto input_options = runtime.model->input_appsrc_options(false);
@@ -163,19 +160,7 @@ GraphRun build_detection_run(const AppConfig& cfg, ModelFamily family, const Rts
   input_options.height = probe.height;
   input_options.depth = 3;
   runtime.graph.add(simaai::neat::nodes::Input(input_options));
-  runtime.graph.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
-  runtime.graph.add(simaai::neat::nodes::groups::Infer(*runtime.model));
-
-  switch (family) {
-  case ModelFamily::YoloV8:
-    runtime.graph.add(simaai::neat::nodes::SimaBoxDecode(
-        *runtime.model, simaai::neat::BoxDecodeType::YoloV8, cfg.min_score, cfg.nms_iou,
-        cfg.max_detections, "", std::nullopt, std::nullopt, probe.width, probe.height));
-    break;
-  case ModelFamily::Auto:
-    throw std::invalid_argument("unsupported model family for detector graph");
-  }
-
+  runtime.graph.add(runtime.model->graph());
   runtime.graph.add(simaai::neat::nodes::Output());
 
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);

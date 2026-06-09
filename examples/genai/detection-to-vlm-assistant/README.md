@@ -5,14 +5,14 @@
 | --- | --- |
 | Category | genai |
 | Difficulty | Intermediate |
-| Tags | object-detection, genai, yolov8, gemma3 |
+| Tags | object-detection, genai, yolo26, gemma3 |
 | Languages | Python |
 | Status | experimental |
 | Binary Name | detection-to-vlm-assistant |
-| Model | yolo_v8s |
+| Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
-This example decodes an RTSP stream, runs YOLOv8 detection with internal box decode, and sends video plus object-detection metadata to Insight. When OpenAI is enabled, the highest-score detected person is cropped and sent to the configured OpenAI-compatible Gemma server from a bounded background worker, so the detection and Insight loop keeps running.
+This example decodes an RTSP stream, runs YOLO26 detection with internal box decode, and sends video plus object-detection metadata to Insight. When OpenAI is enabled, the highest-score detected person is cropped and sent to the configured OpenAI-compatible Gemma server from a bounded background worker, so the detection and Insight loop keeps running.
 
 ## Preview
 Detection metadata visualized in Insight:
@@ -21,10 +21,31 @@ Detection metadata visualized in Insight:
 
 ## Prerequisites
 - Installed NEAT SDK.
-- YOLOv8 model package available under `assets/models/`.
+- YOLO26 detector model package available under `assets/models/`.
 - RTSP stream readable from the SDK runtime.
 - Insight receiver running at the configured host and ports.
 - OpenAI-compatible Gemma server running when `openai.enabled` is true.
+
+## Download Models
+Supported batch-1 YOLO26 detector models:
+- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-b1.tar.gz`
+- `yolo26m-det-int8-b1.tar.gz`
+
+Download the default detector model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+
+cd ../..
+```
 
 ## Run
 From the `apps` repository root:
@@ -35,6 +56,9 @@ python3 examples/genai/detection-to-vlm-assistant/src/python/main.py \
 ```
 
 Set `openai.enabled: false` in the config to run only the detection and Insight path.
+
+For local model comparison, example configs are available under
+`sandbox/configs/detection-to-vlm-assistant/<model-name>/config.yaml`.
 
 The OpenAI path checks `/v1/models` before sending a crop, waits at least `openai.interval_seconds` between attempts, and keeps at most `openai.max_pending_requests` queued or in-flight requests.
 

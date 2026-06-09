@@ -9,14 +9,14 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | single-stream-object-detector |
-| Model | yolo_v8s |
+| Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
 `single-stream-object-detector` is a focused reference example for a common deployment pattern:
 
 - ingest one RTSP camera stream
 - decode the stream into NV12 frames
-- run YOLOv8 object detection
+- run YOLO26 object detection
 - send H.264 video plus detection metadata to Insight
 
 The example is intentionally narrow in scope. It is not a generic output-mode demo and it does not try to support multiple unrelated workflows in one binary. The code is structured to show the intended Insight path clearly.
@@ -44,7 +44,7 @@ The sample is split into three independent runtime stages:
 
 2. `YOLO inference`
    Decoded NV12 frames are pushed into a dedicated YOLO pipeline:
-   `Input -> Preprocess -> Infer -> SimaBoxDecode -> Output`
+   `Input -> model.graph() -> Output`
 
    The model stage is isolated from transport logic so detection behavior can be debugged separately from RTSP or Insight issues.
 
@@ -55,8 +55,7 @@ The sample is split into three independent runtime stages:
 
 - RTSP ingest: `RtspDecodedInputOptions` -> `Graph.add(rtsp_decoded_input)` -> `Graph.build(...)`
 - YOLO path:
-  C++ graph uses `Input -> Preprocess -> Infer -> SimaBoxDecode -> Output`
-  Python path uses `Model.build(...)`/`Model.run(...)` with packed BBOX parsing first and manual decode fallback.
+  C++ and Python use `Input -> model.graph() -> Output`
 - Insight output:
   C++ and Python build a dedicated `VideoSender` runtime plus `MetadataSender`.
 
@@ -71,10 +70,36 @@ This separation keeps the RTSP graph from being tightly coupled to the inference
 ## Prerequisites
 - Installed Neat framework and Insight on the DevKit
 - RTSP camera source or use Insight to start RTSP source
-- SiMa.ai developer portal account so the sample can download the model from modelzoo
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8s && cd ../..`
+- Model artifacts are user-managed. Download the model variant you want to run into `assets/models/`.
 
+## Download Models
+Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
+
+Supported batch-1 YOLO26 detection models:
+- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-b1.tar.gz`
+- `yolo26m-det-int8-b1.tar.gz`
+
+Download all supported batch-1 variants:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26s-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26l-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26x-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
+
+cd ../..
+```
 
 ## Important Behavior
 - The sample always publishes to Insight.
@@ -198,10 +223,13 @@ python3 src/python/main.py --config src/common/config.yaml
 
 Example workflow:
 
-Download the `yolo_v8s` model using `sima-cli`:
+Download the default YOLO26 detector model if it is not already available:
 
 ```bash
-sima-cli modelzoo -v 2.0.0 get yolo_v8s
+mkdir -p assets/models
+cd assets/models
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+cd ../..
 ```
 
 Then start the Python app:
@@ -214,7 +242,7 @@ python3 src/python/main.py --config src/common/config.yaml
 
 Python-specific notes:
 
-- if `model.path` is empty, the Python version tries to locate `yolo_v8s` locally and then falls back to `sima-cli modelzoo -v 2.0.0 get yolo_v8s`
+- if `model.path` is empty, the Python version tries to locate `yolo26m-det-bf16-mla_tess-b1.tar.gz` locally and then falls back to `sima-cli download`
 - it sends Insight metadata directly over UDP and streams video through `VideoSender`
 
 ## Debugging Notes

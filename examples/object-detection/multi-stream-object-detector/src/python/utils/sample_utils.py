@@ -136,7 +136,7 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict[str,
 
 
 def require_detector_output_kind(family: ModelFamily, sample: Any) -> str:
-    if family is not ModelFamily.YOLOV8:
+    if family is not ModelFamily.YOLO26:
         raise ValueError("unsupported model family")
     actual = _sample_payload_tag_upper(sample)
     if actual != _BBOX_PAYLOAD_TAG:
