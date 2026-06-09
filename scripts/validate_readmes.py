@@ -18,11 +18,9 @@ VALID_CATEGORIES = {
     "object-detection",
     "tracking",
     "segmentation",
-    "pose-estimation",
     "depth-estimation",
     "face-detection",
     "genai",
-    "re-identification",
     "throughput",
 }
 

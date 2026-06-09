@@ -3,7 +3,7 @@ source:
 
 model:
   path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
-  labels: examples/object-detection/yolov8-object-detector/common/coco_label.txt
+  labels: examples/object-detection/yolo26-object-detector/common/coco_label.txt
 
 inference:
   frames: 0
