@@ -8,10 +8,10 @@ unit:
   cpp: true
 e2e:
   python:
-    enabled: false
-    reason: RetinaFace e2e is blocked by the current detess/dequant issue.
-    models: []
+    enabled: true
+    models:
+      - retinaface_mobilenet25
   cpp:
-    enabled: false
-    reason: RetinaFace e2e is blocked by the current detess/dequant issue.
-    models: []
+    enabled: true
+    models:
+      - retinaface_mobilenet25

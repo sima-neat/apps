@@ -12,7 +12,7 @@
 | Model | retinaface_mobilenet25 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz] |
 
 ## Concept
-This example demonstrates single-image face detection with **RetinaFace**, a one-stage dense detector designed for robust face localization across pose, scale, and occlusion conditions.
+This example demonstrates folder-based face detection with **RetinaFace**, a one-stage dense detector designed for robust face localization across pose, scale, and occlusion conditions.
 
 RetinaFace predicts:
 - Face bounding boxes
@@ -21,7 +21,7 @@ RetinaFace predicts:
 
 Compared with generic object detectors, RetinaFace is specialized for facial geometry and alignment-sensitive tasks. Landmark outputs make it useful not only for drawing detection overlays, but also for downstream steps such as face alignment, tracking initialization, quality filtering, and recognition pre-processing.
 
-In this app, the compiled `retinaface_mobilenet25` package is run on an input image, raw outputs are decoded into candidate detections, low-confidence candidates are filtered, overlapping boxes are merged with Non-Maximum Suppression (NMS), and the final boxes/landmarks are rendered to an output image.
+In this app, the compiled `retinaface_mobilenet25` package is run on images from an input folder, raw outputs are decoded into candidate detections, low-confidence candidates are filtered, overlapping boxes are merged with Non-Maximum Suppression (NMS), and the final boxes/landmarks are rendered to output images.
 
 ## Preview
 Snippet from a pipeline run:
@@ -150,13 +150,12 @@ Notes:
 - Use an absolute path for `SIMANEAT_APPS_TEST_MODELS_DIR` in Python e2e. The test runs `main.py` with `cwd` set to the example directory.
 - `SIMANEAT_APPS_TEST_INPUT_DIR` is supported by both C++ and Python e2e tests.
 - If `SIMANEAT_APPS_TEST_INPUT_DIR` is not set, both e2e tests fall back to `assets/test_images`.
-- RetinaFace e2e prefers an image filename containing `face` when present, then falls back to the first available image in the input directory.
 
 ## Debugging Notes
 - If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.
 - If no detections appear, lower `decode.confidence_threshold` and confirm the input actually contains faces.
 - If too many duplicate boxes appear, reduce `decode.nms_iou` and/or lower `decode.top_k`.
-- If output writing fails, ensure the parent directory of `<output_image_path>` exists and is writable.
+- If output writing fails, ensure `io.output_dir` exists or can be created.
 
 ## Source Files
 - C++ source: `cpp/main.cpp`

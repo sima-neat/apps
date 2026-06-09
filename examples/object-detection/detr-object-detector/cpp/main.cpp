@@ -1,6 +1,6 @@
 /**
  * @example detr-object-detector.cpp
- * Minimal DETR single-image detection pipeline using tensor input and raw tensor decode.
+ * Minimal DETR folder detection pipeline using tensor input and raw tensor decode.
  *
  * Usage: detr-object-detector [--config <path>]
  */
@@ -15,6 +15,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -91,9 +92,9 @@ struct Detection {
 };
 
 struct Config {
-  fs::path image;
+  fs::path input_dir;
   std::string model = "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz";
-  fs::path output;
+  fs::path output_dir;
   float conf = 0.5f;
   int max_draw = 50;
   bool person_only = false;
@@ -131,13 +132,31 @@ Stats compute_stats(const std::vector<double>& values) {
   return s;
 }
 
+bool is_image_file(const fs::path& path) {
+  std::string ext = path.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
+}
+
+std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
+  std::vector<fs::path> images;
+  for (const auto& entry : fs::directory_iterator(input_dir)) {
+    if (entry.is_regular_file() && is_image_file(entry.path())) {
+      images.push_back(entry.path());
+    }
+  }
+  std::sort(images.begin(), images.end());
+  return images;
+}
+
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
   cfg.model = raw.string_or(
       "model.path", "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz");
-  cfg.image = raw.string_or("io.image", "assets/test_images/input.jpg");
-  cfg.output = raw.string_or("io.output", "sandbox/detr-object-detector/output.png");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/detr-object-detector");
   cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.5));
   cfg.max_draw = raw.int_or("decode.max_draw", 50);
   cfg.person_only = raw.bool_or("decode.person_only", false);
@@ -466,19 +485,17 @@ int main(int argc, char** argv) {
 
   try {
     const Config args = parse_config(argc, argv);
-    if (!fs::exists(args.image)) {
-      throw std::runtime_error("image does not exist: " + args.image.string());
+    if (!fs::is_directory(args.input_dir)) {
+      throw std::runtime_error("input_dir does not exist: " + args.input_dir.string());
     }
     if (!fs::exists(args.model)) {
       throw std::runtime_error("model does not exist: " + args.model);
     }
 
-    cv::Mat bgr_u8 = cv::imread(args.image.string(), cv::IMREAD_COLOR);
-    if (bgr_u8.empty()) {
-      throw std::runtime_error("failed to read image: " + args.image.string());
+    const std::vector<fs::path> image_paths = image_paths_in_dir(args.input_dir);
+    if (image_paths.empty()) {
+      throw std::runtime_error("no images found in: " + args.input_dir.string());
     }
-
-    auto [input_f32, meta] = preprocess_to_tensor_input(bgr_u8);
 
     simaai::neat::Model::Options model_opt;
     model_opt.preprocess.kind = simaai::neat::InputKind::Tensor;
@@ -498,9 +515,16 @@ int main(int argc, char** argv) {
     cv::Mat dummy(kModelH, kModelW, CV_32FC3, cv::Scalar(0.0f, 0.0f, 0.0f));
     auto run = graph.build(simaai::neat::TensorList{tensor_from_hwc_f32(dummy)},
                            simaai::neat::RunMode::Async);
-    simaai::neat::Tensor input_t = tensor_from_hwc_f32(input_f32);
 
     if (args.profile) {
+      const fs::path& image_path = image_paths.front();
+      cv::Mat bgr_u8 = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+      if (bgr_u8.empty()) {
+        throw std::runtime_error("failed to read image: " + image_path.string());
+      }
+      auto [input_f32, meta] = preprocess_to_tensor_input(bgr_u8);
+      simaai::neat::Tensor input_t = tensor_from_hwc_f32(input_f32);
+
       const int runs = std::max(1, args.num_runs);
       std::vector<double> graph_times;
       std::vector<double> post_times;
@@ -535,7 +559,7 @@ int main(int argc, char** argv) {
       const double total_sum = graph_stats.sum + post.sum;
 
       std::cout << "Profiling over " << graph_times.size() << " runs (image='"
-                << args.image.string() << "'):\n";
+                << image_path.string() << "'):\n";
       std::cout << "  Graph run (push+pull): mean=" << graph_stats.mean
                 << "s, min=" << graph_stats.min << "s, max=" << graph_stats.max
                 << "s, FPS=" << (runs_d / graph_stats.sum) << "\n";
@@ -556,61 +580,42 @@ int main(int argc, char** argv) {
       return 0;
     }
 
-    const auto t0_total = std::chrono::steady_clock::now();
-    const auto t0_infer = std::chrono::steady_clock::now();
-    if (!run.push(simaai::neat::TensorList{input_t})) {
-      throw std::runtime_error("run.push failed");
-    }
-
-    auto out_sample = run.pull(args.timeout_ms);
-    const auto t1_infer = std::chrono::steady_clock::now();
-    if (!out_sample.has_value()) {
-      throw std::runtime_error("run.pull returned no sample");
-    }
-
-    const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out_sample);
-    std::cout << "Model produced " << tensors.size() << " tensor(s)\n";
-    for (size_t i = 0; i < tensors.size(); ++i) {
-      std::cout << "  [" << i << "] shape=[";
-      for (size_t d = 0; d < tensors[i].shape.size(); ++d) {
-        std::cout << tensors[i].shape[d] << (d + 1 < tensors[i].shape.size() ? "," : "");
+    fs::create_directories(args.output_dir);
+    int processed = 0;
+    for (const fs::path& image_path : image_paths) {
+      cv::Mat bgr_u8 = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+      if (bgr_u8.empty()) {
+        throw std::runtime_error("failed to read image: " + image_path.string());
       }
-      std::cout << "] dtype=" << static_cast<int>(tensors[i].dtype) << "\n";
-    }
+      auto [input_f32, meta] = preprocess_to_tensor_input(bgr_u8);
+      simaai::neat::Tensor input_t = tensor_from_hwc_f32(input_f32);
 
-    const auto [logits, boxes] = extract_logits_and_boxes(tensors);
-    const std::vector<Detection> dets =
-        decode_detr_outputs(logits, boxes, meta, args.conf, args.person_only);
-
-    std::cout << "Detections: " << dets.size() << "\n";
-    for (size_t i = 0; i < std::min<size_t>(dets.size(), 20); ++i) {
-      const auto& d = dets[i];
-      std::cout << "  [" << i << "] class=" << class_name(d.class_id) << "(" << d.class_id
-                << ") score=" << d.score << " box=[" << d.x1 << "," << d.y1 << "," << d.x2 << ","
-                << d.y2 << "]\n";
-    }
-
-    if (!args.output.empty()) {
-      fs::path parent = args.output.parent_path();
-      if (!parent.empty()) {
-        fs::create_directories(parent);
+      if (!run.push(simaai::neat::TensorList{input_t})) {
+        throw std::runtime_error("run.push failed");
       }
+
+      auto out_sample = run.pull(args.timeout_ms);
+      if (!out_sample.has_value()) {
+        throw std::runtime_error("run.pull returned no sample");
+      }
+
+      const std::vector<simaai::neat::Tensor> tensors = collect_tensors(*out_sample);
+      const auto [logits, boxes] = extract_logits_and_boxes(tensors);
+      const std::vector<Detection> dets =
+          decode_detr_outputs(logits, boxes, meta, args.conf, args.person_only);
+
       cv::Mat overlay = bgr_u8.clone();
       draw_detections(overlay, dets, args.max_draw);
-      if (!cv::imwrite(args.output.string(), overlay)) {
-        throw std::runtime_error("failed to write: " + args.output.string());
+      const fs::path output_path = args.output_dir / (image_path.stem().string() + "_detr.png");
+      if (!cv::imwrite(output_path.string(), overlay)) {
+        throw std::runtime_error("failed to write: " + output_path.string());
       }
-      std::cout << "Wrote annotated image: " << args.output << "\n";
+      ++processed;
+      std::cout << "[" << processed << "/" << image_paths.size() << "] "
+                << image_path.filename().string() << ": " << dets.size() << " detections -> "
+                << output_path.filename().string() << "\n";
     }
-
-    const auto t1_total = std::chrono::steady_clock::now();
-    if (args.profile) {
-      const std::chrono::duration<double, std::milli> total_ms = t1_total - t0_total;
-      const std::chrono::duration<double, std::milli> infer_ms = t1_infer - t0_infer;
-      std::cout << "Timing:\n";
-      std::cout << "  End-to-end: " << total_ms.count() << " ms\n";
-      std::cout << "  Model inference: " << infer_ms.count() << " ms\n";
-    }
+    std::cout << "Done: " << processed << " images processed\n";
 
     run.close();
     return 0;
