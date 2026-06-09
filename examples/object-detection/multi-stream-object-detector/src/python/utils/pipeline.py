@@ -175,7 +175,7 @@ def build_detection_run(
     family: ModelFamily,
     probe: RtspProbe,
 ) -> GraphRun:
-    if family is not ModelFamily.YOLOV8:
+    if family is not ModelFamily.YOLO26:
         raise ValueError("unsupported model family for detector graph")
 
     apply_runtime_env_defaults()
@@ -185,16 +185,13 @@ def build_detection_run(
 
     model_opt = pyneat.ModelOptions()
     model_opt.preprocess.kind = pyneat.InputKind.Image
+    model_opt.preprocess.enable = pyneat.AutoFlag.On
     model_opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-    model_opt.preprocess.input_max_width = probe.width
-    model_opt.preprocess.input_max_height = probe.height
-    model_opt.preprocess.input_max_depth = 3
-    model_opt.decode_type = pyneat.BoxDecodeType.YoloV8
+    model_opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+    model_opt.decode_type = pyneat.BoxDecodeType.YoloV26
     model_opt.score_threshold = cfg.min_score
     model_opt.nms_iou_threshold = cfg.nms_iou
     model_opt.top_k = cfg.max_detections
-    model_opt.boxdecode_original_width = probe.width
-    model_opt.boxdecode_original_height = probe.height
     model = pyneat.Model(cfg.model.path, model_opt)
 
     input_opt = model.input_appsrc_options(False)
@@ -207,19 +204,7 @@ def build_detection_run(
 
     graph = pyneat.Graph("detector")
     graph.add(pyneat.nodes.input(input_opt))
-    graph.add(model.preprocess())
-    graph.add(pyneat.groups.mla(model))
-    graph.add(
-        pyneat.nodes.sima_box_decode(
-            model,
-            decode_type=pyneat.BoxDecodeType.YoloV8,
-            original_width=probe.width,
-            original_height=probe.height,
-            detection_threshold=cfg.min_score,
-            nms_iou_threshold=cfg.nms_iou,
-            top_k=cfg.max_detections,
-        )
-    )
+    graph.add(model.graph())
     graph.add(pyneat.nodes.output())
 
     seed = pyneat.Tensor.from_numpy(

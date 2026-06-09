@@ -260,7 +260,6 @@ int main(int argc, char** argv) {
     model_opt.score_threshold = cfg.min_score;
     model_opt.nms_iou_threshold = cfg.nms_iou;
     model_opt.top_k = cfg.max_detections;
-    model_opt.processcvu.post_run_target = "A65";
 
     simaai::neat::Model model(cfg.model_path, model_opt);
 

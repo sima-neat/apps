@@ -54,9 +54,6 @@ bool probe_rtsp_decoded_dims(const std::string& url, const RtspProbeOptions& opt
 std::filesystem::path default_goldfish_path();
 bool download_file(const std::string& url, const std::filesystem::path& out_path);
 std::string resolve_resnet50_tar();
-std::string resolve_yolov8s_tar(const std::filesystem::path& root = {});
-std::string resolve_yolov8s_tar_local_first(const std::filesystem::path& root = {},
-                                            bool skip_download = false);
 std::filesystem::path ensure_coco_sample(const std::filesystem::path& root = {});
 std::string find_boxdecode_config(const std::filesystem::path& etc_dir);
 std::string prepare_yolo_boxdecode_config(const std::string& src_path,

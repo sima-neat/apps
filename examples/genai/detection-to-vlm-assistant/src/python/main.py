@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RTSP YOLOv8 to Insight and Gemma pipeline."""
+"""RTSP YOLO26 to Insight and Gemma pipeline."""
 
 from __future__ import annotations
 
@@ -87,22 +87,45 @@ def build_video_run(cfg: Config, width: int, height: int, fps: int):
     return graph, graph.build([seed], pyneat.RunMode.Async)
 
 
-def build_model(cfg: Config, width: int, height: int):
+def build_model(cfg: Config):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.input_max_width = width
-    opt.preprocess.input_max_height = height
-    opt.preprocess.input_max_depth = 3
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-    opt.decode_type = pyneat.BoxDecodeType.YoloV8
+    opt.decode_type = pyneat.BoxDecodeType.YoloV26
     opt.score_threshold = cfg.min_score
     opt.nms_iou_threshold = cfg.nms_iou
     opt.top_k = cfg.max_detections
-    opt.boxdecode_original_width = width
-    opt.boxdecode_original_height = height
     return pyneat.Model(cfg.model_path, opt)
+
+
+def build_detector_run(cfg: Config, width: int, height: int):
+    model = build_model(cfg)
+
+    input_opt = model.input_appsrc_options(False)
+    input_opt.payload_type = pyneat.PayloadType.Image
+    input_opt.format = "BGR"
+    input_opt.width = width
+    input_opt.height = height
+    input_opt.depth = 3
+
+    graph = pyneat.Graph("detector")
+    graph.add(pyneat.nodes.input(input_opt))
+    graph.add(model.graph())
+    graph.add(pyneat.nodes.output())
+
+    seed = pyneat.Tensor.from_numpy(
+        np.zeros((height, width, 3), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.BGR,
+        memory=pyneat.TensorMemory.EV74,
+    )
+    run_opt = pyneat.RunOptions()
+    run_opt.queue_depth = 4
+    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_opt.output_memory = pyneat.OutputMemory.Owned
+    return model, graph, graph.build([seed], pyneat.RunMode.Async, run_opt)
 
 
 def build_metadata_sender(cfg: Config):
@@ -129,11 +152,11 @@ def main() -> int:
         print(f"model package does not exist: {cfg.model_path}", file=sys.stderr)
         return 2
 
-    rtsp_run = video_run = commenter = None
+    rtsp_run = detector_run = video_run = commenter = None
     try:
         labels = load_labels(cfg.labels_path)
         width, height, fps = probe_rtsp(cfg.rtsp_url)
-        model = build_model(cfg, width, height)
+        _model, _detector_graph, detector_run = build_detector_run(cfg, width, height)
         _rtsp_graph, rtsp_run = build_rtsp_run(cfg, width, height, fps)
         _video_graph, video_run = build_video_run(cfg, width, height, fps)
         metadata = build_metadata_sender(cfg)
@@ -159,9 +182,7 @@ def main() -> int:
                 image_format=pyneat.PixelFormat.BGR,
                 memory=pyneat.TensorMemory.EV74,
             )
-            boxes = parse_boxes(
-                model.run([model_input], timeout_ms=cfg.timeout_ms)
-            )
+            boxes = parse_boxes(detector_run.run([model_input], timeout_ms=cfg.timeout_ms))
             commenter.try_enqueue(rgb_frame, boxes)
             if not video_run.push(
                 [rgb_frame], copy=True, image_format=pyneat.PixelFormat.RGB
@@ -185,7 +206,7 @@ def main() -> int:
     finally:
         if commenter is not None:
             commenter.close()
-        for run in (video_run, rtsp_run):
+        for run in (video_run, detector_run, rtsp_run):
             if run is not None:
                 run.close()
 

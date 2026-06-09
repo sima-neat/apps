@@ -5,14 +5,14 @@
 | --- | --- |
 | Category | object-detection |
 | Difficulty | Advanced |
-| Tags | object-detection, rtsp, multistream, insight, yolov8 |
+| Tags | object-detection, rtsp, multistream, insight, yolo26 |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-stream-object-detector |
-| Model | yolo_v8m |
+| Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
-This example runs a config-driven multistream RTSP detection pipeline for YOLOv8 model packs and publishes per-stream video plus detection metadata to Insight.
+This example runs a config-driven multistream RTSP detection pipeline for YOLO26 model packs and publishes per-stream video plus detection metadata to Insight.
 
 ## Preview
 Snippet from a pipeline run:
@@ -26,7 +26,7 @@ Architecture:
 - one keep-latest mailbox per stream so the example can scale to many cameras without building large per-stream backlogs
 
 Detector graph:
-- YOLOv8: `Input(RGB) -> Preprocess -> Infer/MLA -> SimaBoxDecode`
+- YOLO26: `Input(RGB) -> model.graph() -> Output`
 
 Video graph:
 - `Input(RGB) -> VideoSender(H.264 RTP/UDP)`
@@ -34,7 +34,7 @@ Video graph:
 ## Prerequisites
 - Installed Neat SDK.
 - One or more reachable RTSP camera URLs.
-- A YOLOv8 model pack downloaded into `assets/models/`.
+- A YOLO26 model pack downloaded into `assets/models/`.
 - Edit `src/common/config.yaml` before running with real streams.
 - On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
@@ -44,15 +44,32 @@ Video graph:
 - `--help`: print the CLI help text
 
 ## Download Models
+The default model is `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
+
+Supported batch-1 YOLO26 detection models:
+- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-b1.tar.gz`
+- `yolo26m-det-int8-b1.tar.gz`
+
+Download all supported batch-1 variants:
+
 ```bash
 mkdir -p assets/models
 cd assets/models
 
-sima-cli modelzoo -v 2.0.0 get yolo_v8n
-sima-cli modelzoo -v 2.0.0 get yolo_v8s
-sima-cli modelzoo -v 2.0.0 get yolo_v8m
-sima-cli modelzoo -v 2.0.0 get yolo_v8l
-sima-cli modelzoo -v 2.0.0 get yolo_v8x
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26s-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26l-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26x-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
+
+cd ../..
 ```
 
 ## Build
@@ -102,15 +119,15 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-str
 - Profiling prints `source`, `preproc`, `detect`, `video`, `metadata`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
 
 ## Notes
-- Point `model.path` at a YOLOv8 pack. This example infers YOLOv8 from the model path and does not use a `model.family` config key.
-- Both the C++ and Python paths decode each RTSP stream to RGB in system memory, run YOLOv8 on those RGB frames, and feed the selected RGB frame into `VideoSender`. They do not manually build lower-level color conversion, encoder, parser, packetizer, or UDP nodes.
+- Point `model.path` at a YOLO26 pack. This example infers YOLO26 from the model path and does not use a `model.family` config key.
+- Both the C++ and Python paths decode each RTSP stream to RGB in system memory, run YOLO26 on those RGB frames, and feed the selected RGB frame into `VideoSender`. They do not manually build lower-level color conversion, encoder, parser, packetizer, or UDP nodes.
 - `output.video_mode: clean` feeds unannotated RGB frames into `VideoSender` and keeps metadata enabled. `annotated` draws detection boxes into the RGB frame before feeding it into `VideoSender` and suppresses metadata so Insight does not overlay detections twice.
 - Because these examples send raw frames, they use the raw-frame `VideoSender` option. If an upstream pipeline already produces H.264, `VideoSender` also supports an encoded-input option that parses, packetizes, and sends without re-encoding.
 - `output.video_enabled: false` disables per-stream H264 video output. In `clean` mode the example still sends metadata detections; in `annotated` mode metadata is suppressed.
 - `runtime.mailbox_depth` defaults to `1` and should usually stay small for dense multistream runs.
 - The example applies the following runtime defaults for dense RTSP runs when the environment does not already override them:
   `SIMA_FORCE_MODEL_NUM_BUFFERS=3`, `SIMA_FORCE_DECODER_NUM_BUFFERS=7`, and `SIMA_FORCE_DECODER_POOL_BUFFERS=7`.
-- The Python implementation mirrors the same high-level contract as C++ while staying on public `pyneat`: `RtspDecodedInput`, model preprocess, `groups.mla(model)`, `nodes.sima_box_decode(...)`, and `groups.video_sender(...)`.
+- The Python implementation mirrors the same high-level contract as C++ while staying on public `pyneat`: `RtspDecodedInput`, `model.graph()`, and `groups.video_sender(...)`.
 
 ## Source Files
 - C++: `src/cpp/main.cpp`

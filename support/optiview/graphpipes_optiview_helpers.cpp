@@ -401,7 +401,7 @@ add_yolo_pipeline(simaai::neat::graph::Graph& g, simaai::neat::Model& model, int
     yolo_nodes.push_back(node);
 
   yolo_nodes.push_back(simaai::neat::nodes::SimaBoxDecode(
-      model, simaai::neat::BoxDecodeType::YoloV8,
+      model, simaai::neat::BoxDecodeType::YoloV26,
       /*min_score=*/0.52f,
       /*nms=*/0.5f,
       /*topk=*/100, "", std::nullopt, std::nullopt, frame_w, frame_h));

@@ -65,7 +65,7 @@ bool test_load_app_config_parses_dynamic_stream_list() {
 
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
-  out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
+  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "input:\n"
          "  tcp: true\n"
          "  latency_ms: 200\n"
@@ -98,7 +98,7 @@ bool test_load_app_config_parses_dynamic_stream_list() {
   bool ok = true;
   try {
     const AppConfig cfg = load_app_config(config_path);
-    ok &= expect_true(cfg.model == "assets/models/yolo_v8m_mpk.tar.gz",
+    ok &= expect_true(cfg.model == "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz",
                       "config parser keeps model path");
     ok &= expect_true(cfg.insight_host == "192.168.0.107", "config parser keeps Insight host");
     ok &= expect_true(cfg.insight_video_port_base == 9000, "config parser keeps video port base");
@@ -138,7 +138,7 @@ bool test_load_app_config_defaults_to_clean_video_mode() {
 
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
-  out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
+  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "input: {}\n"
          "inference:\n"
          "  detection_threshold: 0.25\n"
@@ -181,7 +181,7 @@ bool test_load_app_config_rejects_invalid_video_mode() {
 
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
-  out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
+  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "input: {}\n"
          "inference:\n"
          "  detection_threshold: 0.25\n"
@@ -220,7 +220,7 @@ bool test_load_app_config_rejects_missing_streams() {
 
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
-  out << "model: assets/models/yolo_v8m_mpk.tar.gz\n"
+  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "input: {}\n"
          "inference: {}\n"
          "tracking: {}\n"
@@ -245,7 +245,8 @@ bool test_load_app_config_rejects_missing_streams() {
 }
 
 bool test_common_config_yaml_uses_supported_shape() {
-  const fs::path config_path = "examples/tracking/multi-stream-people-tracker/src/common/config.yaml";
+  const fs::path config_path =
+      "examples/tracking/multi-stream-people-tracker/src/common/config.yaml";
   try {
     const AppConfig cfg = load_app_config(config_path);
     bool ok = true;

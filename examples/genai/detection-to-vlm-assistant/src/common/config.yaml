@@ -7,9 +7,9 @@ model:
 
 inference:
   frames: 0
-  min_score: 0.2
+  min_score: 0.55
   nms_iou: 0.60
-  max_detections: 24
+  max_detections: 50
   # classes:
   #   - person
   #   - car

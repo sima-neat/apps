@@ -98,7 +98,7 @@ std::vector<Detection> parse_bbox_payload(const std::vector<std::uint8_t>& paylo
 void require_detector_output_kind(ModelFamily family, const simaai::neat::Sample& sample) {
   std::string expected;
   switch (family) {
-  case ModelFamily::YoloV8:
+  case ModelFamily::YoloV26:
     expected = "BBOX";
     break;
   case ModelFamily::Auto:

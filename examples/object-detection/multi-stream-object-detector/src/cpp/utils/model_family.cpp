@@ -19,8 +19,8 @@ std::string to_string(ModelFamily family) {
   switch (family) {
   case ModelFamily::Auto:
     return "auto";
-  case ModelFamily::YoloV8:
-    return "yolov8";
+  case ModelFamily::YoloV26:
+    return "yolo26";
   }
   return "auto";
 }
@@ -31,8 +31,8 @@ ModelFamily resolve_model_family(const std::string& model_path, ModelFamily hint
   }
 
   const std::string lowered = lower_copy(model_path);
-  if (lowered.find("yolo_v8") != std::string::npos || lowered.find("yolov8") != std::string::npos) {
-    return ModelFamily::YoloV8;
+  if (lowered.find("yolo26") != std::string::npos) {
+    return ModelFamily::YoloV26;
   }
   throw std::runtime_error("unable to infer model family from model path: " + model_path);
 }

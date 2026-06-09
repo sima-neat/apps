@@ -18,7 +18,7 @@ set(MODALIX_SIMA_NEAT_PLUGIN_LIB_DIR "/opt/toolchain/aarch64/modalix/usr/lib/sim
 
 sima_neat_apps_module(
   "single-stream-object-detector"
-  OUTPUT_TARGET_VAR YOLOV8_ONE_RTSP_INSIGHT_TARGET
+  OUTPUT_TARGET_VAR YOLO26_ONE_RTSP_INSIGHT_TARGET
   UNIT_TEST
   METADATA_E2E_TEST
 )
@@ -26,7 +26,7 @@ sima_neat_apps_module(
 if (BUILD_TESTING)
   add_test(
     NAME single-stream-object-detector.requires_rtsp
-    COMMAND $<TARGET_FILE:${YOLOV8_ONE_RTSP_INSIGHT_TARGET}> --config /nonexistent/single-rtsp-config.yaml
+    COMMAND $<TARGET_FILE:${YOLO26_ONE_RTSP_INSIGHT_TARGET}> --config /nonexistent/single-rtsp-config.yaml
   )
   set_tests_properties(single-stream-object-detector.requires_rtsp PROPERTIES
     WILL_FAIL TRUE
@@ -35,7 +35,7 @@ if (BUILD_TESTING)
 endif()
 
 foreach(target_name
-    "${YOLOV8_ONE_RTSP_INSIGHT_TARGET}"
+    "${YOLO26_ONE_RTSP_INSIGHT_TARGET}"
     single-stream-object-detector_unit_test
     single-stream-object-detector_e2e_test)
   if (TARGET "${target_name}" AND EXISTS "${MODALIX_TOOLCHAIN_LIB_DIR}")

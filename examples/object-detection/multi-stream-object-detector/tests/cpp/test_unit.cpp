@@ -62,7 +62,7 @@ bool test_validate_config_only_smoke_runs(const std::string& binary) {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -91,7 +91,7 @@ bool test_load_app_config_parses_runtime_worker_count() {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "  - rtsp://127.0.0.1:8554/src2\n"
@@ -123,7 +123,7 @@ bool test_load_app_config_parses_runtime_worker_count() {
   bool ok = true;
   try {
     const AppConfig cfg = load_app_config(config_path);
-    ok &= expect_true(cfg.model.path == "assets/models/yolo_v8m_mpk.tar.gz",
+    ok &= expect_true(cfg.model.path == "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz",
                       "config keeps model path");
     ok &= expect_true(cfg.worker_count == 4, "config keeps worker_count");
     ok &= expect_true(cfg.mailbox_depth == 1, "config keeps mailbox_depth");
@@ -151,7 +151,7 @@ bool test_load_app_config_rejects_removed_model_family_field() {
   std::ofstream out(config_path);
   out << "model:\n"
          "  path: assets/models/unsupported_mpk.tar.gz\n"
-         "  family: yolov8\n"
+         "  family: yolo26\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -183,7 +183,7 @@ bool test_load_app_config_rejects_invalid_worker_count() {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -215,7 +215,7 @@ bool test_load_app_config_rejects_invalid_video_mode() {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -247,7 +247,7 @@ bool test_load_app_config_rejects_empty_streams() {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "streams: []\n"
          "runtime:\n"
          "  worker_count: 2\n"
@@ -279,7 +279,7 @@ bool test_metadata_output_enabled_follows_video_mode_contract() {
     const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
     std::ofstream out(config_path);
     out << "model:\n"
-           "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+           "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
            "streams:\n"
            "  - rtsp://127.0.0.1:8554/src1\n"
            "runtime:\n"
@@ -317,7 +317,7 @@ bool test_metadata_output_enabled_stays_enabled_for_metadata_only_mode() {
   const fs::path config_path = fs::path(temp_dir) / "config.yaml";
   std::ofstream out(config_path);
   out << "model:\n"
-         "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+         "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
          "streams:\n"
          "  - rtsp://127.0.0.1:8554/src1\n"
          "runtime:\n"
@@ -355,7 +355,7 @@ bool test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode()
     const fs::path config_path = fs::path(temp_dir) / ("config_" + mode + ".yaml");
     std::ofstream out(config_path);
     out << "model:\n"
-           "  path: assets/models/yolo_v8m_mpk.tar.gz\n"
+           "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
            "streams:\n"
            "  - rtsp://127.0.0.1:8554/src1\n"
            "runtime:\n"
@@ -380,13 +380,13 @@ bool test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode()
   return ok;
 }
 
-bool test_resolve_model_family_auto_for_yolov8() {
-  return expect_true(resolve_model_family("assets/models/yolo_v8m_mpk.tar.gz", ModelFamily::Auto) ==
-                         ModelFamily::YoloV8,
-                     "auto resolves yolo_v8 model path to YoloV8");
+bool test_resolve_model_family_auto_for_yolo26() {
+  return expect_true(resolve_model_family("assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz",
+                                          ModelFamily::Auto) == ModelFamily::YoloV26,
+                     "auto resolves yolo26 model path to YoloV26");
 }
 
-bool test_parse_bbox_payload_normalizes_yolov8_boxes() {
+bool test_parse_bbox_payload_normalizes_yolo26_boxes() {
   const std::vector<std::uint8_t> payload = {
       1, 0, 0,  0, 246, 255, 255, 255, 20,  0,  0, 0, 140, 0,
       0, 0, 50, 0, 0,   0,   102, 102, 102, 63, 3, 0, 0,   0,
@@ -412,7 +412,7 @@ bool test_require_detector_output_kind_rejects_unsupported_sample_kind() {
 
   bool ok = false;
   try {
-    static_cast<void>(require_detector_output_kind(ModelFamily::YoloV8, sample));
+    static_cast<void>(require_detector_output_kind(ModelFamily::YoloV26, sample));
   } catch (const std::exception& ex) {
     ok = expect_contains(ex.what(), "unsupported detector output",
                          "unsupported detector sample error mentions unsupported detector output");
@@ -513,19 +513,19 @@ bool test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_aft
 }
 
 bool test_collect_detector_runtime_keys_deduplicates_same_geometry() {
-  StreamProbeSpec a{ModelFamily::YoloV8, RtspProbe{640, 480, 30}};
-  StreamProbeSpec b{ModelFamily::YoloV8, RtspProbe{640, 480, 25}};
-  StreamProbeSpec c{ModelFamily::YoloV8, RtspProbe{1280, 720, 30}};
+  StreamProbeSpec a{ModelFamily::YoloV26, RtspProbe{640, 480, 30}};
+  StreamProbeSpec b{ModelFamily::YoloV26, RtspProbe{640, 480, 25}};
+  StreamProbeSpec c{ModelFamily::YoloV26, RtspProbe{1280, 720, 30}};
 
   const auto keys = collect_detector_runtime_keys({a, b, c});
 
   bool ok = true;
   ok &= expect_true(keys.size() == 2, "detector runtime keys deduplicate matching geometry");
   if (keys.size() == 2) {
-    ok &= expect_true(keys[0].family == ModelFamily::YoloV8 && keys[0].width == 640 &&
+    ok &= expect_true(keys[0].family == ModelFamily::YoloV26 && keys[0].width == 640 &&
                           keys[0].height == 480,
                       "first detector runtime key keeps initial geometry");
-    ok &= expect_true(keys[1].family == ModelFamily::YoloV8 && keys[1].width == 1280 &&
+    ok &= expect_true(keys[1].family == ModelFamily::YoloV26 && keys[1].width == 1280 &&
                           keys[1].height == 720,
                       "second detector runtime key keeps distinct geometry");
   }
@@ -546,12 +546,11 @@ bool test_format_video_build_error_includes_stream_mode_and_detail() {
   return ok;
 }
 
-bool test_detector_stage_names_cover_yolov8() {
-  const auto yolov8 = detector_stage_names(ModelFamily::YoloV8);
+bool test_detector_stage_names_cover_yolo26() {
+  const auto yolo26 = detector_stage_names(ModelFamily::YoloV26);
 
-  return expect_true(
-      yolov8 == std::vector<std::string>{"input", "preproc", "mla", "sima_box_decode", "output"},
-      "yolov8 stage names match the RGB preprocess detector graph");
+  return expect_true(yolo26 == std::vector<std::string>{"input", "model_graph", "output"},
+                     "yolo26 stage names match the model-owned detector graph");
 }
 
 bool test_apply_runtime_env_defaults_sets_expected_env_when_unset() {
@@ -710,8 +709,8 @@ int main(int argc, char** argv) {
   ok &= test_metadata_output_enabled_follows_video_mode_contract();
   ok &= test_metadata_output_enabled_stays_enabled_for_metadata_only_mode();
   ok &= test_metadata_output_enabled_stays_enabled_for_video_disabled_in_any_mode();
-  ok &= test_resolve_model_family_auto_for_yolov8();
-  ok &= test_parse_bbox_payload_normalizes_yolov8_boxes();
+  ok &= test_resolve_model_family_auto_for_yolo26();
+  ok &= test_parse_bbox_payload_normalizes_yolo26_boxes();
   ok &= test_require_detector_output_kind_rejects_unsupported_sample_kind();
   ok &= test_build_insight_detection_payload_builds_objects();
   ok &= test_tensor_rgb_from_sample_converts_nv12_source_frames();
@@ -721,7 +720,7 @@ int main(int argc, char** argv) {
   ok &= test_latest_frame_mailbox_deduplicates_ready_notifications_and_requeues_after_completion();
   ok &= test_collect_detector_runtime_keys_deduplicates_same_geometry();
   ok &= test_format_video_build_error_includes_stream_mode_and_detail();
-  ok &= test_detector_stage_names_cover_yolov8();
+  ok &= test_detector_stage_names_cover_yolo26();
   ok &= test_apply_runtime_env_defaults_sets_expected_env_when_unset();
   ok &= test_apply_runtime_env_defaults_preserves_explicit_env();
   ok &= test_startup_trace_defaults_to_disabled();

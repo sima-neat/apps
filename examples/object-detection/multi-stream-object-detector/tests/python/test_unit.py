@@ -69,7 +69,7 @@ class TestConfigLoading:
             textwrap.dedent(
                 """
                 model:
-                  path: assets/models/yolo_v8m_mpk.tar.gz
+                  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
                 streams:
                   - rtsp://127.0.0.1:8554/src1
                   - rtsp://127.0.0.1:8554/src2
@@ -103,7 +103,7 @@ class TestConfigLoading:
 
         cfg = load_app_config(config_path)
 
-        assert cfg.model.path == "assets/models/yolo_v8m_mpk.tar.gz"
+        assert cfg.model.path == "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz"
         assert cfg.worker_count == 4
         assert cfg.mailbox_depth == 1
         assert cfg.profile is True
@@ -124,7 +124,7 @@ class TestConfigLoading:
                 """
                 model:
                   path: assets/models/unsupported_mpk.tar.gz
-                  family: yolov8
+                  family: yolo26
                 streams:
                   - rtsp://127.0.0.1:8554/src1
                 runtime:
@@ -149,7 +149,7 @@ class TestConfigLoading:
                 textwrap.dedent(
                     f"""
                     model:
-                      path: assets/models/yolo_v8m_mpk.tar.gz
+                      path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
                     streams:
                       - rtsp://127.0.0.1:8554/src1
                     runtime:
@@ -175,7 +175,7 @@ class TestConfigLoading:
             textwrap.dedent(
                 """
                 model:
-                  path: assets/models/yolo_v8m_mpk.tar.gz
+                  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
                 streams:
                   - rtsp://127.0.0.1:8554/src1
                 runtime:
@@ -195,12 +195,12 @@ class TestConfigLoading:
 
 
 class TestModelFamily:
-    def test_resolve_model_family_auto_for_yolov8(self):
+    def test_resolve_model_family_auto_for_yolo26(self):
         from utils.model_family import ModelFamily, resolve_model_family
 
         assert (
-            resolve_model_family("assets/models/yolo_v8m_mpk.tar.gz", ModelFamily.AUTO)
-            == ModelFamily.YOLOV8
+            resolve_model_family("assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz", ModelFamily.AUTO)
+            == ModelFamily.YOLO26
         )
 
 
@@ -216,7 +216,7 @@ class TestPipelineHelpers:
         )
 
         cfg = AppConfig(
-            model=ModelConfig("assets/models/yolo_v8m_mpk.tar.gz"),
+            model=ModelConfig("assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
             insight_host="127.0.0.1",
             fps=0,
@@ -250,18 +250,15 @@ class TestPipelineHelpers:
                     (),
                     {
                         "kind": None,
+                        "enable": None,
+                        "preset": None,
                         "color_convert": type("FakeColorConvert", (), {"input_format": None})(),
-                        "input_max_width": 0,
-                        "input_max_height": 0,
-                        "input_max_depth": 0,
                     },
                 )()
                 self.decode_type = None
                 self.score_threshold = 0.0
                 self.nms_iou_threshold = 0.0
                 self.top_k = 0
-                self.boxdecode_original_width = 0
-                self.boxdecode_original_height = 0
 
         class FakeRunOptions:
             def __init__(self):
@@ -289,8 +286,8 @@ class TestPipelineHelpers:
 
                 return InputOpt()
 
-            def preprocess(self):
-                return ("model_preprocess", self)
+            def graph(self):
+                return ("model_graph", self)
 
         class FakeNodes:
             @staticmethod
@@ -298,21 +295,8 @@ class TestPipelineHelpers:
                 return ("input", opt)
 
             @staticmethod
-            def preproc(_opt):
-                raise AssertionError("build_detection_run should use model.preprocess()")
-
-            @staticmethod
-            def sima_box_decode(model, **kwargs):
-                return ("boxdecode", model, kwargs)
-
-            @staticmethod
             def output():
                 return ("output",)
-
-        class FakeGroups:
-            @staticmethod
-            def mla(model):
-                return ("mla", model)
 
         class FakePyneat:
             ModelOptions = FakeModelOptions
@@ -331,11 +315,17 @@ class TestPipelineHelpers:
             class InputKind:
                 Image = "image"
 
+            class AutoFlag:
+                On = "on"
+
+            class NormalizePreset:
+                COCO_YOLO = "coco-yolo"
+
             class PreprocessColorFormat:
                 RGB = "rgb"
 
             class BoxDecodeType:
-                YoloV8 = "yolov8"
+                YoloV26 = "yolo26"
 
             class PixelFormat:
                 RGB = "rgb"
@@ -347,7 +337,6 @@ class TestPipelineHelpers:
                 EV74 = "ev74"
 
             nodes = FakeNodes()
-            groups = FakeGroups()
 
             def __init__(self):
                 self.last_graph = None
@@ -367,18 +356,21 @@ class TestPipelineHelpers:
                 return {"shape": shape, "dtype": dtype}
 
         cfg = AppConfig(
-            model=ModelConfig("assets/models/yolo_v8m_mpk.tar.gz"),
+            model=ModelConfig("assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
             insight_host="127.0.0.1",
         )
         probe = RtspProbe(width=1280, height=720, fps=30)
         runtime = RuntimeModules(cv2=None, np=FakeNp(), pyneat=FakePyneat())
 
-        built = build_detection_run(runtime, cfg, ModelFamily.YOLOV8, probe)
+        built = build_detection_run(runtime, cfg, ModelFamily.YOLO26, probe)
 
         added_kinds = [node[0] for node in runtime.pyneat.last_graph.added]
+        model = runtime.pyneat.last_graph.added[1][1]
         assert built.run == "fake-run"
-        assert added_kinds == ["input", "model_preprocess", "mla", "boxdecode", "output"]
+        assert added_kinds == ["input", "model_graph", "output"]
+        assert model.opt.preprocess.enable == runtime.pyneat.AutoFlag.On
+        assert model.opt.preprocess.preset == runtime.pyneat.NormalizePreset.COCO_YOLO
 
     def test_startup_trace_enabled_from_env(self, monkeypatch: pytest.MonkeyPatch):
         from utils.workers import startup_trace_enabled_from_env
@@ -408,7 +400,7 @@ class TestPipelineHelpers:
 
 
 class TestSampleUtils:
-    def test_parse_bbox_payload_normalizes_yolov8_boxes(self):
+    def test_parse_bbox_payload_normalizes_yolo26_boxes(self):
         from utils.sample_utils import parse_bbox_payload
 
         payload = bytes(

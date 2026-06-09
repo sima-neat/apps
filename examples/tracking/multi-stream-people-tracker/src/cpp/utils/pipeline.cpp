@@ -85,16 +85,13 @@ GraphRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
 
   simaai::neat::Model::Options model_options;
   model_options.preprocess.kind = simaai::neat::InputKind::Image;
+  model_options.preprocess.enable = simaai::neat::AutoFlag::On;
   model_options.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::RGB;
-  model_options.preprocess.input_max_width = probe.width;
-  model_options.preprocess.input_max_height = probe.height;
-  model_options.preprocess.input_max_depth = 3;
-  model_options.decode_type = simaai::neat::BoxDecodeType::YoloV8;
+  model_options.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+  model_options.decode_type = simaai::neat::BoxDecodeType::YoloV26;
   model_options.score_threshold = cfg.detection_threshold;
   model_options.nms_iou_threshold = cfg.nms_iou_threshold;
   model_options.top_k = cfg.top_k;
-  model_options.boxdecode_original_width = probe.width;
-  model_options.boxdecode_original_height = probe.height;
   runtime.model = std::make_shared<simaai::neat::Model>(cfg.model, model_options);
 
   auto input_options = runtime.model->input_appsrc_options(false);
@@ -104,11 +101,7 @@ GraphRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
   input_options.height = probe.height;
   input_options.depth = 3;
   runtime.graph.add(simaai::neat::nodes::Input(input_options));
-  runtime.graph.add(simaai::neat::nodes::groups::Preprocess(*runtime.model));
-  runtime.graph.add(simaai::neat::nodes::groups::Infer(*runtime.model));
-  runtime.graph.add(simaai::neat::nodes::SimaBoxDecode(
-      *runtime.model, simaai::neat::BoxDecodeType::YoloV8, cfg.detection_threshold,
-      cfg.nms_iou_threshold, cfg.top_k, "", std::nullopt, std::nullopt, probe.width, probe.height));
+  runtime.graph.add(runtime.model->graph());
   runtime.graph.add(simaai::neat::nodes::Output());
 
   cv::Mat seed = cv::Mat::zeros(probe.height, probe.width, CV_8UC3);

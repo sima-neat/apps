@@ -9,14 +9,14 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-stream-people-tracker |
-| Model | yolo_v8m |
+| Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
 Multi-stream people tracking example with RTSP inputs, mixed-resolution support, per-stream worker threads, Insight live video plus metadata output, and optional sampled overlay saves. The pipeline filters detector output to the configured person class and assigns stable track IDs per stream.
 
-Both the Python and C++ entrypoints keep the detector graph explicit rather than hiding it behind a single `model.run(...)` call:
+Both the Python and C++ entrypoints keep the detector graph explicit:
 
-`RTSP decode -> CPU letterbox/normalize -> QuantTess -> MLA -> SimaBoxDecode -> tracker -> VideoSender(H.264 RTP/UDP)`
+`RTSP decode -> model.graph() -> tracker -> VideoSender(H.264 RTP/UDP)`
 
 Each RTSP stream gets its own source, detection, tracker, and `VideoSender` runtime so native stream resolution can be preserved per camera.
 
@@ -26,25 +26,38 @@ Preview image from a live run:
 ![Multi-stream people tracker preview](../../../assets/portal/tracking/multi-stream-people-tracker/image.png)
 
 ## Supported Models
-Also works with: `yolo_v8n`, `yolo_v8s`, `yolo_v8l`, `yolo_v8x`
+Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
 
-Download any variant into `assets/models/`:
+Supported batch-1 YOLO26 detection models:
+- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-b1.tar.gz`
+- `yolo26m-det-int8-b1.tar.gz`
+
+Download all supported batch-1 variants:
 
 ```bash
 mkdir -p assets/models
 cd assets/models
-sima-cli modelzoo -v 2.0.0 get yolo_v8n
-sima-cli modelzoo -v 2.0.0 get yolo_v8s
-sima-cli modelzoo -v 2.0.0 get yolo_v8m
-sima-cli modelzoo -v 2.0.0 get yolo_v8l
-sima-cli modelzoo -v 2.0.0 get yolo_v8x
+
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26s-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26l-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26x-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
+
 cd ../..
 ```
 
 ## Prerequisites
 - A Neat Python environment with `pyneat`, `numpy`, and OpenCV available.
 - One or more reachable RTSP camera URLs.
-- A YOLOv8 detector model pack downloaded into `assets/models/`.
+- A YOLO26 detector model pack downloaded into `assets/models/`.
 - An Insight viewer instance reachable from the board/host running this example.
 
 ## Important Behavior
@@ -157,11 +170,8 @@ Notes:
   written under `stream_<index>/`; the live Insight video stays clean
 - if the app runs on a DevKit, set `output.insight.host` to the Insight host IP,
   not `127.0.0.1`
-- `pyneat.Model(...)` is still used, but as the model-pack contract source for
-  the explicit `QuantTess -> MLA -> SimaBoxDecode` session, not as a black-box
-  one-call inference path
-- the example uses CPU-side OpenCV letterbox + normalize on A65 and feeds the
-  detector through the model's tensor-input `QuantTess` contract
+- `pyneat.Model(...)` is still used, but the detector runtime composes the
+  model-owned graph fragment instead of a black-box one-call inference path
 - live metadata is emitted separately from video in Insight metadata format in
   `clean` mode, with one channel per stream
 
