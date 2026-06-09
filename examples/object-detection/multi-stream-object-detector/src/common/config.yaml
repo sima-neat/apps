@@ -24,7 +24,7 @@ input:                       # RTSP input transport settings.
   latency_ms: 100            # RTSP receive latency in milliseconds.
 
 runtime:                     # Shared worker and profiling settings.
-  worker_count: 1            # Number of detector workers shared across streams.
+  worker_count: 4            # Number of detector workers shared across streams.
   mailbox_depth: 1           # Keep-latest queue depth per stream.
   profile: true              # Print per-stream timing summaries.
 
