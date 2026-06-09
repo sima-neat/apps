@@ -39,13 +39,13 @@ def start_openai_server(cfg: AppConfig):
             "provided by the installed Neat runtime."
         ) from exc
 
-    options = pyneat.OpenAIServerOptions()
+    options = pyneat.GenAIServerOptions()
     options.host = cfg.openai.host
     options.port = cfg.openai.port
 
     server = None
     try:
-        server = pyneat.OpenAIServer(options)
+        server = pyneat.GenAIServer(options)
         for model in cfg.chat_models:
             chat_name = server.add_model(model.path, model.name)
             print(f"added chat model: {chat_name} -> {model.path}", flush=True)
