@@ -1,0 +1,50 @@
+<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1280" height="720" fill="#101820"/>
+  <rect x="120" y="92" width="1040" height="536" rx="28" fill="#17212B" stroke="#2F3E4C" stroke-width="4"/>
+  <path d="M160 540C300 470 423 494 570 440C727 382 844 271 1120 298" stroke="#263846" stroke-width="18" stroke-linecap="round"/>
+  <path d="M184 550C316 495 435 514 586 462C744 408 844 313 1094 320" stroke="#3B5364" stroke-width="8" stroke-linecap="round"/>
+  <rect x="312" y="176" width="226" height="376" rx="10" stroke="#42F56F" stroke-width="7"/>
+  <rect x="708" y="151" width="214" height="394" rx="10" stroke="#42F56F" stroke-width="7"/>
+  <g stroke="#F04C9B" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M424 238L386 310L372 406"/>
+    <path d="M424 238L469 314L485 404"/>
+    <path d="M386 310L465 312"/>
+    <path d="M386 310L356 430L332 520"/>
+    <path d="M465 312L482 430L516 520"/>
+    <path d="M424 238L421 188"/>
+    <path d="M421 188L393 204"/>
+    <path d="M421 188L451 203"/>
+  </g>
+  <g stroke="#18B8FF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M814 221L760 314L735 407"/>
+    <path d="M814 221L872 313L894 405"/>
+    <path d="M760 314L871 314"/>
+    <path d="M760 314L738 443L704 526"/>
+    <path d="M871 314L888 445L932 526"/>
+    <path d="M814 221L812 171"/>
+    <path d="M812 171L782 188"/>
+    <path d="M812 171L842 188"/>
+  </g>
+  <g fill="#FFDE59">
+    <circle cx="421" cy="188" r="15"/>
+    <circle cx="386" cy="310" r="12"/>
+    <circle cx="465" cy="312" r="12"/>
+    <circle cx="356" cy="430" r="12"/>
+    <circle cx="482" cy="430" r="12"/>
+    <circle cx="332" cy="520" r="12"/>
+    <circle cx="516" cy="520" r="12"/>
+    <circle cx="812" cy="171" r="15"/>
+    <circle cx="760" cy="314" r="12"/>
+    <circle cx="871" cy="314" r="12"/>
+    <circle cx="738" cy="443" r="12"/>
+    <circle cx="888" cy="445" r="12"/>
+    <circle cx="704" cy="526" r="12"/>
+    <circle cx="932" cy="526" r="12"/>
+  </g>
+  <rect x="312" y="130" width="194" height="44" rx="6" fill="#42F56F"/>
+  <rect x="708" y="105" width="194" height="44" rx="6" fill="#42F56F"/>
+  <text x="330" y="160" fill="#101820" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700">person 0.96</text>
+  <text x="726" y="135" fill="#101820" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700">person 0.98</text>
+  <text x="112" y="667" fill="#D7E2EA" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="700">YOLO26 Pose Estimator</text>
+  <text x="112" y="704" fill="#8DA3B5" font-family="Arial, Helvetica, sans-serif" font-size="24">model-managed preprocessing and pose decode</text>
+</svg>

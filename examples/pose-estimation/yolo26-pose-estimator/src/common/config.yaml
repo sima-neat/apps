@@ -1,0 +1,19 @@
+model:
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+
+io:
+  input_dir: assets/test_images
+  output_dir: sandbox/yolo26-pose-estimator
+
+decode:
+  score_threshold: 0.55
+  nms_iou: 0.60
+  max_detections: 50
+
+runtime:
+  timeout_ms: 20000
+  num_runs: 1
+  profile: false
+
+output:
+  overlay: true
