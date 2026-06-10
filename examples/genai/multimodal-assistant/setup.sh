@@ -2,9 +2,9 @@
 set -euo pipefail
 
 EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CACHE_DIR="${MULTIMODAL_ASSISTANT_CACHE_DIR:-${HOME}/.cache/sima-neat/multimodal-assistant}"
-APP_VENV="${APP_VENV:-${CACHE_DIR}/venv}"
 MODELS_DIR="${LLIMA_MODELS_PATH:-/media/nvme/llima/models}"
+APP_VENV="${APP_VENV:-${EXAMPLE_DIR}/.venv}"
+CONFIG_PATH="${CONFIG_PATH:-${EXAMPLE_DIR}/config.local.yaml}"
 PYNEAT_PYTHON="${PYNEAT_PYTHON:-${HOME}/pyneat/bin/python}"
 CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-simaai/Qwen3-VL-2B-Instruct-GPTQ-a16w4}"
 ASR_MODEL_REPO="simaai/whisper-small-a16w8"
@@ -12,23 +12,28 @@ RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-$(basename "${CHAT_MODEL_REPO}")}"
 INSTALL_TTS_VOICES="${INSTALL_TTS_VOICES:-1}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
+CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  ./install.sh
+  ./setup.sh
 
 Environment:
   PYNEAT_PYTHON                 Python interpreter with pyneat
                                 default: ~/pyneat/bin/python
   APP_VENV                      UI virtual environment path
-                                default: ~/.cache/sima-neat/multimodal-assistant/venv
+                                default: ./.venv
+  CONFIG_PATH                   Generated local config path
+                                default: ./config.local.yaml
   LLIMA_MODELS_PATH             Model download directory
                                 default: /media/nvme/llima/models
   CHAT_MODEL_REPO               Hugging Face repo for the default chat/VLM model
                                 default: simaai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
   INSTALL_TTS_VOICES            Download Piper TTS voices, 1 or 0
                                 default: 1
+  CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
+                                default: 2.8.0+cpu
   SKIP_MODEL_DOWNLOAD           Write config without downloading models, 1 or 0
                                 default: 0
 USAGE
@@ -65,13 +70,25 @@ then
   exit 1
 fi
 
+install_cpu_torch_if_needed() {
+  case "$(uname -m)" in
+    x86_64|amd64|aarch64|arm64)
+      echo "Installing CPU-only PyTorch for RAG embeddings..."
+      "${APP_VENV}/bin/python" -m pip install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch==${CPU_TORCH_VERSION}"
+      ;;
+  esac
+}
+
 echo "Creating UI virtual environment:"
 echo "  ${APP_VENV}"
 python3 -m venv "${APP_VENV}"
 "${APP_VENV}/bin/python" -m pip install --upgrade pip
-"${APP_VENV}/bin/python" -m pip install -r "${EXAMPLE_DIR}/src/python/requirements.txt"
-"${APP_VENV}/bin/python" -m pip install -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
-"${APP_VENV}/bin/python" -m pip install -U "huggingface_hub[cli]"
+install_cpu_torch_if_needed
+"${APP_VENV}/bin/python" -m pip install \
+  -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
+  -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
 
 mkdir -p "${MODELS_DIR}"
 CHAT_MODEL_DIR="${MODELS_DIR}/${CHAT_MODEL_NAME}"
@@ -98,7 +115,8 @@ else
   echo "Skipping model downloads because SKIP_MODEL_DOWNLOAD=1."
 fi
 
-cat > "${EXAMPLE_DIR}/src/common/config.yaml" <<YAML
+mkdir -p "$(dirname "${CONFIG_PATH}")"
+cat > "${CONFIG_PATH}" <<YAML
 server:
   openai:
     host: 0.0.0.0
@@ -155,6 +173,8 @@ fi
 
 echo ""
 echo "Install complete."
+echo "Generated config:"
+echo "  ${CONFIG_PATH}"
 echo ""
 echo "Run:"
 echo "  APP_PYTHON=${APP_VENV}/bin/python PYNEAT_PYTHON=${PYNEAT_PYTHON} ./run.sh"

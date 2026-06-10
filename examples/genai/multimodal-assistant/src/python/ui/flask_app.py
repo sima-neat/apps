@@ -71,7 +71,11 @@ def ensure_rag_modules_loaded():
 def stop_service():
     global vectodb_proc
     if vectodb_proc and vectodb_proc.poll() is None:
-        pgid = os.getpgid(vectodb_proc.pid)
+        try:
+            pgid = os.getpgid(vectodb_proc.pid)
+        except ProcessLookupError:
+            vectodb_proc = None
+            return
         os.killpg(pgid, signal.SIGTERM)
         try:
             vectodb_proc.wait(timeout=5)
@@ -80,7 +84,13 @@ def stop_service():
             vectodb_proc.wait(timeout=5)
     vectodb_proc = None
 
+def handle_shutdown_signal(signum, _frame):
+    logging.info("Received signal %s; stopping RAG database service", signum)
+    stop_service()
+    raise KeyboardInterrupt
+
 atexit.register(stop_service)
+signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
 class AppConstants:
     DEFAULT_SIMA_SERVER_IP = "127.0.0.1:9998"
@@ -415,6 +425,7 @@ class AppContext:
         self.model_display_name = ""
         self.chat_model_name = "model"
         self.chat_model_names = ("model",)
+        self.chat_model_capabilities = {"model": {"supportsVision": True}}
         self.active_chat_model_name = "model"
         self.asr_model_name = "whisper-small"
         self.max_tokens = None
@@ -606,6 +617,10 @@ class AppContext:
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
         self.chat_model_names = tuple(model.name for model in app_cfg.chat_models)
+        self.chat_model_capabilities = {
+            model.name: {"supportsVision": bool(model.supports_vision)}
+            for model in app_cfg.chat_models
+        }
         self.chat_model_name = self.chat_model_names[0]
         self.active_chat_model_name = self.chat_model_name
         self.asr_model_name = app_cfg.asr_model.name
@@ -637,6 +652,7 @@ class AppContext:
         self.app.config['MODEL_DISPLAY_NAME'] = self.model_display_name
         self.app.config['CHAT_MODEL_NAME'] = self.chat_model_name
         self.app.config['CHAT_MODEL_NAMES'] = list(self.chat_model_names)
+        self.app.config['CHAT_MODEL_CAPABILITIES'] = self.chat_model_capabilities
         self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
         self.app.config['MAX_TOKENS'] = self.max_tokens
         self.app.config['RAG_ENABLED'] = self.rag_enabled
@@ -673,6 +689,7 @@ class AppContext:
                 f"window.SIMA_CONFIG.ragEnabled='{str(self.rag_enabled).lower()}';"
                 f"window.SIMA_CONFIG.chatModels={json.dumps(list(self.chat_model_names))};"
                 f"window.SIMA_CONFIG.defaultChatModel={json.dumps(self.chat_model_name)};"
+                f"window.SIMA_CONFIG.chatModelCapabilities={json.dumps(self.chat_model_capabilities)};"
                 f"window.SIMA_CONFIG.visionImageHeight='{height_val}';"
                 f"window.SIMA_CONFIG.visionImageWidth='{width_val}';"
             )

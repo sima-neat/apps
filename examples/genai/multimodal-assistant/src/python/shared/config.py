@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,7 @@ PATH_ROOT = _default_path_root()
 class ServedModel:
     name: str
     path: Path | None
+    supports_vision: bool = True
 
 
 @dataclass(frozen=True)
@@ -118,7 +120,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
     request = raw.get("request", {})
     web = raw.get("web", {})
     rag = raw.get("rag", {})
-    chat_models = _load_chat_model_names(server_models)
+    chat_models = _load_chat_model_names(server_models, apps_root)
 
     return AppConfig(
         openai=OpenAIConfig(
@@ -174,24 +176,66 @@ def _load_required_model_entry(raw: object, label: str, apps_root: Path) -> Serv
     model_path = Path(path_text).expanduser()
     if not model_path.is_absolute():
         model_path = _resolve_relative_path(model_path, apps_root)
-    return ServedModel(name=name, path=model_path)
+    return ServedModel(
+        name=name,
+        path=model_path,
+        supports_vision=_load_supports_vision(raw, model_path),
+    )
 
 
-def _load_chat_model_names(models: dict) -> tuple[ServedModel, ...]:
+def _load_chat_model_names(models: dict, apps_root: Path) -> tuple[ServedModel, ...]:
     raw = models.get("chat", {})
     entries = raw if isinstance(raw, list) else [raw]
 
-    names = tuple(_load_model_entry_name(entry) for entry in entries)
-    names = tuple(name for name in names if name)
-    if not names:
+    chat_models = tuple(
+        model for model in (_load_chat_model_entry(entry, apps_root) for entry in entries)
+        if model.name
+    )
+    if not chat_models:
         raise ValueError("models.chat requires at least one model name")
-    return tuple(ServedModel(name=name, path=None) for name in names)
+    return chat_models
+
+
+def _load_chat_model_entry(entry: object, apps_root: Path) -> ServedModel:
+    if not isinstance(entry, dict):
+        return ServedModel(name=str(entry).strip(), path=None)
+
+    name = _load_model_entry_name(entry)
+    path_text = str(entry.get("path", "") or "").strip()
+    model_path = Path(path_text).expanduser() if path_text else None
+    if model_path is not None and not model_path.is_absolute():
+        model_path = _resolve_relative_path(model_path, apps_root)
+    supports_vision = (
+        _load_supports_vision(entry, model_path)
+        if model_path is not None
+        else _load_bool(entry.get("supports_vision", True))
+    )
+    return ServedModel(name=name, path=model_path, supports_vision=supports_vision)
 
 
 def _load_model_entry_name(entry: object) -> str:
     if isinstance(entry, dict):
         entry = entry.get("name", "")
     return str(entry).strip()
+
+
+def _load_supports_vision(raw: dict, model_path: Path | None) -> bool:
+    if "supports_vision" in raw:
+        return _load_bool(raw.get("supports_vision"))
+
+    if model_path is None:
+        return True
+
+    config_path = model_path / "devkit" / "vlm_config.json"
+    if not config_path.is_file():
+        return True
+
+    try:
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return True
+
+    return bool(str(cfg.get("vision_model_name", "") or "").strip())
 
 
 def _load_model_name(models: dict, key: str) -> ServedModel:

@@ -19,6 +19,7 @@ const systemPromptModalMessage = document.getElementById('systemPromptModalMessa
 
 let isMicrophoneMuted = true;
 let mediaStream = null;
+let cameraStartPromise = null;
 let audioTracks = [];
 let recordedChunks = [];
 
@@ -41,10 +42,10 @@ let ragServerStatusText = "";
 
 let currentSystemPrompt = '';
 let systemPromptRequestInFlight = false;
+let imagePromptWasCheckedBeforeModelDisable = true;
 
-// Helper function to check if we're in LLM-only mode
 function isLlmOnlyMode() {
-  return document.body.classList.contains('llm-only');
+  return document.body.classList.contains('llm-only') || !selectedChatModelSupportsVision();
 }
 
 function isRagEnabled() {
@@ -57,10 +58,24 @@ function getConfiguredChatModels() {
   return Array.isArray(config.chatModels) ? config.chatModels.filter(Boolean) : [];
 }
 
+function getChatModelCapabilities() {
+  const config = window.SIMA_CONFIG || {};
+  return config.chatModelCapabilities && typeof config.chatModelCapabilities === 'object'
+    ? config.chatModelCapabilities
+    : {};
+}
+
 function getSelectedChatModel() {
   const select = document.getElementById('chatModelSelect');
   const models = getConfiguredChatModels();
   return (select && select.value) || window.SIMA_CONFIG?.defaultChatModel || models[0] || '';
+}
+
+function selectedChatModelSupportsVision() {
+  const model = getSelectedChatModel();
+  const capabilities = getChatModelCapabilities();
+  const modelCaps = capabilities[model] || {};
+  return modelCaps.supportsVision !== false;
 }
 
 function initializeChatModelSelect() {
@@ -81,7 +96,39 @@ function initializeChatModelSelect() {
   });
 
   select.value = window.SIMA_CONFIG?.defaultChatModel || models[0];
+  select.addEventListener('change', updateSelectedModelVisionState);
   row.style.display = models.length > 1 ? 'block' : 'none';
+  updateSelectedModelVisionState();
+}
+
+function updateSelectedModelVisionState() {
+  const includeImageCheckbox = document.getElementById('toggleImagePrompt');
+  const supportsVision = selectedChatModelSupportsVision();
+
+  if (includeImageCheckbox) {
+    if (!supportsVision) {
+      if (!includeImageCheckbox.disabled) {
+        imagePromptWasCheckedBeforeModelDisable = includeImageCheckbox.checked;
+      }
+      includeImageCheckbox.checked = false;
+      includeImageCheckbox.disabled = true;
+    } else {
+      if (includeImageCheckbox.disabled) {
+        includeImageCheckbox.checked = imagePromptWasCheckedBeforeModelDisable;
+      }
+      includeImageCheckbox.disabled = false;
+    }
+    toggleImageButtons(includeImageCheckbox.checked);
+  }
+
+  if (!supportsVision && mediaStream) {
+    mediaStream.getVideoTracks().forEach(track => {
+      track.stop();
+      mediaStream.removeTrack(track);
+    });
+  } else if (supportsVision && (!mediaStream || mediaStream.getVideoTracks().length === 0)) {
+    startCamera();
+  }
 }
 
 function hideRagControlsIfDisabled() {
@@ -112,6 +159,19 @@ function getVisionImageSize() {
 
 // Access the local camera and microphone feed
 async function startCamera() {
+  if (cameraStartPromise) {
+    return cameraStartPromise;
+  }
+
+  cameraStartPromise = startCameraInternal();
+  try {
+    await cameraStartPromise;
+  } finally {
+    cameraStartPromise = null;
+  }
+}
+
+async function startCameraInternal() {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -365,8 +425,8 @@ let mediaRecorder;
 let audioBlob;
 
 window.onload = function () {
-  // Handle LLM-only mode setup - detect via CSS class
-  const isLlmOnly = document.body.classList.contains('llm-only');
+  // Handle selected model vision capability.
+  const isLlmOnly = isLlmOnlyMode();
 
   if (isLlmOnly) {
     // Disable vision-related elements

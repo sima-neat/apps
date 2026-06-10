@@ -30,5 +30,5 @@ app:
     https: true
 
   rag:
-    enabled: true
-    embedding_model_dir: /media/nvme/llima/models/gte-small
+    enabled: false
+    embedding_model_dir: <path-to-embedding-model-dir>

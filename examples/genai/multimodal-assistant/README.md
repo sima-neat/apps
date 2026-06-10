@@ -17,9 +17,10 @@ This example hosts SiMa-supported GenAI models through Neat's OpenAI-compatible 
 The example supports one or more configured chat models, one configured ASR model, image/text chat, audio transcription, Piper TTS, system prompt control, chat history, voice selection, and abort.
 
 The demo runs as two processes. `src/python/server/main.py` reads the `server`
-section of `src/common/config.yaml` and starts the Neat OpenAI-compatible server.
-`src/python/ui/main.py` reads the `app` section of `src/common/config.yaml` and starts
-the existing Flask UI.
+section of the selected config and starts the Neat OpenAI-compatible server.
+`src/python/ui/main.py` reads the `app` section of the selected config and
+starts the existing Flask UI. `src/common/config.yaml` is the tracked template;
+`./setup.sh` writes the runnable local config to `config.local.yaml`.
 
 Runtime ownership is split deliberately:
 
@@ -54,7 +55,6 @@ Fetch only this example:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
-cd multimodal-assistant
 ```
 
 To fetch the example from another branch, pass `--branch` and use the matching
@@ -63,18 +63,19 @@ raw GitHub URL:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/develop/scripts/get-example.sh \
   | bash -s -- --branch develop multimodal-assistant
-cd multimodal-assistant
 ```
 
 Install the UI virtual environment, default chat/VLM model, Whisper ASR model,
 GTE-small embedding model, Piper TTS voices, default RAG database, and generated
-config:
+local config:
 
 ```bash
-./install.sh
+cd multimodal-assistant
+
+./setup.sh
 ```
 
-By default, `install.sh` downloads:
+By default, `setup.sh` downloads:
 
 - `simaai/Qwen3-VL-2B-Instruct-GPTQ-a16w4`
 - `simaai/whisper-small-a16w8`
@@ -84,30 +85,37 @@ By default, `install.sh` downloads:
 Override the default chat/VLM download with an environment variable when needed:
 
 ```bash
-CHAT_MODEL_REPO=simaai/<chat-model-repo> ./install.sh
+CHAT_MODEL_REPO=simaai/<chat-model-repo> ./setup.sh
 ```
 
-Downloaded models are stored under `/media/nvme/llima/models` unless
-`LLIMA_MODELS_PATH` is set. The UI virtual environment is stored under
-`~/.cache/sima-neat/multimodal-assistant/venv` unless `APP_VENV` is set.
+Downloaded models are stored under `/media/nvme/llima/models` by default. On a
+system without NVMe, set `LLIMA_MODELS_PATH` to another writable location, for
+example:
+
+```bash
+LLIMA_MODELS_PATH=/workspace/neat/models_genai ./setup.sh
+```
+
+The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set.
+The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is
+set.
 RAG is enabled by default and uses `src/python/ui/milvus.db`, created from
 `src/common/rag/neat.md`.
 
 ### Configure Chat/VLM Models
-After install, edit `src/common/config.yaml` to change or add hosted chat/VLM
-models:
+After install, edit `config.local.yaml` to change or add hosted chat/VLM models:
 
 ```yaml
 server:
   models:
     chat:
       - name: Qwen3-VL-2B-Instruct-GPTQ-a16w4
-        path: /media/nvme/llima/models/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+        path: /path/to/llima/models/Qwen3-VL-2B-Instruct-GPTQ-a16w4
       - name: another-chat-or-vlm-model
-        path: /media/nvme/llima/models/another-chat-or-vlm-model
+        path: /path/to/llima/models/another-chat-or-vlm-model
     asr:
       name: whisper-small-a16w8
-      path: /media/nvme/llima/models/whisper-small-a16w8
+      path: /path/to/llima/models/whisper-small-a16w8
 ```
 
 The first chat/VLM entry is selected by default. Additional entries appear in
@@ -155,23 +163,23 @@ Terminal 1, model server:
 source ~/pyneat/bin/activate
 
 python "${EXAMPLE_DIR}/src/python/server/main.py" \
-  --config "${EXAMPLE_DIR}/src/common/config.yaml"
+  --config "${EXAMPLE_DIR}/config.local.yaml"
 ```
 
 Terminal 2, Flask UI:
 
 ```bash
-source ~/.cache/sima-neat/multimodal-assistant/venv/bin/activate
+source .venv/bin/activate
 
 python "${EXAMPLE_DIR}/src/python/ui/main.py" \
-  --config "${EXAMPLE_DIR}/src/common/config.yaml"
+  --config "${EXAMPLE_DIR}/config.local.yaml"
 ```
 
 The supported entrypoints are `src/python/server/main.py` for model hosting and
 `src/python/ui/main.py` for the UI.
 
 ## RAG
-RAG is enabled by default after `./install.sh`.
+RAG is enabled by default after `./setup.sh`.
 
 The installer downloads `thenlper/gte-small`, stores it under the configured
 models directory, and creates:
@@ -182,25 +190,25 @@ src/python/ui/milvus.meta.json
 ```
 
 To point RAG at a different local embedding model or disable it, edit
-`src/common/config.yaml`:
+`config.local.yaml`:
 
 ```yaml
 app:
   rag:
     enabled: true
-    embedding_model_dir: /media/nvme/llima/models/gte-small
+    embedding_model_dir: /path/to/llima/models/gte-small
 ```
 
 To rebuild the RAG database from another Markdown file:
 
 ```bash
 export EXAMPLE_DIR="${PWD}"
-source ~/.cache/sima-neat/multimodal-assistant/venv/bin/activate
+source .venv/bin/activate
 
 python src/python/rag/create_db.py \
   --input /path/to/document.md \
   --output src/python/ui/milvus.db \
-  --embedding-model /media/nvme/llima/models/gte-small
+  --embedding-model "${LLIMA_MODELS_PATH:-/media/nvme/llima/models}/gte-small"
 ```
 
 Do not commit generated files:
@@ -208,6 +216,7 @@ Do not commit generated files:
 ```text
 ${EXAMPLE_DIR}/src/python/ui/milvus.db
 ${EXAMPLE_DIR}/src/python/ui/milvus.meta.json
+${EXAMPLE_DIR}/config.local.yaml
 ```
 
 Check VectorDB directly:
