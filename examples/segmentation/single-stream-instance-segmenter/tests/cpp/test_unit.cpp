@@ -1,4 +1,4 @@
-// Unit test for instance-segmenter: validates CLI arg handling.
+// Unit test for single-stream-instance-segmenter: validates CLI arg handling.
 #include "support/testing/test_process.h"
 
 #include <iostream>

@@ -1,4 +1,4 @@
-# Instance Segmenter
+# Single Stream Instance Segmenter
 
 ## Metadata
 | Field | Value |
@@ -8,11 +8,11 @@
 | Tags | segmentation, yolo26, rtsp, insight |
 | Languages | C++, Python |
 | Status | experimental |
-| Binary Name | instance-segmenter |
+| Binary Name | single-stream-instance-segmenter |
 | Model | yolo26m-seg-bf16-b1 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz] |
 
 ## Concept
-`instance-segmenter` is a single-camera YOLO26 instance segmentation example:
+`single-stream-instance-segmenter` is a single-camera YOLO26 instance segmentation example:
 
 - ingest one RTSP camera stream
 - decode the stream into frames
@@ -26,7 +26,7 @@ the segmentation behavior can be debugged independently from transport issues.
 ## Preview
 Snippet from a pipeline run:
 
-![Instance segmenter preview](../../../assets/portal/segmentation/instance-segmenter/image.jpg)
+![Single stream instance segmenter preview](../../../assets/portal/segmentation/single-stream-instance-segmenter/image.jpg)
 
 ## Supported Models
 Supported YOLO26 segmentation models:
@@ -91,34 +91,34 @@ cd <apps-repo-root>
 
 Binary output:
 ```bash
-./build/examples/segmentation/instance-segmenter/instance-segmenter
+./build/examples/segmentation/single-stream-instance-segmenter/single-stream-instance-segmenter
 ```
 
 ### Build This Example Directly With CMake
 ```bash
-cd <apps-repo-root>/examples/segmentation/instance-segmenter
+cd <apps-repo-root>/examples/segmentation/single-stream-instance-segmenter
 cmake -S cpp -B build
 cmake --build build -j
 ```
 
 Binary output:
 ```bash
-./build/instance-segmenter
+./build/single-stream-instance-segmenter
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/segmentation/instance-segmenter/instance-segmenter \
-  --config examples/segmentation/instance-segmenter/src/common/config.yaml
+./build/examples/segmentation/single-stream-instance-segmenter/single-stream-instance-segmenter \
+  --config examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/segmentation/instance-segmenter/src/python/requirements.txt
-python3 examples/segmentation/instance-segmenter/src/python/main.py \
-  --config examples/segmentation/instance-segmenter/src/common/config.yaml
+pip install -r examples/segmentation/single-stream-instance-segmenter/src/python/requirements.txt
+python3 examples/segmentation/single-stream-instance-segmenter/src/python/main.py \
+  --config examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml
 ```
 
 Example config:
@@ -126,7 +126,7 @@ Example config:
 ```yaml
 model:
   path: assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
-  labels: examples/segmentation/instance-segmenter/src/common/coco_label.txt
+  labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
 
 source:
   rtsp_url: rtsp://<host>:8554/<stream>

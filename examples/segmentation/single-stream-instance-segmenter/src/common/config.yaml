@@ -1,6 +1,6 @@
 model:
   path: <model-path>         # Example: assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
-  labels: examples/segmentation/instance-segmenter/src/common/coco_label.txt
+  labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
 
 source:
   rtsp_url: <rtsp-url-1>     # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>

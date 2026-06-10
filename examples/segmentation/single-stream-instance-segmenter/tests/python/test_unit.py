@@ -1,4 +1,4 @@
-"""Unit tests for instance-segmenter (Python)."""
+"""Unit tests for single-stream-instance-segmenter (Python)."""
 
 import importlib.util
 import subprocess

@@ -50,7 +50,7 @@ using sima_examples::time_ms;
 
 namespace {
 
-// instance-segmenter is a reference pipeline for the common deployment:
+// single-stream-instance-segmenter is a reference pipeline for the common deployment:
 // one RTSP source, one YOLO26 segmentation model, and Insight video/metadata output.
 //
 // The code keeps ingest, inference, and output transport separate so each

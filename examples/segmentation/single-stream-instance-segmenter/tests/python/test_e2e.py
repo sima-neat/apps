@@ -1,4 +1,4 @@
-"""E2E tests for instance-segmenter (Python)."""
+"""E2E tests for single-stream-instance-segmenter (Python)."""
 
 import os
 import sys
@@ -31,7 +31,7 @@ class TestE2E:
         e2e_config_writer,
         run_until_output_files,
     ):
-        output_cfg = e2e_config_section("instance-segmenter", "testing.e2e.output")
+        output_cfg = e2e_config_section("single-stream-instance-segmenter", "testing.e2e.output")
         config_path = e2e_config_writer(
             {
                 "source": {"rtsp_url": rtsp_url},
