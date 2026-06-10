@@ -539,7 +539,7 @@ int main(int argc, char** argv) {
     run_opt.preset = simaai::neat::RunPreset::Balanced;
 
     auto run =
-        sima_examples::build_seeded_run(graph, simaai::neat::TensorList{input_tensor}, run_opt);
+        graph.build(simaai::neat::TensorList{input_tensor}, simaai::neat::RunMode::Async, run_opt);
     std::cout << "Found " << images.size() << " images\n";
 
     int processed = 0;

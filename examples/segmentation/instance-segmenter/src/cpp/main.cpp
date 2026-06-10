@@ -612,8 +612,8 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
 
   cv::Mat video_seed(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
   simaai::neat::RunOptions video_run_options;
-  runtime.video_run = sima_examples::build_seeded_run(
-      runtime.video_graph, std::vector<cv::Mat>{video_seed}, video_run_options);
+  runtime.video_run = runtime.video_graph.build(std::vector<cv::Mat>{video_seed},
+                                                simaai::neat::RunMode::Async, video_run_options);
   std::cout << "video_sender=" << runtime.host << ":" << runtime.video_port << "\n";
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -665,8 +665,8 @@ DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int fr
   detector_run_options.output_memory = simaai::neat::OutputMemory::Owned;
   cv::Mat detector_seed(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
   std::cout << "[init] building YOLO26 segmentation pipeline\n";
-  runtime.detector_run = sima_examples::build_seeded_run(
-      runtime.detector_graph, std::vector<cv::Mat>{detector_seed}, detector_run_options);
+  runtime.detector_run = runtime.detector_graph.build(
+      std::vector<cv::Mat>{detector_seed}, simaai::neat::RunMode::Async, detector_run_options);
   std::cout << "[init] YOLO26 segmentation pipeline ready\n";
   return runtime;
 }
