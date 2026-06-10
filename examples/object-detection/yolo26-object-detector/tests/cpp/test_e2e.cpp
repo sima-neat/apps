@@ -4,7 +4,6 @@
 #include "support/testing/test_config.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -62,29 +61,13 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
-  const double score_threshold = e2e_double("yolo26-object-detector", "decode", "score_threshold");
-  const double nms_iou = e2e_double("yolo26-object-detector", "decode", "nms_iou");
-  const int max_detections = e2e_int("yolo26-object-detector", "decode", "max_detections");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
-  {
-    std::ofstream config_file(config_path);
-    config_file << "model:\n"
-                << "  path: " << model_path << "\n"
-                << "  labels: " << labels_file << "\n"
-                << "io:\n"
-                << "  input_dir: " << input_dir << "\n"
-                << "  output_dir: " << out_dir << "\n"
-                << "decode:\n"
-                << "  score_threshold: " << score_threshold << "\n"
-                << "  nms_iou: " << nms_iou << "\n"
-                << "  max_detections: " << max_detections << "\n"
-                << "runtime:\n"
-                << "  timeout_ms: 20000\n"
-                << "  num_runs: 1\n"
-                << "  profile: false\n"
-                << "output:\n"
-                << "  overlay: true\n";
-  }
+  write_e2e_config("yolo26-object-detector", config_path,
+                   {{"model.path", model_path},
+                    {"model.labels", labels_file},
+                    {"io.input_dir", input_dir},
+                    {"io.output_dir", out_dir},
+                    {"runtime.num_runs", "1"}});
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 

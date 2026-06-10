@@ -193,6 +193,10 @@ bool ScalarConfig::bool_or(const std::string& key, bool default_value) const {
   throw std::runtime_error(key + " must be true or false");
 }
 
+std::map<std::string, std::string> ScalarConfig::scalars() const {
+  return {scalars_.begin(), scalars_.end()};
+}
+
 std::filesystem::path default_config_path(const char* source_dir) {
   return std::filesystem::path(source_dir) / ".." / "common" / "config.yaml";
 }

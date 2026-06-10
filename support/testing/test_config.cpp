@@ -1,6 +1,7 @@
 #include "support/testing/test_config.h"
 
 #include <cstdlib>
+#include <fstream>
 #include <filesystem>
 #include <map>
 #include <stdexcept>
@@ -55,6 +56,118 @@ std::string scoped_model_file_from_env(const std::string& example_name) {
     }
   }
   return {};
+}
+
+bool starts_with(const std::string& value, const std::string& prefix) {
+  return value.rfind(prefix, 0) == 0;
+}
+
+std::vector<std::string> split_dot_key(const std::string& key) {
+  std::vector<std::string> parts;
+  std::istringstream stream(key);
+  std::string part;
+  while (std::getline(stream, part, '.')) {
+    if (part.empty()) {
+      throw std::runtime_error("invalid empty config key segment in: " + key);
+    }
+    parts.push_back(part);
+  }
+  return parts;
+}
+
+std::string quote_scalar(const std::string& value) {
+  std::string quoted = "'";
+  for (const char c : value) {
+    if (c == '\'') {
+      quoted += "''";
+    } else {
+      quoted.push_back(c);
+    }
+  }
+  quoted += "'";
+  return quoted;
+}
+
+struct ConfigNode {
+  std::map<std::string, ConfigNode> children;
+  std::vector<std::string> list;
+  std::string value;
+  bool has_value = false;
+};
+
+ConfigNode& node_for_key(ConfigNode& root, const std::string& key) {
+  ConfigNode* node = &root;
+  for (const auto& part : split_dot_key(key)) {
+    node = &node->children[part];
+  }
+  return *node;
+}
+
+void write_node(std::ostream& out, const ConfigNode& node, int indent) {
+  const std::string spaces(static_cast<std::size_t>(indent), ' ');
+  for (const auto& [key, child] : node.children) {
+    if (!child.list.empty()) {
+      out << spaces << key << ":\n";
+      for (const auto& value : child.list) {
+        out << spaces << "  - " << quote_scalar(value) << "\n";
+      }
+    } else if (child.has_value) {
+      out << spaces << key << ": " << quote_scalar(child.value) << "\n";
+    } else {
+      out << spaces << key << ":\n";
+      write_node(out, child, indent + 2);
+    }
+  }
+}
+
+std::map<std::string, std::string> runtime_scalars_for_e2e(const ScalarConfig& common) {
+  std::map<std::string, std::string> values = common.scalars();
+  std::map<std::string, std::string> e2e_overrides;
+
+  for (const auto& [key, value] : values) {
+    constexpr const char* prefix = "testing.e2e.";
+    if (!starts_with(key, prefix)) {
+      continue;
+    }
+
+    const std::string runtime_key = key.substr(std::string(prefix).size());
+    if (runtime_key == "output.total_saved_frames") {
+      continue;
+    }
+    e2e_overrides[runtime_key] = value;
+  }
+
+  for (auto it = values.begin(); it != values.end();) {
+    if (starts_with(it->first, "testing.")) {
+      it = values.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  for (const auto& [key, value] : e2e_overrides) {
+    values[key] = value;
+  }
+  return values;
+}
+
+void write_nested_config(std::ostream& out, const ConfigScalars& values,
+                         const ConfigLists& list_values) {
+  ConfigNode root;
+  for (const auto& [key, value] : values) {
+    ConfigNode& node = node_for_key(root, key);
+    node.value = value;
+    node.has_value = true;
+    node.children.clear();
+    node.list.clear();
+  }
+  for (const auto& [key, values] : list_values) {
+    ConfigNode& node = node_for_key(root, key);
+    node.list = values;
+    node.has_value = false;
+    node.children.clear();
+  }
+  write_node(out, root, 0);
 }
 
 } // namespace
@@ -128,6 +241,29 @@ bool e2e_bool(const std::string& example_name, const std::string& section, const
               bool default_value) {
   return example_common_config(example_name)
       .bool_or(full_key(example_name, section, key), default_value);
+}
+
+std::filesystem::path write_e2e_config(const std::string& example_name,
+                                       const std::filesystem::path& config_path,
+                                       const ConfigScalars& overrides,
+                                       const ConfigLists& list_overrides) {
+  std::map<std::string, std::string> values =
+      runtime_scalars_for_e2e(example_common_config(example_name));
+  for (const auto& [key, value] : overrides) {
+    values[key] = value;
+  }
+  for (const auto& [key, list] : list_overrides) {
+    static_cast<void>(list);
+    values.erase(key);
+  }
+
+  std::filesystem::create_directories(config_path.parent_path());
+  std::ofstream out(config_path);
+  if (!out.is_open()) {
+    throw std::runtime_error("failed to write e2e config: " + config_path.string());
+  }
+  write_nested_config(out, values, list_overrides);
+  return config_path;
 }
 
 } // namespace sima_examples::testing

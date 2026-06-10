@@ -5,7 +5,6 @@
 #include "support/testing/test_config.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -43,30 +42,12 @@ int main(int argc, char** argv) {
   if (out_dir.empty()) {
     return 1;
   }
-  const double confidence_threshold = e2e_double("face-detector", "decode", "confidence_threshold");
-  const double nms_iou = e2e_double("face-detector", "decode", "nms_iou");
-  const int top_k = e2e_int("face-detector", "decode", "top_k");
-  const int keep_top_k = e2e_int("face-detector", "decode", "keep_top_k");
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
-  {
-    std::ofstream config_file(config_path);
-    config_file << "model:\n"
-                << "  path: " << model_path << "\n"
-                << "io:\n"
-                << "  input_dir: " << input_dir << "\n"
-                << "  output_dir: " << out_dir << "\n"
-                << "decode:\n"
-                << "  confidence_threshold: " << confidence_threshold << "\n"
-                << "  nms_iou: " << nms_iou << "\n"
-                << "  top_k: " << top_k << "\n"
-                << "  keep_top_k: " << keep_top_k << "\n"
-                << "  max_draw: 50\n"
-                << "  landmarks: true\n"
-                << "runtime:\n"
-                << "  timeout_ms: 20000\n"
-                << "  profile: false\n"
-                << "  num_runs: 1\n";
-  }
+  write_e2e_config("face-detector", config_path,
+                   {{"model.path", model_path},
+                    {"io.input_dir", input_dir},
+                    {"io.output_dir", out_dir},
+                    {"runtime.num_runs", "1"}});
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 30000);
 
