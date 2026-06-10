@@ -429,17 +429,7 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
 }
 
 void print_power_metrics(const std::vector<StreamRuntime>& streams) {
-  for (const auto& stream : streams) {
-    if (!stream.detect.has_value()) {
-      continue;
-    }
-    const auto power = stream.detect->run.power_summary();
-    if (!power.enabled) {
-      continue;
-    }
-    std::cout << "\n[stream " << stream.index << "] detection run runtime metrics:\n"
-              << stream.detect->run.metrics_report();
-  }
+  (void)streams;
 }
 
 void publish_thread(StreamRuntime& stream, const AppConfig& cfg,

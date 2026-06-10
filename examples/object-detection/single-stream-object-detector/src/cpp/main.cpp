@@ -224,35 +224,6 @@ void enable_insight_diagnostics(bool enabled) {
   setenv("SIMA_GST_BOUNDARY_PROBES", "1", 0);
 }
 
-void print_pipeline_report(const char* label, const simaai::neat::Run& run, bool enabled) {
-  if (!enabled)
-    return;
-  simaai::neat::RunReportOptions opt;
-  opt.include_pipeline = false;
-  opt.include_stage_timings = false;
-  opt.include_element_timings = true;
-  opt.include_boundaries = false;
-  opt.include_flow_stats = true;
-  opt.include_node_reports = true;
-  opt.include_next_cpu = false;
-  opt.include_queue_depth = false;
-  opt.include_num_buffers = false;
-  opt.include_run_stats = true;
-  opt.include_input_stats = true;
-  opt.include_system_info = false;
-  std::cout << "[TIMING] " << label << "\n" << run.report(opt);
-}
-
-void print_stream_summary(const char* label, const simaai::neat::Run& run, bool enabled) {
-  if (!enabled)
-    return;
-  const auto stats = run.input_stats();
-  std::cout << "[STREAM] " << label << " avg_push_us=" << stats.avg_push_us
-            << " avg_pull_wait_us=" << stats.avg_pull_wait_us
-            << " avg_decode_us=" << stats.avg_decode_us << " avg_copy_us=" << stats.avg_copy_us
-            << " push_failures=" << stats.push_failures << "\n";
-}
-
 double fps_from_count(int count, double elapsed_ms) {
   if (elapsed_ms <= 0.0)
     return 0.0;
@@ -579,8 +550,8 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
   sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, video_seed, video_seed_err),
                          video_seed_err);
   simaai::neat::RunOptions video_run_options;
-  runtime.video_run = runtime.video_graph.build(simaai::neat::TensorList{video_seed},
-                                                simaai::neat::RunMode::Async, video_run_options);
+  runtime.video_run = sima_examples::build_seeded_run(
+      runtime.video_graph, simaai::neat::TensorList{video_seed}, video_run_options);
   std::cout << "video_sender=" << runtime.host << ":" << runtime.video_port << "\n";
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -633,8 +604,8 @@ DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int fr
   detector_run_options.output_memory = simaai::neat::OutputMemory::Owned;
   cv::Mat detector_seed(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
   std::cout << "[init] building YOLO pipeline\n";
-  runtime.detector_run = runtime.detector_graph.build(
-      std::vector<cv::Mat>{detector_seed}, simaai::neat::RunMode::Async, detector_run_options);
+  runtime.detector_run = sima_examples::build_seeded_run(
+      runtime.detector_graph, std::vector<cv::Mat>{detector_seed}, detector_run_options);
   std::cout << "[init] YOLO pipeline ready\n";
   return runtime;
 }
@@ -928,11 +899,6 @@ int main(int argc, char** argv) {
                              producer_start_ms, producer_end_ms, consumer_start_ms,
                              consumer_end_ms);
     profile_window.flush(published.load());
-    print_stream_summary("rtsp", rtsp_runtime.source_run, cfg.runtime.profile);
-    print_stream_summary("yolo", detector_runtime.detector_run, cfg.runtime.profile);
-    print_pipeline_report("yolo", detector_runtime.detector_run, cfg.runtime.profile);
-    print_stream_summary("video_sender", insight_runtime.video_run, cfg.runtime.profile);
-    print_pipeline_report("video_sender", insight_runtime.video_run, cfg.runtime.profile);
 
     // Contract: worker threads are joined before pipeline teardown. Explicit close avoids handing
     // live appsrc/encoder teardown to Run move-assignment while bounded examples are exiting.
