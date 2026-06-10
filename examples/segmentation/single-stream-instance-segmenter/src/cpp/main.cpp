@@ -665,8 +665,8 @@ DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int fr
   detector_run_options.output_memory = simaai::neat::OutputMemory::Owned;
   cv::Mat detector_seed(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
   std::cout << "[init] building YOLO26 segmentation pipeline\n";
-  runtime.detector_run = runtime.detector_graph.build(
-      std::vector<cv::Mat>{detector_seed}, simaai::neat::RunMode::Async, detector_run_options);
+  runtime.detector_run =
+      runtime.detector_graph.build(std::vector<cv::Mat>{detector_seed}, detector_run_options);
   std::cout << "[init] YOLO26 segmentation pipeline ready\n";
   return runtime;
 }

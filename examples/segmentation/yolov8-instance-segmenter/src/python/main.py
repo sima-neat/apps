@@ -351,7 +351,7 @@ def main() -> int:
         graph.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
         graph.add(pyneat.nodes.output())
 
-        runner = graph.build([dummy_tensor], pyneat.RunMode.Async, run_opt)
+        runner = graph.build([dummy_tensor], run_opt)
 
         print(f"Found {len(images)} images")
 

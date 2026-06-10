@@ -84,7 +84,7 @@ def build_video_run(cfg: Config, width: int, height: int, fps: int):
         image_format=pyneat.PixelFormat.RGB,
         memory=pyneat.TensorMemory.CPU,
     )
-    return graph, graph.build([seed], pyneat.RunMode.Async)
+    return graph, graph.build([seed])
 
 
 def build_model(cfg: Config):
@@ -125,7 +125,7 @@ def build_detector_run(cfg: Config, width: int, height: int):
     run_opt.queue_depth = 4
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
-    return model, graph, graph.build([seed], pyneat.RunMode.Async, run_opt)
+    return model, graph, graph.build([seed], run_opt)
 
 
 def build_metadata_sender(cfg: Config):

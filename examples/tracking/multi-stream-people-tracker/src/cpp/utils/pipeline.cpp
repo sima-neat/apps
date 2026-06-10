@@ -110,8 +110,7 @@ GraphRun build_detection_run(const AppConfig& cfg, const RtspProbe& probe) {
   run_options.queue_depth = 1;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::Owned;
-  runtime.run =
-      runtime.graph.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
+  runtime.run = runtime.graph.build(std::vector<cv::Mat>{seed}, run_options);
   return runtime;
 }
 
@@ -147,8 +146,7 @@ GraphRun build_insight_video_run(const AppConfig& cfg, const RtspProbe& probe, i
   simaai::neat::RunOptions run_options;
   run_options.queue_depth = 2;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
-  runtime.run =
-      runtime.graph.build(std::vector<cv::Mat>{seed}, simaai::neat::RunMode::Async, run_options);
+  runtime.run = runtime.graph.build(std::vector<cv::Mat>{seed}, run_options);
   return runtime;
 }
 

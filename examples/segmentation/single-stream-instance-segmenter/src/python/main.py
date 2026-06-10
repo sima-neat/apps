@@ -330,7 +330,7 @@ def build_detector_run(model_path: str, width: int, height: int, inference: Infe
     run_opt.queue_depth = 4
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
-    return model, graph, graph.build([seed], pyneat.RunMode.Async, run_opt)
+    return model, graph, graph.build([seed], run_opt)
 
 
 def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
@@ -361,7 +361,7 @@ def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
         image_format=pyneat.PixelFormat.RGB,
         memory=pyneat.TensorMemory.EV74,
     )
-    return graph, graph.build([seed], pyneat.RunMode.Async)
+    return graph, graph.build([seed])
 
 
 def build_metadata_sender(cfg: AppConfig):

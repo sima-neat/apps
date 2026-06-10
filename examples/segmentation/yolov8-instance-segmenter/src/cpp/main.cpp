@@ -538,8 +538,7 @@ int main(int argc, char** argv) {
     run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
     run_opt.preset = simaai::neat::RunPreset::Balanced;
 
-    auto run =
-        graph.build(simaai::neat::TensorList{input_tensor}, simaai::neat::RunMode::Async, run_opt);
+    auto run = graph.build(simaai::neat::TensorList{input_tensor}, run_opt);
     std::cout << "Found " << images.size() << " images\n";
 
     int processed = 0;
