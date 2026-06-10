@@ -292,17 +292,9 @@ void producer_thread(StreamRuntime& stream, const AppConfig& cfg,
           source_running = false;
         }
         if (!last_error.empty() || !source_running) {
-          const std::string diag = stream.source.run.diagnostics_summary();
-          const std::string report = stream.source.run.report();
           emit_startup_trace(stream.index,
                              "source pull returned empty last_error=" +
                                  (last_error.empty() ? std::string("<empty>") : last_error));
-          if (!diag.empty()) {
-            emit_startup_trace(stream.index, "source diagnostics: " + diag);
-          }
-          if (!report.empty()) {
-            emit_startup_trace(stream.index, "source report: " + report);
-          }
           throw std::runtime_error(last_error.empty() ? std::string("source run stopped")
                                                       : last_error);
         }

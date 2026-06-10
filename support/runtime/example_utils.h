@@ -88,6 +88,28 @@ void check_top1(const std::vector<float>& scores, int expected_id, float min_pro
 simaai::neat::Tensor pull_tensor_with_retry(simaai::neat::Run& run, const std::string& label,
                                             int per_try_ms, int tries);
 
+namespace detail {
+template <typename Inputs>
+auto build_seeded_run_impl(simaai::neat::Graph& graph, const Inputs& inputs,
+                           const simaai::neat::RunOptions& opt, int)
+    -> decltype(graph.build(inputs, opt)) {
+  return graph.build(inputs, opt);
+}
+
+template <typename Inputs>
+auto build_seeded_run_impl(simaai::neat::Graph& graph, const Inputs& inputs,
+                           const simaai::neat::RunOptions& opt, long)
+    -> decltype(graph.build(inputs, simaai::neat::RunMode::Async, opt)) {
+  return graph.build(inputs, simaai::neat::RunMode::Async, opt);
+}
+} // namespace detail
+
+template <typename Inputs>
+simaai::neat::Run build_seeded_run(simaai::neat::Graph& graph, const Inputs& inputs,
+                                   const simaai::neat::RunOptions& opt = {}) {
+  return detail::build_seeded_run_impl(graph, inputs, opt, 0);
+}
+
 std::string h264_gst_pipeline(const std::filesystem::path& out_path, int width, int height,
                               double fps, int bitrate_kbps = 4000);
 

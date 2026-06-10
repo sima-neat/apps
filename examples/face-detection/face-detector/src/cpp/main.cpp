@@ -597,7 +597,7 @@ int main(int argc, char** argv) {
 
     cv::Mat dummy(kInferH, kInferW, CV_32FC3, cv::Scalar(0, 0, 0));
     simaai::neat::Tensor dummy_t = tensor_from_hwc_f32(dummy);
-    auto run = graph.build(simaai::neat::TensorList{dummy_t}, simaai::neat::RunMode::Async);
+    auto run = sima_examples::build_seeded_run(graph, simaai::neat::TensorList{dummy_t});
 
     std::vector<Detection> dets;
 
