@@ -152,10 +152,10 @@
     {
       "label": "Apps: Build Tests",
       "type": "shell",
-      "command": "./build.sh",
+      "command": "bash",
       "args": [
-        "--build-dir",
-        "build-test/build-vscode-tests"
+        "-lc",
+        "rm -rf build-test/build-vscode-tests && ./build.sh --build-dir build-test/build-vscode-tests"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
