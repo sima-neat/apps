@@ -1,404 +1,910 @@
-"""Minimal YOLOv8-seg pipeline using DetessDequant postprocess (no boxdecode)."""
+"""Single-camera RTSP YOLO26 segmentation Insight example using pyneat.
+
+This mirrors the intent of the C++ reference sample in the same folder:
+
+- pull one decoded RTSP stream
+- run one YOLO26 instance segmentation model
+- publish H.264 video with mask overlays plus metadata to Insight
+
+The implementation keeps those responsibilities loosely separated so the main
+runtime path is easy to reason about:
+
+1. RTSP probe/build
+2. YOLO26 segmentation inference and mask extraction
+3. Insight video/metadata publishing
+"""
 
 from __future__ import annotations
 
 import argparse
-import math
-import os
+from dataclasses import dataclass
+import glob
+import json
 import sys
+import time
 from pathlib import Path
-
-import cv2
-import numpy as np
-import pyneat
 import yaml
 
-MASK_ALPHA = 0.65
-DQ_SCALES = [
-    11.110991093672158,
-    13.956323724394647,
-    14.356056332484277,
-    925.8771585551377,
-    343.5148027214258,
-    291.36864499455385,
-    50.265630377702685,
-    56.57840021254144,
-    54.44306583495789,
-    43.49836481362829,
-]
-
-MASK_COLOR_PALETTE = [
-    (56, 56, 255),
-    (151, 157, 255),
-    (31, 112, 255),
-    (29, 178, 255),
-    (49, 210, 207),
-    (10, 249, 72),
-    (23, 204, 146),
-    (134, 219, 61),
-    (52, 147, 26),
-    (187, 212, 0),
-    (255, 194, 0),
-    (168, 153, 44),
-]
-
-COCO80_NAMES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus",
-    "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse",
-    "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
-    "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
-    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
-    "fork", "knife", "spoon", "bowl", "banana", "apple",
-    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
-    "donut", "cake", "chair", "couch", "potted plant", "bed",
-    "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
-]
+DEFAULT_FPS = 30
+SOURCE_RUN_QUEUE_DEPTH = 4
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+DEFAULT_LABELS = DEFAULT_CONFIG.parent / "coco_label.txt"
+MASK_ALPHA = 0.55
+MASK_THRESHOLD = 0.5
+cv2 = None
+np = None
+pyneat = None
 
 
-def is_image(path: Path) -> bool:
-    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
+@dataclass(frozen=True)
+class ModelConfig:
+    path: str
+    labels: str
 
 
-def sigmoid(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-x))
+@dataclass(frozen=True)
+class SourceConfig:
+    rtsp_url: str
+    latency_ms: int
+    tcp: bool
 
 
-def class_color(class_id: int):
-    if class_id < 0:
-        class_id = 0
-    return MASK_COLOR_PALETTE[class_id % len(MASK_COLOR_PALETTE)]
+@dataclass(frozen=True)
+class InferenceConfig:
+    frames: int
+    min_score: float
+    nms_iou: float
+    max_detections: int
 
 
-def iou_xyxy(a, b) -> float:
-    xx1 = max(a[0], b[0])
-    yy1 = max(a[1], b[1])
-    xx2 = min(a[2], b[2])
-    yy2 = min(a[3], b[3])
-    w = max(0.0, xx2 - xx1)
-    h = max(0.0, yy2 - yy1)
-    inter = w * h
-    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
-    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
-    uni = area_a + area_b - inter
-    return inter / uni if uni > 0 else 0.0
+@dataclass(frozen=True)
+class RuntimeConfig:
+    profile: bool
+    profile_interval: int
+
+
+@dataclass(frozen=True)
+class InsightConfig:
+    host: str
+    video_port: int
+    metadata_port: int
+
+
+@dataclass(frozen=True)
+class OutputConfig:
+    save_dir: str
+    save_every: int
+    mask_alpha: float
+    mask_threshold: float
+    draw_boxes: bool
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    model: ModelConfig
+    source: SourceConfig
+    inference: InferenceConfig
+    runtime: RuntimeConfig
+    insight: InsightConfig
+    output: OutputConfig
+
+
+def load_runtime_dependencies() -> None:
+    """Import runtime-only dependencies after argparse validation."""
+    global cv2, np, pyneat
+    if pyneat is not None:
+        return
+
+    # Prefer system OpenCV (built with GStreamer) when running inside a venv.
+    for p in glob.glob("/usr/lib/python3*/dist-packages"):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    import cv2 as cv2_module
+    import numpy as np_module
+    import pyneat as pyneat_module
+
+    cv2 = cv2_module
+    np = np_module
+    pyneat = pyneat_module
 
 
 def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
-    dtype_map = {
-        pyneat.TensorDType.UInt8: np.uint8,
-        pyneat.TensorDType.Int8: np.int8,
-        pyneat.TensorDType.UInt16: np.uint16,
-        pyneat.TensorDType.Int16: np.int16,
-        pyneat.TensorDType.Int32: np.int32,
-        pyneat.TensorDType.Float32: np.float32,
-        pyneat.TensorDType.Float64: np.float64,
-    }
-    np_dtype = dtype_map.get(tensor.dtype)
-    if np_dtype is None:
-        raise TypeError(f"Unsupported tensor dtype: {tensor.dtype}")
-    shape = tuple(int(x) for x in tensor.shape)
-    arr = np.frombuffer(tensor.copy_dense_bytes_tight(), dtype=np_dtype)
-    if shape:
-        arr = arr.reshape(shape)
-    return arr
+    """Copy a pyneat tensor into a NumPy array owned by Python."""
+    return np.asarray(tensor.to_numpy(copy=True))
 
 
-def tensor_to_hwc_f32(tensor: pyneat.Tensor) -> np.ndarray:
-    arr = tensor_to_numpy(tensor).astype(np.float32)
-    if arr.ndim == 4:
-        if arr.shape[0] != 1:
-            raise ValueError("only batch=1 supported")
+def tensor_dim(tensor: pyneat.Tensor, name: str) -> int:
+    value = getattr(tensor, name)
+    return int(value() if callable(value) else value)
+
+
+def tensor_bgr_from_decoded(tensor: pyneat.Tensor) -> np.ndarray:
+    """Normalize decoded output into a writable HWC uint8 BGR frame."""
+    if tensor.is_nv12():
+        width = tensor_dim(tensor, "width")
+        height = tensor_dim(tensor, "height")
+        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise ValueError(f"NV12 payload too small: {payload.size} < {expected}")
+        nv12 = payload[:expected].reshape((height * 3 // 2, width))
+        return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
+
+    if tensor.is_i420():
+        width = tensor_dim(tensor, "width")
+        height = tensor_dim(tensor, "height")
+        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise ValueError(f"I420 payload too small: {payload.size} < {expected}")
+        i420 = payload[:expected].reshape((height * 3 // 2, width))
+        return np.ascontiguousarray(cv2.cvtColor(i420, cv2.COLOR_YUV2BGR_I420))
+
+    arr = tensor_to_numpy(tensor)
+    if arr.ndim == 4 and arr.shape[0] == 1:
         arr = arr[0]
     if arr.ndim != 3:
-        raise ValueError(f"unexpected tensor rank {arr.ndim}")
-    return arr
+        raise ValueError(f"unexpected decoded tensor shape {arr.shape}")
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(arr)
 
 
-def apply_dq_scale_squared_probe(arr: np.ndarray, tensor_index: int) -> np.ndarray:
-    scale = DQ_SCALES[tensor_index]
-    return arr / (scale * scale)
+def tensor_from_bgr_frame(frame: np.ndarray) -> pyneat.Tensor:
+    """Create an EV74 BGR image tensor for model-managed YOLO inference."""
+    return pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(frame),
+        copy=True,
+        image_format=pyneat.PixelFormat.BGR,
+        memory=pyneat.TensorMemory.EV74,
+    )
 
 
-def iter_tensors(sample: pyneat.Sample):
-    if sample.kind == pyneat.SampleKind.Tensor:
-        if sample.tensor is None:
-            raise RuntimeError("tensor sample missing payload")
-        yield sample.tensor
-    elif sample.kind == pyneat.SampleKind.TensorSet:
-        yield from sample.tensors
-    elif sample.kind == pyneat.SampleKind.Bundle:
-        for field in sample.fields:
-            yield from iter_tensors(field)
-    else:
-        raise RuntimeError(f"unexpected sample kind: {sample.kind}")
+def tensor_from_rgb_frame(frame: np.ndarray) -> pyneat.Tensor:
+    """Create an EV74 RGB image tensor for VideoSender input."""
+    return pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(frame),
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
 
 
-def dfl_distance_16(logits: np.ndarray) -> float:
-    maxv = logits.max()
-    e = np.exp(logits - maxv)
-    denom = e.sum()
-    if denom <= 0:
-        return 0.0
-    numer = np.dot(np.arange(16, dtype=np.float32), e)
-    return float(numer / denom)
+def is_tensor_like(value) -> bool:
+    return hasattr(value, "copy_payload_bytes") and hasattr(value, "to_numpy")
 
 
-def decode_yolov8_instances(tensors, infer_size, conf_thr, nms_iou, max_det, dq_scale_squared_probe=False):
-    """Decode YOLOv8 boxes and mask coefficients from DetessDequant outputs."""
-    if len(tensors) < 10:
-        raise ValueError("expected at least 10 tensors for instance-seg decode")
-    reg80 = tensor_to_hwc_f32(tensors[0])
-    reg40 = tensor_to_hwc_f32(tensors[1])
-    reg20 = tensor_to_hwc_f32(tensors[2])
-    cls80 = tensor_to_hwc_f32(tensors[3])
-    cls40 = tensor_to_hwc_f32(tensors[4])
-    cls20 = tensor_to_hwc_f32(tensors[5])
-    mk80 = tensor_to_hwc_f32(tensors[6])
-    mk40 = tensor_to_hwc_f32(tensors[7])
-    mk20 = tensor_to_hwc_f32(tensors[8])
-    proto = tensor_to_hwc_f32(tensors[9])
-    if dq_scale_squared_probe:
-        reg80 = apply_dq_scale_squared_probe(reg80, 0)
-        reg40 = apply_dq_scale_squared_probe(reg40, 1)
-        reg20 = apply_dq_scale_squared_probe(reg20, 2)
-        cls80 = apply_dq_scale_squared_probe(cls80, 3)
-        cls40 = apply_dq_scale_squared_probe(cls40, 4)
-        cls20 = apply_dq_scale_squared_probe(cls20, 5)
-        mk80 = apply_dq_scale_squared_probe(mk80, 6)
-        mk40 = apply_dq_scale_squared_probe(mk40, 7)
-        mk20 = apply_dq_scale_squared_probe(mk20, 8)
-        proto = apply_dq_scale_squared_probe(proto, 9)
-    if proto.shape[2] != 32:
-        raise ValueError(f"unexpected proto channels: {proto.shape}")
-
-    levels = [(reg80, cls80, mk80), (reg40, cls40, mk40), (reg20, cls20, mk20)]
-    candidates = []
-
-    for reg, cls, mk in levels:
-        h, w, _ = reg.shape
-        if cls.shape[0] != h or cls.shape[1] != w or reg.shape[2] != 64:
-            raise ValueError("unexpected reg/cls shape")
-        if mk.shape[0] != h or mk.shape[1] != w or mk.shape[2] != 32:
-            raise ValueError("unexpected mask coeff shape")
-        stride = infer_size / h
-
-        for y in range(h):
-            for x in range(w):
-                cls_vec = cls[y, x, :]
-                cls_sigmoid = 1.0 / (1.0 + np.exp(-cls_vec))
-                best_cls = int(np.argmax(cls_sigmoid))
-                best_score = float(cls_sigmoid[best_cls])
-                if best_score < conf_thr:
-                    continue
-
-                reg_vec = reg[y, x, :]
-                l = dfl_distance_16(reg_vec[0:16]) * stride
-                t = dfl_distance_16(reg_vec[16:32]) * stride
-                r = dfl_distance_16(reg_vec[32:48]) * stride
-                b = dfl_distance_16(reg_vec[48:64]) * stride
-
-                cx = (x + 0.5) * stride
-                cy = (y + 0.5) * stride
-
-                x1 = max(0.0, cx - l)
-                y1 = max(0.0, cy - t)
-                x2 = min(float(infer_size), cx + r)
-                y2 = min(float(infer_size), cy + b)
-                if x2 > x1 and y2 > y1:
-                    candidates.append({
-                        "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                        "score": best_score, "class_id": best_cls,
-                        "coeff": mk[y, x, :].copy(),
-                    })
-
-    candidates.sort(key=lambda b: b["score"], reverse=True)
-    keep = []
-    for b in candidates:
-        suppressed = False
-        for k in keep:
-            if k["class_id"] == b["class_id"] and iou_xyxy(
-                (k["x1"], k["y1"], k["x2"], k["y2"]),
-                (b["x1"], b["y1"], b["x2"], b["y2"]),
-            ) > nms_iou:
-                suppressed = True
-                break
-        if not suppressed:
-            keep.append(b)
-            if len(keep) >= max_det:
-                break
-    return keep, proto
+def is_sample_like(value) -> bool:
+    return hasattr(value, "kind") and hasattr(value, "fields")
 
 
-def apply_mask_overlay(bgr, dets, proto, infer_size, alpha=MASK_ALPHA):
-    ph, pw, pc = proto.shape
-    if pc != 32:
-        raise ValueError(f"unexpected proto channels: {proto.shape}")
-    for d in dets:
-        coeff = d.get("coeff")
-        if coeff is None or coeff.shape[0] != pc:
+def extract_tensors(result) -> list:
+    if isinstance(result, (list, tuple)) and all(is_tensor_like(item) for item in result):
+        return list(result)
+
+    if not is_sample_like(result):
+        return []
+
+    tensors = []
+    stack = [result]
+    while stack:
+        current = stack.pop()
+        stack.extend(reversed(list(current.fields)))
+        if current.kind == pyneat.SampleKind.TensorSet:
+            tensors.extend(current.tensors)
             continue
-        mask_small = np.tensordot(proto, coeff, axes=([2], [0]))
-        mask_small = 1.0 / (1.0 + np.exp(-mask_small))
+        if current.kind == pyneat.SampleKind.Tensor and current.tensor is not None:
+            tensors.append(current.tensor)
+    return tensors
 
-        sx = pw / infer_size
-        sy = ph / infer_size
-        bx1 = max(0, int(math.floor(d["x1"] * sx)))
-        by1 = max(0, int(math.floor(d["y1"] * sy)))
-        bx2 = min(pw - 1, int(math.ceil(d["x2"] * sx)))
-        by2 = min(ph - 1, int(math.ceil(d["y2"] * sy)))
 
-        mask_crop = np.zeros_like(mask_small)
-        mask_crop[by1:by2 + 1, bx1:bx2 + 1] = mask_small[by1:by2 + 1, bx1:bx2 + 1]
-        mask = cv2.resize(mask_crop, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_LINEAR)
+def segmentation_results_from_output(result, width: int, height: int, max_detections: int) -> list[dict]:
+    tensors = extract_tensors(result)
+    if not tensors:
+        raise RuntimeError("model returned no segmentation tensors")
 
-        where = mask > 0.5
-        if not np.any(where):
+    decoded = pyneat.decode_segmentation(
+        tensors,
+        clamp_to=(width, height),
+        top_k=max_detections,
+        strict=False,
+    )
+    detections = []
+    for item in decoded:
+        boxes = tensor_to_numpy(item.boxes).astype(np.float32)
+        masks = tensor_to_numpy(item.masks).astype(np.uint8)
+        if boxes.size == 0:
             continue
-        class_col = class_color(d["class_id"])
-        color = np.array(class_col, dtype=np.float32)
-        bgr[where] = (
-            (1.0 - alpha) * bgr[where].astype(np.float32) + alpha * color
-        ).astype(np.uint8)
-
-        # Draw crisp contour with the same class color used by the mask fill and bbox.
-        contour_mask = (mask > 0.5).astype(np.uint8)
-        contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            cv2.drawContours(bgr, contours, -1, class_col, 2, cv2.LINE_8)
-
-
-def draw_boxes(bgr, boxes, infer_size):
-    sx = bgr.shape[1] / infer_size
-    sy = bgr.shape[0] / infer_size
-    for b in boxes:
-        x1 = max(0, int(round(b["x1"] * sx)))
-        y1 = max(0, int(round(b["y1"] * sy)))
-        x2 = min(bgr.shape[1] - 1, int(round(b["x2"] * sx)))
-        y2 = min(bgr.shape[0] - 1, int(round(b["y2"] * sy)))
-        if x2 <= x1 or y2 <= y1:
-            continue
-        col = class_color(b["class_id"])
-        cv2.rectangle(bgr, (x1, y1), (x2, y2), col, 2)
-        name = COCO80_NAMES[b["class_id"]] if b["class_id"] < 80 else f"class_{b['class_id']}"
-        label = f"{name} s={b['score']:.2f}"
-        cv2.putText(bgr, label, (x1, max(0, y1 - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
+        for row, mask in zip(boxes.reshape((-1, 6)), masks.reshape((-1, 160, 160))):
+            x1, y1, x2, y2, score, class_id = row.tolist()
+            if x2 <= x1 or y2 <= y1:
+                continue
+            detections.append(
+                {
+                    "x1": float(x1),
+                    "y1": float(y1),
+                    "x2": float(x2),
+                    "y2": float(y2),
+                    "score": float(score),
+                    "class_id": int(class_id),
+                    "mask": mask,
+                }
+            )
+    return detections[:max_detections]
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="YOLOv8n instance segmentation overlay")
-    default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-    parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
-    args = parser.parse_args()
+def probe_rtsp(url: str) -> tuple[int, int, int]:
+    """Probe the stream once so the rest of the pipeline uses real dimensions.
 
-    with args.config.open("r", encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
-    model_path = raw.get("model", {}).get("path", "assets/models/yolo_v8n_seg_mpk.tar.gz")
-    io_cfg = raw.get("io", {})
-    runtime = raw.get("runtime", {})
-    decode = raw.get("decode", {})
-    visualization = raw.get("visualization", {})
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
-    output_dir = Path(io_cfg.get("output_dir", "sandbox/instance-segmenter"))
-    infer_size = int(runtime.get("infer_size", 640))
-    timeout_ms = int(runtime.get("timeout_ms", 20000))
-    queue_depth = int(runtime.get("queue_depth", 8))
-    score_thr = float(decode.get("score_threshold", 0.6))
-    nms_iou = float(decode.get("nms_iou", 0.45))
-    max_det = int(decode.get("max_detections", 200))
-    mask_alpha = float(visualization.get("mask_alpha", MASK_ALPHA))
-    dq_scale_squared_probe = os.getenv("SIMANEAT_APPS_DQ_SCALE_SQUARED_PROBE", "") not in {"", "0"}
-    if dq_scale_squared_probe:
-        print("[DEBUG] Dividing detess outputs by dq_scale^2 from 0_postproc.json")
+    The Python sample keeps this step explicit instead of hardcoding 640x480,
+    which makes the output path behave correctly for streams such as 720p.
+    """
+    cap = cv2.VideoCapture(url)
+    if not cap.isOpened():
+        raise RuntimeError(f"failed to open RTSP source for probing: {url}")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
+    cap.release()
+    if width <= 0 or height <= 0:
+        raise RuntimeError("failed to probe RTSP frame size")
+    if fps <= 0:
+        fps = DEFAULT_FPS
+    return width, height, fps
 
-    if not input_dir.is_dir():
-        raise RuntimeError(f"input directory does not exist: {input_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    images = sorted(p for p in input_dir.iterdir() if p.is_file() and is_image(p))
-    if not images:
-        raise RuntimeError(f"no images found in: {input_dir}")
+def build_rtsp_run(
+    url: str,
+    width: int,
+    height: int,
+    fps: int,
+    latency_ms: int,
+    tcp: bool,
+) -> tuple[pyneat.Graph, pyneat.Run]:
+    """Build a decoded RTSP input graph that yields decoded frame tensors."""
+    ro = pyneat.RtspDecodedInputOptions()
+    ro.url = url
+    ro.latency_ms = latency_ms
+    ro.tcp = tcp
+    ro.payload_type = 96
+    ro.insert_queue = True
+    ro.auto_caps_from_stream = True
+    ro.fallback_h264_width = width
+    ro.fallback_h264_height = height
+    ro.fallback_h264_fps = fps
+    ro.sima_allocator_type = 2
+    ro.decoder_raw_output = False
+    ro.use_videoconvert = False
+    ro.use_videoscale = True
+    ro.output_caps.enable = True
+    ro.output_caps.width = width
+    ro.output_caps.height = height
+    ro.output_caps.fps = fps
+    ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
 
-    try:
-        opt = pyneat.ModelOptions()
-        opt.preprocess.kind = pyneat.InputKind.Image
-        opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.RGB
-        opt.preprocess.input_max_width = infer_size
-        opt.preprocess.input_max_height = infer_size
-        opt.preprocess.input_max_depth = 3
-        model = pyneat.Model(model_path, opt)
+    graph = pyneat.Graph()
+    graph.add(pyneat.groups.rtsp_decoded_input(ro))
+    graph.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
 
-        dummy = np.zeros((infer_size, infer_size, 3), dtype=np.uint8)
-        dummy_tensor = pyneat.Tensor.from_numpy(
-            dummy,
-            copy=True,
-            image_format=pyneat.PixelFormat.RGB,
-            memory=pyneat.TensorMemory.EV74,
+    run_opt = pyneat.RunOptions()
+    run_opt.queue_depth = SOURCE_RUN_QUEUE_DEPTH
+    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_opt.output_memory = pyneat.OutputMemory.Owned
+    run = graph.build(run_opt)
+    return graph, run
+
+
+def build_model(model_path: str, inference: InferenceConfig) -> pyneat.Model:
+    """Create the YOLO26 segmentation model with model-managed preprocess/decode."""
+    opt = pyneat.ModelOptions()
+    opt.preprocess.kind = pyneat.InputKind.Image
+    opt.preprocess.enable = pyneat.AutoFlag.On
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+    opt.decode_type = pyneat.BoxDecodeType.YoloV26Seg
+    opt.score_threshold = inference.min_score
+    opt.nms_iou_threshold = inference.nms_iou
+    opt.top_k = inference.max_detections
+    return pyneat.Model(model_path, opt)
+
+
+def build_detector_run(model_path: str, width: int, height: int, inference: InferenceConfig):
+    """Build the explicit YOLO26 segmentation graph used by the RTSP loop."""
+    model = build_model(model_path, inference)
+
+    input_opt = model.input_appsrc_options(False)
+    input_opt.payload_type = pyneat.PayloadType.Image
+    input_opt.format = "BGR"
+    input_opt.width = width
+    input_opt.height = height
+    input_opt.depth = 3
+
+    graph = pyneat.Graph()
+    graph.add(pyneat.nodes.input(input_opt))
+    graph.add(model.graph())
+    graph.add(pyneat.nodes.output())
+
+    seed = tensor_from_bgr_frame(np.zeros((height, width, 3), dtype=np.uint8))
+    run_opt = pyneat.RunOptions()
+    run_opt.queue_depth = 4
+    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_opt.output_memory = pyneat.OutputMemory.Owned
+    return model, graph, graph.build([seed], pyneat.RunMode.Async, run_opt)
+
+
+def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
+    """Build the VideoSender used to publish annotated RGB frames to Insight."""
+    input_opt = pyneat.InputOptions()
+    input_opt.payload_type = pyneat.PayloadType.Image
+    input_opt.format = "RGB"
+    input_opt.width = width
+    input_opt.height = height
+    input_opt.depth = 3
+    input_opt.fps_n = max(1, fps)
+    input_opt.fps_d = 1
+    input_opt.use_simaai_pool = False
+
+    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
+    sender_opt.host = cfg.insight.host
+    sender_opt.channel = 0
+    sender_opt.video_port_base = cfg.insight.video_port
+    sender_opt.encoder.bitrate_kbps = 4000
+
+    graph = pyneat.Graph()
+    graph.add(pyneat.nodes.input(input_opt))
+    graph.add(pyneat.groups.video_sender(sender_opt))
+
+    seed = pyneat.Tensor.from_numpy(
+        np.zeros((height, width, 3), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
+    return graph, graph.build([seed], pyneat.RunMode.Async)
+
+
+def build_metadata_sender(cfg: AppConfig):
+    options = pyneat.MetadataSenderOptions()
+    options.host = cfg.insight.host
+    options.channel = 0
+    options.metadata_port_base = cfg.insight.metadata_port
+    return pyneat.MetadataSender(options)
+
+
+def load_labels(path: Path) -> list[str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Labels file does not exist: {path}")
+    labels = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not labels:
+        raise ValueError(f"Labels file is empty: {path}")
+    return labels
+
+
+def class_name(labels: list[str], class_id: int) -> str:
+    return labels[class_id] if 0 <= class_id < len(labels) else "unknown"
+
+
+def make_instance_segmentation_data_json(detections: list[dict], labels: list[str]) -> str:
+    """Build lightweight metadata; masks are rendered directly into the video."""
+    objects = []
+    for idx, det in enumerate(detections, start=1):
+        cls_id = int(det["class_id"])
+        objects.append(
+            {
+                "id": f"obj_{idx}",
+                "label": class_name(labels, cls_id),
+                "confidence": float(det["score"]),
+                "bbox": [
+                    float(det["x1"]),
+                    float(det["y1"]),
+                    float(det["x2"] - det["x1"]),
+                    float(det["y2"] - det["y1"]),
+                ],
+            }
         )
-        run_opt = pyneat.RunOptions()
-        run_opt.queue_depth = queue_depth
-        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
-        run_opt.preset = pyneat.RunPreset.Balanced
-        graph = pyneat.Graph()
-        graph.add(pyneat.nodes.input(model.input_appsrc_options(False)))
-        graph.add(model.preprocess())
-        graph.add(model.inference())
-        graph.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
-        graph.add(pyneat.nodes.output())
+    return json.dumps({"objects": objects}, separators=(",", ":"))
 
-        runner = graph.build([dummy_tensor], pyneat.RunMode.Async, run_opt)
 
-        print(f"Found {len(images)} images")
+def class_color(class_id: int) -> tuple[int, int, int]:
+    palette = [
+        (56, 56, 255),
+        (151, 157, 255),
+        (31, 112, 255),
+        (29, 178, 255),
+        (49, 210, 207),
+        (10, 249, 72),
+        (23, 204, 146),
+        (134, 219, 61),
+        (52, 147, 26),
+        (187, 212, 0),
+        (255, 194, 0),
+        (168, 153, 44),
+    ]
+    return palette[max(0, class_id) % len(palette)]
+
+
+def draw_box(frame: np.ndarray, det: dict, labels: list[str]) -> None:
+    cls_id = int(det["class_id"])
+    color = class_color(cls_id)
+    x1 = max(0, int(round(det["x1"])))
+    y1 = max(0, int(round(det["y1"])))
+    x2 = min(frame.shape[1] - 1, int(round(det["x2"])))
+    y2 = min(frame.shape[0] - 1, int(round(det["y2"])))
+    if x2 <= x1 or y2 <= y1:
+        return
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(
+        frame,
+        f"{class_name(labels, cls_id)} {float(det['score']):.2f}",
+        (x1, max(0, y1 - 4)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        color,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def frame_rect_for_detection(det: dict, frame_shape: tuple[int, ...]) -> tuple[int, int, int, int]:
+    frame_h, frame_w = frame_shape[:2]
+    x0 = max(0, min(frame_w - 1, int(np.floor(float(det["x1"])))))
+    y0 = max(0, min(frame_h - 1, int(np.floor(float(det["y1"])))))
+    x1 = max(x0 + 1, min(frame_w, int(np.ceil(float(det["x2"])))))
+    y1 = max(y0 + 1, min(frame_h, int(np.ceil(float(det["y2"])))))
+    return x0, y0, x1, y1
+
+
+def mask_rect_for_frame_rect(
+    frame_rect: tuple[int, int, int, int],
+    frame_shape: tuple[int, ...],
+    mask_shape: tuple[int, ...],
+) -> tuple[int, int, int, int]:
+    frame_h, frame_w = frame_shape[:2]
+    mask_h, mask_w = mask_shape[:2]
+    model_w = mask_w * 4
+    model_h = mask_h * 4
+    scale = min(model_w / frame_w, model_h / frame_h)
+    resized_w = frame_w * scale
+    resized_h = frame_h * scale
+    pad_x = (model_w - resized_w) * 0.5
+    pad_y = (model_h - resized_h) * 0.5
+
+    def to_mask_x(frame_x: float) -> float:
+        return (frame_x * scale + pad_x) * mask_w / model_w
+
+    def to_mask_y(frame_y: float) -> float:
+        return (frame_y * scale + pad_y) * mask_h / model_h
+
+    fx0, fy0, fx1, fy1 = frame_rect
+    x0 = max(0, min(mask_w - 1, int(np.floor(to_mask_x(fx0)))))
+    y0 = max(0, min(mask_h - 1, int(np.floor(to_mask_y(fy0)))))
+    x1 = max(x0 + 1, min(mask_w, int(np.ceil(to_mask_x(fx1)))))
+    y1 = max(y0 + 1, min(mask_h, int(np.ceil(to_mask_y(fy1)))))
+    return x0, y0, x1, y1
+
+
+def project_letterbox_mask_roi(
+    mask: np.ndarray,
+    frame_shape: tuple[int, ...],
+    frame_rect: tuple[int, int, int, int],
+) -> np.ndarray:
+    x0, y0, x1, y1 = frame_rect
+    mx0, my0, mx1, my1 = mask_rect_for_frame_rect(frame_rect, frame_shape, mask.shape)
+    return cv2.resize(mask[my0:my1, mx0:mx1], (x1 - x0, y1 - y0), interpolation=cv2.INTER_LINEAR)
+
+
+def overlay_segmentation(
+    frame: np.ndarray,
+    detections: list[dict],
+    min_score: float,
+    cfg: OutputConfig,
+    labels: list[str],
+) -> np.ndarray:
+    annotated = frame.copy()
+    for det in detections:
+        score = float(det["score"])
+        if score < min_score:
+            continue
+        mask = det.get("mask")
+        if mask is None:
+            continue
+        mask = np.asarray(mask, dtype=np.uint8)
+        max_mask = int(mask.max()) if mask.size else 0
+        threshold = cfg.mask_threshold * (255.0 if max_mask > 1 else 1.0)
+        x0, y0, x1, y1 = frame_rect_for_detection(det, frame.shape)
+        roi_mask = project_letterbox_mask_roi(mask, frame.shape, (x0, y0, x1, y1))
+        region = roi_mask > threshold
+        if np.any(region):
+            color = np.array(class_color(int(det["class_id"])), dtype=np.float32)
+            roi = annotated[y0:y1, x0:x1]
+            roi[region] = (
+                (1.0 - cfg.mask_alpha) * roi[region].astype(np.float32)
+                + cfg.mask_alpha * color
+            ).astype(np.uint8)
+            contour_mask = region.astype(np.uint8)
+            contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(roi, contours, -1, class_color(int(det["class_id"])), 2, cv2.LINE_8)
+        if cfg.draw_boxes:
+            draw_box(annotated, det, labels)
+    return annotated
+
+
+def save_annotated_frame(frame: np.ndarray, out_path: Path) -> None:
+    """Write one BGR frame for e2e/debug inspection."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(out_path), frame):
+        raise RuntimeError(f"failed to write output frame: {out_path}")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Expose only the small set of controls needed for this reference flow."""
+    parser = argparse.ArgumentParser(
+        description="Single-camera RTSP YOLO26 segmentation Insight example"
+    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
+    parser.add_argument(
+        "--validate-config-only",
+        action="store_true",
+        help="Validate config and exit without opening the RTSP stream.",
+    )
+    return parser
+
+
+def _mapping(value, name: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a mapping")
+    return value
+
+
+def _required_string(mapping: dict, key: str, section: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{section}.{key} must be a non-empty string")
+    return value
+
+
+def _optional_int(mapping: dict, key: str, default: int) -> int:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer")
+    return int(value)
+
+
+def _optional_float(mapping: dict, key: str, default: float) -> float:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be numeric")
+    return float(value)
+
+
+def _optional_bool(mapping: dict, key: str, default: bool) -> bool:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be true or false")
+    return bool(value)
+
+
+def _optional_string(mapping: dict, key: str, default: str) -> str:
+    value = mapping.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
+def load_app_config(config_path: Path) -> AppConfig:
+    with config_path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+
+    if not isinstance(raw, dict):
+        raise ValueError("config root must be a mapping")
+
+    model_cfg = _mapping(raw.get("model"), "model")
+    source_cfg = _mapping(raw.get("source"), "source")
+    inference_cfg = _mapping(raw.get("inference"), "inference")
+    runtime_cfg = _mapping(raw.get("runtime"), "runtime")
+    output_cfg = _mapping(raw.get("output"), "output")
+    insight_cfg = _mapping(output_cfg.get("insight"), "output.insight")
+
+    cfg = AppConfig(
+        model=ModelConfig(
+            path=_required_string(model_cfg, "path", "model"),
+            labels=_optional_string(model_cfg, "labels", str(DEFAULT_LABELS)),
+        ),
+        source=SourceConfig(
+            rtsp_url=_required_string(source_cfg, "rtsp_url", "source"),
+            latency_ms=_optional_int(source_cfg, "latency_ms", 200),
+            tcp=_optional_bool(source_cfg, "tcp", True),
+        ),
+        inference=InferenceConfig(
+            frames=_optional_int(inference_cfg, "frames", 0),
+            min_score=_optional_float(inference_cfg, "min_score", 0.55),
+            nms_iou=_optional_float(inference_cfg, "nms_iou", 0.60),
+            max_detections=_optional_int(inference_cfg, "max_detections", 50),
+        ),
+        runtime=RuntimeConfig(
+            profile=_optional_bool(runtime_cfg, "profile", False),
+            profile_interval=_optional_int(runtime_cfg, "profile_interval", 100),
+        ),
+        insight=InsightConfig(
+            host=_required_string(insight_cfg, "host", "output.insight"),
+            video_port=_optional_int(insight_cfg, "video_port", 9000),
+            metadata_port=_optional_int(insight_cfg, "metadata_port", 9100),
+        ),
+        output=OutputConfig(
+            save_dir=_optional_string(output_cfg, "save_dir", ""),
+            save_every=_optional_int(output_cfg, "save_every", 0),
+            mask_alpha=_optional_float(output_cfg, "mask_alpha", MASK_ALPHA),
+            mask_threshold=_optional_float(output_cfg, "mask_threshold", MASK_THRESHOLD),
+            draw_boxes=_optional_bool(output_cfg, "draw_boxes", True),
+        ),
+    )
+
+    if cfg.source.latency_ms < 0:
+        raise ValueError("source.latency_ms must be >= 0")
+    if cfg.inference.frames < 0:
+        raise ValueError("inference.frames must be >= 0")
+    if cfg.output.save_every < 0:
+        raise ValueError("output.save_every must be >= 0")
+    if not 0.0 <= cfg.output.mask_alpha <= 1.0:
+        raise ValueError("output.mask_alpha must be between 0 and 1")
+    if not 0.0 <= cfg.output.mask_threshold <= 1.0:
+        raise ValueError("output.mask_threshold must be between 0 and 1")
+    if not 0.0 <= cfg.inference.min_score <= 1.0:
+        raise ValueError("inference.min_score must be between 0 and 1")
+    if not 0.0 <= cfg.inference.nms_iou <= 1.0:
+        raise ValueError("inference.nms_iou must be between 0 and 1")
+    if cfg.inference.max_detections <= 0:
+        raise ValueError("inference.max_detections must be > 0")
+    if cfg.runtime.profile_interval <= 0:
+        raise ValueError("runtime.profile_interval must be > 0")
+    if cfg.insight.video_port <= 0:
+        raise ValueError("output.insight.video_port must be > 0")
+    if cfg.insight.metadata_port <= 0:
+        raise ValueError("output.insight.metadata_port must be > 0")
+
+    return cfg
+
+
+class ProfileWindow:
+    def __init__(self, enabled: bool, interval: int) -> None:
+        self.enabled = enabled
+        self.interval = interval
+        self.reset()
+
+    def reset(self) -> None:
+        self.frames = 0
+        self.boxes = 0
+        self.started = 0.0
+        self.rtsp_pull_ms = 0.0
+        self.infer_ms = 0.0
+        self.decode_ms = 0.0
+        self.video_push_ms = 0.0
+        self.e2e_ms = 0.0
+        self.max_e2e_ms = 0.0
+
+    def add(
+        self,
+        *,
+        rtsp_pull_ms: float,
+        infer_ms: float,
+        decode_ms: float,
+        video_push_ms: float,
+        e2e_ms: float,
+        boxes: int,
+        published_total: int,
+    ) -> None:
+        if not self.enabled:
+            return
+        if self.frames == 0:
+            self.started = time.perf_counter()
+        self.frames += 1
+        self.boxes += boxes
+        self.rtsp_pull_ms += rtsp_pull_ms
+        self.infer_ms += infer_ms
+        self.decode_ms += decode_ms
+        self.video_push_ms += video_push_ms
+        self.e2e_ms += e2e_ms
+        self.max_e2e_ms = max(self.max_e2e_ms, e2e_ms)
+        if self.frames >= self.interval:
+            self.flush(published_total)
+
+    def flush(self, published_total: int) -> None:
+        if not self.enabled or self.frames == 0:
+            return
+        elapsed = max(time.perf_counter() - self.started, 1e-6)
+        frames = float(self.frames)
+        print(
+            f"[profile] frames={self.frames} published={published_total} "
+            f"fps={self.frames / elapsed:.2f} "
+            f"avg_rtsp_pull_ms={self.rtsp_pull_ms / frames:.2f} "
+            f"avg_infer_ms={self.infer_ms / frames:.2f} "
+            f"avg_decode_ms={self.decode_ms / frames:.2f} "
+            f"avg_video_push_ms={self.video_push_ms / frames:.2f} "
+            f"avg_e2e_ms={self.e2e_ms / frames:.2f} "
+            f"avg_boxes={self.boxes / frames:.2f} "
+            f"max_e2e_ms={self.max_e2e_ms:.2f}",
+            flush=True,
+        )
+        self.reset()
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    try:
+        cfg = load_app_config(args.config)
+    except Exception as exc:
+        print(f"Error: failed to load config {args.config}: {exc}", file=sys.stderr)
+        return 2
+    if args.validate_config_only:
+        print(f"Config validated: {args.config}")
+        return 0
+
+    load_runtime_dependencies()
+    model_path = cfg.model.path
+    if not model_path or not Path(model_path).is_file():
+        print("Failed to locate YOLO26 segmentation model package.", file=sys.stderr)
+        print("Set model.path to a YOLO26 segmentation package.", file=sys.stderr)
+        return 2
+    try:
+        labels = load_labels(Path(cfg.model.labels))
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    rtsp_graph = None
+    rtsp_run = None
+    detector_graph = None
+    detector_run = None
+    video_graph = None
+    video_run = None
+    metadata_sender = None
+    try:
+        # Probe first so decode, inference, and VideoSender all agree on the
+        # same live frame dimensions.
+        frame_w, frame_h, fps = probe_rtsp(cfg.source.rtsp_url)
+        print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
+
+        model, detector_graph, detector_run = build_detector_run(
+            model_path,
+            frame_w,
+            frame_h,
+            cfg.inference,
+        )
+        rtsp_graph, rtsp_run = build_rtsp_run(
+            cfg.source.rtsp_url,
+            frame_w,
+            frame_h,
+            fps,
+            cfg.source.latency_ms,
+            tcp=cfg.source.tcp,
+        )
+        video_graph, video_run = build_video_sender_run(cfg, frame_w, frame_h, fps)
+        metadata_sender = build_metadata_sender(cfg)
+
+        print(f"insight host={cfg.insight.host} video_port={cfg.insight.video_port} "
+              f"metadata_port={metadata_sender.metadata_port()} channel=0")
 
         processed = 0
-        for image_path in images:
-            bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-            if bgr is None:
-                print(f"Skipping unreadable image: {image_path.name}", file=sys.stderr)
-                continue
+        started = time.perf_counter()
+        profile_window = ProfileWindow(cfg.runtime.profile, cfg.runtime.profile_interval)
+        save_dir = Path(cfg.output.save_dir) if cfg.output.save_dir else None
+        if save_dir is not None:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        # Contract: single-threaded frame order is pull -> infer -> publish video -> publish metadata.
+        while cfg.inference.frames <= 0 or processed < cfg.inference.frames:
+            t_pull0 = time.perf_counter()
+            tensors = rtsp_run.pull_tensors(timeout_ms=20000)
+            t_pull1 = time.perf_counter()
+            if not tensors:
+                print("RTSP pull timed out / stream closed", file=sys.stderr)
+                break
 
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            rgb = cv2.resize(rgb, (infer_size, infer_size), interpolation=cv2.INTER_LINEAR)
-            rgb_arr = np.ascontiguousarray(rgb, dtype=np.uint8)
+            decoded_frame = tensors[0]
+            frame = tensor_bgr_from_decoded(decoded_frame)
+            infer_input = tensor_from_bgr_frame(frame)
 
-            input_tensor = pyneat.Tensor.from_numpy(
-                rgb_arr,
-                copy=True,
-                image_format=pyneat.PixelFormat.RGB,
-                memory=pyneat.TensorMemory.EV74,
+            t_inf0 = time.perf_counter()
+            result = detector_run.run([infer_input], timeout_ms=20000)
+            t_inf1 = time.perf_counter()
+
+            t_decode0 = time.perf_counter()
+            detections = segmentation_results_from_output(
+                result,
+                frame.shape[1],
+                frame.shape[0],
+                cfg.inference.max_detections,
             )
-            output = runner.run([input_tensor], timeout_ms=timeout_ms)
-            tensors = list(iter_tensors(output)) if hasattr(output, "kind") else list(output)
+            t_decode1 = time.perf_counter()
+            annotated = overlay_segmentation(
+                frame,
+                detections,
+                cfg.inference.min_score,
+                cfg.output,
+                labels,
+            )
+            video_frame = tensor_from_rgb_frame(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
 
-            try:
-                boxes, proto = decode_yolov8_instances(
-                    tensors, infer_size, score_thr, nms_iou, max_det, dq_scale_squared_probe
+            # Contract: publish video first, then publish matching metadata.
+            t_video0 = time.perf_counter()
+            video_ok = video_run.push([video_frame])
+            if not video_ok:
+                raise RuntimeError("Insight video push failed")
+            t_video1 = time.perf_counter()
+            fid = str(processed)
+            data_json = make_instance_segmentation_data_json(detections, labels)
+            metadata_sender.send_metadata(
+                "instance-segmentation",
+                data_json,
+                int(time.time() * 1000),
+                fid,
+            )
+            should_save = (
+                save_dir is not None
+                and cfg.output.save_every > 0
+                and (processed + 1) % cfg.output.save_every == 0
+            )
+            if should_save:
+                save_annotated_frame(
+                    annotated,
+                    save_dir / f"frame_{processed:06d}.jpg",
                 )
-            except Exception as e:
-                print(f"Decode failed for {image_path.name}: {e}", file=sys.stderr)
-                continue
 
-            overlay = bgr.copy()
-            apply_mask_overlay(overlay, boxes, proto, infer_size, alpha=mask_alpha)
-            draw_boxes(overlay, boxes, infer_size)
-            out_file = output_dir / (image_path.stem + "_overlay.jpg")
-            cv2.imwrite(str(out_file), overlay)
-
-            print(f"Wrote: {out_file} boxes={len(boxes)}")
             processed += 1
+            profile_window.add(
+                rtsp_pull_ms=(t_pull1 - t_pull0) * 1000.0,
+                infer_ms=(t_inf1 - t_inf0) * 1000.0,
+                decode_ms=(t_decode1 - t_decode0) * 1000.0,
+                video_push_ms=(t_video1 - t_video0) * 1000.0,
+                e2e_ms=(t_video1 - t_pull1) * 1000.0,
+                boxes=len(detections),
+                published_total=processed,
+            )
 
-        runner.close()
-        print(f"Processed {processed} / {len(images)} images")
-        return 0
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        elapsed = max(time.perf_counter() - started, 1e-6)
+        profile_window.flush(processed)
+        print(f"processed={processed} fps={processed / elapsed:.2f} "
+              f"video_sender={cfg.insight.host}:{cfg.insight.video_port}")
+        return 0 if processed > 0 else 3
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 2
+    finally:
+        # Contract: close output run, then close RTSP run.
+        try:
+            if video_run is not None:
+                video_run.close()
+        except Exception:
+            pass
+        try:
+            if detector_run is not None:
+                detector_run.close()
+        except Exception:
+            pass
+        try:
+            if rtsp_run is not None:
+                rtsp_run.close()
+        except Exception:
+            pass
+        try:
+            metadata_sender = None
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
