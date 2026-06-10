@@ -38,105 +38,79 @@ Multimodal assistant UI:
 
 ![Multimodal Assistant preview](../../../assets/portal/genai/multimodal-assistant/image.png)
 
-## Prerequisites
-Run the commands from the `apps` repository root on the target system.
-
-### 1. Install Neat
-Install Neat before running the demo. The model server must use a Python
-environment where `pyneat` is available. The examples below assume:
+## Requirements
+Install Neat before running the demo. The model server uses the Python
+environment where `pyneat` is available. The default scripts assume:
 
 ```text
 ~/pyneat/bin/python
 ```
 
-### 2. Download Model Artifacts
-Visit the [SiMa.ai Hugging Face page](https://huggingface.co/simaai) to see the
-officially supported model artifacts. Download the chat/VLM and ASR artifacts
-you want to run, then update `src/common/config.yaml` so each model path points to
-the downloaded directory. Model paths can be absolute or relative to the `apps`
-repository root.
+Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat environment is
+somewhere else.
+
+## Install
+Fetch only this example:
 
 ```bash
-python3 -m pip install -U "huggingface_hub[cli]"
-
-MODEL_REPO="<model-repo>"
-MODEL_DIR="/path/to/local/model-dir"
-hf download "simaai/${MODEL_REPO}" --local-dir "${MODEL_DIR}"
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/develop/scripts/get-example.sh | bash -s -- multimodal-assistant
+cd multimodal-assistant
 ```
 
-Model directories must contain `devkit/` and `elf_files/`. Chat models use
-`devkit/vlm_config.json`; ASR models use `devkit/whisper_config.json`.
+Install the UI virtual environment, default chat/VLM model, Whisper ASR model,
+GTE-small embedding model, Piper TTS voices, default RAG database, and generated
+config:
 
-### 3. Configure Models
-Edit `examples/genai/multimodal-assistant/src/common/config.yaml`:
+```bash
+./install.sh
+```
+
+By default, `install.sh` downloads:
+
+- `simaai/Qwen3-VL-2B-Instruct-GPTQ-a16w4`
+- `simaai/whisper-small-a16w8`
+- `thenlper/gte-small`
+
+`whisper-small-a16w8` is the supported ASR model and is always downloaded.
+Override the default chat/VLM download with an environment variable when needed:
+
+```bash
+CHAT_MODEL_REPO=simaai/<chat-model-repo> ./install.sh
+```
+
+Downloaded models are stored under `/media/nvme/llima/models` unless
+`LLIMA_MODELS_PATH` is set. The UI virtual environment is stored under
+`~/.cache/sima-neat/multimodal-assistant/venv` unless `APP_VENV` is set.
+RAG is enabled by default and uses `src/python/ui/milvus.db`, created from
+`src/common/rag/neat.md`.
+
+### Configure Chat/VLM Models
+After install, edit `src/common/config.yaml` to change or add hosted chat/VLM
+models:
 
 ```yaml
 server:
-  openai:
-    host: 0.0.0.0
-    port: 9998
-
   models:
     chat:
-      - name: <chat-model-name>
-        path: <path-to-llm-or-vlm-model>
-      - name: <another-chat-model-name>
-        path: <path-to-another-llm-or-vlm-model>
+      - name: Qwen3-VL-2B-Instruct-GPTQ-a16w4
+        path: /media/nvme/llima/models/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+      - name: another-chat-or-vlm-model
+        path: /media/nvme/llima/models/another-chat-or-vlm-model
     asr:
-      name: <asr-model-name>
-      path: <path-to-asr-model>
+      name: whisper-small-a16w8
+      path: /media/nvme/llima/models/whisper-small-a16w8
 ```
 
-The first chat model in the list is selected by default. Additional chat models
-appear in the UI model selector.
-
-### 4. Create The UI Environment
-Keep the Flask UI dependencies separate from the `pyneat` environment:
-
-```bash
-python3 -m venv ~/multimodal-assistant-app
-source ~/multimodal-assistant-app/bin/activate
-python3 -m pip install -r examples/genai/multimodal-assistant/src/python/requirements.txt
-```
-
-### 5. Install Piper Voices For TTS
-If you need text-to-speech playback, install the Piper voice assets:
-
-```bash
-cd examples/genai/multimodal-assistant/src/python
-bash voice_install.sh
-cd /workspace/sima-neat/apps
-```
-
-The script downloads selected Piper `.onnx` voice models into
-`src/python/ui/assets/`.
-Each voice needs both files:
-
-```text
-src/python/ui/assets/<voice>.onnx
-src/python/ui/assets/<voice>.onnx.json
-```
+The first chat/VLM entry is selected by default. Additional entries appear in
+the UI model selector. Model directories must contain `devkit/` and
+`elf_files/`.
 
 ## Run
-For the general demo, start both processes with the wrapper script:
+Start both the Neat OpenAI-compatible server and the Flask UI:
 
 ```bash
-cd /workspace/sima-neat/apps
-
-APP_PYTHON=~/multimodal-assistant-app/bin/python \
-PYNEAT_PYTHON=~/pyneat/bin/python \
-bash examples/genai/multimodal-assistant/run.sh
+./run.sh
 ```
-
-`run.sh` is a convenience wrapper. It starts:
-
-- `src/python/server/main.py` with `PYNEAT_PYTHON`
-- `src/python/ui/main.py` with `APP_PYTHON`
-
-Set `PYNEAT_PYTHON` to the Python interpreter that has `pyneat` installed. Set
-`APP_PYTHON` to the UI environment that has `src/python/requirements.txt`
-installed. If `PYNEAT_PYTHON` is not set, the script uses `~/pyneat/bin/python`
-when it exists. If `APP_PYTHON` is not set, it uses `python3`.
 
 Open the Flask UI:
 
@@ -162,100 +136,69 @@ the browser UI.
 ### Manual Process Start
 Use this only when you want two explicit terminals.
 
+```bash
+export EXAMPLE_DIR="${PWD}"
+```
+
 Terminal 1, model server:
 
 ```bash
-cd /workspace/sima-neat/apps
 source ~/pyneat/bin/activate
 
-python /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/python/server/main.py \
-  --config /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/common/config.yaml
+python "${EXAMPLE_DIR}/src/python/server/main.py" \
+  --config "${EXAMPLE_DIR}/src/common/config.yaml"
 ```
 
 Terminal 2, Flask UI:
 
 ```bash
-cd /workspace/sima-neat/apps
-source ~/multimodal-assistant-app/bin/activate
+source ~/.cache/sima-neat/multimodal-assistant/venv/bin/activate
 
-python /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/python/ui/main.py \
-  --config /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/common/config.yaml
+python "${EXAMPLE_DIR}/src/python/ui/main.py" \
+  --config "${EXAMPLE_DIR}/src/common/config.yaml"
 ```
 
 The supported entrypoints are `src/python/server/main.py` for model hosting and
 `src/python/ui/main.py` for the UI.
 
-## Optional RAG Setup
-RAG is optional. If you do not need RAG, skip this section.
+## RAG
+RAG is enabled by default after `./install.sh`.
 
-### 1. Enable RAG
-Edit `examples/genai/multimodal-assistant/src/common/config.yaml`:
+The installer downloads `thenlper/gte-small`, stores it under the configured
+models directory, and creates:
+
+```text
+src/python/ui/milvus.db
+src/python/ui/milvus.meta.json
+```
+
+To point RAG at a different local embedding model or disable it, edit
+`src/common/config.yaml`:
 
 ```yaml
 app:
   rag:
     enabled: true
-    embedding_model_dir: <path-to-embedding-model-dir>
+    embedding_model_dir: /media/nvme/llima/models/gte-small
 ```
 
-### 2. Install RAG Dependencies
-Install the RAG packages into the UI environment:
+To rebuild the RAG database from another Markdown file:
 
 ```bash
-cd /workspace/sima-neat/apps
-source ~/multimodal-assistant-app/bin/activate
+export EXAMPLE_DIR="${PWD}"
+source ~/.cache/sima-neat/multimodal-assistant/venv/bin/activate
 
-python3 -m pip install -r examples/genai/multimodal-assistant/src/python/requirements-rag.txt
-```
-
-### 3. Download The Embedding Model
-Place the local embedding model at the path configured by
-`app.rag.embedding_model_dir`. The path can be absolute or relative to the
-`apps` repository root. Use the full Hugging Face repository id.
-
-```bash
-EMBED_REPO="<embedding-model-repo>"
-EMBED_DIR="/path/to/local/embedding-model-dir"
-hf download "${EMBED_REPO}" --local-dir "${EMBED_DIR}"
-```
-
-### 4. Create A RAG Database From Markdown
-The example includes a small Markdown document for smoke testing:
-
-```text
-examples/genai/multimodal-assistant/src/common/rag/neat.md
-```
-
-Create `milvus.db`:
-
-```bash
-cd /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/python
-source ~/multimodal-assistant-app/bin/activate
-
-EMBED_DIR="/path/to/local/embedding-model-dir"
-python rag/create_db.py \
-  --input /workspace/sima-neat/apps/examples/genai/multimodal-assistant/src/common/rag/neat.md \
-  --output ui/milvus.db \
-  --embedding-model "${EMBED_DIR}"
+python src/python/rag/create_db.py \
+  --input /path/to/document.md \
+  --output src/python/ui/milvus.db \
+  --embedding-model /media/nvme/llima/models/gte-small
 ```
 
 Do not commit generated files:
 
 ```text
-examples/genai/multimodal-assistant/src/python/ui/milvus.db
-examples/genai/multimodal-assistant/src/python/ui/milvus.meta.json
-```
-
-### 5. Run And Test RAG
-Start the demo normally. The Flask app starts the local VectorDB service when
-RAG is enabled.
-
-```bash
-cd /workspace/sima-neat/apps
-
-APP_PYTHON=~/multimodal-assistant-app/bin/python \
-PYNEAT_PYTHON=~/pyneat/bin/python \
-bash examples/genai/multimodal-assistant/run.sh
+${EXAMPLE_DIR}/src/python/ui/milvus.db
+${EXAMPLE_DIR}/src/python/ui/milvus.meta.json
 ```
 
 Check VectorDB directly:

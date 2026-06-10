@@ -8,11 +8,20 @@ from pathlib import Path
 import yaml
 
 
-APPS_ROOT = Path(__file__).resolve().parents[6]
+EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
 COMMON_DIR = Path(__file__).resolve().parents[2] / "common"
 DEFAULT_CONFIG = COMMON_DIR / "config.yaml"
 DEFAULT_SERVER_CONFIG = DEFAULT_CONFIG
 DEFAULT_UI_CONFIG = DEFAULT_CONFIG
+
+
+def _default_path_root() -> Path:
+    if EXAMPLE_ROOT.parent.parent.name == "examples":
+        return EXAMPLE_ROOT.parent.parent.parent
+    return EXAMPLE_ROOT
+
+
+PATH_ROOT = _default_path_root()
 
 
 @dataclass(frozen=True)
@@ -62,11 +71,11 @@ class AppConfig:
     rag: RagConfig
 
 
-def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
+def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     return load_server_config(path, apps_root)
 
 
-def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
+def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = raw.get("server", raw)
 
@@ -99,7 +108,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = APP
     )
 
 
-def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
+def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = config.get("app", config)
     server = config.get("server", {})
@@ -164,7 +173,7 @@ def _load_required_model_entry(raw: object, label: str, apps_root: Path) -> Serv
 
     model_path = Path(path_text).expanduser()
     if not model_path.is_absolute():
-        model_path = apps_root / model_path
+        model_path = _resolve_relative_path(model_path, apps_root)
     return ServedModel(name=name, path=model_path)
 
 
@@ -210,8 +219,20 @@ def _load_optional_path(value: object, apps_root: Path) -> str:
 
     path = Path(path_text).expanduser()
     if not path.is_absolute():
-        path = apps_root / path
+        path = _resolve_relative_path(path, apps_root)
     return str(path)
+
+
+def _resolve_relative_path(path: Path, apps_root: Path) -> Path:
+    primary = apps_root / path
+    if primary.exists() or apps_root == EXAMPLE_ROOT:
+        return primary
+
+    example_relative = EXAMPLE_ROOT / path
+    if example_relative.exists():
+        return example_relative
+
+    return primary
 
 
 def _load_bool(value: object) -> bool:

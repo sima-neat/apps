@@ -181,6 +181,7 @@ PY
          -o -path '*/tests/python/test_*.py' \
          -o -path '*/src/common/*' \
          -o -path '*/run.sh' \
+         -o -path '*/install.sh' \
       \) 2>/dev/null | sort
   )
 

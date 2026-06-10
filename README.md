@@ -37,6 +37,26 @@ This repo is intentionally separate from `core`:
 
 This keeps examples editable and easy to customize.
 
+### Fetch A Single Example
+
+Users who only need one example can fetch it with the helper script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/develop/scripts/get-example.sh | bash -s -- <example>
+```
+
+For example:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/develop/scripts/get-example.sh | bash -s -- multimodal-assistant
+cd multimodal-assistant
+./install.sh
+./run.sh
+```
+
+The helper uses Git sparse checkout internally and leaves only the requested
+example directory in the current working directory.
+
 ## Repo Layout
 
 - `examples/`: examples organized by task/category (each example has C++ and Python implementations)
