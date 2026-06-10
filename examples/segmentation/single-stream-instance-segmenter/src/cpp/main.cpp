@@ -612,8 +612,8 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
 
   cv::Mat video_seed(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
   simaai::neat::RunOptions video_run_options;
-  runtime.video_run = runtime.video_graph.build(std::vector<cv::Mat>{video_seed},
-                                                simaai::neat::RunMode::Async, video_run_options);
+  runtime.video_run =
+      runtime.video_graph.build(std::vector<cv::Mat>{video_seed}, video_run_options);
   std::cout << "video_sender=" << runtime.host << ":" << runtime.video_port << "\n";
 
   simaai::neat::MetadataSenderOptions metadata_options;

@@ -550,8 +550,8 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
   sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, video_seed, video_seed_err),
                          video_seed_err);
   simaai::neat::RunOptions video_run_options;
-  runtime.video_run = runtime.video_graph.build(simaai::neat::TensorList{video_seed},
-                                                simaai::neat::RunMode::Async, video_run_options);
+  runtime.video_run =
+      runtime.video_graph.build(simaai::neat::TensorList{video_seed}, video_run_options);
   std::cout << "video_sender=" << runtime.host << ":" << runtime.video_port << "\n";
 
   simaai::neat::MetadataSenderOptions metadata_options;

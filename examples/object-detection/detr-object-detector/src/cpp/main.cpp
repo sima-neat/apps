@@ -513,8 +513,7 @@ int main(int argc, char** argv) {
     graph.add(simaai::neat::nodes::Output());
 
     cv::Mat dummy(kModelH, kModelW, CV_32FC3, cv::Scalar(0.0f, 0.0f, 0.0f));
-    auto run = graph.build(simaai::neat::TensorList{tensor_from_hwc_f32(dummy)},
-                           simaai::neat::RunMode::Async);
+    auto run = graph.build(simaai::neat::TensorList{tensor_from_hwc_f32(dummy)});
 
     if (args.profile) {
       const fs::path& image_path = image_paths.front();
