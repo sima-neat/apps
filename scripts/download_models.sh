@@ -232,6 +232,13 @@ download_huggingface_model() {
     return 1
 }
 
+split_tsv_row() {
+    local row="$1"
+    local -n out="$2"
+    local normalized="${row//$'\t'/$'\x1f'}"
+    IFS=$'\x1f' read -r -a out <<<"$normalized"
+}
+
 download_scoped_models() {
     if [[ "${#LANGUAGES[@]}" -eq 0 ]]; then
         LANGUAGES=(python cpp)
@@ -267,9 +274,17 @@ download_scoped_models() {
     acquire_lock
 
     local failed=0
-    local row model_id source name url expected_file repo path
+    local row model_id source name url expected_file repo path fields
     for row in "${rows[@]}"; do
-        IFS=$'\t' read -r model_id source name url expected_file repo path <<<"$row"
+        fields=()
+        split_tsv_row "$row" fields
+        model_id="${fields[0]:-}"
+        source="${fields[1]:-}"
+        name="${fields[2]:-}"
+        url="${fields[3]:-}"
+        expected_file="${fields[4]:-}"
+        repo="${fields[5]:-}"
+        path="${fields[6]:-}"
         case "$source" in
             modelzoo)
                 download_modelzoo_model "$model_id" "${name:-$model_id}" "$expected_file" || failed=1

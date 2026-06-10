@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.utils.test_scope import load_scope
@@ -196,3 +197,39 @@ def test_download_models_fails_when_scope_resolution_fails(tmp_path):
     assert result.returncode != 0
     assert "failed to resolve scoped models" in result.stderr
     assert "No scoped models are required" not in result.stdout
+
+
+def test_download_models_preserves_empty_url_model_name(tmp_path):
+    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+    fake_scope_python = tmp_path / "fake_scope_python"
+    fake_scope_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'url-demo\\turl\\t\\thttps://example.test/demo-file.tar.gz\\tdemo-file.tar.gz\\t\\t\\n'\n",
+        encoding="utf-8",
+    )
+    fake_scope_python.chmod(0o755)
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "demo-file.tar.gz").write_text("already downloaded\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[skip] url-demo already exists" in result.stdout
