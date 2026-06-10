@@ -155,7 +155,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "rm -rf build-test/build-vscode-tests && ./build.sh --build-dir build-test/build-vscode-tests"
+        "./build.sh --build-dir build-test/build-vscode-tests --clean"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
