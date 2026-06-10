@@ -140,6 +140,16 @@ def draw_poses(frame: np.ndarray, poses: list[dict]) -> np.ndarray:
     return frame
 
 
+def log_pose_debug(image_path: Path, width: int, height: int, pose: dict) -> None:
+    print(
+        f"[POSE_DEBUG] image={image_path.name} frame={width}x{height} "
+        f"bbox=({pose['x1']:.1f},{pose['y1']:.1f},{pose['x2']:.1f},{pose['y2']:.1f}) "
+        f"score={pose['score']:.3f} class_id={pose['class_id']}"
+    )
+    for idx, point in enumerate(pose["keypoints"]):
+        print(f"[POSE_DEBUG] kp[{idx}]=({point[0]:.1f},{point[1]:.1f}) score={point[2]:.3f}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="YOLO26 folder pose-estimation pipeline")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
@@ -167,6 +177,7 @@ def main() -> int:
     num_runs = int(runtime_cfg.get("num_runs", 1))
     profile = bool(runtime_cfg.get("profile", False))
     overlay = bool(output_cfg.get("overlay", True))
+    debug_pose = bool(raw.get("debug", {}).get("pose", False))
 
     if not 0.0 <= min_score <= 1.0:
         print(f"Error: decode.score_threshold must be in [0.0, 1.0], got {min_score}", file=sys.stderr)
@@ -238,6 +249,7 @@ def main() -> int:
 
         pipeline_start = time.perf_counter()
         processed = 0
+        printed_pose_debug = False
 
         for img_path in all_images:
             img_start = time.perf_counter()
@@ -260,6 +272,10 @@ def main() -> int:
 
             poses = pose_results_from_output(out, width, height, max_detections)
             decode_end = time.perf_counter()
+
+            if debug_pose and not printed_pose_debug and poses:
+                log_pose_debug(img_path, width, height, poses[0])
+                printed_pose_debug = True
 
             if overlay:
                 draw_poses(bgr, poses)

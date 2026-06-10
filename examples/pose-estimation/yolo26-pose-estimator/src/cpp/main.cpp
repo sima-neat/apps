@@ -84,6 +84,7 @@ struct Config {
   int timeout_ms = kTimeoutMs;
   bool profile = false;
   bool overlay = true;
+  bool debug_pose = false;
   int num_runs = 1;
 };
 
@@ -116,6 +117,7 @@ Config load_config(const fs::path& path) {
   cfg.num_runs = raw.int_or("runtime.num_runs", 1);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.overlay = raw.bool_or("output.overlay", true);
+  cfg.debug_pose = raw.bool_or("debug.pose", false);
   if (cfg.min_score < 0.0f || cfg.min_score > 1.0f) {
     throw std::runtime_error("decode.score_threshold must be in [0.0, 1.0]");
   }
@@ -299,6 +301,20 @@ void draw_poses(cv::Mat& frame, const std::vector<PoseDetection>& poses) {
   }
 }
 
+void log_pose_debug(const fs::path& image_path, int width, int height, const PoseDetection& pose) {
+  std::cout << "[POSE_DEBUG] image=" << image_path.filename().string() << " frame=" << width << "x"
+            << height << " bbox=(" << cv::format("%.1f", pose.x1) << ","
+            << cv::format("%.1f", pose.y1) << "," << cv::format("%.1f", pose.x2) << ","
+            << cv::format("%.1f", pose.y2) << ") score=" << cv::format("%.3f", pose.score)
+            << " class_id=" << pose.class_id << "\n";
+  for (size_t i = 0; i < pose.keypoints.size(); ++i) {
+    const Keypoint& point = pose.keypoints[i];
+    std::cout << "[POSE_DEBUG] kp[" << i << "]=(" << cv::format("%.1f", point.x) << ","
+              << cv::format("%.1f", point.y) << ") score=" << cv::format("%.3f", point.score)
+              << "\n";
+  }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -372,6 +388,7 @@ int main(int argc, char** argv) {
 
     const auto pipeline_start = std::chrono::steady_clock::now();
     int processed = 0;
+    bool printed_pose_debug = false;
 
     for (int run_idx = 0; run_idx < cfg.num_runs; ++run_idx) {
       for (const auto& image_path : images) {
@@ -390,6 +407,11 @@ int main(int argc, char** argv) {
         const std::vector<PoseDetection> poses =
             decode_poses(out, bgr.cols, bgr.rows, cfg.max_detections);
         const auto decode_end = std::chrono::steady_clock::now();
+
+        if (cfg.debug_pose && !printed_pose_debug && !poses.empty()) {
+          log_pose_debug(image_path, bgr.cols, bgr.rows, poses.front());
+          printed_pose_debug = true;
+        }
 
         if (cfg.overlay) {
           draw_poses(bgr, poses);

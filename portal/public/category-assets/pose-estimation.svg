@@ -1,0 +1,43 @@
+<svg width="640" height="360" viewBox="0 0 640 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <!-- Head -->
+  <circle cx="310" cy="62" r="18" stroke="#F0FFF4" stroke-width="2"/>
+  <!-- Neck to torso -->
+  <path d="M310 80V170" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round"/>
+  <!-- Shoulders -->
+  <path d="M250 120H370" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round"/>
+  <!-- Left arm raised -->
+  <path d="M250 120L210 80L180 40" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Right arm extended back -->
+  <path d="M370 120L420 160L470 180" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Torso to hips -->
+  <path d="M310 170V230" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round"/>
+  <!-- Hips -->
+  <path d="M270 230H350" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round"/>
+  <!-- Left leg striding forward -->
+  <path d="M270 230L240 290L220 340" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Right leg bent back -->
+  <path d="M350 230L390 280L410 340" stroke="#F0FFF4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Keypoint dots -->
+  <circle cx="310" cy="62" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="310" cy="120" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="250" cy="120" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="370" cy="120" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="210" cy="80" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="180" cy="40" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="420" cy="160" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="470" cy="180" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="310" cy="170" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="270" cy="230" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="350" cy="230" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="240" cy="290" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="220" cy="340" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="390" cy="280" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <circle cx="410" cy="340" r="4" fill="#F0FFF4" fill-opacity="0.9"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="640" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A5E3A"/>
+      <stop offset="1" stop-color="#6DD49E"/>
+    </linearGradient>
+  </defs>
+</svg>

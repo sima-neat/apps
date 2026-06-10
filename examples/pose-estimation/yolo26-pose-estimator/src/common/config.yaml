@@ -17,3 +17,6 @@ runtime:
 
 output:
   overlay: true
+
+debug:
+  pose: false
