@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fetch one example from the apps repo and leave a standalone example directory.
+# Fetch one example from the apps repo archive and leave a standalone example
+# directory. This intentionally avoids requiring git on target systems.
 #
 # Usage:
 #   get-example.sh multimodal-assistant
@@ -9,7 +10,8 @@ set -euo pipefail
 #   get-example.sh examples/genai/multimodal-assistant
 
 REPO_URL="${NEAT_APPS_REPO_URL:-https://github.com/sima-neat/apps.git}"
-BRANCH="${NEAT_APPS_BRANCH:-develop}"
+ARCHIVE_URL="${NEAT_APPS_ARCHIVE_URL:-}"
+BRANCH="${NEAT_APPS_BRANCH:-main}"
 DEST_DIR="${NEAT_APPS_EXAMPLE_DEST_DIR:-}"
 FORCE=0
 
@@ -26,8 +28,10 @@ Examples:
 Environment:
   NEAT_APPS_REPO_URL          Apps Git repository URL
                               default: https://github.com/sima-neat/apps.git
-  NEAT_APPS_BRANCH            Git branch, tag, or ref to fetch
-                              default: develop
+  NEAT_APPS_ARCHIVE_URL       Prebuilt source archive URL or local .tar.gz path
+                              default: derived from NEAT_APPS_REPO_URL and branch
+  NEAT_APPS_BRANCH            Git branch to fetch
+                              default: main
   NEAT_APPS_EXAMPLE_DEST_DIR  Destination directory
                               default: ./<example-name>
 USAGE
@@ -74,8 +78,8 @@ if [[ -z "${EXAMPLE_ARG:-}" ]]; then
   exit 2
 fi
 
-if ! command -v git >/dev/null 2>&1; then
-  echo "git is required." >&2
+if ! command -v tar >/dev/null 2>&1; then
+  echo "tar is required." >&2
   exit 1
 fi
 
@@ -99,10 +103,55 @@ normalize_example_path() {
   esac
 }
 
+download_file() {
+  local url="$1"
+  local out="$2"
+
+  if [[ -f "${url}" ]]; then
+    cp "${url}" "${out}"
+    return 0
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL "${url}" -o "${out}"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -O "${out}" "${url}"
+    return 0
+  fi
+
+  echo "curl or wget is required to download the apps archive." >&2
+  return 1
+}
+
+repo_archive_url() {
+  local repo="$1"
+  local ref="$2"
+
+  repo="${repo%.git}"
+
+  case "${repo}" in
+    https://github.com/*/*)
+      printf '%s/archive/refs/heads/%s.tar.gz\n' "${repo}" "${ref}"
+      ;;
+    git@github.com:*/*)
+      repo="${repo#git@github.com:}"
+      printf 'https://github.com/%s/archive/refs/heads/%s.tar.gz\n' "${repo}" "${ref}"
+      ;;
+    *)
+      echo "Cannot derive a GitHub archive URL from: ${repo}" >&2
+      echo "Set NEAT_APPS_ARCHIVE_URL to a .tar.gz archive URL or local path." >&2
+      return 1
+      ;;
+  esac
+}
+
 EXAMPLE_PATH="$(normalize_example_path "${EXAMPLE_ARG}")"
 EXAMPLE_NAME="$(basename "${EXAMPLE_PATH}")"
 DEST_DIR="${DEST_DIR:-${EXAMPLE_NAME}}"
 TMP_DIR="$(mktemp -d /tmp/neat-apps-example.XXXXXX)"
+TMP_ARCHIVE="${TMP_DIR}/apps.tar.gz"
 
 cleanup() {
   rm -rf "${TMP_DIR}"
@@ -118,16 +167,33 @@ if [[ -e "${DEST_DIR}" ]]; then
   rm -rf "${DEST_DIR}"
 fi
 
-echo "Fetching ${EXAMPLE_PATH} from ${REPO_URL} (${BRANCH}) ..."
-git clone --filter=blob:none --sparse --branch "${BRANCH}" "${REPO_URL}" "${TMP_DIR}/apps"
-git -C "${TMP_DIR}/apps" sparse-checkout set "${EXAMPLE_PATH}"
-
-if [[ ! -d "${TMP_DIR}/apps/${EXAMPLE_PATH}" ]]; then
-  echo "Example not found in ${REPO_URL}: ${EXAMPLE_PATH}" >&2
+if [[ -z "${DEST_DIR}" || "${DEST_DIR}" == "/" ]]; then
+  echo "Refusing unsafe destination: ${DEST_DIR:-<empty>}" >&2
   exit 1
 fi
 
-cp -a "${TMP_DIR}/apps/${EXAMPLE_PATH}" "${DEST_DIR}"
+if [[ -z "${ARCHIVE_URL}" ]]; then
+  ARCHIVE_URL="$(repo_archive_url "${REPO_URL}" "${BRANCH}")"
+fi
+
+echo "Fetching ${EXAMPLE_PATH} from ${ARCHIVE_URL} ..."
+download_file "${ARCHIVE_URL}" "${TMP_ARCHIVE}"
+
+tar -tzf "${TMP_ARCHIVE}" > "${TMP_DIR}/archive-list.txt"
+ARCHIVE_ROOT="$(sed -n '1s#/.*##p;q' "${TMP_DIR}/archive-list.txt")"
+if [[ -z "${ARCHIVE_ROOT}" ]]; then
+  echo "Archive is empty: ${ARCHIVE_URL}" >&2
+  exit 1
+fi
+
+ARCHIVE_EXAMPLE_PATH="${ARCHIVE_ROOT}/${EXAMPLE_PATH}"
+if ! grep -qxF "${ARCHIVE_EXAMPLE_PATH}/" "${TMP_DIR}/archive-list.txt"; then
+  echo "Example not found in archive: ${EXAMPLE_PATH}" >&2
+  exit 1
+fi
+
+tar -xzf "${TMP_ARCHIVE}" -C "${TMP_DIR}" "${ARCHIVE_EXAMPLE_PATH}"
+cp -a "${TMP_DIR}/${ARCHIVE_ROOT}/${EXAMPLE_PATH}" "${DEST_DIR}"
 
 echo ""
 echo "Created:"
