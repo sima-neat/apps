@@ -6,12 +6,10 @@ This mirrors the intent of the C++ reference sample in the same folder:
 - run one YOLO26 detector
 - publish H.264 video plus detection metadata to Insight
 
-The implementation keeps those responsibilities loosely separated so the main
-runtime path is easy to reason about:
+The runtime path is one composed graph:
 
-1. RTSP probe/build
-2. YOLO26 inference and box extraction
-3. Insight video/metadata publishing
+RtspDecodedInput -> Branch -> VideoSender
+                         -> Model -> detections
 """
 
 from __future__ import annotations
@@ -29,34 +27,15 @@ from pathlib import Path
 import yaml
 
 DEFAULT_FPS = 30
-SOURCE_RUN_QUEUE_DEPTH = 4
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 cv2 = None
 np = None
 pyneat = None
-DFL_BINS_16 = None
-
-# Standard COCO class order for the bundled YOLO26 detector model used by this sample.
-COCO80_NAMES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus",
-    "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse",
-    "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
-    "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
-    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
-    "fork", "knife", "spoon", "bowl", "banana", "apple",
-    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
-    "donut", "cake", "chair", "couch", "potted plant", "bed",
-    "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
-]
 
 @dataclass(frozen=True)
 class ModelConfig:
     path: str
+    labels: Path
 
 
 @dataclass(frozen=True)
@@ -100,7 +79,7 @@ class AppConfig:
 
 def load_runtime_dependencies() -> None:
     """Import runtime-only dependencies after argparse validation."""
-    global cv2, np, pyneat, DFL_BINS_16
+    global cv2, np, pyneat
     if pyneat is not None:
         return
 
@@ -116,7 +95,6 @@ def load_runtime_dependencies() -> None:
     cv2 = cv2_module
     np = np_module
     pyneat = pyneat_module
-    DFL_BINS_16 = np.arange(16, dtype=np.float32)
 
 
 def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
@@ -159,47 +137,6 @@ def tensor_bgr_from_decoded(tensor: pyneat.Tensor) -> np.ndarray:
     if arr.dtype != np.uint8:
         arr = np.clip(arr, 0, 255).astype(np.uint8)
     return np.ascontiguousarray(arr)
-
-
-def tensor_from_bgr_frame(frame: np.ndarray) -> pyneat.Tensor:
-    """Create an EV74 BGR image tensor for model-managed YOLO inference."""
-    return pyneat.Tensor.from_numpy(
-        np.ascontiguousarray(frame),
-        copy=True,
-        image_format=pyneat.PixelFormat.BGR,
-        memory=pyneat.TensorMemory.EV74,
-    )
-
-
-def blank_nv12_tensor(width: int, height: int) -> pyneat.Tensor:
-    """Create a CPU-backed blank NV12 tensor with explicit Y and UV plane metadata."""
-    if width <= 0 or height <= 0 or width % 2 != 0 or height % 2 != 0:
-        raise ValueError("NV12 requires positive even width and height")
-    payload = np.zeros((height * 3 // 2, width), dtype=np.uint8)
-    tensor = pyneat.Tensor.from_numpy(
-        payload,
-        copy=True,
-        layout=pyneat.TensorLayout.HW,
-        image_format=pyneat.PixelFormat.NV12,
-        memory=pyneat.TensorMemory.CPU,
-    )
-    tensor.shape = [height, width]
-    tensor.strides_bytes = [width, 1]
-
-    y_plane = pyneat.Plane()
-    y_plane.role = pyneat.PlaneRole.Y
-    y_plane.shape = [height, width]
-    y_plane.strides_bytes = [width, 1]
-    y_plane.byte_offset = 0
-
-    uv_plane = pyneat.Plane()
-    uv_plane.role = pyneat.PlaneRole.UV
-    uv_plane.shape = [height // 2, width]
-    uv_plane.strides_bytes = [width, 1]
-    uv_plane.byte_offset = width * height
-
-    tensor.planes = [y_plane, uv_plane]
-    return tensor
 
 
 def is_tensor_like(value) -> bool:
@@ -316,45 +253,23 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def build_rtsp_run(
-    url: str,
-    width: int,
-    height: int,
-    fps: int,
-    latency_ms: int,
-    tcp: bool,
-) -> tuple[pyneat.Graph, pyneat.Run]:
-    """Build a decoded RTSP input graph that yields decoded frame tensors."""
+def make_source_options(cfg: AppConfig, width: int, height: int, fps: int):
     ro = pyneat.RtspDecodedInputOptions()
-    ro.url = url
-    ro.latency_ms = latency_ms
-    ro.tcp = tcp
+    ro.url = cfg.source.rtsp_url
+    ro.latency_ms = cfg.source.latency_ms
+    ro.tcp = cfg.source.tcp
     ro.payload_type = 96
     ro.insert_queue = True
+    ro.out_format = "NV12"
+    ro.decoder_name = "decoder"
+    ro.decoder_raw_output = True
     ro.auto_caps_from_stream = True
     ro.fallback_h264_width = width
     ro.fallback_h264_height = height
     ro.fallback_h264_fps = fps
     ro.sima_allocator_type = 2
-    ro.decoder_raw_output = False
     ro.use_videoconvert = False
-    ro.use_videoscale = True
-    ro.output_caps.enable = True
-    ro.output_caps.width = width
-    ro.output_caps.height = height
-    ro.output_caps.fps = fps
-    ro.output_caps.memory = pyneat.CapsMemory.SystemMemory
-
-    graph = pyneat.Graph()
-    graph.add(pyneat.groups.rtsp_decoded_input(ro))
-    graph.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
-
-    run_opt = pyneat.RunOptions()
-    run_opt.queue_depth = SOURCE_RUN_QUEUE_DEPTH
-    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_opt.output_memory = pyneat.OutputMemory.Owned
-    run = graph.build(run_opt)
-    return graph, run
+    return ro
 
 
 def build_model(model_path: str, inference: InferenceConfig) -> pyneat.Model:
@@ -362,7 +277,7 @@ def build_model(model_path: str, inference: InferenceConfig) -> pyneat.Model:
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26
     opt.score_threshold = inference.min_score
@@ -371,56 +286,77 @@ def build_model(model_path: str, inference: InferenceConfig) -> pyneat.Model:
     return pyneat.Model(model_path, opt)
 
 
-def build_detector_run(model_path: str, width: int, height: int, inference: InferenceConfig):
-    """Build the explicit YOLO26 detector graph used by the RTSP loop."""
-    model = build_model(model_path, inference)
-
-    input_opt = model.input_appsrc_options(False)
-    input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = "BGR"
-    input_opt.width = width
-    input_opt.height = height
-    input_opt.depth = 3
-
-    graph = pyneat.Graph()
-    graph.add(pyneat.nodes.input(input_opt))
-    graph.add(model.graph())
-    graph.add(pyneat.nodes.output())
-
-    seed = tensor_from_bgr_frame(np.zeros((height, width, 3), dtype=np.uint8))
-    run_opt = pyneat.RunOptions()
-    run_opt.queue_depth = 4
-    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_opt.output_memory = pyneat.OutputMemory.Owned
-    return model, graph, graph.build([seed], run_opt)
+@dataclass
+class PipelineRuntime:
+    graph: object
+    run: object
+    metadata_sender: object
+    labels: list[str]
+    frame_w: int
+    frame_h: int
+    output_fps: int
+    video_port: int
 
 
-def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
-    """Build the generic NEAT video sender used by this Insight-targeted example."""
-    input_opt = pyneat.InputOptions()
-    input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = "NV12"
-    input_opt.width = width
-    input_opt.height = height
-    input_opt.fps_n = max(1, fps)
-    input_opt.fps_d = 1
-    input_opt.caps_override = (
-        f"video/x-raw,format=NV12,width={width},height={height},framerate={max(1, fps)}/1"
-    )
-    input_opt.use_simaai_pool = False
+def build_pipeline(cfg: AppConfig, model_path: str) -> PipelineRuntime:
+    frame_w, frame_h, fps = probe_rtsp(cfg.source.rtsp_url)
+    model = build_model(model_path, cfg.inference)
+    labels = load_labels(cfg.model.labels)
 
-    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
+    source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, frame_w, frame_h, fps))
+    source_outputs = ["video", "model"]
+    if cfg.save_dir and cfg.save_every > 0:
+        source_outputs.append("frames")
+    branch = pyneat.graphs.branch("source", source_outputs)
+
+    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, max(1, fps))
     sender_opt.host = cfg.insight.host
     sender_opt.channel = 0
     sender_opt.video_port_base = cfg.insight.video_port
-    sender_opt.encoder.bitrate_kbps = 4000
+    sender_opt.encoder.bitrate_kbps = 600
+
+    video_graph = pyneat.Graph("video")
+    video_graph.connect(
+        pyneat.nodes.input("video"),
+        pyneat.groups.video_sender(sender_opt),
+    )
+
+    model_graph = pyneat.Graph("model")
+    model_graph.connect(pyneat.nodes.input("model"), model)
+    detections = pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4))
 
     graph = pyneat.Graph()
-    graph.add(pyneat.nodes.input(input_opt))
-    graph.add(pyneat.groups.video_sender(sender_opt))
+    graph.connect(source, branch)
+    graph.connect(branch, video_graph)
+    graph.connect(branch, model_graph)
+    graph.connect(model_graph, detections)
+    if cfg.save_dir and cfg.save_every > 0:
+        frames = pyneat.Graph("frames")
+        frames.add(pyneat.nodes.output("frames", pyneat.OutputOptions.latest()))
+        graph.connect(branch, frames)
 
-    seed = blank_nv12_tensor(width, height)
-    return graph, graph.build([seed])
+    run_opt = pyneat.RunOptions()
+    run_opt.preset = pyneat.RunPreset.Reliable
+    run_opt.queue_depth = 4
+    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_opt.output_memory = pyneat.OutputMemory.Owned
+    run = graph.build(run_opt)
+    metadata_sender = build_metadata_sender(cfg)
+    print(
+        f"rtsp={cfg.source.rtsp_url} stream={frame_w}x{frame_h}@{fps} "
+        f"insight={cfg.insight.host} video={sender_opt.video_port} "
+        f"metadata={metadata_sender.metadata_port()} channel=0"
+    )
+    return PipelineRuntime(
+        graph=graph,
+        run=run,
+        metadata_sender=metadata_sender,
+        labels=labels,
+        frame_w=frame_w,
+        frame_h=frame_h,
+        output_fps=fps,
+        video_port=sender_opt.video_port,
+    )
 
 
 def build_metadata_sender(cfg: AppConfig):
@@ -431,16 +367,28 @@ def build_metadata_sender(cfg: AppConfig):
     return pyneat.MetadataSender(options)
 
 
-def make_object_detection_data_json(boxes: list[dict]) -> str:
+def load_labels(path: Path) -> list[str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Labels file does not exist: {path}")
+    labels = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not labels:
+        raise ValueError(f"Labels file is empty: {path}")
+    return labels
+
+
+def class_name(labels: list[str], class_id: int) -> str:
+    return labels[class_id] if 0 <= class_id < len(labels) else "unknown"
+
+
+def make_object_detection_data_json(boxes: list[dict], labels: list[str]) -> str:
     """Build the object-detection metadata data object."""
     objects = []
     for idx, box in enumerate(boxes, start=1):
         cls_id = int(box["class_id"])
-        label = COCO80_NAMES[cls_id] if 0 <= cls_id < len(COCO80_NAMES) else "Unknown"
         objects.append(
             {
                 "id": f"obj_{idx}",
-                "label": label,
+                "label": class_name(labels, cls_id),
                 "confidence": float(box["score"]),
                 "bbox": [
                     float(box["x1"]),
@@ -453,7 +401,13 @@ def make_object_detection_data_json(boxes: list[dict]) -> str:
     return json.dumps({"objects": objects}, separators=(",", ":"))
 
 
-def save_annotated_frame(frame: np.ndarray, boxes: list[dict], min_score: float, out_path: Path) -> None:
+def save_annotated_frame(
+    frame: np.ndarray,
+    boxes: list[dict],
+    labels: list[str],
+    min_score: float,
+    out_path: Path,
+) -> None:
     """Write one BGR frame with detection boxes for e2e/debug inspection."""
     annotated = frame.copy()
     for box in boxes:
@@ -461,7 +415,7 @@ def save_annotated_frame(frame: np.ndarray, boxes: list[dict], min_score: float,
         if score < min_score:
             continue
         cls_id = int(box["class_id"])
-        label = COCO80_NAMES[cls_id] if 0 <= cls_id < len(COCO80_NAMES) else "unknown"
+        label = class_name(labels, cls_id)
         x1 = int(round(box["x1"]))
         y1 = int(round(box["y1"]))
         x2 = int(round(box["x2"]))
@@ -480,6 +434,50 @@ def save_annotated_frame(frame: np.ndarray, boxes: list[dict], min_score: float,
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(out_path), annotated):
         raise RuntimeError(f"failed to write output frame: {out_path}")
+
+
+def first_tensor_from_sample(sample):
+    if sample is None:
+        return None
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
+        return sample.tensor
+    if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
+        return sample.tensors[0]
+    for field in sample.fields:
+        tensor = first_tensor_from_sample(field)
+        if tensor is not None:
+            return tensor
+    return None
+
+
+def maybe_save_debug_frame(runtime: PipelineRuntime, cfg: AppConfig, processed: int, boxes: list[dict]) -> None:
+    if not cfg.save_dir or cfg.save_every <= 0 or processed % cfg.save_every != 0:
+        return
+    frame_sample = runtime.run.pull("frames", 0)
+    frame_tensor = first_tensor_from_sample(frame_sample)
+    if frame_tensor is None:
+        return
+    frame = tensor_bgr_from_decoded(frame_tensor)
+    save_annotated_frame(
+        frame,
+        boxes,
+        runtime.labels,
+        cfg.inference.min_score,
+        Path(cfg.save_dir) / f"frame_{processed}.jpg",
+    )
+
+
+def send_metadata(runtime: PipelineRuntime, sample, boxes: list[dict]) -> None:
+    data_json = make_object_detection_data_json(boxes, runtime.labels)
+    frame_id = getattr(sample, "frame_id", -1)
+    if frame_id is None or frame_id < 0:
+        frame_id = 0
+    runtime.metadata_sender.send_metadata(
+        "object-detection",
+        data_json,
+        int(time.time() * 1000),
+        str(frame_id),
+    )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -558,9 +556,13 @@ def load_app_config(config_path: Path) -> AppConfig:
     runtime_cfg = _mapping(raw.get("runtime"), "runtime")
     output_cfg = _mapping(raw.get("output"), "output")
     insight_cfg = _mapping(output_cfg.get("insight"), "output.insight")
+    default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
 
     cfg = AppConfig(
-        model=ModelConfig(path=_required_string(model_cfg, "path", "model")),
+        model=ModelConfig(
+            path=_required_string(model_cfg, "path", "model"),
+            labels=Path(_optional_string(model_cfg, "labels", str(default_labels))),
+        ),
         source=SourceConfig(
             rtsp_url=_required_string(source_cfg, "rtsp_url", "source"),
             latency_ms=_optional_int(source_cfg, "latency_ms", 200),
@@ -617,23 +619,15 @@ class ProfileWindow:
         self.frames = 0
         self.boxes = 0
         self.started = 0.0
-        self.rtsp_pull_ms = 0.0
-        self.infer_ms = 0.0
-        self.bbox_ms = 0.0
-        self.video_push_ms = 0.0
-        self.e2e_ms = 0.0
-        self.max_e2e_ms = 0.0
+        self.detection_pull_ms = 0.0
+        self.metadata_send_ms = 0.0
 
     def add(
         self,
         *,
-        rtsp_pull_ms: float,
-        infer_ms: float,
-        bbox_ms: float,
-        video_push_ms: float,
-        e2e_ms: float,
+        detection_pull_ms: float,
+        metadata_send_ms: float,
         boxes: int,
-        published_total: int,
     ) -> None:
         if not self.enabled:
             return
@@ -641,30 +635,22 @@ class ProfileWindow:
             self.started = time.perf_counter()
         self.frames += 1
         self.boxes += boxes
-        self.rtsp_pull_ms += rtsp_pull_ms
-        self.infer_ms += infer_ms
-        self.bbox_ms += bbox_ms
-        self.video_push_ms += video_push_ms
-        self.e2e_ms += e2e_ms
-        self.max_e2e_ms = max(self.max_e2e_ms, e2e_ms)
+        self.detection_pull_ms += detection_pull_ms
+        self.metadata_send_ms += metadata_send_ms
         if self.frames >= self.interval:
-            self.flush(published_total)
+            self.flush()
 
-    def flush(self, published_total: int) -> None:
+    def flush(self) -> None:
         if not self.enabled or self.frames == 0:
             return
         elapsed = max(time.perf_counter() - self.started, 1e-6)
         frames = float(self.frames)
         print(
-            f"[profile] frames={self.frames} published={published_total} "
-            f"fps={self.frames / elapsed:.2f} "
-            f"avg_rtsp_pull_ms={self.rtsp_pull_ms / frames:.2f} "
-            f"avg_infer_ms={self.infer_ms / frames:.2f} "
-            f"avg_bbox_ms={self.bbox_ms / frames:.2f} "
-            f"avg_video_push_ms={self.video_push_ms / frames:.2f} "
-            f"avg_e2e_ms={self.e2e_ms / frames:.2f} "
-            f"avg_boxes={self.boxes / frames:.2f} "
-            f"max_e2e_ms={self.max_e2e_ms:.2f}",
+            f"[profile] frames={self.frames} "
+            f"output_fps={self.frames / elapsed:.2f} "
+            f"avg_detection_pull_ms={self.detection_pull_ms / frames:.2f} "
+            f"avg_metadata_send_ms={self.metadata_send_ms / frames:.2f} "
+            f"avg_boxes={self.boxes / frames:.2f}",
             flush=True,
         )
         self.reset()
@@ -750,41 +736,9 @@ def main(argv: list[str] | None = None) -> int:
         print("Set model.path or download a YOLO26 detector package with sima-cli.", file=sys.stderr)
         return 2
 
-    rtsp_graph = None
-    rtsp_run = None
-    detector_graph = None
-    detector_run = None
-    video_graph = None
-    video_run = None
-    metadata_sender = None
+    runtime = None
     try:
-        # Probe first so decode, inference, and VideoSender all agree on the
-        # same live frame dimensions.
-        frame_w, frame_h, fps = probe_rtsp(cfg.source.rtsp_url)
-        print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
-
-        # NEAT boundary: build YOLO detector graph from the resolved compiled model package.
-        model, detector_graph, detector_run = build_detector_run(
-            model_path,
-            frame_w,
-            frame_h,
-            cfg.inference,
-        )
-        # NEAT boundary: build RTSP decode runtime used by pull_tensors().
-        rtsp_graph, rtsp_run = build_rtsp_run(
-            cfg.source.rtsp_url,
-            frame_w,
-            frame_h,
-            fps,
-            cfg.source.latency_ms,
-            tcp=cfg.source.tcp,
-        )
-        # NEAT boundary: build VideoSender and MetadataSender.
-        video_graph, video_run = build_video_sender_run(cfg, frame_w, frame_h, fps)
-        metadata_sender = build_metadata_sender(cfg)
-
-        print(f"insight host={cfg.insight.host} video_port={cfg.insight.video_port} "
-              f"metadata_port={metadata_sender.metadata_port()} channel=0")
+        runtime = build_pipeline(cfg, model_path)
 
         processed = 0
         started = time.perf_counter()
@@ -792,102 +746,48 @@ def main(argv: list[str] | None = None) -> int:
         save_dir = Path(cfg.save_dir) if cfg.save_dir else None
         if save_dir is not None:
             save_dir.mkdir(parents=True, exist_ok=True)
-        # Contract: single-threaded frame order is pull -> infer -> publish video -> publish metadata.
         while cfg.inference.frames <= 0 or processed < cfg.inference.frames:
-            # Push/pull integration point: pull one decoded frame from RTSP run.
-            t_pull0 = time.perf_counter()
-            tensors = rtsp_run.pull_tensors(timeout_ms=20000)
-            t_pull1 = time.perf_counter()
-            if not tensors:
-                print("RTSP pull timed out / stream closed", file=sys.stderr)
-                break
+            pull_start = time.perf_counter()
+            detection_sample = runtime.run.pull("detections", 20000)
+            pull_end = time.perf_counter()
+            if detection_sample is None:
+                print("[warn] timed out waiting for detections", file=sys.stderr)
+                continue
 
-            decoded_frame = tensors[0]
-            frame = tensor_bgr_from_decoded(decoded_frame)
-            infer_input = tensor_from_bgr_frame(frame)
-
-            # Push/pull integration point: run model and parse the BBOX payload.
-            t_inf0 = time.perf_counter()
-            result = detector_run.run([infer_input], timeout_ms=20000)
-            t_inf1 = time.perf_counter()
-
-            payload = extract_bbox_payload(result)
+            payload = extract_bbox_payload(detection_sample)
             if not payload:
                 raise RuntimeError("model returned no BBOX payload")
-            t_bbox0 = time.perf_counter()
             boxes = parse_bbox_payload(
                 payload,
-                frame.shape[1],
-                frame.shape[0],
+                runtime.frame_w,
+                runtime.frame_h,
                 cfg.inference.max_detections,
             )
-            t_bbox1 = time.perf_counter()
 
-            # Contract: publish video first, then publish matching metadata.
-            t_video0 = time.perf_counter()
-            video_ok = video_run.push([decoded_frame])
-            if not video_ok:
-                raise RuntimeError("Insight video push failed")
-            t_video1 = time.perf_counter()
-            fid = str(processed)
-            data_json = make_object_detection_data_json(boxes)
-            metadata_sender.send_metadata(
-                "object-detection",
-                data_json,
-                int(time.time() * 1000),
-                fid,
-            )
-            should_save = (
-                save_dir is not None
-                and cfg.save_every > 0
-                and (processed + 1) % cfg.save_every == 0
-            )
-            if should_save:
-                save_annotated_frame(
-                    frame,
-                    boxes,
-                    cfg.inference.min_score,
-                    save_dir / f"frame_{processed:06d}.jpg",
-                )
+            metadata_start = time.perf_counter()
+            send_metadata(runtime, detection_sample, boxes)
+            metadata_end = time.perf_counter()
 
             processed += 1
+            maybe_save_debug_frame(runtime, cfg, processed, boxes)
             profile_window.add(
-                rtsp_pull_ms=(t_pull1 - t_pull0) * 1000.0,
-                infer_ms=(t_inf1 - t_inf0) * 1000.0,
-                bbox_ms=(t_bbox1 - t_bbox0) * 1000.0,
-                video_push_ms=(t_video1 - t_video0) * 1000.0,
-                e2e_ms=(t_video1 - t_pull1) * 1000.0,
+                detection_pull_ms=(pull_end - pull_start) * 1000.0,
+                metadata_send_ms=(metadata_end - metadata_start) * 1000.0,
                 boxes=len(boxes),
-                published_total=processed,
             )
 
         elapsed = max(time.perf_counter() - started, 1e-6)
-        profile_window.flush(processed)
+        profile_window.flush()
         print(f"processed={processed} fps={processed / elapsed:.2f} "
-              f"video_sender={cfg.insight.host}:{cfg.insight.video_port}")
+              f"video_sender={cfg.insight.host}:{runtime.video_port}")
         return 0 if processed > 0 else 3
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     finally:
-        # Contract: close output run, then close RTSP run.
         try:
-            if video_run is not None:
-                video_run.close()
-        except Exception:
-            pass
-        try:
-            if detector_run is not None:
-                detector_run.close()
-        except Exception:
-            pass
-        try:
-            if rtsp_run is not None:
-                rtsp_run.close()
-        except Exception:
-            pass
-        try:
-            metadata_sender = None
+            if runtime is not None:
+                runtime.run.close()
         except Exception:
             pass
 
