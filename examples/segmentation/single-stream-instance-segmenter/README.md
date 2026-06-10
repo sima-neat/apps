@@ -26,7 +26,7 @@ the segmentation behavior can be debugged independently from transport issues.
 ## Preview
 Snippet from a pipeline run:
 
-![Single stream instance segmenter preview](../../../assets/portal/segmentation/single-stream-instance-segmenter/image.jpg)
+![Single stream instance segmenter preview](../../../assets/portal/segmentation/single-stream-instance-segmenter/image.png)
 
 ## Supported Models
 Supported YOLO26 segmentation models:
