@@ -16,6 +16,7 @@ from pathlib import Path
 VALID_CATEGORIES = {
     "classification",
     "object-detection",
+    "pose-estimation",
     "tracking",
     "segmentation",
     "depth-estimation",

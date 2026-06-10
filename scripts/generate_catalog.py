@@ -16,10 +16,12 @@ IMAGE_CANDIDATES = (
     "assets/card.jpg",
     "assets/card.jpeg",
     "assets/card.webp",
+    "assets/card.svg",
     "assets/hero.png",
     "assets/hero.jpg",
     "assets/hero.jpeg",
     "assets/hero.webp",
+    "assets/hero.svg",
 )
 MODEL_REFERENCE_RE = re.compile(r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$")
 PORTAL_IMAGE_CANDIDATES = (
@@ -27,6 +29,7 @@ PORTAL_IMAGE_CANDIDATES = (
     "image.jpg",
     "image.jpeg",
     "image.webp",
+    "image.svg",
 )
 
 
