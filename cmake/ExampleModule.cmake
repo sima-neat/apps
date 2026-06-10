@@ -17,42 +17,49 @@ function(_sima_neat_apps_find_sources out_var module_dir)
 endfunction()
 
 function(_sima_neat_apps_ensure_neat_target apps_root)
-  if (TARGET SimaNeat::sima_neat)
+  if (TARGET SimaNeatApps::sima_neat)
     return()
   endif()
 
   find_package(SimaNeat CONFIG QUIET)
-  if (TARGET SimaNeat::sima_neat)
-    return()
+  if (TARGET SimaNeat::sima_neat_shared)
+    set(_core_target SimaNeat::sima_neat_shared)
+  elseif (TARGET SimaNeat::sima_neat)
+    set(_core_target SimaNeat::sima_neat)
+  else()
+    set(_core_root "${apps_root}/../core")
+    set(_core_lib "${_core_root}/build/libsima_neat.so")
+    set(_core_include "${_core_root}/include")
+    if (NOT EXISTS "${_core_lib}" OR NOT EXISTS "${_core_include}")
+      message(FATAL_ERROR
+        "Could not find a usable SimaNeat package or local core build. "
+        "Expected ${_core_lib} and ${_core_include}.")
+    endif()
+
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GST REQUIRED IMPORTED_TARGET
+      gstreamer-1.0
+      gstreamer-app-1.0
+      gstreamer-video-1.0
+      gstreamer-sdp-1.0
+      gstreamer-rtsp-server-1.0
+      glib-2.0
+    )
+    pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
+
+    add_library(SimaNeat::sima_neat_shared SHARED IMPORTED GLOBAL)
+    set_target_properties(SimaNeat::sima_neat_shared PROPERTIES
+      IMPORTED_LOCATION "${_core_lib}"
+      INTERFACE_COMPILE_DEFINITIONS "SIMA_WITH_OPENCV;SIMA_HAS_SIMAAI_POOL=1"
+      INTERFACE_INCLUDE_DIRECTORIES "${_core_include};${_core_include}/pipeline"
+      INTERFACE_LINK_LIBRARIES "PkgConfig::GST;PkgConfig::OPENCV;gstsimaallocator;gstsimaaibufferpool"
+    )
+    set(_core_target SimaNeat::sima_neat_shared)
   endif()
 
-  set(_core_root "${apps_root}/../core")
-  set(_core_lib "${_core_root}/build/libsima_neat.a")
-  set(_core_include "${_core_root}/include")
-  if (NOT EXISTS "${_core_lib}" OR NOT EXISTS "${_core_include}")
-    message(FATAL_ERROR
-      "Could not find a usable SimaNeat package or local core build. "
-      "Expected ${_core_lib} and ${_core_include}.")
-  endif()
-
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GST REQUIRED IMPORTED_TARGET
-    gstreamer-1.0
-    gstreamer-app-1.0
-    gstreamer-video-1.0
-    gstreamer-sdp-1.0
-    gstreamer-rtsp-server-1.0
-    glib-2.0
-  )
-  pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
-
-  add_library(SimaNeat::sima_neat STATIC IMPORTED GLOBAL)
-  set_target_properties(SimaNeat::sima_neat PROPERTIES
-    IMPORTED_LOCATION "${_core_lib}"
-    INTERFACE_COMPILE_DEFINITIONS "SIMA_WITH_OPENCV;SIMA_HAS_SIMAAI_POOL=1"
-    INTERFACE_INCLUDE_DIRECTORIES "${_core_include};${_core_include}/pipeline"
-    INTERFACE_LINK_LIBRARIES "PkgConfig::GST;PkgConfig::OPENCV;gstsimaallocator;gstsimaaibufferpool"
-  )
+  add_library(sima_neat_apps_neat_core INTERFACE)
+  add_library(SimaNeatApps::sima_neat ALIAS sima_neat_apps_neat_core)
+  target_link_libraries(sima_neat_apps_neat_core INTERFACE "${_core_target}")
 endfunction()
 
 function(_sima_neat_apps_ensure_support_runtime apps_root)
@@ -72,7 +79,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
 
   target_link_libraries(sima_neat_apps_support_runtime
     PUBLIC
-      SimaNeat::sima_neat
+      SimaNeatApps::sima_neat
       nlohmann_json::nlohmann_json
   )
 
@@ -97,7 +104,7 @@ function(_sima_neat_apps_ensure_support_optiview apps_root)
   target_link_libraries(sima_neat_apps_support_optiview
     PUBLIC
       SimaNeatApps::support_runtime
-      SimaNeat::sima_neat
+      SimaNeatApps::sima_neat
   )
 
   target_include_directories(sima_neat_apps_support_optiview
@@ -280,7 +287,7 @@ function(sima_neat_apps_module example_name)
 
   target_link_libraries(${example_name}
     PRIVATE
-      SimaNeat::sima_neat
+      SimaNeatApps::sima_neat
       SimaNeatApps::support_runtime
   )
 

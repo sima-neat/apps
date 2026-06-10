@@ -18,7 +18,7 @@ function(sima_neat_apps_add_example example_name)
 
   target_link_libraries("${target_name}"
     PRIVATE
-      SimaNeat::sima_neat
+      SimaNeatApps::sima_neat
       SimaNeatApps::support_runtime
   )
 

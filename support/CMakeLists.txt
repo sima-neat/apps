@@ -8,7 +8,7 @@ add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 
 target_link_libraries(sima_neat_apps_support_runtime
   PUBLIC
-    SimaNeat::sima_neat
+    SimaNeatApps::sima_neat
 )
 
 target_link_libraries(sima_neat_apps_support_runtime PUBLIC nlohmann_json::nlohmann_json)
@@ -26,7 +26,7 @@ if (SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT)
   target_link_libraries(sima_neat_apps_support_optiview
     PUBLIC
       SimaNeatApps::support_runtime
-      SimaNeat::sima_neat
+      SimaNeatApps::sima_neat
   )
   target_include_directories(sima_neat_apps_support_optiview
     PUBLIC

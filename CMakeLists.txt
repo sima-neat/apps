@@ -11,42 +11,49 @@ option(SIMANEAT_APPS_BUILD_CPP "Build C++ examples" ON)
 option(SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT "Build legacy OptiView support library" OFF)
 
 function(_sima_neat_apps_ensure_neat_target)
-  if (TARGET SimaNeat::sima_neat)
+  if (TARGET SimaNeatApps::sima_neat)
     return()
   endif()
 
   find_package(SimaNeat CONFIG QUIET)
-  if (TARGET SimaNeat::sima_neat)
-    return()
+  if (TARGET SimaNeat::sima_neat_shared)
+    set(_core_target SimaNeat::sima_neat_shared)
+  elseif (TARGET SimaNeat::sima_neat)
+    set(_core_target SimaNeat::sima_neat)
+  else()
+    set(_core_root "${CMAKE_CURRENT_LIST_DIR}/../core")
+    set(_core_lib "${_core_root}/build/libsima_neat.so")
+    set(_core_include "${_core_root}/include")
+    if (NOT EXISTS "${_core_lib}" OR NOT EXISTS "${_core_include}")
+      message(FATAL_ERROR
+        "Could not find a usable SimaNeat package or local core build. "
+        "Expected ${_core_lib} and ${_core_include}.")
+    endif()
+
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GST REQUIRED IMPORTED_TARGET
+      gstreamer-1.0
+      gstreamer-app-1.0
+      gstreamer-video-1.0
+      gstreamer-sdp-1.0
+      gstreamer-rtsp-server-1.0
+      glib-2.0
+    )
+    pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
+
+    add_library(SimaNeat::sima_neat_shared SHARED IMPORTED GLOBAL)
+    set_target_properties(SimaNeat::sima_neat_shared PROPERTIES
+      IMPORTED_LOCATION "${_core_lib}"
+      INTERFACE_COMPILE_DEFINITIONS "SIMA_WITH_OPENCV;SIMA_HAS_SIMAAI_POOL=1"
+      INTERFACE_INCLUDE_DIRECTORIES "${_core_include};${_core_include}/pipeline"
+      INTERFACE_LINK_LIBRARIES "PkgConfig::GST;PkgConfig::OPENCV;gstsimaallocator;gstsimaaibufferpool"
+    )
+    set(_core_target SimaNeat::sima_neat_shared)
   endif()
 
-  set(_core_root "${CMAKE_CURRENT_LIST_DIR}/../core")
-  set(_core_lib "${_core_root}/build/libsima_neat.a")
-  set(_core_include "${_core_root}/include")
-  if (NOT EXISTS "${_core_lib}" OR NOT EXISTS "${_core_include}")
-    message(FATAL_ERROR
-      "Could not find a usable SimaNeat package or local core build. "
-      "Expected ${_core_lib} and ${_core_include}.")
-  endif()
-
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GST REQUIRED IMPORTED_TARGET
-    gstreamer-1.0
-    gstreamer-app-1.0
-    gstreamer-video-1.0
-    gstreamer-sdp-1.0
-    gstreamer-rtsp-server-1.0
-    glib-2.0
-  )
-  pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
-
-  add_library(SimaNeat::sima_neat STATIC IMPORTED GLOBAL)
-  set_target_properties(SimaNeat::sima_neat PROPERTIES
-    IMPORTED_LOCATION "${_core_lib}"
-    INTERFACE_COMPILE_DEFINITIONS "SIMA_WITH_OPENCV;SIMA_HAS_SIMAAI_POOL=1"
-    INTERFACE_INCLUDE_DIRECTORIES "${_core_include};${_core_include}/pipeline"
-    INTERFACE_LINK_LIBRARIES "PkgConfig::GST;PkgConfig::OPENCV;gstsimaallocator;gstsimaaibufferpool"
-  )
+  add_library(sima_neat_apps_neat_core INTERFACE)
+  add_library(SimaNeatApps::sima_neat ALIAS sima_neat_apps_neat_core)
+  target_link_libraries(sima_neat_apps_neat_core INTERFACE "${_core_target}")
 endfunction()
 
 message(STATUS "Configuring SimaNeatApps")
