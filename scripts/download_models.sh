@@ -22,7 +22,21 @@ KIND="e2e"
 LANGUAGES=()
 POSITIONAL_MODELS=()
 SCOPE_PYTHON="${TEST_SCOPE_PYTHON_BIN:-${PYTHON_TEST_BIN:-python3}}"
+VERSION_PYTHON="${PYTHON_TEST_BIN:-python3}"
 export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
+
+detect_model_sdk_version() {
+    "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" <<'PY' 2>/dev/null || printf '2.0.0\n'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(manifest.get("platform-version") or "2.0.0")
+PY
+}
+
+MODEL_SDK_VERSION="${NEAT_APPS_MODEL_SDK_VERSION:-$(detect_model_sdk_version)}"
 
 usage() {
     cat <<'EOF'
@@ -34,6 +48,7 @@ Options:
   --scope-file <path>   Test scope source file or directory (default: examples)
   --kind <kind>         Scope kind to resolve (default: e2e)
   --language <lang>     Scope language to include; repeatable (python, cpp)
+  NEAT_APPS_MODEL_SDK_VERSION can override {sdk_version} URL placeholders.
   -h, --help            Show help
 EOF
 }
@@ -185,6 +200,7 @@ download_url_model() {
     local expected_file="$3"
     local tmpdir
     local downloaded_files=()
+    url="${url//\{sdk_version\}/$MODEL_SDK_VERSION}"
 
     if model_exists "$model_id" "$expected_file"; then
         echo "[skip] $model_id already exists"
