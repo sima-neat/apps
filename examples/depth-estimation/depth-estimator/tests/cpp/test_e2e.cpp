@@ -4,7 +4,6 @@
 #include "support/testing/test_process.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -39,18 +38,9 @@ int main(int argc, char** argv) {
     return 1;
 
   const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
-  {
-    std::ofstream config_file(config_path);
-    config_file << "model:\n"
-                << "  path: " << model_path << "\n"
-                << "io:\n"
-                << "  input_dir: " << input_dir << "\n"
-                << "  output_dir: " << out_dir << "\n"
-                << "runtime:\n"
-                << "  infer_size: 518\n"
-                << "  timeout_ms: 20000\n"
-                << "  queue_depth: 4\n";
-  }
+  write_e2e_config(
+      "depth-estimator", config_path,
+      {{"model.path", model_path}, {"io.input_dir", input_dir}, {"io.output_dir", out_dir}});
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
 

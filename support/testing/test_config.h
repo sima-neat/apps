@@ -3,9 +3,14 @@
 #include "support/runtime/config_utils.h"
 
 #include <filesystem>
+#include <map>
 #include <string>
+#include <vector>
 
 namespace sima_examples::testing {
+
+using ConfigScalars = std::map<std::string, std::string>;
+using ConfigLists = std::map<std::string, std::vector<std::string>>;
 
 // Locate examples/*/<example_name>/src/common/config.yaml from the apps root.
 std::filesystem::path example_common_config_path(const std::string& example_name);
@@ -25,5 +30,12 @@ int e2e_int(const std::string& example_name, const std::string& section, const s
 
 bool e2e_bool(const std::string& example_name, const std::string& section, const std::string& key,
               bool default_value);
+
+// Write an e2e runtime config by starting from src/common/config.yaml and applying
+// only test-harness overrides. The generated config omits testing.* keys.
+std::filesystem::path write_e2e_config(const std::string& example_name,
+                                       const std::filesystem::path& config_path,
+                                       const ConfigScalars& overrides,
+                                       const ConfigLists& list_overrides = {});
 
 } // namespace sima_examples::testing

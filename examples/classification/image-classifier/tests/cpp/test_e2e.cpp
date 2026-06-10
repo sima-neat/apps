@@ -4,7 +4,6 @@
 #include "support/testing/test_config.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -46,26 +45,12 @@ int main(int argc, char** argv) {
   if (out_dir.empty())
     return 1;
 
-  const int expected_class_id = e2e_int("image-classifier", "validation", "expected_class_id");
-  const double min_probability = e2e_double("image-classifier", "validation", "min_probability");
-  const std::string config_path = (fs::path(out_dir).parent_path() / "config.yaml").string();
-  {
-    std::ofstream config(config_path);
-    config << "model:\n"
-           << "  path: " << model_path << "\n"
-           << "io:\n"
-           << "  image: " << image_path << "\n"
-           << "  fallback_image_url: null\n"
-           << "runtime:\n"
-           << "  input_width: 224\n"
-           << "  input_height: 224\n"
-           << "  timeout_ms: 20000\n"
-           << "validation:\n"
-           << "  expected_class_id: " << expected_class_id << "\n"
-           << "  min_probability: " << min_probability << "\n";
-  }
+  const fs::path config_path = fs::path(out_dir).parent_path() / "config.yaml";
+  write_e2e_config(
+      "image-classifier", config_path,
+      {{"model.path", model_path}, {"io.image", image_path}, {"io.fallback_image_url", "null"}});
 
-  auto r = spawn_and_wait(binary, {"--config", config_path}, timeout);
+  auto r = spawn_and_wait(binary, {"--config", config_path.string()}, timeout);
 
   if (r.exit_code != 0) {
     std::cerr << "[FAIL] exit code " << r.exit_code << "\n";
