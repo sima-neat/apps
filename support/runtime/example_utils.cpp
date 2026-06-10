@@ -271,6 +271,7 @@ bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
   probe.add(simaai::neat::nodes::Output());
 
   simaai::neat::RunOptions run_opt;
+  run_opt.enable_metrics = opt.debug;
   simaai::neat::Run run = probe.build(run_opt);
 
   simaai::neat::Sample sample;
@@ -306,6 +307,7 @@ bool probe_rtsp_encoded(const std::string& url, const RtspProbeOptions& opt, int
 
   simaai::neat::RunOptions run_opt;
   run_opt.output_memory = simaai::neat::OutputMemory::ZeroCopy;
+  run_opt.enable_metrics = opt.debug;
   simaai::neat::Run run = probe.build(run_opt);
 
   bool ok = false;
@@ -347,6 +349,7 @@ bool probe_rtsp_decoded_dims(const std::string& url, const RtspProbeOptions& opt
 
   simaai::neat::RunOptions run_opt;
   run_opt.output_memory = simaai::neat::OutputMemory::ZeroCopy;
+  run_opt.enable_metrics = opt.debug;
   simaai::neat::Run run = probe.build(run_opt);
 
   bool ok = false;

@@ -518,6 +518,7 @@ RtspRuntime build_rtsp_runtime(const AppConfig& cfg) {
   runtime.source_graph.add(simaai::neat::nodes::groups::RtspDecodedInput(source_options));
   runtime.source_graph.add(simaai::neat::nodes::Output());
   simaai::neat::RunOptions source_run_options;
+  source_run_options.enable_metrics = cfg.runtime.profile;
   source_run_options.queue_depth = 4;
   source_run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   runtime.source_run = runtime.source_graph.build(source_run_options);
@@ -579,6 +580,7 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
   sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, video_seed, video_seed_err),
                          video_seed_err);
   simaai::neat::RunOptions video_run_options;
+  video_run_options.enable_metrics = cfg.runtime.profile;
   runtime.video_run = runtime.video_graph.build(simaai::neat::TensorList{video_seed},
                                                 simaai::neat::RunMode::Async, video_run_options);
   std::cout << "video_sender=" << runtime.host << ":" << runtime.video_port << "\n";
@@ -628,6 +630,7 @@ DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int fr
 
   simaai::neat::RunOptions detector_run_options;
   detector_run_options.preset = simaai::neat::RunPreset::Reliable;
+  detector_run_options.enable_metrics = cfg.runtime.profile;
   detector_run_options.queue_depth = 4;
   detector_run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   detector_run_options.output_memory = simaai::neat::OutputMemory::Owned;

@@ -227,6 +227,7 @@ ProbeResult probe_inputs(const Config& cfg, const std::vector<std::string>& urls
   probe.add(simaai::neat::nodes::Output());
 
   simaai::neat::RunOptions probe_opt;
+  probe_opt.enable_metrics = cfg.debug;
   simaai::neat::Run probe_run = probe.build(probe_opt);
 
   simaai::neat::Sample sample;
