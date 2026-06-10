@@ -304,7 +304,7 @@ def main() -> int:
     decode = raw.get("decode", {})
     visualization = raw.get("visualization", {})
     input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
-    output_dir = Path(io_cfg.get("output_dir", "sandbox/instance-segmenter"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/yolov8-instance-segmenter"))
     infer_size = int(runtime.get("infer_size", 640))
     timeout_ms = int(runtime.get("timeout_ms", 20000))
     queue_depth = int(runtime.get("queue_depth", 8))
@@ -351,7 +351,7 @@ def main() -> int:
         graph.add(pyneat.nodes.detess_dequant(pyneat.DetessDequantOptions(model)))
         graph.add(pyneat.nodes.output())
 
-        runner = graph.build([dummy_tensor], pyneat.RunMode.Async, run_opt)
+        runner = graph.build([dummy_tensor], run_opt)
 
         print(f"Found {len(images)} images")
 

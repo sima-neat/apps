@@ -14,7 +14,6 @@
 
 #include "support/runtime/example_utils.h"
 #include "support/runtime/config_utils.h"
-#include "support/object_detection/obj_detection_utils.h"
 #include "neat.h"
 #include "neat/models.h"
 #include "neat/nodes.h"
@@ -23,15 +22,20 @@
 #include <nodes/io/MetadataSender.h>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -46,14 +50,15 @@ using sima_examples::time_ms;
 
 namespace {
 
-// single-stream-object-detector is a reference pipeline for the common deployment:
-// one RTSP source, one YOLO detector, and Insight video/metadata output.
+// single-stream-instance-segmenter is a reference pipeline for the common deployment:
+// one RTSP source, one YOLO26 segmentation model, and Insight video/metadata output.
 //
 // The code keeps ingest, inference, and output transport separate so each
 // stage can be reasoned about and debugged independently.
 
 struct ModelConfig {
   std::string path;
+  fs::path labels;
 };
 
 struct SourceConfig {
@@ -65,8 +70,8 @@ struct SourceConfig {
 struct InferenceConfig {
   int frames = 0;
   double min_score = 0.55;
-  double nms_iou = 0.50;
-  int max_detections = 100;
+  double nms_iou = 0.60;
+  int max_detections = 50;
 };
 
 struct RuntimeConfig {
@@ -80,14 +85,21 @@ struct InsightConfig {
   int metadata_port = 9100;
 };
 
+struct OutputConfig {
+  fs::path save_dir;
+  int save_every = 0;
+  double mask_alpha = 0.55;
+  double mask_threshold = 0.50;
+  bool draw_boxes = true;
+};
+
 struct AppConfig {
   ModelConfig model;
   SourceConfig source;
   InferenceConfig inference;
   RuntimeConfig runtime;
   InsightConfig insight;
-  fs::path save_dir;
-  int save_every = 0;
+  OutputConfig output;
 };
 
 struct CliOptions {
@@ -120,6 +132,7 @@ CliOptions parse_args(int argc, char** argv) {
 void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.source.rtsp_url.empty(), "source.rtsp_url must be set");
   sima_examples::require(!cfg.model.path.empty(), "model.path must be set");
+  sima_examples::require(!cfg.model.labels.empty(), "model.labels must be set");
   sima_examples::require(!cfg.insight.host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.source.latency_ms >= 0, "source.latency_ms must be >= 0");
   sima_examples::require(cfg.inference.frames >= 0, "inference.frames must be >= 0");
@@ -131,97 +144,155 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.runtime.profile_interval > 0, "runtime.profile_interval must be > 0");
   sima_examples::require(cfg.insight.video_port > 0, "output.insight.video_port must be > 0");
   sima_examples::require(cfg.insight.metadata_port > 0, "output.insight.metadata_port must be > 0");
-  sima_examples::require(cfg.save_every >= 0, "output.save_every must be >= 0");
+  sima_examples::require(cfg.output.save_every >= 0, "output.save_every must be >= 0");
+  sima_examples::require(cfg.output.mask_alpha >= 0.0 && cfg.output.mask_alpha <= 1.0,
+                         "output.mask_alpha must be between 0 and 1");
+  sima_examples::require(cfg.output.mask_threshold >= 0.0 && cfg.output.mask_threshold <= 1.0,
+                         "output.mask_threshold must be between 0 and 1");
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
   const auto raw = sima_examples::ScalarConfig::load(config_path);
   AppConfig cfg;
+  const fs::path default_labels =
+      sima_examples::default_config_path(SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).parent_path() /
+      "coco_label.txt";
   cfg.model.path = raw.string_or("model.path", "");
+  cfg.model.labels = raw.string_or("model.labels", default_labels.string());
   cfg.source.rtsp_url = raw.string_or("source.rtsp_url", "");
   cfg.source.latency_ms = raw.int_or("source.latency_ms", 200);
   cfg.source.tcp = raw.bool_or("source.tcp", true);
   cfg.inference.frames = raw.int_or("inference.frames", 0);
   cfg.inference.min_score = raw.double_or("inference.min_score", 0.55);
-  cfg.inference.nms_iou = raw.double_or("inference.nms_iou", 0.50);
-  cfg.inference.max_detections = raw.int_or("inference.max_detections", 100);
+  cfg.inference.nms_iou = raw.double_or("inference.nms_iou", 0.60);
+  cfg.inference.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.runtime.profile = raw.bool_or("runtime.profile", false);
   cfg.runtime.profile_interval = raw.int_or("runtime.profile_interval", 100);
   cfg.insight.host = raw.string_or("output.insight.host", "");
   cfg.insight.video_port = raw.int_or("output.insight.video_port", 9000);
   cfg.insight.metadata_port = raw.int_or("output.insight.metadata_port", 9100);
-  cfg.save_dir = raw.string_or("output.save_dir", "");
-  cfg.save_every = raw.int_or("output.save_every", 0);
+  cfg.output.save_dir = raw.string_or("output.save_dir", "");
+  cfg.output.save_every = raw.int_or("output.save_every", 0);
+  cfg.output.mask_alpha = raw.double_or("output.mask_alpha", 0.55);
+  cfg.output.mask_threshold = raw.double_or("output.mask_threshold", 0.50);
+  cfg.output.draw_boxes = raw.bool_or("output.draw_boxes", true);
   validate_config(cfg);
   return cfg;
 }
 
 using sima_examples::infer_dims;
-using sima_examples::make_blank_nv12_tensor;
-using sima_examples::nv12_copy_to_cpu_tensor;
 
-// This sample uses the standard 80-class COCO label order expected by the
-// bundled YOLO26 detector model. Keeping the mapping local to the sample avoids baking
-// model-specific semantics into generic Insight helpers used by other models.
-std::vector<std::string> yolo_coco_labels() {
-  return {
-      "person",        "bicycle",      "car",
-      "motorcycle",    "airplane",     "bus",
-      "train",         "truck",        "boat",
-      "traffic light", "fire hydrant", "stop sign",
-      "parking meter", "bench",        "bird",
-      "cat",           "dog",          "horse",
-      "sheep",         "cow",          "elephant",
-      "bear",          "zebra",        "giraffe",
-      "backpack",      "umbrella",     "handbag",
-      "tie",           "suitcase",     "frisbee",
-      "skis",          "snowboard",    "sports ball",
-      "kite",          "baseball bat", "baseball glove",
-      "skateboard",    "surfboard",    "tennis racket",
-      "bottle",        "wine glass",   "cup",
-      "fork",          "knife",        "spoon",
-      "bowl",          "banana",       "apple",
-      "sandwich",      "orange",       "broccoli",
-      "carrot",        "hot dog",      "pizza",
-      "donut",         "cake",         "chair",
-      "couch",         "potted plant", "bed",
-      "dining table",  "toilet",       "tv",
-      "laptop",        "mouse",        "remote",
-      "keyboard",      "cell phone",   "microwave",
-      "oven",          "toaster",      "sink",
-      "refrigerator",  "book",         "clock",
-      "vase",          "scissors",     "teddy bear",
-      "hair drier",    "toothbrush",
-  };
+std::vector<std::string> load_labels(const fs::path& labels_path) {
+  std::ifstream in(labels_path);
+  if (!in.good()) {
+    throw std::runtime_error("labels file does not exist: " + labels_path.string());
+  }
+
+  std::vector<std::string> labels;
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty()) {
+      labels.push_back(line);
+    }
+  }
+  if (labels.empty()) {
+    throw std::runtime_error("labels file is empty: " + labels_path.string());
+  }
+  return labels;
 }
 
-bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::uint8_t>& payload,
-                          std::string& err) {
+struct SegmentationDetection {
+  float x1 = 0.0f;
+  float y1 = 0.0f;
+  float x2 = 0.0f;
+  float y2 = 0.0f;
+  float score = 0.0f;
+  int class_id = -1;
+  cv::Mat mask;
+};
+
+std::vector<simaai::neat::Tensor> collect_tensors(const simaai::neat::Sample& sample) {
+  if (sample.kind == simaai::neat::SampleKind::Tensor) {
+    if (!sample.tensor.has_value()) {
+      return {};
+    }
+    return {*sample.tensor};
+  }
+  if (sample.kind == simaai::neat::SampleKind::TensorSet) {
+    return sample.tensors;
+  }
   if (sample.kind == simaai::neat::SampleKind::Bundle) {
+    std::vector<simaai::neat::Tensor> out;
     for (const auto& field : sample.fields) {
-      if (extract_bbox_payload(field, payload, err)) {
-        return true;
+      auto part = collect_tensors(field);
+      out.insert(out.end(), part.begin(), part.end());
+    }
+    return out;
+  }
+  return {};
+}
+
+std::vector<float> tensor_to_floats_local(const simaai::neat::Tensor& tensor) {
+  if (tensor.dtype != simaai::neat::TensorDType::Float32) {
+    throw std::runtime_error("expected Float32 tensor");
+  }
+  const auto bytes = tensor.copy_dense_bytes_tight();
+  if (bytes.size() % sizeof(float) != 0) {
+    throw std::runtime_error("float tensor byte size is not aligned");
+  }
+  std::vector<float> values(bytes.size() / sizeof(float));
+  if (!values.empty()) {
+    std::memcpy(values.data(), bytes.data(), bytes.size());
+  }
+  return values;
+}
+
+std::vector<std::uint8_t> tensor_to_u8_local(const simaai::neat::Tensor& tensor) {
+  if (tensor.dtype != simaai::neat::TensorDType::UInt8) {
+    throw std::runtime_error("expected UInt8 tensor");
+  }
+  return tensor.copy_dense_bytes_tight();
+}
+
+std::vector<SegmentationDetection>
+decode_segmentation_output(const simaai::neat::TensorList& tensors, int frame_w, int frame_h,
+                           int max_detections) {
+  if (tensors.empty()) {
+    throw std::runtime_error("model returned no segmentation tensors");
+  }
+
+  auto decoded =
+      simaai::neat::decode_segmentation(tensors, frame_w, frame_h, max_detections, false);
+  std::vector<SegmentationDetection> detections;
+  for (const auto& item : decoded) {
+    const auto boxes = tensor_to_floats_local(item.boxes);
+    const auto masks = tensor_to_u8_local(item.masks);
+    const int count = static_cast<int>(boxes.size() / 6U);
+    const size_t mask_bytes = 160U * 160U;
+    for (int i = 0; i < count; ++i) {
+      const float* row = boxes.data() + static_cast<size_t>(i) * 6U;
+      if (row[2] <= row[0] || row[3] <= row[1]) {
+        continue;
+      }
+      SegmentationDetection det;
+      det.x1 = row[0];
+      det.y1 = row[1];
+      det.x2 = row[2];
+      det.y2 = row[3];
+      det.score = row[4];
+      det.class_id = static_cast<int>(row[5]);
+      if (masks.size() >= (static_cast<size_t>(i) + 1U) * mask_bytes) {
+        cv::Mat mask(160, 160, CV_8UC1,
+                     const_cast<std::uint8_t*>(masks.data() + static_cast<size_t>(i) * mask_bytes));
+        det.mask = mask.clone();
+      }
+      detections.push_back(std::move(det));
+      if (static_cast<int>(detections.size()) >= max_detections) {
+        return detections;
       }
     }
-    err = "bundle missing BBOX field";
-    return false;
   }
-  if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
-    simaai::neat::Sample tensor_sample = sample;
-    tensor_sample.kind = simaai::neat::SampleKind::Tensor;
-    tensor_sample.tensor = sample.tensors.front();
-    tensor_sample.tensors.clear();
-    return objdet::extract_bbox_payload(tensor_sample, payload, err);
-  }
-  return objdet::extract_bbox_payload(sample, payload, err);
-}
-
-void enable_insight_diagnostics(bool enabled) {
-  if (!enabled)
-    return;
-  setenv("SIMA_GST_ELEMENT_TIMINGS", "1", 0);
-  setenv("SIMA_GST_FLOW_DEBUG", "1", 0);
-  setenv("SIMA_GST_BOUNDARY_PROBES", "1", 0);
+  return detections;
 }
 
 double fps_from_count(int count, double elapsed_ms) {
@@ -332,8 +403,7 @@ struct FrameProfile {
   double queue_pop_ms = 0.0;
   double yolo_push_ms = 0.0;
   double yolo_pull_ms = 0.0;
-  double bbox_extract_ms = 0.0;
-  double bbox_parse_ms = 0.0;
+  double decode_ms = 0.0;
   double video_input_ms = 0.0;
   double video_push_ms = 0.0;
   double metadata_ms = 0.0;
@@ -351,8 +421,7 @@ struct ProfileWindow {
   TimingAccumulator queue_pop;
   TimingAccumulator yolo_push;
   TimingAccumulator yolo_pull;
-  TimingAccumulator bbox_extract;
-  TimingAccumulator bbox_parse;
+  TimingAccumulator decode;
   TimingAccumulator video_input;
   TimingAccumulator video_push;
   TimingAccumulator metadata;
@@ -369,8 +438,7 @@ struct ProfileWindow {
     queue_pop.add(profile.queue_pop_ms);
     yolo_push.add(profile.yolo_push_ms);
     yolo_pull.add(profile.yolo_pull_ms);
-    bbox_extract.add(profile.bbox_extract_ms);
-    bbox_parse.add(profile.bbox_parse_ms);
+    decode.add(profile.decode_ms);
     video_input.add(profile.video_input_ms);
     video_push.add(profile.video_push_ms);
     metadata.add(profile.metadata_ms);
@@ -387,8 +455,7 @@ struct ProfileWindow {
               << " fps=" << fps_from_count(frames, elapsed_ms)
               << " avg_rtsp_pull_ms=" << rtsp_pull.avg() << " avg_queue_pop_ms=" << queue_pop.avg()
               << " avg_yolo_ms=" << (yolo_push.avg() + yolo_pull.avg())
-              << " avg_bbox_ms=" << (bbox_extract.avg() + bbox_parse.avg())
-              << " avg_video_input_ms=" << video_input.avg()
+              << " avg_decode_ms=" << decode.avg() << " avg_video_input_ms=" << video_input.avg()
               << " avg_video_push_ms=" << video_push.avg() << " avg_metadata_ms=" << metadata.avg()
               << " avg_e2e_ms=" << e2e.avg()
               << " avg_boxes=" << (static_cast<double>(boxes) / static_cast<double>(frames))
@@ -404,8 +471,7 @@ struct ProfileWindow {
     queue_pop.reset();
     yolo_push.reset();
     yolo_pull.reset();
-    bbox_extract.reset();
-    bbox_parse.reset();
+    decode.reset();
     video_input.reset();
     video_push.reset();
     metadata.reset();
@@ -528,12 +594,11 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
   runtime.video_port = cfg.insight.video_port;
 
   simaai::neat::InputOptions video_input_options;
-  video_input_options.format = "NV12";
+  video_input_options.payload_type = simaai::neat::PayloadType::Image;
+  video_input_options.format = "RGB";
   video_input_options.width = frame_w;
   video_input_options.height = frame_h;
-  video_input_options.caps_override = "video/x-raw,format=NV12,width=" + std::to_string(frame_w) +
-                                      ",height=" + std::to_string(frame_h) +
-                                      ",framerate=" + std::to_string(output_fps) + "/1";
+  video_input_options.depth = 3;
   video_input_options.use_simaai_pool = false;
   runtime.video_graph.add(simaai::neat::nodes::Input(video_input_options));
   auto video_sender_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
@@ -545,13 +610,10 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
   video_sender_options.encoder.bitrate_kbps = 4000;
   runtime.video_graph.add(simaai::neat::nodes::groups::VideoSender(video_sender_options));
 
-  simaai::neat::Tensor video_seed;
-  std::string video_seed_err;
-  sima_examples::require(make_blank_nv12_tensor(frame_w, frame_h, video_seed, video_seed_err),
-                         video_seed_err);
+  cv::Mat video_seed(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
   simaai::neat::RunOptions video_run_options;
   runtime.video_run =
-      runtime.video_graph.build(simaai::neat::TensorList{video_seed}, video_run_options);
+      runtime.video_graph.build(std::vector<cv::Mat>{video_seed}, video_run_options);
   std::cout << "video_sender=" << runtime.host << ":" << runtime.video_port << "\n";
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -562,7 +624,7 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
   runtime.metadata_sender =
       std::make_unique<simaai::neat::MetadataSender>(metadata_options, &metadata_err);
   sima_examples::require(runtime.metadata_sender->ok(), metadata_err);
-  runtime.labels = yolo_coco_labels();
+  runtime.labels = load_labels(cfg.model.labels);
   std::cout << "insight host=" << runtime.metadata_sender->host()
             << " video_port=" << runtime.video_port
             << " metadata_port=" << runtime.metadata_sender->metadata_port() << " channel=0\n";
@@ -570,19 +632,18 @@ InsightRuntime build_insight_runtime(const AppConfig& cfg, int frame_w, int fram
 }
 
 DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int frame_h) {
-  // NEAT boundary: build detection Graph/Run pipeline.
   DetectorRuntime runtime;
 
-  // NEAT boundary: build model + async inference runtime.
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
   model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::BGR;
   model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
-  model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
+  model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26Seg;
   model_opt.score_threshold = cfg.inference.min_score;
   model_opt.nms_iou_threshold = cfg.inference.nms_iou;
   model_opt.top_k = cfg.inference.max_detections;
+  std::cout << "[init] loading model " << cfg.model.path << "\n";
   runtime.model = std::make_unique<simaai::neat::Model>(cfg.model.path, model_opt);
   std::cout << "[init] model configured for " << frame_w << "x" << frame_h << " BGR\n";
 
@@ -603,10 +664,10 @@ DetectorRuntime build_detector_runtime(const AppConfig& cfg, int frame_w, int fr
   detector_run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   detector_run_options.output_memory = simaai::neat::OutputMemory::Owned;
   cv::Mat detector_seed(frame_h, frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
-  std::cout << "[init] building YOLO pipeline\n";
+  std::cout << "[init] building YOLO26 segmentation pipeline\n";
   runtime.detector_run =
       runtime.detector_graph.build(std::vector<cv::Mat>{detector_seed}, detector_run_options);
-  std::cout << "[init] YOLO pipeline ready\n";
+  std::cout << "[init] YOLO26 segmentation pipeline ready\n";
   return runtime;
 }
 
@@ -618,16 +679,17 @@ std::optional<int> frame_limit_from_config(const AppConfig& cfg) {
 }
 
 std::vector<sima_examples::MetadataBox>
-build_detection_metadata_boxes(const std::vector<objdet::Box>& boxes,
-                               const std::vector<std::string>& labels, int frame_w, int frame_h) {
+build_segmentation_metadata_boxes(const std::vector<SegmentationDetection>& detections,
+                                  const std::vector<std::string>& labels, int frame_w,
+                                  int frame_h) {
   std::vector<sima_examples::MetadataBox> metadata_boxes;
-  metadata_boxes.reserve(boxes.size());
+  metadata_boxes.reserve(detections.size());
   int object_index = 1;
-  for (const auto& box : boxes) {
-    int x1 = static_cast<int>(box.x1);
-    int y1 = static_cast<int>(box.y1);
-    int w = static_cast<int>(box.x2 - box.x1);
-    int h = static_cast<int>(box.y2 - box.y1);
+  for (const auto& det : detections) {
+    int x1 = static_cast<int>(det.x1);
+    int y1 = static_cast<int>(det.y1);
+    int w = static_cast<int>(det.x2 - det.x1);
+    int h = static_cast<int>(det.y2 - det.y1);
     if (x1 < 0)
       x1 = 0;
     if (y1 < 0)
@@ -646,10 +708,10 @@ build_detection_metadata_boxes(const std::vector<objdet::Box>& boxes,
       h = 0;
     sima_examples::MetadataBox obj;
     obj.id = "obj_" + std::to_string(object_index++);
-    obj.label = (box.class_id >= 0 && box.class_id < static_cast<int>(labels.size()))
-                    ? labels[box.class_id]
+    obj.label = (det.class_id >= 0 && det.class_id < static_cast<int>(labels.size()))
+                    ? labels[det.class_id]
                     : "unknown";
-    obj.confidence = box.score;
+    obj.confidence = det.score;
     obj.x = static_cast<float>(x1);
     obj.y = static_cast<float>(y1);
     obj.w = static_cast<float>(w);
@@ -657,6 +719,117 @@ build_detection_metadata_boxes(const std::vector<objdet::Box>& boxes,
     metadata_boxes.push_back(obj);
   }
   return metadata_boxes;
+}
+
+cv::Scalar class_color(int class_id) {
+  static const std::vector<cv::Scalar> palette = {
+      cv::Scalar(56, 56, 255),  cv::Scalar(151, 157, 255), cv::Scalar(31, 112, 255),
+      cv::Scalar(29, 178, 255), cv::Scalar(49, 210, 207),  cv::Scalar(10, 249, 72),
+      cv::Scalar(23, 204, 146), cv::Scalar(134, 219, 61),  cv::Scalar(52, 147, 26),
+      cv::Scalar(187, 212, 0),  cv::Scalar(255, 194, 0),   cv::Scalar(168, 153, 44),
+  };
+  return palette[static_cast<size_t>(std::max(class_id, 0)) % palette.size()];
+}
+
+void draw_box(cv::Mat& frame, const SegmentationDetection& det,
+              const std::vector<std::string>& labels) {
+  const int x1 = std::clamp(static_cast<int>(std::round(det.x1)), 0, frame.cols - 1);
+  const int y1 = std::clamp(static_cast<int>(std::round(det.y1)), 0, frame.rows - 1);
+  const int x2 = std::clamp(static_cast<int>(std::round(det.x2)), 0, frame.cols - 1);
+  const int y2 = std::clamp(static_cast<int>(std::round(det.y2)), 0, frame.rows - 1);
+  if (x2 <= x1 || y2 <= y1) {
+    return;
+  }
+  const cv::Scalar color = class_color(det.class_id);
+  cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), color, 2);
+  const std::string label = (det.class_id >= 0 && det.class_id < static_cast<int>(labels.size()))
+                                ? labels[det.class_id]
+                                : "unknown";
+  cv::putText(frame, label + " " + std::to_string(det.score).substr(0, 4),
+              cv::Point(x1, std::max(0, y1 - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
+              cv::LINE_AA);
+}
+
+cv::Rect frame_rect_for_detection(const SegmentationDetection& det, const cv::Size& frame_size) {
+  const int x0 = std::clamp(static_cast<int>(std::floor(det.x1)), 0, frame_size.width - 1);
+  const int y0 = std::clamp(static_cast<int>(std::floor(det.y1)), 0, frame_size.height - 1);
+  const int x1 = std::clamp(static_cast<int>(std::ceil(det.x2)), x0 + 1, frame_size.width);
+  const int y1 = std::clamp(static_cast<int>(std::ceil(det.y2)), y0 + 1, frame_size.height);
+  return cv::Rect(x0, y0, x1 - x0, y1 - y0);
+}
+
+cv::Rect mask_rect_for_frame_rect(const cv::Rect& frame_rect, const cv::Size& frame_size,
+                                  const cv::Size& mask_size) {
+  const int model_w = mask_size.width * 4;
+  const int model_h = mask_size.height * 4;
+  const double scale =
+      std::min(static_cast<double>(model_w) / static_cast<double>(frame_size.width),
+               static_cast<double>(model_h) / static_cast<double>(frame_size.height));
+  const double resized_w = static_cast<double>(frame_size.width) * scale;
+  const double resized_h = static_cast<double>(frame_size.height) * scale;
+  const double pad_x = (static_cast<double>(model_w) - resized_w) * 0.5;
+  const double pad_y = (static_cast<double>(model_h) - resized_h) * 0.5;
+
+  const auto to_mask_x = [&](double frame_x) {
+    return (frame_x * scale + pad_x) * static_cast<double>(mask_size.width) /
+           static_cast<double>(model_w);
+  };
+  const auto to_mask_y = [&](double frame_y) {
+    return (frame_y * scale + pad_y) * static_cast<double>(mask_size.height) /
+           static_cast<double>(model_h);
+  };
+
+  const int x0 = std::clamp(static_cast<int>(std::floor(to_mask_x(frame_rect.x))), 0,
+                            std::max(0, mask_size.width - 1));
+  const int y0 = std::clamp(static_cast<int>(std::floor(to_mask_y(frame_rect.y))), 0,
+                            std::max(0, mask_size.height - 1));
+  const int x1 = std::clamp(static_cast<int>(std::ceil(to_mask_x(frame_rect.x + frame_rect.width))),
+                            x0 + 1, mask_size.width);
+  const int y1 =
+      std::clamp(static_cast<int>(std::ceil(to_mask_y(frame_rect.y + frame_rect.height))), y0 + 1,
+                 mask_size.height);
+  return cv::Rect(x0, y0, x1 - x0, y1 - y0);
+}
+
+cv::Mat project_letterbox_mask_roi(const cv::Mat& mask, const cv::Rect& frame_rect,
+                                   const cv::Size& frame_size) {
+  const cv::Rect mask_rect =
+      mask_rect_for_frame_rect(frame_rect, frame_size, cv::Size(mask.cols, mask.rows));
+  cv::Mat projected;
+  cv::resize(mask(mask_rect), projected, frame_rect.size(), 0, 0, cv::INTER_LINEAR);
+  return projected;
+}
+
+cv::Mat overlay_segmentation(const cv::Mat& frame,
+                             const std::vector<SegmentationDetection>& detections,
+                             const std::vector<std::string>& labels, const AppConfig& cfg) {
+  cv::Mat annotated = frame.clone();
+  for (const auto& det : detections) {
+    if (det.score < cfg.inference.min_score || det.mask.empty()) {
+      continue;
+    }
+    const cv::Rect frame_rect = frame_rect_for_detection(det, annotated.size());
+    cv::Mat resized_mask = project_letterbox_mask_roi(det.mask, frame_rect, annotated.size());
+    cv::Mat binary_mask;
+    cv::threshold(resized_mask, binary_mask, cfg.output.mask_threshold * 255.0, 255,
+                  cv::THRESH_BINARY);
+    if (cv::countNonZero(binary_mask) > 0) {
+      cv::Mat annotated_roi = annotated(frame_rect);
+      cv::Mat mask_color(frame_rect.size(), annotated.type(), class_color(det.class_id));
+      cv::Mat blended;
+      cv::addWeighted(annotated_roi, 1.0 - cfg.output.mask_alpha, mask_color, cfg.output.mask_alpha,
+                      0.0, blended);
+      blended.copyTo(annotated_roi, binary_mask);
+
+      std::vector<std::vector<cv::Point>> contours;
+      cv::findContours(binary_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+      cv::drawContours(annotated_roi, contours, -1, class_color(det.class_id), 2);
+    }
+    if (cfg.output.draw_boxes) {
+      draw_box(annotated, det, labels);
+    }
+  }
+  return annotated;
 }
 
 void producer_worker(simaai::neat::Run& source_run, simaai::neat::Tensor first_frame,
@@ -703,8 +876,7 @@ void producer_worker(simaai::neat::Run& source_run, simaai::neat::Tensor first_f
 void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_run,
                      simaai::neat::MetadataSender& metadata_sender,
                      const std::vector<std::string>& insight_labels, int frame_w, int frame_h,
-                     int max_detections, double min_score, const fs::path& save_dir, int save_every,
-                     WorkerSharedState& state) {
+                     const AppConfig& cfg, WorkerSharedState& state) {
   state.consumer_start_ms = time_ms();
   int out_pulls = 0;
   while (!state.stop.load() &&
@@ -723,96 +895,73 @@ void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_r
     decoded_frame.pull_ts_ms = item.pull_ts_ms;
     decoded_frame.frame = std::move(item.frame);
 
-    // NEAT boundary: push current frame into async YOLO run, then pull next output.
-    const double t_push0 = time_ms();
+    const double t_yolo0 = time_ms();
     const cv::Mat detector_input =
         decoded_frame.frame.to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::BGR);
-    const bool pushed = detector_run.push(std::vector<cv::Mat>{detector_input});
-    const double t_push1 = time_ms();
-    frame_profile.yolo_push_ms = t_push1 - t_push0;
-    if (!pushed) {
-      std::cerr << "[warn] push failed\n";
-      continue;
-    }
-    const double t_pull0 = time_ms();
-    auto detection_sample = detector_run.pull();
-    const double t_pull1 = time_ms();
-    frame_profile.yolo_pull_ms = t_pull1 - t_pull0;
-    if (!detection_sample.has_value())
-      continue;
+    simaai::neat::Tensor detector_tensor =
+        simaai::neat::Tensor::from_cv_mat(detector_input, simaai::neat::ImageSpec::PixelFormat::BGR,
+                                          simaai::neat::TensorMemory::EV74);
+    auto detection_tensors = detector_run.run(simaai::neat::TensorList{detector_tensor}, 50000);
+    const double t_yolo1 = time_ms();
+    frame_profile.yolo_pull_ms = t_yolo1 - t_yolo0;
     out_pulls += 1;
     state.det_outputs.store(out_pulls);
 
     PendingFrame pending = std::move(decoded_frame);
 
-    const double t_extract0 = time_ms();
-    std::vector<uint8_t> bbox_payload;
-    std::string err;
-    if (!extract_bbox_payload(*detection_sample, bbox_payload, err)) {
-      std::cerr << "[warn] bbox extract failed: " << err << "\n";
-      continue;
-    }
-    const double t_extract1 = time_ms();
-    frame_profile.bbox_extract_ms = t_extract1 - t_extract0;
-
-    const double t_parse0 = time_ms();
-    std::vector<objdet::Box> detections;
+    const double t_decode0 = time_ms();
+    std::vector<SegmentationDetection> detections;
     try {
-      detections =
-          objdet::parse_boxes_strict(bbox_payload, frame_w, frame_h, max_detections, false);
+      detections = decode_segmentation_output(detection_tensors, frame_w, frame_h,
+                                              cfg.inference.max_detections);
     } catch (const std::exception& ex) {
-      std::cerr << "[warn] bbox parse failed: " << ex.what() << "\n";
+      std::cerr << "[warn] segmentation decode failed: " << ex.what() << "\n";
       continue;
     }
-    const double t_parse1 = time_ms();
-    frame_profile.bbox_parse_ms = t_parse1 - t_parse0;
+    const double t_decode1 = time_ms();
+    frame_profile.decode_ms = t_decode1 - t_decode0;
     frame_profile.boxes = static_cast<int>(detections.size());
 
     std::vector<sima_examples::MetadataBox> metadata_boxes =
-        build_detection_metadata_boxes(detections, insight_labels, frame_w, frame_h);
+        build_segmentation_metadata_boxes(detections, insight_labels, frame_w, frame_h);
 
     // Contract: publish video first, then publish the matching metadata side-channel payload.
     double output_ts = 0.0;
     const double t_video_input0 = time_ms();
-    simaai::neat::Tensor nv12_frame;
-    std::string nv12_err;
-    const bool converted = nv12_copy_to_cpu_tensor(pending.frame, nv12_frame, nv12_err);
-    if (!converted) {
-      std::cerr << "[warn] VideoSender input copy failed: " << nv12_err << "\n";
-      continue;
-    }
+    cv::Mat annotated = overlay_segmentation(detector_input, detections, insight_labels, cfg);
+    cv::Mat video_rgb;
+    cv::cvtColor(annotated, video_rgb, cv::COLOR_BGR2RGB);
     const double t_video_input1 = time_ms();
     frame_profile.video_input_ms = t_video_input1 - t_video_input0;
 
-    // NEAT boundary: push the raw frame into VideoSender; the nodegroup owns conversion, H.264
-    // encoding, RTP packetization, and UDP output.
     const double t_video_sender_push0 = time_ms();
-    if (!video_run.push(simaai::neat::TensorList{nv12_frame})) {
+    simaai::neat::Tensor video_tensor = simaai::neat::Tensor::from_cv_mat(
+        video_rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+    if (!video_run.push(simaai::neat::TensorList{video_tensor})) {
       std::cerr << "[warn] VideoSender push failed\n";
       continue;
     }
     const double t_video_sender_push1 = time_ms();
     frame_profile.video_push_ms = t_video_sender_push1 - t_video_sender_push0;
     output_ts = t_video_sender_push1;
-    const int64_t fid = detection_sample->frame_id >= 0 ? detection_sample->frame_id
-                                                        : static_cast<int64_t>(pending.index);
+    const int64_t fid = static_cast<int64_t>(pending.index);
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     const int64_t ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
     const std::string data_json =
         sima_examples::metadata_boxes_data_json("objects", metadata_boxes);
     std::string metadata_err;
     const double t_metadata0 = time_ms();
-    const bool metadata_ok = metadata_sender.send_metadata("object-detection", data_json, ts_ms,
-                                                           std::to_string(fid), &metadata_err);
+    const bool metadata_ok = metadata_sender.send_metadata(
+        "instance-segmentation", data_json, ts_ms, std::to_string(fid), &metadata_err);
     const double t_metadata1 = time_ms();
     frame_profile.metadata_ms = t_metadata1 - t_metadata0;
     if (!metadata_ok) {
       std::cerr << "[warn] insight metadata send failed: " << metadata_err << "\n";
     }
-    if (!save_dir.empty() && save_every > 0 && (state.published.load() + 1) % save_every == 0) {
-      cv::Mat annotated = detector_input.clone();
-      objdet::draw_boxes(annotated, detections, min_score, cv::Scalar(0, 255, 0), "");
-      const fs::path out_path = save_dir / ("frame_" + std::to_string(pending.index) + ".jpg");
+    if (!cfg.output.save_dir.empty() && cfg.output.save_every > 0 &&
+        (state.published.load() + 1) % cfg.output.save_every == 0) {
+      const fs::path out_path =
+          cfg.output.save_dir / ("frame_" + std::to_string(pending.index) + ".jpg");
       if (!cv::imwrite(out_path.string(), annotated)) {
         std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
       }
@@ -831,19 +980,19 @@ void consumer_worker(simaai::neat::Run& detector_run, simaai::neat::Run& video_r
 } // namespace
 
 int main(int argc, char** argv) {
+  std::cout.setf(std::ios::unitbuf);
+  std::cerr.setf(std::ios::unitbuf);
+
   try {
-    // Lifecycle: setup -> start workers -> join -> summary -> teardown.
     const CliOptions cli = parse_args(argc, argv);
     const AppConfig cfg = load_app_config(cli.config_path);
     if (cli.validate_config_only) {
       std::cout << "Config validated: " << cli.config_path << "\n";
       return 0;
     }
-    if (!cfg.save_dir.empty()) {
-      fs::create_directories(cfg.save_dir);
+    if (!cfg.output.save_dir.empty()) {
+      fs::create_directories(cfg.output.save_dir);
     }
-
-    enable_insight_diagnostics(cfg.runtime.profile);
 
     RtspRuntime rtsp_runtime = build_rtsp_runtime(cfg);
     InsightRuntime insight_runtime = build_insight_runtime(
@@ -881,12 +1030,11 @@ int main(int argc, char** argv) {
     std::thread producer_thread(producer_worker, std::ref(rtsp_runtime.source_run),
                                 std::move(rtsp_runtime.first_frame), rtsp_runtime.first_pull_ms,
                                 rtsp_runtime.first_pull_ts, std::ref(worker_state));
-    std::thread consumer_thread(
-        consumer_worker, std::ref(detector_runtime.detector_run),
-        std::ref(insight_runtime.video_run), std::ref(*insight_runtime.metadata_sender),
-        std::cref(insight_runtime.labels), rtsp_runtime.frame_w, rtsp_runtime.frame_h,
-        cfg.inference.max_detections, cfg.inference.min_score, std::cref(cfg.save_dir),
-        cfg.save_every, std::ref(worker_state));
+    std::thread consumer_thread(consumer_worker, std::ref(detector_runtime.detector_run),
+                                std::ref(insight_runtime.video_run),
+                                std::ref(*insight_runtime.metadata_sender),
+                                std::cref(insight_runtime.labels), rtsp_runtime.frame_w,
+                                rtsp_runtime.frame_h, std::cref(cfg), std::ref(worker_state));
 
     if (producer_thread.joinable())
       producer_thread.join();

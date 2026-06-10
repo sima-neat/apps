@@ -1,4 +1,4 @@
-// Unit test for instance-segmenter: validates CLI arg handling.
+// Unit test for yolov8-instance-segmenter: validates CLI arg handling.
 #include "support/testing/test_process.h"
 
 #include <iostream>

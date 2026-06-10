@@ -384,7 +384,7 @@ def build_graph_runner(model: pyneat.Model) -> pyneat.Run:
     graph.add(pyneat.nodes.output())
 
     dummy = tensor_from_hwc_f32(np.zeros((FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.float32))
-    return graph.build([dummy], pyneat.RunMode.Async)
+    return graph.build([dummy])
 
 
 def run_model_inference(runner: pyneat.Run, preprocessed: np.ndarray, timeout_ms: int) -> list[np.ndarray]:

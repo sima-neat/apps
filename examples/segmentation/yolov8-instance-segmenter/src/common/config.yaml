@@ -3,7 +3,7 @@ model:
 
 io:
   input_dir: assets/test_images
-  output_dir: sandbox/instance-segmenter
+  output_dir: sandbox/yolov8-instance-segmenter
 
 runtime:
   infer_size: 640

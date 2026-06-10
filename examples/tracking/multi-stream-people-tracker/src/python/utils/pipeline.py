@@ -176,7 +176,7 @@ def build_detection_run(
     run_opt.queue_depth = 1
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
-    run = graph.build([seed], pyneat.RunMode.Async, run_opt)
+    run = graph.build([seed], run_opt)
     return GraphRun(graph=graph, run=run, model=model)
 
 
@@ -226,7 +226,7 @@ def build_insight_video_run(
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 2
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run = graph.build([seed], pyneat.RunMode.Async, run_opt)
+    run = graph.build([seed], run_opt)
     return GraphRun(graph=graph, run=run)
 
 

@@ -1,4 +1,4 @@
-"""E2E tests for instance-segmenter (Python)."""
+"""E2E tests for yolov8-instance-segmenter (Python)."""
 
 import subprocess
 import sys

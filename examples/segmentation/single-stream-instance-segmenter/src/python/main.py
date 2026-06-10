@@ -1,16 +1,16 @@
-"""Single-camera RTSP YOLO26 Insight example using pyneat.
+"""Single-camera RTSP YOLO26 segmentation Insight example using pyneat.
 
 This mirrors the intent of the C++ reference sample in the same folder:
 
 - pull one decoded RTSP stream
-- run one YOLO26 detector
-- publish H.264 video plus detection metadata to Insight
+- run one YOLO26 instance segmentation model
+- publish H.264 video with mask overlays plus metadata to Insight
 
 The implementation keeps those responsibilities loosely separated so the main
 runtime path is easy to reason about:
 
 1. RTSP probe/build
-2. YOLO26 inference and box extraction
+2. YOLO26 segmentation inference and mask extraction
 3. Insight video/metadata publishing
 """
 
@@ -20,9 +20,6 @@ import argparse
 from dataclasses import dataclass
 import glob
 import json
-import os
-import struct
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -31,32 +28,18 @@ import yaml
 DEFAULT_FPS = 30
 SOURCE_RUN_QUEUE_DEPTH = 4
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+DEFAULT_LABELS = DEFAULT_CONFIG.parent / "coco_label.txt"
+MASK_ALPHA = 0.55
+MASK_THRESHOLD = 0.5
 cv2 = None
 np = None
 pyneat = None
-DFL_BINS_16 = None
 
-# Standard COCO class order for the bundled YOLO26 detector model used by this sample.
-COCO80_NAMES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus",
-    "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse",
-    "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
-    "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
-    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
-    "fork", "knife", "spoon", "bowl", "banana", "apple",
-    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
-    "donut", "cake", "chair", "couch", "potted plant", "bed",
-    "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
-]
 
 @dataclass(frozen=True)
 class ModelConfig:
     path: str
+    labels: str
 
 
 @dataclass(frozen=True)
@@ -88,19 +71,27 @@ class InsightConfig:
 
 
 @dataclass(frozen=True)
+class OutputConfig:
+    save_dir: str
+    save_every: int
+    mask_alpha: float
+    mask_threshold: float
+    draw_boxes: bool
+
+
+@dataclass(frozen=True)
 class AppConfig:
     model: ModelConfig
     source: SourceConfig
     inference: InferenceConfig
     runtime: RuntimeConfig
     insight: InsightConfig
-    save_dir: str
-    save_every: int
+    output: OutputConfig
 
 
 def load_runtime_dependencies() -> None:
     """Import runtime-only dependencies after argparse validation."""
-    global cv2, np, pyneat, DFL_BINS_16
+    global cv2, np, pyneat
     if pyneat is not None:
         return
 
@@ -116,7 +107,6 @@ def load_runtime_dependencies() -> None:
     cv2 = cv2_module
     np = np_module
     pyneat = pyneat_module
-    DFL_BINS_16 = np.arange(16, dtype=np.float32)
 
 
 def tensor_to_numpy(tensor: pyneat.Tensor) -> np.ndarray:
@@ -171,35 +161,14 @@ def tensor_from_bgr_frame(frame: np.ndarray) -> pyneat.Tensor:
     )
 
 
-def blank_nv12_tensor(width: int, height: int) -> pyneat.Tensor:
-    """Create a CPU-backed blank NV12 tensor with explicit Y and UV plane metadata."""
-    if width <= 0 or height <= 0 or width % 2 != 0 or height % 2 != 0:
-        raise ValueError("NV12 requires positive even width and height")
-    payload = np.zeros((height * 3 // 2, width), dtype=np.uint8)
-    tensor = pyneat.Tensor.from_numpy(
-        payload,
+def tensor_from_rgb_frame(frame: np.ndarray) -> pyneat.Tensor:
+    """Create an EV74 RGB image tensor for VideoSender input."""
+    return pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(frame),
         copy=True,
-        layout=pyneat.TensorLayout.HW,
-        image_format=pyneat.PixelFormat.NV12,
-        memory=pyneat.TensorMemory.CPU,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
     )
-    tensor.shape = [height, width]
-    tensor.strides_bytes = [width, 1]
-
-    y_plane = pyneat.Plane()
-    y_plane.role = pyneat.PlaneRole.Y
-    y_plane.shape = [height, width]
-    y_plane.strides_bytes = [width, 1]
-    y_plane.byte_offset = 0
-
-    uv_plane = pyneat.Plane()
-    uv_plane.role = pyneat.PlaneRole.UV
-    uv_plane.shape = [height // 2, width]
-    uv_plane.strides_bytes = [width, 1]
-    uv_plane.byte_offset = width * height
-
-    tensor.planes = [y_plane, uv_plane]
-    return tensor
 
 
 def is_tensor_like(value) -> bool:
@@ -210,90 +179,59 @@ def is_sample_like(value) -> bool:
     return hasattr(value, "kind") and hasattr(value, "fields")
 
 
-def extract_bbox_payload_from_tensors(tensors) -> bytes | None:
-    for tensor in tensors:
-        try:
-            payload = tensor.copy_payload_bytes()
-        except Exception:
-            continue
-        if payload:
-            return payload
-    return None
-
-
-def extract_bbox_payload(result) -> bytes | None:
-    """Prefer the runtime's pre-decoded BBOX payload when the model emits it.
-
-    Some YOLO pipelines already attach a compact BBOX payload. When that exists
-    it is more reliable and cheaper to parse than re-decoding the raw YOLO head
-    tensors in Python.
-    """
+def extract_tensors(result) -> list:
     if isinstance(result, (list, tuple)) and all(is_tensor_like(item) for item in result):
-        return extract_bbox_payload_from_tensors(result)
+        return list(result)
 
     if not is_sample_like(result):
-        return None
+        return []
 
+    tensors = []
     stack = [result]
     while stack:
         current = stack.pop()
         stack.extend(reversed(list(current.fields)))
         if current.kind == pyneat.SampleKind.TensorSet:
-            payload = extract_bbox_payload_from_tensors(current.tensors)
-            if payload:
-                return payload
+            tensors.extend(current.tensors)
             continue
-        if current.kind != pyneat.SampleKind.Tensor or current.tensor is None:
-            continue
-        fmt = (current.payload_tag or current.format or "").upper()
-        if fmt and fmt != "BBOX":
-            continue
-        try:
-            payload = current.tensor.copy_payload_bytes()
-        except Exception:
-            continue
-        if payload:
-            return payload
-    return None
+        if current.kind == pyneat.SampleKind.Tensor and current.tensor is not None:
+            tensors.append(current.tensor)
+    return tensors
 
 
-def parse_bbox_payload(payload: bytes, img_w: int, img_h: int, max_detections: int) -> list[dict]:
-    """Decode the packed BBOX payload format used by NEAT samples."""
-    if len(payload) < 4:
-        return []
-    # Payload layout:
-    #   uint32 count
-    #   repeated { int32 x, int32 y, int32 w, int32 h, float score, int32 class_id }
-    #
-    # Guard the parsed count against truncated payloads so we never read past
-    # the actual buffer contents.
-    count = min(struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // 24, max_detections)
-    boxes = []
-    off = 4
-    for _ in range(count):
-        x, y, w, h, score, cls_id = struct.unpack_from("<iiiifi", payload, off)
-        off += 24
-        # Clamp every box back into the decoded frame. This keeps Insight metadata
-        # consistent even if the payload contains slightly out-of-bounds values.
-        x1 = max(0.0, min(float(img_w), float(x)))
-        y1 = max(0.0, min(float(img_h), float(y)))
-        x2 = max(0.0, min(float(img_w), float(x + w)))
-        y2 = max(0.0, min(float(img_h), float(y + h)))
-        # Skip degenerate boxes after clamping so downstream consumers only see
-        # valid xyxy coordinates.
-        if x2 <= x1 or y2 <= y1:
+def segmentation_results_from_output(result, width: int, height: int, max_detections: int) -> list[dict]:
+    tensors = extract_tensors(result)
+    if not tensors:
+        raise RuntimeError("model returned no segmentation tensors")
+
+    decoded = pyneat.decode_segmentation(
+        tensors,
+        clamp_to=(width, height),
+        top_k=max_detections,
+        strict=False,
+    )
+    detections = []
+    for item in decoded:
+        boxes = tensor_to_numpy(item.boxes).astype(np.float32)
+        masks = tensor_to_numpy(item.masks).astype(np.uint8)
+        if boxes.size == 0:
             continue
-        boxes.append(
-            {
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "score": float(score),
-                "class_id": int(cls_id),
-            }
-        )
-    return boxes
+        for row, mask in zip(boxes.reshape((-1, 6)), masks.reshape((-1, 160, 160))):
+            x1, y1, x2, y2, score, class_id = row.tolist()
+            if x2 <= x1 or y2 <= y1:
+                continue
+            detections.append(
+                {
+                    "x1": float(x1),
+                    "y1": float(y1),
+                    "x2": float(x2),
+                    "y2": float(y2),
+                    "score": float(score),
+                    "class_id": int(class_id),
+                    "mask": mask,
+                }
+            )
+    return detections[:max_detections]
 
 
 def probe_rtsp(url: str) -> tuple[int, int, int]:
@@ -358,13 +296,13 @@ def build_rtsp_run(
 
 
 def build_model(model_path: str, inference: InferenceConfig) -> pyneat.Model:
-    """Create the YOLO model for model-managed YOLO26 preprocessing and decode."""
+    """Create the YOLO26 segmentation model with model-managed preprocess/decode."""
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
-    opt.decode_type = pyneat.BoxDecodeType.YoloV26
+    opt.decode_type = pyneat.BoxDecodeType.YoloV26Seg
     opt.score_threshold = inference.min_score
     opt.nms_iou_threshold = inference.nms_iou
     opt.top_k = inference.max_detections
@@ -372,7 +310,7 @@ def build_model(model_path: str, inference: InferenceConfig) -> pyneat.Model:
 
 
 def build_detector_run(model_path: str, width: int, height: int, inference: InferenceConfig):
-    """Build the explicit YOLO26 detector graph used by the RTSP loop."""
+    """Build the explicit YOLO26 segmentation graph used by the RTSP loop."""
     model = build_model(model_path, inference)
 
     input_opt = model.input_appsrc_options(False)
@@ -396,17 +334,15 @@ def build_detector_run(model_path: str, width: int, height: int, inference: Infe
 
 
 def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
-    """Build the generic NEAT video sender used by this Insight-targeted example."""
+    """Build the VideoSender used to publish annotated RGB frames to Insight."""
     input_opt = pyneat.InputOptions()
     input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = "NV12"
+    input_opt.format = "RGB"
     input_opt.width = width
     input_opt.height = height
+    input_opt.depth = 3
     input_opt.fps_n = max(1, fps)
     input_opt.fps_d = 1
-    input_opt.caps_override = (
-        f"video/x-raw,format=NV12,width={width},height={height},framerate={max(1, fps)}/1"
-    )
     input_opt.use_simaai_pool = False
 
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
@@ -419,7 +355,12 @@ def build_video_sender_run(cfg: AppConfig, width: int, height: int, fps: int):
     graph.add(pyneat.nodes.input(input_opt))
     graph.add(pyneat.groups.video_sender(sender_opt))
 
-    seed = blank_nv12_tensor(width, height)
+    seed = pyneat.Tensor.from_numpy(
+        np.zeros((height, width, 3), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
     return graph, graph.build([seed])
 
 
@@ -431,60 +372,180 @@ def build_metadata_sender(cfg: AppConfig):
     return pyneat.MetadataSender(options)
 
 
-def make_object_detection_data_json(boxes: list[dict]) -> str:
-    """Build the object-detection metadata data object."""
+def load_labels(path: Path) -> list[str]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Labels file does not exist: {path}")
+    labels = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not labels:
+        raise ValueError(f"Labels file is empty: {path}")
+    return labels
+
+
+def class_name(labels: list[str], class_id: int) -> str:
+    return labels[class_id] if 0 <= class_id < len(labels) else "unknown"
+
+
+def make_instance_segmentation_data_json(detections: list[dict], labels: list[str]) -> str:
+    """Build lightweight metadata; masks are rendered directly into the video."""
     objects = []
-    for idx, box in enumerate(boxes, start=1):
-        cls_id = int(box["class_id"])
-        label = COCO80_NAMES[cls_id] if 0 <= cls_id < len(COCO80_NAMES) else "Unknown"
+    for idx, det in enumerate(detections, start=1):
+        cls_id = int(det["class_id"])
         objects.append(
             {
                 "id": f"obj_{idx}",
-                "label": label,
-                "confidence": float(box["score"]),
+                "label": class_name(labels, cls_id),
+                "confidence": float(det["score"]),
                 "bbox": [
-                    float(box["x1"]),
-                    float(box["y1"]),
-                    float(box["x2"] - box["x1"]),
-                    float(box["y2"] - box["y1"]),
+                    float(det["x1"]),
+                    float(det["y1"]),
+                    float(det["x2"] - det["x1"]),
+                    float(det["y2"] - det["y1"]),
                 ],
             }
         )
     return json.dumps({"objects": objects}, separators=(",", ":"))
 
 
-def save_annotated_frame(frame: np.ndarray, boxes: list[dict], min_score: float, out_path: Path) -> None:
-    """Write one BGR frame with detection boxes for e2e/debug inspection."""
+def class_color(class_id: int) -> tuple[int, int, int]:
+    palette = [
+        (56, 56, 255),
+        (151, 157, 255),
+        (31, 112, 255),
+        (29, 178, 255),
+        (49, 210, 207),
+        (10, 249, 72),
+        (23, 204, 146),
+        (134, 219, 61),
+        (52, 147, 26),
+        (187, 212, 0),
+        (255, 194, 0),
+        (168, 153, 44),
+    ]
+    return palette[max(0, class_id) % len(palette)]
+
+
+def draw_box(frame: np.ndarray, det: dict, labels: list[str]) -> None:
+    cls_id = int(det["class_id"])
+    color = class_color(cls_id)
+    x1 = max(0, int(round(det["x1"])))
+    y1 = max(0, int(round(det["y1"])))
+    x2 = min(frame.shape[1] - 1, int(round(det["x2"])))
+    y2 = min(frame.shape[0] - 1, int(round(det["y2"])))
+    if x2 <= x1 or y2 <= y1:
+        return
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(
+        frame,
+        f"{class_name(labels, cls_id)} {float(det['score']):.2f}",
+        (x1, max(0, y1 - 4)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        color,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def frame_rect_for_detection(det: dict, frame_shape: tuple[int, ...]) -> tuple[int, int, int, int]:
+    frame_h, frame_w = frame_shape[:2]
+    x0 = max(0, min(frame_w - 1, int(np.floor(float(det["x1"])))))
+    y0 = max(0, min(frame_h - 1, int(np.floor(float(det["y1"])))))
+    x1 = max(x0 + 1, min(frame_w, int(np.ceil(float(det["x2"])))))
+    y1 = max(y0 + 1, min(frame_h, int(np.ceil(float(det["y2"])))))
+    return x0, y0, x1, y1
+
+
+def mask_rect_for_frame_rect(
+    frame_rect: tuple[int, int, int, int],
+    frame_shape: tuple[int, ...],
+    mask_shape: tuple[int, ...],
+) -> tuple[int, int, int, int]:
+    frame_h, frame_w = frame_shape[:2]
+    mask_h, mask_w = mask_shape[:2]
+    model_w = mask_w * 4
+    model_h = mask_h * 4
+    scale = min(model_w / frame_w, model_h / frame_h)
+    resized_w = frame_w * scale
+    resized_h = frame_h * scale
+    pad_x = (model_w - resized_w) * 0.5
+    pad_y = (model_h - resized_h) * 0.5
+
+    def to_mask_x(frame_x: float) -> float:
+        return (frame_x * scale + pad_x) * mask_w / model_w
+
+    def to_mask_y(frame_y: float) -> float:
+        return (frame_y * scale + pad_y) * mask_h / model_h
+
+    fx0, fy0, fx1, fy1 = frame_rect
+    x0 = max(0, min(mask_w - 1, int(np.floor(to_mask_x(fx0)))))
+    y0 = max(0, min(mask_h - 1, int(np.floor(to_mask_y(fy0)))))
+    x1 = max(x0 + 1, min(mask_w, int(np.ceil(to_mask_x(fx1)))))
+    y1 = max(y0 + 1, min(mask_h, int(np.ceil(to_mask_y(fy1)))))
+    return x0, y0, x1, y1
+
+
+def project_letterbox_mask_roi(
+    mask: np.ndarray,
+    frame_shape: tuple[int, ...],
+    frame_rect: tuple[int, int, int, int],
+) -> np.ndarray:
+    x0, y0, x1, y1 = frame_rect
+    mx0, my0, mx1, my1 = mask_rect_for_frame_rect(frame_rect, frame_shape, mask.shape)
+    return cv2.resize(mask[my0:my1, mx0:mx1], (x1 - x0, y1 - y0), interpolation=cv2.INTER_LINEAR)
+
+
+def overlay_segmentation(
+    frame: np.ndarray,
+    detections: list[dict],
+    min_score: float,
+    cfg: OutputConfig,
+    labels: list[str],
+) -> np.ndarray:
     annotated = frame.copy()
-    for box in boxes:
-        score = float(box["score"])
+    for det in detections:
+        score = float(det["score"])
         if score < min_score:
             continue
-        cls_id = int(box["class_id"])
-        label = COCO80_NAMES[cls_id] if 0 <= cls_id < len(COCO80_NAMES) else "unknown"
-        x1 = int(round(box["x1"]))
-        y1 = int(round(box["y1"]))
-        x2 = int(round(box["x2"]))
-        y2 = int(round(box["y2"]))
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(
-            annotated,
-            f"{label} {score:.2f}",
-            (x1, max(0, y1 - 4)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 255, 0),
-            1,
-            cv2.LINE_AA,
-        )
+        mask = det.get("mask")
+        if mask is None:
+            continue
+        mask = np.asarray(mask, dtype=np.uint8)
+        max_mask = int(mask.max()) if mask.size else 0
+        threshold = cfg.mask_threshold * (255.0 if max_mask > 1 else 1.0)
+        x0, y0, x1, y1 = frame_rect_for_detection(det, frame.shape)
+        roi_mask = project_letterbox_mask_roi(mask, frame.shape, (x0, y0, x1, y1))
+        region = roi_mask > threshold
+        if np.any(region):
+            color = np.array(class_color(int(det["class_id"])), dtype=np.float32)
+            roi = annotated[y0:y1, x0:x1]
+            roi[region] = (
+                (1.0 - cfg.mask_alpha) * roi[region].astype(np.float32)
+                + cfg.mask_alpha * color
+            ).astype(np.uint8)
+            contour_mask = region.astype(np.uint8)
+            contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(roi, contours, -1, class_color(int(det["class_id"])), 2, cv2.LINE_8)
+        if cfg.draw_boxes:
+            draw_box(annotated, det, labels)
+    return annotated
+
+
+def save_annotated_frame(frame: np.ndarray, out_path: Path) -> None:
+    """Write one BGR frame for e2e/debug inspection."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(out_path), annotated):
+    if not cv2.imwrite(str(out_path), frame):
         raise RuntimeError(f"failed to write output frame: {out_path}")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Expose only the small set of controls needed for this reference flow."""
-    parser = argparse.ArgumentParser(description="Single-camera RTSP YOLO26 Insight example")
+    parser = argparse.ArgumentParser(
+        description="Single-camera RTSP YOLO26 segmentation Insight example"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
     parser.add_argument(
         "--validate-config-only",
@@ -560,7 +621,10 @@ def load_app_config(config_path: Path) -> AppConfig:
     insight_cfg = _mapping(output_cfg.get("insight"), "output.insight")
 
     cfg = AppConfig(
-        model=ModelConfig(path=_required_string(model_cfg, "path", "model")),
+        model=ModelConfig(
+            path=_required_string(model_cfg, "path", "model"),
+            labels=_optional_string(model_cfg, "labels", str(DEFAULT_LABELS)),
+        ),
         source=SourceConfig(
             rtsp_url=_required_string(source_cfg, "rtsp_url", "source"),
             latency_ms=_optional_int(source_cfg, "latency_ms", 200),
@@ -569,8 +633,8 @@ def load_app_config(config_path: Path) -> AppConfig:
         inference=InferenceConfig(
             frames=_optional_int(inference_cfg, "frames", 0),
             min_score=_optional_float(inference_cfg, "min_score", 0.55),
-            nms_iou=_optional_float(inference_cfg, "nms_iou", 0.50),
-            max_detections=_optional_int(inference_cfg, "max_detections", 100),
+            nms_iou=_optional_float(inference_cfg, "nms_iou", 0.60),
+            max_detections=_optional_int(inference_cfg, "max_detections", 50),
         ),
         runtime=RuntimeConfig(
             profile=_optional_bool(runtime_cfg, "profile", False),
@@ -581,16 +645,25 @@ def load_app_config(config_path: Path) -> AppConfig:
             video_port=_optional_int(insight_cfg, "video_port", 9000),
             metadata_port=_optional_int(insight_cfg, "metadata_port", 9100),
         ),
-        save_dir=_optional_string(output_cfg, "save_dir", ""),
-        save_every=_optional_int(output_cfg, "save_every", 0),
+        output=OutputConfig(
+            save_dir=_optional_string(output_cfg, "save_dir", ""),
+            save_every=_optional_int(output_cfg, "save_every", 0),
+            mask_alpha=_optional_float(output_cfg, "mask_alpha", MASK_ALPHA),
+            mask_threshold=_optional_float(output_cfg, "mask_threshold", MASK_THRESHOLD),
+            draw_boxes=_optional_bool(output_cfg, "draw_boxes", True),
+        ),
     )
 
     if cfg.source.latency_ms < 0:
         raise ValueError("source.latency_ms must be >= 0")
     if cfg.inference.frames < 0:
         raise ValueError("inference.frames must be >= 0")
-    if cfg.save_every < 0:
+    if cfg.output.save_every < 0:
         raise ValueError("output.save_every must be >= 0")
+    if not 0.0 <= cfg.output.mask_alpha <= 1.0:
+        raise ValueError("output.mask_alpha must be between 0 and 1")
+    if not 0.0 <= cfg.output.mask_threshold <= 1.0:
+        raise ValueError("output.mask_threshold must be between 0 and 1")
     if not 0.0 <= cfg.inference.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.inference.nms_iou <= 1.0:
@@ -619,7 +692,7 @@ class ProfileWindow:
         self.started = 0.0
         self.rtsp_pull_ms = 0.0
         self.infer_ms = 0.0
-        self.bbox_ms = 0.0
+        self.decode_ms = 0.0
         self.video_push_ms = 0.0
         self.e2e_ms = 0.0
         self.max_e2e_ms = 0.0
@@ -629,7 +702,7 @@ class ProfileWindow:
         *,
         rtsp_pull_ms: float,
         infer_ms: float,
-        bbox_ms: float,
+        decode_ms: float,
         video_push_ms: float,
         e2e_ms: float,
         boxes: int,
@@ -643,7 +716,7 @@ class ProfileWindow:
         self.boxes += boxes
         self.rtsp_pull_ms += rtsp_pull_ms
         self.infer_ms += infer_ms
-        self.bbox_ms += bbox_ms
+        self.decode_ms += decode_ms
         self.video_push_ms += video_push_ms
         self.e2e_ms += e2e_ms
         self.max_e2e_ms = max(self.max_e2e_ms, e2e_ms)
@@ -660,7 +733,7 @@ class ProfileWindow:
             f"fps={self.frames / elapsed:.2f} "
             f"avg_rtsp_pull_ms={self.rtsp_pull_ms / frames:.2f} "
             f"avg_infer_ms={self.infer_ms / frames:.2f} "
-            f"avg_bbox_ms={self.bbox_ms / frames:.2f} "
+            f"avg_decode_ms={self.decode_ms / frames:.2f} "
             f"avg_video_push_ms={self.video_push_ms / frames:.2f} "
             f"avg_e2e_ms={self.e2e_ms / frames:.2f} "
             f"avg_boxes={self.boxes / frames:.2f} "
@@ -668,68 +741,6 @@ class ProfileWindow:
             flush=True,
         )
         self.reset()
-
-
-def resolve_yolo26_model(root: Path) -> str:
-    """Mirror the C++ sample's local-first model lookup strategy.
-
-    Resolution order:
-
-    1. explicit environment override
-    2. local/common modelzoo directories
-    3. `sima-cli download <YOLO26 detector URL>`
-    """
-    env_path = os.environ.get("SIMA_YOLO_TAR", "")
-    if env_path and Path(env_path).exists():
-        return env_path
-
-    tmp_dir = root / "tmp"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    model_name = "yolo26m-det-bf16-mla_tess-b1.tar.gz"
-    model_url = (
-        "https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/"
-        f"yolo26-detection/{model_name}"
-    )
-    tmp_tar = tmp_dir / model_name
-    direct_tar = root / model_name
-    if direct_tar.exists():
-        return str(direct_tar)
-    if tmp_tar.exists():
-        return str(tmp_tar)
-
-    home = Path.home()
-    search_dirs = [
-        root / "models",
-        root,
-        Path.cwd(),
-        root / "tmp",
-        home / ".simaai",
-        home / ".simaai" / "modelzoo",
-        home / ".sima" / "modelzoo",
-        Path("/data/simaai/modelzoo"),
-    ]
-    names = [
-        model_name,
-    ]
-    for directory in search_dirs:
-        for name in names:
-            candidate = directory / name
-            if candidate.exists():
-                return str(candidate)
-
-    try:
-        subprocess.run(["sima-cli", "download", model_url], cwd=str(tmp_dir), check=True)
-    except Exception:
-        return ""
-
-    if tmp_tar.exists():
-        return str(tmp_tar)
-    for directory in search_dirs:
-        for name in names:
-            candidate = directory / name
-            if candidate.exists():
-                return str(candidate)
-    return ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -744,10 +755,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     load_runtime_dependencies()
-    model_path = cfg.model.path or resolve_yolo26_model(Path.cwd())
+    model_path = cfg.model.path
     if not model_path or not Path(model_path).is_file():
-        print("Failed to locate YOLO26 detector model package.", file=sys.stderr)
-        print("Set model.path or download a YOLO26 detector package with sima-cli.", file=sys.stderr)
+        print("Failed to locate YOLO26 segmentation model package.", file=sys.stderr)
+        print("Set model.path to a YOLO26 segmentation package.", file=sys.stderr)
+        return 2
+    try:
+        labels = load_labels(Path(cfg.model.labels))
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 2
 
     rtsp_graph = None
@@ -763,14 +779,12 @@ def main(argv: list[str] | None = None) -> int:
         frame_w, frame_h, fps = probe_rtsp(cfg.source.rtsp_url)
         print(f"[init] probed RTSP decode dims {frame_w}x{frame_h}")
 
-        # NEAT boundary: build YOLO detector graph from the resolved compiled model package.
         model, detector_graph, detector_run = build_detector_run(
             model_path,
             frame_w,
             frame_h,
             cfg.inference,
         )
-        # NEAT boundary: build RTSP decode runtime used by pull_tensors().
         rtsp_graph, rtsp_run = build_rtsp_run(
             cfg.source.rtsp_url,
             frame_w,
@@ -779,7 +793,6 @@ def main(argv: list[str] | None = None) -> int:
             cfg.source.latency_ms,
             tcp=cfg.source.tcp,
         )
-        # NEAT boundary: build VideoSender and MetadataSender.
         video_graph, video_run = build_video_sender_run(cfg, frame_w, frame_h, fps)
         metadata_sender = build_metadata_sender(cfg)
 
@@ -789,12 +802,11 @@ def main(argv: list[str] | None = None) -> int:
         processed = 0
         started = time.perf_counter()
         profile_window = ProfileWindow(cfg.runtime.profile, cfg.runtime.profile_interval)
-        save_dir = Path(cfg.save_dir) if cfg.save_dir else None
+        save_dir = Path(cfg.output.save_dir) if cfg.output.save_dir else None
         if save_dir is not None:
             save_dir.mkdir(parents=True, exist_ok=True)
         # Contract: single-threaded frame order is pull -> infer -> publish video -> publish metadata.
         while cfg.inference.frames <= 0 or processed < cfg.inference.frames:
-            # Push/pull integration point: pull one decoded frame from RTSP run.
             t_pull0 = time.perf_counter()
             tensors = rtsp_run.pull_tensors(timeout_ms=20000)
             t_pull1 = time.perf_counter()
@@ -806,47 +818,49 @@ def main(argv: list[str] | None = None) -> int:
             frame = tensor_bgr_from_decoded(decoded_frame)
             infer_input = tensor_from_bgr_frame(frame)
 
-            # Push/pull integration point: run model and parse the BBOX payload.
             t_inf0 = time.perf_counter()
             result = detector_run.run([infer_input], timeout_ms=20000)
             t_inf1 = time.perf_counter()
 
-            payload = extract_bbox_payload(result)
-            if not payload:
-                raise RuntimeError("model returned no BBOX payload")
-            t_bbox0 = time.perf_counter()
-            boxes = parse_bbox_payload(
-                payload,
+            t_decode0 = time.perf_counter()
+            detections = segmentation_results_from_output(
+                result,
                 frame.shape[1],
                 frame.shape[0],
                 cfg.inference.max_detections,
             )
-            t_bbox1 = time.perf_counter()
+            t_decode1 = time.perf_counter()
+            annotated = overlay_segmentation(
+                frame,
+                detections,
+                cfg.inference.min_score,
+                cfg.output,
+                labels,
+            )
+            video_frame = tensor_from_rgb_frame(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
 
             # Contract: publish video first, then publish matching metadata.
             t_video0 = time.perf_counter()
-            video_ok = video_run.push([decoded_frame])
+            video_ok = video_run.push([video_frame])
             if not video_ok:
                 raise RuntimeError("Insight video push failed")
             t_video1 = time.perf_counter()
             fid = str(processed)
-            data_json = make_object_detection_data_json(boxes)
+            data_json = make_instance_segmentation_data_json(detections, labels)
             metadata_sender.send_metadata(
-                "object-detection",
+                "instance-segmentation",
                 data_json,
                 int(time.time() * 1000),
                 fid,
             )
             should_save = (
                 save_dir is not None
-                and cfg.save_every > 0
-                and (processed + 1) % cfg.save_every == 0
+                and cfg.output.save_every > 0
+                and (processed + 1) % cfg.output.save_every == 0
             )
             if should_save:
                 save_annotated_frame(
-                    frame,
-                    boxes,
-                    cfg.inference.min_score,
+                    annotated,
                     save_dir / f"frame_{processed:06d}.jpg",
                 )
 
@@ -854,10 +868,10 @@ def main(argv: list[str] | None = None) -> int:
             profile_window.add(
                 rtsp_pull_ms=(t_pull1 - t_pull0) * 1000.0,
                 infer_ms=(t_inf1 - t_inf0) * 1000.0,
-                bbox_ms=(t_bbox1 - t_bbox0) * 1000.0,
+                decode_ms=(t_decode1 - t_decode0) * 1000.0,
                 video_push_ms=(t_video1 - t_video0) * 1000.0,
                 e2e_ms=(t_video1 - t_pull1) * 1000.0,
-                boxes=len(boxes),
+                boxes=len(detections),
                 published_total=processed,
             )
 

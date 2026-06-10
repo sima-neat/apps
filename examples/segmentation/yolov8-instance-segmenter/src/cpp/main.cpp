@@ -1,8 +1,8 @@
 /**
- * @example instance-segmenter.cpp
+ * @example yolov8-instance-segmenter.cpp
  * Minimal YOLOv8-seg pipeline using DetessDequant postprocess (no boxdecode).
  *
- * Usage: instance-segmenter [--config <path>]
+ * Usage: yolov8-instance-segmenter [--config <path>]
  */
 #include "neat.h"
 #include "support/runtime/config_utils.h"
@@ -47,7 +47,7 @@ Config load_config(const fs::path& path) {
   Config cfg;
   cfg.model_path = raw.string_or("model.path", "assets/models/yolo_v8n_seg_mpk.tar.gz");
   cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
-  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/instance-segmenter");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/yolov8-instance-segmenter");
   cfg.infer_size = raw.int_or("runtime.infer_size", 640);
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", 8);
@@ -538,8 +538,7 @@ int main(int argc, char** argv) {
     run_opt.overflow_policy = simaai::neat::OverflowPolicy::Block;
     run_opt.preset = simaai::neat::RunPreset::Balanced;
 
-    auto run =
-        graph.build(simaai::neat::TensorList{input_tensor}, simaai::neat::RunMode::Async, run_opt);
+    auto run = graph.build(simaai::neat::TensorList{input_tensor}, run_opt);
     std::cout << "Found " << images.size() << " images\n";
 
     int processed = 0;

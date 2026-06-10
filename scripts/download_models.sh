@@ -22,7 +22,21 @@ KIND="e2e"
 LANGUAGES=()
 POSITIONAL_MODELS=()
 SCOPE_PYTHON="${TEST_SCOPE_PYTHON_BIN:-${PYTHON_TEST_BIN:-python3}}"
+VERSION_PYTHON="${PYTHON_TEST_BIN:-python3}"
 export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
+
+detect_model_sdk_version() {
+    "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" <<'PY' 2>/dev/null || printf '2.0.0\n'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(manifest.get("platform-version") or "2.0.0")
+PY
+}
+
+MODEL_SDK_VERSION="${NEAT_APPS_MODEL_SDK_VERSION:-$(detect_model_sdk_version)}"
 
 usage() {
     cat <<'EOF'
@@ -34,6 +48,7 @@ Options:
   --scope-file <path>   Test scope source file or directory (default: examples)
   --kind <kind>         Scope kind to resolve (default: e2e)
   --language <lang>     Scope language to include; repeatable (python, cpp)
+  NEAT_APPS_MODEL_SDK_VERSION can override {sdk_version} URL placeholders.
   -h, --help            Show help
 EOF
 }
@@ -185,6 +200,7 @@ download_url_model() {
     local expected_file="$3"
     local tmpdir
     local downloaded_files=()
+    url="${url//\{sdk_version\}/$MODEL_SDK_VERSION}"
 
     if model_exists "$model_id" "$expected_file"; then
         echo "[skip] $model_id already exists"
@@ -232,6 +248,13 @@ download_huggingface_model() {
     return 1
 }
 
+split_tsv_row() {
+    local row="$1"
+    local -n out="$2"
+    local normalized="${row//$'\t'/$'\x1f'}"
+    IFS=$'\x1f' read -r -a out <<<"$normalized"
+}
+
 download_scoped_models() {
     if [[ "${#LANGUAGES[@]}" -eq 0 ]]; then
         LANGUAGES=(python cpp)
@@ -267,9 +290,17 @@ download_scoped_models() {
     acquire_lock
 
     local failed=0
-    local row model_id source name url expected_file repo path
+    local row model_id source name url expected_file repo path fields
     for row in "${rows[@]}"; do
-        IFS=$'\t' read -r model_id source name url expected_file repo path <<<"$row"
+        fields=()
+        split_tsv_row "$row" fields
+        model_id="${fields[0]:-}"
+        source="${fields[1]:-}"
+        name="${fields[2]:-}"
+        url="${fields[3]:-}"
+        expected_file="${fields[4]:-}"
+        repo="${fields[5]:-}"
+        path="${fields[6]:-}"
         case "$source" in
             modelzoo)
                 download_modelzoo_model "$model_id" "${name:-$model_id}" "$expected_file" || failed=1

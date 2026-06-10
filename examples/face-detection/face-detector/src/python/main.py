@@ -410,7 +410,7 @@ def build_retinaface_runner(model_path: Path) -> Any:
 
     _log("Building Graph run with dummy frame")
     dummy = tensor_from_hwc_f32(np.zeros((INFER_HEIGHT, INFER_WIDTH, 3), dtype=np.float32))
-    return graph.build([dummy], pyneat.RunMode.Async)
+    return graph.build([dummy])
 
 
 def prepare_retinaface_frame(image_path: Path) -> tuple[pyneat.Tensor, np.ndarray, PreprocMeta]:

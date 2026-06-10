@@ -1,4 +1,4 @@
-"""Unit tests for instance-segmenter (Python)."""
+"""Unit tests for yolov8-instance-segmenter (Python)."""
 import importlib.util
 import subprocess
 import sys
@@ -29,7 +29,7 @@ class FakeTensor:
 
 @pytest.mark.unit
 class TestArgParsing:
-    """Validate CLI argument parsing for the instance segmentation overlay pipeline."""
+    """Validate CLI argument parsing for the YOLOv8 instance segmentation overlay pipeline."""
 
     def test_help(self):
         """--help should print usage without running inference."""

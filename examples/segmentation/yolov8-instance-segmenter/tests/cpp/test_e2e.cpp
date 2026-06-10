@@ -1,4 +1,4 @@
-// E2E test for instance-segmenter.
+// E2E test for yolov8-instance-segmenter.
 // Runs the binary with a real model and test images, verifies overlay outputs.
 #include "support/testing/test_process.h"
 #include "support/testing/test_config.h"
@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
 
-  const std::string model_path = configured_model_path("instance-segmenter", models_dir);
+  const std::string model_path = configured_model_path("yolov8-instance-segmenter", models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail(
         "configured segmentation model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
@@ -34,13 +34,14 @@ int main(int argc, char** argv) {
                 "directory with test images (assets/test_images is empty or missing)");
   }
 
-  auto out_dir = create_test_output_dir("instance-segmenter", "test_full_pipeline");
+  auto out_dir = create_test_output_dir("yolov8-instance-segmenter", "test_full_pipeline");
   if (out_dir.empty())
     return 1;
 
-  const double score_threshold = e2e_double("instance-segmenter", "decode", "score_threshold");
-  const double nms_iou = e2e_double("instance-segmenter", "decode", "nms_iou");
-  const int max_detections = e2e_int("instance-segmenter", "decode", "max_detections");
+  const double score_threshold =
+      e2e_double("yolov8-instance-segmenter", "decode", "score_threshold");
+  const double nms_iou = e2e_double("yolov8-instance-segmenter", "decode", "nms_iou");
+  const int max_detections = e2e_int("yolov8-instance-segmenter", "decode", "max_detections");
   const std::string config_path = (fs::path(out_dir).parent_path() / "config.yaml").string();
   {
     std::ofstream config(config_path);
@@ -79,7 +80,7 @@ int main(int argc, char** argv) {
     std::cerr << "[FAIL] some output files are empty\n";
     rc = 1;
   } else {
-    std::cout << "[OK] instance segmentation overlay produced " << output_files
+    std::cout << "[OK] YOLOv8 instance segmentation overlay produced " << output_files
               << " output files\n";
   }
 
