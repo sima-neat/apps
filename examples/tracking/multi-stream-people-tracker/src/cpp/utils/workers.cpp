@@ -428,20 +428,6 @@ void print_profile_summary(const std::vector<StreamRuntime>& streams) {
   }
 }
 
-void print_power_metrics(const std::vector<StreamRuntime>& streams) {
-  for (const auto& stream : streams) {
-    if (!stream.detect.has_value()) {
-      continue;
-    }
-    const auto power = stream.detect->run.power_summary();
-    if (!power.enabled) {
-      continue;
-    }
-    std::cout << "\n[stream " << stream.index << "] detection run runtime metrics:\n"
-              << stream.detect->run.metrics_report();
-  }
-}
-
 void publish_thread(StreamRuntime& stream, const AppConfig& cfg,
                     KeepLatestQueue<ResultPacket>& result_queue, std::atomic<bool>& stop_event) {
   const std::optional<fs::path> output_dir =
@@ -652,9 +638,6 @@ int run_app(const AppConfig& cfg) {
       thread.join();
     }
   }
-
-  print_power_metrics(streams);
-
   for (auto& stream : streams) {
     close_stream_runtime(stream);
   }
