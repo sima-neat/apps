@@ -16,13 +16,15 @@ DEFAULT_SERVER_CONFIG = DEFAULT_CONFIG
 DEFAULT_UI_CONFIG = DEFAULT_CONFIG
 
 
-def _default_path_root() -> Path:
-    if EXAMPLE_ROOT.parent.parent.name == "examples":
-        return EXAMPLE_ROOT.parent.parent.parent
-    return EXAMPLE_ROOT
+def _detect_apps_root() -> Path | None:
+    maybe_apps_root = EXAMPLE_ROOT.parent.parent.parent
+    if EXAMPLE_ROOT.parent.parent.name == "examples" and (maybe_apps_root / "examples").is_dir():
+        return maybe_apps_root
+    return None
 
 
-PATH_ROOT = _default_path_root()
+APPS_ROOT = _detect_apps_root()
+PATH_ROOT = APPS_ROOT or EXAMPLE_ROOT
 
 
 @dataclass(frozen=True)
@@ -268,15 +270,13 @@ def _load_optional_path(value: object, apps_root: Path) -> str:
 
 
 def _resolve_relative_path(path: Path, apps_root: Path) -> Path:
-    primary = apps_root / path
-    if primary.exists() or apps_root == EXAMPLE_ROOT:
-        return primary
+    candidate_roots = (apps_root, EXAMPLE_ROOT)
+    for root in candidate_roots:
+        candidate = root / path
+        if candidate.exists():
+            return candidate
 
-    example_relative = EXAMPLE_ROOT / path
-    if example_relative.exists():
-        return example_relative
-
-    return primary
+    return apps_root / path
 
 
 def _load_bool(value: object) -> bool:
