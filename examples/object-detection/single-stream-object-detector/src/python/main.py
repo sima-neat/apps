@@ -381,9 +381,10 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     labels = load_labels(cfg.labels_path)
 
     source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, fps, frame_w, frame_h))
+    save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
     outputs = ["video", "model"]
-    if cfg.save_dir and cfg.save_every > 0:
-        outputs.append("frames")
+    if save_debug_frames:
+        outputs.append("debug_frame")
     branch = pyneat.graphs.branch("source", outputs)
 
     video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
@@ -397,17 +398,24 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
-    detections = pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4))
+
+    detections_graph = pyneat.Graph("detections")
+    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
 
     graph = pyneat.Graph()
     graph.connect(source, branch)
     graph.connect(branch, video_graph)
     graph.connect(branch, model_graph)
-    graph.connect(model_graph, detections)
-    if cfg.save_dir and cfg.save_every > 0:
-        frames = pyneat.Graph("frames")
-        frames.add(pyneat.nodes.output("frames", pyneat.OutputOptions.latest()))
+    graph.connect(model_graph, detections_graph)
+    if save_debug_frames:
+        frames = pyneat.Graph("debug_frame")
+        frames.add(pyneat.nodes.output("debug_frame", pyneat.OutputOptions.every_frame(4)))
+        debug_join = pyneat.graphs.combine(
+            ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
+        )
         graph.connect(branch, frames)
+        graph.connect(frames, debug_join)
+        graph.connect(detections_graph, debug_join)
     if cfg.profile:
         print(f"Backend:\n{graph.describe_backend()}")
 
@@ -528,13 +536,11 @@ def draw_boxes(frame, boxes: list[dict], min_score: float) -> None:
         )
 
 
-def maybe_save_debug_frame(runtime: PipelineRuntime, cfg: AppConfig, processed: int,
-                           boxes: list[dict]) -> None:
+def maybe_save_debug_frame(cfg: AppConfig, processed: int, sample, boxes: list[dict]) -> None:
     if not cfg.save_dir or cfg.save_every <= 0 or processed % cfg.save_every != 0:
         return
 
-    frame_sample = runtime.run.pull("frames", 0)
-    frame_tensor = first_tensor_from_sample(frame_sample)
+    frame_tensor = first_tensor_from_sample(sample)
     if frame_tensor is None:
         return
 
@@ -547,10 +553,11 @@ def maybe_save_debug_frame(runtime: PipelineRuntime, cfg: AppConfig, processed: 
 
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
+    output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
     processed = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
-        detection_sample = runtime.run.pull("detections", 20000)
+        detection_sample = runtime.run.pull(output_name, 20000)
         pull_end = time_ms()
         if detection_sample is None:
             print("[warn] timed out waiting for detections", file=sys.stderr)
@@ -564,7 +571,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         metadata_end = time_ms()
 
         processed += 1
-        maybe_save_debug_frame(runtime, cfg, processed, boxes)
+        maybe_save_debug_frame(cfg, processed, detection_sample, boxes)
         profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
 
     profile.flush()

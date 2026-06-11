@@ -312,9 +312,10 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.labels = load_labels(cfg.labels_path);
 
   auto source = simaai::neat::nodes::groups::RtspDecodedInput(source_options);
+  const bool save_debug_frames = !cfg.save_dir.empty() && cfg.save_every > 0;
   std::vector<std::string> source_outputs = {"video", "model"};
-  if (!cfg.save_dir.empty() && cfg.save_every > 0) {
-    source_outputs.push_back("frames");
+  if (save_debug_frames) {
+    source_outputs.push_back("debug_frame");
   }
   auto branch = simaai::neat::graphs::Branch("source", source_outputs);
 
@@ -331,17 +332,23 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
 
   simaai::neat::Graph model_graph("model");
   model_graph.connect(simaai::neat::nodes::Input("model"), *runtime.model);
-  auto detections =
-      simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4));
+  simaai::neat::Graph detections_graph("detections");
+  detections_graph.add(
+      simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
 
   runtime.graph.connect(source, branch);
   runtime.graph.connect(branch, video_graph);
   runtime.graph.connect(branch, model_graph);
-  runtime.graph.connect(model_graph, detections);
-  if (!cfg.save_dir.empty() && cfg.save_every > 0) {
-    simaai::neat::Graph frames("frames");
-    frames.add(simaai::neat::nodes::Output("frames", simaai::neat::OutputOptions::Latest()));
+  runtime.graph.connect(model_graph, detections_graph);
+  if (save_debug_frames) {
+    simaai::neat::Graph frames("debug_frame");
+    frames.add(
+        simaai::neat::nodes::Output("debug_frame", simaai::neat::OutputOptions::EveryFrame(4)));
+    auto debug_join = simaai::neat::graphs::Combine({"debug_frame", "detections"}, "debug_output",
+                                                    simaai::neat::CombinePolicy::ByPts);
     runtime.graph.connect(branch, frames);
+    runtime.graph.connect(frames, debug_join);
+    runtime.graph.connect(detections_graph, debug_join);
   }
   if (cfg.profile) {
     std::cout << "Backend:\n" << runtime.graph.describe_backend() << "\n";
@@ -386,17 +393,13 @@ void send_metadata(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
   }
 }
 
-void maybe_save_debug_frame(PipelineRuntime& runtime, const AppConfig& cfg, int processed,
+void maybe_save_debug_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample& sample,
                             const std::vector<objdet::Box>& boxes) {
   if (cfg.save_dir.empty() || cfg.save_every <= 0 || processed % cfg.save_every != 0) {
     return;
   }
 
-  auto frame_sample = runtime.run.pull("frames", 0);
-  if (!frame_sample.has_value()) {
-    return;
-  }
-  const auto tensors = simaai::neat::tensors_from_sample(*frame_sample, false);
+  const auto tensors = simaai::neat::tensors_from_sample(sample, false);
   if (tensors.empty()) {
     return;
   }
@@ -419,12 +422,14 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
   profile.enabled = cfg.profile;
   profile.interval = cfg.profile_interval;
 
+  const std::string output_name =
+      (!cfg.save_dir.empty() && cfg.save_every > 0) ? "debug_output" : "detections";
   int processed = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     simaai::neat::Sample detection_sample;
     simaai::neat::PullError pull_error;
     const double pull_start = sima_examples::time_ms();
-    const auto status = runtime.run.pull("detections", 20000, detection_sample, &pull_error);
+    const auto status = runtime.run.pull(output_name, 20000, detection_sample, &pull_error);
     const double pull_end = sima_examples::time_ms();
     if (status == simaai::neat::PullStatus::Timeout) {
       std::cerr << "[warn] timed out waiting for detections\n";
@@ -450,7 +455,7 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     const double metadata_end = sima_examples::time_ms();
 
     ++processed;
-    maybe_save_debug_frame(runtime, cfg, processed, boxes);
+    maybe_save_debug_frame(cfg, processed, detection_sample, boxes);
     profile.add(pull_end - pull_start, metadata_end - metadata_start,
                 static_cast<int>(boxes.size()));
   }
