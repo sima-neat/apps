@@ -1,5 +1,6 @@
 // E2E test for multi-stream-object-detector.
 // Runs the RTSP pipeline and verifies sampled debug frames are written.
+#include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
@@ -38,9 +39,7 @@ int main(int argc, char** argv) {
   }
 
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
-  const std::string insight_host = env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
-                                       ? env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
-                                       : "127.0.0.1";
+  const std::string insight_host = "127.0.0.1";
   const int video_port_base = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port_base =
       env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
@@ -55,6 +54,19 @@ int main(int argc, char** argv) {
                    {{"streams", {rtsp_urls[0], rtsp_urls[1]}}});
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
+  MetadataJsonListenerOptions metadata_options;
+  metadata_options.host = insight_host;
+  metadata_options.base_port = metadata_port_base;
+  metadata_options.num_ports = 2;
+  metadata_options.timeout_ms = 5000;
+  metadata_options.require_all_ports = true;
+  MetadataJsonListener metadata_listener(metadata_options);
+  if (!metadata_listener.ok()) {
+    std::cerr << "[FAIL] metadata listener failed: " << metadata_listener.error() << "\n";
+    remove_dir(output_dir);
+    return 1;
+  }
+
   const ProcessResult result = spawn_until_output_files(binary, {"--config", config_path.string()},
                                                         output_dir, total_saved_frames, timeout_ms);
 
@@ -76,6 +88,17 @@ int main(int argc, char** argv) {
     } else {
       std::cout << "[OK] multi-camera object detector produced " << files
                 << " sampled output files\n";
+    }
+  }
+  if (rc == 0) {
+    const MetadataJsonListenerResult metadata = metadata_listener.wait_for_messages();
+    if (!metadata.success) {
+      std::cerr << "[FAIL] object-detection metadata was not received on all streams: "
+                << metadata.error << "\n";
+      rc = 1;
+    } else {
+      std::cout << "[OK] object-detection metadata received on "
+                << metadata.ports_with_valid_json.size() << " streams\n";
     }
   }
 
