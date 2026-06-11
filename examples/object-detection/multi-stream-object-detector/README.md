@@ -20,16 +20,17 @@ Snippet from a pipeline run:
 ![Multi-stream object detector preview](../../../assets/portal/object-detection/multi-stream-object-detector/image.png)
 
 Architecture:
-- one decoded RGB RTSP source runtime per stream
-- one lazy Insight video runtime and one Insight metadata sender per stream
-- a shared detector worker pool sized by `runtime.worker_count`
-- one keep-latest mailbox per stream so the example can scale to many cameras without building large per-stream backlogs
+- one complete graph per RTSP stream
+- each stream branches decoded NV12 frames into video and model paths
+- clean Insight video is sent through `VideoSender`
+- YOLO26 detections are sent as metadata for Insight overlay
+- optional debug output joins decoded frames and detections by frame id before saving
 
-Detector graph:
-- YOLO26: `Input(RGB) -> model.graph() -> Output`
-
-Video graph:
-- `Input(RGB) -> VideoSender(H.264 RTP/UDP)`
+Per-stream graph:
+- `RtspDecodedInput -> Branch(video, model[, debug_frame])`
+- `video -> VideoSender(H.264 RTP/UDP)`
+- `model -> YOLO26 model.graph() -> detections`
+- debug only: `Combine(debug_frame, detections, ByFrame) -> debug_output`
 
 ## Prerequisites
 - Installed Neat SDK.
@@ -111,29 +112,21 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-str
 ```
 
 ## Debugging notes
-- The checked-in `src/common/config.yaml` includes 16 placeholder stream slots. Replace the RTSP URLs and Insight host before running.
+- The checked-in `src/common/config.yaml` includes four placeholder stream slots. Replace the RTSP URLs and Insight host before running.
+- This phase supports up to four active streams.
 - On Modalix DevKit, start with `bash /usr/bin/fix_devkit_runtime.sh`. If the runtime still behaves inconsistently, a full board reboot has been a more reliable reset than service restarts alone.
-- `output.debug_dir` and `output.save_every` let you save periodic RGB debug frames locally without changing the Insight output contract.
-- `output.insight.metadata_offset_ms` lets you shift metadata timestamps to better align Insight boxes with the published video stream when transport latency makes boxes appear early or late. It only applies when metadata output is enabled.
-- When `inference.fps` is lower than the source FPS, the example throttles after decode and keeps only the most recent frame per stream in the mailbox.
-- Profiling prints `source`, `preproc`, `detect`, `video`, `metadata`, `publish`, and `loop` timings per stream so bottlenecks are easier to isolate.
+- `output.debug_dir` and `output.save_every` let you save periodic aligned debug frames locally without changing the Insight output contract.
+- Profiling prints per-stream pull, metadata, output FPS, and detection-count summaries.
 
 ## Notes
-- Point `model.path` at a YOLO26 pack. This example infers YOLO26 from the model path and does not use a `model.family` config key.
-- Both the C++ and Python paths decode each RTSP stream to RGB in system memory, run YOLO26 on those RGB frames, and feed the selected RGB frame into `VideoSender`. They do not manually build lower-level color conversion, encoder, parser, packetizer, or UDP nodes.
-- `output.video_mode: clean` feeds unannotated RGB frames into `VideoSender` and keeps metadata enabled. `annotated` draws detection boxes into the RGB frame before feeding it into `VideoSender` and suppresses metadata so Insight does not overlay detections twice.
-- Because these examples send raw frames, they use the raw-frame `VideoSender` option. If an upstream pipeline already produces H.264, `VideoSender` also supports an encoded-input option that parses, packetizes, and sends without re-encoding.
-- `output.video_enabled: false` disables per-stream H264 video output. In `clean` mode the example still sends metadata detections; in `annotated` mode metadata is suppressed.
-- `runtime.mailbox_depth` defaults to `1` and should usually stay small for dense multistream runs.
-- The example applies the following runtime defaults for dense RTSP runs when the environment does not already override them:
-  `SIMA_FORCE_MODEL_NUM_BUFFERS=3`, `SIMA_FORCE_DECODER_NUM_BUFFERS=7`, and `SIMA_FORCE_DECODER_POOL_BUFFERS=7`.
-- The Python implementation mirrors the same high-level contract as C++ while staying on public `pyneat`: `RtspDecodedInput`, `model.graph()`, and `groups.video_sender(...)`.
+- Point `model.path` at a YOLO26 detection pack. This example does not use a `model.family` config key.
+- Both C++ and Python use the same public graph shape: `RtspDecodedInput`, `graphs::Branch`, `model.graph()`, `graphs::Combine` for debug saves, and `VideoSender`.
+- The live path keeps video and metadata separate. Insight overlays metadata on the clean video stream.
+- `output.video_enabled: false` disables per-stream H.264 video output. Metadata still runs.
 
 ## Source Files
 - C++: `src/cpp/main.cpp`
-- C++ runtime helpers: `src/cpp/utils/config.cpp`, `src/cpp/utils/pipeline.cpp`, `src/cpp/utils/sample_utils.cpp`, `src/cpp/utils/workers.cpp`
 - C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
 - Python: `src/python/main.py`
-- Python runtime helpers: `src/python/utils/config.py`, `src/python/utils/model_family.py`, `src/python/utils/pipeline.py`, `src/python/utils/sample_utils.py`, `src/python/utils/image_utils.py`, `src/python/utils/workers.py`
 - Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
 - Shared assets: `src/common/`

@@ -6,26 +6,12 @@ streams:                     # RTSP inputs, one entry per camera.
   - <rtsp-url-2>
   - <rtsp-url-3>
   - <rtsp-url-4>
-  # - <rtsp-url-5>
-  # - <rtsp-url-6>
-  # - <rtsp-url-7>
-  # - <rtsp-url-8>
-  # - <rtsp-url-9>
-  # - <rtsp-url-10>
-  # - <rtsp-url-11>
-  # - <rtsp-url-12>
-  # - <rtsp-url-13>
-  # - <rtsp-url-14>
-  # - <rtsp-url-15>
-  # - <rtsp-url-16>
 
 input:                       # RTSP input transport settings.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
 
-runtime:                     # Shared worker and profiling settings.
-  worker_count: 4            # Number of detector workers shared across streams.
-  mailbox_depth: 1           # Keep-latest queue depth per stream.
+runtime:                     # Runtime and profiling settings.
   profile: true              # Print per-stream timing summaries.
 
 inference:                   # Detection controls.
@@ -41,7 +27,6 @@ output:                      # Insight output plus optional local debug saves.
     video_port_base: 9000    # Base UDP port for video channels.
     metadata_port_base: 9100 # Base UDP port for metadata channels.
   video_enabled: true        # Disable to publish metadata only.
-  video_mode: annotated      # clean encodes decoded frames + metadata; annotated draws detections before encode.
   debug_dir: null            # Optional directory for periodic debug frame saves.
   save_every: 0              # Save every Nth debug frame. 0 disables saving.
 
