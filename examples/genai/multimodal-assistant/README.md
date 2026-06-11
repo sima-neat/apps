@@ -57,14 +57,6 @@ Fetch only this example:
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
 ```
 
-To fetch the example from another branch, pass `--branch` and use the matching
-raw GitHub URL:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh \
-  | bash -s -- --branch main multimodal-assistant
-```
-
 Install the UI virtual environment, default chat/VLM model, Whisper ASR model,
 GTE-small embedding model, Piper TTS voices, default RAG database, and generated
 local config:
