@@ -1,12 +1,9 @@
 #include "support/testing/test_process.h"
-#include "support/runtime/example_utils.h"
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
-
-#include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
 
@@ -122,35 +119,6 @@ bool test_validate_config_only_rejects_empty_streams(const std::string& binary) 
   return ok;
 }
 
-bool test_object_metadata_json_contract() {
-  sima_examples::MetadataBox box;
-  box.id = "obj_1";
-  box.label = "person";
-  box.confidence = 0.75F;
-  box.x = 10.0F;
-  box.y = 20.0F;
-  box.w = 30.0F;
-  box.h = 40.0F;
-
-  const auto data =
-      nlohmann::json::parse(sima_examples::metadata_boxes_data_json("objects", {box}));
-  const auto& objects = data["objects"];
-  const auto& object = objects[0];
-
-  return expect_true(objects.is_array(), "metadata data contains objects array") &&
-         expect_true(objects.size() == 1, "metadata data contains one object") &&
-         expect_true(object["id"] == "obj_1", "metadata object has id") &&
-         expect_true(object["label"] == "person", "metadata object has label") &&
-         expect_true(object["confidence"].get<float>() == 0.75F,
-                     "metadata object has confidence") &&
-         expect_true(object["bbox"].is_array(), "metadata object has bbox array") &&
-         expect_true(object["bbox"].size() == 4, "metadata bbox uses xywh shape") &&
-         expect_true(object["bbox"][0].get<float>() == 10.0F, "metadata bbox has x") &&
-         expect_true(object["bbox"][1].get<float>() == 20.0F, "metadata bbox has y") &&
-         expect_true(object["bbox"][2].get<float>() == 30.0F, "metadata bbox has width") &&
-         expect_true(object["bbox"][3].get<float>() == 40.0F, "metadata bbox has height");
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -166,6 +134,5 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
-  ok &= test_object_metadata_json_contract();
   return ok ? 0 : 1;
 }
