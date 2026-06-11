@@ -2,23 +2,37 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 
-APPS_ROOT = Path(__file__).resolve().parents[6]
+EXAMPLE_ROOT = Path(__file__).resolve().parents[3]
 COMMON_DIR = Path(__file__).resolve().parents[2] / "common"
 DEFAULT_CONFIG = COMMON_DIR / "config.yaml"
 DEFAULT_SERVER_CONFIG = DEFAULT_CONFIG
 DEFAULT_UI_CONFIG = DEFAULT_CONFIG
 
 
+def _detect_apps_root() -> Path | None:
+    maybe_apps_root = EXAMPLE_ROOT.parent.parent.parent
+    if EXAMPLE_ROOT.parent.parent.name == "examples" and (maybe_apps_root / "examples").is_dir():
+        return maybe_apps_root
+    return None
+
+
+APPS_ROOT = _detect_apps_root()
+PATH_ROOT = APPS_ROOT or EXAMPLE_ROOT
+
+
 @dataclass(frozen=True)
 class ServedModel:
     name: str
     path: Path | None
+    supports_vision: bool = True
+    vision_image_size: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -62,11 +76,11 @@ class AppConfig:
     rag: RagConfig
 
 
-def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
+def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     return load_server_config(path, apps_root)
 
 
-def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
+def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = raw.get("server", raw)
 
@@ -99,7 +113,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = APP
     )
 
 
-def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = APPS_ROOT) -> AppConfig:
+def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     raw = config.get("app", config)
     server = config.get("server", {})
@@ -109,7 +123,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = APPS_ROOT) 
     request = raw.get("request", {})
     web = raw.get("web", {})
     rag = raw.get("rag", {})
-    chat_models = _load_chat_model_names(server_models)
+    chat_models = _load_chat_model_names(server_models, apps_root)
 
     return AppConfig(
         openai=OpenAIConfig(
@@ -164,25 +178,124 @@ def _load_required_model_entry(raw: object, label: str, apps_root: Path) -> Serv
 
     model_path = Path(path_text).expanduser()
     if not model_path.is_absolute():
-        model_path = apps_root / model_path
-    return ServedModel(name=name, path=model_path)
+        model_path = _resolve_relative_path(model_path, apps_root)
+    supports_vision = _load_supports_vision(raw, model_path)
+    return ServedModel(
+        name=name,
+        path=model_path,
+        supports_vision=supports_vision,
+        vision_image_size=_load_vision_image_size(raw, model_path) if supports_vision else None,
+    )
 
 
-def _load_chat_model_names(models: dict) -> tuple[ServedModel, ...]:
+def _load_chat_model_names(models: dict, apps_root: Path) -> tuple[ServedModel, ...]:
     raw = models.get("chat", {})
     entries = raw if isinstance(raw, list) else [raw]
 
-    names = tuple(_load_model_entry_name(entry) for entry in entries)
-    names = tuple(name for name in names if name)
-    if not names:
+    chat_models = tuple(
+        model for model in (_load_chat_model_entry(entry, apps_root) for entry in entries)
+        if model.name
+    )
+    if not chat_models:
         raise ValueError("models.chat requires at least one model name")
-    return tuple(ServedModel(name=name, path=None) for name in names)
+    return chat_models
+
+
+def _load_chat_model_entry(entry: object, apps_root: Path) -> ServedModel:
+    if not isinstance(entry, dict):
+        return ServedModel(name=str(entry).strip(), path=None)
+
+    name = _load_model_entry_name(entry)
+    path_text = str(entry.get("path", "") or "").strip()
+    model_path = Path(path_text).expanduser() if path_text else None
+    if model_path is not None and not model_path.is_absolute():
+        model_path = _resolve_relative_path(model_path, apps_root)
+    supports_vision = (
+        _load_supports_vision(entry, model_path)
+        if model_path is not None
+        else _load_bool(entry.get("supports_vision", True))
+    )
+    return ServedModel(
+        name=name,
+        path=model_path,
+        supports_vision=supports_vision,
+        vision_image_size=_load_vision_image_size(entry, model_path) if supports_vision else None,
+    )
 
 
 def _load_model_entry_name(entry: object) -> str:
     if isinstance(entry, dict):
         entry = entry.get("name", "")
     return str(entry).strip()
+
+
+def _load_supports_vision(raw: dict, model_path: Path | None) -> bool:
+    if "supports_vision" in raw:
+        return _load_bool(raw.get("supports_vision"))
+
+    if model_path is None:
+        return True
+
+    config_path = model_path / "devkit" / "vlm_config.json"
+    if not config_path.is_file():
+        return True
+
+    try:
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return True
+
+    return bool(str(cfg.get("vision_model_name", "") or "").strip())
+
+
+def _load_vision_image_size(raw: dict, model_path: Path | None) -> dict[str, int] | None:
+    raw_size = raw.get("vision_image_size") or raw.get("image_size")
+
+    if raw_size is None and model_path is not None:
+        config_path = model_path / "devkit" / "vlm_config.json"
+        if config_path.is_file():
+            try:
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                raw_size = cfg.get("vm_cfg", {}).get("image_size")
+            except Exception:
+                raw_size = None
+
+    return _parse_vision_image_size(raw_size)
+
+
+def _parse_vision_image_size(raw_size: object) -> dict[str, int] | None:
+    height = width = None
+
+    if isinstance(raw_size, int):
+        height = width = raw_size
+    elif isinstance(raw_size, float):
+        height = width = int(raw_size)
+    elif isinstance(raw_size, str):
+        normalized = raw_size.strip().lower().replace(" ", "")
+        if "x" in normalized:
+            parts = normalized.split("x", 1)
+            if len(parts) == 2:
+                try:
+                    height = int(float(parts[0]))
+                    width = int(float(parts[1]))
+                except ValueError:
+                    return None
+        else:
+            try:
+                height = width = int(float(normalized))
+            except ValueError:
+                return None
+    elif isinstance(raw_size, (list, tuple)) and len(raw_size) == 2:
+        try:
+            height = int(float(raw_size[0]))
+            width = int(float(raw_size[1]))
+        except (TypeError, ValueError):
+            return None
+
+    if not height or not width or height <= 0 or width <= 0:
+        return None
+
+    return {"height": height, "width": width}
 
 
 def _load_model_name(models: dict, key: str) -> ServedModel:
@@ -210,8 +323,18 @@ def _load_optional_path(value: object, apps_root: Path) -> str:
 
     path = Path(path_text).expanduser()
     if not path.is_absolute():
-        path = apps_root / path
+        path = _resolve_relative_path(path, apps_root)
     return str(path)
+
+
+def _resolve_relative_path(path: Path, apps_root: Path) -> Path:
+    candidate_roots = (apps_root, EXAMPLE_ROOT)
+    for root in candidate_roots:
+        candidate = root / path
+        if candidate.exists():
+            return candidate
+
+    return apps_root / path
 
 
 def _load_bool(value: object) -> bool:
