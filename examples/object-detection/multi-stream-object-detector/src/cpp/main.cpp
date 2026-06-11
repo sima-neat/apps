@@ -26,20 +26,32 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
 
 namespace {
+
+volatile std::sig_atomic_t g_stop_requested = 0;
+
+void request_stop(int) {
+  g_stop_requested = 1;
+}
 
 struct AppConfig {
   std::string model_path;
@@ -53,6 +65,7 @@ struct AppConfig {
   double nms_iou = 0.60;
   int max_detections = 50;
   bool profile = false;
+  int warmup_frames = 30;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -233,6 +246,7 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
                          "inference.nms_iou must be between 0 and 1");
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
+  sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0,
                          "output.insight.metadata_port_base must be > 0");
@@ -256,6 +270,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.profile = raw.bool_or("runtime.profile", false);
+  cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -336,6 +351,11 @@ std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<o
   return metadata_boxes;
 }
 
+int64_t fallback_timestamp_ms() {
+  const auto now = std::chrono::system_clock::now().time_since_epoch();
+  return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+}
+
 simaai::neat::nodes::groups::RtspDecodedInputOptions
 make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, int& width_out,
                     int& height_out) {
@@ -383,8 +403,8 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg) {
   return std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
 }
 
-StreamRuntime build_stream(const AppConfig& cfg, int stream_index, const std::string& url,
-                           const std::vector<std::string>& labels) {
+StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url,
+                                   const std::vector<std::string>& labels) {
   StreamRuntime runtime;
   runtime.index = stream_index;
   runtime.url = url;
@@ -484,11 +504,11 @@ void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
   const auto metadata_boxes =
       build_metadata_boxes(boxes, stream.labels, stream.frame_w, stream.frame_h);
   const std::string data_json = sima_examples::metadata_boxes_data_json("objects", metadata_boxes);
-  const auto now = std::chrono::system_clock::now().time_since_epoch();
-  const int64_t ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+  const int64_t timestamp_ms =
+      sample.pts_ns >= 0 ? sample.pts_ns / 1000000 : fallback_timestamp_ms();
   const int64_t frame_id = sample.frame_id >= 0 ? sample.frame_id : 0;
   std::string err;
-  if (!stream.metadata_sender->send_metadata("object-detection", data_json, ts_ms,
+  if (!stream.metadata_sender->send_metadata("object-detection", data_json, timestamp_ms,
                                              std::to_string(frame_id), &err)) {
     std::cerr << "[warn] stream " << stream.index << " metadata send failed: " << err << "\n";
   }
@@ -522,10 +542,11 @@ void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream,
 
 bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg,
                          const std::string& output_name) {
+  constexpr int kPullTimeoutMs = 50;
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;
   const double pull_start = sima_examples::time_ms();
-  const auto status = stream.run.pull(output_name, 2000, sample, &pull_error);
+  const auto status = stream.run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
   const double pull_end = sima_examples::time_ms();
   if (status == simaai::neat::PullStatus::Timeout) {
     return false;
@@ -548,18 +569,40 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg,
   const auto boxes = objdet::parse_boxes_strict(payload, stream.frame_w, stream.frame_h,
                                                 cfg.max_detections, false);
 
-  const double metadata_start = sima_examples::time_ms();
-  send_metadata(stream, sample, boxes);
-  const double metadata_end = sima_examples::time_ms();
-
   ++stream.processed;
-  maybe_save_debug_frame(cfg, stream, sample, boxes);
-  stream.profile.add(pull_end - pull_start, metadata_end - metadata_start,
-                     static_cast<int>(boxes.size()));
+  const bool warming_up = stream.processed <= cfg.warmup_frames;
+  if (!warming_up) {
+    const double metadata_start = sima_examples::time_ms();
+    send_metadata(stream, sample, boxes);
+    const double metadata_end = sima_examples::time_ms();
+    maybe_save_debug_frame(cfg, stream, sample, boxes);
+    stream.profile.add(pull_end - pull_start, metadata_end - metadata_start,
+                       static_cast<int>(boxes.size()));
+  }
   return true;
 }
 
+void consume_stream(StreamRuntime& stream, const AppConfig& cfg, const std::string& output_name,
+                    std::atomic_bool& stop_requested, std::exception_ptr& first_error,
+                    std::mutex& error_mutex) {
+  try {
+    while (!stop_requested.load() && g_stop_requested == 0 && !stream.closed &&
+           (cfg.frames <= 0 || stream.processed < cfg.frames)) {
+      (void)process_stream_once(stream, cfg, output_name);
+    }
+  } catch (...) {
+    {
+      std::lock_guard<std::mutex> lock(error_mutex);
+      if (!first_error)
+        first_error = std::current_exception();
+    }
+    stop_requested.store(true);
+  }
+}
+
 void run_app(const AppConfig& cfg) {
+  g_stop_requested = 0;
+  auto previous_sigint = std::signal(SIGINT, request_stop);
   if (cfg.profile) {
     setenv("SIMA_GST_ELEMENT_TIMINGS", "1", 0);
     setenv("SIMA_GST_FLOW_DEBUG", "1", 0);
@@ -573,21 +616,25 @@ void run_app(const AppConfig& cfg) {
   std::vector<StreamRuntime> streams;
   streams.reserve(cfg.rtsp_urls.size());
   for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
-    streams.push_back(build_stream(cfg, static_cast<int>(index), cfg.rtsp_urls[index], labels));
+    streams.push_back(
+        build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index], labels));
   }
 
   const std::string output_name =
       (!cfg.save_dir.empty() && cfg.save_every > 0) ? "debug_output" : "detections";
-  bool running = true;
-  while (running) {
-    running = false;
-    for (auto& stream : streams) {
-      if (stream.closed || (cfg.frames > 0 && stream.processed >= cfg.frames)) {
-        continue;
-      }
-      running = true;
-      (void)process_stream_once(stream, cfg, output_name);
-    }
+  std::atomic_bool stop_requested{false};
+  std::exception_ptr first_error;
+  std::mutex error_mutex;
+  std::vector<std::thread> consumers;
+  consumers.reserve(streams.size());
+  for (auto& stream : streams) {
+    consumers.emplace_back(consume_stream, std::ref(stream), std::cref(cfg), std::cref(output_name),
+                           std::ref(stop_requested), std::ref(first_error), std::ref(error_mutex));
+  }
+
+  for (auto& consumer : consumers) {
+    if (consumer.joinable())
+      consumer.join();
   }
 
   for (auto& stream : streams) {
@@ -595,6 +642,10 @@ void run_app(const AppConfig& cfg) {
     stream.run.close();
     std::cout << "[stream " << stream.index << "] processed=" << stream.processed << "\n";
   }
+
+  std::signal(SIGINT, previous_sigint);
+  if (first_error)
+    std::rethrow_exception(first_error);
 }
 
 } // namespace

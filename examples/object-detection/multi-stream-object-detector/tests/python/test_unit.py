@@ -87,6 +87,7 @@ class TestConfigLoading:
         assert cfg.model_path == "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz"
         assert len(cfg.rtsp_urls) == 4
         assert cfg.insight_host == "127.0.0.1"
+        assert cfg.warmup_frames == 30
 
     def test_load_app_config_rejects_too_many_streams(self, tmp_path: Path):
         from main import load_app_config
@@ -158,6 +159,7 @@ class FakeMetadataSender:
 
 class FakeSample:
     frame_id = 42
+    pts_ns = 1_234_000_000
 
 
 class TestMetadata:
@@ -195,7 +197,7 @@ class TestMetadata:
         assert len(sender.calls) == 1
         metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
         assert metadata_type == "object-detection"
-        assert isinstance(timestamp_ms, int)
+        assert timestamp_ms == 1234
         assert frame_id == "42"
         assert json.loads(data_json) == {
             "objects": [

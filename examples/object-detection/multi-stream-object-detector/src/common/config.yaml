@@ -13,6 +13,7 @@ input:                       # RTSP input transport settings.
 
 runtime:                     # Runtime and profiling settings.
   profile: true              # Print per-stream timing summaries.
+  warmup_frames: 30          # Drain this many frames before metadata/profile output.
 
 inference:                   # Detection controls.
   frames: 0                  # Frame limit per stream. 0 means unlimited.

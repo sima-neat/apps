@@ -10,6 +10,7 @@ import json
 import os
 import struct
 import sys
+import threading
 import time
 
 import yaml
@@ -34,6 +35,7 @@ class AppConfig:
     nms_iou: float = 0.60
     max_detections: int = 50
     profile: bool = False
+    warmup_frames: int = 30
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -198,6 +200,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.nms_iou must be between 0 and 1")
     if cfg.max_detections <= 0:
         raise ValueError("inference.max_detections must be > 0")
+    if cfg.warmup_frames < 0:
+        raise ValueError("runtime.warmup_frames must be >= 0")
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.metadata_port_base <= 0:
@@ -240,6 +244,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         nms_iou=float_or(inference, "nms_iou", 0.60),
         max_detections=int_or(inference, "max_detections", 50),
         profile=bool_or(runtime, "profile", False),
+        warmup_frames=int_or(runtime, "warmup_frames", 30),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
@@ -390,7 +395,9 @@ def make_model(cfg: AppConfig):
     return pyneat.Model(cfg.model_path, opt)
 
 
-def build_stream(cfg: AppConfig, stream_index: int, url: str, labels: list[str]) -> StreamRuntime:
+def build_stream_runtime(
+    cfg: AppConfig, stream_index: int, url: str, labels: list[str]
+) -> StreamRuntime:
     frame_w, frame_h, fps = probe_rtsp(url)
     output_fps = cfg.fps if cfg.fps > 0 else fps
     model = make_model(cfg)
@@ -475,13 +482,17 @@ def build_stream(cfg: AppConfig, stream_index: int, url: str, labels: list[str])
 
 def send_metadata(stream: StreamRuntime, sample, boxes: list[dict]) -> None:
     metadata_boxes = build_metadata_boxes(boxes, stream.labels, stream.frame_w, stream.frame_h)
+    pts_ns = getattr(sample, "pts_ns", -1)
+    if pts_ns is not None and pts_ns >= 0:
+        timestamp_ms = int(pts_ns // 1_000_000)
+    else:
+        timestamp_ms = int(time.time() * 1000)
     frame_id = getattr(sample, "frame_id", -1)
-    if frame_id is None or frame_id < 0:
-        frame_id = 0
+    frame_id = int(frame_id) if frame_id is not None and frame_id >= 0 else 0
     stream.metadata_sender.send_metadata(
         "object-detection",
         json.dumps({"objects": metadata_boxes}, separators=(",", ":")),
-        int(time.time() * 1000),
+        timestamp_ms,
         str(frame_id),
     )
 
@@ -567,22 +578,44 @@ def maybe_save_debug_frame(cfg: AppConfig, stream: StreamRuntime, sample, boxes:
 
 def process_stream_once(stream: StreamRuntime, cfg: AppConfig, output_name: str) -> bool:
     pull_start = time_ms()
-    sample = stream.run.pull(output_name, 2000)
+    sample = stream.run.pull(output_name, 50)
     pull_end = time_ms()
     if sample is None:
+        if hasattr(stream.run, "can_pull") and not stream.run.can_pull():
+            stream.closed = True
         return False
 
     payload = extract_bbox_payload(sample)
     boxes = parse_boxes_strict(payload, stream.frame_w, stream.frame_h, cfg.max_detections)
 
-    metadata_start = time_ms()
-    send_metadata(stream, sample, boxes)
-    metadata_end = time_ms()
-
     stream.processed += 1
-    maybe_save_debug_frame(cfg, stream, sample, boxes)
-    stream.profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+    warming_up = stream.processed <= cfg.warmup_frames
+    if not warming_up:
+        metadata_start = time_ms()
+        send_metadata(stream, sample, boxes)
+        metadata_end = time_ms()
+        maybe_save_debug_frame(cfg, stream, sample, boxes)
+        stream.profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
     return True
+
+
+def consume_stream(
+    stream: StreamRuntime,
+    cfg: AppConfig,
+    output_name: str,
+    stop_event: threading.Event,
+    errors: list[BaseException],
+) -> None:
+    try:
+        while (
+            not stop_event.is_set()
+            and not stream.closed
+            and (cfg.frames <= 0 or stream.processed < cfg.frames)
+        ):
+            process_stream_once(stream, cfg, output_name)
+    except BaseException as exc:
+        errors.append(exc)
+        stop_event.set()
 
 
 def run_app(cfg: AppConfig) -> None:
@@ -594,23 +627,40 @@ def run_app(cfg: AppConfig) -> None:
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
     labels = load_labels(cfg.labels_path)
-    streams = [build_stream(cfg, index, url, labels) for index, url in enumerate(cfg.rtsp_urls)]
+    streams = [
+        build_stream_runtime(cfg, index, url, labels) for index, url in enumerate(cfg.rtsp_urls)
+    ]
     output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
+    stop_event = threading.Event()
+    errors: list[BaseException] = []
+    consumers = [
+        threading.Thread(
+            target=consume_stream,
+            args=(stream, cfg, output_name, stop_event, errors),
+            name=f"stream-{stream.index}-consumer",
+        )
+        for stream in streams
+    ]
 
     try:
-        running = True
-        while running:
-            running = False
-            for stream in streams:
-                if stream.closed or (cfg.frames > 0 and stream.processed >= cfg.frames):
-                    continue
-                running = True
-                process_stream_once(stream, cfg, output_name)
+        for consumer in consumers:
+            consumer.start()
+        for consumer in consumers:
+            consumer.join()
+    except KeyboardInterrupt:
+        stop_event.set()
     finally:
+        stop_event.set()
+        for stream in streams:
+            stream.run.close()
+        for consumer in consumers:
+            if consumer.is_alive():
+                consumer.join(timeout=2.0)
         for stream in streams:
             stream.profile.flush()
-            stream.run.close()
             print(f"[stream {stream.index}] processed={stream.processed}")
+    if errors:
+        raise errors[0]
 
 
 def main(argv: list[str] | None = None) -> int:
