@@ -390,7 +390,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     video_options.host = cfg.insight_host
     video_options.channel = 0
     video_options.video_port_base = cfg.video_port
-    video_options.encoder.bitrate_kbps = 1200
+    video_options.encoder.bitrate_kbps = 1000
 
     video_graph = pyneat.Graph("video")
     video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
@@ -412,10 +412,10 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         print(f"Backend:\n{graph.describe_backend()}")
 
     run_options = pyneat.RunOptions()
-    run_options.preset = pyneat.RunPreset.Reliable
-    run_options.queue_depth = 4
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 3
     run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.Owned
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     run = graph.build(run_options)
 
     metadata_options = pyneat.MetadataSenderOptions()

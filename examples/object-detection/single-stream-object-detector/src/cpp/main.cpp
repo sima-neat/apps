@@ -323,7 +323,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   video_options.host = cfg.insight_host;
   video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;
-  video_options.encoder.bitrate_kbps = 600;
+  video_options.encoder.bitrate_kbps = 1000;
   runtime.video_port = video_options.video_port();
   simaai::neat::Graph video_graph("video");
   video_graph.connect(simaai::neat::nodes::Input("video"),
@@ -349,10 +349,10 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
 
   // Runtime options
   simaai::neat::RunOptions run_options;
-  run_options.preset = simaai::neat::RunPreset::Reliable;
-  run_options.queue_depth = 4;
+  run_options.preset = simaai::neat::RunPreset::Realtime;
+  run_options.queue_depth = 3;
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
-  run_options.output_memory = simaai::neat::OutputMemory::Owned;
+  run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   runtime.run = runtime.graph.build(run_options);
 
   simaai::neat::MetadataSenderOptions metadata_options;
