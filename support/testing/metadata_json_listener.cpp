@@ -56,11 +56,9 @@ bool resolve_bind_addr(const std::string& host, int port, sockaddr_storage& out,
   return ok;
 }
 
-// Keep validation intentionally narrow and stable: the goal is to verify that
-// an example emitted structurally valid object-detection metadata, not to
-// enforce model-specific semantics such as object count or label names.
-bool is_valid_metadata_detection_json(const std::string& payload, MetadataJsonMessage& out,
-                                      std::string& err) {
+bool is_valid_metadata_json(const std::string& payload, const std::string& metadata_type,
+                            const std::string& data_array_key, MetadataJsonMessage& out,
+                            std::string& err) {
   json parsed;
   try {
     parsed = json::parse(payload);
@@ -73,7 +71,7 @@ bool is_valid_metadata_detection_json(const std::string& payload, MetadataJsonMe
     err = "json root is not an object";
     return false;
   }
-  if (!parsed.contains("type") || parsed["type"] != "object-detection") {
+  if (!parsed.contains("type") || parsed["type"] != metadata_type) {
     err = "missing or invalid type";
     return false;
   }
@@ -89,15 +87,15 @@ bool is_valid_metadata_detection_json(const std::string& payload, MetadataJsonMe
     err = "missing or invalid data";
     return false;
   }
-  if (!parsed["data"].contains("objects") || !parsed["data"]["objects"].is_array()) {
-    err = "missing or invalid data.objects";
+  if (!parsed["data"].contains(data_array_key) || !parsed["data"][data_array_key].is_array()) {
+    err = "missing or invalid data." + data_array_key;
     return false;
   }
 
   out.payload = payload;
   out.frame_id = parsed["frame_id"].get<std::string>();
   out.timestamp_ms = parsed["timestamp"].get<int64_t>();
-  out.object_count = static_cast<int>(parsed["data"]["objects"].size());
+  out.object_count = static_cast<int>(parsed["data"][data_array_key].size());
   return true;
 }
 
@@ -191,7 +189,7 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
   msg.port = sock.port;
   std::string parse_err;
   const std::string payload(buf, static_cast<size_t>(n));
-  if (!is_valid_metadata_detection_json(payload, msg, parse_err)) {
+  if (!is_valid_metadata_json(payload, opt_.metadata_type, opt_.data_array_key, msg, parse_err)) {
     if (result.error.empty()) {
       result.error = "invalid json on port " + std::to_string(sock.port) + ": " + parse_err;
     }

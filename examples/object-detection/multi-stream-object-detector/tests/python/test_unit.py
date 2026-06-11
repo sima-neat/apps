@@ -28,7 +28,7 @@ def write_config(tmp_path: Path, streams: list[str]) -> Path:
         "\n".join(
             [
                 "model:",
-                "  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz",
+                "  path: assets/models/yolo26m-det-int8-b1.tar.gz",
                 "streams:",
                 stream_lines,
                 "output:",
@@ -84,7 +84,7 @@ class TestConfigLoading:
 
         cfg = load_app_config(config_path)
 
-        assert cfg.model_path == "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz"
+        assert cfg.model_path == "assets/models/yolo26m-det-int8-b1.tar.gz"
         assert len(cfg.rtsp_urls) == 4
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.warmup_frames == 30
@@ -114,7 +114,7 @@ class TestConfigLoading:
             textwrap.dedent(
                 """
                 model:
-                  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+                  path: assets/models/yolo26m-det-int8-b1.tar.gz
                 streams: []
                 output:
                   insight:
