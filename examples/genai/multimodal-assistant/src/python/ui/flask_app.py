@@ -425,7 +425,7 @@ class AppContext:
         self.model_display_name = ""
         self.chat_model_name = "model"
         self.chat_model_names = ("model",)
-        self.chat_model_capabilities = {"model": {"supportsVision": True}}
+        self.chat_model_capabilities = {"model": {"supportsVision": True, "imageSize": None}}
         self.active_chat_model_name = "model"
         self.asr_model_name = "whisper-small"
         self.max_tokens = None
@@ -618,7 +618,10 @@ class AppContext:
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
         self.chat_model_names = tuple(model.name for model in app_cfg.chat_models)
         self.chat_model_capabilities = {
-            model.name: {"supportsVision": bool(model.supports_vision)}
+            model.name: {
+                "supportsVision": bool(model.supports_vision),
+                "imageSize": model.vision_image_size,
+            }
             for model in app_cfg.chat_models
         }
         self.chat_model_name = self.chat_model_names[0]

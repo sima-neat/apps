@@ -147,8 +147,11 @@ function hideRagControlsIfDisabled() {
 
 function getVisionImageSize() {
   const config = window.SIMA_CONFIG || {};
-  const height = parseInt(config.visionImageHeight, 10);
-  const width = parseInt(config.visionImageWidth, 10);
+  const selectedModel = getSelectedChatModel();
+  const modelCaps = getChatModelCapabilities()[selectedModel] || {};
+  const modelSize = modelCaps.imageSize || modelCaps.visionImageSize || null;
+  const height = parseInt(modelSize?.height ?? config.visionImageHeight, 10);
+  const width = parseInt(modelSize?.width ?? config.visionImageWidth, 10);
 
   if (Number.isFinite(height) && Number.isFinite(width) && height > 0 && width > 0) {
     return { height, width };

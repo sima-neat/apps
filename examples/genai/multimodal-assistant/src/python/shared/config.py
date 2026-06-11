@@ -32,6 +32,7 @@ class ServedModel:
     name: str
     path: Path | None
     supports_vision: bool = True
+    vision_image_size: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -178,10 +179,12 @@ def _load_required_model_entry(raw: object, label: str, apps_root: Path) -> Serv
     model_path = Path(path_text).expanduser()
     if not model_path.is_absolute():
         model_path = _resolve_relative_path(model_path, apps_root)
+    supports_vision = _load_supports_vision(raw, model_path)
     return ServedModel(
         name=name,
         path=model_path,
-        supports_vision=_load_supports_vision(raw, model_path),
+        supports_vision=supports_vision,
+        vision_image_size=_load_vision_image_size(raw, model_path) if supports_vision else None,
     )
 
 
@@ -212,7 +215,12 @@ def _load_chat_model_entry(entry: object, apps_root: Path) -> ServedModel:
         if model_path is not None
         else _load_bool(entry.get("supports_vision", True))
     )
-    return ServedModel(name=name, path=model_path, supports_vision=supports_vision)
+    return ServedModel(
+        name=name,
+        path=model_path,
+        supports_vision=supports_vision,
+        vision_image_size=_load_vision_image_size(entry, model_path) if supports_vision else None,
+    )
 
 
 def _load_model_entry_name(entry: object) -> str:
@@ -238,6 +246,56 @@ def _load_supports_vision(raw: dict, model_path: Path | None) -> bool:
         return True
 
     return bool(str(cfg.get("vision_model_name", "") or "").strip())
+
+
+def _load_vision_image_size(raw: dict, model_path: Path | None) -> dict[str, int] | None:
+    raw_size = raw.get("vision_image_size") or raw.get("image_size")
+
+    if raw_size is None and model_path is not None:
+        config_path = model_path / "devkit" / "vlm_config.json"
+        if config_path.is_file():
+            try:
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                raw_size = cfg.get("vm_cfg", {}).get("image_size")
+            except Exception:
+                raw_size = None
+
+    return _parse_vision_image_size(raw_size)
+
+
+def _parse_vision_image_size(raw_size: object) -> dict[str, int] | None:
+    height = width = None
+
+    if isinstance(raw_size, int):
+        height = width = raw_size
+    elif isinstance(raw_size, float):
+        height = width = int(raw_size)
+    elif isinstance(raw_size, str):
+        normalized = raw_size.strip().lower().replace(" ", "")
+        if "x" in normalized:
+            parts = normalized.split("x", 1)
+            if len(parts) == 2:
+                try:
+                    height = int(float(parts[0]))
+                    width = int(float(parts[1]))
+                except ValueError:
+                    return None
+        else:
+            try:
+                height = width = int(float(normalized))
+            except ValueError:
+                return None
+    elif isinstance(raw_size, (list, tuple)) and len(raw_size) == 2:
+        try:
+            height = int(float(raw_size[0]))
+            width = int(float(raw_size[1]))
+        except (TypeError, ValueError):
+            return None
+
+    if not height or not width or height <= 0 or width <= 0:
+        return None
+
+    return {"height": height, "width": width}
 
 
 def _load_model_name(models: dict, key: str) -> ServedModel:

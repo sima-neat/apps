@@ -6,7 +6,7 @@ MODELS_DIR="${LLIMA_MODELS_PATH:-/media/nvme/llima/models}"
 APP_VENV="${APP_VENV:-${EXAMPLE_DIR}/.venv}"
 CONFIG_PATH="${CONFIG_PATH:-${EXAMPLE_DIR}/config.local.yaml}"
 PYNEAT_PYTHON="${PYNEAT_PYTHON:-${HOME}/pyneat/bin/python}"
-CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-simaai/Qwen3-VL-2B-Instruct-GPTQ-a16w4}"
+CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-simaai/Qwen3-VL-4B-Instruct-GPTQ-a16w4}"
 ASR_MODEL_REPO="simaai/whisper-small-a16w8"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-$(basename "${CHAT_MODEL_REPO}")}"
@@ -29,7 +29,7 @@ Environment:
   LLIMA_MODELS_PATH             Model download directory
                                 default: /media/nvme/llima/models
   CHAT_MODEL_REPO               Hugging Face repo for the default chat/VLM model
-                                default: simaai/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+                                default: simaai/Qwen3-VL-4B-Instruct-GPTQ-a16w4
   INSTALL_TTS_VOICES            Download Piper TTS voices, 1 or 0
                                 default: 1
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
