@@ -343,6 +343,9 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
     frames.add(simaai::neat::nodes::Output("frames", simaai::neat::OutputOptions::Latest()));
     runtime.graph.connect(branch, frames);
   }
+  if (cfg.profile) {
+    std::cout << "Backend:\n" << runtime.graph.describe_backend() << "\n";
+  }
 
   // Runtime options
   simaai::neat::RunOptions run_options;
