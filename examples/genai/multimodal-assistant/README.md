@@ -61,8 +61,8 @@ To fetch the example from another branch, pass `--branch` and use the matching
 raw GitHub URL:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/develop/scripts/get-example.sh \
-  | bash -s -- --branch develop multimodal-assistant
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh \
+  | bash -s -- --branch main multimodal-assistant
 ```
 
 Install the UI virtual environment, default chat/VLM model, Whisper ASR model,

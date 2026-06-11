@@ -42,13 +42,13 @@ This keeps examples editable and easy to customize.
 Users who only need one example can fetch it with the helper script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/develop/scripts/get-example.sh | bash -s -- <example>
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- <example>
 ```
 
 For example:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/develop/scripts/get-example.sh | bash -s -- multimodal-assistant
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
 cd multimodal-assistant
 ./install.sh
 ./run.sh
