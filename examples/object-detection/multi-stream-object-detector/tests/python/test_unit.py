@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -144,3 +145,65 @@ class TestConfigLoading:
 
         assert result.returncode == 0
         assert "streams=2" in result.stdout
+
+
+class FakeMetadataSender:
+    def __init__(self):
+        self.calls = []
+
+    def send_metadata(self, metadata_type, data_json, timestamp_ms, frame_id):
+        self.calls.append((metadata_type, data_json, timestamp_ms, frame_id))
+        return True
+
+
+class FakeSample:
+    frame_id = 42
+
+
+class TestMetadata:
+    def test_send_metadata_uses_object_detection_contract(self):
+        from main import ProfileWindow, StreamRuntime, send_metadata
+
+        sender = FakeMetadataSender()
+        runtime = StreamRuntime(
+            index=0,
+            url="rtsp://127.0.0.1:8554/src1",
+            model=None,
+            graph=None,
+            run=None,
+            metadata_sender=sender,
+            labels=["person"],
+            profile=ProfileWindow(False, 0),
+            frame_w=100,
+            frame_h=100,
+            output_fps=30,
+            video_port=9000,
+        )
+        boxes = [
+            {
+                "x1": 10.0,
+                "y1": 20.0,
+                "x2": 40.0,
+                "y2": 60.0,
+                "score": 0.75,
+                "class_id": 0,
+            }
+        ]
+
+        send_metadata(runtime, FakeSample(), boxes)
+
+        assert len(sender.calls) == 1
+        metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
+        assert metadata_type == "object-detection"
+        assert isinstance(timestamp_ms, int)
+        assert frame_id == "42"
+        assert json.loads(data_json) == {
+            "objects": [
+                {
+                    "id": "obj_1",
+                    "label": "person",
+                    "confidence": 0.75,
+                    "bbox": [10.0, 20.0, 30.0, 40.0],
+                }
+            ]
+        }
