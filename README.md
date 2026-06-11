@@ -50,12 +50,12 @@ For example:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
 cd multimodal-assistant
-./install.sh
+./setup.sh
 ./run.sh
 ```
 
-The helper uses Git sparse checkout internally and leaves only the requested
-example directory in the current working directory.
+The helper fetches the apps archive and leaves only the requested example
+directory in the current working directory.
 
 ## Repo Layout
 

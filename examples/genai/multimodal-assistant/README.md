@@ -77,7 +77,7 @@ cd multimodal-assistant
 
 By default, `setup.sh` downloads:
 
-- `simaai/Qwen3-VL-2B-Instruct-GPTQ-a16w4`
+- `simaai/Qwen3-VL-4B-Instruct-GPTQ-a16w4`
 - `simaai/whisper-small-a16w8`
 - `thenlper/gte-small`
 
