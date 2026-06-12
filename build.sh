@@ -99,10 +99,29 @@ git_branch_key() {
   sanitize_branch_key "${raw}"
 }
 
+tag_version() {
+  local tag
+  tag="$(current_dependency_tag)"
+  if [[ -z "${tag}" ]]; then
+    return 1
+  fi
+  if [[ "${tag}" =~ ^v[0-9] ]]; then
+    tag="${tag#v}"
+  fi
+  printf '%s\n' "${tag}"
+}
+
+artifact_version() {
+  if tag_version; then
+    return 0
+  fi
+  git_short_sha
+}
+
 package_distribution() {
   local build_path="${ROOT_DIR}/${BUILD_DIR}"
   local stage_dir="${ROOT_DIR}/neat-apps-runtime"
-  local branch_key short_sha archive_name archive_path
+  local branch_key version archive_name archive_path
   local neat_core_branch neat_core_version
 
   if [[ ! -d "${build_path}" ]]; then
@@ -111,8 +130,8 @@ package_distribution() {
   fi
 
   branch_key="$(git_branch_key)"
-  short_sha="$(git_short_sha)"
-  archive_name="neat-apps-${branch_key}-${short_sha}.tar.gz"
+  version="$(artifact_version)"
+  archive_name="neat-apps-${branch_key}-${version}.tar.gz"
   archive_path="${ROOT_DIR}/${archive_name}"
 
   rm -rf "${stage_dir}"
