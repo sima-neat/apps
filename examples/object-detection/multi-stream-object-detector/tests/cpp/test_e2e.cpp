@@ -50,7 +50,8 @@ int main(int argc, char** argv) {
                     {"output.debug_dir", output_dir},
                     {"output.insight.host", insight_host},
                     {"output.insight.video_port_base", std::to_string(video_port_base)},
-                    {"output.insight.metadata_port_base", std::to_string(metadata_port_base)}},
+                    {"output.insight.metadata_port_base", std::to_string(metadata_port_base)},
+                    {"inference.frames", "140"}},
                    {{"streams", {rtsp_urls[0], rtsp_urls[1]}}});
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
@@ -67,8 +68,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const ProcessResult result = spawn_until_output_files(binary, {"--config", config_path.string()},
-                                                        output_dir, total_saved_frames, timeout_ms);
+  const ProcessResult result =
+      spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
 
   int rc = 0;
   if (result.exit_code != 0) {

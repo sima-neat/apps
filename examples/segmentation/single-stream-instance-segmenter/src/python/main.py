@@ -476,7 +476,7 @@ def build_metadata_sender(cfg: AppConfig):
 def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     input_opt = pyneat.InputOptions()
     input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = "RGB"
+    input_opt.format = pyneat.Format.RGB
     input_opt.width = width
     input_opt.height = height
     input_opt.depth = 3
