@@ -7,16 +7,13 @@
 namespace sima_examples::testing {
 
 // Test-only UDP listener for metadata JSON outputs.
-//
-// This utility is intended for end-to-end example validation under CTest:
-// start an example, listen on one or more metadata JSON ports, and return
-// success once valid object-detection metadata is observed. It is not part of the
-// runtime/sample data path used by the examples themselves.
 struct MetadataJsonListenerOptions {
   std::string host = "127.0.0.1";
   int base_port = 9100;
   int num_ports = 1;
   int timeout_ms = 20000;
+  std::string metadata_type = "object-detection";
+  std::string data_array_key = "objects";
   // When false, any valid JSON message on any configured port is enough.
   // When true, each configured port must receive at least one valid message.
   bool require_all_ports = false;
@@ -48,9 +45,7 @@ public:
   bool ok() const;
   const std::string& error() const;
 
-  // Wait until timeout for valid object-detection metadata. This is designed
-  // around the typical e2e test contract: pass if the example emits at least
-  // one well-formed detection payload, or fail after the timeout expires.
+  // Wait until timeout for valid metadata matching MetadataJsonListenerOptions.
   MetadataJsonListenerResult wait_for_messages();
 
 private:

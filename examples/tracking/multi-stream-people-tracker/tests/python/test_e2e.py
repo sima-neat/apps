@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import sys
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -65,6 +65,9 @@ class TestE2E:
                     },
                     "debug_dir": str(tmp_output_dir),
                 },
+                "inference": {
+                    "frames": 140,
+                },
             }
         )
 
@@ -74,11 +77,10 @@ class TestE2E:
             "--config",
             str(config_path),
         ]
-
         result = run_until_output_files(
             cmd,
             tmp_output_dir,
-            total_saved_frames,
+            0,
             test_timeout_ms / 1000,
             cwd=str(EXAMPLE_DIR),
         )

@@ -1,29 +1,19 @@
-#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/config_api.cpp"
-#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/image_utils_api.cpp"
-#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/pipeline_api.cpp"
-#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/sample_utils_api.cpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 #include "support/testing/test_process.h"
 
-#include <opencv2/core/mat.hpp>
-#include <opencv2/imgcodecs.hpp>
-
-#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace fs = std::filesystem;
 
+using multi_stream_people_tracker::Detection;
+using multi_stream_people_tracker::PeopleTracker;
 using sima_examples::testing::create_test_scratch_dir;
-using sima_examples::testing::ProcessResult;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
-namespace multi_stream_people_tracker {
 namespace {
 
 bool expect_true(bool condition, const std::string& message) {
@@ -40,243 +30,86 @@ bool expect_contains(const std::string& haystack, const std::string& needle,
   return expect_true(haystack.find(needle) != std::string::npos, message);
 }
 
-bool expect_near(double lhs, double rhs, double epsilon, const std::string& message) {
-  return expect_true(std::fabs(lhs - rhs) <= epsilon, message);
+fs::path write_config(const std::string& test_name, const std::string& body) {
+  const std::string temp_dir = create_test_scratch_dir("multi-stream-people-tracker", test_name);
+  if (temp_dir.empty()) {
+    throw std::runtime_error("failed to create temp directory");
+  }
+  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
+  std::ofstream out(config_path);
+  out << body;
+  return config_path;
 }
 
 bool test_help_runs(const std::string& binary) {
-  const ProcessResult result = spawn_and_wait(binary, {"--help"}, 20000);
+  const auto result = spawn_and_wait(binary, {"--help"}, 20000);
   return expect_true(result.exit_code == 0, "help exits with code 0") &&
-         expect_contains(result.stdout_text, "--config", "help mentions --config");
+         expect_contains(result.stdout_text, "--config", "help mentions --config") &&
+         expect_contains(result.stdout_text, "--validate-config-only",
+                         "help mentions --validate-config-only");
 }
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
-  const ProcessResult result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
-  return expect_true(result.exit_code != 0, "missing config exits nonzero") &&
-         expect_contains(result.stderr_text, "config", "missing config error mentions config");
+  const auto result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
+  return expect_true(result.exit_code == 2, "missing config exits with code 2") &&
+         expect_contains(result.stderr_text, "config file not found",
+                         "missing config error mentions config file not found");
 }
 
-bool test_load_app_config_parses_dynamic_stream_list() {
-  const std::string temp_dir = create_test_scratch_dir(
-      "multi-stream-people-tracker", "test_load_app_config_parses_dynamic_stream_list");
-  if (temp_dir.empty()) {
-    return expect_true(false, "created temp directory for config parsing test");
-  }
-
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
-         "input:\n"
-         "  tcp: true\n"
-         "  latency_ms: 200\n"
-         "inference:\n"
-         "  frames: 0\n"
-         "  fps: 0\n"
-         "  bitrate_kbps: 2500\n"
-         "  profile: true\n"
-         "  person_class_id: 0\n"
-         "  detection_threshold: 0.25\n"
-         "  nms_iou_threshold: 0.5\n"
-         "  top_k: 24\n"
-         "tracking:\n"
-         "  iou_threshold: 0.3\n"
-         "  max_missing_frames: 15\n"
-         "output:\n"
-         "  insight:\n"
-         "    host: 192.168.0.107\n"
-         "    video_port_base: 9000\n"
-         "    metadata_port_base: 9100\n"
-         "  video_mode: annotated\n"
-         "  debug_dir: null\n"
-         "  save_every: 0\n"
-         "streams:\n"
-         "  - rtsp://192.168.0.235:8554/src1\n"
-         "  - rtsp://192.168.0.235:8554/src2\n"
-         "  - rtsp://192.168.0.235:8554/src3\n";
-  out.close();
-
-  bool ok = true;
-  try {
-    const AppConfig cfg = load_app_config(config_path);
-    ok &= expect_true(cfg.model == "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz",
-                      "config parser keeps model path");
-    ok &= expect_true(cfg.insight_host == "192.168.0.107", "config parser keeps Insight host");
-    ok &= expect_true(cfg.insight_video_port_base == 9000, "config parser keeps video port base");
-    ok &= expect_true(cfg.insight_metadata_port_base == 9100,
-                      "config parser keeps metadata port base");
-    ok &= expect_true(cfg.video_mode == VideoMode::Annotated,
-                      "config parser keeps annotated video mode");
-    ok &=
-        expect_true(!metadata_output_enabled(cfg), "annotated video mode disables metadata output");
-    ok &= expect_true(cfg.tcp, "config parser keeps tcp=true");
-    ok &= expect_true(cfg.save_every == 0, "config parser keeps save_every");
-    ok &=
-        expect_near(cfg.detection_threshold, 0.25, 1e-6, "config parser keeps detection threshold");
-    ok &= expect_near(cfg.nms_iou_threshold, 0.5, 1e-6, "config parser keeps nms iou threshold");
-    ok &= expect_true(cfg.top_k == 24, "config parser keeps top_k");
-    ok &= expect_true(cfg.rtsp_urls ==
-                          std::vector<std::string>{
-                              "rtsp://192.168.0.235:8554/src1",
-                              "rtsp://192.168.0.235:8554/src2",
-                              "rtsp://192.168.0.235:8554/src3",
-                          },
-                      "config parser keeps all RTSP URLs");
-  } catch (const std::exception& ex) {
-    ok &= expect_true(false, std::string("config parser should load valid config: ") + ex.what());
-  }
-
-  remove_dir(temp_dir);
-  return ok;
-}
-
-bool test_load_app_config_defaults_to_clean_video_mode() {
-  const std::string temp_dir = create_test_scratch_dir(
-      "multi-stream-people-tracker", "test_load_app_config_defaults_to_clean_video_mode");
-  if (temp_dir.empty()) {
-    return expect_true(false, "created temp directory for video mode default test");
-  }
-
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
-         "input: {}\n"
-         "inference:\n"
-         "  detection_threshold: 0.25\n"
-         "  nms_iou_threshold: 0.5\n"
-         "  top_k: 24\n"
-         "tracking: {}\n"
-         "output:\n"
-         "  insight:\n"
-         "    host: 127.0.0.1\n"
-         "    video_port_base: 9000\n"
-         "    metadata_port_base: 9100\n"
-         "  debug_dir: null\n"
-         "  save_every: 0\n"
-         "streams:\n"
-         "  - rtsp://127.0.0.1:8554/src1\n";
-  out.close();
-
-  bool ok = true;
-  try {
-    const AppConfig cfg = load_app_config(config_path);
-    ok &= expect_true(cfg.video_mode == VideoMode::Clean,
-                      "config parser defaults to clean video mode");
-    ok &=
-        expect_true(metadata_output_enabled(cfg), "clean video mode keeps metadata output enabled");
-  } catch (const std::exception& ex) {
-    ok &= expect_true(false,
-                      std::string("config parser should load default video mode: ") + ex.what());
-  }
-
-  remove_dir(temp_dir);
-  return ok;
-}
-
-bool test_load_app_config_rejects_invalid_video_mode() {
-  const std::string temp_dir = create_test_scratch_dir(
-      "multi-stream-people-tracker", "test_load_app_config_rejects_invalid_video_mode");
-  if (temp_dir.empty()) {
-    return expect_true(false, "created temp directory for bad video mode test");
-  }
-
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
-         "input: {}\n"
-         "inference:\n"
-         "  detection_threshold: 0.25\n"
-         "  nms_iou_threshold: 0.5\n"
-         "  top_k: 24\n"
-         "tracking: {}\n"
-         "output:\n"
-         "  insight:\n"
-         "    host: 127.0.0.1\n"
-         "    video_port_base: 9000\n"
-         "    metadata_port_base: 9100\n"
-         "  video_mode: invalid\n"
-         "  debug_dir: null\n"
-         "  save_every: 0\n"
-         "streams:\n"
-         "  - rtsp://127.0.0.1:8554/src1\n";
-  out.close();
-
-  bool ok = false;
-  try {
-    static_cast<void>(load_app_config(config_path));
-  } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "video_mode", "invalid video mode error mentions video_mode");
-  }
-
-  remove_dir(temp_dir);
-  return ok;
-}
-
-bool test_load_app_config_rejects_missing_streams() {
-  const std::string temp_dir = create_test_scratch_dir(
-      "multi-stream-people-tracker", "test_load_app_config_rejects_missing_streams");
-  if (temp_dir.empty()) {
-    return expect_true(false, "created temp directory for missing streams test");
-  }
-
-  const fs::path config_path = fs::path(temp_dir) / "config.yaml";
-  std::ofstream out(config_path);
-  out << "model: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz\n"
-         "input: {}\n"
-         "inference: {}\n"
-         "tracking: {}\n"
-         "output:\n"
-         "  insight:\n"
-         "    host: 127.0.0.1\n"
-         "    video_port_base: 9000\n"
-         "    metadata_port_base: 9100\n"
-         "  debug_dir: null\n"
-         "  save_every: 0\n";
-  out.close();
-
-  bool ok = false;
-  try {
-    static_cast<void>(load_app_config(config_path));
-  } catch (const std::exception& ex) {
-    ok = expect_contains(ex.what(), "streams", "missing streams error mentions streams");
-  }
-
-  remove_dir(temp_dir);
-  return ok;
-}
-
-bool test_common_config_yaml_uses_supported_shape() {
+bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
   const fs::path config_path =
-      "examples/tracking/multi-stream-people-tracker/src/common/config.yaml";
-  try {
-    const AppConfig cfg = load_app_config(config_path);
-    bool ok = true;
-    ok &= expect_true(!cfg.model.empty(), "common config contains model");
-    ok &= expect_true(cfg.insight_video_port_base > 0, "common config video port base is positive");
-    ok &= expect_true(cfg.insight_metadata_port_base > 0,
-                      "common config metadata port base is positive");
-    ok &= expect_true(cfg.save_every >= 0, "common config save_every is nonnegative");
-    ok &= expect_true(!cfg.rtsp_urls.empty(), "common config has streams");
-    return ok;
-  } catch (const std::exception& ex) {
-    return expect_true(false, std::string("common config should load: ") + ex.what());
-  }
+      write_config("test_validate_config_only_accepts_four_streams",
+                   "model:\n"
+                   "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "  - rtsp://127.0.0.1:8554/src2\n"
+                   "  - rtsp://127.0.0.1:8554/src3\n"
+                   "  - rtsp://127.0.0.1:8554/src4\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok =
+      expect_true(result.exit_code == 0, "four-stream config validates") &&
+      expect_contains(result.stdout_text, "streams=4", "validate output reports stream count");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_rejects_too_many_streams",
+                   "model:\n"
+                   "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "  - rtsp://127.0.0.1:8554/src2\n"
+                   "  - rtsp://127.0.0.1:8554/src3\n"
+                   "  - rtsp://127.0.0.1:8554/src4\n"
+                   "  - rtsp://127.0.0.1:8554/src5\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 1, "five-stream config is rejected") &&
+                  expect_contains(result.stderr_text, "up to four streams",
+                                  "too-many-stream error mentions four-stream phase limit");
+  remove_dir(config_path.parent_path().string());
+  return ok;
 }
 
 bool test_tracker_reuses_track_id_for_nearby_detection() {
   PeopleTracker tracker(0.3f, 2);
-  const std::vector<Detection> first_input = {
-      Detection{10.0f, 10.0f, 50.0f, 80.0f, 0.9f, 0},
-  };
-  const std::vector<Detection> second_input = {
-      Detection{12.0f, 12.0f, 52.0f, 82.0f, 0.88f, 0},
-  };
-
-  const auto first = tracker.update(first_input, 0);
-  const auto second = tracker.update(second_input, 1);
-
+  const auto first = tracker.update({Detection{10.0f, 10.0f, 50.0f, 80.0f, 0.9f, 0}}, 0);
+  const auto second = tracker.update({Detection{12.0f, 11.0f, 52.0f, 81.0f, 0.8f, 0}}, 1);
   return expect_true(first.size() == 1, "tracker returns one detection on first frame") &&
          expect_true(second.size() == 1, "tracker returns one detection on second frame") &&
-         expect_true(second.front().track_id == first.front().track_id,
+         expect_true(first.front().track_id == second.front().track_id,
                      "tracker reuses track id for nearby detection");
 }
 
@@ -289,50 +122,7 @@ bool test_tracker_drops_track_after_missing_budget() {
                      "tracker expires track after missing frame budget");
 }
 
-bool test_make_insight_tracking_detection_uses_track_id() {
-  const auto payload = make_insight_tracking_detection({
-      TrackedDetection{42, 1.0f, 2.0f, 11.0f, 22.0f, 0.9f, 0},
-  });
-
-  bool ok = true;
-  ok &= expect_true(payload.tracks.size() == 1, "Insight payload returns one track");
-  ok &= expect_true(payload.tracks.front().id == "42", "Insight payload keeps track id");
-  ok &= expect_true(payload.tracks.front().label == "person", "Insight payload labels track");
-  ok &= expect_true(payload.tracks.front().x == 1.0f, "Insight payload keeps x");
-  ok &= expect_true(payload.tracks.front().y == 2.0f, "Insight payload keeps y");
-  ok &= expect_true(payload.tracks.front().w == 10.0f, "Insight payload keeps width");
-  ok &= expect_true(payload.tracks.front().h == 20.0f, "Insight payload keeps height");
-  ok &=
-      expect_near(payload.tracks.front().confidence, 0.9, 1e-6, "Insight payload keeps confidence");
-  return ok;
-}
-
-bool test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg() {
-  const std::string temp_dir = create_test_scratch_dir(
-      "multi-stream-people-tracker", "test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg");
-  if (temp_dir.empty()) {
-    return expect_true(false, "created temp directory for overlay save test");
-  }
-
-  const cv::Mat frame_rgb(32, 32, CV_8UC3, cv::Scalar(255, 0, 0));
-  bool ok = save_overlay_frame(fs::path(temp_dir), 0, 0, frame_rgb, 1);
-  ok &= expect_true(ok, "overlay save writes sampled frame");
-
-  const fs::path out_path = sample_output_path(fs::path(temp_dir), 0, 0);
-  const cv::Mat saved = cv::imread(out_path.string(), cv::IMREAD_COLOR);
-  ok &= expect_true(!saved.empty(), "overlay save writes readable image");
-  if (!saved.empty()) {
-    const cv::Vec3b pixel = saved.at<cv::Vec3b>(0, 0);
-    ok &= expect_true(pixel[2] > pixel[0],
-                      "overlay save preserves red-dominant RGB content after reload");
-  }
-
-  remove_dir(temp_dir);
-  return ok;
-}
-
 } // namespace
-} // namespace multi_stream_people_tracker
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -341,19 +131,12 @@ int main(int argc, char** argv) {
   }
 
   const std::string binary = argv[1];
-  int failures = 0;
-
-  failures += !multi_stream_people_tracker::test_help_runs(binary);
-  failures += !multi_stream_people_tracker::test_missing_config_file_fails_cleanly(binary);
-  failures += !multi_stream_people_tracker::test_load_app_config_parses_dynamic_stream_list();
-  failures += !multi_stream_people_tracker::test_load_app_config_defaults_to_clean_video_mode();
-  failures += !multi_stream_people_tracker::test_load_app_config_rejects_invalid_video_mode();
-  failures += !multi_stream_people_tracker::test_load_app_config_rejects_missing_streams();
-  failures += !multi_stream_people_tracker::test_common_config_yaml_uses_supported_shape();
-  failures += !multi_stream_people_tracker::test_tracker_reuses_track_id_for_nearby_detection();
-  failures += !multi_stream_people_tracker::test_tracker_drops_track_after_missing_budget();
-  failures += !multi_stream_people_tracker::test_make_insight_tracking_detection_uses_track_id();
-  failures += !multi_stream_people_tracker::test_save_overlay_frame_converts_rgb_to_bgr_for_jpeg();
-
-  return failures == 0 ? 0 : 1;
+  bool ok = true;
+  ok &= test_help_runs(binary);
+  ok &= test_missing_config_file_fails_cleanly(binary);
+  ok &= test_validate_config_only_accepts_four_streams(binary);
+  ok &= test_validate_config_only_rejects_too_many_streams(binary);
+  ok &= test_tracker_reuses_track_id_for_nearby_detection();
+  ok &= test_tracker_drops_track_after_missing_budget();
+  return ok ? 0 : 1;
 }

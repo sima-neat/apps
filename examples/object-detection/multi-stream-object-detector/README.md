@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-stream-object-detector |
-| Model | yolo26m-det-bf16-mla_tess-b1 |
+| Model | yolo26m-det-int8-b1 |
 
 ## Concept
 This example runs a config-driven multistream RTSP detection pipeline for YOLO26 model packs and publishes per-stream video plus detection metadata to Insight.
@@ -45,7 +45,7 @@ Per-stream graph:
 - `--help`: print the CLI help text
 
 ## Download Models
-The default model is `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
+The default model is `yolo26m-det-int8-b1.tar.gz`.
 
 Supported batch-1 YOLO26 detection models:
 - `yolo26n-det-bf16-mla_tess-b1.tar.gz`
