@@ -1,0 +1,8 @@
+model:
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+
+benchmark:
+  frames: 1000
+
+output:
+  report_json: sandbox/model-benchmark/report.json

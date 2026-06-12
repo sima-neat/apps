@@ -39,7 +39,7 @@ Multimodal assistant UI:
 
 ![Multimodal Assistant preview](../../../assets/portal/genai/multimodal-assistant/image.png)
 
-## Requirements
+## Prerequisites
 Install Neat before running the demo. The model server uses the Python
 environment where `pyneat` is available. The default scripts assume:
 

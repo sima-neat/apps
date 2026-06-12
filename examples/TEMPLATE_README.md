@@ -3,7 +3,7 @@
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | <classification / object-detection / face-detection / segmentation / depth-estimation / genai / throughput> |
+| Category | <benchmarking / classification / object-detection / face-detection / segmentation / depth-estimation / genai / throughput> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |

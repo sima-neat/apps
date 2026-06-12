@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 VALID_CATEGORIES = {
+    "benchmarking",
     "classification",
     "object-detection",
     "tracking",
