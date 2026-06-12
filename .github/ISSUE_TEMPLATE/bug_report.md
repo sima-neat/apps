@@ -49,7 +49,7 @@ Paste the full error message, traceback, or relevant logs. Redact secrets if nee
 - Hardware platform:
 - Host OS:
 - SiMa.ai Neat apps branch or commit:
-- Neat/core SDK version:
+- Neat Library and Neat Development Environment versions:
 - Python version, compiler, or toolchain:
 - Model, media, or RTSP source details:
 

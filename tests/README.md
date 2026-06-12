@@ -1,7 +1,7 @@
 # SiMa NEAT Apps Testing
 
 `tests/test.sh` is the single test entrypoint for CI, VS Code tasks, and manual
-SDK runs. Build and NEAT install stay in `build.sh`.
+Neat Development Environment runs. Build and Neat Library install stay in `build.sh`.
 
 ## Quick Start
 
@@ -162,10 +162,10 @@ ${PYTHON_TEST_BIN:-python3} -m pip install pytest PyYAML
 
 For a persistent local override, set `PYTHON_TEST_BIN` in `tests/configs/.env.local`.
 
-## VS Code From SDK
+## VS Code From Neat Development Environment
 
-Launch the VS Code tasks from the eLxr SDK workspace under `/workspace`.
-The task wrapper builds in the SDK, then calls `tests/test.sh` on the
+Launch the VS Code tasks from the Neat Development Environment workspace under `/workspace`.
+The task wrapper builds in the Neat Development Environment, then calls `tests/test.sh` on the
 board-side workspace through `dk`.
 
 ```bash

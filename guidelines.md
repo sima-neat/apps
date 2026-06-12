@@ -4,7 +4,7 @@ This document defines how contributors should add and maintain examples in `apps
 
 ## Goals
 - Preserve runtime behavior unless a change is explicitly requested.
-- Keep examples pedagogical: users should understand NEAT API usage by reading `main.py` and `main.cpp`.
+- Keep examples pedagogical: users should understand Neat Library API usage by reading `main.py` and `main.cpp`.
 - Keep every example consistent in layout, testing, and documentation.
 
 ## Required Example Layout
@@ -50,7 +50,7 @@ To add a new example:
 
 ## Implementation Expectations
 - Prefer implementing both C++ and Python paths for each example.
-- Keep core API calls explicit and visible (do not hide all logic behind opaque wrappers).
+- Keep Neat Library API calls explicit and visible (do not hide all logic behind opaque wrappers).
 - Keep argument parsing and runtime wiring obvious to readers.
 - Keep lifecycle stages clear: setup/build, run loop, teardown/reporting.
 

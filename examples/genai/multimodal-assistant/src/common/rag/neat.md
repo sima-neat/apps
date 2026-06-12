@@ -1,11 +1,11 @@
-# Neat Runtime Overview
+# Neat Library Overview
 
 ## What Neat Is
 
-SiMa.ai Neat is an application-development framework for building and running AI
+The Neat Library is the C++ and Python library for building and running AI
 applications on the SiMa.ai platform. It provides developers a set of Python and
 C++ APIs to execute and test compiled model artifacts, compose AI applications
-that leverage the SoC's hardware blocks, and manage runtime execution.
+that leverage the SoC's hardware blocks, and manage application execution.
 
 In the broader SiMa.ai software ecosystem, Neat sits at the application layer.
 It builds on the SiMa.ai runtime stack and uses GStreamer-based execution
@@ -20,11 +20,10 @@ Graph, and that graph is built and executed as a Run object on the SoC. The same
 workflow is designed to work well with agentic development so teams can explore,
 build, and iterate faster.
 
-## Runtime APIs
+## Library APIs
 
-Neat is SiMa.ai's application runtime for deploying AI pipelines on SiMa
-hardware. It provides Python and C++ APIs for loading model artifacts, composing
-runtime graphs, and running inference on SiMa devices.
+The Neat Library provides Python and C++ APIs for loading model artifacts,
+composing graphs, and running inference on SiMa devices.
 
 ## Model Hosting
 

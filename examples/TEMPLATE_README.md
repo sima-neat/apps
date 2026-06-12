@@ -12,7 +12,7 @@
 | Model | <default_model_name> [https://example.com/path/to/<default_model_name>_mpk.tar.gz] |
 
 ## Concept
-<1-2 paragraphs: what this example demonstrates and which NEAT capabilities it exercises.>
+<1-2 paragraphs: what this example demonstrates and which Neat Library capabilities it exercises.>
 
 ## Preview
 Optional. If you have a demo screenshot for the portal detail page, place it here immediately after `Concept`.
@@ -30,7 +30,7 @@ Download any variant into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <model_variant_1> && cd ../..`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <default_model_name> && cd ../..`
