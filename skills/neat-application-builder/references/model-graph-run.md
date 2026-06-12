@@ -73,15 +73,3 @@ public input or output. If more than one endpoint exists, use the names.
 Use `Sample` when the application needs frame IDs, timestamps, bundled values,
 or other metadata. Use `TensorList` when raw tensor payloads are enough.
 
-## Diagnostics
-
-Catch `simaai::neat::NeatError` around `Model`, `Graph`, and `Run` operations
-that can fail. Start triage from structured fields:
-
-1. `report().error_code`
-2. `report().repro_note`
-3. `report().bus`
-4. `report().repro_gst_launch`
-
-Do not start with low-level runtime logs unless the structured report points
-there.
