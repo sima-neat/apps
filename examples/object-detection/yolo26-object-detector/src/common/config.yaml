@@ -7,7 +7,7 @@ io:
   output_dir: sandbox/yolo26-object-detector
 
 decode:
-  score_threshold: 0.55
+  score_threshold: 0.40
   nms_iou: 0.60
   max_detections: 50
 
