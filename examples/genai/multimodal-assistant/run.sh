@@ -39,6 +39,7 @@ fi
 
 pids=()
 process_groups=()
+cleanup_started=0
 
 stop_stale_rag_worker() {
   if ! command -v pkill >/dev/null 2>&1; then
@@ -81,7 +82,13 @@ signal_process_groups() {
 }
 
 cleanup() {
-  trap - EXIT INT TERM
+  if [[ "${cleanup_started}" -eq 1 ]]; then
+    return
+  fi
+  cleanup_started=1
+
+  trap - EXIT
+  trap '' INT TERM
   signal_process_groups INT
 
   local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
