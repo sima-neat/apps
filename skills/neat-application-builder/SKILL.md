@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Use when building Neat Library applications with public C++ or Python APIs, including choosing between Model, Graph, GenAIModel, and GenAIServer; using Run handles returned by built graphs; reading packaged core headers/docs; composing application pipelines; and validating Neat Development Environment or DevKit behavior. Do not use for repository maintenance, release automation, review workflows, performance-tuning recipes, or project-specific delivery work.
+description: Use when building Neat Library applications with public C++ or Python APIs, including choosing between Model, Graph, GenAIModel, and GenAIServer; using Run handles returned by built graphs; reading packaged core headers/docs; composing application pipelines; and validating Neat Development Environment or DevKit behavior. Do not use for repository maintenance, release automation, review workflows, or work outside the public Neat Library application surface.
 ---
 
 # Neat Application Builder
@@ -44,7 +44,7 @@ reference implementations after the API shape is chosen.
 
 - Do not describe this as a repository maintenance skill.
 - Do not add repository publication, release automation, review workflow, or contributor-process guidance.
-- Do not include performance-tuning methods, queue-tuning recipes, memory-placement recipes, project-specific delivery patterns, or issue-specific lessons.
+- Use only public Neat Library APIs, packaged source, installed headers, official docs, and public examples.
 - Do not guess API behavior from memory. Verify against current packaged core source or installed docs.
 
 ## References
