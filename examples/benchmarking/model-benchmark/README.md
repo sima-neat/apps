@@ -70,7 +70,7 @@ report_json=sandbox/model-benchmark/my_model.json
 ```
 
 ## Benchmark Results
-See `BENCHMARK_RESULTS.md` for the readable benchmark summary. Use `benchmark-results.csv` for sorting, filtering, or spreadsheet review. Both files are manually updated from JSON reports for now.
+See `BENCHMARK_RESULTS.md` for the manually maintained reference results for Apps-supported model packages.
 
 ## Debugging Notes
 - If `pyneat` is missing, activate the Neat Python environment with `source ~/pyneat/bin/activate`.
@@ -82,4 +82,4 @@ See `BENCHMARK_RESULTS.md` for the readable benchmark summary. Use `benchmark-re
 - Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
 - Shared config: `src/common/config.yaml`
 - Test scope: `tests/test-scope.yaml`
-- Reference results: `BENCHMARK_RESULTS.md`, `benchmark-results.csv`
+- Reference results: `BENCHMARK_RESULTS.md`

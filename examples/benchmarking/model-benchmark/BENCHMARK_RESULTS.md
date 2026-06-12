@@ -1,7 +1,7 @@
 # Model Benchmark Results
 
-This is the readable summary for model-only synthetic benchmarks from `pyneat.Model.benchmark()`.
-For sorting, filtering, or spreadsheet import, use `benchmark-results.csv` in this directory.
+This file is a manually maintained reference table for Apps-supported compiled model packages.
+The numbers come from `pyneat.Model.benchmark()` through `src/python/main.py`.
 
 These results measure the compiled model package only. They do not include camera ingest, RTSP decode, Insight output, metadata conversion, overlays, or application postprocessing.
 
@@ -9,43 +9,45 @@ These results measure the compiled model package only. They do not include camer
 
 | Field | Value |
 | --- | --- |
-| Command | `python3 examples/benchmarking/model-benchmark/src/python/main.py --model <model-package>` |
-| Config | `examples/benchmarking/model-benchmark/src/common/config.yaml` |
+| Target | Modalix (`aarch64`) |
+| SDK | 2.0.0 |
+| Date | 2026-06-12 |
 | Frames | 1000 |
-| JSON Report | `sandbox/model-benchmark/report.json` |
-| Spreadsheet Table | `examples/benchmarking/model-benchmark/benchmark-results.csv` |
+| Command | `python3 examples/benchmarking/model-benchmark/src/python/main.py --model <model-package>` |
+| JSON Reports | `sandbox/model-benchmark/runs/<model-id>.json` |
 | Power Columns | Omitted |
-| Status | Pending: local DevKit `192.168.2.7:22` was unreachable, so benchmark runs did not start. |
 
-## Result Table
+## General Models
 
-Fill `benchmark-results.csv` after each benchmark run. Keep this Markdown file as the customer-facing summary and use the CSV as the table source when many rows need sorting or spreadsheet review.
+| Model ID | Package | Used By | Latency ms | FPS |
+| --- | --- | --- | ---: | ---: |
+| `resnet_50` | `resnet_50_mpk.tar.gz` | image-classifier | 2.264 | 918.20 |
+| `depth_anything_v2_vits` | `depth_anything_v2_vits_mpk.tar.gz` | depth-estimator | 20.695 | 54.56 |
+| `retinaface_mobilenet25` | `retinaface_mobilenet25_mod_0_mpk.tar.gz` | face-detector | 4.383 | 608.04 |
+| `detr_resnet50_modified_class_embed_bbox_embed` | `detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` | detr-object-detector | 23.672 | 68.15 |
+| `yolo_v8n_seg` | `yolo_v8n_seg_mpk.tar.gz` | yolov8-instance-segmenter | 6.600 | 387.95 |
 
-| Family | Models | Status |
-| --- | ---: | --- |
-| General | 5 | Pending |
-| YOLO26 detection | 7 | Pending |
-| YOLO26 segmentation | 8 | Pending |
+## YOLO26 Detection
 
-## CSV Columns
+| Model ID | Package | Used By | Latency ms | FPS |
+| --- | --- | --- | ---: | ---: |
+| `yolo26n-det-bf16-mla_tess-b1` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | 6.427 | 348.86 |
+| `yolo26s-det-bf16-mla_tess-b1` | `yolo26s-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | 8.984 | 180.09 |
+| `yolo26m-det-bf16-mla_tess-b1` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, yolo26-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | 16.762 | 62.57 |
+| `yolo26l-det-bf16-mla_tess-b1` | `yolo26l-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | 20.107 | 50.71 |
+| `yolo26x-det-bf16-mla_tess-b1` | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, multi-stream-people-tracker | 49.978 | 27.83 |
+| `yolo26m-det-bf16-b1` | `yolo26m-det-bf16-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | 21.110 | 77.23 |
+| `yolo26m-det-int8-b1` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | 6.764 | 271.33 |
 
-| Column | Meaning |
-| --- | --- |
-| `model_id` | Stable model ID from `tests/test-scope.yaml`. |
-| `package` | Compiled model package filename. |
-| `family` | Model family used for grouping and filtering. |
-| `used_by` | Apps examples that currently use or support the model. |
-| `target` | Target board or runtime used for the benchmark. |
-| `sdk` | SDK version used for the benchmark. |
-| `frames` | Measured synthetic frames passed to `Model.benchmark()`. |
-| `latency_ms` | Reported model latency in milliseconds. |
-| `fps` | Reported model throughput. |
-| `date` | Benchmark date in `YYYY-MM-DD` format. |
+## YOLO26 Segmentation
 
-## Updating Results
-
-1. Run `main.py` for one compiled model package.
-2. Read `sandbox/model-benchmark/report.json`.
-3. Copy `latency_ms` and `fps` into `benchmark-results.csv`.
-4. Record the target, SDK, frame count, and date in the same CSV row.
-5. Keep power values out of the CSV unless the benchmark policy changes.
+| Model ID | Package | Used By | Latency ms | FPS |
+| --- | --- | --- | ---: | ---: |
+| `yolo26n-seg-bf16-mla_tess` | `yolo26n-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | 9.290 | 238.74 |
+| `yolo26s-seg-bf16-mla_tess` | `yolo26s-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | 15.474 | 131.85 |
+| `yolo26m-seg-bf16-mla_tess` | `yolo26m-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | 32.663 | 50.02 |
+| `yolo26l-seg-bf16-mla_tess` | `yolo26l-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | 28.501 | 42.89 |
+| `yolo26x-seg-bf16-mla_tess` | `yolo26x-seg-bf16-mla_tess.tar.gz` | single-stream-instance-segmenter | 55.701 | 19.84 |
+| `yolo26m-seg-bf16-b1` | `yolo26m-seg-bf16-b1.tar.gz` | single-stream-instance-segmenter | 26.983 | 50.43 |
+| `yolo26m-seg-bf16-mla_tess-b1` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` | single-stream-instance-segmenter | 25.012 | 50.53 |
+| `yolo26m-seg-int8-b1` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter | 9.991 | 195.12 |
