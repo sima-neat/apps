@@ -8,6 +8,19 @@ namespace sima_examples {
 
 namespace fs = std::filesystem;
 
+namespace {
+
+bool download_modelzoo_model(const fs::path& root, const std::string& model_name) {
+  const fs::path script = root / "scripts" / "download_models.sh";
+  if (!fs::exists(script))
+    return false;
+  const std::string cmd = "cd " + shell_quote(root.string()) +
+                          " && bash scripts/download_models.sh " + shell_quote(model_name);
+  return std::system(cmd.c_str()) == 0;
+}
+
+} // namespace
+
 std::string shell_quote(const std::string& s) {
   std::string out = "'";
   for (char c : s) {
@@ -118,8 +131,7 @@ std::string resolve_resnet50_tar(const fs::path& root_in) {
   if (fs::exists(local))
     return local.string();
 
-  const int rc = std::system("sima-cli modelzoo -v 2.0.0 get resnet_50");
-  if (rc != 0)
+  if (!download_modelzoo_model(root, "resnet_50"))
     return "";
 
   if (fs::exists(local))
@@ -234,8 +246,7 @@ std::string resolve_modelzoo_tar(const std::string& model_name, const fs::path& 
     }
   }
 
-  const std::string cmd = "sima-cli modelzoo -v 2.0.0 get " + shell_quote(model_name);
-  if (std::system(cmd.c_str()) != 0)
+  if (!download_modelzoo_model(root, model_name))
     return "";
 
   if (fs::exists(local))

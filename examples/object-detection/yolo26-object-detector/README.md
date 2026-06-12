@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolo26-object-detector |
-| Model | yolo26m-det-bf16-mla_tess-b1 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz] |
+| Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
 Minimal image-folder object detection pipeline using yolo26m. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the NEAT API for model loading, inference, and result decoding.
@@ -20,6 +20,8 @@ Snippet from a pipeline run:
 ![YOLO26 object detector preview](../../../assets/portal/object-detection/yolo26-object-detector/image.png)
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Supported model:
 - `yolo26m-det-bf16-mla_tess-b1.tar.gz`
 
@@ -29,7 +31,7 @@ Download the supported model:
 mkdir -p assets/models
 cd assets/models
 
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 
 cd ../..
 ```

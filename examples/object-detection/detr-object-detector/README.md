@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | detr-object-detector |
-| Model | detr_resnet50_modified_class_embed_bbox_embed [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz] |
+| Model | detr_resnet50_modified_class_embed_bbox_embed |
 
 ## Concept
 This example demonstrates folder-based object detection with a compiled **DETR** model. Each input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the NEAT pipeline, and then decoded into object boxes and class scores.
@@ -22,6 +22,8 @@ Snippet from a pipeline run:
 ![DETR object detector preview](../../../assets/portal/object-detection/detr-object-detector/image.png)
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Validated with: `detr_resnet50_modified_class_embed_bbox_embed`
 
 Download into `assets/models/`:
@@ -32,7 +34,7 @@ Download into `assets/models/`:
 - Model artifacts are user-managed and should be placed under `assets/models/`.
 - Preferred download command: `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
 - Direct URL fallback:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz && cd ../..`
+  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz && cd ../..`
 - Default model path:
   `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 

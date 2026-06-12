@@ -19,15 +19,17 @@ The pipeline is trying to classify this goldfish image.
 ![Image classifier goldfish input](../../../assets/portal/classification/image-classifier/image.jpeg)
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Primary model: `resnet_50`
 
 Download into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get resnet_50 && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get resnet_50 && cd ../..`
 
 ## Prerequisites
 - Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get resnet_50 && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get resnet_50 && cd ../..`
 
 ## Important Behavior
 - Runtime settings live in `src/common/config.yaml`.

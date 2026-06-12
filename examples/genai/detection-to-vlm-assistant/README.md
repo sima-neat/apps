@@ -27,6 +27,8 @@ Detection metadata visualized in Insight:
 - OpenAI-compatible Gemma server running when `openai.enabled` is true.
 
 ## Download Models
+Use the platform version wherever `<platform-version>` appears.
+
 Supported batch-1 YOLO26 detector models:
 - `yolo26n-det-bf16-mla_tess-b1.tar.gz`
 - `yolo26s-det-bf16-mla_tess-b1.tar.gz`
@@ -42,7 +44,7 @@ Download the default detector model:
 mkdir -p assets/models
 cd assets/models
 
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 
 cd ../..
 ```

@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | face-detector |
-| Model | retinaface_mobilenet25 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz] |
+| Model | retinaface_mobilenet25 |
 
 ## Concept
 This example demonstrates folder-based face detection with **RetinaFace**, a one-stage dense detector designed for robust face localization across pose, scale, and occlusion conditions.
@@ -29,6 +29,8 @@ Snippet from a pipeline run:
 ![Face detector preview](../../../assets/portal/face-detection/face-detector/image.png)
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Validated with: `retinaface_mobilenet25`
 
 Download into `assets/models/`:
@@ -39,7 +41,7 @@ Download into `assets/models/`:
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Preferred download command: `./scripts/download_models.sh retinaface_mobilenet25`
 - Direct URL fallback:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
+  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
 
 ## Important Behavior
 - C++ and Python read runtime values from `src/common/config.yaml`.
