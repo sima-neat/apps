@@ -161,6 +161,7 @@ def _run_build(
         "GITHUB_BASE_REF",
         "GITHUB_HEAD_REF",
         "GITHUB_REF_NAME",
+        "GITHUB_REF_TYPE",
         "NEAT_APPS_ARTIFACT_BRANCH_KEY",
         "NEAT_APPS_ARTIFACT_SHORT_SHA",
         "NEAT_APPS_DEPENDENCY_BRANCH",
@@ -202,6 +203,19 @@ def _run_build(
         stderr=subprocess.PIPE,
         check=False,
     )
+
+
+def _installer_env(tmp_path: Path) -> dict[str, str]:
+    return {
+        "NEAT_INSTALLER_URL": "https://installer.test/install-neat.sh",
+        "NEAT_APPS_TEST_INSTALLER_URL": "https://installer.test/install-neat.sh",
+        "NEAT_APPS_TEST_INSTALLER_PWD": str(tmp_path / "installer-pwd.txt"),
+        "NEAT_APPS_TEST_INSTALLER_ARGS": str(tmp_path / "installer-args.txt"),
+    }
+
+
+def _installer_args(tmp_path: Path) -> str:
+    return (tmp_path / "installer-args.txt").read_text(encoding="utf-8").strip()
 
 
 def _curl_log(tmp_path: Path) -> list[str]:
@@ -246,12 +260,12 @@ def _write_fake_neat_json(tmp_path: Path, *, channel: str, tag: str, env: str) -
 def test_empty_manifest_resolves_from_dependency_branch_and_platform_version(tmp_path):
     proc = _run_build(
         tmp_path,
-        env={"NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
+        args=["--only-install-neat-core"],
+        env={**_installer_env(tmp_path), "NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "Platform version      : 2.0.0" in proc.stdout
-    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert _installer_args(tmp_path) == "--minimum develop devsha1"
     assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
 
 
@@ -259,22 +273,27 @@ def test_snap_manifest_resolves_from_dependency_branch(tmp_path):
     proc = _run_build(
         tmp_path,
         neat_core={"policy": "snap"},
-        env={"NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
+        args=["--only-install-neat-core"],
+        env={**_installer_env(tmp_path), "NEAT_APPS_DEPENDENCY_BRANCH": "develop"},
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert _installer_args(tmp_path) == "--minimum develop devsha1"
     assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
 
 
 def test_empty_manifest_custom_branch_uses_matching_core_artifact_once(tmp_path):
     proc = _run_build(
         tmp_path,
-        env={"NEAT_APPS_DEPENDENCY_BRANCH": "zz-core-artifact-for-test"},
+        args=["--only-install-neat-core"],
+        env={
+            **_installer_env(tmp_path),
+            "NEAT_APPS_DEPENDENCY_BRANCH": "zz-core-artifact-for-test",
+        },
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core target      : zz-core-artifact-for-test:featsha1" in proc.stdout
+    assert _installer_args(tmp_path) == "--minimum zz-core-artifact-for-test featsha1"
     assert (
         _curl_log(tmp_path).count(
             "https://core.test/zz-core-artifact-for-test/latest.tag"
@@ -286,11 +305,15 @@ def test_empty_manifest_custom_branch_uses_matching_core_artifact_once(tmp_path)
 def test_empty_manifest_custom_branch_falls_back_to_develop(tmp_path):
     proc = _run_build(
         tmp_path,
-        env={"NEAT_APPS_DEPENDENCY_BRANCH": "zz-missing-core-artifact-for-test"},
+        args=["--only-install-neat-core"],
+        env={
+            **_installer_env(tmp_path),
+            "NEAT_APPS_DEPENDENCY_BRANCH": "zz-missing-core-artifact-for-test",
+        },
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert _installer_args(tmp_path) == "--minimum develop devsha1"
     assert "using develop-latest" in proc.stderr
 
 
@@ -298,19 +321,28 @@ def test_snap_manifest_custom_branch_falls_back_to_develop(tmp_path):
     proc = _run_build(
         tmp_path,
         neat_core={"policy": "snap"},
-        env={"NEAT_APPS_DEPENDENCY_BRANCH": "zz-missing-core-artifact-for-test"},
+        args=["--only-install-neat-core"],
+        env={
+            **_installer_env(tmp_path),
+            "NEAT_APPS_DEPENDENCY_BRANCH": "zz-missing-core-artifact-for-test",
+        },
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core target      : develop:devsha1" in proc.stdout
+    assert _installer_args(tmp_path) == "--minimum develop devsha1"
     assert "using develop-latest" in proc.stderr
 
 
 def test_explicit_manifest_uses_valid_branch_version(tmp_path):
-    proc = _run_build(tmp_path, neat_core="zz-core-artifact-for-test-pinnedsha1")
+    proc = _run_build(
+        tmp_path,
+        neat_core="zz-core-artifact-for-test-pinnedsha1",
+        args=["--only-install-neat-core"],
+        env=_installer_env(tmp_path),
+    )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
+    assert _installer_args(tmp_path) == "--minimum zz-core-artifact-for-test pinnedsha1"
     assert (
         "https://core.test/zz-core-artifact-for-test/pinnedsha1/metadata.json"
         in _curl_log(tmp_path)
@@ -322,10 +354,12 @@ def test_dependency_object_manifest_uses_valid_artifact(tmp_path, ref_key):
     proc = _run_build(
         tmp_path,
         neat_core={ref_key: "zz-core-artifact-for-test", "spec": "pinnedsha1"},
+        args=["--only-install-neat-core"],
+        env=_installer_env(tmp_path),
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core target      : zz-core-artifact-for-test:pinnedsha1" in proc.stdout
+    assert _installer_args(tmp_path) == "--minimum zz-core-artifact-for-test pinnedsha1"
     assert (
         "https://core.test/zz-core-artifact-for-test/pinnedsha1/metadata.json"
         in _curl_log(tmp_path)
@@ -333,7 +367,11 @@ def test_dependency_object_manifest_uses_valid_artifact(tmp_path, ref_key):
 
 
 def test_explicit_manifest_fails_when_artifact_is_invalid(tmp_path):
-    proc = _run_build(tmp_path, neat_core="zz-missing-core-artifact-for-test-pinnedsha1")
+    proc = _run_build(
+        tmp_path,
+        neat_core="zz-missing-core-artifact-for-test-pinnedsha1",
+        args=["--only-install-neat-core"],
+    )
 
     assert proc.returncode != 0
     assert "unavailable NEAT core artifact" in proc.stderr
@@ -343,6 +381,7 @@ def test_protected_branch_rejects_explicit_manifest_value(tmp_path):
     proc = _run_build(
         tmp_path,
         neat_core="main-mainsha1",
+        args=["--only-install-neat-core"],
         env={"GITHUB_REF_NAME": "main"},
     )
 
@@ -354,6 +393,7 @@ def test_protected_branch_rejects_explicit_dependency_object_manifest(tmp_path):
     proc = _run_build(
         tmp_path,
         neat_core={"branch": "main", "spec": "mainsha1"},
+        args=["--only-install-neat-core"],
         env={"GITHUB_REF_NAME": "main"},
     )
 
@@ -362,10 +402,51 @@ def test_protected_branch_rejects_explicit_dependency_object_manifest(tmp_path):
 
 
 def test_unsupported_manifest_object_fails(tmp_path):
-    proc = _run_build(tmp_path, neat_core={"policy": "latest"})
+    proc = _run_build(
+        tmp_path,
+        neat_core={"policy": "latest"},
+        args=["--only-install-neat-core"],
+    )
 
     assert proc.returncode != 0
     assert "unsupported neat-core.policy" in proc.stderr
+
+
+def test_snap_manifest_tag_build_uses_matching_core_tag(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            **_installer_env(tmp_path),
+            "GITHUB_REF_TYPE": "tag",
+            "GITHUB_REF_NAME": "v2.1.0",
+            "NEAT_APPS_TEST_LATEST_TAGS": "\n".join(
+                [
+                    "develop=devsha1",
+                    "v2.1.0=tagsha1",
+                ]
+            ),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum v2.1.0 tagsha1"
+    assert "https://core.test/v2.1.0/latest.tag" in _curl_log(tmp_path)
+
+
+def test_snap_manifest_tag_build_fails_without_matching_core_tag(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "GITHUB_REF_TYPE": "tag",
+            "GITHUB_REF_NAME": "v9.9.9",
+        },
+    )
+
+    assert proc.returncode != 0
+    assert "exact tag-snap NEAT core artifact" in proc.stderr
+    assert "using develop-latest" not in proc.stderr
 
 
 def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):
