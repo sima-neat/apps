@@ -312,6 +312,18 @@ current_dependency_branch() {
   echo "develop"
 }
 
+current_dependency_tag() {
+  if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+    printf '%s\n' "${GITHUB_REF_NAME}"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${ROOT_DIR}" describe --tags --exact-match HEAD 2>/dev/null || true
+    return 0
+  fi
+  printf '\n'
+}
+
 protected_manifest_branch_context() {
   if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
     printf '%s\n' "${GITHUB_BASE_REF}"
@@ -594,7 +606,15 @@ validate_explicit_core_ref() {
 }
 
 resolve_empty_neat_core_branch() {
-  local branch
+  local branch tag
+  if [[ -z "${NEAT_APPS_DEPENDENCY_BRANCH:-}" ]]; then
+    tag="$(current_dependency_tag)"
+    if [[ -n "${tag}" ]]; then
+      printf '%s\n' "${tag}"
+      return 0
+    fi
+  fi
+
   branch="$(current_dependency_branch)"
 
   if [[ "${branch}" == "main" || "${branch}" == "develop" ]]; then
@@ -714,7 +734,7 @@ run_sima_cli_core_install() {
 }
 
 ensure_neat_core() {
-  local branch version install_mode sima_cli_bin vulcan_env
+  local branch exact_tag install_mode sima_cli_bin version vulcan_env
   mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
   load_neat_core_target
   branch="${NEAT_CORE_TARGET_BRANCH}"
@@ -733,7 +753,13 @@ ensure_neat_core() {
 
   # Resolve "latest" to an exact tag before checking installed state.
   if [[ "${version}" == "latest" ]]; then
-    version="$(resolve_latest_version "${branch}")"
+    if ! version="$(resolve_latest_version "${branch}")"; then
+      exact_tag="$(current_dependency_tag)"
+      if [[ -n "${exact_tag}" && "${branch}" == "${exact_tag}" ]]; then
+        echo "ERROR: Failed to resolve exact tag-snap NEAT core artifact for tag '${branch}'." >&2
+      fi
+      exit 1
+    fi
   fi
 
   local expected_tag="${branch}/${version}"
@@ -830,7 +856,13 @@ if [[ "${INSTALL_CORE}" -eq 1 ]]; then
   NEAT_CORE_DISPLAY_BRANCH="${NEAT_CORE_TARGET_BRANCH}"
   NEAT_CORE_DISPLAY_VERSION="${NEAT_CORE_TARGET_VERSION}"
   if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
-    NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"
+    if ! NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"; then
+      exact_tag="$(current_dependency_tag)"
+      if [[ -n "${exact_tag}" && "${NEAT_CORE_DISPLAY_BRANCH}" == "${exact_tag}" ]]; then
+        echo "ERROR: Failed to resolve exact tag-snap NEAT core artifact for tag '${NEAT_CORE_DISPLAY_BRANCH}'." >&2
+      fi
+      exit 1
+    fi
   fi
 fi
 
