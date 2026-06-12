@@ -49,6 +49,7 @@ function(sima_neat_apps_add_example example_name)
 endfunction()
 
 add_subdirectory(classification)
+add_subdirectory(benchmarking)
 add_subdirectory(object-detection)
 add_subdirectory(tracking)
 add_subdirectory(segmentation)
