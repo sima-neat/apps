@@ -187,6 +187,8 @@ PY
 
   cp -a "${ROOT_DIR}/tests" "${stage_dir}/tests"
   rm -f "${stage_dir}/tests/.env.local"
+  mkdir -p "${stage_dir}/deps"
+  cp "${APPS_MANIFEST}" "${stage_dir}/deps/manifest.json"
   mkdir -p "${stage_dir}/scripts"
   cp "${ROOT_DIR}/scripts/download_models.sh" "${stage_dir}/scripts/download_models.sh"
   cp "${ROOT_DIR}/tests/conftest.py" "${stage_dir}/examples/conftest.py"

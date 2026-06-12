@@ -19,15 +19,17 @@ Snippet from a pipeline run:
 ![Depth estimator preview](../../../assets/portal/depth-estimation/depth-estimator/image.png)
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Primary model: `depth_anything_v2_vits`
 
 Download into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits && cd ../..`
 
 ## Prerequisites
 - Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get depth_anything_v2_vits && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits && cd ../..`
 
 ## Important Behavior
 - Runtime settings are read from `src/common/config.yaml` by default.

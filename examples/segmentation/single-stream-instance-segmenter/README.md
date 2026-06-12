@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | single-stream-instance-segmenter |
-| Model | yolo26m-seg-bf16-b1 [https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz] |
+| Model | yolo26m-seg-bf16-b1 |
 
 ## Concept
 `single-stream-instance-segmenter` is a single-camera YOLO26 instance segmentation example:
@@ -29,6 +29,8 @@ Snippet from a pipeline run:
 ![Single stream instance segmenter preview](../../../assets/portal/segmentation/single-stream-instance-segmenter/image.png)
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Supported YOLO26 segmentation models:
 
 - `yolo26n-seg-bf16-mla_tess.tar.gz`
@@ -43,18 +45,18 @@ Supported YOLO26 segmentation models:
 Download the supported variants:
 
 ```bash
-SDK_VERSION=${NEAT_APPS_MODEL_SDK_VERSION:-2.0.0}
+PLATFORM_VERSION=<platform-version>
 mkdir -p assets/models/YOLO26-SEGMENTATION
 cd assets/models/YOLO26-SEGMENTATION
 
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26s-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26l-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26x-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${SDK_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26s-seg-bf16-mla_tess.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26l-seg-bf16-mla_tess.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26x-seg-bf16-mla_tess.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz"
 
 cd ../../..
 ```

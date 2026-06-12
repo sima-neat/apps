@@ -19,15 +19,17 @@ Snippet from a pipeline run:
 ![Instance segmenter preview](../../../assets/portal/segmentation/yolov8-instance-segmenter/image.jpg)
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Also works with: `yolo_v8s_seg`, `yolo_v8m_seg`, `yolo_v8l_seg`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8n_seg && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get yolo_v8n_seg && cd ../..`
 
 ## Prerequisites
 - Installed Neat SDK.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get yolo_v8n_seg && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get yolo_v8n_seg && cd ../..`
 
 ## Important Behavior
 - Model path is positional and required.

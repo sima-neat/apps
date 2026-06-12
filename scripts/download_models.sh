@@ -25,18 +25,37 @@ SCOPE_PYTHON="${TEST_SCOPE_PYTHON_BIN:-${PYTHON_TEST_BIN:-python3}}"
 VERSION_PYTHON="${PYTHON_TEST_BIN:-python3}"
 export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
 
-detect_model_sdk_version() {
-    "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" <<'PY' 2>/dev/null || printf '2.0.0\n'
+detect_platform_version() {
+    "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(manifest.get("platform-version") or "2.0.0")
+path = Path(sys.argv[1])
+try:
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+except FileNotFoundError:
+    print(
+        f"ERROR: Missing manifest: {path}. Set NEAT_APPS_PLATFORM_VERSION to override.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+platform_version = manifest.get("platform-version")
+if not isinstance(platform_version, str) or not platform_version.strip():
+    print(f"ERROR: {path} must define platform-version as a non-empty string.", file=sys.stderr)
+    raise SystemExit(1)
+print(platform_version.strip())
 PY
 }
 
-MODEL_SDK_VERSION="${NEAT_APPS_MODEL_SDK_VERSION:-$(detect_model_sdk_version)}"
+PLATFORM_VERSION="${NEAT_APPS_PLATFORM_VERSION:-}"
+
+ensure_platform_version() {
+    if [[ -z "$PLATFORM_VERSION" ]]; then
+        PLATFORM_VERSION="$(detect_platform_version)"
+    fi
+}
 
 usage() {
     cat <<'EOF'
@@ -48,7 +67,7 @@ Options:
   --scope-file <path>   Test scope source file or directory (default: examples)
   --kind <kind>         Scope kind to resolve (default: e2e)
   --language <lang>     Scope language to include; repeatable (python, cpp)
-  NEAT_APPS_MODEL_SDK_VERSION can override {sdk_version} URL placeholders.
+  NEAT_APPS_PLATFORM_VERSION can override the platform version.
   -h, --help            Show help
 EOF
 }
@@ -177,11 +196,12 @@ download_modelzoo_model() {
         return 0
     fi
     ensure_sima_cli_bin
+    ensure_platform_version
 
     local before
     before=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
-    echo "[download] $model_id (modelzoo: $model_name)"
-    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v 2.0.0 get "$model_name")
+    echo "[download] $model_id (modelzoo: $model_name, platform-version: $PLATFORM_VERSION)"
+    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$PLATFORM_VERSION" get "$model_name")
 
     local after
     after=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
@@ -200,7 +220,10 @@ download_url_model() {
     local expected_file="$3"
     local tmpdir
     local downloaded_files=()
-    url="${url//\{sdk_version\}/$MODEL_SDK_VERSION}"
+    if [[ "$url" == *"{platform_version}"* ]]; then
+        ensure_platform_version
+        url="${url//\{platform_version\}/$PLATFORM_VERSION}"
+    fi
 
     if model_exists "$model_id" "$expected_file"; then
         echo "[skip] $model_id already exists"

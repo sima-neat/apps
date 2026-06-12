@@ -1,7 +1,7 @@
 models:
   yolo26m-det-bf16-mla_tess-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
     file: yolo26m-det-bf16-mla_tess-b1.tar.gz
 unit:
   python: true
