@@ -20,9 +20,9 @@ Detection metadata visualized in Insight:
 ![Detection-to-VLM assistant preview](../../../assets/portal/genai/detection-to-vlm-assistant/image.png)
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat Development Environment.
 - YOLO26 detector model package available under `assets/models/`.
-- RTSP stream readable from the SDK runtime.
+- RTSP stream readable from the Neat Development Environment.
 - Insight receiver running at the configured host and ports.
 - OpenAI-compatible Gemma server running when `openai.enabled` is true.
 

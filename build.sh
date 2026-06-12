@@ -211,7 +211,14 @@ PY
   mkdir -p "${stage_dir}/scripts"
   cp "${ROOT_DIR}/scripts/download_models.sh" "${stage_dir}/scripts/download_models.sh"
   cp "${ROOT_DIR}/tests/conftest.py" "${stage_dir}/examples/conftest.py"
-  cp -a "${ROOT_DIR}/assets/." "${stage_dir}/assets/"
+  while IFS= read -r rel; do
+    local src_file target_dir
+    src_file="${ROOT_DIR}/${rel}"
+    [[ -f "${src_file}" ]] || continue
+    target_dir="${stage_dir}/$(dirname "${rel}")"
+    mkdir -p "${target_dir}"
+    cp "${src_file}" "${target_dir}/"
+  done < <(git -C "${ROOT_DIR}" ls-files assets)
 
   find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
   find "${stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete

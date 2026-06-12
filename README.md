@@ -3,15 +3,15 @@
 ![Standard Build & Archive](https://img.shields.io/badge/Standard%20Build%20%26%20Archive-TBA-lightgrey)
 ![Fuzz Nightly](https://img.shields.io/badge/Fuzz%20Nightly-TBA-lightgrey)
 ![Crash Correctness Nightly](https://img.shields.io/badge/Crash%20Correctness%20Nightly-TBA-lightgrey)
-![SDK](https://img.shields.io/badge/SDK-2.0-green)
+![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.0-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
 Neat Apps contains editable Neat applications and reference examples built around real workflows such as detection, segmentation, and streaming pipelines. The goal is to make the apps easy to run, easy to modify, and easy to learn from.
 
-The core idea is simple: `core` installs the Neat SDK, runtime, and tooling, while `apps` shows how to use them in customer-facing C++ and Python examples where the important Neat API calls stay visible in the source.
+The core idea is simple: the Neat Library provides the C++ and Python runtime APIs, while `apps` shows how to use them in customer-facing examples where the important Neat Library API calls stay visible in the source.
 
 This repo is intentionally separate from `core`:
-- `core` installs the Neat SDK/runtime/tooling
+- `core` owns the Neat Library runtime and tooling
 - `apps` holds customer-facing applications and sample code
 
 ## Customer Workflow (Early Release)
@@ -28,11 +28,11 @@ This repo is intentionally separate from `core`:
    ./build.sh --all --clean
    ```
 
-   This installs the NEAT core version resolved from `deps/manifest.json`, configures and builds the apps, builds the portal, and creates a packaged `neat-apps-runtime/` bundle plus a `neat-apps-<branch>-<sha>.tar.gz` archive.
+   This installs the Neat Library version resolved from `deps/manifest.json`, configures and builds the apps, builds the portal, and creates a packaged `neat-apps-runtime/` bundle plus a `neat-apps-<branch>-<sha>.tar.gz` archive.
 
    **Note:** After the initial setup completes, the default `pyneat` virtual environment is available at `~/pyneat`. Activate it with `source ~/pyneat/bin/activate` to run Python examples.
 
-3. For broader Neat framework concepts and platform documentation, see:
+3. For broader Neat Library concepts and platform documentation, see:
    https://docs.sima-neat.com/
 
 This keeps examples editable and easy to customize.
@@ -63,7 +63,7 @@ directory in the current working directory.
 - `support/`: shared C++ helper code used by multiple examples
 - `assets/`: user-managed runtime assets (models under `assets/models/`, test media under `assets/test_images/`)
 - `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
-- `deps/manifest.json`: Neat core SDK and platform-version dependency declaration
+- `deps/manifest.json`: Neat Library and platform-version dependency declaration
 
 ## Example Structure
 
@@ -76,10 +76,10 @@ Examples are organized under `examples/<category>/<example>`. Each example is so
 | `examples/<category>/<example>/README.md` | Example-specific usage and setup instructions |
 | `examples/<category>/<example>/tests/test-scope.yaml` | Internal test selection and e2e model source metadata |
 | `examples/<category>/<example>/src/cpp/CMakeLists.txt` | C++ example build configuration |
-| `examples/<category>/<example>/src/cpp/main.cpp` | C++ entrypoint with visible Neat API flow |
+| `examples/<category>/<example>/src/cpp/main.cpp` | C++ entrypoint with visible Neat Library API flow |
 | `examples/<category>/<example>/tests/cpp/test_unit.cpp` | C++ unit tests |
 | `examples/<category>/<example>/tests/cpp/test_e2e.cpp` | C++ end-to-end tests |
-| `examples/<category>/<example>/src/python/main.py` | Python entrypoint with visible Neat API flow |
+| `examples/<category>/<example>/src/python/main.py` | Python entrypoint with visible Neat Library API flow |
 | `examples/<category>/<example>/src/python/requirements.txt` | Python example dependencies |
 | `examples/<category>/<example>/tests/python/test_unit.py` | Python unit tests |
 | `examples/<category>/<example>/tests/python/test_e2e.py` | Python end-to-end tests |
@@ -97,8 +97,8 @@ For the full contributor rules, required layout, and authoring expectations, see
 `build.sh` has three main modes:
 
 - build/configure the apps locally
-- install the Neat core SDK only
-- run the full first-time or release flow with `--all`, which installs Neat core, builds the apps, builds the portal, and packages `neat-apps-runtime`
+- install the Neat Library dependency only
+- run the full first-time or release flow with `--all`, which installs the Neat Library dependency, builds the apps, builds the portal, and packages `neat-apps-runtime`
 
 It does not run tests.
 
@@ -114,10 +114,10 @@ Common commands:
 # Clean build directory then build
 ./build.sh --clean
 
-# Install Neat core, build apps, build portal, then package
+# Install Neat Library dependency, build apps, build portal, then package
 ./build.sh --all
 
-# Install Neat core only, no build
+# Install Neat Library dependency only, no build
 ./build.sh --only-install-neat-core
 
 # Override deps/manifest.json for one run (branch-version)
@@ -132,8 +132,8 @@ Common commands:
 
 Main `build.sh` args:
 
-- `--all`: install Neat core SDK, build apps, build portal, then package
-- `--only-install-neat-core`: install Neat core SDK and exit
+- `--all`: install Neat Library dependency, build apps, build portal, then package
+- `--only-install-neat-core`: install Neat Library dependency and exit
 - `--neat-core-version <branch-version>`: override `deps/manifest.json`
 - `--clean`: remove build dir before configure
 - `--debug` / `--release`: build type
@@ -192,9 +192,9 @@ open preview.html
 
 If you use host-streamed sources from a board/devkit, use the host IP in the RTSP URL instead of `127.0.0.1`. Any other RTSP source also works.
 
-## NEAT Core Dependency
+## Neat Library Dependency
 
-`deps/manifest.json` declares the Neat core dependency and the platform version.
+`deps/manifest.json` declares the Neat Library dependency and the platform version.
 The normal value is `"neat-core": {"policy": "snap"}`. Snap resolves from the
 dependency branch: `main` uses `main-latest`, `develop` uses `develop-latest`,
 and custom branches use a matching core branch when available or fall back to
@@ -213,7 +213,7 @@ For bug reports, include:
 - steps to reproduce
 - expected behavior and actual behavior
 - the full error message, traceback, or relevant logs
-- environment details such as platform, OS, SDK version, and input assets
+- environment details such as platform, OS, Neat Development Environment version, and input assets
 
 For feature requests, include:
 

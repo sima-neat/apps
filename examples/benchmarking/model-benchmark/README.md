@@ -27,7 +27,7 @@ This example accepts any compiled model package supported by `pyneat.Model`.
 `tests/test-scope.yaml` lists the compiled model packages already used by Apps examples. `BENCHMARK_RESULTS.md` is the manually maintained table for reference benchmark results.
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Activated `pyneat` environment.
 - A compiled model package available locally, usually under `assets/models/`.
 

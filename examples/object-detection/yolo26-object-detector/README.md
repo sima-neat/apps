@@ -12,7 +12,7 @@
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
-Minimal image-folder object detection pipeline using yolo26m. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the NEAT API for model loading, inference, and result decoding.
+Minimal image-folder object detection pipeline using yolo26m. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the Neat Library API for model loading, inference, and result decoding.
 
 ## Preview
 Snippet from a pipeline run:
@@ -37,7 +37,7 @@ cd ../..
 ```
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
 

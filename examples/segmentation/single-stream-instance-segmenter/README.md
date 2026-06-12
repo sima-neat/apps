@@ -62,7 +62,7 @@ cd ../../..
 ```
 
 ## Prerequisites
-- Installed Neat framework and Insight on the DevKit.
+- Installed Neat Library and Insight on the DevKit.
 - RTSP camera source, or an Insight/tool-mediasources RTSP stream.
 - A YOLO26 segmentation model package downloaded locally.
 - `model.path`, `model.labels`, `source.rtsp_url`, and `output.insight.host` set in `src/common/config.yaml`.

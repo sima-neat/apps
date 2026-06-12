@@ -12,7 +12,7 @@
 | Model | detr_resnet50_modified_class_embed_bbox_embed |
 
 ## Concept
-This example demonstrates folder-based object detection with a compiled **DETR** model. Each input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the NEAT pipeline, and then decoded into object boxes and class scores.
+This example demonstrates folder-based object detection with a compiled **DETR** model. Each input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the Neat Library pipeline, and then decoded into object boxes and class scores.
 
 The model emits two raw tensors: classification logits and normalized bounding boxes for a fixed set of object queries. The example applies `softmax` over the class logits, `sigmoid` over the box outputs, filters by confidence, optionally keeps only the COCO `person` class, maps detections back onto the original image, and writes annotated output images.
 
@@ -30,7 +30,7 @@ Download into `assets/models/`:
 - `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be placed under `assets/models/`.
 - Preferred download command: `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
 - Direct URL fallback:

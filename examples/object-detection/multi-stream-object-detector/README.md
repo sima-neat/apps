@@ -33,7 +33,7 @@ Per-stream graph:
 - debug only: `Combine(debug_frame, detections, ByFrame) -> debug_output`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - One or more reachable RTSP camera URLs.
 - A YOLO26 model pack downloaded into `assets/models/`.
 - Edit `src/common/config.yaml` before running with real streams.

@@ -27,7 +27,7 @@ Download into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get resnet_50 && cd ../..`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get resnet_50 && cd ../..`
 
