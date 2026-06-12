@@ -6,6 +6,7 @@ const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
 const recordButton = document.getElementById('recordButton');
 const recordIcon = document.getElementById('recordIcon');
+const recordIconUrls = window.recordIconUrls;
 const snapChatButton = document.getElementById('snapChatButton');
 const uploadButton = document.getElementById('uploadButton');
 const themeToggle = document.getElementById('themeToggle');
@@ -496,10 +497,7 @@ window.onload = function () {
 };
 
 function toggleMicrophone(mute) {
-  const mutedUrl = recordButton.getAttribute('data-muted-url');
-  const activeUrl = recordButton.getAttribute('data-active-url');
-
-  recordIcon.src = mute ? mutedUrl : activeUrl;
+  recordIcon.src = mute ? recordIconUrls.muted : recordIconUrls.active;
 
   if (audioTracks.length > 0) {
     audioTracks[0].enabled = !mute;
