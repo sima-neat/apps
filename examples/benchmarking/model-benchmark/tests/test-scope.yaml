@@ -46,7 +46,7 @@ models:
   yolo26m-det-int8-b1:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK2.0.0/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
-    file: YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz
+    file: yolo26m-det-int8-b1.tar.gz
   yolo26n-seg-bf16-mla_tess:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{sdk_version}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz
