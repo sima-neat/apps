@@ -28,13 +28,6 @@ Use `Graph` when:
 - The app needs branching, fan-in, reusable graph fragments, or source/output nodes.
 - The app must expose an application boundary beyond a single model call.
 
-Use `Run` when:
-
-- A `Graph` has been built.
-- The app needs long-lived asynchronous execution.
-- The app needs named `push("input", ...)` or `pull("output", ...)`.
-- The app needs timeout handling, close/drain behavior, or measurement scopes.
-
 ## GenAI
 
 Use `GenAIModel` when:
