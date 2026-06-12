@@ -168,9 +168,7 @@
             <button id="sendButton" class="input-button" title="Send">
               <img src="{{ url_for('static', filename='icons/send.png') }}" alt="Send" width="24" height="24">
             </button>
-            <button id="recordButton" class="input-button" title="Record Audio"
-              data-muted-url="{{ url_for('static', filename='icons/muted.png') }}"
-              data-active-url="{{ url_for('static', filename='icons/microphone.png') }}">
+            <button id="recordButton" class="input-button" title="Record Audio">
               <img id="recordIcon" src="{{ url_for('static', filename='icons/muted.png') }}" alt="Record" width="24"
                 height="24">
             </button>
@@ -211,6 +209,12 @@
     </div>
   </div>
 
+  <script>
+    window.recordIconUrls = Object.freeze({
+      muted: "{{ url_for('static', filename='icons/muted.png') }}",
+      active: "{{ url_for('static', filename='icons/microphone.png') }}"
+    });
+  </script>
   <script src="{{ url_for('static', filename='newui.js') }}"></script>
   <script src="{{ url_for('static', filename='socket.io.min.js') }}"></script>
 </body>

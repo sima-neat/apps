@@ -11,6 +11,9 @@ on:
         default: main
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   resolve-test-runner:
     name: Resolve Test Runner
