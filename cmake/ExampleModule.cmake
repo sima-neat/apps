@@ -89,30 +89,6 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
   )
 endfunction()
 
-function(_sima_neat_apps_ensure_support_optiview apps_root)
-  if (TARGET SimaNeatApps::support_optiview)
-    return()
-  endif()
-
-  _sima_neat_apps_ensure_support_runtime("${apps_root}")
-
-  add_library(sima_neat_apps_support_optiview STATIC
-    "${apps_root}/support/optiview/graphpipes_optiview_helpers.cpp"
-  )
-  add_library(SimaNeatApps::support_optiview ALIAS sima_neat_apps_support_optiview)
-
-  target_link_libraries(sima_neat_apps_support_optiview
-    PUBLIC
-      SimaNeatApps::support_runtime
-      SimaNeatApps::sima_neat
-  )
-
-  target_include_directories(sima_neat_apps_support_optiview
-    PUBLIC
-      "${apps_root}"
-  )
-endfunction()
-
 function(_sima_neat_apps_ensure_support_testing apps_root)
   if (TARGET SimaNeatApps::support_testing)
     return()
@@ -236,17 +212,13 @@ function(_sima_neat_apps_add_generic_e2e_test example_name module_dir example_ta
 endfunction()
 
 function(sima_neat_apps_module example_name)
-  set(options OPTIVIEW METADATA_E2E_TEST UNIT_TEST E2E_TEST)
+  set(options METADATA_E2E_TEST UNIT_TEST E2E_TEST)
   set(one_value_args OUTPUT_TARGET_VAR)
   set(multi_value_args SOURCES)
   cmake_parse_arguments(APP "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
   if (COMMAND sima_neat_apps_add_example)
-    if (APP_OPTIVIEW)
-      sima_neat_apps_add_example("${example_name}" OPTIVIEW OUTPUT_TARGET_VAR _module_target_name)
-    else()
-      sima_neat_apps_add_example("${example_name}" OUTPUT_TARGET_VAR _module_target_name)
-    endif()
+    sima_neat_apps_add_example("${example_name}" OUTPUT_TARGET_VAR _module_target_name)
     if (APP_OUTPUT_TARGET_VAR)
       set(${APP_OUTPUT_TARGET_VAR} "${_module_target_name}" PARENT_SCOPE)
     endif()
@@ -276,9 +248,6 @@ function(sima_neat_apps_module example_name)
 
   _sima_neat_apps_ensure_neat_target("${_apps_root}")
   _sima_neat_apps_ensure_support_runtime("${_apps_root}")
-  if (APP_OPTIVIEW)
-    _sima_neat_apps_ensure_support_optiview("${_apps_root}")
-  endif()
   if (BUILD_TESTING)
     _sima_neat_apps_ensure_support_testing("${_apps_root}")
   endif()
@@ -290,10 +259,6 @@ function(sima_neat_apps_module example_name)
       SimaNeatApps::sima_neat
       SimaNeatApps::support_runtime
   )
-
-  if (APP_OPTIVIEW)
-    target_link_libraries(${example_name} PRIVATE SimaNeatApps::support_optiview)
-  endif()
 
   target_include_directories(${example_name}
     PRIVATE
