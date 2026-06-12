@@ -143,6 +143,8 @@ jobs:
 
         docker exec \
           -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
+          -e GITHUB_REF_NAME="${GITHUB_REF_NAME}" \
+          -e GITHUB_REF_TYPE="${GITHUB_REF_TYPE}" \
           -e GITHUB_SHA="${GITHUB_SHA}" \
           "${sdk_container}" \
           bash -lc '
@@ -156,10 +158,15 @@ jobs:
               export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
             fi
             cd /workspace
-            short_sha="$(printf "%.12s" "${GITHUB_SHA}")"
+            if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+              version="${GITHUB_REF_NAME}"
+              version="${version#v}"
+            else
+              version="$(printf "%.12s" "${GITHUB_SHA}")"
+            fi
             sima-cli packages build dist \
               --name gh:sima-neat/apps \
-              --version "${short_sha}" \
+              --version "${version}" \
               --description "SiMa.ai Neat example applications and portal runtime" \
               --install-script install_vulcan_apps_package.sh
           '
@@ -240,8 +247,13 @@ jobs:
           fi
 
           REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          SHORT_SHA="$(printf "%.12s" "${GITHUB_SHA}")"
-          PACKAGE_SPEC="apps@${REF_NAME}:${SHORT_SHA}"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="$(printf "%.12s" "${GITHUB_SHA}")"
+          fi
+          PACKAGE_SPEC="apps@${REF_NAME}:${VERSION}"
 
           mkdir -p _vulcan-test/install
           echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
