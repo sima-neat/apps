@@ -12,9 +12,6 @@ Development Environment's packaged core source, installed headers, and local
 documentation as the source of truth. Use apps examples only as optional
 reference implementations after the API shape is chosen.
 
-Keep this skill generic. Do not encode project-specific pipeline lessons,
-performance recipes, or internal repository workflow.
-
 ## Official Naming
 
 - Use `Neat Library` for the C++/Python API and runtime.
