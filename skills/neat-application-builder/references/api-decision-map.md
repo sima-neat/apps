@@ -18,7 +18,7 @@ Use `Model.build(...)` when:
 - The app needs a long-lived runner with repeated `push` / `pull`.
 - The model-owned `Runner` interface is enough.
 
-## Graph And Run
+## Graph
 
 Use `Graph` when:
 

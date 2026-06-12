@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Use when building Neat Library applications with public C++ or Python APIs, including choosing between Model, Graph, Run, GenAIModel, and GenAIServer; reading packaged core headers/docs; composing application pipelines; and validating Neat Development Environment or DevKit behavior. Do not use for repository maintenance, release automation, review workflows, performance-tuning recipes, or project-specific delivery work.
+description: Use when building Neat Library applications with public C++ or Python APIs, including choosing between Model, Graph, GenAIModel, and GenAIServer; using Run handles returned by built graphs; reading packaged core headers/docs; composing application pipelines; and validating Neat Development Environment or DevKit behavior. Do not use for repository maintenance, release automation, review workflows, performance-tuning recipes, or project-specific delivery work.
 ---
 
 # Neat Application Builder
@@ -11,15 +11,6 @@ Build applications against the installed Neat Library. Treat the current Neat
 Development Environment's packaged core source, installed headers, and local
 documentation as the source of truth. Use apps examples only as optional
 reference implementations after the API shape is chosen.
-
-## Official Naming
-
-- Use `Neat Library` for the C++/Python API and runtime.
-- Use `Neat Development Environment` for the Docker-based development environment.
-- Use `Model Compiler` for quantization, compilation, and validation.
-- Keep `LLiMa` unchanged.
-- Keep command, repository, package, image, path, and artifact names verbatim.
-  Examples: `sima-cli sdk`, `ghcr:sima-neat/sdk`, `sdk`, `core`, and `/neat-resources/core-src`.
 
 ## Workflow
 
@@ -46,7 +37,6 @@ reference implementations after the API shape is chosen.
 
 - Use `Model` for a single classic compiled model archive and direct request/response inference.
 - Use `Graph` when the application needs multiple stages, named inputs or outputs, branching, fan-in, reusable fragments, or source/output nodes.
-- Use `Run` after a `Graph` is built and the application needs long-lived push/pull execution.
 - Use `GenAIModel` for in-process GenAI calls against LLiMa model directories.
 - Use `GenAIServer` when a browser, service, or remote client should call GenAI models over HTTP.
 
