@@ -59,9 +59,6 @@ source before writing code or explaining behavior.
 - Pre-built node groups for common application plumbing
   - Inspect `include/nodes/groups/*.h`
   - Start with `RtspDecodedInput.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
-- Graph helpers such as branching and combining
-  - Inspect `include/graphs/Fragments.h`
-  - Read `docs/develop-apps/development-workflow/graph.mdx`
 
 ## Model Pre/Post And Decode Helpers
 
@@ -115,8 +112,6 @@ their docs. Do not inline their workflows here.
 
 - Model Compiler and model preparation
   - Read the Model Compiler and compile-a-model docs.
-- Model Zoo and precompiled model retrieval
-  - Read the Model Zoo docs.
 - LLiMa compile, test, and benchmark workflows
   - Read the LLiMa / GenAI tooling docs.
 - Insight visualization or UI workflows
