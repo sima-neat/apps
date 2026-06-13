@@ -6,6 +6,7 @@
 | Category | classification |
 | Difficulty | Beginner |
 | Tags | classification, model, mpk |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | image-classifier |
 | Model | resnet_50 |
@@ -30,6 +31,19 @@ Download into `assets/models/`:
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get resnet_50 && cd ../..`
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - Runtime settings live in `src/common/config.yaml`.

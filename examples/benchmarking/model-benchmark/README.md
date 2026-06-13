@@ -31,6 +31,19 @@ This example accepts any compiled model package supported by `pyneat.Model`.
 - Activated `pyneat` environment.
 - A compiled model package available locally, usually under `assets/models/`.
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Important Behavior
 - `benchmark.frames` controls the measured synthetic frames passed to `Model.benchmark()`.
 - The default report path is `sandbox/model-benchmark/report.json`.

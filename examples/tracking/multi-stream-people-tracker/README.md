@@ -68,6 +68,19 @@ cd ../..
 - A YOLO26 detector model pack downloaded into `assets/models/`.
 - An Insight viewer instance reachable from the board/host running this example.
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Important Behavior
 - The Python and C++ implementations follow the same per-stream graph structure.
 - The `streams:` list in `src/common/config.yaml` controls the number of cameras dynamically. This phase supports up to four streams.

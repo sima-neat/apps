@@ -67,6 +67,19 @@ cd ../../..
 - A YOLO26 segmentation model package downloaded locally.
 - `model.path`, `model.labels`, `source.rtsp_url`, and `output.insight.host` set in `src/common/config.yaml`.
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Important Behavior
 - C++ and Python read runtime values from `src/common/config.yaml`.
 - `model.path` must point to a valid YOLO26 segmentation model package.

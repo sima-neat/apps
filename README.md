@@ -16,24 +16,31 @@ This repo is intentionally separate from `core`:
 
 ## Customer Workflow (Early Release)
 
-1. Clone this repo.
+1. Install the Neat Library by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
 
-2. `sima-cli` is used by some examples and tools in this repo. Install it by following the official guide: https://docs.sima.ai/pages/sima_cli/main.html
+2. Clone this repo:
 
-2. For first-time setup, run:
+   ```bash
+   git clone https://github.com/sima-neat/apps.git
+   cd apps
+   ```
+
+3. `sima-cli` is used by some examples and tools in this repo. Install it by following the official [sima-cli guide](https://developer.sima.ai/software/tools/sima-cli/).
+
+4. For first-time setup, run:
 
    ```bash
    sudo apt update
    sudo apt-get install -y nlohmann-json3-dev nodejs npm
-   ./build.sh --all --clean
+   ./build.sh --clean
    ```
 
-   This installs the Neat Library version resolved from `deps/manifest.json`, configures and builds the apps, builds the portal, and creates a packaged `neat-apps-runtime/` bundle plus a `neat-apps-<branch>-<sha>.tar.gz` archive.
+   This configures and builds the apps from the local checkout. Follow each example README for model downloads and run commands.
 
-   **Note:** After the initial setup completes, the default `pyneat` virtual environment is available at `~/pyneat`. Activate it with `source ~/pyneat/bin/activate` to run Python examples.
+   **Note:** If the Neat Library was installed into the default `pyneat` virtual environment, activate it with `source ~/pyneat/bin/activate` to run Python examples.
 
-3. For broader Neat Library concepts and platform documentation, see:
-   https://docs.sima-neat.com/
+5. For broader Neat Library concepts and platform documentation, see:
+   https://developer.sima.ai/
 
 This keeps examples editable and easy to customize.
 
@@ -98,14 +105,14 @@ For the full contributor rules, required layout, and authoring expectations, see
 
 - build/configure the apps locally
 - install the Neat Library dependency only
-- run the full first-time or release flow with `--all`, which installs the Neat Library dependency, builds the apps, builds the portal, and packages `neat-apps-runtime`
+- run the full release/package flow with `--all`, which installs the Neat Library dependency, builds the apps, builds the portal, and packages `neat-apps-runtime`
 
 It does not run tests.
 
 Common commands:
 
 ```bash
-# First-time setup or full release-style flow
+# Full release/package flow
 ./build.sh --all --clean
 
 # Build only (default)

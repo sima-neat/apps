@@ -6,6 +6,7 @@
 | Category | segmentation |
 | Difficulty | Intermediate |
 | Tags | segmentation |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolov8-instance-segmenter |
 | Model | yolo_v8n_seg |
@@ -30,6 +31,19 @@ Download any variant into `assets/models/`:
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get yolo_v8n_seg && cd ../..`
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - Model path is positional and required.

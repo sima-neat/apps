@@ -35,6 +35,19 @@ Download any variant into `assets/models/`:
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <default_model_name> && cd ../..`
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Important Behavior
 - This example expects the model path to be provided explicitly at runtime.
 - Input and output paths are user-provided.

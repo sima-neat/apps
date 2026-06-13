@@ -43,6 +43,19 @@ Download into `assets/models/`:
 - Direct URL fallback:
   `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Important Behavior
 - C++ and Python read runtime values from `src/common/config.yaml`.
 - Detection confidence and NMS IoU live under `decode`.

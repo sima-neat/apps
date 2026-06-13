@@ -72,6 +72,19 @@ This separation keeps the RTSP graph from being tightly coupled to the inference
 - RTSP camera source or use Insight to start RTSP source
 - Model artifacts are user-managed. Download the model variant you want to run into `assets/models/`.
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Download Models
 Use the platform version wherever `<platform-version>` appears.
 
@@ -244,7 +257,7 @@ python3 src/python/main.py --config src/common/config.yaml
 
 Python-specific notes:
 
-- if `model.path` is empty, the Python version tries to locate `yolo26m-det-bf16-mla_tess-b1.tar.gz` locally and then falls back to `sima-cli download`
+- `model.path` must point to a downloaded YOLO26 detector package
 - it sends Insight metadata directly over UDP and streams video through `VideoSender`
 
 ## Debugging Notes

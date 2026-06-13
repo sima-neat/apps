@@ -39,6 +39,19 @@ Per-stream graph:
 - Edit `src/common/config.yaml` before running with real streams.
 - On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Command-line options
 - `--config <path>`: path to the YAML configuration file
 - `--validate-config-only`: validate the config and exit without opening RTSP streams
