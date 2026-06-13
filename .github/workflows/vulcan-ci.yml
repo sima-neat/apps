@@ -1,6 +1,6 @@
 name: Vulcan CI
 
-run-name: ${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'dev' }})
+run-name: ${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'production' }})
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
     name: Resolve Vulcan Config
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
     with:
-      vulcan_env: ${{ vars.VULCAN_ENV || 'dev' }}
+      vulcan_env: ${{ vars.VULCAN_ENV || 'production' }}
 
   build:
     name: Build Apps on Vulcan
@@ -246,13 +246,8 @@ jobs:
           fi
 
           REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-            VERSION="${VERSION#v}"
-          else
-            VERSION="$(printf "%.12s" "${GITHUB_SHA}")"
-          fi
-          PACKAGE_SPEC="apps@${REF_NAME}:${VERSION}"
+          SHORT_SHA="$(printf "%.12s" "${GITHUB_SHA}")"
+          PACKAGE_SPEC="apps@${REF_NAME}:${SHORT_SHA}"
 
           mkdir -p _vulcan-test/install
           echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
@@ -304,6 +299,21 @@ jobs:
         if: ${{ always() }}
         run: |
           rm -rf _vulcan-test
+
+  promote-latest-tag:
+    name: Promote Vulcan latest tag
+    if: ${{ always() && (github.ref_type == 'branch' || github.ref_type == 'tag') && needs.test-runtime.result == 'success' }}
+    needs:
+      - resolve-vulcan-config
+      - test-runtime
+    uses: sima-neat/.github/.github/workflows/vulcan-update-latest-artifacts.yml@main
+    with:
+      aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
+      environment_name: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+      bucket: ${{ needs.resolve-vulcan-config.outputs.artifact_bucket }}
+      role_to_assume: ${{ needs.resolve-vulcan-config.outputs.artifact_publisher_role_arn }}
+      sse_kms_key_id: ${{ needs.resolve-vulcan-config.outputs.artifact_kms_key_id }}
+      artifact_folder: "."
 
   build-sysdoc-examples:
     name: Build SysDoc Examples Route
@@ -484,18 +494,3 @@ jobs:
             --api-key "${write_api_key}" \
             --index-name "${index_name}" \
             --sync
-
-  promote-latest-tag:
-    name: Promote Vulcan latest tag
-    if: ${{ github.ref_type == 'branch' || github.ref_type == 'tag' }}
-    needs:
-      - resolve-vulcan-config
-      - test-runtime
-    uses: sima-neat/.github/.github/workflows/vulcan-update-latest-artifacts.yml@main
-    with:
-      aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
-      environment_name: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
-      bucket: ${{ needs.resolve-vulcan-config.outputs.artifact_bucket }}
-      role_to_assume: ${{ needs.resolve-vulcan-config.outputs.artifact_publisher_role_arn }}
-      sse_kms_key_id: ${{ needs.resolve-vulcan-config.outputs.artifact_kms_key_id }}
-      artifact_folder: "."

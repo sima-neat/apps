@@ -4,7 +4,7 @@ set -euo pipefail
 DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
 RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-neat-apps-runtime}"
 RUNTIME_DST="${DEST_DIR}/neat-apps-runtime"
-VULCAN_ENV="${NEAT_VULCAN_ENV:-${VULCAN_ENV:-dev}}"
+VULCAN_ENV="${NEAT_VULCAN_ENV:-${VULCAN_ENV:-production}}"
 NEAT_CORE_INSTALL_DIR=""
 NEAT_CORE_INSTALL_DIR_OWNED=0
 
