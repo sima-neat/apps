@@ -34,7 +34,7 @@ Insight is SiMa.ai's lightweight, cross-platform development and visualization t
 
 For this sample, the most important part is the viewer/output contract: the application sends video on the Insight video channel and sends detection metadata as JSON on the Insight side channel. That allows the browser UI to display the live stream together with object detections without relying on external tools such as `ffplay`, VLC, or ad hoc debug viewers.
 
-For more information regarding Insight, please refer to this [page](https://docs.sima.ai/pages/insight/main.html#).
+For more information regarding Insight, please refer to this [page](https://developer.sima.ai/software/tools/insight).
 
 ## Architecture
 The sample is split into three independent runtime stages:
@@ -271,4 +271,4 @@ Python-specific notes:
 - C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
 - Python source: `src/python/main.py`
 - Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
-- Insight documentation: <https://docs.sima.ai/pages/insight/main.html>
+- Insight documentation: <https://developer.sima.ai/software/tools/insight>
