@@ -97,7 +97,7 @@ Examples are organized under `examples/<category>/<example>`. Each example is so
 
 ### Contributor Guidelines
 
-For the full contributor rules, required layout, and authoring expectations, see [guidelines.md](./guidelines.md).
+For the contributor workflow, example contract, and review checklist, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Build (`build.sh`)
 

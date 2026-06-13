@@ -4,12 +4,12 @@
 | Field | Value |
 | --- | --- |
 | Category | genai |
-| Difficulty | Intermediate |
-| Tags | genai, vlm, asr, tts, openai |
+| Difficulty | Advanced |
+| Tags | genai, vlm, asr, tts, openai-compatible |
 | Languages | Python |
 | Status | experimental |
 | Binary Name | multimodal-assistant |
-| Model | LLM/VLM and Whisper ASR model directories |
+| Model | Qwen3-VL-4B-Instruct-GPTQ-a16w4 + whisper-small-a16w8 |
 
 ## Concept
 This example hosts SiMa-supported GenAI models through Neat's OpenAI-compatible server and uses the imported Flask demo UI as the interactive assistant surface.

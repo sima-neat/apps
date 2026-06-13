@@ -5,7 +5,7 @@
 | --- | --- |
 | Category | depth-estimation |
 | Difficulty | Intermediate |
-| Tags | depth-estimation |
+| Tags | depth-estimation, depth-anything, folder-inference |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | depth-estimator |
@@ -78,7 +78,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/depth-estimation/depth-estimator
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

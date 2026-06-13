@@ -4,8 +4,8 @@
 | Field | Value |
 | --- | --- |
 | Category | genai |
-| Difficulty | Intermediate |
-| Tags | object-detection, genai, yolo26, gemma3 |
+| Difficulty | Advanced |
+| Tags | object-detection, genai, yolo26, rtsp, insight, openai-compatible |
 | Languages | Python |
 | Status | experimental |
 | Binary Name | detection-to-vlm-assistant |

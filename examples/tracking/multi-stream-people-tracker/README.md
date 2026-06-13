@@ -4,8 +4,8 @@
 | Field | Value |
 | --- | --- |
 | Category | tracking |
-| Difficulty | Intermediate |
-| Tags | object-detection, rtsp, tracking, insight |
+| Difficulty | Advanced |
+| Tags | object-detection, yolo26, rtsp, multistream, insight, people-tracking |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-stream-people-tracker |

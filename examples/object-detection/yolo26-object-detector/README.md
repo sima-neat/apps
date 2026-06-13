@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolo26-object-detector |
-| Model | YOLO26 batch-1 detection packages |
+| Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
 Minimal image-folder object detection pipeline using a YOLO26 detection model. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the Neat Library API for model loading, inference, and result decoding.
@@ -98,7 +98,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/object-detection/yolo26-object-detector
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

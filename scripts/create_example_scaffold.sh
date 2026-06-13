@@ -215,6 +215,23 @@ render_readme() {
 ## Concept
 TODO: describe what this example demonstrates.
 
+## Prerequisites
+- Installed Neat Development Environment.
+- Model artifacts are user-managed and should be downloaded into \`assets/models/\`.
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+\`\`\`bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+\`\`\`
+
+After this setup, follow the example-specific commands below.
+
 ## Build
 ### Build From The Apps Repo
 \`\`\`bash

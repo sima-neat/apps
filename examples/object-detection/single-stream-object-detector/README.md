@@ -5,7 +5,7 @@
 | --- | --- |
 | Category | object-detection |
 | Difficulty | Intermediate |
-| Tags | object-detection, rtsp, insight |
+| Tags | object-detection, yolo26, rtsp, insight |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | single-stream-object-detector |
@@ -160,7 +160,7 @@ Configure and build only this example from its own directory:
 
 ```bash
 cd <apps-repo-root>/examples/object-detection/single-stream-object-detector
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

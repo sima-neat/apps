@@ -5,7 +5,7 @@
 | --- | --- |
 | Category | segmentation |
 | Difficulty | Intermediate |
-| Tags | segmentation |
+| Tags | segmentation, yolov8, instance-segmentation, folder-inference |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolov8-instance-segmenter |
@@ -86,7 +86,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/segmentation/yolov8-instance-segmenter
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

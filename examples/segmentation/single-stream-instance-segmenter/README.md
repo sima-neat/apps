@@ -5,7 +5,7 @@
 | --- | --- |
 | Category | segmentation |
 | Difficulty | Intermediate |
-| Tags | segmentation, yolo26, rtsp, insight |
+| Tags | segmentation, yolo26, instance-segmentation, rtsp, insight |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | single-stream-instance-segmenter |
@@ -112,7 +112,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/segmentation/single-stream-instance-segmenter
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 
