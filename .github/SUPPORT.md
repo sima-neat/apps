@@ -15,7 +15,7 @@ Include:
 - steps to reproduce
 - actual behavior and expected behavior
 - the full error message, traceback, or relevant logs
-- environment details such as platform, OS, SDK version, and input assets
+- environment details such as platform, OS, Neat Development Environment version, and input assets
 
 ### Feature Requests
 

@@ -39,7 +39,9 @@ int main(int argc, char** argv) {
   }
 
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
-  const std::string insight_host = "127.0.0.1";
+  const std::string insight_host = env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
+                                       ? env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
+                                       : "127.0.0.1";
   const int video_port_base = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port_base =
       env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);

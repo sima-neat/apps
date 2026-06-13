@@ -5,14 +5,14 @@
 | --- | --- |
 | Category | object-detection |
 | Difficulty | Beginner |
-| Tags | object-detection, yolo26m, folder-inference |
+| Tags | object-detection, yolo26, folder-inference |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | yolo26-object-detector |
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
-Minimal image-folder object detection pipeline using yolo26m. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the NEAT API for model loading, inference, and result decoding.
+Minimal image-folder object detection pipeline using a YOLO26 detection model. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the Neat Library API for model loading, inference, and result decoding.
 
 ## Preview
 Snippet from a pipeline run:
@@ -22,10 +22,18 @@ Snippet from a pipeline run:
 ## Supported Models
 Use the platform version wherever `<platform-version>` appears.
 
-Supported model:
-- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
 
-Download the supported model:
+Supported batch-1 YOLO26 detection models:
+- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-b1.tar.gz`
+- `yolo26m-det-int8-b1.tar.gz`
+
+Download the default model:
 
 ```bash
 mkdir -p assets/models
@@ -37,9 +45,22 @@ cd ../..
 ```
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - C++ and Python read runtime values from `src/common/config.yaml`.
@@ -77,7 +98,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/object-detection/yolo26-object-detector
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

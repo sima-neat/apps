@@ -37,11 +37,24 @@ Download into `assets/models/`:
 - `./scripts/download_models.sh retinaface_mobilenet25`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Preferred download command: `./scripts/download_models.sh retinaface_mobilenet25`
 - Direct URL fallback:
   `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - C++ and Python read runtime values from `src/common/config.yaml`.
@@ -76,7 +89,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/face-detection/face-detector
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

@@ -604,7 +604,7 @@ def consume_stream(
     cfg: AppConfig,
     output_name: str,
     stop_event: threading.Event,
-    errors: list[BaseException],
+    errors: list[Exception],
 ) -> None:
     try:
         while (
@@ -613,7 +613,7 @@ def consume_stream(
             and (cfg.frames <= 0 or stream.processed < cfg.frames)
         ):
             process_stream_once(stream, cfg, output_name)
-    except BaseException as exc:
+    except Exception as exc:
         errors.append(exc)
         stop_event.set()
 
@@ -632,7 +632,7 @@ def run_app(cfg: AppConfig) -> None:
     ]
     output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
     stop_event = threading.Event()
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     consumers = [
         threading.Thread(
             target=consume_stream,

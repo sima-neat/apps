@@ -8,11 +8,6 @@ import time
 from pathlib import Path
 
 
-DEFAULT_MODELS = [
-    ("/workspace/sima-neat/apps/assets/models/genai/gemma4-E2B-it", "gemma4"),
-]
-
-
 def parse_model(value: str) -> tuple[str, str | None]:
     if ":" not in value:
         return value, None
@@ -33,6 +28,8 @@ def main() -> None:
         help="Model directory, optionally suffixed with :served_name. Can be repeated.",
     )
     args = parser.parse_args()
+    if not args.model:
+        parser.error("--model is required. Use --model /path/to/model[:served_name].")
 
     import pyneat
 
@@ -41,8 +38,7 @@ def main() -> None:
     options.port = args.port
 
     server = pyneat.GenAIServer(options)
-    model_specs = args.model or DEFAULT_MODELS
-    for model_dir, served_name in model_specs:
+    for model_dir, served_name in args.model:
         path = Path(model_dir)
         if served_name:
             actual_name = server.add_model(path, served_name)

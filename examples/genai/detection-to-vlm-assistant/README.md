@@ -4,8 +4,8 @@
 | Field | Value |
 | --- | --- |
 | Category | genai |
-| Difficulty | Intermediate |
-| Tags | object-detection, genai, yolo26, gemma3 |
+| Difficulty | Advanced |
+| Tags | object-detection, genai, yolo26, rtsp, insight, openai-compatible |
 | Languages | Python |
 | Status | experimental |
 | Binary Name | detection-to-vlm-assistant |
@@ -20,11 +20,24 @@ Detection metadata visualized in Insight:
 ![Detection-to-VLM assistant preview](../../../assets/portal/genai/detection-to-vlm-assistant/image.png)
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat Development Environment.
 - YOLO26 detector model package available under `assets/models/`.
-- RTSP stream readable from the SDK runtime.
+- RTSP stream readable from the Neat Development Environment.
 - Insight receiver running at the configured host and ports.
 - OpenAI-compatible Gemma server running when `openai.enabled` is true.
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Download Models
 Use the platform version wherever `<platform-version>` appears.

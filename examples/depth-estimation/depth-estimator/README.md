@@ -5,7 +5,8 @@
 | --- | --- |
 | Category | depth-estimation |
 | Difficulty | Intermediate |
-| Tags | depth-estimation |
+| Tags | depth-estimation, depth-anything, folder-inference |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | depth-estimator |
 | Model | depth_anything_v2_vits |
@@ -27,9 +28,22 @@ Download into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits && cd ../..`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits && cd ../..`
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - Runtime settings are read from `src/common/config.yaml` by default.
@@ -64,7 +78,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/depth-estimation/depth-estimator
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

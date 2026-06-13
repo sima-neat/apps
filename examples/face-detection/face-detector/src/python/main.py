@@ -485,7 +485,6 @@ def main() -> int:
     top_k = int(decode_cfg.get("top_k", 5000))
     keep_top_k = int(decode_cfg.get("keep_top_k", 750))
     max_draw = int(decode_cfg.get("max_draw", 50))
-    landmarks = bool(decode_cfg.get("landmarks", True))
     profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 100))
     timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))

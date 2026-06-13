@@ -1,7 +1,6 @@
 function(sima_neat_apps_add_example example_name)
-  set(options OPTIVIEW)
   set(one_value_args OUTPUT_TARGET_VAR)
-  cmake_parse_arguments(APP "${options}" "${one_value_args}" "" ${ARGN})
+  cmake_parse_arguments(APP "" "${one_value_args}" "" ${ARGN})
 
   set(source_path "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")
   if (NOT EXISTS "${source_path}")
@@ -21,15 +20,6 @@ function(sima_neat_apps_add_example example_name)
       SimaNeatApps::sima_neat
       SimaNeatApps::support_runtime
   )
-
-  if (APP_OPTIVIEW)
-    if (NOT TARGET SimaNeatApps::support_optiview)
-      message(FATAL_ERROR
-        "Example ${example_name} requires SimaNeatApps::support_optiview but "
-        "SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT is OFF")
-    endif()
-    target_link_libraries("${target_name}" PRIVATE SimaNeatApps::support_optiview)
-  endif()
 
   target_include_directories("${target_name}"
     PRIVATE

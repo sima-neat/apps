@@ -3,7 +3,7 @@
 
 Scans examples/*/*/README.md files and verifies:
 - Metadata table exists with all required fields
-- Field values match allowed enums (categories, difficulties, statuses)
+- Field values match allowed enums (categories, difficulties, languages, statuses)
 - Required sections are present
 
 Exit code 0 on success, 1 if any README is missing or malformed.
@@ -27,12 +27,29 @@ VALID_CATEGORIES = {
 
 VALID_DIFFICULTIES = {"Beginner", "Intermediate", "Advanced"}
 
+VALID_LANGUAGES = {"C++", "Python"}
+
 VALID_STATUSES = {"experimental", "stable"}
 
-REQUIRED_METADATA_FIELDS = {"Category", "Difficulty", "Tags", "Status", "Binary Name", "Model"}
+REQUIRED_METADATA_FIELDS = {
+    "Category",
+    "Difficulty",
+    "Tags",
+    "Languages",
+    "Status",
+    "Binary Name",
+    "Model",
+}
 MODEL_REFERENCE_RE = re.compile(r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$")
 
-REQUIRED_SECTIONS = {"Metadata", "Concept", "Prerequisites", "Run", "Source Files"}
+REQUIRED_SECTIONS = {
+    "Metadata",
+    "Concept",
+    "Prerequisites",
+    "Get The Apps Repo",
+    "Run",
+    "Source Files",
+}
 
 
 def parse_metadata_table(content: str) -> dict[str, str] | None:
@@ -99,6 +116,18 @@ def validate_readme(readme_path: Path) -> list[str]:
         errors.append(
             f"Invalid Difficulty '{difficulty}'. "
             f"Must be one of: {', '.join(sorted(VALID_DIFFICULTIES))}"
+        )
+
+    languages = [
+        item.strip()
+        for item in metadata.get("Languages", "").split(",")
+        if item.strip()
+    ]
+    invalid_languages = [language for language in languages if language not in VALID_LANGUAGES]
+    if invalid_languages:
+        errors.append(
+            f"Invalid Languages '{metadata.get('Languages', '')}'. "
+            f"Must contain only: {', '.join(sorted(VALID_LANGUAGES))}"
         )
 
     status = metadata.get("Status", "")

@@ -8,7 +8,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(CTest)
 
 option(SIMANEAT_APPS_BUILD_CPP "Build C++ examples" ON)
-option(SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT "Build legacy OptiView support library" OFF)
 
 function(_sima_neat_apps_ensure_neat_target)
   if (TARGET SimaNeatApps::sima_neat)
@@ -58,7 +57,6 @@ endfunction()
 
 message(STATUS "Configuring SimaNeatApps")
 message(STATUS "  Build C++ examples      : ${SIMANEAT_APPS_BUILD_CPP}")
-message(STATUS "  Build legacy OptiView support: ${SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT}")
 
 if (SIMANEAT_APPS_BUILD_CPP)
   _sima_neat_apps_ensure_neat_target()

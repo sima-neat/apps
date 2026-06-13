@@ -9,7 +9,7 @@
 if [ -n "$1" ]; then
   HOST="$1"
 else
-  HOST=${MODALIX_HOST:-192.168.2.20:5000}
+  HOST=${MODALIX_HOST:-127.0.0.1:5000}
 fi
 
 curl -N -k -X POST "https://${HOST}/v1/chat" \

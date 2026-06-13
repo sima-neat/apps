@@ -18,22 +18,6 @@ target_include_directories(sima_neat_apps_support_runtime
     ${PROJECT_SOURCE_DIR}
 )
 
-if (SIMANEAT_APPS_BUILD_OPTIVIEW_SUPPORT)
-  add_library(sima_neat_apps_support_optiview STATIC
-    optiview/graphpipes_optiview_helpers.cpp
-  )
-  add_library(SimaNeatApps::support_optiview ALIAS sima_neat_apps_support_optiview)
-  target_link_libraries(sima_neat_apps_support_optiview
-    PUBLIC
-      SimaNeatApps::support_runtime
-      SimaNeatApps::sima_neat
-  )
-  target_include_directories(sima_neat_apps_support_optiview
-    PUBLIC
-      ${PROJECT_SOURCE_DIR}
-  )
-endif()
-
 if (BUILD_TESTING)
   add_library(sima_neat_apps_support_testing STATIC
     runtime/config_utils.cpp

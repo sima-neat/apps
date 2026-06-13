@@ -12,7 +12,7 @@
 | Model | detr_resnet50_modified_class_embed_bbox_embed |
 
 ## Concept
-This example demonstrates folder-based object detection with a compiled **DETR** model. Each input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the NEAT pipeline, and then decoded into object boxes and class scores.
+This example demonstrates folder-based object detection with a compiled **DETR** model. Each input image is resized with aspect-ratio preservation into the model frame, normalized with ImageNet mean and standard deviation, run through the Neat Library pipeline, and then decoded into object boxes and class scores.
 
 The model emits two raw tensors: classification logits and normalized bounding boxes for a fixed set of object queries. The example applies `softmax` over the class logits, `sigmoid` over the box outputs, filters by confidence, optionally keeps only the COCO `person` class, maps detections back onto the original image, and writes annotated output images.
 
@@ -30,7 +30,7 @@ Download into `assets/models/`:
 - `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be placed under `assets/models/`.
 - Preferred download command: `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
 - Direct URL fallback:
@@ -38,11 +38,24 @@ Download into `assets/models/`:
 - Default model path:
   `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
 ## Important Behavior
 - The example expects an input folder with image files.
 - Input preprocessing preserves aspect ratio and center-pads into an `1333x800` model frame.
 - Output boxes are mapped back to the original image resolution before drawing.
-- By default all DETR foreground classes are considered; `--person-only` keeps only the DETR `person` class.
+- By default all DETR foreground classes are considered. Set `decode.person_only: true` in `src/common/config.yaml` to keep only the DETR `person` class.
 - Overlay text uses built-in DETR COCO labels and class-colored boxes.
 - `runtime.profile` runs repeated inference and reports session, postprocessing, and overall timing statistics.
 
@@ -74,7 +87,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/object-detection/detr-object-detector
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

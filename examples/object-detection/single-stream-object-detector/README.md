@@ -5,7 +5,7 @@
 | --- | --- |
 | Category | object-detection |
 | Difficulty | Intermediate |
-| Tags | object-detection, rtsp, insight |
+| Tags | object-detection, yolo26, rtsp, insight |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | single-stream-object-detector |
@@ -51,7 +51,7 @@ The sample is split into three independent runtime stages:
 3. `Insight output`
    The original decoded frame is pushed into `VideoSender`. The nodegroup owns the raw-frame video transport path, including conversion, H.264 encoding, RTP packetization, and UDP output. Detection results from the YOLO path are converted into Insight metadata and sent on the metadata side channel.
 
-## Neat API Usage
+## Neat Library API Usage
 
 - RTSP ingest: `RtspDecodedInputOptions` -> `Graph.add(rtsp_decoded_input)` -> `Graph.build(...)`
 - YOLO path:
@@ -68,9 +68,22 @@ The example uses a producer/consumer design:
 This separation keeps the RTSP graph from being tightly coupled to the inference latency of each frame and makes profile output easier to interpret.
 
 ## Prerequisites
-- Installed Neat framework and Insight on the DevKit
+- Installed Neat Library and Insight on the DevKit
 - RTSP camera source or use Insight to start RTSP source
 - Model artifacts are user-managed. Download the model variant you want to run into `assets/models/`.
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Download Models
 Use the platform version wherever `<platform-version>` appears.
@@ -123,7 +136,7 @@ cd ../..
 ## Build
 This example can be built in either of these environments:
 
-- from an `eLxr SDK` environment
+- from a Neat Development Environment
 - directly on a `DevKit`
 
 Within either environment, the C++ implementation can be built in two ways. The Python implementation does not require a compile step.
@@ -147,7 +160,7 @@ Configure and build only this example from its own directory:
 
 ```bash
 cd <apps-repo-root>/examples/object-detection/single-stream-object-detector
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 
@@ -157,12 +170,12 @@ The resulting binary is:
 ./build/single-stream-object-detector
 ```
 
-Direct CMake builds use the shared example module support in the `apps` repo and link against the available Neat/core installation or local core build.
+Direct CMake builds use the shared example module support in the `apps` repo and link against the available Neat Library installation or local core build.
 
 In practice:
 
-- on `eLxr SDK`, this is typically done after sourcing the SDK environment and then building from the repo or the example folder
-- on `DevKit`, this can be done directly on the target device as long as the required Neat dependencies are installed
+- in the Neat Development Environment, this is typically done after activating the environment and then building from the repo or the example folder
+- on `DevKit`, this can be done directly on the target device as long as the required Neat Library dependencies are installed
 
 ## RTSP Source
 
@@ -244,7 +257,7 @@ python3 src/python/main.py --config src/common/config.yaml
 
 Python-specific notes:
 
-- if `model.path` is empty, the Python version tries to locate `yolo26m-det-bf16-mla_tess-b1.tar.gz` locally and then falls back to `sima-cli download`
+- `model.path` must point to a downloaded YOLO26 detector package
 - it sends Insight metadata directly over UDP and streams video through `VideoSender`
 
 ## Debugging Notes

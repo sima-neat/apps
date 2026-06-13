@@ -33,13 +33,26 @@ Per-stream graph:
 - debug only: `Combine(debug_frame, detections, ByFrame) -> debug_output`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - One or more reachable RTSP camera URLs.
 - A YOLO26 model pack downloaded into `assets/models/`.
 - Edit `src/common/config.yaml` before running with real streams.
 - On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
-## Command-line options
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
+
+## Command-Line Options
 - `--config <path>`: path to the YAML configuration file
 - `--validate-config-only`: validate the config and exit without opening RTSP streams
 - `--help`: print the CLI help text
@@ -113,7 +126,7 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-str
   --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml
 ```
 
-## Debugging notes
+## Debugging Notes
 - The checked-in `src/common/config.yaml` includes four placeholder stream slots. Replace the RTSP URLs and Insight host before running.
 - This phase supports up to four active streams.
 - On Modalix DevKit, start with `bash /usr/bin/fix_devkit_runtime.sh`. If the runtime still behaves inconsistently, a full board reboot has been a more reliable reset than service restarts alone.

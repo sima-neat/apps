@@ -19,6 +19,23 @@ from tests.utils.e2e_config import (
     write_merged_config,
 )
 
+__all__ = [
+    "apps_root",
+    "e2e_config_section",
+    "models_dir",
+    "rtsp_url",
+    "rtsp_urls",
+    "tmp_output_dir",
+    "e2e_config_writer",
+    "e2e_subprocess_artifacts",
+    "e2e_model_path",
+    "run_until_output_files",
+    "test_images_dir",
+    "test_timeout_ms",
+    "require_e2e",
+    "skip_unless_e2e_ready",
+]
+
 
 def _require_env(key: str, description: str) -> str:
     """Return env var value or skip/fail depending on strict mode."""
@@ -33,6 +50,7 @@ def _require_env(key: str, description: str) -> str:
             "Set it or unset SIMANEAT_APPS_TEST_REQUIRE_E2E."
         )
     pytest.skip(f"set {key} ({description}) to run this test")
+    raise AssertionError("pytest.skip returned unexpectedly")
 
 
 @pytest.fixture

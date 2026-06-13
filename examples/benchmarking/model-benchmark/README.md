@@ -27,9 +27,22 @@ This example accepts any compiled model package supported by `pyneat.Model`.
 `tests/test-scope.yaml` lists the compiled model packages already used by Apps examples. `BENCHMARK_RESULTS.md` is the manually maintained table for reference benchmark results.
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Activated `pyneat` environment.
 - A compiled model package available locally, usually under `assets/models/`.
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - `benchmark.frames` controls the measured synthetic frames passed to `Model.benchmark()`.

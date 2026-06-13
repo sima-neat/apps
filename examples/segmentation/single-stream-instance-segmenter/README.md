@@ -5,7 +5,7 @@
 | --- | --- |
 | Category | segmentation |
 | Difficulty | Intermediate |
-| Tags | segmentation, yolo26, rtsp, insight |
+| Tags | segmentation, yolo26, instance-segmentation, rtsp, insight |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | single-stream-instance-segmenter |
@@ -62,10 +62,23 @@ cd ../../..
 ```
 
 ## Prerequisites
-- Installed Neat framework and Insight on the DevKit.
+- Installed Neat Library and Insight on the DevKit.
 - RTSP camera source, or an Insight/tool-mediasources RTSP stream.
 - A YOLO26 segmentation model package downloaded locally.
 - `model.path`, `model.labels`, `source.rtsp_url`, and `output.insight.host` set in `src/common/config.yaml`.
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - C++ and Python read runtime values from `src/common/config.yaml`.
@@ -99,7 +112,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>/examples/segmentation/single-stream-instance-segmenter
-cmake -S cpp -B build
+cmake -S src/cpp -B build
 cmake --build build -j
 ```
 

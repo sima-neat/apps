@@ -3,7 +3,7 @@
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | <benchmarking / classification / object-detection / face-detection / segmentation / depth-estimation / genai / throughput> |
+| Category | <benchmarking / classification / object-detection / tracking / face-detection / segmentation / depth-estimation / genai / throughput> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
@@ -12,7 +12,7 @@
 | Model | <default_model_name> [https://example.com/path/to/<default_model_name>_mpk.tar.gz] |
 
 ## Concept
-<1-2 paragraphs: what this example demonstrates and which NEAT capabilities it exercises.>
+<1-2 paragraphs: what this example demonstrates and which Neat Library capabilities it exercises.>
 
 ## Preview
 Optional. If you have a demo screenshot for the portal detail page, place it here immediately after `Concept`.
@@ -30,10 +30,23 @@ Download any variant into `assets/models/`:
 - `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <model_variant_1> && cd ../..`
 
 ## Prerequisites
-- Installed Neat SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 - Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <default_model_name> && cd ../..`
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - This example expects the model path to be provided explicitly at runtime.
