@@ -192,6 +192,21 @@ jobs:
       artifact_glob: "*"
       min_artifact_count: 4
 
+  promote-latest-tag:
+    name: Promote Vulcan latest tag
+    if: ${{ github.ref_type == 'branch' || github.ref_type == 'tag' }}
+    needs:
+      - resolve-vulcan-config
+      - publish-vulcan-artifacts
+    uses: sima-neat/.github/.github/workflows/vulcan-update-latest-artifacts.yml@main
+    with:
+      aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
+      environment_name: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+      bucket: ${{ needs.resolve-vulcan-config.outputs.artifact_bucket }}
+      role_to_assume: ${{ needs.resolve-vulcan-config.outputs.artifact_publisher_role_arn }}
+      sse_kms_key_id: ${{ needs.resolve-vulcan-config.outputs.artifact_kms_key_id }}
+      artifact_folder: "."
+
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
     needs: resolve-vulcan-config
@@ -209,7 +224,7 @@ jobs:
     needs:
       - resolve-vulcan-config
       - resolve-test-runner
-      - publish-vulcan-artifacts
+      - promote-latest-tag
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
       labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
@@ -246,13 +261,7 @@ jobs:
           fi
 
           REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-            VERSION="${VERSION#v}"
-          else
-            VERSION="$(printf "%.12s" "${GITHUB_SHA}")"
-          fi
-          PACKAGE_SPEC="apps@${REF_NAME}:${VERSION}"
+          PACKAGE_SPEC="apps@${REF_NAME}"
 
           mkdir -p _vulcan-test/install
           echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
@@ -484,18 +493,3 @@ jobs:
             --api-key "${write_api_key}" \
             --index-name "${index_name}" \
             --sync
-
-  promote-latest-tag:
-    name: Promote Vulcan latest tag
-    if: ${{ github.ref_type == 'branch' || github.ref_type == 'tag' }}
-    needs:
-      - resolve-vulcan-config
-      - test-runtime
-    uses: sima-neat/.github/.github/workflows/vulcan-update-latest-artifacts.yml@main
-    with:
-      aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
-      environment_name: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
-      bucket: ${{ needs.resolve-vulcan-config.outputs.artifact_bucket }}
-      role_to_assume: ${{ needs.resolve-vulcan-config.outputs.artifact_publisher_role_arn }}
-      sse_kms_key_id: ${{ needs.resolve-vulcan-config.outputs.artifact_kms_key_id }}
-      artifact_folder: "."
