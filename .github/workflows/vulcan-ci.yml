@@ -83,7 +83,6 @@ jobs:
             python3 sima-cli-install.py main latest --noninteractive
             rm -f sima-cli-install.py
             export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
-            sima-cli version
             sima-cli neat install --help >/dev/null
             sima-cli packages build --help >/dev/null
 
@@ -488,7 +487,7 @@ jobs:
 
   promote-latest-tag:
     name: Promote Vulcan latest tag
-    if: ${{ github.ref_type == 'branch' }}
+    if: ${{ github.ref_type == 'branch' || github.ref_type == 'tag' }}
     needs:
       - resolve-vulcan-config
       - test-runtime
