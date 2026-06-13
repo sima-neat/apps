@@ -198,7 +198,7 @@ jobs:
     if: ${{ github.ref_type == 'branch' }}
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
     with:
-      vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
+      vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && github.ref_name != 'main' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
 
   resolve-test-runner:
     name: Resolve Test Runner
