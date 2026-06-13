@@ -53,7 +53,7 @@ Environment:
                             Scratch directory override for Vulcan core installs
                             (default: fresh /tmp/neat-apps-core-install.XXXXXX)
   NEAT_CORE_INSTALL_MODE    legacy or vulcan. Defaults to vulcan when NEAT_VULCAN_ENV is set.
-  NEAT_VULCAN_ENV           Vulcan artifact environment for sima-cli core installs
+  NEAT_VULCAN_ENV           Vulcan artifact environment for sima-cli core installs (default: production)
   CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
   SYSROOT                   Target sysroot (used by the default cross toolchain file)
 EOF
@@ -776,7 +776,7 @@ ensure_neat_core() {
     fi
   fi
   if [[ "${install_mode}" == "vulcan" ]]; then
-    vulcan_env="${NEAT_VULCAN_ENV:-dev}"
+    vulcan_env="${NEAT_VULCAN_ENV:-production}"
   fi
 
   # Resolve "latest" to an exact tag before checking installed state.
