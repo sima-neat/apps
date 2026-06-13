@@ -66,33 +66,33 @@ directory in the current working directory.
 
 ## Repo Layout
 
-- `examples/`: examples organized by task/category (each example has C++ and Python implementations)
-- `support/`: shared C++ helper code used by multiple examples
-- `assets/`: user-managed runtime assets (models under `assets/models/`, test media under `assets/test_images/`)
-- `tests/`: centralized test infrastructure (runner, env setup, pytest config/docs)
+- `examples/`: application examples organized by task/category. Each example owns its README, runtime config, source entrypoints, and tests.
+- `support/`: shared C++ helper code used by multiple examples.
+- `assets/`: user-managed runtime assets, including models under `assets/models/` and test media under `assets/test_images/`.
+- `tests/`: centralized test infrastructure, including the runner, environment setup, pytest config, and docs.
 - `deps/manifest.json`: Neat Library and platform-version dependency declaration
 
 ## Example Structure
 
-Examples are organized under `examples/<category>/<example>`. Each example is source-first and meant to be readable from the entrypoints, with the main application flow visible in both `src/cpp/main.cpp` and `src/python/main.py`.
+Examples are organized under `examples/<category>/<example>`. Each example is source-first and meant to be readable from its entrypoints. Most runtime examples provide both C++ and Python entrypoints; Python-only examples document their supported scripts in their own README.
 
-### Required Layout
+### Common Layout
 
 | Path | Purpose |
 | --- | --- |
 | `examples/<category>/<example>/README.md` | Example-specific usage and setup instructions |
 | `examples/<category>/<example>/tests/test-scope.yaml` | Internal test selection and e2e model source metadata |
-| `examples/<category>/<example>/src/cpp/CMakeLists.txt` | C++ example build configuration |
-| `examples/<category>/<example>/src/cpp/main.cpp` | C++ entrypoint with visible Neat Library API flow |
-| `examples/<category>/<example>/tests/cpp/test_unit.cpp` | C++ unit tests |
-| `examples/<category>/<example>/tests/cpp/test_e2e.cpp` | C++ end-to-end tests |
-| `examples/<category>/<example>/src/python/main.py` | Python entrypoint with visible Neat Library API flow |
+| `examples/<category>/<example>/src/cpp/CMakeLists.txt` | C++ example build configuration, when the example has a C++ implementation |
+| `examples/<category>/<example>/src/cpp/main.cpp` | C++ entrypoint with visible Neat Library API flow, when present |
+| `examples/<category>/<example>/tests/cpp/test_unit.cpp` | C++ unit tests, when C++ unit coverage is enabled |
+| `examples/<category>/<example>/tests/cpp/test_e2e.cpp` | C++ end-to-end tests, when C++ e2e coverage is enabled |
+| `examples/<category>/<example>/src/python/main.py` | Python entrypoint with visible Neat Library API flow, when the example uses a single Python entrypoint |
 | `examples/<category>/<example>/src/python/requirements.txt` | Python example dependencies |
-| `examples/<category>/<example>/tests/python/test_unit.py` | Python unit tests |
-| `examples/<category>/<example>/tests/python/test_e2e.py` | Python end-to-end tests |
-| `examples/<category>/<example>/src/common/` | Files shared by the C++ and Python implementations |
+| `examples/<category>/<example>/tests/python/test_unit.py` | Python unit tests, when Python unit coverage is enabled |
+| `examples/<category>/<example>/tests/python/test_e2e.py` | Python end-to-end tests, when Python e2e coverage is enabled |
+| `examples/<category>/<example>/src/common/` | Files shared by the example implementations |
 
-> **IMPORTANT:** Use this structure when reading, extending, or adding examples.
+> **IMPORTANT:** Use this structure when reading, extending, or adding examples, and follow each example README for any example-specific entrypoints.
 > Follow the instructions inside each example `README.md`, or visit the [SiMa.ai Neat Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
 
 ### Contributor Guidelines
