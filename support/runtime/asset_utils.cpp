@@ -8,6 +8,19 @@ namespace sima_examples {
 
 namespace fs = std::filesystem;
 
+namespace {
+
+bool download_modelzoo_model(const fs::path& root, const std::string& model_name) {
+  const fs::path script = root / "scripts" / "download_models.sh";
+  if (!fs::exists(script))
+    return false;
+  const std::string cmd = "cd " + shell_quote(root.string()) +
+                          " && bash scripts/download_models.sh " + shell_quote(model_name);
+  return std::system(cmd.c_str()) == 0;
+}
+
+} // namespace
+
 std::string shell_quote(const std::string& s) {
   std::string out = "'";
   for (char c : s) {
@@ -118,8 +131,7 @@ std::string resolve_resnet50_tar(const fs::path& root_in) {
   if (fs::exists(local))
     return local.string();
 
-  const int rc = std::system("sima-cli modelzoo -v 2.0.0 get resnet_50");
-  if (rc != 0)
+  if (!download_modelzoo_model(root, "resnet_50"))
     return "";
 
   if (fs::exists(local))
@@ -136,77 +148,6 @@ std::string resolve_resnet50_tar(const fs::path& root_in) {
   }
 
   return "";
-}
-
-std::string resolve_yolov8s_tar_local_first(const fs::path& root_in, bool skip_download) {
-  const fs::path root = root_in.empty() ? fs::current_path() : root_in;
-  const fs::path tmp_tar = root / "tmp" / "yolo_v8s_mpk.tar.gz";
-
-  const char* env = std::getenv("SIMA_YOLO_TAR");
-  if (env && *env && fs::exists(env)) {
-    return std::string(env);
-  }
-
-  const fs::path direct_tar = root / "yolo_v8s_mpk.tar.gz";
-  if (fs::exists(direct_tar))
-    return direct_tar.string();
-
-  if (fs::exists(tmp_tar))
-    return tmp_tar.string();
-
-  const char* home = std::getenv("HOME");
-  const fs::path home_path = home ? fs::path(home) : fs::path();
-  const std::vector<fs::path> search_dirs = {
-      root / "models",
-      root,
-      fs::current_path(),
-      root / "tmp",
-      home_path / ".simaai",
-      home_path / ".simaai" / "modelzoo",
-      home_path / ".sima" / "modelzoo",
-      "/data/simaai/modelzoo",
-  };
-
-  const std::vector<std::string> names = {
-      "yolo_v8s_mpk.tar.gz",
-      "yolo-v8s_mpk.tar.gz",
-      "yolov8s_mpk.tar.gz",
-      "yolov8_s_mpk.tar.gz",
-  };
-
-  for (const auto& dir : search_dirs) {
-    if (dir.empty())
-      continue;
-    for (const auto& name : names) {
-      fs::path candidate = dir / name;
-      if (fs::exists(candidate) && move_to_tmp(candidate, tmp_tar)) {
-        return tmp_tar.string();
-      }
-    }
-  }
-
-  if (!skip_download) {
-    const int rc = std::system("sima-cli modelzoo -v 2.0.0 get yolo_v8s");
-    if (rc == 0 && fs::exists(tmp_tar))
-      return tmp_tar.string();
-  }
-
-  for (const auto& dir : search_dirs) {
-    if (dir.empty())
-      continue;
-    for (const auto& name : names) {
-      fs::path candidate = dir / name;
-      if (fs::exists(candidate) && move_to_tmp(candidate, tmp_tar)) {
-        return tmp_tar.string();
-      }
-    }
-  }
-
-  return "";
-}
-
-std::string resolve_yolov8s_tar(const fs::path& root) {
-  return resolve_yolov8s_tar_local_first(root, false);
 }
 
 std::string resolve_modelzoo_tar(const std::string& model_name, const fs::path& root_in) {
@@ -305,8 +246,7 @@ std::string resolve_modelzoo_tar(const std::string& model_name, const fs::path& 
     }
   }
 
-  const std::string cmd = "sima-cli modelzoo -v 2.0.0 get " + shell_quote(model_name);
-  if (std::system(cmd.c_str()) != 0)
+  if (!download_modelzoo_model(root, model_name))
     return "";
 
   if (fs::exists(local))

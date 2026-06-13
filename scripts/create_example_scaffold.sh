@@ -90,15 +90,8 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(CTest)
 endif()
 
-include("\${CMAKE_CURRENT_LIST_DIR}/../../../../cmake/ExampleModule.cmake")
+include("\${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 sima_neat_apps_module("${example_name}" UNIT_TEST E2E_TEST)
-EOF_CMAKE
-}
-
-render_cpp_test_cmakelists() {
-  cat <<'EOF_CMAKE'
-# Test sources are registered by ../../../../cmake/ExampleModule.cmake.
-# Keep this file to make the expected test layout explicit per example.
 EOF_CMAKE
 }
 
@@ -156,7 +149,7 @@ from pathlib import Path
 import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
-MAIN_PY = EXAMPLE_DIR / "python" / "main.py"
+MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
 
 @pytest.mark.unit
@@ -184,6 +177,24 @@ def test_e2e_placeholder() -> None:
 EOF_PY
 }
 
+render_test_scope() {
+  cat <<'EOF_YAML'
+models: {}
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: TODO: select an e2e model and implement runtime coverage.
+    models: []
+  cpp:
+    enabled: false
+    reason: TODO: select an e2e model and implement runtime coverage.
+    models: []
+EOF_YAML
+}
+
 render_readme() {
   local example_name="$1"
   local category="$2"
@@ -204,6 +215,23 @@ render_readme() {
 ## Concept
 TODO: describe what this example demonstrates.
 
+## Prerequisites
+- Installed Neat Development Environment.
+- Model artifacts are user-managed and should be downloaded into \`assets/models/\`.
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+\`\`\`bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+\`\`\`
+
+After this setup, follow the example-specific commands below.
+
 ## Build
 ### Build From The Apps Repo
 \`\`\`bash
@@ -214,7 +242,7 @@ cd <apps-repo-root>
 ### Build This Example Directly With CMake
 \`\`\`bash
 cd <apps-repo-root>
-cmake -S examples/${category}/${example_name}/cpp -B build/${example_name}
+cmake -S examples/${category}/${example_name}/src/cpp -B build/${example_name}
 cmake --build build/${example_name} -j
 \`\`\`
 
@@ -227,23 +255,24 @@ cmake --build build/${example_name} -j
 ### Python
 \`\`\`bash
 source ~/pyneat/bin/activate
-pip install -r examples/${category}/${example_name}/python/requirements.txt
-python3 examples/${category}/${example_name}/python/main.py
+pip install -r examples/${category}/${example_name}/src/python/requirements.txt
+python3 examples/${category}/${example_name}/src/python/main.py
 \`\`\`
 
 ## Source Files
-- C++: \`cpp/main.cpp\`
-- C++ tests: \`cpp/tests/unit_test.cpp\`, \`cpp/tests/e2e_test.cpp\`
-- Python: \`python/main.py\`
-- Python tests: \`python/tests/test_unit.py\`, \`python/tests/test_e2e.py\`
-- Shared assets: \`common/\`
+- Test scope: \`tests/test-scope.yaml\`
+- C++: \`src/cpp/main.cpp\`
+- C++ tests: \`tests/cpp/test_unit.cpp\`, \`tests/cpp/test_e2e.cpp\`
+- Python: \`src/python/main.py\`
+- Python tests: \`tests/python/test_unit.py\`, \`tests/python/test_e2e.py\`
+- Shared assets: \`src/common/\`
 EOF_MD
 }
 
 register_cpp_example() {
   local category_file="$1"
   local example_name="$2"
-  local line="add_subdirectory(${example_name}/cpp ${example_name})"
+  local line="add_subdirectory(${example_name}/src/cpp ${example_name})"
 
   grep -Fqx "${line}" "${category_file}" && return 0
   printf '%s\n' "${line}" >> "${category_file}"
@@ -259,28 +288,30 @@ create_example() {
   [[ -f "${category_cmake}" ]] || die "Missing category CMakeLists: ${category_cmake}"
   [[ ! -e "${module_dir}" ]] || die "Example already exists: ${module_dir}"
 
-  ensure_dir "${module_dir}/cpp/tests"
-  ensure_dir "${module_dir}/python/tests"
-  ensure_dir "${module_dir}/common"
-  : > "${module_dir}/common/.gitkeep"
+  ensure_dir "${module_dir}/src/cpp"
+  ensure_dir "${module_dir}/src/python"
+  ensure_dir "${module_dir}/src/common"
+  ensure_dir "${module_dir}/tests/cpp"
+  ensure_dir "${module_dir}/tests/python"
+  : > "${module_dir}/src/common/.gitkeep"
 
-  render_cpp_main "${example_name}" > "${module_dir}/cpp/main.cpp"
-  render_cpp_cmakelists "${example_name}" > "${module_dir}/cpp/CMakeLists.txt"
-  render_cpp_test_cmakelists > "${module_dir}/cpp/tests/CMakeLists.txt"
-  render_cpp_unit_test > "${module_dir}/cpp/tests/unit_test.cpp"
-  render_cpp_e2e_test > "${module_dir}/cpp/tests/e2e_test.cpp"
+  render_cpp_main "${example_name}" > "${module_dir}/src/cpp/main.cpp"
+  render_cpp_cmakelists "${example_name}" > "${module_dir}/src/cpp/CMakeLists.txt"
+  render_cpp_unit_test > "${module_dir}/tests/cpp/test_unit.cpp"
+  render_cpp_e2e_test > "${module_dir}/tests/cpp/test_e2e.cpp"
 
-  render_python_main "${example_name}" > "${module_dir}/python/main.py"
-  render_python_requirements > "${module_dir}/python/requirements.txt"
-  render_python_unit_test > "${module_dir}/python/tests/test_unit.py"
-  render_python_e2e_test > "${module_dir}/python/tests/test_e2e.py"
+  render_python_main "${example_name}" > "${module_dir}/src/python/main.py"
+  render_python_requirements > "${module_dir}/src/python/requirements.txt"
+  render_python_unit_test > "${module_dir}/tests/python/test_unit.py"
+  render_python_e2e_test > "${module_dir}/tests/python/test_e2e.py"
 
   render_readme "${example_name}" "${category}" > "${module_dir}/README.md"
+  render_test_scope > "${module_dir}/tests/test-scope.yaml"
 
   chmod +x \
-    "${module_dir}/python/main.py" \
-    "${module_dir}/python/tests/test_unit.py" \
-    "${module_dir}/python/tests/test_e2e.py"
+    "${module_dir}/src/python/main.py" \
+    "${module_dir}/tests/python/test_unit.py" \
+    "${module_dir}/tests/python/test_e2e.py"
 
   register_cpp_example "${category_cmake}" "${example_name}"
 }

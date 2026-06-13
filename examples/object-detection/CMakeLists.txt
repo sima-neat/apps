@@ -1,11 +1,10 @@
 foreach(example IN ITEMS
-    detr-object-detection
-    single-rtsp-object-detection-optiview
-    multistream-rtsp-detection-pipeline
-    simple-object-detection-overlay-pipeline
+    detr-object-detector
+    single-stream-object-detector
+    yolo26-object-detector
 )
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/cpp/CMakeLists.txt")
-    add_subdirectory(${example}/cpp ${example})
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/src/cpp/CMakeLists.txt")
+    add_subdirectory(${example}/src/cpp ${example})
   endif()
 endforeach()
-add_subdirectory(multistream-object-detection-optiview/cpp multistream-object-detection-optiview)
+add_subdirectory(multi-stream-object-detector/src/cpp multi-stream-object-detector)

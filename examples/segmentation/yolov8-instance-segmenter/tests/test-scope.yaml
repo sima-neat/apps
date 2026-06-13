@@ -1,0 +1,17 @@
+models:
+  yolo_v8n_seg:
+    source: modelzoo
+    name: yolo_v8n_seg
+    file: yolo_v8n_seg_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo_v8n_seg
+  cpp:
+    enabled: true
+    models:
+    - yolo_v8n_seg

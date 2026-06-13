@@ -1,0 +1,93 @@
+models:
+  resnet_50:
+    source: modelzoo
+    name: resnet_50
+    file: resnet_50_mpk.tar.gz
+  depth_anything_v2_vits:
+    source: modelzoo
+    name: depth_anything_v2_vits
+    file: depth_anything_v2_vits_mpk.tar.gz
+  retinaface_mobilenet25:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
+    file: retinaface_mobilenet25_mod_0_mpk.tar.gz
+  detr_resnet50_modified_class_embed_bbox_embed:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+    file: detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+  yolo_v8n_seg:
+    source: modelzoo
+    name: yolo_v8n_seg
+    file: yolo_v8n_seg_mpk.tar.gz
+  yolo26n-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26n-det-bf16-mla_tess-b1.tar.gz
+  yolo26s-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26s-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26s-det-bf16-mla_tess-b1.tar.gz
+  yolo26m-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26m-det-bf16-mla_tess-b1.tar.gz
+  yolo26l-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26l-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26l-det-bf16-mla_tess-b1.tar.gz
+  yolo26x-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26x-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26x-det-bf16-mla_tess-b1.tar.gz
+  yolo26m-det-bf16-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-b1.tar.gz
+    file: yolo26m-det-bf16-b1.tar.gz
+  yolo26m-det-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
+    file: yolo26m-det-int8-b1.tar.gz
+  yolo26n-seg-bf16-mla_tess:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz
+    file: yolo26n-seg-bf16-mla_tess.tar.gz
+  yolo26s-seg-bf16-mla_tess:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26s-seg-bf16-mla_tess.tar.gz
+    file: yolo26s-seg-bf16-mla_tess.tar.gz
+  yolo26m-seg-bf16-mla_tess:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess.tar.gz
+    file: yolo26m-seg-bf16-mla_tess.tar.gz
+  yolo26l-seg-bf16-mla_tess:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26l-seg-bf16-mla_tess.tar.gz
+    file: yolo26l-seg-bf16-mla_tess.tar.gz
+  yolo26x-seg-bf16-mla_tess:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26x-seg-bf16-mla_tess.tar.gz
+    file: yolo26x-seg-bf16-mla_tess.tar.gz
+  yolo26m-seg-bf16-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz
+    file: yolo26m-seg-bf16-b1.tar.gz
+  yolo26m-seg-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess-b1.tar.gz
+    file: yolo26m-seg-bf16-mla_tess-b1.tar.gz
+  yolo26m-seg-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz
+    file: yolo26m-seg-int8-b1.tar.gz
+unit:
+  python: true
+  cpp: false
+e2e:
+  python:
+    enabled: true
+    models:
+      - yolo26m-det-int8-b1
+  cpp:
+    enabled: false
+    reason: Python-only benchmark example.
+    models: []

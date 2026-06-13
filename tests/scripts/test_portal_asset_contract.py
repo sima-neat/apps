@@ -21,8 +21,15 @@ def _load_module(name: str, path: Path):
 def test_portal_cards_always_use_category_asset_cover():
     app_jsx = (APPS_ROOT / "portal" / "src" / "App.jsx").read_text()
 
-    assert 'src={fallbackImage}' in app_jsx
+    assert 'event.currentTarget.src = fallbackImage' in app_jsx
     assert 'src={example.image_path ? `./${example.image_path}` : fallbackImage}' not in app_jsx
+
+
+def test_portal_page_uses_global_search_only():
+    app_jsx = (APPS_ROOT / "portal" / "src" / "App.jsx").read_text()
+
+    assert 'id="catalog-search"' not in app_jsx
+    assert 'type="search"' not in app_jsx
 
 
 def test_generate_catalog_uses_repo_level_portal_assets_for_example():
@@ -35,12 +42,12 @@ def test_generate_catalog_uses_repo_level_portal_assets_for_example():
         APPS_ROOT
         / "examples"
         / "tracking"
-        / "multi-camera-people-detection-and-tracking-optiview"
+        / "multi-stream-people-tracker"
     )
 
     assert module.find_image_path(app_dir) == (
         "assets/portal/tracking/"
-        "multi-camera-people-detection-and-tracking-optiview/image.png"
+        "multi-stream-people-tracker/image.png"
     )
 
 
@@ -67,7 +74,7 @@ def test_generate_catalog_rewrites_readme_preview_images_to_portal_assets(tmp_pa
                 "| Languages | C++, Python |",
                 "| Status | experimental |",
                 "| Binary Name | demo-example |",
-                "| Model | yolo_v8m |",
+                "| Model | yolo26m-det-bf16-mla_tess-b1 |",
                 "",
                 "## Concept",
                 "Demo concept.",
@@ -194,3 +201,51 @@ def test_sync_portal_assets_copies_readme_linked_assets(tmp_path):
 
     synced_image = asset_root / "tracking" / "demo-example" / "image.png"
     assert synced_image.read_bytes() == b"png"
+
+
+def test_algolia_apps_records_use_examples_source_and_route(tmp_path):
+    module = _load_module(
+        "sync_algolia_apps_index_for_test",
+        APPS_ROOT / "scripts" / "sync_algolia_apps_index.py",
+    )
+
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "examples": [
+                    {
+                        "id": "tracking/demo-example",
+                        "name": "Demo Example",
+                        "category": "tracking",
+                        "summary": "Tracks people.",
+                        "binary_name": "demo-example",
+                        "model": "yolo26m-det-bf16-mla_tess-b1",
+                        "languages": "C++, Python",
+                        "tags": ["tracking", "rtsp"],
+                        "readme_path": "examples/tracking/demo-example/README.md",
+                        "sections": [
+                            {
+                                "title": "Concept",
+                                "slug": "concept",
+                                "markdown": "Use **Neat** to track detections.",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+
+    records, summary = module.generate_records(
+        catalog_path,
+        "https://build.neat.sima.ai/examples",
+        module.DEFAULT_MAX_RECORD_BYTES,
+    )
+
+    assert summary["count"] == 1
+    assert records[0]["source"] == "examples"
+    assert records[0]["url"] == "https://build.neat.sima.ai/examples/app/tracking/demo-example"
+    assert records[0]["route"] == "/examples/app/tracking/demo-example"
+    assert records[0]["hierarchy"]["lvl1"] == "tracking"
+    assert "tracking rtsp" in records[0]["content"]

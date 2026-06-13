@@ -1,7 +1,7 @@
 foreach(example IN ITEMS
-    retinaface-face-detection
+    face-detector
 )
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/cpp/CMakeLists.txt")
-    add_subdirectory(${example}/cpp "${example}_cpp")
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/src/cpp/CMakeLists.txt")
+    add_subdirectory(${example}/src/cpp "${example}_cpp")
   endif()
 endforeach()

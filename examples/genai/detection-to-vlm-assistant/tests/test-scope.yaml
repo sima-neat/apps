@@ -1,0 +1,21 @@
+models:
+  yolo26m-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26m-det-bf16-mla_tess-b1.tar.gz
+  gemma4-openai-server:
+    source: huggingface
+    repo: TBD
+    path: TBD
+unit:
+  python: false
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: GenAI model assets and runtime coverage are not enabled for GA yet.
+    models: []
+  cpp:
+    enabled: false
+    reason: No C++ test coverage for this Python-only GenAI example.
+    models: []

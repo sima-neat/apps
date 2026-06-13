@@ -1,0 +1,17 @@
+models:
+  resnet_50:
+    source: modelzoo
+    name: resnet_50
+    file: resnet_50_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - resnet_50
+  cpp:
+    enabled: true
+    models:
+    - resnet_50

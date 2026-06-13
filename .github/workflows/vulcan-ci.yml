@@ -1,0 +1,501 @@
+name: Vulcan CI
+
+run-name: ${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'dev' }})
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "*"
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+  packages: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  resolve-vulcan-config:
+    name: Resolve Vulcan Config
+    uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
+    with:
+      vulcan_env: ${{ vars.VULCAN_ENV || 'dev' }}
+
+  build:
+    name: Build Apps on Vulcan
+    needs: resolve-vulcan-config
+    uses: sima-neat/.github/.github/workflows/vulcan-build.yml@main
+    with:
+      vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+      sdk_cache: ${{ needs.resolve-vulcan-config.outputs.sdk_cache }}
+      capacity: ${{ needs.resolve-vulcan-config.outputs.capacity }}
+      fetch_depth: 0
+      checkout_submodules: recursive
+      ensure_sdk_container: true
+      sdk_setup_args: "-y -n --minimal --workspace /mnt/vulcan/workspace --no-model-sdk --no-insight"
+      artifact_name: neat-apps-dist
+      artifact_path: dist/*
+      artifact_retention_days: 3
+      build_command: |
+        set -euo pipefail
+        artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
+
+        if [[ -n "${GITHUB_WORKSPACE:-}" && -d "${GITHUB_WORKSPACE}" && "${GITHUB_WORKSPACE}" != "/" ]]; then
+          find "${GITHUB_WORKSPACE}" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          df -h
+        fi
+
+        sdk_container="$(docker ps --filter 'ancestor=ghcr.io/sima-neat/sdk:latest' --format '{{.Names}}' | head -n 1)"
+        if [[ -z "${sdk_container}" ]]; then
+          sdk_container="$(docker ps --filter 'name=sdk' --format '{{.Names}}' | head -n 1)"
+        fi
+        if [[ -z "${sdk_container}" ]]; then
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+          echo "Could not find running SDK container." >&2
+          exit 1
+        fi
+
+        docker exec \
+          -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
+          -e GITHUB_HEAD_REF="${{ github.head_ref }}" \
+          -e GITHUB_REF_NAME="${{ github.ref_name }}" \
+          -e GITHUB_REF_TYPE="${{ github.ref_type }}" \
+          -e GITHUB_SHA="${{ github.sha }}" \
+          -e NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}" \
+          -e NEAT_APPS_ARTIFACT_SHORT_SHA="${{ github.sha }}" \
+          -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
+          -e NEAT_CORE_INSTALL_MODE="vulcan" \
+          -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
+          "${sdk_container}" \
+          bash -lc '
+            set -euo pipefail
+            export SIMA_CLI_CHECK_FOR_UPDATE=0
+            curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
+            python3 sima-cli-install.py main latest --noninteractive
+            rm -f sima-cli-install.py
+            export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+            sima-cli neat install --help >/dev/null
+            sima-cli packages build --help >/dev/null
+
+            packages=()
+            if ! command -v npm >/dev/null 2>&1; then
+              packages+=(nodejs npm)
+            fi
+            if ! command -v rg >/dev/null 2>&1; then
+              packages+=(ripgrep)
+            fi
+            if [[ "${#packages[@]}" -gt 0 ]]; then
+              export DEBIAN_FRONTEND=noninteractive
+              if command -v apt-get >/dev/null 2>&1; then
+                apt-get update
+                apt-get install -y --no-install-recommends "${packages[@]}"
+              elif command -v sudo >/dev/null 2>&1; then
+                sudo apt-get update
+                sudo apt-get install -y --no-install-recommends "${packages[@]}"
+              else
+                echo "Required build tools are missing, but apt-get is unavailable: ${packages[*]}" >&2
+                exit 1
+              fi
+            fi
+
+            cd /workspace
+            chmod +x build.sh scripts/ci/check_public_includes.sh scripts/install-vulcan-apps-package.sh
+            ./build.sh --all --clean
+            ./scripts/ci/check_public_includes.sh
+          '
+
+      post_build_command: |
+        set -euo pipefail
+
+        rm -rf dist
+        mkdir -p dist
+        mapfile -t archives < <(find . -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' | sort)
+        if [[ "${#archives[@]}" -ne 1 ]]; then
+          echo "Expected exactly one neat-apps archive, found ${#archives[@]}" >&2
+          printf '  %s\n' "${archives[@]}" >&2 || true
+          exit 1
+        fi
+
+        cp "${archives[0]}" dist/
+        install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
+        test -f neat-apps-runtime/neat-core.json
+        cp neat-apps-runtime/neat-core.json dist/neat-core.json
+
+        sdk_container="$(docker ps --filter 'ancestor=ghcr.io/sima-neat/sdk:latest' --format '{{.Names}}' | head -n 1)"
+        if [[ -z "${sdk_container}" ]]; then
+          sdk_container="$(docker ps --filter 'name=sdk' --format '{{.Names}}' | head -n 1)"
+        fi
+        if [[ -z "${sdk_container}" ]]; then
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+          echo "Could not find running SDK container." >&2
+          exit 1
+        fi
+
+        docker exec \
+          -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
+          -e GITHUB_REF_NAME="${GITHUB_REF_NAME}" \
+          -e GITHUB_REF_TYPE="${GITHUB_REF_TYPE}" \
+          -e GITHUB_SHA="${GITHUB_SHA}" \
+          "${sdk_container}" \
+          bash -lc '
+            set -euo pipefail
+            export SIMA_CLI_CHECK_FOR_UPDATE=0
+            export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+            if ! command -v sima-cli >/dev/null 2>&1 || ! sima-cli packages build --help >/dev/null 2>&1; then
+              curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
+              python3 sima-cli-install.py main latest --noninteractive
+              rm -f sima-cli-install.py
+              export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+            fi
+            cd /workspace
+            if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+              version="${GITHUB_REF_NAME}"
+              version="${version#v}"
+            else
+              version="$(printf "%.12s" "${GITHUB_SHA}")"
+            fi
+            sima-cli packages build dist \
+              --name gh:sima-neat/apps \
+              --version "${version}" \
+              --description "SiMa.ai Neat example applications and portal runtime" \
+              --install-script install_vulcan_apps_package.sh
+          '
+
+        python3 -m json.tool dist/metadata.json >/dev/null
+        tar -tzf "${archives[0]}" neat-apps-runtime/neat-core.json >/dev/null
+        ls -lh dist
+
+  publish-vulcan-artifacts:
+    name: Publish to Vulcan
+    needs:
+      - resolve-vulcan-config
+      - build
+    uses: sima-neat/.github/.github/workflows/vulcan-publish-artifacts.yml@main
+    with:
+      aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
+      environment_name: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+      bucket: ${{ needs.resolve-vulcan-config.outputs.artifact_bucket }}
+      role_to_assume: ${{ needs.resolve-vulcan-config.outputs.artifact_publisher_role_arn }}
+      sse_kms_key_id: ${{ needs.resolve-vulcan-config.outputs.artifact_kms_key_id }}
+      cloudfront_distribution_id: ${{ needs.resolve-vulcan-config.outputs.artifact_cloudfront_distribution_id }}
+      artifact_folder: "."
+      artifact_pattern: neat-apps-dist
+      artifact_glob: "*"
+      min_artifact_count: 4
+
+  resolve-portal-publish-config:
+    name: Resolve Portal Publish Config
+    needs: resolve-vulcan-config
+    if: ${{ github.ref_type == 'branch' }}
+    uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
+    with:
+      vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env == 'prod' && 'staging' || needs.resolve-vulcan-config.outputs.vulcan_env }}
+
+  resolve-test-runner:
+    name: Resolve Test Runner
+    uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
+
+  test-runtime:
+    name: Test Apps Runtime
+    needs:
+      - resolve-vulcan-config
+      - resolve-test-runner
+      - publish-vulcan-artifacts
+    runs-on:
+      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+      labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
+    env:
+      VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+      SIMA_CLI_CHECK_FOR_UPDATE: "0"
+      NEAT_APPS_SKIP_MODEL_DOWNLOAD: "1"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Clean test workspace
+        run: |
+          rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
+          rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh neat-core.json
+
+      - name: Fix devkit runtime
+        run: |
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+
+      - name: Install apps runtime from Vulcan artifact
+        run: |
+          if ! command -v sima-cli >/dev/null 2>&1; then
+            echo "sima-cli not found on test runner." >&2
+            exit 1
+          fi
+
+          REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="$(printf "%.12s" "${GITHUB_SHA}")"
+          fi
+          PACKAGE_SPEC="apps@${REF_NAME}:${VERSION}"
+
+          mkdir -p _vulcan-test/install
+          echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
+          sima-cli neat install --env "${VULCAN_ENV}" -d _vulcan-test/install "${PACKAGE_SPEC}" -f
+
+      - name: Locate installed apps runtime
+        run: |
+          mapfile -t runtime_dirs < <(find _vulcan-test/install -type d -path '*/neat-apps/neat-apps-runtime' | sort)
+          if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
+            printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
+            find _vulcan-test/install -maxdepth 4 -mindepth 1 -type d -printf '  %p\n' | sort >&2 || true
+            exit 1
+          fi
+          printf '%s\n' "${runtime_dirs[0]}" > _vulcan-test/apps_runtime_dir.txt
+          echo "Using apps runtime: ${runtime_dirs[0]}"
+
+      - name: Locate pyneat
+        run: |
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          else
+            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
+            exit 1
+          fi
+
+      - name: Install Python test dependencies
+        run: |
+          source "${PYNEAT_ACTIVATE}"
+          echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+          "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
+
+      - name: Run apps unit tests on devkit
+        env:
+          SIMANEAT_APPS_TEST_RTSP_URL: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URL }}
+          SIMANEAT_APPS_TEST_RTSP_URLS: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URLS }}
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --unit
+
+      - name: Cleanup test workspace tmp artifacts
+        if: ${{ always() }}
+        run: |
+          rm -rf _vulcan-test
+
+  build-sysdoc-examples:
+    name: Build SysDoc Examples Route
+    if: ${{ github.ref_type == 'branch' }}
+    needs:
+      - resolve-portal-publish-config
+      - test-runtime
+    runs-on: ubuntu-latest
+    env:
+      PORTAL_BASE_URL: ${{ format('{0}/examples', needs.resolve-portal-publish-config.outputs.sysdoc_base_url) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install portal dependencies
+        working-directory: portal
+        run: npm ci
+
+      - name: Build portal
+        working-directory: portal
+        run: npm run build
+
+      - name: Upload portal artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-sysdoc-examples
+          path: portal/dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-sysdoc-examples:
+    name: Publish SysDoc Examples Route
+    if: ${{ github.ref_type == 'branch' }}
+    needs:
+      - resolve-portal-publish-config
+      - build-sysdoc-examples
+    uses: sima-neat/.github/.github/workflows/vulcan-publish-static-site.yml@main
+    with:
+      aws_region: ${{ needs.resolve-portal-publish-config.outputs.aws_region }}
+      environment_name: ${{ needs.resolve-portal-publish-config.outputs.vulcan_env }}
+      site_key: APPS_PORTAL
+      bucket: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_bucket }}
+      role_to_assume: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_publisher_role_arn }}
+      sse_kms_key_id: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_kms_key_id }}
+      cloudfront_distribution_id: ${{ needs.resolve-portal-publish-config.outputs.sysdoc_cloudfront_distribution_id }}
+      artifact_pattern: neat-apps-sysdoc-examples
+      s3_prefix: examples
+      cloudfront_paths: "/examples /examples/*"
+
+  publish-apps-algolia:
+    name: Publish Apps Algolia Index
+    if: ${{ github.ref_type == 'branch' }}
+    needs:
+      - resolve-portal-publish-config
+      - publish-sysdoc-examples
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-portal-publish-config.outputs.vulcan_env }}
+    env:
+      AWS_REGION: ${{ needs.resolve-portal-publish-config.outputs.aws_region }}
+      VULCAN_CONFIG_S3_URI: ${{ needs.resolve-portal-publish-config.outputs.config_s3_uri }}
+      SYSDOC_EXAMPLES_URL: ${{ format('{0}/examples', needs.resolve-portal-publish-config.outputs.sysdoc_base_url) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Configure AWS credentials for Vulcan config
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ needs.resolve-portal-publish-config.outputs.aws_region }}
+          role-to-assume: ${{ needs.resolve-portal-publish-config.outputs.config_reader_role_arn }}
+          role-session-name: vulcan-apps-algolia-config-${{ github.run_id }}
+
+      - name: Generate Apps Algolia records
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          config_file="${RUNNER_TEMP}/vulcan-environment.json"
+          aws s3 cp "${VULCAN_CONFIG_S3_URI}" "${config_file}" --only-show-errors
+          mkdir -p _algolia
+
+          CONFIG_FILE="${config_file}" python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["CONFIG_FILE"], encoding="utf-8") as handle:
+              config = json.load(handle)
+
+          algolia = config.get("algolia") or {}
+          base_index_name = algolia.get("index_name") or ""
+          apps_index_name = algolia.get("apps_index_name") or (f"{base_index_name}-apps" if base_index_name else "")
+
+          publish = {
+              "schemaVersion": 1,
+              "source": "examples",
+              "app_id": algolia.get("app_id"),
+              "index_name": apps_index_name,
+              "write_api_key_secret_arn": algolia.get("write_api_key_secret_arn"),
+          }
+
+          with open("_algolia/publish.json", "w", encoding="utf-8") as handle:
+              json.dump(publish, handle, indent=2)
+              handle.write("\n")
+          PY
+
+          python3 scripts/generate_catalog.py > portal/public/catalog.json
+          python3 scripts/sync_algolia_apps_index.py \
+            --catalog-json portal/public/catalog.json \
+            --site-base-url "${SYSDOC_EXAMPLES_URL}" \
+            --records-json _algolia/records.json \
+            --summary-json _algolia/summary.json \
+            --generate-only
+
+          python3 -m json.tool _algolia/publish.json >/dev/null
+          python3 -m json.tool _algolia/records.json >/dev/null
+          python3 -m json.tool _algolia/summary.json >/dev/null
+
+      - name: Configure AWS credentials for Algolia secret
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ needs.resolve-portal-publish-config.outputs.aws_region }}
+          role-to-assume: ${{ needs.resolve-portal-publish-config.outputs.apps_portal_publisher_role_arn }}
+          role-session-name: vulcan-apps-algolia-${{ github.run_id }}
+
+      - name: Push Apps Algolia records
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readarray -t algolia_values < <(python3 - <<'PY'
+          import json
+
+          with open("_algolia/publish.json", encoding="utf-8") as handle:
+              config = json.load(handle)
+
+          values = [
+              config.get("app_id") or "",
+              config.get("index_name") or "",
+              config.get("write_api_key_secret_arn") or "",
+          ]
+          print("\n".join(values))
+          PY
+          )
+
+          app_id="${algolia_values[0]:-}"
+          index_name="${algolia_values[1]:-}"
+          write_key_secret_arn="${algolia_values[2]:-}"
+
+          if [[ -z "${app_id}" && -z "${index_name}" && -z "${write_key_secret_arn}" ]]; then
+            echo "No Algolia config for this Vulcan environment; skipping apps search index sync."
+            exit 0
+          fi
+
+          if [[ -z "${app_id}" || -z "${index_name}" || -z "${write_key_secret_arn}" ]]; then
+            echo "Incomplete Algolia config; app_id, index_name, and write_api_key_secret_arn are required." >&2
+            exit 1
+          fi
+
+          write_api_key="$(aws secretsmanager get-secret-value \
+            --secret-id "${write_key_secret_arn}" \
+            --query SecretString \
+            --output text)"
+
+          python3 scripts/sync_algolia_apps_index.py \
+            --site-base-url "${SYSDOC_EXAMPLES_URL}" \
+            --input-records-json _algolia/records.json \
+            --app-id "${app_id}" \
+            --api-key "${write_api_key}" \
+            --index-name "${index_name}" \
+            --sync
+
+  promote-latest-tag:
+    name: Promote Vulcan latest tag
+    if: ${{ github.ref_type == 'branch' || github.ref_type == 'tag' }}
+    needs:
+      - resolve-vulcan-config
+      - test-runtime
+    uses: sima-neat/.github/.github/workflows/vulcan-update-latest-artifacts.yml@main
+    with:
+      aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
+      environment_name: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+      bucket: ${{ needs.resolve-vulcan-config.outputs.artifact_bucket }}
+      role_to_assume: ${{ needs.resolve-vulcan-config.outputs.artifact_publisher_role_arn }}
+      sse_kms_key_id: ${{ needs.resolve-vulcan-config.outputs.artifact_kms_key_id }}
+      artifact_folder: "."

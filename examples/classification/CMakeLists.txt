@@ -1,1 +1,1 @@
-add_subdirectory(simple-image-classification-pipeline/cpp simple-image-classification-pipeline)
+add_subdirectory(image-classifier/src/cpp image-classifier)

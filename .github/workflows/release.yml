@@ -1,0 +1,84 @@
+name: Release
+
+run-name: Release ${{ inputs.tag }} from ${{ inputs.source_branch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_line:
+        description: Minor release line, for example 2.1. Creates or reuses release-2.1.
+        required: true
+        type: string
+      tag:
+        description: Patch release version without v prefix, for example 2.1.2.
+        required: true
+        type: string
+      source_branch:
+        description: Source branch for creating a new release branch.
+        required: true
+        type: string
+        default: main
+      branch_exists_behavior:
+        description: Behavior when release-{release_line} already exists.
+        required: true
+        type: choice
+        default: reuse
+        options:
+          - reuse
+          - fail
+          - update_from_source
+      tag_exists_behavior:
+        description: Behavior when v{tag} already exists.
+        required: true
+        type: choice
+        default: fail
+        options:
+          - fail
+          - move
+      release_notes_mode:
+        description: Release notes source for the draft GitHub release.
+        required: true
+        type: choice
+        default: generated
+        options:
+          - generated
+          - empty
+          - from_file
+      release_notes_file:
+        description: Release notes file path when release_notes_mode is from_file.
+        required: false
+        type: string
+        default: ""
+      prerelease:
+        description: Mark the draft release as a prerelease.
+        required: false
+        type: boolean
+        default: false
+      latest:
+        description: Mark the release as latest when published.
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: Resolve and print actions without pushing branches, tags, or releases.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: sima-neat/.github/.github/workflows/vulcan-release.yml@main
+    with:
+      release_line: ${{ inputs.release_line }}
+      tag: ${{ inputs.tag }}
+      source_branch: ${{ inputs.source_branch }}
+      branch_exists_behavior: ${{ inputs.branch_exists_behavior }}
+      tag_exists_behavior: ${{ inputs.tag_exists_behavior }}
+      release_notes_mode: ${{ inputs.release_notes_mode }}
+      release_notes_file: ${{ inputs.release_notes_file }}
+      prerelease: ${{ inputs.prerelease }}
+      latest: ${{ inputs.latest }}
+      dry_run: ${{ inputs.dry_run }}

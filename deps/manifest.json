@@ -1,0 +1,9 @@
+{
+  "neat-core": {
+    "policy": "snap"
+  },
+  "sdk": {
+    "channel": "main"
+  },
+  "platform-version": "2.0.0"
+}

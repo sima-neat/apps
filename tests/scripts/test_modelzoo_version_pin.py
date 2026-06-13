@@ -15,23 +15,34 @@ def _files_requiring_pinned_modelzoo_calls() -> list[Path]:
         APPS_ROOT / "examples" / "TEMPLATE_README.md",
     ]
     files.extend(sorted((APPS_ROOT / "examples").glob("*/*/README.md")))
+    files.extend(sorted((APPS_ROOT / "examples").glob("*/*/tests/test-scope.yaml")))
     files.append(
         APPS_ROOT
         / "examples"
         / "object-detection"
-        / "single-rtsp-object-detection-optiview"
+        / "single-stream-object-detector"
+        / "src"
         / "python"
         / "main.py"
     )
     return files
 
 
-def test_apps_surfaces_do_not_use_unpinned_modelzoo_get():
+def test_apps_surfaces_do_not_hardcode_model_platform_version():
     offenders: list[str] = []
+    blocked = [
+        "modelzoo get",
+        "modelzoo -v 2.0.0",
+        "SDK2.0.0",
+        "{sdk_version}",
+        "NEAT_APPS_MODEL_SDK_VERSION",
+        "MODEL_SDK_VERSION",
+    ]
 
     for path in _files_requiring_pinned_modelzoo_calls():
         text = path.read_text(encoding="utf-8")
-        if "modelzoo get" in text:
-            offenders.append(str(path.relative_to(APPS_ROOT)))
+        matches = [pattern for pattern in blocked if pattern in text]
+        if matches:
+            offenders.append(f"{path.relative_to(APPS_ROOT)}: {', '.join(matches)}")
 
     assert offenders == []

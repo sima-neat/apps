@@ -1,0 +1,15 @@
+model:
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+
+io:
+  image: null
+  fallback_image_url: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n01443537_goldfish.JPEG
+
+runtime:
+  input_width: 224
+  input_height: 224
+  timeout_ms: 20000
+
+validation:
+  expected_class_id: 1
+  min_probability: 0.20

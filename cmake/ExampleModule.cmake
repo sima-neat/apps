@@ -17,42 +17,49 @@ function(_sima_neat_apps_find_sources out_var module_dir)
 endfunction()
 
 function(_sima_neat_apps_ensure_neat_target apps_root)
-  if (TARGET SimaNeat::sima_neat)
+  if (TARGET SimaNeatApps::sima_neat)
     return()
   endif()
 
   find_package(SimaNeat CONFIG QUIET)
-  if (TARGET SimaNeat::sima_neat)
-    return()
+  if (TARGET SimaNeat::sima_neat_shared)
+    set(_core_target SimaNeat::sima_neat_shared)
+  elseif (TARGET SimaNeat::sima_neat)
+    set(_core_target SimaNeat::sima_neat)
+  else()
+    set(_core_root "${apps_root}/../core")
+    set(_core_lib "${_core_root}/build/libsima_neat.so")
+    set(_core_include "${_core_root}/include")
+    if (NOT EXISTS "${_core_lib}" OR NOT EXISTS "${_core_include}")
+      message(FATAL_ERROR
+        "Could not find a usable SimaNeat package or local core build. "
+        "Expected ${_core_lib} and ${_core_include}.")
+    endif()
+
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GST REQUIRED IMPORTED_TARGET
+      gstreamer-1.0
+      gstreamer-app-1.0
+      gstreamer-video-1.0
+      gstreamer-sdp-1.0
+      gstreamer-rtsp-server-1.0
+      glib-2.0
+    )
+    pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
+
+    add_library(SimaNeat::sima_neat_shared SHARED IMPORTED GLOBAL)
+    set_target_properties(SimaNeat::sima_neat_shared PROPERTIES
+      IMPORTED_LOCATION "${_core_lib}"
+      INTERFACE_COMPILE_DEFINITIONS "SIMA_WITH_OPENCV;SIMA_HAS_SIMAAI_POOL=1"
+      INTERFACE_INCLUDE_DIRECTORIES "${_core_include};${_core_include}/pipeline"
+      INTERFACE_LINK_LIBRARIES "PkgConfig::GST;PkgConfig::OPENCV;gstsimaallocator;gstsimaaibufferpool"
+    )
+    set(_core_target SimaNeat::sima_neat_shared)
   endif()
 
-  set(_core_root "${apps_root}/../core")
-  set(_core_lib "${_core_root}/build/libsima_neat.a")
-  set(_core_include "${_core_root}/include")
-  if (NOT EXISTS "${_core_lib}" OR NOT EXISTS "${_core_include}")
-    message(FATAL_ERROR
-      "Could not find a usable SimaNeat package or local core build. "
-      "Expected ${_core_lib} and ${_core_include}.")
-  endif()
-
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GST REQUIRED IMPORTED_TARGET
-    gstreamer-1.0
-    gstreamer-app-1.0
-    gstreamer-video-1.0
-    gstreamer-sdp-1.0
-    gstreamer-rtsp-server-1.0
-    glib-2.0
-  )
-  pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
-
-  add_library(SimaNeat::sima_neat STATIC IMPORTED GLOBAL)
-  set_target_properties(SimaNeat::sima_neat PROPERTIES
-    IMPORTED_LOCATION "${_core_lib}"
-    INTERFACE_COMPILE_DEFINITIONS "SIMA_WITH_OPENCV;SIMA_HAS_SIMAAI_POOL=1"
-    INTERFACE_INCLUDE_DIRECTORIES "${_core_include};${_core_include}/pipeline"
-    INTERFACE_LINK_LIBRARIES "PkgConfig::GST;PkgConfig::OPENCV;gstsimaallocator;gstsimaaibufferpool"
-  )
+  add_library(sima_neat_apps_neat_core INTERFACE)
+  add_library(SimaNeatApps::sima_neat ALIAS sima_neat_apps_neat_core)
+  target_link_libraries(sima_neat_apps_neat_core INTERFACE "${_core_target}")
 endfunction()
 
 function(_sima_neat_apps_ensure_support_runtime apps_root)
@@ -64,6 +71,7 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
 
   add_library(sima_neat_apps_support_runtime STATIC
     "${apps_root}/support/runtime/asset_utils.cpp"
+    "${apps_root}/support/runtime/config_utils.cpp"
     "${apps_root}/support/runtime/example_utils.cpp"
     "${apps_root}/support/object_detection/obj_detection_utils.cpp"
   )
@@ -71,35 +79,11 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
 
   target_link_libraries(sima_neat_apps_support_runtime
     PUBLIC
-      SimaNeat::sima_neat
+      SimaNeatApps::sima_neat
       nlohmann_json::nlohmann_json
   )
 
   target_include_directories(sima_neat_apps_support_runtime
-    PUBLIC
-      "${apps_root}"
-  )
-endfunction()
-
-function(_sima_neat_apps_ensure_support_optiview apps_root)
-  if (TARGET SimaNeatApps::support_optiview)
-    return()
-  endif()
-
-  _sima_neat_apps_ensure_support_runtime("${apps_root}")
-
-  add_library(sima_neat_apps_support_optiview STATIC
-    "${apps_root}/support/optiview/graphpipes_optiview_helpers.cpp"
-  )
-  add_library(SimaNeatApps::support_optiview ALIAS sima_neat_apps_support_optiview)
-
-  target_link_libraries(sima_neat_apps_support_optiview
-    PUBLIC
-      SimaNeatApps::support_runtime
-      SimaNeat::sima_neat
-  )
-
-  target_include_directories(sima_neat_apps_support_optiview
     PUBLIC
       "${apps_root}"
   )
@@ -113,7 +97,9 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   find_package(nlohmann_json REQUIRED)
 
   add_library(sima_neat_apps_support_testing STATIC
-    "${apps_root}/support/testing/optiview_json_listener.cpp"
+    "${apps_root}/support/runtime/config_utils.cpp"
+    "${apps_root}/support/testing/metadata_json_listener.cpp"
+    "${apps_root}/support/testing/test_config.cpp"
     "${apps_root}/support/testing/test_process.cpp"
   )
   add_library(SimaNeatApps::support_testing ALIAS sima_neat_apps_support_testing)
@@ -129,9 +115,9 @@ function(_sima_neat_apps_ensure_support_testing apps_root)
   )
 endfunction()
 
-function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_target)
-  get_filename_component(_apps_root "${module_dir}/../../../.." ABSOLUTE)
-  set(_e2e_source "${module_dir}/tests/e2e_test.cpp")
+function(_sima_neat_apps_add_metadata_e2e_test example_name module_dir example_target)
+  get_filename_component(_apps_root "${module_dir}/../../../../.." ABSOLUTE)
+  set(_e2e_source "${module_dir}/../../tests/cpp/test_e2e.cpp")
   if (NOT EXISTS "${_e2e_source}")
     message(FATAL_ERROR
       "Example ${example_name} requested standard e2e testing but ${_e2e_source} does not exist.")
@@ -149,10 +135,10 @@ function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_t
   )
 
   add_test(
-    NAME "${example_name}.optiview_json_e2e"
+    NAME "${example_name}.metadata_json_e2e"
     COMMAND $<TARGET_FILE:${_e2e_target}> $<TARGET_FILE:${example_target}>
   )
-  set_tests_properties("${example_name}.optiview_json_e2e" PROPERTIES
+  set_tests_properties("${example_name}.metadata_json_e2e" PROPERTIES
     SKIP_RETURN_CODE 77
     LABELS "e2e"
     WORKING_DIRECTORY "${_apps_root}"
@@ -160,11 +146,11 @@ function(_sima_neat_apps_add_optiview_e2e_test example_name module_dir example_t
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Generic unit test: compile tests/unit_test.cpp, register with label "unit".
+# Generic unit test: compile tests/test_unit.cpp, register with label "unit".
 # ---------------------------------------------------------------------------
 function(_sima_neat_apps_add_unit_test example_name module_dir example_target)
-  get_filename_component(_apps_root "${module_dir}/../../../.." ABSOLUTE)
-  set(_unit_source "${module_dir}/tests/unit_test.cpp")
+  get_filename_component(_apps_root "${module_dir}/../../../../.." ABSOLUTE)
+  set(_unit_source "${module_dir}/../../tests/cpp/test_unit.cpp")
   if (NOT EXISTS "${_unit_source}")
     message(FATAL_ERROR
       "Example ${example_name} requested UNIT_TEST but ${_unit_source} does not exist.")
@@ -193,11 +179,11 @@ function(_sima_neat_apps_add_unit_test example_name module_dir example_target)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Generic e2e test: compile tests/e2e_test.cpp, register with label "e2e".
+# Generic e2e test: compile tests/test_e2e.cpp, register with label "e2e".
 # ---------------------------------------------------------------------------
 function(_sima_neat_apps_add_generic_e2e_test example_name module_dir example_target)
-  get_filename_component(_apps_root "${module_dir}/../../../.." ABSOLUTE)
-  set(_e2e_source "${module_dir}/tests/e2e_test.cpp")
+  get_filename_component(_apps_root "${module_dir}/../../../../.." ABSOLUTE)
+  set(_e2e_source "${module_dir}/../../tests/cpp/test_e2e.cpp")
   if (NOT EXISTS "${_e2e_source}")
     message(FATAL_ERROR
       "Example ${example_name} requested E2E_TEST but ${_e2e_source} does not exist.")
@@ -226,24 +212,20 @@ function(_sima_neat_apps_add_generic_e2e_test example_name module_dir example_ta
 endfunction()
 
 function(sima_neat_apps_module example_name)
-  set(options OPTIVIEW OPTIVIEW_E2E_TEST UNIT_TEST E2E_TEST)
+  set(options METADATA_E2E_TEST UNIT_TEST E2E_TEST)
   set(one_value_args OUTPUT_TARGET_VAR)
   set(multi_value_args SOURCES)
   cmake_parse_arguments(APP "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
   if (COMMAND sima_neat_apps_add_example)
-    if (APP_OPTIVIEW)
-      sima_neat_apps_add_example("${example_name}" OPTIVIEW OUTPUT_TARGET_VAR _module_target_name)
-    else()
-      sima_neat_apps_add_example("${example_name}" OUTPUT_TARGET_VAR _module_target_name)
-    endif()
+    sima_neat_apps_add_example("${example_name}" OUTPUT_TARGET_VAR _module_target_name)
     if (APP_OUTPUT_TARGET_VAR)
       set(${APP_OUTPUT_TARGET_VAR} "${_module_target_name}" PARENT_SCOPE)
     endif()
 
     get_filename_component(_module_dir "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
-    if (BUILD_TESTING AND APP_OPTIVIEW_E2E_TEST)
-      _sima_neat_apps_add_optiview_e2e_test("${example_name}" "${_module_dir}" "${_module_target_name}")
+    if (BUILD_TESTING AND APP_METADATA_E2E_TEST)
+      _sima_neat_apps_add_metadata_e2e_test("${example_name}" "${_module_dir}" "${_module_target_name}")
     endif()
     if (BUILD_TESTING AND APP_UNIT_TEST)
       _sima_neat_apps_add_unit_test("${example_name}" "${_module_dir}" "${_module_target_name}")
@@ -256,7 +238,7 @@ function(sima_neat_apps_module example_name)
   endif()
 
   get_filename_component(_module_dir "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
-  get_filename_component(_apps_root "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
+  get_filename_component(_apps_root "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 
   if (APP_SOURCES)
     set(_sources "${APP_SOURCES}")
@@ -266,9 +248,6 @@ function(sima_neat_apps_module example_name)
 
   _sima_neat_apps_ensure_neat_target("${_apps_root}")
   _sima_neat_apps_ensure_support_runtime("${_apps_root}")
-  if (APP_OPTIVIEW)
-    _sima_neat_apps_ensure_support_optiview("${_apps_root}")
-  endif()
   if (BUILD_TESTING)
     _sima_neat_apps_ensure_support_testing("${_apps_root}")
   endif()
@@ -277,25 +256,26 @@ function(sima_neat_apps_module example_name)
 
   target_link_libraries(${example_name}
     PRIVATE
-      SimaNeat::sima_neat
+      SimaNeatApps::sima_neat
       SimaNeatApps::support_runtime
   )
-
-  if (APP_OPTIVIEW)
-    target_link_libraries(${example_name} PRIVATE SimaNeatApps::support_optiview)
-  endif()
 
   target_include_directories(${example_name}
     PRIVATE
       "${_apps_root}"
   )
 
+  target_compile_definitions(${example_name}
+    PRIVATE
+      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_module_dir}"
+  )
+
   if (APP_OUTPUT_TARGET_VAR)
     set(${APP_OUTPUT_TARGET_VAR} "${example_name}" PARENT_SCOPE)
   endif()
 
-  if (BUILD_TESTING AND APP_OPTIVIEW_E2E_TEST)
-    _sima_neat_apps_add_optiview_e2e_test("${example_name}" "${_module_dir}" "${example_name}")
+  if (BUILD_TESTING AND APP_METADATA_E2E_TEST)
+    _sima_neat_apps_add_metadata_e2e_test("${example_name}" "${_module_dir}" "${example_name}")
   endif()
 
   if (BUILD_TESTING AND APP_UNIT_TEST)

@@ -1,27 +1,185 @@
 import { marked } from "marked";
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
-import { extractFilterOptions, findExample, githubUrlForExample, loadCatalog, matchesFilters } from "./catalog";
+import {
+  extractFilterOptions,
+  findExample,
+  githubUrlForExample,
+  loadCatalog,
+  matchesFilters,
+  portalAssetUrl,
+} from "./catalog";
 
 marked.setOptions({ breaks: true });
+
+const THEME_COOKIE = "sima-neat-theme";
+const THEME_KEYS = ["portal-theme", "theme"];
+const VALID_THEMES = new Set(["light", "dark"]);
+const SHOW_DEVELOPER_CENTER_NAV = import.meta.env.BASE_URL.replace(/\/+$/, "") === "/examples";
+
+function normalizeTheme(value) {
+  return VALID_THEMES.has(value) ? value : null;
+}
+
+function readCookieTheme() {
+  const entry = document.cookie
+    .split("; ")
+    .find((cookie) => cookie.startsWith(`${THEME_COOKIE}=`));
+  return normalizeTheme(entry ? decodeURIComponent(entry.split("=").slice(1).join("=")) : null);
+}
+
+function cookieDomain() {
+  const { hostname } = window.location;
+  if (hostname === "localhost" || /^[\d.]+$/.test(hostname)) {
+    return "";
+  }
+
+  if (hostname.endsWith(".neat.sima.ai") || hostname.endsWith(".neat.paconsultings.com")) {
+    const parts = hostname.split(".");
+    return parts.length > 3 ? parts.slice(1).join(".") : hostname;
+  }
+
+  return "";
+}
+
+function writeCookieTheme(theme) {
+  const domain = cookieDomain();
+  const domainPart = domain ? `; Domain=.${domain}` : "";
+  const securePart = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${THEME_COOKIE}=${encodeURIComponent(theme)}; Path=/; Max-Age=31536000; SameSite=Lax${securePart}${domainPart}`;
+}
+
+function readStoredTheme() {
+  for (const key of THEME_KEYS) {
+    const value = normalizeTheme(window.localStorage.getItem(key));
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function writeStoredTheme(theme) {
+  THEME_KEYS.forEach((key) => window.localStorage.setItem(key, theme));
+}
+
+function normalizeMarkdownAssetUrls(markdown = "") {
+  const assetPrefixes = ["example-assets", "category-assets"];
+  return assetPrefixes.reduce((content, prefix) => {
+    const assetUrl = portalAssetUrl(`${prefix}/`);
+    return content
+      .replace(new RegExp(`(\\]\\()(?:\\./)?${prefix}/`, "g"), `$1${assetUrl}`)
+      .replace(new RegExp(`(\\bsrc=["'])(?:\\./)?${prefix}/`, "g"), `$1${assetUrl}`);
+  }, markdown);
+}
+
+function renderMarkdown(markdown = "") {
+  return marked.parse(normalizeMarkdownAssetUrls(markdown));
+}
 
 function readInitialTheme() {
   if (typeof window === "undefined") {
     return "light";
   }
 
-  const savedTheme = window.localStorage.getItem("portal-theme");
-  if (savedTheme === "light" || savedTheme === "dark") {
+  const savedTheme = readCookieTheme() || readStoredTheme();
+  if (savedTheme) {
     return savedTheme;
   }
 
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+function ensureDeveloperCenterShellStylesheet() {
+  const href = "/developer-center-shell.css";
+  if (document.querySelector(`link[href="${href}"]`)) {
+    return;
+  }
+
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+function ensureDeveloperCenterShellScript(onLoad, onError) {
+  const src = "/developer-center-shell.js";
+  const existing = document.querySelector(`script[src="${src}"]`);
+  if (window.DeveloperCenterShell) {
+    onLoad();
+    return undefined;
+  }
+
+  if (existing) {
+    existing.addEventListener("load", onLoad, { once: true });
+    return () => existing.removeEventListener("load", onLoad);
+  }
+
+  const script = document.createElement("script");
+  script.src = src;
+  script.async = true;
+  script.addEventListener("load", onLoad, { once: true });
+  script.addEventListener("error", () => {
+    console.warn("Developer Center shell runtime is unavailable.");
+    onError?.();
+  }, { once: true });
+  document.head.appendChild(script);
+  return () => script.removeEventListener("load", onLoad);
+}
+
+function useDeveloperCenterShell(setTheme, setUseShellFallback) {
+  useEffect(() => {
+    if (!SHOW_DEVELOPER_CENTER_NAV) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    ensureDeveloperCenterShellStylesheet();
+
+    const mountShell = () => {
+      if (!cancelled) {
+        if (window.DeveloperCenterShell) {
+          setUseShellFallback(false);
+          window.DeveloperCenterShell.mount("#developer-center-shell", { active: "examples" });
+        } else {
+          setUseShellFallback(true);
+        }
+      }
+    };
+    const cleanupScriptListener = ensureDeveloperCenterShellScript(mountShell, () => {
+      if (!cancelled) {
+        setUseShellFallback(true);
+      }
+    });
+    const fallbackTimer = window.setTimeout(() => {
+      if (!cancelled && !window.DeveloperCenterShell) {
+        setUseShellFallback(true);
+      }
+    }, 1200);
+    const syncTheme = (event) => {
+      const theme = normalizeTheme(event.detail?.theme);
+      if (theme) {
+        setTheme(theme);
+      }
+    };
+
+    window.addEventListener("developer-center-theme-change", syncTheme);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fallbackTimer);
+      cleanupScriptListener?.();
+      window.removeEventListener("developer-center-theme-change", syncTheme);
+    };
+  }, [setTheme, setUseShellFallback]);
+}
+
 function App() {
   const [catalog, setCatalog] = useState(null);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(readInitialTheme);
+  const [useShellFallback, setUseShellFallback] = useState(false);
+  const toggleTheme = () => setTheme((current) => (current === "light" ? "dark" : "light"));
+  useDeveloperCenterShell(setTheme, setUseShellFallback);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,40 +201,132 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem("portal-theme", theme);
+    writeStoredTheme(theme);
+    writeCookieTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    const syncTheme = () => {
+      const cookieTheme = readCookieTheme();
+      if (cookieTheme) {
+        setTheme(cookieTheme);
+      }
+    };
+
+    window.addEventListener("focus", syncTheme);
+    document.addEventListener("visibilitychange", syncTheme);
+    return () => {
+      window.removeEventListener("focus", syncTheme);
+      document.removeEventListener("visibilitychange", syncTheme);
+    };
+  }, []);
 
   if (error) {
     return (
-      <div className="portal-shell">
-        <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
-        <div className="state-panel error-panel">{error}</div>
-      </div>
+      <AppFrame theme={theme} onToggleTheme={toggleTheme} useShellFallback={useShellFallback}>
+        <div className="portal-shell">
+          <div className="state-panel error-panel">{error}</div>
+        </div>
+      </AppFrame>
     );
   }
 
   if (!catalog) {
     return (
-      <div className="portal-shell">
-        <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
-        <div className="state-panel">Loading app catalog...</div>
-      </div>
+      <AppFrame theme={theme} onToggleTheme={toggleTheme} useShellFallback={useShellFallback}>
+        <div className="portal-shell">
+          <div className="state-panel">Loading app catalog...</div>
+        </div>
+      </AppFrame>
     );
   }
 
   return (
-    <>
-      <ThemeToggle theme={theme} onToggle={() => setTheme((current) => (current === "light" ? "dark" : "light"))} />
+    <AppFrame theme={theme} onToggleTheme={toggleTheme} useShellFallback={useShellFallback}>
       <Routes>
         <Route path="/" element={<CatalogPage catalog={catalog} />} />
-        <Route path="/app/:appId" element={<DetailPage catalog={catalog} />} />
+        <Route path="/app/*" element={<DetailPage catalog={catalog} />} />
       </Routes>
+    </AppFrame>
+  );
+}
+
+function AppFrame({ children, theme, onToggleTheme, useShellFallback }) {
+  return (
+    <>
+      {SHOW_DEVELOPER_CENTER_NAV && !useShellFallback ? <div id="developer-center-shell" /> : null}
+      {SHOW_DEVELOPER_CENTER_NAV && useShellFallback ? (
+        <DeveloperCenterShellFallback theme={theme} onToggleTheme={onToggleTheme} />
+      ) : null}
+      {children}
     </>
   );
 }
 
+function DeveloperCenterShellFallback({ theme, onToggleTheme }) {
+  return (
+    <div className="developer-center-fallback-shell">
+      <header className="navbar dev-center-navbar">
+        <div className="navbar__inner">
+          <div className="navbar__items">
+            <a className="navbar__brand" href="/" aria-label="Developer Center home">
+              <span className="navbar__logo">
+                <img src="/img/sima-logo.png" alt="" />
+              </span>
+              <span className="navbar__title">Developer Center</span>
+            </a>
+            <div className="navbar__items navbar__items--desktop">
+              <div className="navbar__item">
+                <a className="navbar__link" href="/hardware">Hardware</a>
+              </div>
+              <div className="navbar__item">
+                <a className="navbar__link" href="/software">Software</a>
+              </div>
+              <div className="navbar__item">
+                <a className="navbar__link navbar__link--active" href="/examples">Examples</a>
+              </div>
+              <a className="navbar__item navbar__link" href="https://huggingface.co/simaai" target="_blank" rel="noreferrer">
+                Models
+                <svg width="13.5" height="13.5" viewBox="0 0 24 24" aria-label="(opens in new tab)" className="iconExternalLink">
+                  <path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z" />
+                </svg>
+              </a>
+              <a className="navbar__item navbar__link" href="https://developer.sima.ai" target="_blank" rel="noreferrer">
+                Community
+                <svg width="13.5" height="13.5" viewBox="0 0 24 24" aria-label="(opens in new tab)" className="iconExternalLink">
+                  <path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3ZM5 5h6v2H7v10h10v-4h2v6H5V5Z" />
+                </svg>
+              </a>
+            </div>
+          </div>
+          <div className="navbar__items navbar__items--right">
+            <div className="color-mode-toggle">
+              <button
+                className="color-mode-toggle-button"
+                type="button"
+                aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                onClick={onToggleTheme}
+              >
+                {theme === "light" ? (
+                  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" className="color-mode-toggle-icon">
+                    <path fill="currentColor" d="M12 9c1.65 0 3 1.35 3 3s-1.35 3-3 3-3-1.35-3-3 1.35-3 3-3m0-2c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5ZM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1Zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1ZM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1Zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1ZM5.99 4.58a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41L5.99 4.58Zm12.37 12.37a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41l-1.06-1.06ZM19.42 5.99a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06ZM7.05 18.36a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06Z" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" className="color-mode-toggle-icon">
+                    <path fill="currentColor" d="M9.37 5.51A7.4 7.4 0 0 0 16.5 14.9c.68 0 1.35-.09 1.99-.27A7.03 7.03 0 0 1 12 19c-3.86 0-7-3.14-7-7 0-2.93 1.81-5.45 4.37-6.49ZM12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26 5.4 5.4 0 0 1-3.14-9.8A9.2 9.2 0 0 0 12 3Z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+    </div>
+  );
+}
+
 function CatalogPage({ catalog }) {
-  const [query, setQuery] = useState("");
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [filters, setFilters] = useState({
     category: "",
@@ -86,22 +336,16 @@ function CatalogPage({ catalog }) {
     model: "",
     tag: "",
   });
-  const deferredQuery = useDeferredValue(query);
   const options = extractFilterOptions(catalog.examples);
-  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters, deferredQuery));
+  const filtered = catalog.examples.filter((example) => matchesFilters(example, filters, ""));
 
   return (
     <div className="portal-shell">
       <header className="hero">
         <div className="hero-copy">
-          <div className="brand-row">
-            <img className="brand-logo" src="./sima-logo.png" alt="SiMa.ai" />
-            <p className="eyebrow">SiMa NEAT Apps Portal</p>
-          </div>
-          <h1>Discover SiMa NEAT reference examples that expedite the path from proof of concept to product.</h1>
+          <h1>Neat Examples</h1>
           <p className="hero-text">
-            Browse source-first applications, search across tags and models, and drill into structured
-            example documentation generated from the repo itself.
+            Learn how to build production-grade applications by exploring these examples.
           </p>
           <div className="hero-actions">
             <a className="hero-action" href="https://github.com/sima-neat/apps" target="_blank" rel="noreferrer">
@@ -128,16 +372,9 @@ function CatalogPage({ catalog }) {
             </button>
           </div>
         </div>
-        <div className="hero-search">
-          <input
-            id="catalog-search"
-            className="search-input"
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by app name, tag, model, or category"
-          />
-          <p className="search-meta">{filtered.length} of {catalog.examples.length} examples</p>
+        <div className="hero-stat">
+          <span>{filtered.length}</span>
+          <p>{filtered.length === catalog.examples.length ? "examples" : `of ${catalog.examples.length} examples`}</p>
         </div>
       </header>
 
@@ -148,8 +385,8 @@ function CatalogPage({ catalog }) {
           ))}
           {filtered.length === 0 ? (
             <div className="empty-state">
-              <h2>No examples matched the current search.</h2>
-              <p>Try clearing a filter or using a broader search term.</p>
+              <h2>No examples matched the current filters.</h2>
+              <p>Try clearing a filter.</p>
             </div>
           ) : null}
         </main>
@@ -244,7 +481,8 @@ bash /tmp/install.sh`}</code>
 }
 
 function ExampleCard({ example }) {
-  const fallbackImage = `./category-assets/${slugTone(example.category)}.svg`;
+  const fallbackImage = portalAssetUrl(`category-assets/${slugTone(example.category)}.svg`);
+  const cardImage = portalAssetUrl(example.image_path || `category-assets/${slugTone(example.category)}.svg`);
   const displayName = formatDisplayLabel(example.name || example.binary_name || example.id);
   const summaryHtml = marked.parseInline(example.summary || "No summary available.");
 
@@ -252,8 +490,14 @@ function ExampleCard({ example }) {
     <Link className="app-card" to={`/app/${encodeURIComponent(example.id)}`}>
       <div className="card-image">
         <img
-          src={fallbackImage}
+          src={cardImage}
           alt={displayName}
+          onError={(event) => {
+            if (event.currentTarget.dataset.fallbackApplied !== "true") {
+              event.currentTarget.dataset.fallbackApplied = "true";
+              event.currentTarget.src = fallbackImage;
+            }
+          }}
         />
       </div>
       <div className="card-body">
@@ -266,20 +510,19 @@ function ExampleCard({ example }) {
 }
 
 function DetailPage({ catalog }) {
-  const { appId = "" } = useParams();
+  const { "*": appPath = "" } = useParams();
   const navigate = useNavigate();
-  const decodedId = decodeURIComponent(appId);
+  const decodedId = decodeURIComponent(appPath);
   const example = findExample(catalog, decodedId);
   const githubUrl = githubUrlForExample(example);
-  const sections = (example?.sections || []).filter((section) => section.slug !== "metadata");
+  const sections = (example?.sections || []).filter(
+    (section) => !["metadata", "concept"].includes(section.slug),
+  );
   const displayName = example?.name || example?.binary_name || decodedId;
   const binaryLabel = example?.binary_name || "";
   const modelLabel = example?.model || "";
   const modelUrl = example?.model_url || "";
   const summaryHtml = marked.parseInline(example?.summary || "No summary available.");
-  const pathLabel = decodedId
-    .split("/")
-    .join(" / ");
   const docPanelRef = useRef(null);
   const [activeSection, setActiveSection] = useState(sections[0]?.slug || "");
 
@@ -361,7 +604,6 @@ function DetailPage({ catalog }) {
         >
           <span aria-hidden="true">⌂</span>
         </button>
-        <div className="detail-path">{pathLabel}</div>
       </div>
 
       <section className="detail-hero">
@@ -408,7 +650,7 @@ function DetailPage({ catalog }) {
                   </header>
                   <div
                     className="markdown-body"
-                    dangerouslySetInnerHTML={{ __html: marked.parse(section.markdown || "") }}
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(section.markdown) }}
                   />
                 </section>
               ))}
@@ -464,23 +706,6 @@ function FilterGroup({ label, value, options, onChange }) {
   );
 }
 
-function ThemeToggle({ theme, onToggle }) {
-  return (
-    <button
-      className="theme-toggle"
-      type="button"
-      onClick={onToggle}
-      aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-      title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-    >
-      <span className={`theme-toggle-track ${theme === "dark" ? "dark" : ""}`}>
-        <span className="theme-toggle-label">{theme === "light" ? "Light" : "Dark"}</span>
-        <span className="theme-toggle-thumb" />
-      </span>
-    </button>
-  );
-}
-
 function Chip({ label, tone }) {
   return <span className={`chip chip-${tone}`}>{label}</span>;
 }
@@ -519,7 +744,7 @@ function formatDisplayLabel(value) {
 
   const acronyms = new Map([
     ["rtsp", "RTSP"],
-    ["optiview", "OptiView"],
+    ["insight", "Insight"],
     ["yolo", "YOLO"],
     ["mpk", "MPK"],
     ["api", "API"],

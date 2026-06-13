@@ -3,7 +3,7 @@
 ## Metadata
 | Field | Value |
 | --- | --- |
-| Category | <classification / object-detection / re-identification / pose-estimation / face-detection / semantic-segmentation / instance-segmentation / depth-estimation / throughput> |
+| Category | <benchmarking / classification / object-detection / tracking / face-detection / segmentation / depth-estimation / genai / throughput> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
@@ -12,7 +12,7 @@
 | Model | <default_model_name> [https://example.com/path/to/<default_model_name>_mpk.tar.gz] |
 
 ## Concept
-<1-2 paragraphs: what this example demonstrates and which NEAT capabilities it exercises.>
+<1-2 paragraphs: what this example demonstrates and which Neat Library capabilities it exercises.>
 
 ## Preview
 Optional. If you have a demo screenshot for the portal detail page, place it here immediately after `Concept`.
@@ -22,16 +22,31 @@ Optional. If you have a demo screenshot for the portal detail page, place it her
 ```
 
 ## Supported Models
+Use the platform version wherever `<platform-version>` appears.
+
 Also works with: `<model_variant_1>`, `<model_variant_2>`
 
 Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get <model_variant_1> && cd ../..`
+- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <model_variant_1> && cd ../..`
 
 ## Prerequisites
-- Installed NEAT SDK.
+- Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v 2.0.0 get <default_model_name> && cd ../..`
+- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <default_model_name> && cd ../..`
+
+## Get The Apps Repo
+Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+
+Then clone and build the apps repo:
+
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
+
+After this setup, follow the example-specific commands below.
 
 ## Important Behavior
 - This example expects the model path to be provided explicitly at runtime.
@@ -49,7 +64,7 @@ Download any variant into `assets/models/`:
 
 ### Python
 - Invocation:
-  `python3 examples/<category>/<name>/python/main.py <args>`
+  `python3 examples/<category>/<name>/src/python/main.py <args>`
 - Required arguments:
   `<required_arg_1> <required_arg_2>`
 - Optional arguments:
@@ -70,7 +85,7 @@ Binary output:
 ### Build This Example Directly With CMake
 ```bash
 cd <apps-repo-root>
-cmake -S examples/<category>/<name>/cpp -B build/<name>
+cmake -S examples/<category>/<name>/src/cpp -B build/<name>
 cmake --build build/<name> -j
 ```
 
@@ -88,8 +103,8 @@ Binary output:
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/<category>/<name>/python/requirements.txt
-python3 examples/<category>/<name>/python/main.py <args>
+pip install -r examples/<category>/<name>/src/python/requirements.txt
+python3 examples/<category>/<name>/src/python/main.py <args>
 ```
 
 ## Debugging Notes
@@ -98,8 +113,9 @@ python3 examples/<category>/<name>/python/main.py <args>
 - Confirm output directories are writable.
 
 ## Source Files
-- C++ source: `cpp/main.cpp`
-- C++ tests: `cpp/tests/unit_test.cpp`, `cpp/tests/e2e_test.cpp`
-- Python source: `python/main.py`
-- Python tests: `python/tests/test_unit.py`, `python/tests/test_e2e.py`
-- Shared assets: `common/`
+- Test scope: `tests/test-scope.yaml`
+- C++ source: `src/cpp/main.cpp`
+- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+- Python source: `src/python/main.py`
+- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
+- Shared assets: `src/common/`

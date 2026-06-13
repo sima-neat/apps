@@ -6,15 +6,25 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: "Branch to test"
+        description: "Branch artifact to install. Runner selection uses the workflow run ref."
         required: true
         default: main
         type: string
 
+permissions:
+  contents: read
+
 jobs:
+  resolve-test-runner:
+    name: Resolve Test Runner
+    uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
+
   modalix-nightly-e2e:
     if: github.event_name == 'schedule'
-    runs-on: [self-hosted, Linux, ARM64, modalix]
+    needs: resolve-test-runner
+    runs-on:
+      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+      labels: [self-hosted, Linux, ARM64, modalix]
     strategy:
       fail-fast: false
       matrix:
@@ -47,7 +57,7 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest
+          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
 
       - name: Run nightly e2e tests from installed apps runtime
         shell: bash
@@ -58,12 +68,14 @@ jobs:
           /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
           source "${PYNEAT_ACTIVATE}"
-          source tests/scripts/testing/setup_test_env.sh
-          ./tests/test.sh --e2e
+          ./tests/test.sh --e2e --strict
 
   modalix-manual-e2e:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, Linux, ARM64, modalix]
+    needs: resolve-test-runner
+    runs-on:
+      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+      labels: [self-hosted, Linux, ARM64, modalix]
 
     steps:
       - name: Install apps runtime for latest branch build
@@ -90,7 +102,7 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest
+          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
 
       - name: Run manual e2e tests from installed apps runtime
         shell: bash
@@ -101,5 +113,4 @@ jobs:
           /usr/bin/fix_devkit_runtime.sh
           cd neat-apps/neat-apps-runtime
           source "${PYNEAT_ACTIVATE}"
-          source tests/scripts/testing/setup_test_env.sh
-          ./tests/test.sh --e2e
+          ./tests/test.sh --e2e --strict

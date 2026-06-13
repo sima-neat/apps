@@ -1,0 +1,20 @@
+model:
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+
+io:
+  input_dir: assets/test_images
+  output_dir: sandbox/face-detector
+
+decode:
+  confidence_threshold: 0.40
+  nms_iou: 0.90
+  top_k: 5000
+  keep_top_k: 750
+  max_draw: 50
+  landmarks: true
+
+runtime:
+  timeout_ms: 20000
+  profile: false
+  num_runs: 100
+  verbose: false

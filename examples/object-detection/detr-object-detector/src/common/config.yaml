@@ -1,0 +1,17 @@
+model:
+  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+
+io:
+  input_dir: assets/test_images
+  output_dir: sandbox/detr-object-detector
+
+decode:
+  confidence_threshold: 0.70
+  max_draw: 50
+  person_only: false
+
+runtime:
+  timeout_ms: 20000
+  profile: false
+  num_runs: 100
+  verbose: false
