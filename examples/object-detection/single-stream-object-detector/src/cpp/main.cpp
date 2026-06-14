@@ -344,9 +344,11 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   detections_graph.add(
       simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
 
+  simaai::neat::GraphLinkOptions live_link_options;
+  live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, video_graph);
-  runtime.graph.connect(branch, model_graph);
+  runtime.graph.connect(branch, video_graph, live_link_options);
+  runtime.graph.connect(branch, model_graph, live_link_options);
   runtime.graph.connect(model_graph, detections_graph);
   if (save_debug_frames) {
     simaai::neat::Graph frames("debug_frame");

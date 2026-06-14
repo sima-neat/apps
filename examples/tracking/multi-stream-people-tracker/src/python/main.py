@@ -427,6 +427,8 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
     branch = pyneat.graphs.branch("source", outputs)
 
     graph = pyneat.Graph()
+    live_link_options = pyneat.GraphLinkOptions()
+    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)
     video_port = 0
     if cfg.video_enabled:
@@ -439,13 +441,13 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
 
         video_graph = pyneat.Graph("video")
         video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
-        graph.connect(branch, video_graph)
+        graph.connect(branch, video_graph, live_link_options)
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
     detections_graph = pyneat.Graph("detections")
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
-    graph.connect(branch, model_graph)
+    graph.connect(branch, model_graph, live_link_options)
     graph.connect(model_graph, detections_graph)
 
     if save_debug_frames:

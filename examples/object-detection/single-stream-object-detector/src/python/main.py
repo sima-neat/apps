@@ -409,9 +409,11 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
 
     graph = pyneat.Graph()
+    live_link_options = pyneat.GraphLinkOptions()
+    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)
-    graph.connect(branch, video_graph)
-    graph.connect(branch, model_graph)
+    graph.connect(branch, video_graph, live_link_options)
+    graph.connect(branch, model_graph, live_link_options)
     graph.connect(model_graph, detections_graph)
     if save_debug_frames:
         frames = pyneat.Graph("debug_frame")

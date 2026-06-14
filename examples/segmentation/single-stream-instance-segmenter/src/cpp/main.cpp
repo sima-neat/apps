@@ -558,9 +558,11 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   auto joined = simaai::neat::graphs::Combine({"frame", "segments"}, "segmentation_output",
                                               simaai::neat::CombinePolicy::ByFrame);
 
+  simaai::neat::GraphLinkOptions live_link_options;
+  live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, frame_graph);
-  runtime.graph.connect(branch, model_graph);
+  runtime.graph.connect(branch, frame_graph, live_link_options);
+  runtime.graph.connect(branch, model_graph, live_link_options);
   runtime.graph.connect(model_graph, segments_graph);
   runtime.graph.connect(frame_graph, joined);
   runtime.graph.connect(segments_graph, joined);
