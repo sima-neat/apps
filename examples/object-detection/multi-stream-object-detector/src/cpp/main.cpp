@@ -441,6 +441,8 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   }
   auto branch = simaai::neat::graphs::Branch("source", outputs);
 
+  simaai::neat::GraphLinkOptions live_link_options;
+  live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   runtime.graph.connect(source, branch);
   if (cfg.video_enabled) {
     auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
@@ -453,7 +455,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     simaai::neat::Graph video_graph("video");
     video_graph.connect(simaai::neat::nodes::Input("video"),
                         simaai::neat::nodes::groups::VideoSender(video_options));
-    runtime.graph.connect(branch, video_graph);
+    runtime.graph.connect(branch, video_graph, live_link_options);
   }
 
   simaai::neat::Graph model_graph("model");
@@ -461,7 +463,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   simaai::neat::Graph detections_graph("detections");
   detections_graph.add(
       simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
-  runtime.graph.connect(branch, model_graph);
+  runtime.graph.connect(branch, model_graph, live_link_options);
   runtime.graph.connect(model_graph, detections_graph);
 
   if (save_debug_frames) {
