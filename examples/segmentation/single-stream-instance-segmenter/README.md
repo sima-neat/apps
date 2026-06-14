@@ -90,6 +90,7 @@ After this setup, follow the example-specific commands below.
 - Masks are rendered into the video stream. Metadata contains object labels, confidences, and boxes.
 - `output.save_dir` and `output.save_every` can be used to save sampled annotated frames.
 - The model path uses model-managed preprocessing with `COCO_YOLO` normalization and `YoloV26Seg` decode.
+- Insight video is sent through `VideoSender`; the app passes raw frames plus stream geometry, and the nodegroup owns raw-frame caps, conversion, H.264 encoding, RTP packetization, and UDP output.
 
 ## Command-Line Options
 - `--config <path>`

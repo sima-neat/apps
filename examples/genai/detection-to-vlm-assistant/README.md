@@ -12,7 +12,7 @@
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
-This example decodes an RTSP stream, runs YOLO26 detection with internal box decode, and sends video plus object-detection metadata to Insight. When OpenAI is enabled, the highest-score detected person is cropped and sent to the configured OpenAI-compatible Gemma server from a bounded background worker, so the detection and Insight loop keeps running.
+This example decodes an RTSP stream, runs YOLO26 detection with internal box decode, and sends video plus object-detection metadata to Insight. Insight video uses `VideoSender`, which owns raw-frame caps, conversion, H.264 encoding, RTP packetization, and UDP output. When OpenAI is enabled, the highest-score detected person is cropped and sent to the configured OpenAI-compatible Gemma server from a bounded background worker, so the detection and Insight loop keeps running.
 
 ## Preview
 Detection metadata visualized in Insight:
