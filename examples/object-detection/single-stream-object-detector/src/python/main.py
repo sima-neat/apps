@@ -409,9 +409,21 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
 
     graph = pyneat.Graph()
+    live_link = None
+    if hasattr(pyneat, "GraphLinkOptions") and hasattr(pyneat, "GraphLinkPolicy"):
+        live_link = pyneat.GraphLinkOptions()
+        live_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+        live_link.queue_depth = 3
+
+    def connect_live_branch(target_graph) -> None:
+        if live_link is None:
+            graph.connect(branch, target_graph)
+        else:
+            graph.connect(branch, target_graph, live_link)
+
     graph.connect(source, branch)
-    graph.connect(branch, video_graph)
-    graph.connect(branch, model_graph)
+    connect_live_branch(video_graph)
+    connect_live_branch(model_graph)
     graph.connect(model_graph, detections_graph)
     if save_debug_frames:
         frames = pyneat.Graph("debug_frame")
@@ -419,7 +431,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         debug_join = pyneat.graphs.combine(
             ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
         )
-        graph.connect(branch, frames)
+        connect_live_branch(frames)
         graph.connect(frames, debug_join)
         graph.connect(detections_graph, debug_join)
     if cfg.profile:
@@ -561,13 +573,27 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
     processed = 0
+    consecutive_timeouts = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
         detection_sample = runtime.run.pull(output_name, 20000)
         pull_end = time_ms()
         if detection_sample is None:
-            print("[warn] timed out waiting for detections", file=sys.stderr)
+            consecutive_timeouts += 1
+            last_error_fn = getattr(runtime.run, "last_error", None)
+            last_error = last_error_fn() if callable(last_error_fn) else ""
+            if last_error:
+                raise RuntimeError(f"runtime stopped while waiting for detections: {last_error}")
+            running_fn = getattr(runtime.run, "running", None)
+            if callable(running_fn) and not running_fn():
+                print("[warn] detection output closed; stopping", file=sys.stderr)
+                break
+            print(
+                f"[warn] timed out waiting for detections ({consecutive_timeouts} consecutive)",
+                file=sys.stderr,
+            )
             continue
+        consecutive_timeouts = 0
 
         payload = extract_bbox_payload(detection_sample)
         boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
