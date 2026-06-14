@@ -22,7 +22,7 @@ Snippet from a pipeline run:
 Architecture:
 - one complete graph per RTSP stream
 - each stream branches decoded NV12 frames into video and model paths
-- clean Insight video is sent through `VideoSender`
+- clean Insight video is sent through `VideoSender`, which owns raw-frame caps, conversion, H.264 encoding, RTP packetization, and UDP output
 - YOLO26 detections are sent as metadata for Insight overlay
 - optional debug output joins decoded frames and detections by frame id before saving
 
@@ -136,6 +136,7 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-str
 ## Notes
 - Point `model.path` at a YOLO26 detection pack. This example does not use a `model.family` config key.
 - Both C++ and Python use the same public graph shape: `RtspDecodedInput`, `graphs::Branch`, `model.graph()`, `graphs::Combine` for debug saves, and `VideoSender`.
+- The app does not add lower-level video conversion, raw capsfilter, encoder, parser, packetizer, or UDP nodes around `VideoSender`.
 - The live path keeps video and metadata separate. Insight overlays metadata on the clean video stream.
 - `output.video_enabled: false` disables per-stream H.264 video output. Metadata still runs.
 

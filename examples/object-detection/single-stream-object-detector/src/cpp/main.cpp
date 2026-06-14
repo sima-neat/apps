@@ -283,6 +283,14 @@ make_source_options(const AppConfig& cfg, int& fps_out, int& width_out, int& hei
     opt.fallback_h264_fps = probe.fps;
     fps_out = probe.fps;
   }
+  if (width_out > 0 && height_out > 0 && fps_out > 0) {
+    opt.output_caps.enable = true;
+    opt.output_caps.format = "NV12";
+    opt.output_caps.width = width_out;
+    opt.output_caps.height = height_out;
+    opt.output_caps.fps = fps_out;
+    opt.output_caps.memory = simaai::neat::CapsMemory::Any;
+  }
   return opt;
 }
 
