@@ -41,14 +41,14 @@ For another supported model, replace `<default-model>` in the download command a
 The command stores models under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
-- Installed Neat Development Environment.
-- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
+- Installed Neat Development Environment + Neat Library.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 
 ## Get The Apps Repo
-Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Then clone and build the apps repo:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -56,7 +56,7 @@ cd apps
 ./build.sh --clean
 ```
 
-After this setup, follow the example-specific commands below.
+After building, run the example commands below on the Modalix/DevKit board.
 
 ## Configure
 Edit `examples/<category>/<name>/src/common/config.yaml`.

@@ -22,8 +22,16 @@ Detection metadata visualized in Insight:
 ## Insight Setup
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
+In the Neat Development Environment, install the sample video assets:
+
+```bash
+sima-cli install assets/multi-video-sources
+```
+
+This provides 720p and 480p videos that Insight can stream as RTSP sources.
+
 To create a reproducible RTSP input:
-1. Run `neat` in the Neat Developer Environment and open the reported `Insight Web UI`.
+1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
 2. In Insight, open `RTSP Source`.
 3. Use a sample video or upload your own video.
 4. Start the stream and copy the RTSP URL.
@@ -32,16 +40,16 @@ To create a reproducible RTSP input:
 Use the same `neat` output to set `insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
 
 ## Prerequisites
-- Installed Neat Development Environment.
-- Default YOLO26 detector model downloaded, or `model.path` set to another readable model package.
+- Installed Neat Development Environment + Neat Library.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 detector model, or set `model.path` to another readable model package.
 - RTSP source created in Insight or provided by your camera.
 - Insight receiver running at the configured host and ports.
 - OpenAI-compatible Gemma server running when `openai.enabled` is true.
 
 ## Get The Apps Repo
-Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Then clone and build the apps repo:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -49,7 +57,7 @@ cd apps
 ./build.sh --clean
 ```
 
-After this setup, follow the example-specific commands below.
+After building, run the example commands below on the Modalix/DevKit board.
 
 ## Download Models
 Use the SDK platform version wherever `<platform-version>` appears.

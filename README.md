@@ -1,58 +1,64 @@
 # SiMa Neat Apps
 
-![Standard Build & Archive](https://img.shields.io/badge/Standard%20Build%20%26%20Archive-TBA-lightgrey)
-![Fuzz Nightly](https://img.shields.io/badge/Fuzz%20Nightly-TBA-lightgrey)
-![Crash Correctness Nightly](https://img.shields.io/badge/Crash%20Correctness%20Nightly-TBA-lightgrey)
-![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.0-green)
+![Vulcan CI](https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg)
+![Apps Nightly E2E](https://github.com/sima-neat/apps/actions/workflows/nightly-e2e.yml/badge.svg)
+![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.2-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
-Neat Apps contains editable Neat applications and reference examples built around real workflows such as detection, segmentation, and streaming pipelines. The goal is to make the apps easy to run, easy to modify, and easy to learn from.
+SiMa Neat Apps is a source-first collection of editable applications and reference
+examples for real Modalix workflows: detection, segmentation, streaming,
+tracking, benchmarking, and GenAI.
 
-The core idea is simple: the Neat Library provides the C++ and Python runtime APIs, while `apps` shows how to use them in customer-facing examples where the important Neat Library API calls stay visible in the source.
+Use this repo when you want runnable examples that keep the important Neat
+Library C++ and Python API calls visible in the source. Use the Neat Library
+docs for the runtime API contract, and use this repo for working application
+patterns.
 
-This repo is intentionally separate from `core`:
-- `core` owns the Neat Library runtime and tooling
-- `apps` holds customer-facing applications and sample code
+`core` owns the Neat Library runtime and tooling. `apps` owns customer-facing
+examples and sample application code.
 
-## Customer Workflow (Early Release)
+## Start
 
-1. Install the Neat Library by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+Install the Neat Development Environment and Neat Library first:
 
-2. Clone this repo:
+- [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/install-the-environment)
+- [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/install-or-update)
+- [sima-cli](https://developer.sima.ai/software/tools/sima-cli/)
 
-   ```bash
-   git clone https://github.com/sima-neat/apps.git
-   cd apps
-   ```
+For Neat Development Environment 2.1.2:
 
-3. `sima-cli` is used by some examples and tools in this repo. Install it by following the official [sima-cli guide](https://developer.sima.ai/software/tools/sima-cli/).
+```bash
+sima-cli install ghcr:sima-neat/sdk:v2.1.2
+sima-cli sdk neat
+```
 
-4. For first-time setup, run:
+Clone and build this repo from the SDK shell:
 
-   ```bash
-   sudo apt update
-   sudo apt-get install -y nlohmann-json3-dev nodejs npm
-   ./build.sh --clean
-   ```
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
+```
 
-   This configures and builds the apps from the local checkout. Follow each example README for model downloads and run commands.
+Python examples use the PyNeat environment installed with the Neat Library:
 
-   **Note:** If the Neat Library was installed into the default `pyneat` virtual environment, activate it with `source ~/pyneat/bin/activate` to run Python examples.
+```bash
+source ~/pyneat/bin/activate
+```
 
-5. For broader Neat Library concepts and platform documentation, see:
-   https://developer.sima.ai/
+For the public examples index, use the
+[Neat Apps Portal](https://developer.sima.ai/examples). For broader application
+development docs, use [Develop Apps](https://developer.sima.ai/software/develop-apps/).
 
-This keeps examples editable and easy to customize.
+## Fetch One Example
 
-### Fetch A Single Example
-
-Users who only need one example can fetch it with the helper script:
+To fetch one example without cloning the full repo:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- <example>
 ```
 
-For example:
+Example:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
@@ -61,172 +67,84 @@ cd multimodal-assistant
 ./run.sh
 ```
 
-The helper fetches the apps archive and leaves only the requested example
-directory in the current working directory.
-
 ## Repo Layout
-
-- `examples/`: application examples organized by task/category. Each example owns its README, runtime config, source entrypoints, and tests.
-- `support/`: shared C++ helper code used by multiple examples.
-- `assets/`: user-managed runtime assets, including models under `assets/models/` and test media under `assets/test_images/`.
-- `tests/`: centralized test infrastructure, including the runner, environment setup, pytest config, and docs.
-- `deps/manifest.json`: Neat Library and platform-version dependency declaration
-
-## Example Structure
-
-Examples are organized under `examples/<category>/<example>`. Each example is source-first and meant to be readable from its entrypoints. Most runtime examples provide both C++ and Python entrypoints; Python-only examples document their supported scripts in their own README.
-
-### Common Layout
 
 | Path | Purpose |
 | --- | --- |
-| `examples/<category>/<example>/README.md` | Example-specific usage and setup instructions |
-| `examples/<category>/<example>/tests/test-scope.yaml` | Internal test selection and e2e model source metadata |
-| `examples/<category>/<example>/src/cpp/CMakeLists.txt` | C++ example build configuration, when the example has a C++ implementation |
-| `examples/<category>/<example>/src/cpp/main.cpp` | C++ entrypoint with visible Neat Library API flow, when present |
-| `examples/<category>/<example>/tests/cpp/test_unit.cpp` | C++ unit tests, when C++ unit coverage is enabled |
-| `examples/<category>/<example>/tests/cpp/test_e2e.cpp` | C++ end-to-end tests, when C++ e2e coverage is enabled |
-| `examples/<category>/<example>/src/python/main.py` | Python entrypoint with visible Neat Library API flow, when the example uses a single Python entrypoint |
-| `examples/<category>/<example>/src/python/requirements.txt` | Python example dependencies |
-| `examples/<category>/<example>/tests/python/test_unit.py` | Python unit tests, when Python unit coverage is enabled |
-| `examples/<category>/<example>/tests/python/test_e2e.py` | Python end-to-end tests, when Python e2e coverage is enabled |
-| `examples/<category>/<example>/src/common/` | Files shared by the example implementations |
+| `examples/` | Application examples organized by category |
+| `assets/` | Runtime assets, including models and test media |
+| `tests/` | Test runner, fixtures, and test documentation |
+| `deps/manifest.json` | Neat Library and platform dependency declaration |
+| `portal/` | Source for the examples portal |
 
-> **IMPORTANT:** Use this structure when reading, extending, or adding examples, and follow each example README for any example-specific entrypoints.
-> Follow the instructions inside each example `README.md`, or visit the [SiMa.ai Neat Apps Portal](<https://developer.sima.ai/examples>).
+## Examples
 
-### Contributor Guidelines
+Examples live under `examples/<category>/<example>/`.
 
-For the contributor workflow, example contract, and review checklist, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+The common shape is:
 
-## Build (`build.sh`)
+| Path | Purpose |
+| --- | --- |
+| `README.md` | Example-specific setup and run instructions |
+| `src/common/` | Shared config, labels, and assets |
+| `src/cpp/main.cpp` | C++ entrypoint, when present |
+| `src/python/main.py` | Python entrypoint, when present |
+| `tests/` | Example-specific unit and e2e tests |
 
-`build.sh` has three main modes:
+Start with the example README. It is the source for model downloads, runtime
+inputs, config edits, and run commands for that example.
 
-- build/configure the apps locally
-- install the Neat Library dependency only
-- run the full release/package flow with `--all`, which installs the Neat Library dependency, builds the apps, builds the portal, and packages `neat-apps-runtime`
+Contributor details live in [CONTRIBUTING.md](./CONTRIBUTING.md). The README
+template lives at [examples/TEMPLATE_README.md](./examples/TEMPLATE_README.md).
 
-It does not run tests.
+## Build
+
+`build.sh` builds the repo. It does not run tests.
 
 Common commands:
 
 ```bash
-# Full release/package flow
-./build.sh --all --clean
-
-# Build only (default)
-./build.sh
-
-# Clean build directory then build
-./build.sh --clean
-
-# Install Neat Library dependency, build apps, build portal, then package
-./build.sh --all
-
-# Install Neat Library dependency only, no build
-./build.sh --only-install-neat-core
-
-# Override deps/manifest.json for one run (branch-version)
-./build.sh --all --neat-core-version main-latest
-
-# Debug build
-./build.sh --debug
-
-# Build to a custom directory
-./build.sh --build-dir out/build
+./build.sh          # configure and build
+./build.sh --clean  # clean build directory first
 ```
 
-Main `build.sh` args:
-
-- `--all`: install Neat Library dependency, build apps, build portal, then package
-- `--only-install-neat-core`: install Neat Library dependency and exit
-- `--neat-core-version <branch-version>`: override `deps/manifest.json`
-- `--clean`: remove build dir before configure
-- `--debug` / `--release`: build type
-- `--build-dir <dir>`: build directory
-- `--no-cpp`: skip C++ example build (layout/metadata only)
-
-When `--all` is used, the script also:
-
-- builds `portal/` with `npm` for local testing
-- stages a distributable `neat-apps-runtime/` tree
-- writes a packaged `neat-core.json` into that staged runtime
-- creates `neat-apps-<branch>-<sha>.tar.gz` at the repo root
-
-If Neat is installed in a custom location and CMake cannot find it automatically, set `CMAKE_PREFIX_PATH`:
-
-```bash
-CMAKE_PREFIX_PATH=/path/to/neat/install ./build.sh
-```
-
-### Cross Compilation
-
-`build.sh` auto-selects `cmake/toolchains/aarch64-modalix.cmake` when cross
-environment variables are present (`SYSROOT`, `CROSS_COMPILE`, `CC`, `CXX`).
-Set `CMAKE_TOOLCHAIN_FILE` explicitly if you want to override that default.
-
-Typical usage:
-
-```bash
-./build.sh
-```
-
-## Test (`tests/test.sh` only)
-
-Testing is documented in [tests/README.md](./tests/README.md).
-
-Summary:
-
-- `build.sh` does not run tests.
-- `tests/test.sh` is test-only.
-- For RTSP e2e tests, make sure RTSP stream source(s) are running before invoking `tests/test.sh`.
+Compile C++ examples in the Neat Development Environment. Run Neat runtime and
+e2e checks on SiMa hardware such as Modalix or DevKit.
 
 ## RTSP Streams
 
-If you want a quick RTSP source for testing, [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources) on the host is one option:
+For quick RTSP sources, use
+[`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources):
 
 ```bash
 sima-cli install gh:sima-ai/tool-mediasources
 ./mediasrc.sh <video-dir>
 ```
 
-If you use [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources), you can check the streams with:
-
-```bash
-open preview.html
-```
-
-If you use host-streamed sources from a board/devkit, use the host IP in the RTSP URL instead of `127.0.0.1`. Any other RTSP source also works.
+If a board or DevKit consumes host-streamed RTSP sources, use the host IP in the
+RTSP URL instead of `127.0.0.1`.
 
 ## Neat Library Dependency
 
-`deps/manifest.json` declares the Neat Library dependency and the platform version.
-The normal value is `"neat-core": {"policy": "snap"}`. Snap resolves from the
-dependency branch: `main` uses `main-latest`, `develop` uses `develop-latest`,
-and custom branches use a matching core branch when available or fall back to
-`develop-latest`. Explicit manifest pins can use `{"branch": "...", "spec": "..."}`
-or `{"ref": "...", "spec": "..."}`. Legacy string pins and the
-`--neat-core-version <branch-version>` override remain supported.
+`deps/manifest.json` declares the Neat Library dependency and platform version.
+
+The normal branch value is:
+
+```json
+{
+  "neat-core": {
+    "policy": "snap"
+  }
+}
+```
+
+`snap` resolves from the dependency branch: `main` uses `main-latest`, `develop`
+uses `develop-latest`, and custom branches use a matching core branch when one
+exists or fall back to `develop-latest`.
 
 ## Support
 
-Use the GitHub issue templates on the repo's `New issue` page and keep reports detailed.
+Use GitHub issues for bug reports and feature requests. Include the exact
+example, command, inputs, environment, and logs needed to reproduce the issue.
 
-For bug reports, include:
-
-- a clear explanation of the bug
-- the exact example, script, or command that was run
-- steps to reproduce
-- expected behavior and actual behavior
-- the full error message, traceback, or relevant logs
-- environment details such as platform, OS, Neat Development Environment version, and input assets
-
-For feature requests, include:
-
-- exactly what needs to be added, removed, or changed
-- why the change is necessary
-- the examples, docs, scripts, or workflows that should change
-- the expected outcome or acceptance criteria
-
-If you are blocked or need help triaging an issue, contact us at `support@sima.ai`.
+For direct help, contact `support@sima.ai`.
