@@ -22,6 +22,14 @@ Detection metadata visualized in Insight:
 ## Insight Setup
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
+In the Neat Development Environment, install the sample video assets:
+
+```bash
+sima-cli install assets/multi-video-sources
+```
+
+This provides 720p and 480p videos that Insight can stream as RTSP sources.
+
 To create a reproducible RTSP input:
 1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
 2. In Insight, open `RTSP Source`.
