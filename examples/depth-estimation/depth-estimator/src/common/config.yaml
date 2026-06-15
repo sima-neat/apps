@@ -2,8 +2,8 @@ model:                       # Depth model selection.
   path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
 io:                          # Input and output paths.
-  input_dir: assets/test_images       # Folder containing input images.
-  output_dir: sandbox/depth-estimator # Folder for depth visualizations.
+  input_dir: <input-dir>                    # Folder containing input images.
+  output_dir: <output-dir>                  # Folder for depth visualizations.
 
 runtime:                     # Runtime settings.
   infer_size: 518            # Square model input size.

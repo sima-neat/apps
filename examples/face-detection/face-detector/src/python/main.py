@@ -48,6 +48,14 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
 
+def required_config_path(section: dict, key: str, dotted_key: str) -> Path:
+    value = section.get(key)
+    value_text = "" if value is None else str(value).strip()
+    if not value_text or (value_text.startswith("<") and value_text.endswith(">")):
+        raise ValueError(f"{dotted_key} must be set in config")
+    return Path(value_text)
+
+
 class PreprocMeta(NamedTuple):
     orig_h: int
     orig_w: int
@@ -478,8 +486,12 @@ def main() -> int:
     runtime_cfg = raw.get("runtime", {})
 
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
-    output_dir = Path(io_cfg.get("output_dir", "sandbox/face-detector"))
+    try:
+        input_dir = required_config_path(io_cfg, "input_dir", "io.input_dir")
+        output_dir = required_config_path(io_cfg, "output_dir", "io.output_dir")
+    except ValueError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
     confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.4))
     nms_threshold = float(decode_cfg.get("nms_iou", 0.9))
     top_k = int(decode_cfg.get("top_k", 5000))

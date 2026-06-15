@@ -46,14 +46,22 @@ struct Config {
   int num_runs = 1;
 };
 
+std::string required_config_string(const sima_examples::ScalarConfig& raw, const std::string& key) {
+  const auto value = raw.string_value(key);
+  if (!value.has_value() || value->empty() || (value->front() == '<' && value->back() == '>')) {
+    throw std::runtime_error(key + " must be set in config");
+  }
+  return *value;
+}
+
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
   cfg.model_path = raw.string_or("model.path", "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz");
   cfg.labels_path = raw.string_or(
       "model.labels", "examples/object-detection/yolo26-object-detector/src/common/coco_label.txt");
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
-  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/yolo26-object-detector");
+  cfg.input_dir = required_config_string(raw, "io.input_dir");
+  cfg.output_dir = required_config_string(raw, "io.output_dir");
   cfg.min_score = static_cast<float>(raw.double_or("decode.score_threshold", kDefaultMinScore));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", kDefaultNmsIou));
   cfg.max_detections = raw.int_or("decode.max_detections", kMaxDet);

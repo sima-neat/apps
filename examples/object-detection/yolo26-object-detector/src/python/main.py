@@ -87,6 +87,14 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(handle) or {}
 
 
+def required_config_path(section: dict, key: str, dotted_key: str) -> Path:
+    value = section.get(key)
+    value_text = "" if value is None else str(value).strip()
+    if not value_text or (value_text.startswith("<") and value_text.endswith(">")):
+        raise ValueError(f"{dotted_key} must be set in config")
+    return Path(value_text)
+
+
 def clear_output_images(output_dir: Path, input_dir: Path) -> int:
     if output_dir.resolve() == input_dir.resolve():
         print(
@@ -127,8 +135,12 @@ def main() -> int:
             "examples/object-detection/yolo26-object-detector/src/common/coco_label.txt",
         )
     )
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
-    output_dir = Path(io_cfg.get("output_dir", "sandbox/yolo26-object-detector"))
+    try:
+        input_dir = required_config_path(io_cfg, "input_dir", "io.input_dir")
+        output_dir = required_config_path(io_cfg, "output_dir", "io.output_dir")
+    except ValueError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 2
     min_score = float(decode_cfg.get("score_threshold", MIN_SCORE))
     nms_iou = float(decode_cfg.get("nms_iou", NMS_IOU))
     max_detections = int(decode_cfg.get("max_detections", MAX_DET))

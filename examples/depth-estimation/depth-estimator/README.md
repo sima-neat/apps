@@ -60,8 +60,8 @@ model:
   path: <model-path>                         # Path to the model package.
 
 io:
-  input_dir: assets/test_images                         # Folder containing input images.
-  output_dir: sandbox/depth-estimator                   # Folder for depth visualizations.
+  input_dir: <input-dir>                    # Folder containing input images.
+  output_dir: <output-dir>                  # Folder for depth visualizations.
 ```
 
 ## Run

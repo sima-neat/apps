@@ -150,13 +150,21 @@ std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
   return images;
 }
 
+std::string required_config_string(const sima_examples::ScalarConfig& raw, const std::string& key) {
+  const auto value = raw.string_value(key);
+  if (!value.has_value() || value->empty() || (value->front() == '<' && value->back() == '>')) {
+    throw std::runtime_error(key + " must be set in config");
+  }
+  return *value;
+}
+
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
   cfg.model = raw.string_or(
       "model.path", "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz");
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
-  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/detr-object-detector");
+  cfg.input_dir = required_config_string(raw, "io.input_dir");
+  cfg.output_dir = required_config_string(raw, "io.output_dir");
   cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.5));
   cfg.max_draw = raw.int_or("decode.max_draw", 50);
   cfg.person_only = raw.bool_or("decode.person_only", false);

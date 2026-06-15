@@ -62,8 +62,8 @@ model:
   path: <model-path>                                  # Path to the model package.
 
 io:
-  input_dir: assets/test_images                                                # Folder containing input images.
-  output_dir: sandbox/detr-object-detector                                     # Folder for annotated images.
+  input_dir: <input-dir>                    # Folder containing input images.
+  output_dir: <output-dir>                  # Folder for annotated images.
 
 decode:
   confidence_threshold: 0.70                                                   # Minimum object confidence.
