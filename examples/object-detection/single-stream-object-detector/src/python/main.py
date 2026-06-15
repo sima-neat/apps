@@ -413,7 +413,10 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)
     graph.connect(branch, video_graph, live_link_options)
-    graph.connect(branch, model_graph, live_link_options)
+    if save_debug_frames:
+        graph.connect(branch, model_graph)
+    else:
+        graph.connect(branch, model_graph, live_link_options)
     graph.connect(model_graph, detections_graph)
     if save_debug_frames:
         frames = pyneat.Graph("debug_frame")
@@ -421,7 +424,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         debug_join = pyneat.graphs.combine(
             ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
         )
-        graph.connect(branch, frames, live_link_options)
+        graph.connect(branch, frames)
         graph.connect(frames, debug_join)
         graph.connect(detections_graph, debug_join)
     if cfg.profile:

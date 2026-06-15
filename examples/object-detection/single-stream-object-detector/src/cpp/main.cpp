@@ -348,7 +348,11 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   runtime.graph.connect(source, branch);
   runtime.graph.connect(branch, video_graph, live_link_options);
-  runtime.graph.connect(branch, model_graph, live_link_options);
+  if (save_debug_frames) {
+    runtime.graph.connect(branch, model_graph);
+  } else {
+    runtime.graph.connect(branch, model_graph, live_link_options);
+  }
   runtime.graph.connect(model_graph, detections_graph);
   if (save_debug_frames) {
     simaai::neat::Graph frames("debug_frame");
@@ -356,7 +360,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
         simaai::neat::nodes::Output("debug_frame", simaai::neat::OutputOptions::EveryFrame(4)));
     auto debug_join = simaai::neat::graphs::Combine({"debug_frame", "detections"}, "debug_output",
                                                     simaai::neat::CombinePolicy::ByPts);
-    runtime.graph.connect(branch, frames, live_link_options);
+    runtime.graph.connect(branch, frames);
     runtime.graph.connect(frames, debug_join);
     runtime.graph.connect(detections_graph, debug_join);
   }
