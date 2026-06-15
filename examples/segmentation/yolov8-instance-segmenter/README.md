@@ -42,9 +42,9 @@ The command stores the model under `assets/models/` as a repo-local convention. 
 - Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
-Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) for setup and compilation. Install the Neat Library first by following the [Neat Library guide](https://developer.sima.ai/software/getting-started/neat-library/).
 
-Then clone and build the apps repo:
+Clone and build the apps repo in the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -52,7 +52,7 @@ cd apps
 ./build.sh --clean
 ```
 
-After this setup, follow the example-specific commands below.
+After building, run the example commands below on the Modalix/DevKit board.
 
 ## Configure
 Edit `examples/segmentation/yolov8-instance-segmenter/src/common/config.yaml`.
