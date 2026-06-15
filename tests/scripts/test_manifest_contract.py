@@ -178,6 +178,7 @@ def _run_build(
                 [
                     "develop=devsha1",
                     "main=mainsha1",
+                    "feature%2Fcore-artifact=featsha2",
                     "zz-core-artifact-for-test=featsha1",
                     "scratch-core-for-test=scratchsha1",
                 ]
@@ -185,6 +186,7 @@ def _run_build(
             "NEAT_APPS_TEST_METADATA": "\n".join(
                 [
                     "main:mainsha1",
+                    "feature%2Fcore-artifact:pinnedsha2",
                     "zz-core-artifact-for-test:pinnedsha1",
                 ]
             ),
@@ -364,6 +366,35 @@ def test_dependency_object_manifest_uses_valid_artifact(tmp_path, ref_key):
         "https://core.test/zz-core-artifact-for-test/pinnedsha1/metadata.json"
         in _curl_log(tmp_path)
     )
+
+
+def test_dependency_object_manifest_url_encodes_slash_branch_for_artifact(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"branch": "feature/core-artifact", "spec": "pinnedsha2"},
+        args=["--only-install-neat-core"],
+        env=_installer_env(tmp_path),
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum feature/core-artifact pinnedsha2"
+    assert (
+        "https://core.test/feature%2Fcore-artifact/pinnedsha2/metadata.json"
+        in _curl_log(tmp_path)
+    )
+
+
+def test_dependency_object_manifest_url_encodes_slash_branch_for_latest(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        neat_core={"branch": "feature/core-artifact"},
+        args=["--only-install-neat-core"],
+        env=_installer_env(tmp_path),
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum feature/core-artifact featsha2"
+    assert "https://core.test/feature%2Fcore-artifact/latest.tag" in _curl_log(tmp_path)
 
 
 def test_explicit_manifest_fails_when_artifact_is_invalid(tmp_path):
