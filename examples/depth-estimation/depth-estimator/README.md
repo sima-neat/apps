@@ -20,7 +20,7 @@ Snippet from a pipeline run:
 ![Depth estimator preview](../../../assets/portal/depth-estimation/depth-estimator/image.png)
 
 ## Supported Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Primary model: `depth_anything_v2_vits`
 
@@ -29,7 +29,7 @@ Download the model:
 ```bash
 mkdir -p assets/models
 cd assets/models
-sima-cli modelzoo -v 2.1.2 get depth_anything_v2_vits
+sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits
 cd ../..
 ```
 

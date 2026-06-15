@@ -20,7 +20,7 @@ Snippet from a pipeline run:
 ![Instance segmenter preview](../../../assets/portal/segmentation/yolov8-instance-segmenter/image.jpg)
 
 ## Supported Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Default model: `yolo_v8n_seg`.
 
@@ -30,7 +30,7 @@ Download the default model:
 mkdir -p assets/models
 cd assets/models
 
-sima-cli modelzoo -v 2.1.2 get yolo_v8n_seg
+sima-cli modelzoo -v <platform-version> get yolo_v8n_seg
 
 cd ../..
 ```

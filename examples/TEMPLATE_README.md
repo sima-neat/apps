@@ -22,7 +22,7 @@ Optional. If you have a demo screenshot for the portal detail page, place it her
 ```
 
 ## Supported Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Default model: `<default-model>`.
 
@@ -32,7 +32,7 @@ Download the default model:
 mkdir -p assets/models
 cd assets/models
 
-sima-cli modelzoo -v 2.1.2 get <default-model>
+sima-cli modelzoo -v <platform-version> get <default-model>
 
 cd ../..
 ```

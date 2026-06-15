@@ -52,7 +52,7 @@ cd apps
 After this setup, follow the example-specific commands below.
 
 ## Download Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 The default model is `yolo26m-det-int8-b1.tar.gz`.
 
@@ -62,7 +62,7 @@ Download the default model:
 mkdir -p assets/models
 cd assets/models
 
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
 
 cd ../..
 ```

@@ -20,7 +20,7 @@ Snippet from a pipeline run:
 ![YOLO26 object detector preview](../../../assets/portal/object-detection/yolo26-object-detector/image.png)
 
 ## Supported Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
 
@@ -30,7 +30,7 @@ Download the default model:
 mkdir -p assets/models
 cd assets/models
 
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 
 cd ../..
 ```

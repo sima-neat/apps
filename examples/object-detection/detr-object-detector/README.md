@@ -22,7 +22,7 @@ Snippet from a pipeline run:
 ![DETR object detector preview](../../../assets/portal/object-detection/detr-object-detector/image.png)
 
 ## Supported Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Validated with: `detr_resnet50_modified_class_embed_bbox_embed`
 
@@ -31,7 +31,7 @@ Download the validated model:
 ```bash
 mkdir -p assets/models
 cd assets/models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
 cd ../..
 ```
 

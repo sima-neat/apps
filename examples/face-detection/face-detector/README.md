@@ -29,7 +29,7 @@ Snippet from a pipeline run:
 ![Face detector preview](../../../assets/portal/face-detection/face-detector/image.png)
 
 ## Supported Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Validated with: `retinaface_mobilenet25`
 
@@ -38,7 +38,7 @@ Download the validated model:
 ```bash
 mkdir -p assets/models
 cd assets/models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
 cd ../..
 ```
 

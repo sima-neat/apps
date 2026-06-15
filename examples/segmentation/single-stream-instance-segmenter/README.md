@@ -41,7 +41,7 @@ To create a reproducible RTSP input:
 Use the same `neat` output to set `output.insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
 
 ## Supported Models
-This README is written for SDK `2.1.2`.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Default model: `yolo26m-seg-bf16-b1.tar.gz`.
 
@@ -51,7 +51,7 @@ Download the default model:
 mkdir -p assets/models/YOLO26-SEGMENTATION
 cd assets/models/YOLO26-SEGMENTATION
 
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz
 
 cd ../../..
 ```
