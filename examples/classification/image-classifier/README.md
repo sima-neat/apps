@@ -20,7 +20,7 @@ The pipeline is trying to classify this goldfish image.
 ![Image classifier goldfish input](../../../assets/portal/classification/image-classifier/image.jpeg)
 
 ## Supported Models
-Use the platform version wherever `<platform-version>` appears.
+This README is written for SDK `2.1.2`.
 
 Primary model: `resnet_50`
 
@@ -29,7 +29,7 @@ Download the model:
 ```bash
 mkdir -p assets/models
 cd assets/models
-sima-cli modelzoo -v <platform-version> get resnet_50
+sima-cli modelzoo -v 2.1.2 get resnet_50
 cd ../..
 ```
 

@@ -22,25 +22,22 @@ Optional. If you have a demo screenshot for the portal detail page, place it her
 ```
 
 ## Supported Models
-Use the platform version wherever `<platform-version>` appears.
+This README is written for SDK `2.1.2`.
 
-Also works with: `<model_variant_1>`, `<model_variant_2>`
+Default model: `<default-model>`.
 
-Download one model:
+Download the default model:
 
 ```bash
 mkdir -p assets/models
 cd assets/models
 
-PLATFORM_VERSION="<platform-version>"
-MODEL=<modelzoo-name>
-
-sima-cli modelzoo -v "${PLATFORM_VERSION}" get "${MODEL}"
+sima-cli modelzoo -v 2.1.2 get <default-model>
 
 cd ../..
 ```
 
-Set `PLATFORM_VERSION` to your installed SDK platform version, and replace `MODEL` with a supported modelzoo name.
+For another supported model, replace `<default-model>` in the download command and config path.
 
 ## Prerequisites
 - Installed Neat Development Environment.
@@ -91,6 +88,9 @@ python3 examples/<category>/<name>/src/python/main.py \
 - Confirm the model file exists under `assets/models/`.
 - Confirm input paths exist and are readable.
 - Confirm output directories are writable.
+
+## Appendix: Additional Models
+This example can also run with `<model_variant_1>` or `<model_variant_2>`. Replace the default model name in the download command and config path.
 
 ## Source Files
 - Test scope: `tests/test-scope.yaml`

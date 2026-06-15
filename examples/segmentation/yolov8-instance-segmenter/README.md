@@ -20,25 +20,20 @@ Snippet from a pipeline run:
 ![Instance segmenter preview](../../../assets/portal/segmentation/yolov8-instance-segmenter/image.jpg)
 
 ## Supported Models
-Use the platform version wherever `<platform-version>` appears.
+This README is written for SDK `2.1.2`.
 
-Also works with: `yolo_v8s_seg`, `yolo_v8m_seg`, `yolo_v8l_seg`
+Default model: `yolo_v8n_seg`.
 
-Download one model:
+Download the default model:
 
 ```bash
 mkdir -p assets/models
 cd assets/models
 
-PLATFORM_VERSION="<platform-version>"
-MODEL=yolo_v8n_seg
-
-sima-cli modelzoo -v "${PLATFORM_VERSION}" get "${MODEL}"
+sima-cli modelzoo -v 2.1.2 get yolo_v8n_seg
 
 cd ../..
 ```
-
-Set `PLATFORM_VERSION` to your installed SDK platform version, and replace `MODEL` with a supported modelzoo name.
 
 ## Prerequisites
 - Installed Neat Development Environment.
@@ -91,6 +86,10 @@ python3 examples/segmentation/yolov8-instance-segmenter/src/python/main.py \
 - If startup fails, verify model file path and filename.
 - If output is empty, check `decode.score_threshold` and `runtime.infer_size`.
 - Ensure output directory is writable.
+
+## Appendix: Additional Models
+This example also works with `yolo_v8s_seg`, `yolo_v8m_seg`, and `yolo_v8l_seg`.
+Replace `yolo_v8n_seg` in the download command and update `model.path`.
 
 ## Source Files
 - C++ source: `src/cpp/main.cpp`

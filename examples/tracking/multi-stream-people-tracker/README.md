@@ -22,47 +22,35 @@ Preview image from a live run:
 ## Insight Setup
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host RTSP streams, receive video from `VideoSender`, receive tracking metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
-Run `neat` in the Neat Developer Environment and copy these values into your config:
+To create reproducible RTSP inputs:
+1. Run `neat` in the Neat Developer Environment and open the reported `Insight Web UI`.
+2. In Insight, open `RTSP Source`.
+3. Use sample videos or upload your own videos.
+4. Start each stream and copy the RTSP URLs.
+5. Put those RTSP URLs into `streams`.
 
-- `Insight Web UI`: browser URL for the viewer
-- `rtsp.tcp`: RTSP source port
-- `videoUDP`: UDP video port range
-- `metadataUDP`: UDP metadata port range
+Use the same `neat` output to set `output.insight.host`, `video_port_base`, and `metadata_port_base` from the reported `videoUDP` and `metadataUDP` ranges.
 
 ## Supported Models
-Use the platform version wherever `<platform-version>` appears.
+This README is written for SDK `2.1.2`.
 
 Default model: `yolo26m-det-int8-b1.tar.gz`.
 
-Supported batch-1 YOLO26 detection models:
-- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-b1.tar.gz`
-- `yolo26m-det-int8-b1.tar.gz`
-
-Download a supported model:
+Download the default model:
 
 ```bash
 mkdir -p assets/models
 cd assets/models
 
-PLATFORM_VERSION="<platform-version>"
-MODEL=yolo26m-det-int8-b1.tar.gz
-
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-detection/${MODEL}"
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
 
 cd ../..
 ```
 
-Set `PLATFORM_VERSION` to your installed SDK platform version, and replace `MODEL` with any supported model listed above.
-
 ## Prerequisites
 - A Neat Python environment with `pyneat`, `numpy`, and OpenCV available.
-- One or more reachable RTSP camera URLs.
-- A YOLO26 detector model pack downloaded into `assets/models/`.
+- RTSP sources created in Insight or provided by your cameras.
+- Default YOLO26 detector model pack downloaded into `assets/models/`.
 - An Insight viewer instance reachable from the board/host running this example.
 
 ## Get The Apps Repo
@@ -86,8 +74,8 @@ model:
   path: assets/models/yolo26m-det-int8-b1.tar.gz       # Model package to load.
 
 streams:
-  - rtsp://<insight-host-ip>:<rtsp.tcp>/<stream-1>     # First RTSP stream.
-  - rtsp://<insight-host-ip>:<rtsp.tcp>/<stream-2>     # Second RTSP stream.
+  - <first-rtsp-url-copied-from-insight>               # First RTSP stream.
+  - <second-rtsp-url-copied-from-insight>              # Second RTSP stream.
 
 inference:
   frames: 0                                            # Frame limit per stream. 0 runs continuously.
@@ -124,6 +112,17 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
 - Confirm each RTSP URL is reachable from the board or host running the example.
 - If Insight appears idle, verify `output.insight.host`, `video_port_base`, and `metadata_port_base`.
 - If you want saved overlay frames, set both `output.debug_dir` and `output.save_every`.
+
+## Appendix: Additional Models
+Other supported batch-1 YOLO26 detection models:
+- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-b1.tar.gz`
+
+Replace the default filename in the download command and `model.path`.
 
 ## Source Files
 - C++ source: `src/cpp/main.cpp`
