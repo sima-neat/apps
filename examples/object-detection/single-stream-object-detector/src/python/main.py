@@ -609,6 +609,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             runtime.run.close()
         return 0
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1

@@ -663,8 +663,9 @@ void run_app(const AppConfig& cfg) {
   }
 
   std::signal(SIGINT, previous_sigint);
-  if (first_error)
+  if (first_error) {
     std::rethrow_exception(first_error);
+  }
 }
 
 } // namespace

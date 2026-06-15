@@ -531,11 +531,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     )
 
     graph = pyneat.Graph()
-    live_link_options = pyneat.GraphLinkOptions()
-    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)
-    graph.connect(branch, frame_graph, live_link_options)
-    graph.connect(branch, model_graph, live_link_options)
+    graph.connect(branch, frame_graph)
+    graph.connect(branch, model_graph)
     graph.connect(model_graph, segments_graph)
     graph.connect(frame_graph, joined)
     graph.connect(segments_graph, joined)
@@ -805,6 +803,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             runtime.video_run.close()
             runtime.run.close()
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1
