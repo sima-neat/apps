@@ -1,20 +1,20 @@
-model:
-  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+model:                       # Detector model selection.
+  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
   labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
-io:
-  input_dir: assets/test_images
-  output_dir: sandbox/yolo26-object-detector
+io:                          # Input and output paths.
+  input_dir: assets/test_images                 # Folder containing input images.
+  output_dir: sandbox/yolo26-object-detector    # Folder for annotated images.
 
-decode:
-  score_threshold: 0.40
-  nms_iou: 0.60
-  max_detections: 50
+decode:                      # YOLO decode settings.
+  score_threshold: 0.40      # Minimum object confidence.
+  nms_iou: 0.60              # Overlap threshold for NMS.
+  max_detections: 50         # Max detections to keep per image.
 
-runtime:
-  timeout_ms: 20000
-  num_runs: 1
-  profile: false
+runtime:                     # Runtime settings.
+  timeout_ms: 20000          # Inference timeout in milliseconds.
+  num_runs: 1                # Number of repeated runs.
+  profile: false             # Print profiling summaries.
 
-output:
-  overlay: true
+output:                      # Output rendering settings.
+  overlay: true              # Draw boxes and labels on output images.

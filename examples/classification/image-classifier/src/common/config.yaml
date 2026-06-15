@@ -1,15 +1,15 @@
-model:
-  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+model:                       # Classifier model selection.
+  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
-io:
-  image: null
+io:                          # Input image settings.
+  image: null                # Optional local image path. null uses fallback_image_url.
   fallback_image_url: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n01443537_goldfish.JPEG
 
-runtime:
-  input_width: 224
-  input_height: 224
-  timeout_ms: 20000
+runtime:                     # Runtime settings.
+  input_width: 224           # Model input width.
+  input_height: 224          # Model input height.
+  timeout_ms: 20000          # Inference timeout in milliseconds.
 
-validation:
-  expected_class_id: 1
-  min_probability: 0.20
+validation:                  # Expected result check.
+  expected_class_id: 1       # Expected ImageNet class id.
+  min_probability: 0.20      # Minimum expected-class probability.

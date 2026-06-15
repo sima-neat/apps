@@ -1,20 +1,20 @@
-model:
-  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+model:                       # Face detector model selection.
+  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
-io:
-  input_dir: assets/test_images
-  output_dir: sandbox/face-detector
+io:                          # Input and output paths.
+  input_dir: assets/test_images      # Folder containing input images.
+  output_dir: sandbox/face-detector  # Folder for annotated images.
 
-decode:
-  confidence_threshold: 0.40
-  nms_iou: 0.90
-  top_k: 5000
-  keep_top_k: 750
-  max_draw: 50
-  landmarks: true
+decode:                      # RetinaFace decode settings.
+  confidence_threshold: 0.40 # Minimum face confidence.
+  nms_iou: 0.90              # Overlap threshold for NMS.
+  top_k: 5000                # Candidate boxes before NMS.
+  keep_top_k: 750            # Candidate boxes after NMS.
+  max_draw: 50               # Max faces to draw per image.
+  landmarks: true            # Draw five facial landmarks.
 
-runtime:
-  timeout_ms: 20000
-  profile: false
-  num_runs: 100
-  verbose: false
+runtime:                     # Runtime settings.
+  timeout_ms: 20000          # Inference timeout in milliseconds.
+  profile: false             # Print profiling summaries.
+  num_runs: 100              # Number of repeated runs for profiling.
+  verbose: false             # Print verbose runtime output.

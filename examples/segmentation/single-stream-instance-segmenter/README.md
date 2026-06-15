@@ -28,43 +28,40 @@ Snippet from a pipeline run:
 
 ![Single stream instance segmenter preview](../../../assets/portal/segmentation/single-stream-instance-segmenter/image.png)
 
+## Insight Setup
+[Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive segmentation metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
+
+To create a reproducible RTSP input:
+1. Run `neat` in the Neat Developer Environment and open the reported `Insight Web UI`.
+2. In Insight, open `RTSP Source`.
+3. Use a sample video or upload your own video.
+4. Start the stream and copy the RTSP URL.
+5. Put that RTSP URL into `source.rtsp_url`.
+
+Use the same `neat` output to set `output.insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
+
 ## Supported Models
-Use the platform version wherever `<platform-version>` appears.
+Use the SDK platform version wherever `<platform-version>` appears.
 
-Supported YOLO26 segmentation models:
+Default model: `yolo26m-seg-bf16-b1.tar.gz`.
 
-- `yolo26n-seg-bf16-mla_tess.tar.gz`
-- `yolo26s-seg-bf16-mla_tess.tar.gz`
-- `yolo26m-seg-bf16-mla_tess.tar.gz`
-- `yolo26l-seg-bf16-mla_tess.tar.gz`
-- `yolo26x-seg-bf16-mla_tess.tar.gz`
-- `yolo26m-seg-bf16-b1.tar.gz`
-- `yolo26m-seg-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-seg-int8-b1.tar.gz`
-
-Download the supported variants:
+Download the default model:
 
 ```bash
-PLATFORM_VERSION=<platform-version>
 mkdir -p assets/models/YOLO26-SEGMENTATION
 cd assets/models/YOLO26-SEGMENTATION
 
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26s-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26l-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26x-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz"
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz
 
 cd ../../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - Installed Neat Library and Insight on the DevKit.
-- RTSP camera source, or an Insight/tool-mediasources RTSP stream.
-- A YOLO26 segmentation model package downloaded locally.
+- RTSP source created in Insight or provided by your camera.
+- Default YOLO26 segmentation model downloaded, or `model.path` set to another readable model package.
 - `model.path`, `model.labels`, `source.rtsp_url`, and `output.insight.host` set in `src/common/config.yaml`.
 
 ## Get The Apps Repo
@@ -80,46 +77,26 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- C++ and Python read runtime values from `src/common/config.yaml`.
-- `model.path` must point to a valid YOLO26 segmentation model package.
-- `model.labels` points to the COCO labels file used for overlays and metadata.
-- `source.rtsp_url` must point to a live RTSP stream.
-- `output.insight.host` must point to the host running the Insight receiver/viewer.
-- If `inference.frames` is zero, the sample runs continuously.
-- Masks are rendered into the video stream. Metadata contains object labels, confidences, and boxes.
-- `output.save_dir` and `output.save_every` can be used to save sampled annotated frames.
-- The model path uses model-managed preprocessing with `COCO_YOLO` normalization and `YoloV26Seg` decode.
-- Insight video is sent through `VideoSender`; the app passes raw frames plus stream geometry, and the nodegroup owns raw-frame caps, conversion, H.264 encoding, RTP packetization, and UDP output.
+## Configure
+Edit `examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml`.
 
-## Command-Line Options
-- `--config <path>`
-  Optional. YAML config path. Defaults to `src/common/config.yaml`.
-- `--validate-config-only`
-  Validate YAML config and exit without opening the RTSP stream.
+```yaml
+model:
+  path: <model-path>                                                # Path to the model package.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
+source:
+  rtsp_url: <rtsp-url-copied-from-insight>                          # RTSP stream URL.
+  tcp: true                                                          # Use TCP transport for RTSP.
 
-Binary output:
-```bash
-./build/examples/segmentation/single-stream-instance-segmenter/single-stream-instance-segmenter
-```
+inference:
+  frames: 0                                                          # Frame limit. 0 runs continuously.
+  min_score: 0.55                                                    # Minimum instance confidence.
 
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/segmentation/single-stream-instance-segmenter
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/single-stream-instance-segmenter
+output:
+  insight:
+    host: <insight-host-ip>                                          # Host running Insight.
+    video_port: <videoUDP start port from neat>                      # UDP video port.
+    metadata_port: <metadataUDP start port from neat>                # UDP metadata port.
 ```
 
 ## Run
@@ -137,45 +114,23 @@ python3 examples/segmentation/single-stream-instance-segmenter/src/python/main.p
   --config examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml
 ```
 
-Example config:
-
-```yaml
-model:
-  path: assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
-  labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
-
-source:
-  rtsp_url: rtsp://<host>:8554/<stream>
-  tcp: true
-  latency_ms: 100
-
-inference:
-  frames: 0
-  min_score: 0.55
-  nms_iou: 0.60
-  max_detections: 50
-
-runtime:
-  profile: false
-  profile_interval: 100
-
-output:
-  save_dir: ""
-  save_every: 0
-  mask_alpha: 0.55
-  mask_threshold: 0.50
-  draw_boxes: true
-  insight:
-    host: <insight-host-ip>
-    video_port: 9000
-    metadata_port: 9100
-```
-
 ## Debugging Notes
 - If startup fails, verify `model.path` and `source.rtsp_url`.
 - If the app times out waiting for RTSP, verify source reachability first.
 - If Insight receives no video, verify `output.insight.host` and UDP ports.
 - If saved frames are needed for inspection, set `output.save_dir` and `output.save_every`.
+
+## Appendix: Additional Models
+Other supported YOLO26 segmentation models:
+- `yolo26n-seg-bf16-mla_tess.tar.gz`
+- `yolo26s-seg-bf16-mla_tess.tar.gz`
+- `yolo26m-seg-bf16-mla_tess.tar.gz`
+- `yolo26l-seg-bf16-mla_tess.tar.gz`
+- `yolo26x-seg-bf16-mla_tess.tar.gz`
+- `yolo26m-seg-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-seg-int8-b1.tar.gz`
+
+Replace the default filename in the download command and `model.path`.
 
 ## Source Files
 - C++ source: `src/cpp/main.cpp`

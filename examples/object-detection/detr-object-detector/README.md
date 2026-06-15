@@ -22,21 +22,24 @@ Snippet from a pipeline run:
 ![DETR object detector preview](../../../assets/portal/object-detection/detr-object-detector/image.png)
 
 ## Supported Models
-Use the platform version wherever `<platform-version>` appears.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Validated with: `detr_resnet50_modified_class_embed_bbox_embed`
 
-Download into `assets/models/`:
-- `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
+Download the validated model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+cd ../..
+```
+
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment.
-- Model artifacts are user-managed and should be placed under `assets/models/`.
-- Preferred download command: `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
-- Direct URL fallback:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz && cd ../..`
-- Default model path:
-  `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
+- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
@@ -51,62 +54,35 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- The example expects an input folder with image files.
-- Input preprocessing preserves aspect ratio and center-pads into an `1333x800` model frame.
-- Output boxes are mapped back to the original image resolution before drawing.
-- By default all DETR foreground classes are considered. Set `decode.person_only: true` in `src/common/config.yaml` to keep only the DETR `person` class.
-- Overlay text uses built-in DETR COCO labels and class-colored boxes.
-- `runtime.profile` runs repeated inference and reports session, postprocessing, and overall timing statistics.
+## Configure
+Edit `examples/object-detection/detr-object-detector/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/object-detection/detr-object-detector/detr-object-detector [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+```yaml
+model:
+  path: <model-path>                                  # Path to the model package.
 
-### Python
-- Invocation:
-  `python3 examples/object-detection/detr-object-detector/src/python/main.py [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+io:
+  input_dir: assets/test_images                                                # Folder containing input images.
+  output_dir: sandbox/detr-object-detector                                     # Folder for annotated images.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/object-detection/detr-object-detector/detr-object-detector
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/object-detection/detr-object-detector
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/detr-object-detector
+decode:
+  confidence_threshold: 0.70                                                   # Minimum object confidence.
+  person_only: false                                                           # Keep only COCO person detections when true.
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/detr-object-detector/detr-object-detector
+./build/examples/object-detection/detr-object-detector/detr-object-detector \
+  --config examples/object-detection/detr-object-detector/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/detr-object-detector/src/python/requirements.txt
-python3 examples/object-detection/detr-object-detector/src/python/main.py
+python3 examples/object-detection/detr-object-detector/src/python/main.py \
+  --config examples/object-detection/detr-object-detector/src/common/config.yaml
 ```
 
 ## Testing
@@ -160,7 +136,7 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 ```
 
 ## Debugging Notes
-- If the model fails to load, verify `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` exists and is readable.
+- If the model fails to load, verify `model.path` points to a readable model package.
 - First-run model initialization can exceed 60 seconds on some setups. Increase `SIMANEAT_APPS_TEST_TIMEOUT_MS` (for example `180000`) for e2e runs.
 - If no detections appear, lower `decode.confidence_threshold` and confirm the input images contain supported COCO objects.
 - If detections are visibly offset, verify the model frame assumptions (`1333x800`) still match the compiled package.

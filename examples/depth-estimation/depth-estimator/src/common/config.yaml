@@ -1,11 +1,11 @@
-model:
-  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+model:                       # Depth model selection.
+  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
-io:
-  input_dir: assets/test_images
-  output_dir: sandbox/depth-estimator
+io:                          # Input and output paths.
+  input_dir: assets/test_images       # Folder containing input images.
+  output_dir: sandbox/depth-estimator # Folder for depth visualizations.
 
-runtime:
-  infer_size: 518
-  timeout_ms: 20000
-  queue_depth: 4
+runtime:                     # Runtime settings.
+  infer_size: 518            # Square model input size.
+  timeout_ms: 20000          # Inference timeout in milliseconds.
+  queue_depth: 4             # Runtime queue depth.
