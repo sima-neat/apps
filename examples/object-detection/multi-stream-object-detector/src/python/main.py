@@ -10,7 +10,6 @@ import json
 import os
 import struct
 import sys
-import threading
 import time
 
 import yaml
@@ -49,8 +48,6 @@ class StreamRuntime:
     index: int
     url: str
     model: object
-    graph: object
-    run: object
     metadata_sender: object
     labels: list[str]
     profile: "ProfileWindow"
@@ -58,6 +55,7 @@ class StreamRuntime:
     frame_h: int
     output_fps: int
     video_port: int
+    output_name: str
     processed: int = 0
     closed: bool = False
 
@@ -402,25 +400,32 @@ def make_model(cfg: AppConfig):
 
 
 def build_stream_runtime(
-    cfg: AppConfig, stream_index: int, url: str, labels: list[str]
+    cfg: AppConfig, stream_index: int, url: str, labels: list[str], app_graph
 ) -> StreamRuntime:
     frame_w, frame_h, fps = probe_rtsp(url)
     output_fps = cfg.fps if cfg.fps > 0 else fps
     model = make_model(cfg)
 
+    suffix = str(stream_index)
+    model_name = f"model_{suffix}"
+    video_name = f"video_{suffix}"
+    debug_frame_name = f"debug_frame_{suffix}"
+    detections_name = f"detections_{suffix}"
+    debug_output_name = f"debug_output_{suffix}"
+    output_name = debug_output_name if cfg.save_dir and cfg.save_every > 0 else detections_name
+
     source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, url, fps, frame_w, frame_h))
     save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
-    outputs = ["model"]
+    outputs = [model_name]
     if cfg.video_enabled:
-        outputs.append("video")
+        outputs.append(video_name)
     if save_debug_frames:
-        outputs.append("debug_frame")
+        outputs.append(debug_frame_name)
     branch = pyneat.graphs.branch("source", outputs)
 
-    graph = pyneat.Graph()
     live_link_options = pyneat.GraphLinkOptions()
     live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    graph.connect(source, branch)
+    app_graph.connect(source, branch)
     video_port = 0
     if cfg.video_enabled:
         video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, output_fps)
@@ -430,35 +435,26 @@ def build_stream_runtime(
         video_options.encoder.bitrate_kbps = 1000
         video_port = video_options.video_port
 
-        video_graph = pyneat.Graph("video")
-        video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
-        graph.connect(branch, video_graph, live_link_options)
+        video_graph = pyneat.Graph(video_name)
+        video_graph.connect(pyneat.nodes.input(video_name), pyneat.groups.video_sender(video_options))
+        app_graph.connect(branch, video_graph, live_link_options)
 
-    model_graph = pyneat.Graph("model")
-    model_graph.connect(pyneat.nodes.input("model"), model)
-    detections_graph = pyneat.Graph("detections")
-    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
-    graph.connect(branch, model_graph, live_link_options)
-    graph.connect(model_graph, detections_graph)
+    model_graph = pyneat.Graph(model_name)
+    model_graph.connect(pyneat.nodes.input(model_name), model)
+    detections_graph = pyneat.Graph(detections_name)
+    detections_graph.add(pyneat.nodes.output(detections_name, pyneat.OutputOptions.every_frame(4)))
+    app_graph.connect(branch, model_graph, live_link_options)
+    app_graph.connect(model_graph, detections_graph)
 
     if save_debug_frames:
-        frames = pyneat.Graph("debug_frame")
-        frames.add(pyneat.nodes.output("debug_frame", pyneat.OutputOptions.every_frame(4)))
+        frames = pyneat.Graph(debug_frame_name)
+        frames.add(pyneat.nodes.output(debug_frame_name, pyneat.OutputOptions.every_frame(4)))
         debug_join = pyneat.graphs.combine(
-            ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByFrame
+            [debug_frame_name, detections_name], debug_output_name, pyneat.CombinePolicy.ByFrame
         )
-        graph.connect(branch, frames)
-        graph.connect(frames, debug_join)
-        graph.connect(detections_graph, debug_join)
-    if cfg.profile:
-        print(f"Backend stream={stream_index}:\n{graph.describe_backend()}")
-
-    run_options = pyneat.RunOptions()
-    run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 3
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    run = graph.build(run_options)
+        app_graph.connect(branch, frames, live_link_options)
+        app_graph.connect(frames, debug_join)
+        app_graph.connect(detections_graph, debug_join)
 
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
@@ -476,8 +472,6 @@ def build_stream_runtime(
         index=stream_index,
         url=url,
         model=model,
-        graph=graph,
-        run=run,
         metadata_sender=metadata_sender,
         labels=labels,
         profile=ProfileWindow(cfg.profile, stream_index),
@@ -485,6 +479,7 @@ def build_stream_runtime(
         frame_h=frame_h,
         output_fps=output_fps,
         video_port=video_port,
+        output_name=output_name,
     )
 
 
@@ -584,12 +579,17 @@ def maybe_save_debug_frame(cfg: AppConfig, stream: StreamRuntime, sample, boxes:
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
-def process_stream_once(stream: StreamRuntime, cfg: AppConfig, output_name: str) -> bool:
+def process_stream_once(run, stream: StreamRuntime, cfg: AppConfig) -> bool:
     pull_start = time_ms()
-    sample = stream.run.pull(output_name, 50)
+    sample = run.pull(stream.output_name, 50)
     pull_end = time_ms()
     if sample is None:
-        if hasattr(stream.run, "can_pull") and not stream.run.can_pull():
+        last_error_fn = getattr(run, "last_error", None)
+        last_error = last_error_fn() if callable(last_error_fn) else ""
+        if last_error:
+            raise RuntimeError(f"stream {stream.index} runtime error: {last_error}")
+        running_fn = getattr(run, "running", None)
+        if callable(running_fn) and not running_fn():
             stream.closed = True
         return False
 
@@ -607,25 +607,6 @@ def process_stream_once(stream: StreamRuntime, cfg: AppConfig, output_name: str)
     return True
 
 
-def consume_stream(
-    stream: StreamRuntime,
-    cfg: AppConfig,
-    output_name: str,
-    stop_event: threading.Event,
-    errors: list[Exception],
-) -> None:
-    try:
-        while (
-            not stop_event.is_set()
-            and not stream.closed
-            and (cfg.frames <= 0 or stream.processed < cfg.frames)
-        ):
-            process_stream_once(stream, cfg, output_name)
-    except Exception as exc:
-        errors.append(exc)
-        stop_event.set()
-
-
 def run_app(cfg: AppConfig) -> None:
     if cfg.profile:
         os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
@@ -635,40 +616,40 @@ def run_app(cfg: AppConfig) -> None:
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
     labels = load_labels(cfg.labels_path)
+    graph = pyneat.Graph("multi_stream")
     streams = [
-        build_stream_runtime(cfg, index, url, labels) for index, url in enumerate(cfg.rtsp_urls)
-    ]
-    output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
-    stop_event = threading.Event()
-    errors: list[Exception] = []
-    consumers = [
-        threading.Thread(
-            target=consume_stream,
-            args=(stream, cfg, output_name, stop_event, errors),
-            name=f"stream-{stream.index}-consumer",
-        )
-        for stream in streams
+        build_stream_runtime(cfg, index, url, labels, graph)
+        for index, url in enumerate(cfg.rtsp_urls)
     ]
 
+    if cfg.profile:
+        print(f"Backend:\n{graph.describe_backend()}")
+
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 3
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run = graph.build(run_options)
+
     try:
-        for consumer in consumers:
-            consumer.start()
-        for consumer in consumers:
-            consumer.join()
+        all_done = False
+        while not all_done:
+            all_done = True
+            for stream in streams:
+                if stream.closed or (
+                    cfg.frames > 0 and stream.processed >= cfg.frames
+                ):
+                    continue
+                all_done = False
+                process_stream_once(run, stream, cfg)
     except KeyboardInterrupt:
-        stop_event.set()
+        pass
     finally:
-        stop_event.set()
-        for stream in streams:
-            stream.run.close()
-        for consumer in consumers:
-            if consumer.is_alive():
-                consumer.join(timeout=2.0)
+        run.close()
         for stream in streams:
             stream.profile.flush()
             print(f"[stream {stream.index}] processed={stream.processed}")
-    if errors:
-        raise errors[0]
 
 
 def main(argv: list[str] | None = None) -> int:
