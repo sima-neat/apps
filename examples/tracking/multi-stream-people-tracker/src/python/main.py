@@ -674,6 +674,7 @@ def run_app(cfg: AppConfig) -> None:
             consumer.join()
     except KeyboardInterrupt:
         stop_event.set()
+        raise
     finally:
         stop_event.set()
         for stream in streams:
@@ -702,6 +703,8 @@ def main(argv: list[str] | None = None) -> int:
         load_runtime_dependencies()
         run_app(cfg)
         return 0
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1
