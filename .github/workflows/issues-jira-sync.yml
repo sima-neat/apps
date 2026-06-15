@@ -92,9 +92,9 @@ jobs:
       comment_url: '${{ github.event_name == ''workflow_dispatch'' && inputs.comment_url || github.event.comment.html_url || '''' }}'
       dry_run: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
       github_repository: '${{ github.repository }}'
-      jira_project_key: '${{ vars.JIRA_PROJECT_KEY || ''AUTO'' }}'
+      jira_project_key: '${{ vars.JIRA_PROJECT_KEY || ''NEAT'' }}'
       jira_issue_type_name: '${{ vars.JIRA_ISSUE_TYPE_NAME || ''Task'' }}'
-      jira_epic_key: '${{ vars.JIRA_NEAT_APPS_EPIC_KEY || ''AUTO-1881'' }}'
+      jira_epic_key: '${{ vars.JIRA_NEAT_APPS_EPIC_KEY || ''NEAT-62'' }}'
       jira_epic_link_field_id: '${{ vars.JIRA_EPIC_LINK_FIELD_ID || '''' }}'
       jira_gh_user_map_json: '${{ vars.JIRA_GH_USER_MAP_JSON || ''{}'' }}'
       jira_backlog_enforce: ${{ vars.JIRA_BACKLOG_ENFORCE == 'true' }}
