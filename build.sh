@@ -68,7 +68,8 @@ core_artifact_branch_key() {
 import sys
 import urllib.parse
 
-print(urllib.parse.quote(sys.argv[1], safe=""))
+ref_key = urllib.parse.quote(sys.argv[1], safe="")
+print(urllib.parse.quote(ref_key, safe=""))
 PY
 }
 
