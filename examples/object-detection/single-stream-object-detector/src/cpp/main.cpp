@@ -356,7 +356,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
         simaai::neat::nodes::Output("debug_frame", simaai::neat::OutputOptions::EveryFrame(4)));
     auto debug_join = simaai::neat::graphs::Combine({"debug_frame", "detections"}, "debug_output",
                                                     simaai::neat::CombinePolicy::ByPts);
-    runtime.graph.connect(branch, frames);
+    runtime.graph.connect(branch, frames, live_link_options);
     runtime.graph.connect(frames, debug_join);
     runtime.graph.connect(detections_graph, debug_join);
   }
