@@ -10,10 +10,11 @@ These results measure the compiled model package only. They do not include camer
 | Field | Value |
 | --- | --- |
 | Target | Modalix (`aarch64`) |
-| SDK | 2.0.0 |
+| SDK | 2.1.2 |
 | Date | 2026-06-12 |
 | Frames | 1000 |
 | Command | `python3 examples/benchmarking/model-benchmark/src/python/main.py --model <model-package>` |
+| Refresh Script | `python3 examples/benchmarking/model-benchmark/scripts/refresh_results.py --run` |
 | JSON Reports | `sandbox/model-benchmark/runs/<model-id>.json` |
 | Power Columns | Omitted |
 
