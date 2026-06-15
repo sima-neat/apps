@@ -449,7 +449,7 @@ function CatalogPage({ catalog }) {
             <div className="download-modal-header">
               <div>
                 <p className="eyebrow">Download</p>
-                <h2 id="download-modal-title">Install prebuilt apps from any branch</h2>
+                <h2 id="download-modal-title">Download Neat Apps</h2>
               </div>
               <button
                 className="modal-close"
@@ -466,12 +466,10 @@ function CatalogPage({ catalog }) {
               </button>
             </div>
             <p className="download-modal-copy">
-              To download the prebuilt apps package from any branch, run this command from the Modalix DevKit:
+              To download the current prebuilt Apps runtime, run:
             </p>
             <pre className="download-code">
-              <code>{`mkdir /media/nvme/neat-apps && cd /media/nvme/neat-apps &&
-wget -O /tmp/install.sh https://apps.sima-neat.com/tools/install-neat-apps.sh &&
-bash /tmp/install.sh`}</code>
+              <code>{`sima-cli neat install apps`}</code>
             </pre>
           </div>
         </div>
