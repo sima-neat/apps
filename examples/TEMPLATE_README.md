@@ -66,8 +66,8 @@ model:
   path: <model-path>             # Path to the model package.
 
 io:
-  input_dir: <input-dir>                  # Folder containing input images.
-  output_dir: <output-dir>                # Folder for generated outputs.
+  input_dir: assets/test_images           # Folder containing input images.
+  output_dir: sandbox/<name>              # Folder for generated outputs.
 ```
 
 ## Run

@@ -62,8 +62,8 @@ model:
   path: <model-path>                   # Path to the model package.
 
 io:
-  input_dir: <input-dir>                    # Folder containing input images.
-  output_dir: <output-dir>                  # Folder for annotated images.
+  input_dir: assets/test_images                 # Folder containing input images.
+  output_dir: sandbox/yolov8-instance-segmenter # Folder for annotated images.
 
 decode:
   score_threshold: 0.25                         # Minimum instance confidence.

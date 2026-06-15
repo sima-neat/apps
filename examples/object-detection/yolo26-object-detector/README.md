@@ -64,8 +64,8 @@ model:
   labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
 io:
-  input_dir: <input-dir>                    # Folder containing input images.
-  output_dir: <output-dir>                  # Folder for annotated images.
+  input_dir: assets/test_images                           # Folder containing input images.
+  output_dir: sandbox/yolo26-object-detector              # Folder for annotated images.
 
 decode:
   score_threshold: 0.40                                   # Minimum object confidence.

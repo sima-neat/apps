@@ -2,8 +2,8 @@ model:                       # Segmenter model selection.
   path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
 io:                          # Input and output paths.
-  input_dir: <input-dir>                    # Folder containing input images.
-  output_dir: <output-dir>                  # Folder for annotated images.
+  input_dir: assets/test_images                    # Folder containing input images.
+  output_dir: sandbox/yolov8-instance-segmenter    # Folder for annotated images.
 
 runtime:                     # Runtime settings.
   infer_size: 640            # Square model input size.

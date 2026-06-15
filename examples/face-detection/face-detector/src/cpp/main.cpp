@@ -508,21 +508,12 @@ static std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
   return images;
 }
 
-static std::string required_config_string(const sima_examples::ScalarConfig& raw,
-                                          const std::string& key) {
-  const auto value = raw.string_value(key);
-  if (!value.has_value() || value->empty() || (value->front() == '<' && value->back() == '>')) {
-    throw std::runtime_error(key + " must be set in config");
-  }
-  return *value;
-}
-
 static Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
   cfg.model = raw.string_or("model.path", "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz");
-  cfg.input_dir = required_config_string(raw, "io.input_dir");
-  cfg.output_dir = required_config_string(raw, "io.output_dir");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.output_dir = raw.string_or("io.output_dir", "sandbox/face-detector");
   cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.4));
   cfg.nms = static_cast<float>(raw.double_or("decode.nms_iou", 0.9));
   cfg.top_k = raw.int_or("decode.top_k", 5000);

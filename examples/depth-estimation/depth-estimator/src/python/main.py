@@ -13,14 +13,6 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
 
-def required_config_path(section: dict, key: str, dotted_key: str) -> Path:
-    value = section.get(key)
-    value_text = "" if value is None else str(value).strip()
-    if not value_text or (value_text.startswith("<") and value_text.endswith(">")):
-        raise ValueError(f"{dotted_key} must be set in config")
-    return Path(value_text)
-
-
 def tensor_to_numpy(t: pyneat.Tensor) -> np.ndarray:
     return np.asarray(t.to_numpy(copy=True))
 
@@ -79,12 +71,8 @@ def main() -> int:
     model_path = raw.get("model", {}).get("path", "assets/models/depth_anything_v2_vits_mpk.tar.gz")
     io_cfg = raw.get("io", {})
     runtime = raw.get("runtime", {})
-    try:
-        input_dir = required_config_path(io_cfg, "input_dir", "io.input_dir")
-        output_dir = required_config_path(io_cfg, "output_dir", "io.output_dir")
-    except ValueError as exc:
-        print(f"config error: {exc}", file=sys.stderr)
-        return 2
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/depth-estimator"))
     infer_size = int(runtime.get("infer_size", 518))
     timeout_ms = int(runtime.get("timeout_ms", 20000))
     queue_depth = int(runtime.get("queue_depth", 4))

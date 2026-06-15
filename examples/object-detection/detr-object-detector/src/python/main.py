@@ -130,14 +130,6 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
 
 
-def required_config_path(section: dict, key: str, dotted_key: str) -> Path:
-    value = section.get(key)
-    value_text = "" if value is None else str(value).strip()
-    if not value_text or (value_text.startswith("<") and value_text.endswith(">")):
-        raise ValueError(f"{dotted_key} must be set in config")
-    return Path(value_text)
-
-
 def _log(msg: str) -> None:
     if VERBOSE:
         print(f"[detr-debug] {msg}", flush=True)
@@ -441,13 +433,9 @@ def main() -> int:
     decode_cfg = raw.get("decode", {})
     runtime_cfg = raw.get("runtime", {})
 
+    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
-    try:
-        input_dir = required_config_path(io_cfg, "input_dir", "io.input_dir")
-        output_dir = required_config_path(io_cfg, "output_dir", "io.output_dir")
-    except ValueError as exc:
-        print(f"config error: {exc}", file=sys.stderr)
-        return 2
+    output_dir = Path(io_cfg.get("output_dir", "sandbox/detr-object-detector"))
     confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.5))
     max_draw = int(decode_cfg.get("max_draw", 50))
     person_only = bool(decode_cfg.get("person_only", False))
