@@ -66,7 +66,7 @@ source ~/pyneat/bin/activate
 pip install -r examples/benchmarking/model-benchmark/src/python/requirements.txt
 
 python3 examples/benchmarking/model-benchmark/src/python/main.py \
-  --model <model-path> \
+  --model assets/models/my_model.tar.gz \
   --frames 1000 \
   --output-json sandbox/model-benchmark/my_model.json
 ```
