@@ -30,7 +30,7 @@ Snippet from a pipeline run:
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
 To create a reproducible RTSP input:
-1. Run `neat` in the Neat Developer Environment and open the reported `Insight Web UI`.
+1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
 2. In Insight, open `RTSP Source`.
 3. Use a sample video or upload your own video.
 4. Start the stream and copy the RTSP URL.
@@ -39,14 +39,14 @@ To create a reproducible RTSP input:
 Use the same `neat` output to set `output.insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
 
 ## Prerequisites
-- Installed Neat Library and Insight on the DevKit
+- Installed Neat Development Environment + Neat Library.
 - RTSP source created in Insight or provided by your camera
-- Default model downloaded, or `model.path` set to another readable model package
+- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) for setup and compilation. Install the Neat Library first by following the [Neat Library guide](https://developer.sima.ai/software/getting-started/neat-library/).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Clone and build the apps repo in the Neat Development Environment:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git

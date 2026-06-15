@@ -27,14 +27,14 @@ This example accepts any compiled model package supported by `pyneat.Model`.
 `tests/test-scope.yaml` lists the compiled model packages already used by Apps examples. `BENCHMARK_RESULTS.md` is the manually maintained table for reference benchmark results.
 
 ## Prerequisites
-- Installed Neat Development Environment.
+- Installed Neat Development Environment + Neat Library.
 - Activated `pyneat` environment.
-- A compiled model package available locally.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`.
 
 ## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) for setup and compilation. Install the Neat Library first by following the [Neat Library guide](https://developer.sima.ai/software/getting-started/neat-library/).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Clone and build the apps repo in the Neat Development Environment:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -59,7 +59,7 @@ output:
 ```
 
 ## Run
-From the Apps repo root:
+On the Modalix/DevKit board, from the Apps repo root:
 
 ```bash
 source ~/pyneat/bin/activate

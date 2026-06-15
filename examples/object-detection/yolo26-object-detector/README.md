@@ -38,14 +38,14 @@ cd ../..
 The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
-- Installed Neat Development Environment.
-- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
+- Installed Neat Development Environment + Neat Library.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
 - Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
 
 ## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) for setup and compilation. Install the Neat Library first by following the [Neat Library guide](https://developer.sima.ai/software/getting-started/neat-library/).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Clone and build the apps repo in the Neat Development Environment:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -88,7 +88,7 @@ python3 examples/object-detection/yolo26-object-detector/src/python/main.py \
 ```
 
 ## Testing
-Run from the apps repository root:
+On the Modalix/DevKit board, run from the apps repository root:
 
 ```bash
 cd <apps-repo-root>

@@ -23,7 +23,7 @@ Preview image from a live run:
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host RTSP streams, receive video from `VideoSender`, receive tracking metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
 To create reproducible RTSP inputs:
-1. Run `neat` in the Neat Developer Environment and open the reported `Insight Web UI`.
+1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
 2. In Insight, open `RTSP Source`.
 3. Use sample videos or upload your own videos.
 4. Start each stream and copy the RTSP URLs.
@@ -50,15 +50,16 @@ cd ../..
 The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
-- A Neat Python environment with `pyneat`, `numpy`, and OpenCV available.
+- Installed Neat Development Environment + Neat Library.
+- A Neat Library Python environment with `pyneat`, `numpy`, and OpenCV available.
 - RTSP sources created in Insight or provided by your cameras.
-- Default YOLO26 detector model downloaded, or `model.path` set to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 detector model, or set `model.path` to another readable model package.
 - An Insight viewer instance reachable from the board/host running this example.
 
 ## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) for setup and compilation. Install the Neat Library first by following the [Neat Library guide](https://developer.sima.ai/software/getting-started/neat-library/).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Clone and build the apps repo in the Neat Development Environment:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
