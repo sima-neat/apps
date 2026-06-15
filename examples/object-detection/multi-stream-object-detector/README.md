@@ -19,30 +19,37 @@ Snippet from a pipeline run:
 
 ![Multi-stream object detector preview](../../../assets/portal/object-detection/multi-stream-object-detector/image.png)
 
-Architecture:
-- one complete graph per RTSP stream
-- each stream branches decoded NV12 frames into video and model paths
-- clean Insight video is sent through `VideoSender`
-- YOLO26 detections are sent as metadata for Insight overlay
-- optional debug output joins decoded frames and detections by frame id before saving
+## Insight Setup
+[Neat Insight](https://developer.sima.ai/software/tools/insight/) can host RTSP streams, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
-Per-stream graph:
-- `RtspDecodedInput -> Branch(video, model[, debug_frame])`
-- `video -> VideoSender(H.264 RTP/UDP)`
-- `model -> YOLO26 model.graph() -> detections`
-- debug only: `Combine(debug_frame, detections, ByFrame) -> debug_output`
+In the Neat Development Environment, install the sample video assets:
+
+```bash
+sima-cli install assets/multi-video-sources
+```
+
+This provides 720p and 480p videos that Insight can stream as RTSP sources.
+
+To create reproducible RTSP inputs:
+1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
+2. In Insight, open `RTSP Source`.
+3. Use sample videos or upload your own videos.
+4. Start each stream and copy the RTSP URLs.
+5. Put those RTSP URLs into `streams`.
+
+Use the same `neat` output to set `output.insight.host`, `video_port_base`, and `metadata_port_base` from the reported `videoUDP` and `metadataUDP` ranges.
 
 ## Prerequisites
-- Installed Neat Development Environment.
-- One or more reachable RTSP camera URLs.
-- A YOLO26 model pack downloaded into `assets/models/`.
+- Installed Neat Development Environment + Neat Library.
+- RTSP sources created in Insight or provided by your cameras.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 model, or set `model.path` to another readable model package.
 - Edit `src/common/config.yaml` before running with real streams.
 - On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
 ## Get The Apps Repo
-Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Then clone and build the apps repo:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -50,56 +57,46 @@ cd apps
 ./build.sh --clean
 ```
 
-After this setup, follow the example-specific commands below.
-
-## Command-Line Options
-- `--config <path>`: path to the YAML configuration file
-- `--validate-config-only`: validate the config and exit without opening RTSP streams
-- `--help`: print the CLI help text
+After building, run the example commands below on the Modalix/DevKit board.
 
 ## Download Models
-Use the platform version wherever `<platform-version>` appears.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 The default model is `yolo26m-det-int8-b1.tar.gz`.
 
-Supported batch-1 YOLO26 detection models:
-- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-b1.tar.gz`
-- `yolo26m-det-int8-b1.tar.gz`
-
-Download all supported batch-1 variants:
+Download the default model:
 
 ```bash
 mkdir -p assets/models
 cd assets/models
 
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26s-det-bf16-mla_tess-b1.tar.gz
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26l-det-bf16-mla_tess-b1.tar.gz
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26x-det-bf16-mla_tess-b1.tar.gz
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-b1.tar.gz
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
 
 cd ../..
 ```
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>
-cmake -S examples/object-detection/multi-stream-object-detector/src/cpp -B build/multi-stream-object-detector
-cmake --build build/multi-stream-object-detector -j
+## Configure
+Edit `examples/object-detection/multi-stream-object-detector/src/common/config.yaml`.
+
+```yaml
+model:
+  path: <model-path>                                   # Path to the model package.
+
+streams:
+  - <first-rtsp-url-copied-from-insight>               # First RTSP stream.
+  - <second-rtsp-url-copied-from-insight>              # Second RTSP stream.
+
+inference:
+  frames: 0                                            # Frame limit per stream. 0 runs continuously.
+  min_score: 0.30                                      # Minimum object confidence.
+
+output:
+  insight:
+    host: <insight-host-ip>                            # Host running Insight.
+    video_port_base: <videoUDP start port from neat>   # First UDP video port.
+    metadata_port_base: <metadataUDP start port from neat> # First UDP metadata port.
 ```
 
 ## Run
@@ -133,11 +130,16 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-str
 - `output.debug_dir` and `output.save_every` let you save periodic aligned debug frames locally without changing the Insight output contract.
 - Profiling prints per-stream pull, metadata, output FPS, and detection-count summaries.
 
-## Notes
-- Point `model.path` at a YOLO26 detection pack. This example does not use a `model.family` config key.
-- Both C++ and Python use the same public graph shape: `RtspDecodedInput`, `graphs::Branch`, `model.graph()`, `graphs::Combine` for debug saves, and `VideoSender`.
-- The live path keeps video and metadata separate. Insight overlays metadata on the clean video stream.
-- `output.video_enabled: false` disables per-stream H.264 video output. Metadata still runs.
+## Appendix: Additional Models
+Other supported batch-1 YOLO26 detection models:
+- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
+- `yolo26m-det-bf16-b1.tar.gz`
+
+Replace the default filename in the download command and `model.path`.
 
 ## Source Files
 - C++: `src/cpp/main.cpp`

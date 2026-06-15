@@ -283,6 +283,14 @@ make_source_options(const AppConfig& cfg, int& fps_out, int& width_out, int& hei
     opt.fallback_h264_fps = probe.fps;
     fps_out = probe.fps;
   }
+  if (width_out > 0 && height_out > 0 && fps_out > 0) {
+    opt.output_caps.enable = true;
+    opt.output_caps.format = "NV12";
+    opt.output_caps.width = width_out;
+    opt.output_caps.height = height_out;
+    opt.output_caps.fps = fps_out;
+    opt.output_caps.memory = simaai::neat::CapsMemory::Any;
+  }
   return opt;
 }
 
@@ -336,9 +344,15 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   detections_graph.add(
       simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
 
+  simaai::neat::GraphLinkOptions live_link_options;
+  live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, video_graph);
-  runtime.graph.connect(branch, model_graph);
+  runtime.graph.connect(branch, video_graph, live_link_options);
+  if (save_debug_frames) {
+    runtime.graph.connect(branch, model_graph);
+  } else {
+    runtime.graph.connect(branch, model_graph, live_link_options);
+  }
   runtime.graph.connect(model_graph, detections_graph);
   if (save_debug_frames) {
     simaai::neat::Graph frames("debug_frame");

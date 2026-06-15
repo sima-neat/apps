@@ -12,6 +12,10 @@
 namespace fs = std::filesystem;
 using namespace sima_examples::testing;
 
+namespace {
+constexpr const char* kE2eInsightHost = "127.0.0.1";
+} // namespace
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -39,9 +43,6 @@ int main(int argc, char** argv) {
   }
 
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
-  const std::string insight_host = env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
-                                       ? env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
-                                       : "127.0.0.1";
   const int video_port_base = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port_base =
       env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
@@ -50,7 +51,7 @@ int main(int argc, char** argv) {
   write_e2e_config("multi-stream-object-detector", config_path,
                    {{"model.path", model_path},
                     {"output.debug_dir", output_dir},
-                    {"output.insight.host", insight_host},
+                    {"output.insight.host", kE2eInsightHost},
                     {"output.insight.video_port_base", std::to_string(video_port_base)},
                     {"output.insight.metadata_port_base", std::to_string(metadata_port_base)},
                     {"inference.frames", "140"}},
@@ -58,7 +59,7 @@ int main(int argc, char** argv) {
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   MetadataJsonListenerOptions metadata_options;
-  metadata_options.host = insight_host;
+  metadata_options.host = kE2eInsightHost;
   metadata_options.base_port = metadata_port_base;
   metadata_options.num_ports = 2;
   metadata_options.timeout_ms = 5000;
@@ -70,8 +71,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const ProcessResult result =
-      spawn_and_wait(binary, {"--config", config_path.string()}, timeout_ms);
+  const ProcessResult result = spawn_until_output_files(binary, {"--config", config_path.string()},
+                                                        output_dir, total_saved_frames, timeout_ms);
 
   int rc = 0;
   if (result.exit_code != 0) {

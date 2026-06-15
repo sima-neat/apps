@@ -359,6 +359,12 @@ def make_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt.fallback_h264_width = width
     opt.fallback_h264_height = height
     opt.fallback_h264_fps = fps
+    opt.output_caps.enable = True
+    opt.output_caps.format = pyneat.Format.NV12
+    opt.output_caps.width = width
+    opt.output_caps.height = height
+    opt.output_caps.fps = fps
+    opt.output_caps.memory = pyneat.CapsMemory.Any
     return opt
 
 
@@ -403,9 +409,14 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
 
     graph = pyneat.Graph()
+    live_link_options = pyneat.GraphLinkOptions()
+    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)
-    graph.connect(branch, video_graph)
-    graph.connect(branch, model_graph)
+    graph.connect(branch, video_graph, live_link_options)
+    if save_debug_frames:
+        graph.connect(branch, model_graph)
+    else:
+        graph.connect(branch, model_graph, live_link_options)
     graph.connect(model_graph, detections_graph)
     if save_debug_frames:
         frames = pyneat.Graph("debug_frame")
@@ -601,6 +612,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             runtime.run.close()
         return 0
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1

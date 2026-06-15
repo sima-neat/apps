@@ -1,19 +1,19 @@
-model:
-  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+model:                       # Segmenter model selection.
+  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
-io:
-  input_dir: assets/test_images
-  output_dir: sandbox/yolov8-instance-segmenter
+io:                          # Input and output paths.
+  input_dir: assets/test_images                    # Folder containing input images.
+  output_dir: sandbox/yolov8-instance-segmenter    # Folder for annotated images.
 
-runtime:
-  infer_size: 640
-  timeout_ms: 20000
-  queue_depth: 8
+runtime:                     # Runtime settings.
+  infer_size: 640            # Square model input size.
+  timeout_ms: 20000          # Inference timeout in milliseconds.
+  queue_depth: 8             # Runtime queue depth.
 
-decode:
-  score_threshold: 0.60
-  nms_iou: 0.45
-  max_detections: 200
+decode:                      # YOLOv8 segmentation decode settings.
+  score_threshold: 0.60      # Minimum instance confidence.
+  nms_iou: 0.45              # Overlap threshold for NMS.
+  max_detections: 200        # Max instances to keep per image.
 
-visualization:
-  mask_alpha: 0.65
+visualization:               # Overlay rendering settings.
+  mask_alpha: 0.65           # Mask overlay opacity.
