@@ -42,9 +42,11 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - Installed Neat Development Environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
@@ -64,7 +66,7 @@ Edit `examples/face-detection/face-detector/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz # Model package to load.
+  path: <model-path>                                  # Path to the model package.
 
 io:
   input_dir: assets/test_images                               # Folder containing input images.
@@ -146,7 +148,7 @@ Notes:
 - If `SIMANEAT_APPS_TEST_INPUT_DIR` is not set, both e2e tests fall back to `assets/test_images`.
 
 ## Debugging Notes
-- If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.
+- If the model fails to load, verify `model.path` points to a readable model package.
 - If no detections appear, lower `decode.confidence_threshold` and confirm the input actually contains faces.
 - If too many duplicate boxes appear, reduce `decode.nms_iou` and/or lower `decode.top_k`.
 - If output writing fails, ensure `io.output_dir` exists or can be created.

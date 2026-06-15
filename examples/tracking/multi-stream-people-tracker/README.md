@@ -47,10 +47,12 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - A Neat Python environment with `pyneat`, `numpy`, and OpenCV available.
 - RTSP sources created in Insight or provided by your cameras.
-- Default YOLO26 detector model pack downloaded into `assets/models/`.
+- Default YOLO26 detector model downloaded, or `model.path` set to another readable model package.
 - An Insight viewer instance reachable from the board/host running this example.
 
 ## Get The Apps Repo
@@ -71,7 +73,7 @@ Edit `examples/tracking/multi-stream-people-tracker/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/yolo26m-det-int8-b1.tar.gz       # Model package to load.
+  path: <model-path>                                   # Path to the model package.
 
 streams:
   - <first-rtsp-url-copied-from-insight>               # First RTSP stream.
@@ -108,7 +110,7 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
 
 ## Debugging Notes
 - Start with one RTSP stream and confirm the config before scaling to multiple cameras.
-- Confirm the model file exists under `assets/models/`.
+- Confirm `model.path` points to a readable model package.
 - Confirm each RTSP URL is reachable from the board or host running the example.
 - If Insight appears idle, verify `output.insight.host`, `video_port_base`, and `metadata_port_base`.
 - If you want saved overlay frames, set both `output.debug_dir` and `output.save_every`.

@@ -35,11 +35,11 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - Installed Neat Development Environment.
-- Model artifacts are user-managed and should be placed under `assets/models/`.
-- Default model path:
-  `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
+- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
@@ -59,7 +59,7 @@ Edit `examples/object-detection/detr-object-detector/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz # Model package to load.
+  path: <model-path>                                  # Path to the model package.
 
 io:
   input_dir: assets/test_images                                                # Folder containing input images.
@@ -136,7 +136,7 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 ```
 
 ## Debugging Notes
-- If the model fails to load, verify `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz` exists and is readable.
+- If the model fails to load, verify `model.path` points to a readable model package.
 - First-run model initialization can exceed 60 seconds on some setups. Increase `SIMANEAT_APPS_TEST_TIMEOUT_MS` (for example `180000`) for e2e runs.
 - If no detections appear, lower `decode.confidence_threshold` and confirm the input images contain supported COCO objects.
 - If detections are visibly offset, verify the model frame assumptions (`1333x800`) still match the compiled package.

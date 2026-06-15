@@ -33,9 +33,11 @@ sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - Installed Neat Development Environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
@@ -55,7 +57,7 @@ Edit `examples/depth-estimation/depth-estimator/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/depth_anything_v2_vits_mpk.tar.gz # Model package to load.
+  path: <model-path>                         # Path to the model package.
 
 io:
   input_dir: assets/test_images                         # Folder containing input images.

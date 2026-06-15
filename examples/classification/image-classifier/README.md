@@ -33,9 +33,11 @@ sima-cli modelzoo -v <platform-version> get resnet_50
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - Installed Neat Development Environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
@@ -55,7 +57,7 @@ Edit `examples/classification/image-classifier/src/common/config.yaml` if you wa
 
 ```yaml
 model:
-  path: assets/models/resnet_50_mpk.tar.gz  # Model package to load.
+  path: <model-path>                        # Path to the model package.
 
 io:
   image: null                               # Input image. null uses the sample image.
@@ -80,7 +82,7 @@ python3 examples/classification/image-classifier/src/python/main.py \
 ```
 
 ## Debugging Notes
-- If you see a model load error, verify the model file exists at `assets/models/resnet_50_mpk.tar.gz`.
+- If you see a model load error, verify `model.path` points to a readable model package.
 - If image decode fails, set `io.image` in the config.
 - If top-1 validation fails, try lowering `validation.min_probability` for debug runs.
 

@@ -38,10 +38,11 @@ cd ../..
 ```
 
 For another supported model, replace `<default-model>` in the download command and config path.
+The command stores models under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 
 ## Get The Apps Repo
@@ -62,7 +63,7 @@ Edit `examples/<category>/<name>/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/<model-pack>.tar.gz # Model package to load.
+  path: <model-path>             # Path to the model package.
 
 io:
   input_dir: assets/test_images           # Folder containing input images.
@@ -85,7 +86,7 @@ python3 examples/<category>/<name>/src/python/main.py \
 ```
 
 ## Debugging Notes
-- Confirm the model file exists under `assets/models/`.
+- Confirm `model.path` points to a readable model package.
 - Confirm input paths exist and are readable.
 - Confirm output directories are writable.
 

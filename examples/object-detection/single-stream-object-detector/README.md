@@ -41,7 +41,7 @@ Use the same `neat` output to set `output.insight.host`, `video_port`, and `meta
 ## Prerequisites
 - Installed Neat Library and Insight on the DevKit
 - RTSP source created in Insight or provided by your camera
-- Default model downloaded into `assets/models/`
+- Default model downloaded, or `model.path` set to another readable model package
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
@@ -72,12 +72,14 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Configure
 Edit `examples/object-detection/single-stream-object-detector/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz # Model package to load.
+  path: <model-path>                                      # Path to the model package.
 
 source:
   rtsp_url: <rtsp-url-copied-from-insight>                # RTSP stream URL.

@@ -56,10 +56,12 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - Installed Neat Library and Insight on the DevKit.
 - RTSP source created in Insight or provided by your camera.
-- Default YOLO26 segmentation model package downloaded locally.
+- Default YOLO26 segmentation model downloaded, or `model.path` set to another readable model package.
 - `model.path`, `model.labels`, `source.rtsp_url`, and `output.insight.host` set in `src/common/config.yaml`.
 
 ## Get The Apps Repo
@@ -80,7 +82,7 @@ Edit `examples/segmentation/single-stream-instance-segmenter/src/common/config.y
 
 ```yaml
 model:
-  path: assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz # Model package to load.
+  path: <model-path>                                                # Path to the model package.
 
 source:
   rtsp_url: <rtsp-url-copied-from-insight>                          # RTSP stream URL.

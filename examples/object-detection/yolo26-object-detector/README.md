@@ -35,9 +35,11 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Prerequisites
 - Installed Neat Development Environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Model artifacts are user-managed. Download the default model, or set `model.path` to another readable model package.
 - Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
 
 ## Get The Apps Repo
@@ -58,7 +60,7 @@ Edit `examples/object-detection/yolo26-object-detector/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz # Model package to load.
+  path: <model-path>                         # Path to the model package.
   labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
 io:
@@ -129,7 +131,7 @@ pytest examples/object-detection/yolo26-object-detector/tests/python/test_e2e.py
 
 ## Debugging Notes
 - If detections are missing, validate label file ordering and score thresholds.
-- If model load fails, verify `assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz` exists.
+- If model load fails, verify `model.path` points to a readable model package.
 - Ensure input folder contains supported image extensions (`.jpg`, `.jpeg`, `.png`, `.bmp`).
 - Use `--profile` to identify bottlenecks in the pipeline.
 - Use `decode.score_threshold` and `decode.nms_iou` to tune detection sensitivity.

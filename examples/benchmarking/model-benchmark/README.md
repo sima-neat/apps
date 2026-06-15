@@ -29,7 +29,7 @@ This example accepts any compiled model package supported by `pyneat.Model`.
 ## Prerequisites
 - Installed Neat Development Environment.
 - Activated `pyneat` environment.
-- A compiled model package available locally, usually under `assets/models/`.
+- A compiled model package available locally.
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
@@ -49,7 +49,7 @@ Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or override
 
 ```yaml
 model:
-  path: assets/models/<model-pack>.tar.gz     # Model package to benchmark.
+  path: <model-path>                          # Path to the model package.
 
 benchmark:
   frames: 1000                                # Number of synthetic frames.
@@ -66,7 +66,7 @@ source ~/pyneat/bin/activate
 pip install -r examples/benchmarking/model-benchmark/src/python/requirements.txt
 
 python3 examples/benchmarking/model-benchmark/src/python/main.py \
-  --model assets/models/my_model.tar.gz \
+  --model <model-path> \
   --frames 1000 \
   --output-json sandbox/model-benchmark/my_model.json
 ```

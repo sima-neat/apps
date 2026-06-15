@@ -34,7 +34,7 @@ Use the same `neat` output to set `output.insight.host`, `video_port_base`, and 
 ## Prerequisites
 - Installed Neat Development Environment.
 - RTSP sources created in Insight or provided by your cameras.
-- Default YOLO26 model pack downloaded into `assets/models/`.
+- Default YOLO26 model downloaded, or `model.path` set to another readable model package.
 - Edit `src/common/config.yaml` before running with real streams.
 - On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
@@ -67,12 +67,14 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Configure
 Edit `examples/object-detection/multi-stream-object-detector/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: assets/models/yolo26m-det-int8-b1.tar.gz       # Model package to load.
+  path: <model-path>                                   # Path to the model package.
 
 streams:
   - <first-rtsp-url-copied-from-insight>               # First RTSP stream.

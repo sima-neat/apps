@@ -33,7 +33,7 @@ Use the same `neat` output to set `insight.host`, `video_port`, and `metadata_po
 
 ## Prerequisites
 - Installed Neat Development Environment.
-- Default YOLO26 detector model package available under `assets/models/`.
+- Default YOLO26 detector model downloaded, or `model.path` set to another readable model package.
 - RTSP source created in Insight or provided by your camera.
 - Insight receiver running at the configured host and ports.
 - OpenAI-compatible Gemma server running when `openai.enabled` is true.
@@ -67,6 +67,8 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ../..
 ```
 
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+
 ## Configure
 Edit `examples/genai/detection-to-vlm-assistant/src/common/config.yaml`.
 
@@ -75,7 +77,7 @@ source:
   rtsp_url: <rtsp-url-copied-from-insight>              # RTSP stream URL.
 
 model:
-  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz # Model package to load.
+  path: <model-path>                                    # Path to the model package.
 
 insight:
   host: <insight-host-ip>                                  # Host running Insight.
