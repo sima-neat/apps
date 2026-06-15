@@ -40,20 +40,20 @@ Multimodal assistant UI:
 ![Multimodal Assistant preview](../../../assets/portal/genai/multimodal-assistant/image.png)
 
 ## Prerequisites
-Install Neat before running the demo. The model server uses the Python
-environment where `pyneat` is available. The default scripts assume:
+- Installed Neat Development Environment + Neat Library.
+- The model server uses the Python environment where `pyneat` is available. The default scripts assume:
 
 ```text
 ~/pyneat/bin/python
 ```
 
-Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat environment is
+Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat Library environment is
 somewhere else.
 
 ## Get The Apps Repo
-Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Then clone and build the apps repo:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -61,7 +61,7 @@ cd apps
 ./build.sh --clean
 ```
 
-After this setup, follow the example-specific commands below.
+After building, run the example commands below on the Modalix/DevKit board.
 
 ## Install
 Fetch only this example:

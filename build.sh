@@ -63,6 +63,16 @@ sanitize_branch_key() {
   printf '%s' "$1" | tr '/ ' '--'
 }
 
+core_artifact_branch_key() {
+  python3 - "$1" <<'PY'
+import sys
+import urllib.parse
+
+ref_key = urllib.parse.quote(sys.argv[1], safe="")
+print(urllib.parse.quote(ref_key, safe=""))
+PY
+}
+
 git_short_sha() {
   if [[ -n "${NEAT_APPS_ARTIFACT_SHORT_SHA:-}" ]]; then
     printf '%.7s\n' "${NEAT_APPS_ARTIFACT_SHORT_SHA}"
@@ -416,7 +426,7 @@ core_artifact_version_exists() {
     return 1
   fi
 
-  branch_key="$(sanitize_branch_key "${branch}")"
+  branch_key="$(core_artifact_branch_key "${branch}")"
   download_text "${NEAT_ARTIFACTS_BASE_URL}/${branch_key}/${version}/metadata.json" >/dev/null 2>&1
 }
 
@@ -548,7 +558,7 @@ resolve_latest_version() {
   local branch_key cache_key cache_path missing_path latest_url
   local resolved=""
 
-  branch_key="$(sanitize_branch_key "${branch}")"
+  branch_key="$(core_artifact_branch_key "${branch}")"
   cache_key="$(printf '%s' "${branch_key}" | tr -c 'A-Za-z0-9._-' '_')"
   cache_path="${LATEST_TAG_CACHE_DIR}/${cache_key}.tag"
   missing_path="${LATEST_TAG_CACHE_DIR}/${cache_key}.missing"

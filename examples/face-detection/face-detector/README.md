@@ -29,24 +29,29 @@ Snippet from a pipeline run:
 ![Face detector preview](../../../assets/portal/face-detection/face-detector/image.png)
 
 ## Supported Models
-Use the platform version wherever `<platform-version>` appears.
+Use the SDK platform version wherever `<platform-version>` appears.
 
 Validated with: `retinaface_mobilenet25`
 
-Download into `assets/models/`:
-- `./scripts/download_models.sh retinaface_mobilenet25`
+Download the validated model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
+cd ../..
+```
+
+The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
-- Installed Neat Development Environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Preferred download command: `./scripts/download_models.sh retinaface_mobilenet25`
-- Direct URL fallback:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
+- Installed Neat Development Environment + Neat Library.
+- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
-Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
+Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
 
-Then clone and build the apps repo:
+Clone and build the apps repo inside the Neat Development Environment:
 
 ```bash
 git clone https://github.com/sima-neat/apps.git
@@ -54,65 +59,41 @@ cd apps
 ./build.sh --clean
 ```
 
-After this setup, follow the example-specific commands below.
+After building, run the example commands below on the Modalix/DevKit board.
 
-## Important Behavior
-- C++ and Python read runtime values from `src/common/config.yaml`.
-- Detection confidence and NMS IoU live under `decode`.
-- By default, detections include 5-point facial landmarks unless `decode.landmarks` is `false`.
+## Configure
+Edit `examples/face-detection/face-detector/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/face-detection/face-detector_cpp/face-detector [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+```yaml
+model:
+  path: <model-path>                                  # Path to the model package.
 
-### Python
-- Invocation:
-  `python3 examples/face-detection/face-detector/src/python/main.py [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+io:
+  input_dir: assets/test_images                               # Folder containing input images.
+  output_dir: sandbox/face-detector                           # Folder for annotated images.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/face-detection/face-detector_cpp/face-detector
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/face-detection/face-detector
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/face-detector
+decode:
+  confidence_threshold: 0.40                                  # Minimum face confidence.
+  landmarks: true                                             # Draw five facial landmarks.
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/face-detection/face-detector_cpp/face-detector
+./build/examples/face-detection/face-detector_cpp/face-detector \
+  --config examples/face-detection/face-detector/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/face-detection/face-detector/src/python/requirements.txt
-python3 examples/face-detection/face-detector/src/python/main.py
+python3 examples/face-detection/face-detector/src/python/main.py \
+  --config examples/face-detection/face-detector/src/common/config.yaml
 ```
 
 ## Testing
-Run from the apps repository root:
+On the Modalix/DevKit board, run from the apps repository root:
 
 ```bash
 cd <apps-repo-root>
@@ -167,7 +148,7 @@ Notes:
 - If `SIMANEAT_APPS_TEST_INPUT_DIR` is not set, both e2e tests fall back to `assets/test_images`.
 
 ## Debugging Notes
-- If the model fails to load, verify `assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz` exists and is readable.
+- If the model fails to load, verify `model.path` points to a readable model package.
 - If no detections appear, lower `decode.confidence_threshold` and confirm the input actually contains faces.
 - If too many duplicate boxes appear, reduce `decode.nms_iou` and/or lower `decode.top_k`.
 - If output writing fails, ensure `io.output_dir` exists or can be created.

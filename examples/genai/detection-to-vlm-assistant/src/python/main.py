@@ -200,6 +200,8 @@ def main() -> int:
             if cfg.debug:
                 print(f"frame={frame_id} detections={len(boxes)}")
         return 0 if frame_id > 0 else 3
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
