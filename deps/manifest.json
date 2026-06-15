@@ -1,7 +1,6 @@
 {
   "neat-core": {
-    "branch": "codex/internals-linux-codec-service",
-    "spec": "4d4688395032"
+    "policy": "snap"
   },
   "sdk": {
     "channel": "develop"
