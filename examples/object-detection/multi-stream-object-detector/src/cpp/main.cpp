@@ -128,6 +128,7 @@ struct StreamRuntime {
   simaai::neat::Run run;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
+  std::string output_name;
   ProfileWindow profile;
   int frame_w = 0;
   int frame_h = 0;
@@ -387,6 +388,14 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
     opt.fallback_h264_fps = probe.fps;
     fps_out = probe.fps;
   }
+  if (width_out > 0 && height_out > 0 && fps_out > 0) {
+    opt.output_caps.enable = true;
+    opt.output_caps.format = "NV12";
+    opt.output_caps.width = width_out;
+    opt.output_caps.height = height_out;
+    opt.output_caps.fps = fps_out;
+    opt.output_caps.memory = simaai::neat::CapsMemory::Any;
+  }
   return opt;
 }
 
@@ -422,17 +431,27 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   runtime.profile.enabled = cfg.profile;
   runtime.profile.stream_index = stream_index;
 
-  auto source = simaai::neat::nodes::groups::RtspDecodedInput(source_options);
+  const std::string model_name = "model";
+  const std::string video_name = "video";
+  const std::string debug_frame_name = "debug_frame";
+  const std::string detections_name = "detections";
+  const std::string debug_output_name = "debug_output";
+  runtime.output_name =
+      (!cfg.save_dir.empty() && cfg.save_every > 0) ? debug_output_name : detections_name;
+
   const bool save_debug_frames = !cfg.save_dir.empty() && cfg.save_every > 0;
-  std::vector<std::string> outputs = {"model"};
+  std::vector<std::string> outputs = {model_name};
   if (cfg.video_enabled) {
-    outputs.push_back("video");
+    outputs.push_back(video_name);
   }
   if (save_debug_frames) {
-    outputs.push_back("debug_frame");
+    outputs.push_back(debug_frame_name);
   }
+  auto source = simaai::neat::nodes::groups::RtspDecodedInput(source_options);
   auto branch = simaai::neat::graphs::Branch("source", outputs);
 
+  simaai::neat::GraphLinkOptions live_link_options;
+  live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   runtime.graph.connect(source, branch);
   if (cfg.video_enabled) {
     auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
@@ -442,30 +461,32 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     video_options.video_port_base = cfg.video_port_base;
     video_options.encoder.bitrate_kbps = 1000;
     runtime.video_port = video_options.video_port();
-    simaai::neat::Graph video_graph("video");
-    video_graph.connect(simaai::neat::nodes::Input("video"),
+    simaai::neat::Graph video_graph(video_name);
+    video_graph.connect(simaai::neat::nodes::Input(video_name),
                         simaai::neat::nodes::groups::VideoSender(video_options));
-    runtime.graph.connect(branch, video_graph);
+    runtime.graph.connect(branch, video_graph, live_link_options);
   }
 
-  simaai::neat::Graph model_graph("model");
-  model_graph.connect(simaai::neat::nodes::Input("model"), *runtime.model);
-  simaai::neat::Graph detections_graph("detections");
+  simaai::neat::Graph model_graph(model_name);
+  model_graph.connect(simaai::neat::nodes::Input(model_name), *runtime.model);
+  simaai::neat::Graph detections_graph(detections_name);
   detections_graph.add(
-      simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
-  runtime.graph.connect(branch, model_graph);
+      simaai::neat::nodes::Output(detections_name, simaai::neat::OutputOptions::EveryFrame(4)));
+  runtime.graph.connect(branch, model_graph, live_link_options);
   runtime.graph.connect(model_graph, detections_graph);
 
   if (save_debug_frames) {
-    simaai::neat::Graph frames("debug_frame");
+    simaai::neat::Graph frames(debug_frame_name);
     frames.add(
-        simaai::neat::nodes::Output("debug_frame", simaai::neat::OutputOptions::EveryFrame(4)));
-    auto debug_join = simaai::neat::graphs::Combine({"debug_frame", "detections"}, "debug_output",
-                                                    simaai::neat::CombinePolicy::ByFrame);
-    runtime.graph.connect(branch, frames);
+        simaai::neat::nodes::Output(debug_frame_name, simaai::neat::OutputOptions::EveryFrame(4)));
+    auto debug_join =
+        simaai::neat::graphs::Combine({debug_frame_name, detections_name}, debug_output_name,
+                                      simaai::neat::CombinePolicy::ByFrame);
+    runtime.graph.connect(branch, frames, live_link_options);
     runtime.graph.connect(frames, debug_join);
     runtime.graph.connect(detections_graph, debug_join);
   }
+
   if (cfg.profile) {
     std::cout << "Backend stream=" << stream_index << ":\n"
               << runtime.graph.describe_backend() << "\n";
@@ -540,13 +561,12 @@ void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream,
   }
 }
 
-bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg,
-                         const std::string& output_name) {
+bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
   constexpr int kPullTimeoutMs = 50;
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;
   const double pull_start = sima_examples::time_ms();
-  const auto status = stream.run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
+  const auto status = stream.run.pull(stream.output_name, kPullTimeoutMs, sample, &pull_error);
   const double pull_end = sima_examples::time_ms();
   if (status == simaai::neat::PullStatus::Timeout) {
     return false;
@@ -582,13 +602,12 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg,
   return true;
 }
 
-void consume_stream(StreamRuntime& stream, const AppConfig& cfg, const std::string& output_name,
-                    std::atomic_bool& stop_requested, std::exception_ptr& first_error,
-                    std::mutex& error_mutex) {
+void consume_stream(StreamRuntime& stream, const AppConfig& cfg, std::atomic_bool& stop_requested,
+                    std::exception_ptr& first_error, std::mutex& error_mutex) {
   try {
     while (!stop_requested.load() && g_stop_requested == 0 && !stream.closed &&
            (cfg.frames <= 0 || stream.processed < cfg.frames)) {
-      (void)process_stream_once(stream, cfg, output_name);
+      (void)process_stream_once(stream, cfg);
     }
   } catch (...) {
     {
@@ -620,21 +639,20 @@ void run_app(const AppConfig& cfg) {
         build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index], labels));
   }
 
-  const std::string output_name =
-      (!cfg.save_dir.empty() && cfg.save_every > 0) ? "debug_output" : "detections";
   std::atomic_bool stop_requested{false};
   std::exception_ptr first_error;
   std::mutex error_mutex;
   std::vector<std::thread> consumers;
   consumers.reserve(streams.size());
   for (auto& stream : streams) {
-    consumers.emplace_back(consume_stream, std::ref(stream), std::cref(cfg), std::cref(output_name),
+    consumers.emplace_back(consume_stream, std::ref(stream), std::cref(cfg),
                            std::ref(stop_requested), std::ref(first_error), std::ref(error_mutex));
   }
 
   for (auto& consumer : consumers) {
-    if (consumer.joinable())
+    if (consumer.joinable()) {
       consumer.join();
+    }
   }
 
   for (auto& stream : streams) {
@@ -642,10 +660,10 @@ void run_app(const AppConfig& cfg) {
     stream.run.close();
     std::cout << "[stream " << stream.index << "] processed=" << stream.processed << "\n";
   }
-
   std::signal(SIGINT, previous_sigint);
-  if (first_error)
+  if (first_error) {
     std::rethrow_exception(first_error);
+  }
 }
 
 } // namespace

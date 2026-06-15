@@ -180,6 +180,7 @@ class TestMetadata:
             frame_h=100,
             output_fps=30,
             video_port=9000,
+            output_name="detections",
         )
         boxes = [
             {

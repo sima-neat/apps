@@ -19,7 +19,7 @@ Both the Python and C++ entrypoints use one complete graph per RTSP stream:
 ```text
 RtspDecodedInput
   -> Branch(video, model[, debug_frame])
-    -> video: VideoSender(H.264 RTP/UDP)
+    -> video: VideoSender(raw caps + H.264 RTP/UDP)
     -> model: YOLO26 model.graph() -> Output(detections)
     -> debug only: Combine(debug_frame, detections, ByFrame) -> debug_output
 ```
@@ -92,6 +92,7 @@ After this setup, follow the example-specific commands below.
 - `inference.min_score`, `inference.nms_iou`, and `inference.max_detections` are explicit detector decode parameters in the checked-in config.
 - The example defaults to person class id `0`, and tracker behavior is configurable from the config file.
 - Both C++ and Python add the `VideoSender` nodegroup for video transport and use `model.graph()` for model-owned preprocessing, inference, and YOLO26 decode.
+- `VideoSender` owns raw-frame caps, conversion, H.264 encoding, RTP packetization, and UDP output. The app does not add those lower-level nodes itself.
 - Debug saves use `Combine(ByFrame)` so saved frames and tracks stay aligned.
 
 ## Command-Line Options

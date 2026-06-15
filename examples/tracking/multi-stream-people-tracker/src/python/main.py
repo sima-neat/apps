@@ -390,6 +390,12 @@ def make_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: 
     opt.fallback_h264_width = width
     opt.fallback_h264_height = height
     opt.fallback_h264_fps = fps
+    opt.output_caps.enable = True
+    opt.output_caps.format = pyneat.Format.NV12
+    opt.output_caps.width = width
+    opt.output_caps.height = height
+    opt.output_caps.fps = fps
+    opt.output_caps.memory = pyneat.CapsMemory.Any
     return opt
 
 
@@ -421,6 +427,8 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
     branch = pyneat.graphs.branch("source", outputs)
 
     graph = pyneat.Graph()
+    live_link_options = pyneat.GraphLinkOptions()
+    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)
     video_port = 0
     if cfg.video_enabled:
@@ -433,13 +441,13 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
 
         video_graph = pyneat.Graph("video")
         video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
-        graph.connect(branch, video_graph)
+        graph.connect(branch, video_graph, live_link_options)
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
     detections_graph = pyneat.Graph("detections")
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
-    graph.connect(branch, model_graph)
+    graph.connect(branch, model_graph, live_link_options)
     graph.connect(model_graph, detections_graph)
 
     if save_debug_frames:
@@ -666,6 +674,7 @@ def run_app(cfg: AppConfig) -> None:
             consumer.join()
     except KeyboardInterrupt:
         stop_event.set()
+        raise
     finally:
         stop_event.set()
         for stream in streams:
@@ -694,6 +703,8 @@ def main(argv: list[str] | None = None) -> int:
         load_runtime_dependencies()
         run_app(cfg)
         return 0
+    except KeyboardInterrupt:
+        return 130
     except Exception as exc:
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1

@@ -390,6 +390,14 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
     opt.fallback_h264_fps = probe.fps;
     fps_out = probe.fps;
   }
+  if (width_out > 0 && height_out > 0 && fps_out > 0) {
+    opt.output_caps.enable = true;
+    opt.output_caps.format = "NV12";
+    opt.output_caps.width = width_out;
+    opt.output_caps.height = height_out;
+    opt.output_caps.fps = fps_out;
+    opt.output_caps.memory = simaai::neat::CapsMemory::Any;
+  }
   return opt;
 }
 
@@ -435,6 +443,8 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   }
   auto branch = simaai::neat::graphs::Branch("source", outputs);
 
+  simaai::neat::GraphLinkOptions live_link_options;
+  live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   runtime.graph.connect(source, branch);
   if (cfg.video_enabled) {
     auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
@@ -447,7 +457,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     simaai::neat::Graph video_graph("video");
     video_graph.connect(simaai::neat::nodes::Input("video"),
                         simaai::neat::nodes::groups::VideoSender(video_options));
-    runtime.graph.connect(branch, video_graph);
+    runtime.graph.connect(branch, video_graph, live_link_options);
   }
 
   simaai::neat::Graph model_graph("model");
@@ -455,7 +465,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   simaai::neat::Graph detections_graph("detections");
   detections_graph.add(
       simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
-  runtime.graph.connect(branch, model_graph);
+  runtime.graph.connect(branch, model_graph, live_link_options);
   runtime.graph.connect(model_graph, detections_graph);
 
   if (save_debug_frames) {
@@ -653,8 +663,9 @@ void run_app(const AppConfig& cfg) {
   }
 
   std::signal(SIGINT, previous_sigint);
-  if (first_error)
+  if (first_error) {
     std::rethrow_exception(first_error);
+  }
 }
 
 } // namespace

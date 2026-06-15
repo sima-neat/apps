@@ -93,7 +93,7 @@ Examples are organized under `examples/<category>/<example>`. Each example is so
 | `examples/<category>/<example>/src/common/` | Files shared by the example implementations |
 
 > **IMPORTANT:** Use this structure when reading, extending, or adding examples, and follow each example README for any example-specific entrypoints.
-> Follow the instructions inside each example `README.md`, or visit the [SiMa.ai Neat Apps Portal](<https://apps.sima-neat.com/portal/index.html>).
+> Follow the instructions inside each example `README.md`, or visit the [SiMa.ai Neat Apps Portal](<https://developer.sima.ai/examples>).
 
 ### Contributor Guidelines
 

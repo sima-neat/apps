@@ -34,7 +34,7 @@ Insight is SiMa.ai's lightweight, cross-platform development and visualization t
 
 For this sample, the most important part is the viewer/output contract: the application sends video on the Insight video channel and sends detection metadata as JSON on the Insight side channel. That allows the browser UI to display the live stream together with object detections without relying on external tools such as `ffplay`, VLC, or ad hoc debug viewers.
 
-For more information regarding Insight, please refer to this [page](https://docs.sima.ai/pages/insight/main.html#).
+For more information regarding Insight, please refer to this [page](https://developer.sima.ai/software/tools/insight).
 
 ## Architecture
 The sample is split into three independent runtime stages:
@@ -49,7 +49,7 @@ The sample is split into three independent runtime stages:
    The model stage is isolated from transport logic so detection behavior can be debugged separately from RTSP or Insight issues.
 
 3. `Insight output`
-   The original decoded frame is pushed into `VideoSender`. The nodegroup owns the raw-frame video transport path, including conversion, H.264 encoding, RTP packetization, and UDP output. Detection results from the YOLO path are converted into Insight metadata and sent on the metadata side channel.
+   The original decoded frame is pushed into `VideoSender`. The nodegroup owns the raw-frame video transport path, including conversion, raw NV12 caps, H.264 encoding, RTP packetization, and UDP output. Detection results from the YOLO path are converted into Insight metadata and sent on the metadata side channel.
 
 ## Neat Library API Usage
 
@@ -120,7 +120,7 @@ cd ../..
 - The sample always publishes to Insight.
 - Video is sent to the configured Insight video UDP port.
 - Detection metadata is sent to the configured Insight metadata UDP port.
-- The app adds only the `VideoSender` nodegroup for video output. It does not manually add lower-level color conversion, encoder, parser, packetizer, or UDP nodes.
+- The app adds only the `VideoSender` nodegroup for video output. It does not manually add lower-level color conversion, raw capsfilter, encoder, parser, packetizer, or UDP nodes.
 - This example feeds raw decoded frames to `VideoSender` with the raw-frame option. If an upstream pipeline already produces H.264, `VideoSender` also supports the encoded-input option, where it parses, packetizes, and sends without re-encoding.
 - `model.path` must point to a valid YOLO compiled model package file.
 - `source.rtsp_url` must be set before running.
@@ -271,4 +271,4 @@ Python-specific notes:
 - C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
 - Python source: `src/python/main.py`
 - Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
-- Insight documentation: <https://docs.sima.ai/pages/insight/main.html>
+- Insight documentation: <https://developer.sima.ai/software/tools/insight>
