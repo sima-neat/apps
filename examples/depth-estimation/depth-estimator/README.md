@@ -24,13 +24,18 @@ Use the platform version wherever `<platform-version>` appears.
 
 Primary model: `depth_anything_v2_vits`
 
-Download into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits && cd ../..`
+Download the model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits
+cd ../..
+```
 
 ## Prerequisites
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits && cd ../..`
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).

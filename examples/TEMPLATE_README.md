@@ -26,14 +26,26 @@ Use the platform version wherever `<platform-version>` appears.
 
 Also works with: `<model_variant_1>`, `<model_variant_2>`
 
-Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <model_variant_1> && cd ../..`
+Download one model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+
+PLATFORM_VERSION="<platform-version>"
+MODEL=<modelzoo-name>
+
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get "${MODEL}"
+
+cd ../..
+```
+
+Set `PLATFORM_VERSION` to your installed SDK platform version, and replace `MODEL` with a supported modelzoo name.
 
 ## Prerequisites
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get <default_model_name> && cd ../..`
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).

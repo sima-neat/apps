@@ -33,15 +33,18 @@ Use the platform version wherever `<platform-version>` appears.
 
 Validated with: `retinaface_mobilenet25`
 
-Download into `assets/models/`:
-- `./scripts/download_models.sh retinaface_mobilenet25`
+Download the validated model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
+cd ../..
+```
 
 ## Prerequisites
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Preferred download command: `./scripts/download_models.sh retinaface_mobilenet25`
-- Direct URL fallback:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz && cd ../..`
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).

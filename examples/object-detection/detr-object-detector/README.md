@@ -26,15 +26,18 @@ Use the platform version wherever `<platform-version>` appears.
 
 Validated with: `detr_resnet50_modified_class_embed_bbox_embed`
 
-Download into `assets/models/`:
-- `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
+Download the validated model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+cd ../..
+```
 
 ## Prerequisites
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be placed under `assets/models/`.
-- Preferred download command: `./scripts/download_models.sh detr_resnet50_modified_class_embed_bbox_embed`
-- Direct URL fallback:
-  `mkdir -p assets/models && cd assets/models && sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz && cd ../..`
 - Default model path:
   `assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz`
 

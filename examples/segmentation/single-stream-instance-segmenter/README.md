@@ -42,24 +42,21 @@ Supported YOLO26 segmentation models:
 - `yolo26m-seg-bf16-mla_tess-b1.tar.gz`
 - `yolo26m-seg-int8-b1.tar.gz`
 
-Download the supported variants:
+Download one model:
 
 ```bash
-PLATFORM_VERSION=<platform-version>
 mkdir -p assets/models/YOLO26-SEGMENTATION
 cd assets/models/YOLO26-SEGMENTATION
 
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26n-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26s-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26l-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26x-seg-bf16-mla_tess.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-mla_tess-b1.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/yolo26m-seg-int8-b1.tar.gz"
+PLATFORM_VERSION="<platform-version>"
+MODEL=yolo26m-seg-bf16-b1.tar.gz
+
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/${MODEL}"
 
 cd ../../..
 ```
+
+Set `PLATFORM_VERSION` to your installed SDK platform version, and replace `MODEL` with any supported model listed above.
 
 ## Prerequisites
 - Installed Neat Library and Insight on the DevKit.

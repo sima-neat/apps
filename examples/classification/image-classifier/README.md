@@ -24,13 +24,18 @@ Use the platform version wherever `<platform-version>` appears.
 
 Primary model: `resnet_50`
 
-Download into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get resnet_50 && cd ../..`
+Download the model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+sima-cli modelzoo -v <platform-version> get resnet_50
+cd ../..
+```
 
 ## Prerequisites
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get resnet_50 && cd ../..`
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).

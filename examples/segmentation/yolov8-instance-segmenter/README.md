@@ -24,13 +24,25 @@ Use the platform version wherever `<platform-version>` appears.
 
 Also works with: `yolo_v8s_seg`, `yolo_v8m_seg`, `yolo_v8l_seg`
 
-Download any variant into `assets/models/`:
-- `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get yolo_v8n_seg && cd ../..`
+Download one model:
+
+```bash
+mkdir -p assets/models
+cd assets/models
+
+PLATFORM_VERSION="<platform-version>"
+MODEL=yolo_v8n_seg
+
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get "${MODEL}"
+
+cd ../..
+```
+
+Set `PLATFORM_VERSION` to your installed SDK platform version, and replace `MODEL` with a supported modelzoo name.
 
 ## Prerequisites
 - Installed Neat Development Environment.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`.
-- Download command: `mkdir -p assets/models && cd assets/models && sima-cli modelzoo -v <platform-version> get yolo_v8n_seg && cd ../..`
 
 ## Get The Apps Repo
 Install the Neat Library first by following the official [Neat Library installation guide](https://developer.sima.ai/software/getting-started/installation/neat-library).
