@@ -67,62 +67,36 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- C++ and Python read runtime values from `src/common/config.yaml`.
-- Labels file is configured under `model.labels`.
-- Output images are written as `.png` files.
-- Use `runtime.profile` to print per-image and aggregate timing plus FPS.
-- Use `runtime.num_runs` to repeat the image set for benchmarking.
-- Use `output.overlay: false` to skip drawing bounding boxes and writing output images.
+## Configure
+Edit `examples/object-detection/yolo26-object-detector/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+```yaml
+model:
+  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz # Model package to load.
+  labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
-### Python
-- Invocation:
-  `python examples/object-detection/yolo26-object-detector/src/python/main.py [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+io:
+  input_dir: assets/test_images                           # Folder containing input images.
+  output_dir: sandbox/yolo26-object-detector              # Folder for annotated images.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/object-detection/yolo26-object-detector
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/yolo26-object-detector
+decode:
+  score_threshold: 0.40                                   # Minimum object confidence.
+  nms_iou: 0.60                                           # Overlap threshold for NMS.
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector
+./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector \
+  --config examples/object-detection/yolo26-object-detector/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
-python examples/object-detection/yolo26-object-detector/src/python/main.py
+python3 examples/object-detection/yolo26-object-detector/src/python/main.py \
+  --config examples/object-detection/yolo26-object-detector/src/common/config.yaml
 ```
 
 ## Testing

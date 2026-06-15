@@ -59,59 +59,35 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- C++ and Python read runtime values from `src/common/config.yaml`.
-- Detection confidence and NMS IoU live under `decode`.
-- By default, detections include 5-point facial landmarks unless `decode.landmarks` is `false`.
+## Configure
+Edit `examples/face-detection/face-detector/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/face-detection/face-detector_cpp/face-detector [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+```yaml
+model:
+  path: assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz # Model package to load.
 
-### Python
-- Invocation:
-  `python3 examples/face-detection/face-detector/src/python/main.py [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+io:
+  input_dir: assets/test_images                               # Folder containing input images.
+  output_dir: sandbox/face-detector                           # Folder for annotated images.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/face-detection/face-detector_cpp/face-detector
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/face-detection/face-detector
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/face-detector
+decode:
+  confidence_threshold: 0.40                                  # Minimum face confidence.
+  landmarks: true                                             # Draw five facial landmarks.
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/face-detection/face-detector_cpp/face-detector
+./build/examples/face-detection/face-detector_cpp/face-detector \
+  --config examples/face-detection/face-detector/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/face-detection/face-detector/src/python/requirements.txt
-python3 examples/face-detection/face-detector/src/python/main.py
+python3 examples/face-detection/face-detector/src/python/main.py \
+  --config examples/face-detection/face-detector/src/common/config.yaml
 ```
 
 ## Testing

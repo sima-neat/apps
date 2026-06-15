@@ -50,50 +50,18 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- Runtime settings live in `src/common/config.yaml`.
-- If `io.image` is null, the example downloads a sample goldfish image automatically.
-- `validation.min_probability` controls the pass/fail threshold for the expected class probability.
+## Configure
+Edit `examples/classification/image-classifier/src/common/config.yaml` if you want to use a different image or threshold.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/classification/image-classifier/image-classifier [--config <path>]`
-- Required arguments:
-  None. Defaults to `src/common/config.yaml`.
-- Optional arguments:
-  `--config <path>`
+```yaml
+model:
+  path: assets/models/resnet_50_mpk.tar.gz  # Model package to load.
 
-### Python
-- Invocation:
-  `python examples/classification/image-classifier/src/python/main.py [--config <path>]`
-- Required arguments:
-  None. Defaults to `src/common/config.yaml`.
-- Optional arguments:
-  `--config <path>`
+io:
+  image: null                               # Input image. null uses the sample image.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/classification/image-classifier/image-classifier
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/classification/image-classifier
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/image-classifier
+validation:
+  min_probability: 0.50                     # Minimum expected-class probability.
 ```
 
 ## Run
@@ -107,7 +75,7 @@ Binary output:
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/classification/image-classifier/src/python/requirements.txt
-python examples/classification/image-classifier/src/python/main.py \
+python3 examples/classification/image-classifier/src/python/main.py \
   --config examples/classification/image-classifier/src/common/config.yaml
 ```
 

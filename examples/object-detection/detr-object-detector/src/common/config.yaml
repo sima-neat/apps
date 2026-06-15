@@ -1,17 +1,17 @@
-model:
-  path: <model-path>  # Example: assets/models/<model-pack>.tar.gz
+model:                       # DETR model selection.
+  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
 
-io:
-  input_dir: assets/test_images
-  output_dir: sandbox/detr-object-detector
+io:                          # Input and output paths.
+  input_dir: assets/test_images              # Folder containing input images.
+  output_dir: sandbox/detr-object-detector   # Folder for annotated images.
 
-decode:
-  confidence_threshold: 0.70
-  max_draw: 50
-  person_only: false
+decode:                      # DETR decode settings.
+  confidence_threshold: 0.70 # Minimum object confidence.
+  max_draw: 50               # Max detections to draw per image.
+  person_only: false         # Keep only COCO person detections when true.
 
-runtime:
-  timeout_ms: 20000
-  profile: false
-  num_runs: 100
-  verbose: false
+runtime:                     # Runtime settings.
+  timeout_ms: 20000          # Inference timeout in milliseconds.
+  profile: false             # Print profiling summaries.
+  num_runs: 100              # Number of repeated runs for profiling.
+  verbose: false             # Print verbose runtime output.

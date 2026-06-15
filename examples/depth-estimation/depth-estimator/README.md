@@ -50,61 +50,31 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- Runtime settings are read from `src/common/config.yaml` by default.
-- Input directory is scanned for common image extensions.
-- Output files are written to the configured output directory.
+## Configure
+Edit `examples/depth-estimation/depth-estimator/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/depth-estimation/depth-estimator/depth-estimator [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+```yaml
+model:
+  path: assets/models/depth_anything_v2_vits_mpk.tar.gz # Model package to load.
 
-### Python
-- Invocation:
-  `python examples/depth-estimation/depth-estimator/src/python/main.py [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
-
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/depth-estimation/depth-estimator/depth-estimator
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/depth-estimation/depth-estimator
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/depth-estimator
+io:
+  input_dir: assets/test_images                         # Folder containing input images.
+  output_dir: sandbox/depth-estimator                   # Folder for depth visualizations.
 ```
 
 ## Run
-Edit `examples/depth-estimation/depth-estimator/src/common/config.yaml` to point at the model and image folder.
-
 ### C++
 ```bash
-./build/examples/depth-estimation/depth-estimator/depth-estimator
+./build/examples/depth-estimation/depth-estimator/depth-estimator \
+  --config examples/depth-estimation/depth-estimator/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/depth-estimation/depth-estimator/src/python/requirements.txt
-python examples/depth-estimation/depth-estimator/src/python/main.py
+python3 examples/depth-estimation/depth-estimator/src/python/main.py \
+  --config examples/depth-estimation/depth-estimator/src/common/config.yaml
 ```
 
 ## Debugging Notes

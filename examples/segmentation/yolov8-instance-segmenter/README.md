@@ -57,54 +57,19 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- Model path is positional and required.
-- Input directory is scanned for common image extensions.
-- Output images include per-instance mask overlays plus bounding boxes/class labels.
-- Runtime and decode settings live in `src/common/config.yaml`.
-- Inference runs on a resized model input, but saved overlays preserve the original image resolution.
-- Uses YOLOv8-seg tensors for box regression/class scores, mask coefficients, and prototype masks.
-- Masks, mask contours, and bounding boxes share the same vivid class-color palette.
+## Configure
+Edit `examples/segmentation/yolov8-instance-segmenter/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/segmentation/yolov8-instance-segmenter/yolov8-instance-segmenter [--config <path>]`
-- Required arguments:
-  None. Defaults to `src/common/config.yaml`.
-- Optional arguments:
-  `--config <path>`
+```yaml
+model:
+  path: assets/models/yolo_v8n_seg_mpk.tar.gz  # Model package to load.
 
-### Python
-- Invocation:
-  `python3 examples/segmentation/yolov8-instance-segmenter/src/python/main.py [--config <path>]`
-- Required arguments:
-  None. Defaults to `src/common/config.yaml`.
-- Optional arguments:
-  `--config <path>`
+io:
+  input_dir: assets/test_images                 # Folder containing input images.
+  output_dir: sandbox/yolov8-instance-segmenter # Folder for annotated images.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/segmentation/yolov8-instance-segmenter/yolov8-instance-segmenter
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/segmentation/yolov8-instance-segmenter
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/yolov8-instance-segmenter
+decode:
+  score_threshold: 0.25                         # Minimum instance confidence.
 ```
 
 ## Run

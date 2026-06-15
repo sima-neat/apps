@@ -19,6 +19,16 @@ Detection metadata visualized in Insight:
 
 ![Detection-to-VLM assistant preview](../../../assets/portal/genai/detection-to-vlm-assistant/image.png)
 
+## Insight Setup
+[Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
+
+Run `neat` in the Neat Developer Environment and copy these values into your config:
+
+- `Insight Web UI`: browser URL for the viewer
+- `rtsp.tcp`: RTSP source port
+- `videoUDP`: UDP video port range
+- `metadataUDP`: UDP metadata port range
+
 ## Prerequisites
 - Installed Neat Development Environment.
 - YOLO26 detector model package available under `assets/models/`.
@@ -66,6 +76,25 @@ cd ../..
 ```
 
 Set `PLATFORM_VERSION` to your installed SDK platform version, and replace `MODEL` with any supported model listed above.
+
+## Configure
+Edit `examples/genai/detection-to-vlm-assistant/src/common/config.yaml`.
+
+```yaml
+source:
+  rtsp_url: rtsp://<insight-host-ip>:<rtsp.tcp>/<stream> # RTSP stream URL.
+
+model:
+  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz # Model package to load.
+
+insight:
+  host: <insight-host-ip>                                  # Host running Insight.
+  video_port: <videoUDP start port from neat>              # UDP video port.
+  metadata_port: <metadataUDP start port from neat>        # UDP metadata port.
+
+openai:
+  enabled: false                                           # Disable for detection plus Insight only.
+```
 
 ## Run
 From the `apps` repository root:

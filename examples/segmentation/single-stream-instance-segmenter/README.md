@@ -28,6 +28,16 @@ Snippet from a pipeline run:
 
 ![Single stream instance segmenter preview](../../../assets/portal/segmentation/single-stream-instance-segmenter/image.png)
 
+## Insight Setup
+[Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive segmentation metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
+
+Run `neat` in the Neat Developer Environment and copy these values into your config:
+
+- `Insight Web UI`: browser URL for the viewer
+- `rtsp.tcp`: RTSP source port
+- `videoUDP`: UDP video port range
+- `metadataUDP`: UDP metadata port range
+
 ## Supported Models
 Use the platform version wherever `<platform-version>` appears.
 
@@ -77,46 +87,26 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- C++ and Python read runtime values from `src/common/config.yaml`.
-- `model.path` must point to a valid YOLO26 segmentation model package.
-- `model.labels` points to the COCO labels file used for overlays and metadata.
-- `source.rtsp_url` must point to a live RTSP stream.
-- `output.insight.host` must point to the host running the Insight receiver/viewer.
-- If `inference.frames` is zero, the sample runs continuously.
-- Masks are rendered into the video stream. Metadata contains object labels, confidences, and boxes.
-- `output.save_dir` and `output.save_every` can be used to save sampled annotated frames.
-- The model path uses model-managed preprocessing with `COCO_YOLO` normalization and `YoloV26Seg` decode.
-- Insight video is sent through `VideoSender`; the app passes raw frames plus stream geometry, and the nodegroup owns raw-frame caps, conversion, H.264 encoding, RTP packetization, and UDP output.
+## Configure
+Edit `examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml`.
 
-## Command-Line Options
-- `--config <path>`
-  Optional. YAML config path. Defaults to `src/common/config.yaml`.
-- `--validate-config-only`
-  Validate YAML config and exit without opening the RTSP stream.
+```yaml
+model:
+  path: assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz # Model package to load.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
+source:
+  rtsp_url: rtsp://<insight-host-ip>:<rtsp.tcp>/<stream>             # RTSP stream URL.
+  tcp: true                                                          # Use TCP transport for RTSP.
 
-Binary output:
-```bash
-./build/examples/segmentation/single-stream-instance-segmenter/single-stream-instance-segmenter
-```
+inference:
+  frames: 0                                                          # Frame limit. 0 runs continuously.
+  min_score: 0.55                                                    # Minimum instance confidence.
 
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/segmentation/single-stream-instance-segmenter
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/single-stream-instance-segmenter
+output:
+  insight:
+    host: <insight-host-ip>                                          # Host running Insight.
+    video_port: <videoUDP start port from neat>                      # UDP video port.
+    metadata_port: <metadataUDP start port from neat>                # UDP metadata port.
 ```
 
 ## Run
@@ -132,40 +122,6 @@ source ~/pyneat/bin/activate
 pip install -r examples/segmentation/single-stream-instance-segmenter/src/python/requirements.txt
 python3 examples/segmentation/single-stream-instance-segmenter/src/python/main.py \
   --config examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml
-```
-
-Example config:
-
-```yaml
-model:
-  path: assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
-  labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
-
-source:
-  rtsp_url: rtsp://<host>:8554/<stream>
-  tcp: true
-  latency_ms: 100
-
-inference:
-  frames: 0
-  min_score: 0.55
-  nms_iou: 0.60
-  max_detections: 50
-
-runtime:
-  profile: false
-  profile_interval: 100
-
-output:
-  save_dir: ""
-  save_every: 0
-  mask_alpha: 0.55
-  mask_threshold: 0.50
-  draw_boxes: true
-  insight:
-    host: <insight-host-ip>
-    video_port: 9000
-    metadata_port: 9100
 ```
 
 ## Debugging Notes

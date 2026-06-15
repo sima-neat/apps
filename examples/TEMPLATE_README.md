@@ -60,63 +60,31 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- This example expects the model path to be provided explicitly at runtime.
-- Input and output paths are user-provided.
-- Update this section with any example-specific behavior that affects runtime results.
+## Configure
+Edit `examples/<category>/<name>/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/<category>/<name>/<binary> <args>`
-- Required arguments:
-  `<required_arg_1> <required_arg_2>`
-- Optional arguments:
-  `--flag <value>`
+```yaml
+model:
+  path: assets/models/<model-pack>.tar.gz # Model package to load.
 
-### Python
-- Invocation:
-  `python3 examples/<category>/<name>/src/python/main.py <args>`
-- Required arguments:
-  `<required_arg_1> <required_arg_2>`
-- Optional arguments:
-  `--flag <value>`
-
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/<category>/<name>/<binary>
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>
-cmake -S examples/<category>/<name>/src/cpp -B build/<name>
-cmake --build build/<name> -j
-```
-
-Binary output:
-```bash
-./build/<name>/<binary>
+io:
+  input_dir: assets/test_images           # Folder containing input images.
+  output_dir: sandbox/<name>              # Folder for generated outputs.
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/<category>/<name>/<binary> <args>
+./build/examples/<category>/<name>/<binary> \
+  --config examples/<category>/<name>/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/<category>/<name>/src/python/requirements.txt
-python3 examples/<category>/<name>/src/python/main.py <args>
+python3 examples/<category>/<name>/src/python/main.py \
+  --config examples/<category>/<name>/src/common/config.yaml
 ```
 
 ## Debugging Notes

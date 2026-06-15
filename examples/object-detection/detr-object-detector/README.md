@@ -54,62 +54,35 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- The example expects an input folder with image files.
-- Input preprocessing preserves aspect ratio and center-pads into an `1333x800` model frame.
-- Output boxes are mapped back to the original image resolution before drawing.
-- By default all DETR foreground classes are considered. Set `decode.person_only: true` in `src/common/config.yaml` to keep only the DETR `person` class.
-- Overlay text uses built-in DETR COCO labels and class-colored boxes.
-- `runtime.profile` runs repeated inference and reports session, postprocessing, and overall timing statistics.
+## Configure
+Edit `examples/object-detection/detr-object-detector/src/common/config.yaml`.
 
-## Command-Line Options
-### C++
-- Invocation:
-  `./build/examples/object-detection/detr-object-detector/detr-object-detector [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+```yaml
+model:
+  path: assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz # Model package to load.
 
-### Python
-- Invocation:
-  `python3 examples/object-detection/detr-object-detector/src/python/main.py [--config <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
+io:
+  input_dir: assets/test_images                                                # Folder containing input images.
+  output_dir: sandbox/detr-object-detector                                     # Folder for annotated images.
 
-## Build
-### Build From The Apps Repo
-```bash
-cd <apps-repo-root>
-./build.sh
-```
-
-Binary output:
-```bash
-./build/examples/object-detection/detr-object-detector/detr-object-detector
-```
-
-### Build This Example Directly With CMake
-```bash
-cd <apps-repo-root>/examples/object-detection/detr-object-detector
-cmake -S src/cpp -B build
-cmake --build build -j
-```
-
-Binary output:
-```bash
-./build/detr-object-detector
+decode:
+  confidence_threshold: 0.70                                                   # Minimum object confidence.
+  person_only: false                                                           # Keep only COCO person detections when true.
 ```
 
 ## Run
 ### C++
 ```bash
-./build/examples/object-detection/detr-object-detector/detr-object-detector
+./build/examples/object-detection/detr-object-detector/detr-object-detector \
+  --config examples/object-detection/detr-object-detector/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/detr-object-detector/src/python/requirements.txt
-python3 examples/object-detection/detr-object-detector/src/python/main.py
+python3 examples/object-detection/detr-object-detector/src/python/main.py \
+  --config examples/object-detection/detr-object-detector/src/common/config.yaml
 ```
 
 ## Testing

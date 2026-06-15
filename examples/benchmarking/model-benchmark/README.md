@@ -44,20 +44,19 @@ cd apps
 
 After this setup, follow the example-specific commands below.
 
-## Important Behavior
-- `benchmark.frames` controls the measured synthetic frames passed to `Model.benchmark()`.
-- The default report path is `sandbox/model-benchmark/report.json`.
-- The JSON report is the stable output for comparing model packages.
+## Configure
+Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or override these values from the command line.
 
-## Command-Line Options
-### Python
-- Invocation:
-  `python3 examples/benchmarking/model-benchmark/src/python/main.py [--config <path>] [--model <path>] [--frames <n>] [--output-json <path>]`
-- Optional arguments:
-  `--config <path>`: YAML config path. Defaults to `src/common/config.yaml`.
-  `--model <path>`: compiled model package path. Overrides `model.path`.
-  `--frames <n>`: measured synthetic frames. Overrides `benchmark.frames`.
-  `--output-json <path>`: report path. Overrides `output.report_json`.
+```yaml
+model:
+  path: assets/models/<model-pack>.tar.gz     # Model package to benchmark.
+
+benchmark:
+  frames: 1000                                # Number of synthetic frames.
+
+output:
+  report_json: sandbox/model-benchmark/report.json # JSON report path.
+```
 
 ## Run
 From the Apps repo root:
