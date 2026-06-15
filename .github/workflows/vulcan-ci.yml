@@ -108,6 +108,21 @@ jobs:
             fi
 
             cd /workspace
+            echo "SDK release:"
+            cat /etc/sdk-release || true
+            echo "Build compiler environment:"
+            echo "  CC=${CC:-}"
+            echo "  CXX=${CXX:-}"
+            if [[ -n "${CC:-}" ]]; then
+              command -v "${CC}" || true
+              "${CC}" --version | head -n 1 || true
+            fi
+            if [[ -n "${CXX:-}" ]]; then
+              command -v "${CXX}" || true
+              "${CXX}" --version | head -n 1 || true
+            fi
+            echo "Cross compiler symlinks:"
+            ls -l /usr/bin/aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-g++ || true
             chmod +x build.sh scripts/ci/check_public_includes.sh scripts/install-vulcan-apps-package.sh
             ./build.sh --all --clean
             ./scripts/ci/check_public_includes.sh
