@@ -20,6 +20,7 @@ VOICES=(
   "en_US-kristin-medium"
   "en_GB-northern_english_male-medium"
   "vi_VN-vivos-x_low"
+  "vi_VN-vais1000-medium"
   "de_DE-thorsten-medium"
   "es_ES-davefx-medium"
   "fr_FR-siwis-medium"

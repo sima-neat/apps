@@ -460,6 +460,7 @@ window.onload = function () {
 
   // Initialize dashboard functionality
   initializeVoiceSync();
+  initializeUtteranceSpeedControl();
   initializeChatModelSelect();
   hideRagControlsIfDisabled();
   if (isRagEnabled()) {
@@ -1029,6 +1030,26 @@ function clearStatusMessages() {
   // that should persist across chat sessions
 }
 
+
+function getUtteranceSpeed() {
+  const speedRange = document.getElementById('utteranceSpeedRange');
+  const speed = speedRange ? parseFloat(speedRange.value) : 1.0;
+  return Number.isFinite(speed) && speed > 0 ? speed : 1.0;
+}
+
+function updateUtteranceSpeedValue() {
+  const speedValue = document.getElementById('utteranceSpeedValue');
+  if (speedValue) {
+    speedValue.textContent = `${getUtteranceSpeed().toFixed(2)}x`;
+  }
+}
+
+function initializeUtteranceSpeedControl() {
+  const speedRange = document.getElementById('utteranceSpeedRange');
+  if (!speedRange) return;
+  updateUtteranceSpeedValue();
+  speedRange.addEventListener('input', updateUtteranceSpeedValue);
+}
 function captureAndAnimateSnap(textchat = null) {
   const includeImageCheckbox = document.getElementById('toggleImagePrompt');
 
@@ -1214,6 +1235,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
   formData.append('searchRag', isRagEnabled() && searchRag ? searchRag.checked : false);
   formData.append('includeChatHistory', includeChatHistory ? includeChatHistory.checked : true);
   formData.append('chatModel', getSelectedChatModel());
+  formData.append('utteranceSpeed', getUtteranceSpeed().toFixed(2));
 
   const sendRequest = async () => {
     activeGeneration = true;
