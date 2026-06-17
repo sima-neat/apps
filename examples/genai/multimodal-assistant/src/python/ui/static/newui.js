@@ -460,6 +460,7 @@ window.onload = function () {
 
   // Initialize dashboard functionality
   initializeVoiceSync();
+  initializeUtteranceSpeedControl();
   initializeChatModelSelect();
   hideRagControlsIfDisabled();
   if (isRagEnabled()) {
@@ -939,12 +940,7 @@ function resetSettingsToDefaults() {
   const languageSelect = document.getElementById('languageSelect');
   if (languageSelect) {
     languageSelect.value = 'en';
-  }
-
-  // Reset voice select to default
-  const voiceSelect = document.getElementById('voiceSelect');
-  if (voiceSelect) {
-    voiceSelect.value = 'default';
+    refreshVoiceOptions();
   }
 
   // Clear any status messages
@@ -1009,12 +1005,7 @@ function showSettingsRows() {
     languageRow.style.display = 'block';
   }
 
-  // Voice row logic depends on language selection
-  const voiceRow = document.getElementById('voiceRow');
-  const languageSelect = document.getElementById('languageSelect');
-  if (voiceRow && languageSelect) {
-    voiceRow.style.display = languageSelect.value === 'en' ? 'block' : 'none';
-  }
+  refreshVoiceOptions();
 }
 
 // Clear only status messages, preserve settings values
@@ -1029,6 +1020,26 @@ function clearStatusMessages() {
   // that should persist across chat sessions
 }
 
+
+function getUtteranceSpeed() {
+  const speedRange = document.getElementById('utteranceSpeedRange');
+  const speed = speedRange ? parseFloat(speedRange.value) : 1.0;
+  return Number.isFinite(speed) && speed > 0 ? speed : 1.0;
+}
+
+function updateUtteranceSpeedValue() {
+  const speedValue = document.getElementById('utteranceSpeedValue');
+  if (speedValue) {
+    speedValue.textContent = `${getUtteranceSpeed().toFixed(2)}x`;
+  }
+}
+
+function initializeUtteranceSpeedControl() {
+  const speedRange = document.getElementById('utteranceSpeedRange');
+  if (!speedRange) return;
+  updateUtteranceSpeedValue();
+  speedRange.addEventListener('input', updateUtteranceSpeedValue);
+}
 function captureAndAnimateSnap(textchat = null) {
   const includeImageCheckbox = document.getElementById('toggleImagePrompt');
 
@@ -1214,6 +1225,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
   formData.append('searchRag', isRagEnabled() && searchRag ? searchRag.checked : false);
   formData.append('includeChatHistory', includeChatHistory ? includeChatHistory.checked : true);
   formData.append('chatModel', getSelectedChatModel());
+  formData.append('utteranceSpeed', getUtteranceSpeed().toFixed(2));
 
   const sendRequest = async () => {
     activeGeneration = true;
@@ -1636,28 +1648,80 @@ async function processSystemAudioOnce(data) {
   }
 }
 
+function getSelectedVoiceLanguage() {
+  const languageSelect = document.getElementById('languageSelect');
+  return languageSelect ? languageSelect.value : 'en';
+}
+
+function getVoiceStorageKey(lang) {
+  return `${lang}VoiceId`;
+}
+
+function setVoiceRowVisible(visible) {
+  const voiceRow = document.getElementById('voiceRow');
+  if (voiceRow) {
+    voiceRow.style.display = visible ? 'block' : 'none';
+  }
+}
+
+function setVoiceLabel(lang) {
+  const voiceLabel = document.querySelector('label[for="voiceSelect"]');
+  const languageSelect = document.getElementById('languageSelect');
+  const selectedOption = languageSelect ? languageSelect.options[languageSelect.selectedIndex] : null;
+  const label = selectedOption ? selectedOption.textContent.replace(/\s*\([^)]*\)\s*$/, '') : lang;
+  if (voiceLabel) {
+    voiceLabel.textContent = `${label} Voice:`;
+  }
+}
+
+async function refreshVoiceOptions() {
+  const voiceSelect = document.getElementById('voiceSelect');
+  if (!voiceSelect) return;
+
+  const lang = getSelectedVoiceLanguage();
+  setVoiceLabel(lang);
+
+  try {
+    const response = await fetch(`/voices?lang=${encodeURIComponent(lang)}`);
+    if (!response.ok) throw new Error('Failed to load voices');
+
+    const data = await response.json();
+    const voices = Array.isArray(data.voices) ? data.voices : [];
+    while (voiceSelect.firstChild) voiceSelect.removeChild(voiceSelect.firstChild);
+
+    if (voices.length === 0) {
+      voiceSelect.dataset.lang = lang;
+      voiceSelect.dataset.prev = '';
+      setVoiceRowVisible(false);
+      return;
+    }
+
+    const stored = localStorage.getItem(getVoiceStorageKey(lang));
+    const current = data.current;
+    const toSelect = current || stored || voices[0].id;
+
+    voices.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = v.label || v.id;
+      voiceSelect.appendChild(opt);
+    });
+
+    const found = Array.from(voiceSelect.options).some(o => o.value === toSelect);
+    voiceSelect.value = found ? toSelect : voiceSelect.options[0].value;
+    voiceSelect.dataset.lang = lang;
+    voiceSelect.dataset.prev = voiceSelect.value;
+    setVoiceRowVisible(voices.length > 1);
+  } catch (e) {
+    voiceSelect.dataset.lang = lang;
+    voiceSelect.dataset.prev = '';
+    setVoiceRowVisible(false);
+  }
+}
+
 // Settings are now always visible, so initialize voice sync on load
 function initializeVoiceSync() {
-  try {
-    const voiceSelect = document.getElementById('voiceSelect');
-    const languageSelect = document.getElementById('languageSelect');
-    if (voiceSelect && languageSelect && languageSelect.value === 'en') {
-      fetch('/voices?lang=en')
-        .then(res => res.ok ? res.json() : null)
-        .then(data => {
-          if (data && data.current) {
-            const found = Array.from(voiceSelect.options).some(o => o.value === data.current);
-            if (found) {
-              voiceSelect.value = data.current;
-              voiceSelect.dataset.prev = voiceSelect.value;
-            }
-          }
-        })
-        .catch(() => { });
-    }
-  } catch (e) {
-    // ignore sync errors
-  }
+  refreshVoiceOptions();
 }
 
 function setRagControls(dbReady) {
@@ -1720,51 +1784,13 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Initialize voice row visibility based on current language
-  const voiceRow = document.getElementById('voiceRow');
-  const languageSelect = document.getElementById('languageSelect');
-  if (voiceRow && languageSelect) {
-    voiceRow.style.display = languageSelect.value === 'en' ? 'block' : 'none';
-  }
-
-  // Fetch English voices and populate dropdown
-  const voiceSelect = document.getElementById('voiceSelect');
-  if (voiceSelect) {
-    fetch('/voices?lang=en')
-      .then(r => r.ok ? r.json() : Promise.reject(new Error('Failed to load voices')))
-      .then(data => {
-        if (!data || !Array.isArray(data.voices) || data.voices.length === 0) return;
-        while (voiceSelect.firstChild) voiceSelect.removeChild(voiceSelect.firstChild);
-        const stored = localStorage.getItem('enVoiceId');
-        const current = data.current;
-        let toSelect = stored || current || (data.voices[0] && data.voices[0].id);
-        data.voices.forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v.id;
-          opt.textContent = v.label || v.id;
-          voiceSelect.appendChild(opt);
-        });
-        if (toSelect) {
-          const found = Array.from(voiceSelect.options).some(o => o.value === toSelect);
-          voiceSelect.value = found ? toSelect : voiceSelect.options[0].value;
-        }
-        if (voiceRow && languageSelect) {
-          voiceRow.style.display = languageSelect.value === 'en' ? 'block' : 'none';
-        }
-      })
-      .catch(() => { });
-  }
+  refreshVoiceOptions();
 });
 
 // Toggle voice selector on language change
 const languageSelectEl = document.getElementById('languageSelect');
 if (languageSelectEl) {
-  languageSelectEl.addEventListener('change', () => {
-    const voiceRow = document.getElementById('voiceRow');
-    if (voiceRow) {
-      voiceRow.style.display = languageSelectEl.value === 'en' ? 'block' : 'none';
-    }
-  });
+  languageSelectEl.addEventListener('change', refreshVoiceOptions);
 }
 
 // Chat functionality now handled by new dashboard interface
@@ -1972,7 +1998,7 @@ document.getElementById("importRagDatabaseButton").addEventListener("click", asy
   };
 });
 
-// Wire English voice selection change
+// Wire language-aware voice selection change
 (function setupVoiceSelection() {
   const voiceSelectEl = document.getElementById('voiceSelect');
   if (!voiceSelectEl) return;
@@ -2019,11 +2045,11 @@ document.getElementById("importRagDatabaseButton").addEventListener("click", asy
       const res = await fetch('/voices/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lang: 'en', voiceId: chosen })
+        body: JSON.stringify({ lang: getSelectedVoiceLanguage(), voiceId: chosen })
       });
       if (!res.ok) throw new Error('Server rejected voice');
       const data = await res.json();
-      localStorage.setItem('enVoiceId', chosen);
+      localStorage.setItem(getVoiceStorageKey(getSelectedVoiceLanguage()), chosen);
       voiceSelectEl.dataset.prev = chosen;
       // brief confirmation: write into voiceStatus if present
       if (voiceMsg) {

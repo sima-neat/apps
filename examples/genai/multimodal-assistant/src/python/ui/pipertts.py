@@ -50,6 +50,16 @@ class PiperTTS:
             normalize_audio=True
         )
 
+
+    def set_utterance_speed(self, speed):
+        """Set speech speed as a multiplier where 1.0 is normal."""
+        try:
+            speed = float(speed)
+        except (TypeError, ValueError):
+            speed = 1.0
+        speed = max(0.5, min(2.0, speed))
+        self.config.length_scale = 1.0 / speed
+
     def synthesize(self, text):
         """
         Synthesize speech from the provided text into a WAV audio buffer.
