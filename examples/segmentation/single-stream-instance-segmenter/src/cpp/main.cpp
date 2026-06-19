@@ -280,6 +280,9 @@ decode_segmentation_output(const simaai::neat::TensorList& tensors, int frame_w,
   std::vector<SegmentationDetection> detections;
   const size_t mask_bytes = 160U * 160U;
   for (const auto& item : decoded) {
+    if (!item.boxes.shape.empty() && item.boxes.shape.front() == 0) {
+      continue;
+    }
     const auto boxes = tensor_to_floats(item.boxes);
     const auto masks = tensor_to_u8(item.masks);
     const int count = static_cast<int>(boxes.size() / 6U);
