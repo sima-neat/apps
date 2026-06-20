@@ -123,6 +123,7 @@ class TalkController:
         self.totalk = ''
         self.talk = []
         self.pipers = {}
+        self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
         self._init_pipers_threaded(supported_langs or ['en'])
         
@@ -146,6 +147,16 @@ class TalkController:
     def set_language(self, lang):
         self.current_language = lang if lang in self.supported_langs else 'xx'
 
+    def set_utterance_speed(self, speed):
+        try:
+            speed = float(speed)
+        except (TypeError, ValueError):
+            speed = 1.0
+        self.utterance_speed = max(0.5, min(2.0, speed))
+        for piper in self.pipers.values():
+            if hasattr(piper, 'set_utterance_speed'):
+                piper.set_utterance_speed(self.utterance_speed)
+
     def _init_pipers_threaded(self, langs):
         threads = []
         assets = Path("assets")
@@ -153,9 +164,11 @@ class TalkController:
         def load_piper(lang_code, onnx_file):
             from pipertts import PiperTTS # import here if needed locally
             try:
-                self.pipers[lang_code] = PiperTTS(
+                piper = PiperTTS(
                     model_path=str(onnx_file)
                 )
+                piper.set_utterance_speed(self.utterance_speed)
+                self.pipers[lang_code] = piper
                 logging.info(f"Loaded Piper model for {lang_code}")
             except Exception as e:
                 logging.warning(f"Failed to load Piper model for {lang_code}: {e}")
@@ -629,7 +642,7 @@ class AppContext:
             self.set_system_prompt(self.system_prompt)
 
         if not self.apionly:
-            self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh']) 
+            self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh', 'vi'])
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
@@ -812,6 +825,7 @@ class AppContext:
                 with self.talk_ctrl.lock:
                     old = self.talk_ctrl.pipers.get(lang)
                     new_voice = PiperTTS(model_path=str(candidate))
+                    new_voice.set_utterance_speed(self.talk_ctrl.utterance_speed)
                     self.talk_ctrl.pipers[lang] = new_voice
                     self.current_voice_by_lang[lang] = candidate.name
                     # Drop reference to old instance; GC will reclaim when unreferenced
@@ -881,6 +895,7 @@ class AppContext:
 
             # Handle form fields
             language = request.form.get('language', 'en')
+            utterance_speed = request.form.get('utteranceSpeed', '1.0')
             chat = request.form.get('textchat', '').strip()
             search_rag = request.form.get('searchRag', 'false').lower() == 'true'
             include_chat_history = request.form.get('includeChatHistory', 'true').lower() == 'true'
@@ -892,6 +907,7 @@ class AppContext:
 
             self.talk_ctrl.reset()
             self.talk_ctrl.set_language(language)
+            self.talk_ctrl.set_utterance_speed(utterance_speed)
             had_active_generation = self.interrupt_active_generation(
                 preserve_partial=include_chat_history
             )
@@ -1035,6 +1051,7 @@ class AppContext:
                 model = data.get('model', 'piper-tts')
                 voice = data.get('voice', 'default')
                 language = data.get('language', 'en')
+                utterance_speed = data.get('utterance_speed', data.get('utteranceSpeed', 1.0))
                 response_format = data.get('response_format', 'wav')
 
                 if not text:
@@ -1046,6 +1063,7 @@ class AppContext:
 
                 logging.info(f"Received TTS request: model={model}, voice={voice}, format={response_format}")
 
+                self.talk_ctrl.set_utterance_speed(utterance_speed)
                 result = self.talk_ctrl.tts_on_demand(text, language=language)
 
                 # Default to WAV for Piper. If mp3 is requested, you need ffmpeg to convert.
