@@ -1,5 +1,6 @@
 foreach(example IN ITEMS
     detr-object-detector
+    faster-rcnn-object-detector
     single-stream-object-detector
     yolo26-object-detector
 )

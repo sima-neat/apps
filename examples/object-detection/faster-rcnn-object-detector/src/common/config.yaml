@@ -1,0 +1,19 @@
+models:                      # Faster R-CNN merged model packages.
+  backbone_rpn:
+    path: assets/models/backbone_rpn_head_640_640_mpk.tar.gz
+  head_predictor:
+    path: assets/models/box_head_predictor_640_640_mpk.tar.gz
+
+io:                          # Input and output paths.
+  input_dir: assets/test_images
+  output_dir: sandbox/faster-rcnn-object-detector
+
+decode:                      # Detection decode settings.
+  confidence_threshold: 0.50 # Minimum class confidence.
+  max_draw: 50               # Max detections to draw per image.
+
+runtime:                     # Runtime settings.
+  timeout_ms: 20000          # Inference timeout per NEAT model call.
+  profile: true             # Print profiling summaries.
+  num_runs: 10              # Number of repeated runs for profiling.
+  verbose: false             # Print verbose runtime output.
