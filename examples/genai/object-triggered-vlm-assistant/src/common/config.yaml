@@ -1,0 +1,68 @@
+source:                          # RTSP input source.
+  rtsp_url: <rtsp-url-1>         # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+
+model:                           # Detector model selection.
+  path: <model-path>             # Example: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+  labels: examples/genai/object-triggered-vlm-assistant/src/common/coco_label.txt
+
+trigger:                         # VLM trigger condition.
+  class: person                  # Single-class default.
+  # classes:                     # Optional multi-class default; UI can change this at runtime.
+  #   - person
+  #   - car
+
+inference:                       # Detection controls.
+  frames: 0                      # Frame limit. 0 means run continuously.
+  min_score: 0.55                # Detection score threshold.
+  nms_iou: 0.60                  # NMS IoU threshold.
+  max_detections: 50             # Max detections to keep per frame.
+  # classes:                     # Optional Insight metadata filter.
+  #   - person
+  #   - car
+  #   - truck
+
+runtime:                         # Runtime settings.
+  timeout_ms: 50000              # Inference timeout in milliseconds.
+  debug: false
+
+memory:                          # Recent trigger-class memory.
+  sample_interval_seconds: 0.5   # Store linked frame/object metadata at this cadence.
+  retention_seconds: 10          # Keep recent sampled evidence for this long.
+  jpeg_quality: 85               # JPEG quality for sampled full-frame evidence.
+
+tracker:                         # Trigger-class object tracker.
+  iou_threshold: 0.40            # Match detections to existing tracks by IoU.
+  max_missing_seconds: 1.0       # Expire a track after this long without a match.
+
+insight:                         # Live video and metadata destination.
+  host: <insight-host-ip>        # Host running the Insight receiver/viewer.
+  video_port: 9000               # UDP video port.
+  metadata_port: 9100            # UDP metadata port.
+  channel: 0                     # Insight channel index.
+
+vlm:                             # OpenAI-compatible VLM server.
+  enabled: true                  # Enable detector-triggered VLM requests.
+  host: 127.0.0.1                # OpenAI-compatible server host.
+  port: 9998                     # OpenAI-compatible server port.
+  model: gemma4-E4B-it           # Served model name.
+  max_tokens: 24                 # Keep response short.
+  interval_seconds: 3            # Minimum seconds between VLM requests.
+  timeout_seconds: 30            # Request timeout in seconds.
+  max_pending_requests: 1        # Max queued or in-flight VLM requests.
+  system_prompt: >-
+    You are given an image crop of one object detected by an object detector.
+    The user provides the exact object_detector_class.
+    Reply exactly in this format:
+    "{object_detector_class} of {c} color was just seen".
+    Replace {object_detector_class} with the provided detector class.
+    Replace {c} with the dominant visible color of the detected object.
+    Do not add punctuation, explanation, markdown, or extra words.
+
+qa:                              # Current/past question API.
+  enabled: true
+  host: 0.0.0.0
+  port: 8088
+  max_tokens: 64
+  past_tolerance_seconds: 1.0    # Allowed timestamp error when selecting past evidence.
+  default_past_seconds: 3.0      # Used for past-style questions without explicit seconds_ago.
+  crop_padding_ratio: 0.75       # Expand detector bbox before asking VLM about past evidence.
