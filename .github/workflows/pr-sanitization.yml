@@ -1,0 +1,13 @@
+name: PR Sanitization
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-sanitization:
+    uses: sima-neat/.github/.github/workflows/pr-sanitization.yml@main

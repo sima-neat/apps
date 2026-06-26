@@ -21,6 +21,9 @@ function resolveBasePath() {
 export default defineConfig({
   plugins: [react()],
   base: resolveBasePath(),
+  define: {
+    __PORTAL_GA_MEASUREMENT_ID__: JSON.stringify(process.env.PORTAL_GA_MEASUREMENT_ID || ""),
+  },
   server: {
     host: "0.0.0.0",
     port: 5000,
