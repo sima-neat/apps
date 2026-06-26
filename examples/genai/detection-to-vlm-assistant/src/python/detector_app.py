@@ -343,6 +343,8 @@ class GenAICommenter:
         self.lock = threading.Lock()
         self.last_enqueue_at = 0.0
         self.in_flight = False
+        self.server_available: bool | None = None
+        self.response_count = 0
         self.started = False
 
     def start(self) -> None:
@@ -357,7 +359,7 @@ class GenAICommenter:
         if now - self.last_enqueue_at < self.cfg.genai_interval_seconds:
             return
         if self._pending_count() >= self.cfg.genai_max_pending_requests:
-            print("genai: queue busy, dropping request", flush=True)
+            print("[genai-server] queue busy, dropping request", flush=True)
             self.last_enqueue_at = now
             return
 
@@ -369,7 +371,7 @@ class GenAICommenter:
             self.queue.put_nowait(crop_box(frame, box).copy())
             self.last_enqueue_at = now
         except Full:
-            print("genai: queue full, dropping request", flush=True)
+            print("[genai-server] queue full, dropping request", flush=True)
             self.last_enqueue_at = now
 
     def close(self) -> None:
@@ -397,11 +399,15 @@ class GenAICommenter:
                 if self._server_ready():
                     response = request_person_crop_response(crop, self.cfg)
                     if response:
-                        print(f"genai: {response}", flush=True)
+                        self.response_count += 1
+                        print(
+                            f"\n[response #{self.response_count:03d}] {response}",
+                            flush=True,
+                        )
             except (TimeoutError, OSError, error.URLError) as exc:
-                print(f"genai unavailable: {exc}", flush=True)
+                print(f"[genai-server] request failed: {exc}", flush=True)
             except Exception as exc:
-                print(f"genai request failed: {exc}", flush=True)
+                print(f"[genai-server] request failed: {exc}", flush=True)
             finally:
                 self._set_in_flight(False)
                 self.queue.task_done()
@@ -411,13 +417,23 @@ class GenAICommenter:
         try:
             timeout = min(self.cfg.genai_timeout_seconds, 5.0)
             with request.urlopen(url, timeout=timeout) as res:
-                return 200 <= res.status < 300
+                ready = 200 <= res.status < 300
+                if ready and self.server_available is False:
+                    print(
+                        f"\n[genai-server] connected "
+                        f"http://{self.cfg.genai_host}:{self.cfg.genai_port}",
+                        flush=True,
+                    )
+                self.server_available = ready
+                return ready
         except (TimeoutError, OSError, error.URLError) as exc:
-            print(
-                f"genai unavailable: could not access server at "
-                f"{self.cfg.genai_host}:{self.cfg.genai_port}: {exc}",
-                flush=True,
-            )
+            if self.server_available is not False:
+                print(
+                    f"[genai-server] waiting for "
+                    f"http://{self.cfg.genai_host}:{self.cfg.genai_port}: {exc}",
+                    flush=True,
+                )
+            self.server_available = False
             return False
 
 
@@ -561,9 +577,15 @@ def main() -> int:
         commenter = GenAICommenter(cfg, labels)
         commenter.start()
         print(
-            f"rtsp={cfg.rtsp_url} stream={width}x{height}@{fps} "
-            f"insight={cfg.insight_host} video={cfg.video_port} "
-            f"metadata={cfg.metadata_port} channel={cfg.channel}"
+            f"[detector] stream {cfg.rtsp_url}\n"
+            f"[detector] input {width}x{height}@{fps}\n"
+            f"[insight] video={cfg.insight_host}:{cfg.video_port} "
+            f"metadata={cfg.insight_host}:{cfg.metadata_port} channel={cfg.channel}\n"
+            f"[genai-server] "
+            f"{'enabled' if cfg.genai_enabled else 'disabled'} "
+            f"model={cfg.genai_model or '-'} "
+            f"url=http://{cfg.genai_host}:{cfg.genai_port} "
+            f"interval={cfg.genai_interval_seconds:g}s\n"
         )
 
         frame_id = 0
@@ -596,7 +618,7 @@ def main() -> int:
                 raise RuntimeError("failed to send metadata to Insight")
             frame_id += 1
             if cfg.debug:
-                print(f"frame={frame_id} detections={len(boxes)}")
+                print(f"[detector] frame={frame_id} detections={len(boxes)}")
         return 0 if frame_id > 0 else 3
     except KeyboardInterrupt:
         return 130
