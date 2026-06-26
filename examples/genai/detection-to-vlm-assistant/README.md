@@ -42,7 +42,8 @@ Use the same `neat` output to set `insight.host`, `video_port`, and `metadata_po
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 detector model, or set `model.path` to another readable model package.
-- A local vision-language model directory for the GenAI server, configured with `genai_server.model.path`.
+- Choose a vision-language model from the [SiMa.ai VLM collection](https://huggingface.co/collections/simaai/vision-language-models), download it locally, and set `genai_server.model.path` to that model directory.
+- Set `genai_server.model.name` to the served model name used by the detector app.
 - RTSP source created in Insight or provided by your camera.
 - Insight receiver running at the configured host and ports.
 - GenAI server running when `genai.enabled` is true.
