@@ -59,7 +59,7 @@ def build_rtsp_run(cfg: Config, width: int, height: int, fps: int):
 def build_video_run(cfg: Config, width: int, height: int, fps: int):
     input_opt = pyneat.InputOptions()
     input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = "RGB"
+    input_opt.format = pyneat.Format.RGB
     input_opt.width = width
     input_opt.height = height
     input_opt.depth = 3
@@ -105,7 +105,7 @@ def build_detector_run(cfg: Config, width: int, height: int):
 
     input_opt = model.input_appsrc_options(False)
     input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = "BGR"
+    input_opt.format = pyneat.Format.BGR
     input_opt.width = width
     input_opt.height = height
     input_opt.depth = 3
