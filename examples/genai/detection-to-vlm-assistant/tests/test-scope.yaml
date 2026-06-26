@@ -8,7 +8,7 @@ models:
     repo: TBD
     path: TBD
 unit:
-  python: false
+  python: true
   cpp: false
 e2e:
   python:
