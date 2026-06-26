@@ -24,16 +24,23 @@ insight:                     # Live video and metadata destination.
   metadata_port: 9100        # UDP metadata port.
   channel: 0                 # Insight channel index.
 
-openai:                      # Optional OpenAI-compatible captioner.
+genai_server:                # Local GenAI server process.
+  host: 0.0.0.0              # Host interface to bind.
+  port: 9998                 # Server port.
+  model:                     # Vision-language model served locally.
+    name: <served-vlm-model-name>
+    path: <path-to-vlm-model-dir>
+
+genai:                       # Optional crop-to-VLM requests.
   enabled: true              # Enable crop-to-VLM requests.
-  host: 127.0.0.1            # OpenAI-compatible server host.
-  port: 9998                 # OpenAI-compatible server port.
-  model: gemma4              # Model name passed to the server.
+  host: 127.0.0.1            # GenAI server client host.
+  port: 9998                 # GenAI server client port.
   max_tokens: 128            # Max generated tokens per request.
-  interval_seconds: 3        # Minimum seconds between VLM requests.
+  interval_seconds: 5        # Minimum seconds between VLM requests.
   timeout_seconds: 30        # Request timeout in seconds.
   max_pending_requests: 1    # Max queued or in-flight VLM requests.
   system_prompt: >-
-    Write one sarcastic scene caption. Comment on the visible situation,
-    not identity or appearance. Use 10 words or fewer. Avoid: darling,
-    ordinary, riveting, seriously, wow, posed. No explanation.
+    Describe the visible action in the detected person crop. Be factual,
+    concise, and avoid guessing identity or protected attributes.
+  user_prompt: >-
+    What is the person doing in this crop?
