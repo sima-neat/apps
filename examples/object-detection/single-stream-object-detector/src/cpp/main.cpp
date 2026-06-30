@@ -323,7 +323,7 @@ make_encoded_rtsp_source(const simaai::neat::nodes::groups::RtspDecodedInputOpti
 }
 
 simaai::neat::Graph
-make_h264_decode_graph(const std::string& input_name,
+make_h264_decode_graph(const std::string& input_name, const std::string& output_name,
                        const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::Graph decode("rtsp_h264_decode");
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
@@ -348,6 +348,7 @@ make_h264_decode_graph(const std::string& input_name,
   if (!opt.extra_fragment.empty()) {
     decode.add(simaai::neat::nodes::Custom(opt.extra_fragment));
   }
+  decode.add(simaai::neat::nodes::Output(output_name));
   return decode;
 }
 
@@ -379,7 +380,8 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   const bool save_debug_frames = !cfg.save_dir.empty() && cfg.save_every > 0;
   auto source = make_encoded_rtsp_source(source_options);
   auto encoded_branch = simaai::neat::graphs::Branch("encoded_source", {"video", "decode"});
-  auto decode_graph = make_h264_decode_graph("decode", source_options);
+  auto decode_graph = make_h264_decode_graph(
+      "decode", save_debug_frames ? "decoded_source" : "model", source_options);
 
   auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
   video_options.host = cfg.insight_host;

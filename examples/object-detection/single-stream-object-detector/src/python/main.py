@@ -402,7 +402,7 @@ def make_encoded_rtsp_source(opt) -> pyneat.Graph:
     return source
 
 
-def make_h264_decode_graph(input_name: str, opt) -> pyneat.Graph:
+def make_h264_decode_graph(input_name: str, output_name: str, opt) -> pyneat.Graph:
     decode = pyneat.Graph("rtsp_h264_decode")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
@@ -437,6 +437,7 @@ def make_h264_decode_graph(input_name: str, opt) -> pyneat.Graph:
         )
     if opt.extra_fragment:
         decode.add(pyneat.nodes.custom(opt.extra_fragment))
+    decode.add(pyneat.nodes.output(output_name))
     return decode
 
 
@@ -462,7 +463,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     source = make_encoded_rtsp_source(source_options)
     save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
     encoded_branch = pyneat.graphs.branch("encoded_source", ["video", "decode"])
-    decode_graph = make_h264_decode_graph("decode", source_options)
+    decode_graph = make_h264_decode_graph(
+        "decode", "decoded_source" if save_debug_frames else "model", source_options
+    )
 
     video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
     video_options.host = cfg.insight_host

@@ -428,7 +428,7 @@ make_encoded_rtsp_source(const simaai::neat::nodes::groups::RtspDecodedInputOpti
 }
 
 simaai::neat::Graph
-make_h264_decode_graph(const std::string& input_name,
+make_h264_decode_graph(const std::string& input_name, const std::string& output_name,
                        const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::Graph decode("rtsp_h264_decode");
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
@@ -453,6 +453,7 @@ make_h264_decode_graph(const std::string& input_name,
   if (!opt.extra_fragment.empty()) {
     decode.add(simaai::neat::nodes::Custom(opt.extra_fragment));
   }
+  decode.add(simaai::neat::nodes::Output(output_name));
   return decode;
 }
 
@@ -499,7 +500,8 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
 
   const bool save_debug_frames = !cfg.save_dir.empty() && cfg.save_every > 0;
   auto source = make_encoded_rtsp_source(source_options);
-  auto decode_graph = make_h264_decode_graph(decode_name, source_options);
+  auto decode_graph = make_h264_decode_graph(
+      decode_name, save_debug_frames ? "decoded_source" : model_name, source_options);
 
   simaai::neat::GraphLinkOptions live_link_options;
   live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;

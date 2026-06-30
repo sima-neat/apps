@@ -423,7 +423,7 @@ def make_encoded_rtsp_source(opt) -> pyneat.Graph:
     return source
 
 
-def make_h264_decode_graph(input_name: str, opt) -> pyneat.Graph:
+def make_h264_decode_graph(input_name: str, output_name: str, opt) -> pyneat.Graph:
     decode = pyneat.Graph("rtsp_h264_decode")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
@@ -458,6 +458,7 @@ def make_h264_decode_graph(input_name: str, opt) -> pyneat.Graph:
         )
     if opt.extra_fragment:
         decode.add(pyneat.nodes.custom(opt.extra_fragment))
+    decode.add(pyneat.nodes.output(output_name))
     return decode
 
 
@@ -492,7 +493,9 @@ def build_stream_runtime(
     source_options = make_source_options(cfg, url, fps, frame_w, frame_h)
     source = make_encoded_rtsp_source(source_options)
     save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
-    decode_graph = make_h264_decode_graph(decode_name, source_options)
+    decode_graph = make_h264_decode_graph(
+        decode_name, "decoded_source" if save_debug_frames else model_name, source_options
+    )
 
     graph = pyneat.Graph()
     live_link_options = pyneat.GraphLinkOptions()
