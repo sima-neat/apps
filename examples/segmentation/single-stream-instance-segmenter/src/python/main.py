@@ -488,7 +488,7 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     input_opt.depth = 3
     input_opt.fps_n = max(1, fps)
     input_opt.fps_d = 1
-    input_opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
+    input_opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
 
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
     sender_opt.host = cfg.insight_host
