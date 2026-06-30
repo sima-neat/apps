@@ -479,7 +479,7 @@ def build_video_run(cfg: Config, width: int, height: int, fps: int):
     input_opt.caps_override = (
         f"video/x-raw,format=RGB,width={width},height={height},framerate={max(1, fps)}/1"
     )
-    input_opt.use_simaai_pool = False
+    input_opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
 
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
     sender_opt.host = cfg.insight_host

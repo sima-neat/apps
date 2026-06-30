@@ -584,7 +584,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   video_input.width = runtime.frame_w;
   video_input.height = runtime.frame_h;
   video_input.depth = 3;
-  video_input.use_simaai_pool = false;
+  video_input.memory_policy = simaai::neat::InputMemoryPolicy::SystemMemory;
 
   auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
       runtime.frame_w, runtime.frame_h, runtime.output_fps);
