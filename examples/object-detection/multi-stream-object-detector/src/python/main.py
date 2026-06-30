@@ -449,7 +449,7 @@ def make_h264_decode_graph(input_name: str, opt) -> pyneat.Graph:
     if output_caps_enabled(opt.output_caps):
         decode.add(
             pyneat.nodes.caps_raw(
-                opt.output_caps.format,
+                "NV12",
                 opt.output_caps.width,
                 opt.output_caps.height,
                 opt.output_caps.fps,
