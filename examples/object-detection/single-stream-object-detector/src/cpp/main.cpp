@@ -294,6 +294,63 @@ make_source_options(const AppConfig& cfg, int& fps_out, int& width_out, int& hei
   return opt;
 }
 
+bool output_caps_enabled(
+    const simaai::neat::nodes::groups::RtspDecodedInputOptions::OutputCaps& caps) {
+  return caps.enable || caps.width > 0 || caps.height > 0 || caps.fps > 0;
+}
+
+simaai::neat::Graph
+make_encoded_rtsp_source(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+  simaai::neat::Graph source("rtsp_encoded_source");
+  const bool use_auto_caps = opt.auto_caps_from_stream &&
+                             (opt.h264_fps <= 0 || opt.h264_width <= 0 || opt.h264_height <= 0);
+  const bool insert_queue = opt.insert_queue && !opt.sync_mode;
+  source.add(simaai::neat::nodes::RTSPInput(opt.url, opt.latency_ms, opt.tcp));
+  if (insert_queue) {
+    source.add(simaai::neat::nodes::Queue());
+  }
+  source.add(simaai::neat::nodes::H264Depacketize(opt.payload_type, opt.h264_parse_config_interval,
+                                                  opt.h264_fps, opt.h264_width, opt.h264_height,
+                                                  /*enforce_h264_caps=*/!use_auto_caps));
+  if (insert_queue) {
+    source.add(simaai::neat::nodes::Queue());
+  }
+  if (use_auto_caps) {
+    source.add(simaai::neat::nodes::H264CapsFixup(opt.fallback_h264_fps, opt.fallback_h264_width,
+                                                  opt.fallback_h264_height));
+  }
+  return source;
+}
+
+simaai::neat::Graph
+make_h264_decode_graph(const std::string& input_name,
+                       const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+  simaai::neat::Graph decode("rtsp_h264_decode");
+  const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
+  const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
+  const int dec_fps = (opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps;
+
+  decode.add(simaai::neat::nodes::Input(input_name));
+  decode.add(simaai::neat::nodes::H264Decode(opt.sima_allocator_type, opt.out_format,
+                                             opt.decoder_name, opt.decoder_raw_output,
+                                             opt.decoder_next_element, dec_w, dec_h, dec_fps));
+  if (opt.use_videoconvert) {
+    decode.add(simaai::neat::nodes::VideoConvert());
+  }
+  if (opt.use_videoscale) {
+    decode.add(simaai::neat::nodes::VideoScale());
+  }
+  if (output_caps_enabled(opt.output_caps)) {
+    const auto& caps = opt.output_caps;
+    decode.add(
+        simaai::neat::nodes::CapsRaw(caps.format, caps.width, caps.height, caps.fps, caps.memory));
+  }
+  if (!opt.extra_fragment.empty()) {
+    decode.add(simaai::neat::nodes::Custom(opt.extra_fragment));
+  }
+  return decode;
+}
+
 std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg) {
   // Model options
   simaai::neat::Model::Options model_opt;
@@ -319,20 +376,15 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.model = make_model(cfg);
   runtime.labels = load_labels(cfg.labels_path);
 
-  auto source = simaai::neat::nodes::groups::RtspDecodedInput(source_options);
   const bool save_debug_frames = !cfg.save_dir.empty() && cfg.save_every > 0;
-  std::vector<std::string> source_outputs = {"video", "model"};
-  if (save_debug_frames) {
-    source_outputs.push_back("debug_frame");
-  }
-  auto branch = simaai::neat::graphs::Branch("source", source_outputs);
+  auto source = make_encoded_rtsp_source(source_options);
+  auto encoded_branch = simaai::neat::graphs::Branch("encoded_source", {"video", "decode"});
+  auto decode_graph = make_h264_decode_graph("decode", source_options);
 
-  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-      runtime.frame_w, runtime.frame_h, runtime.output_fps);
+  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
   video_options.host = cfg.insight_host;
   video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;
-  video_options.encoder.bitrate_kbps = 1000;
   runtime.video_port = video_options.video_port();
   simaai::neat::Graph video_graph("video");
   video_graph.connect(simaai::neat::nodes::Input("video"),
@@ -346,24 +398,26 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
 
   simaai::neat::GraphLinkOptions live_link_options;
   live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-  runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, video_graph, live_link_options);
+  runtime.graph.connect(source, encoded_branch);
+  runtime.graph.connect(encoded_branch, video_graph, live_link_options);
   if (save_debug_frames) {
-    runtime.graph.connect(branch, model_graph);
-  } else {
-    runtime.graph.connect(branch, model_graph, live_link_options);
-  }
-  runtime.graph.connect(model_graph, detections_graph);
-  if (save_debug_frames) {
+    auto decoded_branch = simaai::neat::graphs::Branch("decoded_source", {"model", "debug_frame"});
+    runtime.graph.connect(encoded_branch, decode_graph);
+    runtime.graph.connect(decode_graph, decoded_branch);
+    runtime.graph.connect(decoded_branch, model_graph);
     simaai::neat::Graph frames("debug_frame");
     frames.add(
         simaai::neat::nodes::Output("debug_frame", simaai::neat::OutputOptions::EveryFrame(4)));
     auto debug_join = simaai::neat::graphs::Combine({"debug_frame", "detections"}, "debug_output",
                                                     simaai::neat::CombinePolicy::ByPts);
-    runtime.graph.connect(branch, frames);
+    runtime.graph.connect(decoded_branch, frames);
     runtime.graph.connect(frames, debug_join);
     runtime.graph.connect(detections_graph, debug_join);
+  } else {
+    runtime.graph.connect(encoded_branch, decode_graph, live_link_options);
+    runtime.graph.connect(decode_graph, model_graph);
   }
+  runtime.graph.connect(model_graph, detections_graph);
   if (cfg.profile) {
     std::cout << "Backend:\n" << runtime.graph.describe_backend() << "\n";
   }

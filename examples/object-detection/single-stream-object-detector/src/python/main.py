@@ -368,6 +368,78 @@ def make_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     return opt
 
 
+def output_caps_enabled(caps) -> bool:
+    return caps.enable or caps.width > 0 or caps.height > 0 or caps.fps > 0
+
+
+def make_encoded_rtsp_source(opt) -> pyneat.Graph:
+    source = pyneat.Graph("rtsp_encoded_source")
+    use_auto_caps = opt.auto_caps_from_stream and (
+        opt.h264_fps <= 0 or opt.h264_width <= 0 or opt.h264_height <= 0
+    )
+    insert_queue = opt.insert_queue and not opt.sync_mode
+    source.add(pyneat.nodes.rtsp_input(opt.url, opt.latency_ms, opt.tcp))
+    if insert_queue:
+        source.add(pyneat.nodes.queue())
+    source.add(
+        pyneat.nodes.h264_depacketize(
+            payload_type=opt.payload_type,
+            h264_parse_config_interval=opt.h264_parse_config_interval,
+            h264_fps=opt.h264_fps,
+            h264_width=opt.h264_width,
+            h264_height=opt.h264_height,
+            enforce_h264_caps=not use_auto_caps,
+        )
+    )
+    if insert_queue:
+        source.add(pyneat.nodes.queue())
+    if use_auto_caps:
+        source.add(
+            pyneat.nodes.h264_caps_fixup(
+                opt.fallback_h264_fps, opt.fallback_h264_width, opt.fallback_h264_height
+            )
+        )
+    return source
+
+
+def make_h264_decode_graph(input_name: str, opt) -> pyneat.Graph:
+    decode = pyneat.Graph("rtsp_h264_decode")
+    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
+    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
+    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+
+    decode.add(pyneat.nodes.input(input_name))
+    decode.add(
+        pyneat.nodes.h264_decode(
+            sima_allocator_type=opt.sima_allocator_type,
+            out_format="NV12",
+            decoder_name=opt.decoder_name,
+            raw_output=opt.decoder_raw_output,
+            next_element=opt.decoder_next_element,
+            dec_width=dec_w,
+            dec_height=dec_h,
+            dec_fps=dec_fps,
+        )
+    )
+    if opt.use_videoconvert:
+        decode.add(pyneat.nodes.video_convert())
+    if opt.use_videoscale:
+        decode.add(pyneat.nodes.video_scale())
+    if output_caps_enabled(opt.output_caps):
+        decode.add(
+            pyneat.nodes.caps_raw(
+                opt.output_caps.format,
+                opt.output_caps.width,
+                opt.output_caps.height,
+                opt.output_caps.fps,
+                opt.output_caps.memory,
+            )
+        )
+    if opt.extra_fragment:
+        decode.add(pyneat.nodes.custom(opt.extra_fragment))
+    return decode
+
+
 def make_model(cfg: AppConfig):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
@@ -386,18 +458,16 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     model = make_model(cfg)
     labels = load_labels(cfg.labels_path)
 
-    source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, fps, frame_w, frame_h))
+    source_options = make_source_options(cfg, fps, frame_w, frame_h)
+    source = make_encoded_rtsp_source(source_options)
     save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
-    outputs = ["video", "model"]
-    if save_debug_frames:
-        outputs.append("debug_frame")
-    branch = pyneat.graphs.branch("source", outputs)
+    encoded_branch = pyneat.graphs.branch("encoded_source", ["video", "decode"])
+    decode_graph = make_h264_decode_graph("decode", source_options)
 
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
+    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
     video_options.host = cfg.insight_host
     video_options.channel = 0
     video_options.video_port_base = cfg.video_port
-    video_options.encoder.bitrate_kbps = 1000
 
     video_graph = pyneat.Graph("video")
     video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
@@ -411,12 +481,16 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     graph = pyneat.Graph()
     live_link_options = pyneat.GraphLinkOptions()
     live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    graph.connect(source, branch)
-    graph.connect(branch, video_graph, live_link_options)
+    graph.connect(source, encoded_branch)
+    graph.connect(encoded_branch, video_graph, live_link_options)
     if save_debug_frames:
-        graph.connect(branch, model_graph)
+        decoded_branch = pyneat.graphs.branch("decoded_source", ["model", "debug_frame"])
+        graph.connect(encoded_branch, decode_graph)
+        graph.connect(decode_graph, decoded_branch)
+        graph.connect(decoded_branch, model_graph)
     else:
-        graph.connect(branch, model_graph, live_link_options)
+        graph.connect(encoded_branch, decode_graph, live_link_options)
+        graph.connect(decode_graph, model_graph)
     graph.connect(model_graph, detections_graph)
     if save_debug_frames:
         frames = pyneat.Graph("debug_frame")
@@ -424,7 +498,7 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         debug_join = pyneat.graphs.combine(
             ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
         )
-        graph.connect(branch, frames)
+        graph.connect(decoded_branch, frames)
         graph.connect(frames, debug_join)
         graph.connect(detections_graph, debug_join)
     if cfg.profile:
