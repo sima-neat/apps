@@ -584,7 +584,7 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   video_input.width = runtime.frame_w;
   video_input.height = runtime.frame_h;
   video_input.depth = 3;
-  video_input.use_simaai_pool = false;
+  video_input.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
 
   auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
       runtime.frame_w, runtime.frame_h, runtime.output_fps);
@@ -597,7 +597,9 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.video_graph.add(simaai::neat::nodes::Input(video_input));
   runtime.video_graph.add(simaai::neat::nodes::groups::VideoSender(video_options));
   cv::Mat seed(runtime.frame_h, runtime.frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
-  runtime.video_run = runtime.video_graph.build(std::vector<cv::Mat>{seed});
+  const auto seed_tensor = simaai::neat::Tensor::from_cv_mat(
+      seed, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+  runtime.video_run = runtime.video_graph.build(simaai::neat::TensorList{seed_tensor});
 
   simaai::neat::MetadataSenderOptions metadata_options;
   metadata_options.host = cfg.insight_host;
