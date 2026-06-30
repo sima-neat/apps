@@ -479,7 +479,7 @@ def build_video_run(cfg: Config, width: int, height: int, fps: int):
     input_opt.caps_override = (
         f"video/x-raw,format=RGB,width={width},height={height},framerate={max(1, fps)}/1"
     )
-    input_opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
+    input_opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
 
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
     sender_opt.host = cfg.insight_host
@@ -493,7 +493,7 @@ def build_video_run(cfg: Config, width: int, height: int, fps: int):
         np.zeros((height, width, 3), dtype=np.uint8),
         copy=True,
         image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.CPU,
+        memory=pyneat.TensorMemory.EV74,
     )
     return graph, graph.build([seed])
 
