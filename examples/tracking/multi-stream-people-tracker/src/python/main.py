@@ -444,10 +444,6 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
 def h264_encoded_input_options():
     opt = pyneat.InputOptions()
     opt.payload_type = pyneat.PayloadType.Encoded
-    opt.caps_override = (
-        "video/x-h264,parsed=true,stream-format=(string)byte-stream,"
-        "alignment=(string)au"
-    )
     return opt
 
 
