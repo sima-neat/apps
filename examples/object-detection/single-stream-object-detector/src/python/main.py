@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import struct
 import sys
+import threading
 import time
 
 import yaml
@@ -408,13 +409,23 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
     return source
 
 
+def h264_encoded_input_options():
+    opt = pyneat.InputOptions()
+    opt.payload_type = pyneat.PayloadType.Encoded
+    opt.caps_override = (
+        "video/x-h264,parsed=true,stream-format=(string)byte-stream,"
+        "alignment=(string)au"
+    )
+    return opt
+
+
 def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> pyneat.Graph:
     decode = pyneat.Graph("decode_model")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
     dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
 
-    decode.add(pyneat.nodes.input(input_name))
+    decode.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     decode.add(
         pyneat.nodes.h264_decode(
             sima_allocator_type=opt.sima_allocator_type,
@@ -450,7 +461,7 @@ def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> p
 
 def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
     video = pyneat.Graph("video_sender")
-    video.add(pyneat.nodes.input(input_name))
+    video.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     video.add(pyneat.groups.video_sender(video_options))
     return video
 
@@ -478,9 +489,6 @@ def build_run_options() -> pyneat.RunOptions:
 
 
 def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
-    if cfg.save_dir and cfg.save_every > 0:
-        raise RuntimeError("debug frame saving is not supported with encoded RTSP fanout")
-
     frame_w, frame_h, fps = probe_rtsp(cfg.rtsp_url)
     model = build_model(cfg)
     labels = load_labels(cfg.labels_path)
@@ -639,40 +647,83 @@ def maybe_save_debug_frame(cfg: AppConfig, processed: int, sample, boxes: list[d
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
-def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
-    profile = ProfileWindow(cfg.profile, cfg.profile_interval)
-    processed = 0
-    while cfg.frames <= 0 or processed < cfg.frames:
-        pull_start = time_ms()
+def pump_encoded_samples(
+    runtime: PipelineRuntime,
+    stop_event: threading.Event,
+    errors: list[Exception],
+) -> None:
+    try:
         encoded_sample = runtime.pending_encoded_sample
         runtime.pending_encoded_sample = None
-        if encoded_sample is None:
-            encoded_sample = runtime.source_run.pull("encoded", 20000)
-        if encoded_sample is None:
-            print("[warn] timed out waiting for encoded RTSP frame", file=sys.stderr)
-            continue
-        if not runtime.decode_run.push("encoded", [encoded_sample]):
-            raise RuntimeError("failed to push encoded sample to decode graph")
-        if not runtime.video_run.push("encoded", [encoded_sample]):
-            raise RuntimeError("failed to push encoded sample to video sender graph")
+        while not stop_event.is_set():
+            if encoded_sample is None:
+                encoded_sample = runtime.source_run.pull("encoded", 200)
+            if encoded_sample is None:
+                if stop_event.is_set():
+                    break
+                last_error_fn = getattr(runtime.source_run, "last_error", None)
+                last_error = last_error_fn() if callable(last_error_fn) else ""
+                if last_error:
+                    raise RuntimeError(f"source runtime error: {last_error}")
+                continue
+            if not runtime.decode_run.push("encoded", [encoded_sample]):
+                if stop_event.is_set():
+                    break
+                raise RuntimeError("failed to push encoded sample to decode graph")
+            if not runtime.video_run.push("encoded", [encoded_sample]):
+                if stop_event.is_set():
+                    break
+                raise RuntimeError("failed to push encoded sample to video sender graph")
+            encoded_sample = None
+    except Exception as exc:
+        errors.append(exc)
+        stop_event.set()
 
-        detection_sample = runtime.decode_run.pull("detections", 20000)
-        pull_end = time_ms()
-        if detection_sample is None:
-            print("[warn] timed out waiting for detections", file=sys.stderr)
-            continue
 
-        payload = extract_bbox_payload(detection_sample)
-        boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
+def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
+    profile = ProfileWindow(cfg.profile, cfg.profile_interval)
+    stop_event = threading.Event()
+    pump_errors: list[Exception] = []
+    pump = threading.Thread(
+        target=pump_encoded_samples,
+        args=(runtime, stop_event, pump_errors),
+        name="encoded-pump",
+        daemon=True,
+    )
+    processed = 0
+    pump.start()
+    try:
+        while cfg.frames <= 0 or processed < cfg.frames:
+            if pump_errors:
+                raise pump_errors[0]
+            pull_start = time_ms()
+            detection_sample = runtime.decode_run.pull("detections", 20000)
+            pull_end = time_ms()
+            if detection_sample is None:
+                if pump_errors:
+                    raise pump_errors[0]
+                print("[warn] timed out waiting for detections", file=sys.stderr)
+                continue
 
-        metadata_start = time_ms()
-        send_metadata(runtime, detection_sample, boxes)
-        metadata_end = time_ms()
+            payload = extract_bbox_payload(detection_sample)
+            boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
 
-        processed += 1
-        maybe_save_debug_frame(cfg, processed, detection_sample, boxes)
-        profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+            metadata_start = time_ms()
+            send_metadata(runtime, detection_sample, boxes)
+            metadata_end = time_ms()
 
+            processed += 1
+            maybe_save_debug_frame(cfg, processed, detection_sample, boxes)
+            profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+    finally:
+        stop_event.set()
+        runtime.video_run.close()
+        runtime.decode_run.close()
+        runtime.source_run.close()
+        pump.join(timeout=2.0)
+
+    if pump_errors:
+        raise pump_errors[0]
     profile.flush()
     print(f"processed={processed} video_sender={cfg.insight_host}:{runtime.video_port}")
     return processed
@@ -695,12 +746,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
         runtime = build_pipeline(cfg)
-        try:
-            run_pipeline(runtime, cfg)
-        finally:
-            runtime.video_run.close()
-            runtime.decode_run.close()
-            runtime.source_run.close()
+        run_pipeline(runtime, cfg)
         return 0
     except KeyboardInterrupt:
         return 130

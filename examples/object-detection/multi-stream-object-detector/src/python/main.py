@@ -428,13 +428,23 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
     return source
 
 
+def h264_encoded_input_options():
+    opt = pyneat.InputOptions()
+    opt.payload_type = pyneat.PayloadType.Encoded
+    opt.caps_override = (
+        "video/x-h264,parsed=true,stream-format=(string)byte-stream,"
+        "alignment=(string)au"
+    )
+    return opt
+
+
 def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> pyneat.Graph:
     decode = pyneat.Graph("decode_model")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
     dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
 
-    decode.add(pyneat.nodes.input(input_name))
+    decode.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     decode.add(
         pyneat.nodes.h264_decode(
             sima_allocator_type=opt.sima_allocator_type,
@@ -470,7 +480,7 @@ def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> p
 
 def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
     video = pyneat.Graph("video_sender")
-    video.add(pyneat.nodes.input(input_name))
+    video.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     video.add(pyneat.groups.video_sender(video_options))
     return video
 
@@ -500,9 +510,6 @@ def build_run_options() -> pyneat.RunOptions:
 def build_stream_runtime(
     cfg: AppConfig, stream_index: int, url: str, labels: list[str]
 ) -> StreamRuntime:
-    if cfg.save_dir and cfg.save_every > 0:
-        raise RuntimeError("debug frame saving is not supported with encoded RTSP fanout")
-
     frame_w, frame_h, fps = probe_rtsp(url)
     output_fps = cfg.fps if cfg.fps > 0 else fps
     model = build_model(cfg)
@@ -669,29 +676,47 @@ def maybe_save_debug_frame(cfg: AppConfig, stream: StreamRuntime, sample, boxes:
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
+def pump_encoded_samples(
+    stream: StreamRuntime,
+    stop_event: threading.Event,
+    errors: list[Exception],
+) -> None:
+    try:
+        encoded_sample = stream.pending_encoded_sample
+        stream.pending_encoded_sample = None
+        while not stop_event.is_set() and not stream.closed:
+            if encoded_sample is None:
+                encoded_sample = stream.source_run.pull("encoded", 50)
+            if encoded_sample is None:
+                if stop_event.is_set():
+                    break
+                last_error_fn = getattr(stream.source_run, "last_error", None)
+                last_error = last_error_fn() if callable(last_error_fn) else ""
+                if last_error:
+                    raise RuntimeError(f"stream {stream.index} source runtime error: {last_error}")
+                running_fn = getattr(stream.source_run, "running", None)
+                if callable(running_fn) and not running_fn():
+                    stream.closed = True
+                continue
+            if not stream.decode_run.push("encoded", [encoded_sample]):
+                if stop_event.is_set():
+                    break
+                raise RuntimeError(f"stream {stream.index} failed to push encoded sample to decode graph")
+            if stream.video_run is not None:
+                if not stream.video_run.push("encoded", [encoded_sample]):
+                    if stop_event.is_set():
+                        break
+                    raise RuntimeError(
+                        f"stream {stream.index} failed to push encoded sample to video sender graph"
+                    )
+            encoded_sample = None
+    except Exception as exc:
+        errors.append(exc)
+        stop_event.set()
+
+
 def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
     pull_start = time_ms()
-    encoded_sample = stream.pending_encoded_sample
-    stream.pending_encoded_sample = None
-    if encoded_sample is None:
-        encoded_sample = stream.source_run.pull("encoded", 50)
-    if encoded_sample is None:
-        last_error_fn = getattr(stream.source_run, "last_error", None)
-        last_error = last_error_fn() if callable(last_error_fn) else ""
-        if last_error:
-            raise RuntimeError(f"stream {stream.index} source runtime error: {last_error}")
-        running_fn = getattr(stream.source_run, "running", None)
-        if callable(running_fn) and not running_fn():
-            stream.closed = True
-        return False
-
-    if not stream.decode_run.push("encoded", [encoded_sample]):
-        raise RuntimeError(f"stream {stream.index} failed to push encoded sample to decode graph")
-    if stream.video_run is not None and not stream.video_run.push("encoded", [encoded_sample]):
-        raise RuntimeError(
-            f"stream {stream.index} failed to push encoded sample to video sender graph"
-        )
-
     sample = stream.decode_run.pull("detections", 50)
     pull_end = time_ms()
     if sample is None:
@@ -759,8 +784,19 @@ def run_app(cfg: AppConfig) -> None:
         )
         for stream in streams
     ]
+    pumps = [
+        threading.Thread(
+            target=pump_encoded_samples,
+            args=(stream, stop_event, errors),
+            name=f"stream-{stream.index}-encoded-pump",
+            daemon=True,
+        )
+        for stream in streams
+    ]
 
     try:
+        for pump in pumps:
+            pump.start()
         for consumer in consumers:
             consumer.start()
         for consumer in consumers:
@@ -775,6 +811,9 @@ def run_app(cfg: AppConfig) -> None:
                 stream.video_run.close()
             stream.decode_run.close()
             stream.source_run.close()
+        for pump in pumps:
+            if pump.is_alive():
+                pump.join(timeout=2.0)
         for consumer in consumers:
             if consumer.is_alive():
                 consumer.join(timeout=2.0)
