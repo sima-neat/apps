@@ -117,6 +117,8 @@ struct PipelineRuntime {
   simaai::neat::Run decode_run;
   simaai::neat::Graph video_graph;
   simaai::neat::Run video_run;
+  simaai::neat::Graph save_graph;
+  simaai::neat::Run save_run;
   std::optional<simaai::neat::Sample> pending_encoded_sample;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
@@ -381,6 +383,27 @@ build_video_sender_graph(const std::string& input_name,
   return video;
 }
 
+simaai::neat::Graph
+build_save_frame_graph(const std::string& input_name,
+                       const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+  simaai::neat::Graph save("save_frame");
+  const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
+  const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
+  const int dec_fps = (opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps;
+
+  save.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
+  save.add(simaai::neat::nodes::H264Decode(opt.sima_allocator_type, opt.out_format,
+                                           opt.decoder_name, opt.decoder_raw_output,
+                                           opt.decoder_next_element, dec_w, dec_h, dec_fps));
+  if (output_caps_enabled(opt.output_caps)) {
+    const auto& caps = opt.output_caps;
+    save.add(
+        simaai::neat::nodes::CapsRaw(caps.format, caps.width, caps.height, caps.fps, caps.memory));
+  }
+  save.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
+  return save;
+}
+
 std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   // Model options
   simaai::neat::Model::Options model_opt;
@@ -404,6 +427,10 @@ simaai::neat::RunOptions build_run_options() {
   return run_options;
 }
 
+bool save_frames_enabled(const AppConfig& cfg) {
+  return !cfg.save_dir.empty() && cfg.save_every > 0;
+}
+
 PipelineRuntime build_pipeline(const AppConfig& cfg) {
   PipelineRuntime runtime;
   const auto source_options =
@@ -424,10 +451,16 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.decode_graph =
       build_decode_model_graph("encoded", "detections", source_options, *runtime.model);
   runtime.video_graph = build_video_sender_graph("encoded", video_options);
+  if (save_frames_enabled(cfg)) {
+    runtime.save_graph = build_save_frame_graph("encoded", source_options);
+  }
   if (cfg.profile) {
     std::cout << "Source backend:\n" << runtime.source_graph.describe_backend() << "\n";
     std::cout << "Decode backend:\n" << runtime.decode_graph.describe_backend() << "\n";
     std::cout << "Video backend:\n" << runtime.video_graph.describe_backend() << "\n";
+    if (save_frames_enabled(cfg)) {
+      std::cout << "Save backend:\n" << runtime.save_graph.describe_backend() << "\n";
+    }
   }
 
   runtime.source_run = runtime.source_graph.build(build_run_options());
@@ -449,6 +482,10 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
       runtime.decode_graph.build(*runtime.pending_encoded_sample, downstream_options);
   runtime.video_run =
       runtime.video_graph.build(*runtime.pending_encoded_sample, downstream_options);
+  if (save_frames_enabled(cfg)) {
+    runtime.save_run =
+        runtime.save_graph.build(*runtime.pending_encoded_sample, downstream_options);
+  }
 
   simaai::neat::MetadataSenderOptions metadata_options;
   metadata_options.host = cfg.insight_host;
@@ -558,6 +595,12 @@ void pump_encoded_samples(PipelineRuntime& runtime, std::atomic_bool& stop_reque
         }
         throw std::runtime_error("failed to push encoded sample to video sender graph");
       }
+      if (runtime.save_run && !runtime.save_run.push("encoded", encoded_sample)) {
+        if (stop_requested.load()) {
+          break;
+        }
+        throw std::runtime_error("failed to push encoded sample to save graph");
+      }
     }
   } catch (...) {
     set_first_error(std::current_exception(), first_error, error_mutex);
@@ -579,6 +622,9 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     stop_requested.store(true);
     runtime.video_run.close();
     runtime.decode_run.close();
+    if (runtime.save_run) {
+      runtime.save_run.close();
+    }
     runtime.source_run.close();
     if (pump.joinable()) {
       pump.join();
@@ -607,6 +653,16 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
       if (status != simaai::neat::PullStatus::Ok) {
         throw std::runtime_error("failed to pull detections: " + pull_error.message);
       }
+      simaai::neat::Sample frame_sample;
+      if (runtime.save_run) {
+        simaai::neat::PullError frame_pull_error;
+        const auto frame_status =
+            runtime.save_run.pull("frame", 20000, frame_sample, &frame_pull_error);
+        if (frame_status != simaai::neat::PullStatus::Ok) {
+          throw std::runtime_error("failed to pull decoded save frame: " +
+                                   frame_pull_error.message);
+        }
+      }
 
       std::vector<std::uint8_t> payload;
       std::string err;
@@ -621,7 +677,9 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
       const double metadata_end = sima_examples::time_ms();
 
       ++processed;
-      maybe_save_debug_frame(cfg, processed, detection_sample, boxes);
+      if (runtime.save_run) {
+        maybe_save_debug_frame(cfg, processed, frame_sample, boxes);
+      }
       profile.add(pull_end - pull_start, metadata_end - metadata_start,
                   static_cast<int>(boxes.size()));
     }
@@ -647,7 +705,7 @@ int main(int argc, char** argv) {
       std::cout << "Config validated: " << cli.config_path << "\n";
       return 0;
     }
-    if (!cfg.save_dir.empty()) {
+    if (save_frames_enabled(cfg)) {
       fs::create_directories(cfg.save_dir);
     }
 

@@ -55,6 +55,8 @@ class StreamRuntime:
     decode_run: object
     video_graph: object | None
     video_run: object | None
+    save_graph: object | None
+    save_run: object | None
     pending_encoded_sample: object
     metadata_sender: object
     labels: list[str]
@@ -485,6 +487,39 @@ def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
     return video
 
 
+def build_save_frame_graph(input_name: str, opt) -> pyneat.Graph:
+    save = pyneat.Graph("save_frame")
+    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
+    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
+    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+
+    save.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
+    save.add(
+        pyneat.nodes.h264_decode(
+            sima_allocator_type=opt.sima_allocator_type,
+            out_format="NV12",
+            decoder_name=opt.decoder_name,
+            raw_output=opt.decoder_raw_output,
+            next_element=opt.decoder_next_element,
+            dec_width=dec_w,
+            dec_height=dec_h,
+            dec_fps=dec_fps,
+        )
+    )
+    if output_caps_enabled(opt.output_caps):
+        save.add(
+            pyneat.nodes.caps_raw(
+                "NV12",
+                opt.output_caps.width,
+                opt.output_caps.height,
+                opt.output_caps.fps,
+                opt.output_caps.memory,
+            )
+        )
+    save.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    return save
+
+
 def build_model(cfg: AppConfig):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
@@ -507,6 +542,10 @@ def build_run_options() -> pyneat.RunOptions:
     return run_options
 
 
+def save_frames_enabled(cfg: AppConfig) -> bool:
+    return bool(cfg.save_dir) and cfg.save_every > 0
+
+
 def build_stream_runtime(
     cfg: AppConfig, stream_index: int, url: str, labels: list[str]
 ) -> StreamRuntime:
@@ -517,6 +556,9 @@ def build_stream_runtime(
     source_options = build_source_options(cfg, url, fps, frame_w, frame_h)
     source_graph = build_encoded_source_graph(source_options)
     decode_graph = build_decode_model_graph("encoded", "detections", source_options, model)
+    save_graph = (
+        build_save_frame_graph("encoded", source_options) if save_frames_enabled(cfg) else None
+    )
 
     video_port = 0
     video_graph = None
@@ -532,6 +574,8 @@ def build_stream_runtime(
         print(f"Decode backend stream={stream_index}:\n{decode_graph.describe_backend()}")
         if video_graph is not None:
             print(f"Video backend stream={stream_index}:\n{video_graph.describe_backend()}")
+        if save_graph is not None:
+            print(f"Save backend stream={stream_index}:\n{save_graph.describe_backend()}")
 
     source_run = source_graph.build(build_run_options())
     pending_encoded_sample = source_run.pull("encoded", 20000)
@@ -544,6 +588,11 @@ def build_stream_runtime(
     video_run = (
         video_graph.build([pending_encoded_sample], options=downstream_options)
         if video_graph is not None
+        else None
+    )
+    save_run = (
+        save_graph.build([pending_encoded_sample], options=downstream_options)
+        if save_graph is not None
         else None
     )
 
@@ -569,6 +618,8 @@ def build_stream_runtime(
         decode_run=decode_run,
         video_graph=video_graph,
         video_run=video_run,
+        save_graph=save_graph,
+        save_run=save_run,
         pending_encoded_sample=pending_encoded_sample,
         metadata_sender=metadata_sender,
         labels=labels,
@@ -709,6 +760,13 @@ def pump_encoded_samples(
                     raise RuntimeError(
                         f"stream {stream.index} failed to push encoded sample to video sender graph"
                     )
+            if stream.save_run is not None:
+                if not stream.save_run.push("encoded", [encoded_sample]):
+                    if stop_event.is_set():
+                        break
+                    raise RuntimeError(
+                        f"stream {stream.index} failed to push encoded sample to save graph"
+                    )
             encoded_sample = None
     except Exception as exc:
         errors.append(exc)
@@ -728,6 +786,11 @@ def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
         if callable(running_fn) and not running_fn():
             stream.closed = True
         return False
+    frame_sample = None
+    if stream.save_run is not None:
+        frame_sample = stream.save_run.pull("frame", 20000)
+        if frame_sample is None:
+            raise RuntimeError(f"stream {stream.index} timed out waiting for decoded save frame")
 
     payload = extract_bbox_payload(sample)
     boxes = parse_boxes_strict(payload, stream.frame_w, stream.frame_h, cfg.max_detections)
@@ -738,7 +801,8 @@ def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
         metadata_start = time_ms()
         send_metadata(stream, sample, boxes)
         metadata_end = time_ms()
-        maybe_save_debug_frame(cfg, stream, sample, boxes)
+        if frame_sample is not None:
+            maybe_save_debug_frame(cfg, stream, frame_sample, boxes)
         stream.profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
     return True
 
@@ -766,7 +830,7 @@ def run_app(cfg: AppConfig) -> None:
         os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
         os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
         os.environ.setdefault("SIMA_GST_BOUNDARY_PROBES", "1")
-    if cfg.save_dir:
+    if save_frames_enabled(cfg):
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
     labels = load_labels(cfg.labels_path)
@@ -810,6 +874,8 @@ def run_app(cfg: AppConfig) -> None:
             if stream.video_run is not None:
                 stream.video_run.close()
             stream.decode_run.close()
+            if stream.save_run is not None:
+                stream.save_run.close()
             stream.source_run.close()
         for pump in pumps:
             if pump.is_alive():

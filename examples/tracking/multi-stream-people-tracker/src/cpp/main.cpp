@@ -140,6 +140,8 @@ struct StreamRuntime {
   simaai::neat::Run decode_run;
   simaai::neat::Graph video_graph;
   simaai::neat::Run video_run;
+  simaai::neat::Graph save_graph;
+  simaai::neat::Run save_run;
   std::optional<simaai::neat::Sample> pending_encoded_sample;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   PeopleTracker tracker;
@@ -484,6 +486,27 @@ build_video_sender_graph(const std::string& input_name,
   return video;
 }
 
+simaai::neat::Graph
+build_save_frame_graph(const std::string& input_name,
+                       const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+  simaai::neat::Graph save("save_frame");
+  const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
+  const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
+  const int dec_fps = (opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps;
+
+  save.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
+  save.add(simaai::neat::nodes::H264Decode(opt.sima_allocator_type, opt.out_format,
+                                           opt.decoder_name, opt.decoder_raw_output,
+                                           opt.decoder_next_element, dec_w, dec_h, dec_fps));
+  if (output_caps_enabled(opt.output_caps)) {
+    const auto& caps = opt.output_caps;
+    save.add(
+        simaai::neat::nodes::CapsRaw(caps.format, caps.width, caps.height, caps.fps, caps.memory));
+  }
+  save.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
+  return save;
+}
+
 std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
@@ -504,6 +527,10 @@ simaai::neat::RunOptions build_run_options() {
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   return run_options;
+}
+
+bool save_frames_enabled(const AppConfig& cfg) {
+  return !cfg.save_dir.empty() && cfg.save_every > 0;
 }
 
 StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url) {
@@ -527,6 +554,9 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   runtime.source_graph = build_encoded_source_graph(source_options);
   runtime.decode_graph =
       build_decode_model_graph("encoded", "detections", source_options, *runtime.model);
+  if (save_frames_enabled(cfg)) {
+    runtime.save_graph = build_save_frame_graph("encoded", source_options);
+  }
   if (cfg.video_enabled) {
     auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
     video_options.host = cfg.insight_host;
@@ -544,6 +574,10 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     if (cfg.video_enabled) {
       std::cout << "Video backend stream=" << stream_index << ":\n"
                 << runtime.video_graph.describe_backend() << "\n";
+    }
+    if (save_frames_enabled(cfg)) {
+      std::cout << "Save backend stream=" << stream_index << ":\n"
+                << runtime.save_graph.describe_backend() << "\n";
     }
   }
 
@@ -569,6 +603,10 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   if (cfg.video_enabled) {
     runtime.video_run =
         runtime.video_graph.build(*runtime.pending_encoded_sample, downstream_options);
+  }
+  if (save_frames_enabled(cfg)) {
+    runtime.save_run =
+        runtime.save_graph.build(*runtime.pending_encoded_sample, downstream_options);
   }
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -690,6 +728,15 @@ void pump_encoded_samples(StreamRuntime& stream, const AppConfig& cfg,
                                    " failed to push encoded sample to video sender graph");
         }
       }
+      if (stream.save_run) {
+        if (!stream.save_run.push("encoded", encoded_sample)) {
+          if (stop_requested.load()) {
+            break;
+          }
+          throw std::runtime_error("stream " + std::to_string(stream.index) +
+                                   " failed to push encoded sample to save graph");
+        }
+      }
     }
   } catch (...) {
     set_first_error(std::current_exception(), first_error, error_mutex);
@@ -715,6 +762,15 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
     throw std::runtime_error("stream " + std::to_string(stream.index) +
                              " failed to pull detections: " + pull_error.message);
   }
+  simaai::neat::Sample frame_sample;
+  if (stream.save_run) {
+    simaai::neat::PullError frame_pull_error;
+    const auto frame_status = stream.save_run.pull("frame", 20000, frame_sample, &frame_pull_error);
+    if (frame_status != simaai::neat::PullStatus::Ok) {
+      throw std::runtime_error("stream " + std::to_string(stream.index) +
+                               " failed to pull decoded save frame: " + frame_pull_error.message);
+    }
+  }
 
   std::vector<std::uint8_t> payload;
   std::string err;
@@ -735,7 +791,9 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
     const double metadata_start = sima_examples::time_ms();
     send_metadata(stream, sample, tracks);
     const double metadata_end = sima_examples::time_ms();
-    maybe_save_debug_frame(cfg, stream, sample, tracks);
+    if (stream.save_run) {
+      maybe_save_debug_frame(cfg, stream, frame_sample, tracks);
+    }
     stream.profile.add(pull_end - pull_start, tracker_end - tracker_start,
                        metadata_end - metadata_start, static_cast<int>(tracks.size()));
   }
@@ -763,7 +821,7 @@ void run_app(const AppConfig& cfg) {
     setenv("SIMA_GST_FLOW_DEBUG", "1", 0);
     setenv("SIMA_GST_BOUNDARY_PROBES", "1", 0);
   }
-  if (!cfg.save_dir.empty()) {
+  if (save_frames_enabled(cfg)) {
     fs::create_directories(cfg.save_dir);
   }
 
@@ -800,6 +858,9 @@ void run_app(const AppConfig& cfg) {
       stream.video_run.close();
     }
     stream.decode_run.close();
+    if (stream.save_run) {
+      stream.save_run.close();
+    }
     stream.source_run.close();
   }
   for (auto& pump : pumps) {
