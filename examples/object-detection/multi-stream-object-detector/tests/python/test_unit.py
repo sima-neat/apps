@@ -171,8 +171,15 @@ class TestMetadata:
             index=0,
             url="rtsp://127.0.0.1:8554/src1",
             model=None,
-            graph=None,
-            run=None,
+            source_graph=None,
+            source_run=None,
+            decode_graph=None,
+            decode_run=None,
+            video_graph=None,
+            video_run=None,
+            save_graph=None,
+            save_run=None,
+            pending_encoded_sample=None,
             metadata_sender=sender,
             labels=["person"],
             profile=ProfileWindow(False, 0),
@@ -180,7 +187,6 @@ class TestMetadata:
             frame_h=100,
             output_fps=30,
             video_port=9000,
-            output_name="detections",
         )
         boxes = [
             {

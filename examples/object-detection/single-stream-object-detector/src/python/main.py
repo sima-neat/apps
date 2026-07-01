@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import struct
 import sys
+import threading
 import time
 
 import yaml
@@ -44,8 +45,15 @@ class AppConfig:
 @dataclass
 class PipelineRuntime:
     model: object
-    graph: object
-    run: object
+    source_graph: object
+    source_run: object
+    decode_graph: object
+    decode_run: object
+    video_graph: object
+    video_run: object
+    save_graph: object | None
+    save_run: object | None
+    pending_encoded_sample: object
     metadata_sender: object
     labels: list[str]
     frame_w: int
@@ -346,7 +354,7 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def make_source_options(cfg: AppConfig, fps: int, width: int, height: int):
+def build_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt = pyneat.RtspDecodedInputOptions()
     opt.url = cfg.rtsp_url
     opt.latency_ms = cfg.latency_ms
@@ -368,7 +376,132 @@ def make_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     return opt
 
 
-def make_model(cfg: AppConfig):
+def output_caps_enabled(caps) -> bool:
+    return caps.enable or caps.width > 0 or caps.height > 0 or caps.fps > 0
+
+
+def build_encoded_source_graph(opt) -> pyneat.Graph:
+    source = pyneat.Graph("rtsp_encoded_source")
+    use_auto_caps = opt.auto_caps_from_stream and (
+        opt.h264_fps <= 0 or opt.h264_width <= 0 or opt.h264_height <= 0
+    )
+    insert_queue = opt.insert_queue and not opt.sync_mode
+    source.add(pyneat.nodes.rtsp_input(opt.url, opt.latency_ms, opt.tcp))
+    if insert_queue:
+        source.add(pyneat.nodes.queue())
+    source.add(
+        pyneat.nodes.h264_depacketize(
+            payload_type=opt.payload_type,
+            h264_parse_config_interval=opt.h264_parse_config_interval,
+            h264_fps=opt.h264_fps,
+            h264_width=opt.h264_width,
+            h264_height=opt.h264_height,
+            enforce_h264_caps=not use_auto_caps,
+        )
+    )
+    if insert_queue:
+        source.add(pyneat.nodes.queue())
+    if use_auto_caps:
+        source.add(
+            pyneat.nodes.h264_caps_fixup(
+                opt.fallback_h264_fps, opt.fallback_h264_width, opt.fallback_h264_height
+            )
+        )
+    source.add(pyneat.nodes.output("encoded", pyneat.OutputOptions.every_frame(3)))
+    return source
+
+
+def h264_encoded_input_options():
+    opt = pyneat.InputOptions()
+    opt.payload_type = pyneat.PayloadType.Encoded
+    opt.caps_override = (
+        "video/x-h264,parsed=true,stream-format=(string)byte-stream,"
+        "alignment=(string)au"
+    )
+    return opt
+
+
+def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> pyneat.Graph:
+    decode = pyneat.Graph("decode_model")
+    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
+    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
+    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+
+    decode.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
+    decode.add(
+        pyneat.nodes.h264_decode(
+            sima_allocator_type=opt.sima_allocator_type,
+            out_format="NV12",
+            decoder_name=opt.decoder_name,
+            raw_output=opt.decoder_raw_output,
+            next_element=opt.decoder_next_element,
+            dec_width=dec_w,
+            dec_height=dec_h,
+            dec_fps=dec_fps,
+        )
+    )
+    if opt.use_videoconvert:
+        decode.add(pyneat.nodes.video_convert())
+    if opt.use_videoscale:
+        decode.add(pyneat.nodes.video_scale())
+    if output_caps_enabled(opt.output_caps):
+        decode.add(
+            pyneat.nodes.caps_raw(
+                "NV12",
+                opt.output_caps.width,
+                opt.output_caps.height,
+                opt.output_caps.fps,
+                opt.output_caps.memory,
+            )
+        )
+    if opt.extra_fragment:
+        decode.add(pyneat.nodes.custom(opt.extra_fragment))
+    decode.add(model)
+    decode.add(pyneat.nodes.output(output_name, pyneat.OutputOptions.every_frame(4)))
+    return decode
+
+
+def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
+    video = pyneat.Graph("video_sender")
+    video.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
+    video.add(pyneat.groups.video_sender(video_options))
+    return video
+
+
+def build_save_frame_graph(input_name: str, opt) -> pyneat.Graph:
+    save = pyneat.Graph("save_frame")
+    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
+    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
+    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+
+    save.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
+    save.add(
+        pyneat.nodes.h264_decode(
+            sima_allocator_type=opt.sima_allocator_type,
+            out_format="NV12",
+            decoder_name=opt.decoder_name,
+            raw_output=opt.decoder_raw_output,
+            next_element=opt.decoder_next_element,
+            dec_width=dec_w,
+            dec_height=dec_h,
+            dec_fps=dec_fps,
+        )
+    )
+    if output_caps_enabled(opt.output_caps):
+        save.add(
+            pyneat.nodes.caps_raw(
+                "NV12",
+                opt.output_caps.width,
+                opt.output_caps.height,
+                opt.output_caps.fps,
+                opt.output_caps.memory,
+            )
+        )
+    save.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    return save
+
+
+def build_model(cfg: AppConfig):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
@@ -381,61 +514,57 @@ def make_model(cfg: AppConfig):
     return pyneat.Model(cfg.model_path, opt)
 
 
-def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
-    frame_w, frame_h, fps = probe_rtsp(cfg.rtsp_url)
-    model = make_model(cfg)
-    labels = load_labels(cfg.labels_path)
-
-    source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, fps, frame_w, frame_h))
-    save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
-    outputs = ["video", "model"]
-    if save_debug_frames:
-        outputs.append("debug_frame")
-    branch = pyneat.graphs.branch("source", outputs)
-
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
-    video_options.host = cfg.insight_host
-    video_options.channel = 0
-    video_options.video_port_base = cfg.video_port
-    video_options.encoder.bitrate_kbps = 1000
-
-    video_graph = pyneat.Graph("video")
-    video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
-
-    model_graph = pyneat.Graph("model")
-    model_graph.connect(pyneat.nodes.input("model"), model)
-
-    detections_graph = pyneat.Graph("detections")
-    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
-
-    graph = pyneat.Graph()
-    live_link_options = pyneat.GraphLinkOptions()
-    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    graph.connect(source, branch)
-    graph.connect(branch, video_graph, live_link_options)
-    if save_debug_frames:
-        graph.connect(branch, model_graph)
-    else:
-        graph.connect(branch, model_graph, live_link_options)
-    graph.connect(model_graph, detections_graph)
-    if save_debug_frames:
-        frames = pyneat.Graph("debug_frame")
-        frames.add(pyneat.nodes.output("debug_frame", pyneat.OutputOptions.every_frame(4)))
-        debug_join = pyneat.graphs.combine(
-            ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
-        )
-        graph.connect(branch, frames)
-        graph.connect(frames, debug_join)
-        graph.connect(detections_graph, debug_join)
-    if cfg.profile:
-        print(f"Backend:\n{graph.describe_backend()}")
-
+def build_run_options() -> pyneat.RunOptions:
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
     run_options.queue_depth = 3
     run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    run = graph.build(run_options)
+    return run_options
+
+
+def save_frames_enabled(cfg: AppConfig) -> bool:
+    return bool(cfg.save_dir) and cfg.save_every > 0
+
+
+def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
+    frame_w, frame_h, fps = probe_rtsp(cfg.rtsp_url)
+    model = build_model(cfg)
+    labels = load_labels(cfg.labels_path)
+
+    source_options = build_source_options(cfg, fps, frame_w, frame_h)
+    source_graph = build_encoded_source_graph(source_options)
+    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+    video_options.host = cfg.insight_host
+    video_options.channel = 0
+    video_options.video_port_base = cfg.video_port
+
+    decode_graph = build_decode_model_graph("encoded", "detections", source_options, model)
+    video_graph = build_video_sender_graph("encoded", video_options)
+    save_graph = (
+        build_save_frame_graph("encoded", source_options) if save_frames_enabled(cfg) else None
+    )
+    if cfg.profile:
+        print(f"Source backend:\n{source_graph.describe_backend()}")
+        print(f"Decode backend:\n{decode_graph.describe_backend()}")
+        print(f"Video backend:\n{video_graph.describe_backend()}")
+        if save_graph is not None:
+            print(f"Save backend:\n{save_graph.describe_backend()}")
+
+    source_run = source_graph.build(build_run_options())
+    pending_encoded_sample = source_run.pull("encoded", 20000)
+    if pending_encoded_sample is None:
+        raise RuntimeError("timed out waiting for encoded RTSP frame")
+
+    downstream_options = build_run_options()
+    downstream_options.startup_preflight = False
+    decode_run = decode_graph.build([pending_encoded_sample], options=downstream_options)
+    video_run = video_graph.build([pending_encoded_sample], options=downstream_options)
+    save_run = (
+        save_graph.build([pending_encoded_sample], options=downstream_options)
+        if save_graph is not None
+        else None
+    )
 
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
@@ -450,8 +579,15 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     )
     return PipelineRuntime(
         model=model,
-        graph=graph,
-        run=run,
+        source_graph=source_graph,
+        source_run=source_run,
+        decode_graph=decode_graph,
+        decode_run=decode_run,
+        video_graph=video_graph,
+        video_run=video_run,
+        save_graph=save_graph,
+        save_run=save_run,
+        pending_encoded_sample=pending_encoded_sample,
         metadata_sender=metadata_sender,
         labels=labels,
         frame_w=frame_w,
@@ -562,29 +698,97 @@ def maybe_save_debug_frame(cfg: AppConfig, processed: int, sample, boxes: list[d
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
+def pump_encoded_samples(
+    runtime: PipelineRuntime,
+    stop_event: threading.Event,
+    errors: list[Exception],
+) -> None:
+    try:
+        encoded_sample = runtime.pending_encoded_sample
+        runtime.pending_encoded_sample = None
+        while not stop_event.is_set():
+            if encoded_sample is None:
+                encoded_sample = runtime.source_run.pull("encoded", 200)
+            if encoded_sample is None:
+                if stop_event.is_set():
+                    break
+                last_error_fn = getattr(runtime.source_run, "last_error", None)
+                last_error = last_error_fn() if callable(last_error_fn) else ""
+                if last_error:
+                    raise RuntimeError(f"source runtime error: {last_error}")
+                continue
+            if not runtime.decode_run.push("encoded", [encoded_sample]):
+                if stop_event.is_set():
+                    break
+                raise RuntimeError("failed to push encoded sample to decode graph")
+            if not runtime.video_run.push("encoded", [encoded_sample]):
+                if stop_event.is_set():
+                    break
+                raise RuntimeError("failed to push encoded sample to video sender graph")
+            if runtime.save_run is not None and not runtime.save_run.push(
+                "encoded", [encoded_sample]
+            ):
+                if stop_event.is_set():
+                    break
+                raise RuntimeError("failed to push encoded sample to save graph")
+            encoded_sample = None
+    except Exception as exc:
+        errors.append(exc)
+        stop_event.set()
+
+
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
-    output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
+    stop_event = threading.Event()
+    pump_errors: list[Exception] = []
+    pump = threading.Thread(
+        target=pump_encoded_samples,
+        args=(runtime, stop_event, pump_errors),
+        name="encoded-pump",
+        daemon=True,
+    )
     processed = 0
-    while cfg.frames <= 0 or processed < cfg.frames:
-        pull_start = time_ms()
-        detection_sample = runtime.run.pull(output_name, 20000)
-        pull_end = time_ms()
-        if detection_sample is None:
-            print("[warn] timed out waiting for detections", file=sys.stderr)
-            continue
+    pump.start()
+    try:
+        while cfg.frames <= 0 or processed < cfg.frames:
+            if pump_errors:
+                raise pump_errors[0]
+            pull_start = time_ms()
+            detection_sample = runtime.decode_run.pull("detections", 20000)
+            pull_end = time_ms()
+            if detection_sample is None:
+                if pump_errors:
+                    raise pump_errors[0]
+                print("[warn] timed out waiting for detections", file=sys.stderr)
+                continue
+            frame_sample = None
+            if runtime.save_run is not None:
+                frame_sample = runtime.save_run.pull("frame", 20000)
+                if frame_sample is None:
+                    raise RuntimeError("timed out waiting for decoded save frame")
 
-        payload = extract_bbox_payload(detection_sample)
-        boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
+            payload = extract_bbox_payload(detection_sample)
+            boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
 
-        metadata_start = time_ms()
-        send_metadata(runtime, detection_sample, boxes)
-        metadata_end = time_ms()
+            metadata_start = time_ms()
+            send_metadata(runtime, detection_sample, boxes)
+            metadata_end = time_ms()
 
-        processed += 1
-        maybe_save_debug_frame(cfg, processed, detection_sample, boxes)
-        profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+            processed += 1
+            if frame_sample is not None:
+                maybe_save_debug_frame(cfg, processed, frame_sample, boxes)
+            profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+    finally:
+        stop_event.set()
+        runtime.video_run.close()
+        runtime.decode_run.close()
+        if runtime.save_run is not None:
+            runtime.save_run.close()
+        runtime.source_run.close()
+        pump.join(timeout=2.0)
 
+    if pump_errors:
+        raise pump_errors[0]
     profile.flush()
     print(f"processed={processed} video_sender={cfg.insight_host}:{runtime.video_port}")
     return processed
@@ -603,14 +807,11 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
             os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
             os.environ.setdefault("SIMA_GST_BOUNDARY_PROBES", "1")
-        if cfg.save_dir:
+        if save_frames_enabled(cfg):
             Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
         runtime = build_pipeline(cfg)
-        try:
-            run_pipeline(runtime, cfg)
-        finally:
-            runtime.run.close()
+        run_pipeline(runtime, cfg)
         return 0
     except KeyboardInterrupt:
         return 130
