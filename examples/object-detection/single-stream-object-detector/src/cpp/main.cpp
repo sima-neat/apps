@@ -313,8 +313,6 @@ bool output_caps_enabled(
 simaai::neat::InputOptions h264_encoded_input_options() {
   simaai::neat::InputOptions opt;
   opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.caps_override =
-      "video/x-h264,parsed=true,stream-format=(string)byte-stream,alignment=(string)au";
   return opt;
 }
 
