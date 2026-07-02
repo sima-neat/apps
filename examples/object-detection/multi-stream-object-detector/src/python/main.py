@@ -401,31 +401,13 @@ def output_caps_enabled(caps) -> bool:
 
 def build_encoded_source_graph(opt) -> pyneat.Graph:
     source = pyneat.Graph("rtsp_encoded_source")
-    use_auto_caps = opt.auto_caps_from_stream and (
-        opt.h264_fps <= 0 or opt.h264_width <= 0 or opt.h264_height <= 0
-    )
-    insert_queue = opt.insert_queue and not opt.sync_mode
-    source.add(pyneat.nodes.rtsp_input(opt.url, opt.latency_ms, opt.tcp))
-    if insert_queue:
-        source.add(pyneat.nodes.queue())
-    source.add(
-        pyneat.nodes.h264_depacketize(
-            payload_type=opt.payload_type,
-            h264_parse_config_interval=opt.h264_parse_config_interval,
-            h264_fps=opt.h264_fps,
-            h264_width=opt.h264_width,
-            h264_height=opt.h264_height,
-            enforce_h264_caps=not use_auto_caps,
-        )
-    )
-    if insert_queue:
-        source.add(pyneat.nodes.queue())
-    if use_auto_caps:
-        source.add(
-            pyneat.nodes.h264_caps_fixup(
-                opt.fallback_h264_fps, opt.fallback_h264_width, opt.fallback_h264_height
-            )
-        )
+
+    encoded_opt = pyneat.RtspEncodedInputOptions()
+    encoded_opt.url = opt.url
+    encoded_opt.codec = pyneat.RtspCodec.H264
+    encoded_opt.latency_ms = opt.latency_ms
+    encoded_opt.tcp = opt.tcp
+    source.add(pyneat.groups.rtsp_encoded_input(encoded_opt))
     source.add(pyneat.nodes.output("encoded", pyneat.OutputOptions.every_frame(3)))
     return source
 
