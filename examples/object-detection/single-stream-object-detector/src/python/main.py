@@ -10,12 +10,12 @@ import os
 from pathlib import Path
 import struct
 import sys
-import threading
 import time
 
 import yaml
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+DEFAULT_FPS = 30
 
 cv2 = None
 np = None
@@ -26,9 +26,13 @@ pyneat = None
 class AppConfig:
     model_path: str
     labels_path: Path
-    rtsp_url: str
+    source_url: str
+    source_type: str = "rtsp"
+    source_codec: str = "h264"
     latency_ms: int = 200
     tcp: bool = True
+    source_fps: int = 0
+    ssl_strict: bool = True
     frames: int = 0
     min_score: float = 0.55
     nms_iou: float = 0.60
@@ -45,15 +49,8 @@ class AppConfig:
 @dataclass
 class PipelineRuntime:
     model: object
-    source_graph: object
-    source_run: object
-    decode_graph: object
-    decode_run: object
-    video_graph: object
-    video_run: object
-    save_graph: object | None
-    save_run: object | None
-    pending_encoded_sample: object
+    graph: object
+    run: object
     metadata_sender: object
     labels: list[str]
     frame_w: int
@@ -175,9 +172,25 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return value
 
 
+def parse_source_type(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"rtsp", "http", "https"}:
+        return "http" if lowered == "https" else lowered
+    raise ValueError("source.type must be rtsp or http")
+
+
+def parse_source_codec(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"h264", "h.264"}:
+        return "h264"
+    if lowered in {"mjpeg", "jpeg"}:
+        return "mjpeg"
+    raise ValueError("source.codec must be h264 or mjpeg")
+
+
 def validate_config(cfg: AppConfig) -> None:
-    if not cfg.rtsp_url:
-        raise ValueError("source.rtsp_url must be set")
+    if not cfg.source_url:
+        raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
     if not str(cfg.labels_path):
@@ -186,6 +199,12 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.insight.host must be set")
     if cfg.latency_ms < 0:
         raise ValueError("source.latency_ms must be >= 0")
+    if cfg.source_fps < 0:
+        raise ValueError("source.fps must be >= 0")
+    if cfg.source_type == "http" and cfg.source_codec != "mjpeg":
+        raise ValueError("source.codec must be mjpeg for source.type=http")
+    if cfg.source_type == "http" and cfg.source_fps <= 0:
+        raise ValueError("source.fps must be > 0 for HTTP MJPEG sources")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -220,9 +239,13 @@ def load_app_config(config_path: Path) -> AppConfig:
     cfg = AppConfig(
         model_path=string_or(model, "path"),
         labels_path=Path(string_or(model, "labels", str(default_labels))),
-        rtsp_url=string_or(source, "rtsp_url"),
+        source_url=string_or(source, "url", string_or(source, "rtsp_url")),
+        source_type=parse_source_type(string_or(source, "type", "rtsp")),
+        source_codec=parse_source_codec(string_or(source, "codec", "h264")),
         latency_ms=int_or(source, "latency_ms", 200),
         tcp=bool_or(source, "tcp", True),
+        source_fps=int_or(source, "fps", 0),
+        ssl_strict=bool_or(source, "ssl_strict", True),
         frames=int_or(inference, "frames", 0),
         min_score=float_or(inference, "min_score", 0.55),
         nms_iou=float_or(inference, "nms_iou", 0.60),
@@ -354,154 +377,102 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def build_source_options(cfg: AppConfig, fps: int, width: int, height: int):
+def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt = pyneat.RtspDecodedInputOptions()
-    opt.url = cfg.rtsp_url
+    opt.url = cfg.source_url
     opt.latency_ms = cfg.latency_ms
     opt.tcp = cfg.tcp
-    opt.payload_type = 96
     opt.insert_queue = True
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
-    opt.auto_caps_from_stream = True
-    opt.fallback_h264_width = width
-    opt.fallback_h264_height = height
-    opt.fallback_h264_fps = fps
-    opt.output_caps.enable = True
-    opt.output_caps.format = pyneat.Format.NV12
-    opt.output_caps.width = width
-    opt.output_caps.height = height
-    opt.output_caps.fps = fps
-    opt.output_caps.memory = pyneat.CapsMemory.Any
+    opt.codec = pyneat.RtspCodec.H264 if cfg.source_codec == "h264" else pyneat.RtspCodec.MJPEG
+    if cfg.source_codec == "h264":
+        opt.payload_type = 96
+        opt.auto_caps_from_stream = True
+        opt.fallback_h264_width = width
+        opt.fallback_h264_height = height
+        opt.fallback_h264_fps = fps
+    else:
+        opt.mjpeg_payload_type = 26
+        opt.dec_width = width
+        opt.dec_height = height
+        opt.dec_fps = fps
+    set_output_caps(opt.output_caps, fps, width, height)
     return opt
 
 
-def output_caps_enabled(caps) -> bool:
-    return caps.enable or caps.width > 0 or caps.height > 0 or caps.fps > 0
-
-
-def build_encoded_source_graph(opt) -> pyneat.Graph:
-    source = pyneat.Graph("rtsp_encoded_source")
-    use_auto_caps = opt.auto_caps_from_stream and (
-        opt.h264_fps <= 0 or opt.h264_width <= 0 or opt.h264_height <= 0
-    )
-    insert_queue = opt.insert_queue and not opt.sync_mode
-    source.add(pyneat.nodes.rtsp_input(opt.url, opt.latency_ms, opt.tcp))
-    if insert_queue:
-        source.add(pyneat.nodes.queue())
-    source.add(
-        pyneat.nodes.h264_depacketize(
-            payload_type=opt.payload_type,
-            h264_parse_config_interval=opt.h264_parse_config_interval,
-            h264_fps=opt.h264_fps,
-            h264_width=opt.h264_width,
-            h264_height=opt.h264_height,
-            enforce_h264_caps=not use_auto_caps,
-        )
-    )
-    if insert_queue:
-        source.add(pyneat.nodes.queue())
-    if use_auto_caps:
-        source.add(
-            pyneat.nodes.h264_caps_fixup(
-                opt.fallback_h264_fps, opt.fallback_h264_width, opt.fallback_h264_height
-            )
-        )
-    source.add(pyneat.nodes.output("encoded", pyneat.OutputOptions.every_frame(3)))
-    return source
-
-
-def h264_encoded_input_options():
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
+def make_http_mjpeg_source_options(cfg: AppConfig, fps: int, width: int, height: int):
+    opt = pyneat.HttpMjpegDecodedInputOptions()
+    opt.url = cfg.source_url
+    opt.decoder_name = "decoder"
+    opt.decoder_raw_output = True
+    opt.dec_fps = fps
+    opt.ssl_strict = cfg.ssl_strict
+    set_output_caps(opt.output_caps, fps, width, height)
     return opt
 
 
-def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> pyneat.Graph:
-    decode = pyneat.Graph("decode_model")
-    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
-    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+def set_output_caps(caps, fps: int, width: int, height: int) -> None:
+    if width <= 0 or height <= 0 or fps <= 0:
+        return
+    caps.enable = True
+    caps.format = pyneat.Format.NV12
+    caps.width = width
+    caps.height = height
+    caps.fps = fps
+    caps.memory = pyneat.CapsMemory.Any
 
-    decode.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
-    decode.add(
-        pyneat.nodes.h264_decode(
-            sima_allocator_type=opt.sima_allocator_type,
-            out_format="NV12",
-            decoder_name=opt.decoder_name,
-            raw_output=opt.decoder_raw_output,
-            next_element=opt.decoder_next_element,
-            dec_width=dec_w,
-            dec_height=dec_h,
-            dec_fps=dec_fps,
-        )
+
+def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int):
+    if cfg.source_type == "rtsp":
+        return pyneat.groups.rtsp_decoded_input(make_rtsp_source_options(cfg, fps, width, height))
+    return pyneat.groups.http_mjpeg_decoded_input(
+        make_http_mjpeg_source_options(cfg, fps, width, height)
     )
-    if opt.use_videoconvert:
-        decode.add(pyneat.nodes.video_convert())
-    if opt.use_videoscale:
-        decode.add(pyneat.nodes.video_scale())
-    if output_caps_enabled(opt.output_caps):
-        decode.add(
-            pyneat.nodes.caps_raw(
-                "NV12",
-                opt.output_caps.width,
-                opt.output_caps.height,
-                opt.output_caps.fps,
-                opt.output_caps.memory,
-            )
-        )
-    if opt.extra_fragment:
-        decode.add(pyneat.nodes.custom(opt.extra_fragment))
-    decode.add(model)
-    decode.add(pyneat.nodes.output(output_name, pyneat.OutputOptions.every_frame(4)))
-    return decode
 
 
-def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
-    video = pyneat.Graph("video_sender")
-    video.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
-    video.add(pyneat.groups.video_sender(video_options))
-    return video
+def probe_decoded_source(cfg: AppConfig) -> tuple[int, int, int]:
+    fps = cfg.source_fps
+    graph = pyneat.Graph("source_probe")
+    graph.add(make_source_graph(cfg, fps, 0, 0))
+    graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(1)))
+
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 3
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run = graph.build(run_options)
+    try:
+        sample = run.pull("frame", 20000)
+    finally:
+        run.close()
+    if sample is None:
+        raise RuntimeError("failed to probe decoded source frame")
+    tensor = first_tensor_from_sample(sample)
+    if tensor is None:
+        raise RuntimeError("decoded source probe did not produce a tensor")
+    return tensor_dim(tensor, "width"), tensor_dim(tensor, "height"), fps
 
 
-def build_save_frame_graph(input_name: str, opt) -> pyneat.Graph:
-    save = pyneat.Graph("save_frame")
-    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
-    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
-
-    save.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
-    save.add(
-        pyneat.nodes.h264_decode(
-            sima_allocator_type=opt.sima_allocator_type,
-            out_format="NV12",
-            decoder_name=opt.decoder_name,
-            raw_output=opt.decoder_raw_output,
-            next_element=opt.decoder_next_element,
-            dec_width=dec_w,
-            dec_height=dec_h,
-            dec_fps=dec_fps,
-        )
-    )
-    if output_caps_enabled(opt.output_caps):
-        save.add(
-            pyneat.nodes.caps_raw(
-                "NV12",
-                opt.output_caps.width,
-                opt.output_caps.height,
-                opt.output_caps.fps,
-                opt.output_caps.memory,
-            )
-        )
-    save.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-    return save
+def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
+    if cfg.source_type == "rtsp":
+        width, height, fps = probe_rtsp(cfg.source_url)
+        return width, height, cfg.source_fps if cfg.source_fps > 0 else fps
+    width, height, fps = probe_decoded_source(cfg)
+    if cfg.source_type == "rtsp" and fps <= 0:
+        fps = DEFAULT_FPS
+    return width, height, fps
 
 
-def build_model(cfg: AppConfig):
+def make_model(cfg: AppConfig, frame_w: int, frame_h: int):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    if frame_w > 0 and frame_h > 0:
+        opt.preprocess.input_max_width = frame_w
+        opt.preprocess.input_max_height = frame_h
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26
     opt.score_threshold = cfg.min_score
@@ -510,57 +481,61 @@ def build_model(cfg: AppConfig):
     return pyneat.Model(cfg.model_path, opt)
 
 
-def build_run_options() -> pyneat.RunOptions:
+def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
+    frame_w, frame_h, fps = resolve_source_geometry(cfg)
+    model = make_model(cfg, frame_w, frame_h)
+    labels = load_labels(cfg.labels_path)
+
+    source = make_source_graph(cfg, fps, frame_w, frame_h)
+    save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
+    outputs = ["video", "model"]
+    if save_debug_frames:
+        outputs.append("debug_frame")
+    branch = pyneat.graphs.branch("source", outputs)
+
+    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
+    video_options.host = cfg.insight_host
+    video_options.channel = 0
+    video_options.video_port_base = cfg.video_port
+    video_options.encoder.bitrate_kbps = 1000
+
+    video_graph = pyneat.Graph("video")
+    video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
+
+    model_graph = pyneat.Graph("model")
+    model_graph.connect(pyneat.nodes.input("model"), model)
+
+    detections_graph = pyneat.Graph("detections")
+    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+
+    graph = pyneat.Graph()
+    live_link_options = pyneat.GraphLinkOptions()
+    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    graph.connect(source, branch)
+    graph.connect(branch, video_graph, live_link_options)
+    if save_debug_frames:
+        graph.connect(branch, model_graph)
+    else:
+        graph.connect(branch, model_graph, live_link_options)
+    graph.connect(model_graph, detections_graph)
+    if save_debug_frames:
+        frames = pyneat.Graph("debug_frame")
+        frames.add(pyneat.nodes.output("debug_frame", pyneat.OutputOptions.every_frame(4)))
+        debug_join = pyneat.graphs.combine(
+            ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
+        )
+        graph.connect(branch, frames)
+        graph.connect(frames, debug_join)
+        graph.connect(detections_graph, debug_join)
+    if cfg.profile:
+        print(f"Backend:\n{graph.describe_backend()}")
+
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
     run_options.queue_depth = 3
     run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    return run_options
-
-
-def save_frames_enabled(cfg: AppConfig) -> bool:
-    return bool(cfg.save_dir) and cfg.save_every > 0
-
-
-def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
-    frame_w, frame_h, fps = probe_rtsp(cfg.rtsp_url)
-    model = build_model(cfg)
-    labels = load_labels(cfg.labels_path)
-
-    source_options = build_source_options(cfg, fps, frame_w, frame_h)
-    source_graph = build_encoded_source_graph(source_options)
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
-    video_options.host = cfg.insight_host
-    video_options.channel = 0
-    video_options.video_port_base = cfg.video_port
-
-    decode_graph = build_decode_model_graph("encoded", "detections", source_options, model)
-    video_graph = build_video_sender_graph("encoded", video_options)
-    save_graph = (
-        build_save_frame_graph("encoded", source_options) if save_frames_enabled(cfg) else None
-    )
-    if cfg.profile:
-        print(f"Source backend:\n{source_graph.describe_backend()}")
-        print(f"Decode backend:\n{decode_graph.describe_backend()}")
-        print(f"Video backend:\n{video_graph.describe_backend()}")
-        if save_graph is not None:
-            print(f"Save backend:\n{save_graph.describe_backend()}")
-
-    source_run = source_graph.build(build_run_options())
-    pending_encoded_sample = source_run.pull("encoded", 20000)
-    if pending_encoded_sample is None:
-        raise RuntimeError("timed out waiting for encoded RTSP frame")
-
-    downstream_options = build_run_options()
-    downstream_options.startup_preflight = False
-    decode_run = decode_graph.build([pending_encoded_sample], options=downstream_options)
-    video_run = video_graph.build([pending_encoded_sample], options=downstream_options)
-    save_run = (
-        save_graph.build([pending_encoded_sample], options=downstream_options)
-        if save_graph is not None
-        else None
-    )
+    run = graph.build(run_options)
 
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
@@ -569,21 +544,15 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     metadata_sender = pyneat.MetadataSender(metadata_options)
 
     print(
-        f"rtsp={cfg.rtsp_url} stream={frame_w}x{frame_h}@{fps} "
+        f"source={cfg.source_url} type={cfg.source_type} codec={cfg.source_codec} "
+        f"stream={frame_w}x{frame_h}@{fps} "
         f"insight={cfg.insight_host} video={video_options.video_port} "
         f"metadata={metadata_sender.metadata_port()} channel=0"
     )
     return PipelineRuntime(
         model=model,
-        source_graph=source_graph,
-        source_run=source_run,
-        decode_graph=decode_graph,
-        decode_run=decode_run,
-        video_graph=video_graph,
-        video_run=video_run,
-        save_graph=save_graph,
-        save_run=save_run,
-        pending_encoded_sample=pending_encoded_sample,
+        graph=graph,
+        run=run,
         metadata_sender=metadata_sender,
         labels=labels,
         frame_w=frame_w,
@@ -694,97 +663,29 @@ def maybe_save_debug_frame(cfg: AppConfig, processed: int, sample, boxes: list[d
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
-def pump_encoded_samples(
-    runtime: PipelineRuntime,
-    stop_event: threading.Event,
-    errors: list[Exception],
-) -> None:
-    try:
-        encoded_sample = runtime.pending_encoded_sample
-        runtime.pending_encoded_sample = None
-        while not stop_event.is_set():
-            if encoded_sample is None:
-                encoded_sample = runtime.source_run.pull("encoded", 200)
-            if encoded_sample is None:
-                if stop_event.is_set():
-                    break
-                last_error_fn = getattr(runtime.source_run, "last_error", None)
-                last_error = last_error_fn() if callable(last_error_fn) else ""
-                if last_error:
-                    raise RuntimeError(f"source runtime error: {last_error}")
-                continue
-            if not runtime.decode_run.push("encoded", [encoded_sample]):
-                if stop_event.is_set():
-                    break
-                raise RuntimeError("failed to push encoded sample to decode graph")
-            if not runtime.video_run.push("encoded", [encoded_sample]):
-                if stop_event.is_set():
-                    break
-                raise RuntimeError("failed to push encoded sample to video sender graph")
-            if runtime.save_run is not None and not runtime.save_run.push(
-                "encoded", [encoded_sample]
-            ):
-                if stop_event.is_set():
-                    break
-                raise RuntimeError("failed to push encoded sample to save graph")
-            encoded_sample = None
-    except Exception as exc:
-        errors.append(exc)
-        stop_event.set()
-
-
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
-    stop_event = threading.Event()
-    pump_errors: list[Exception] = []
-    pump = threading.Thread(
-        target=pump_encoded_samples,
-        args=(runtime, stop_event, pump_errors),
-        name="encoded-pump",
-        daemon=True,
-    )
+    output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
     processed = 0
-    pump.start()
-    try:
-        while cfg.frames <= 0 or processed < cfg.frames:
-            if pump_errors:
-                raise pump_errors[0]
-            pull_start = time_ms()
-            detection_sample = runtime.decode_run.pull("detections", 20000)
-            pull_end = time_ms()
-            if detection_sample is None:
-                if pump_errors:
-                    raise pump_errors[0]
-                print("[warn] timed out waiting for detections", file=sys.stderr)
-                continue
-            frame_sample = None
-            if runtime.save_run is not None:
-                frame_sample = runtime.save_run.pull("frame", 20000)
-                if frame_sample is None:
-                    raise RuntimeError("timed out waiting for decoded save frame")
+    while cfg.frames <= 0 or processed < cfg.frames:
+        pull_start = time_ms()
+        detection_sample = runtime.run.pull(output_name, 20000)
+        pull_end = time_ms()
+        if detection_sample is None:
+            print("[warn] timed out waiting for detections", file=sys.stderr)
+            continue
 
-            payload = extract_bbox_payload(detection_sample)
-            boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
+        payload = extract_bbox_payload(detection_sample)
+        boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
 
-            metadata_start = time_ms()
-            send_metadata(runtime, detection_sample, boxes)
-            metadata_end = time_ms()
+        metadata_start = time_ms()
+        send_metadata(runtime, detection_sample, boxes)
+        metadata_end = time_ms()
 
-            processed += 1
-            if frame_sample is not None:
-                maybe_save_debug_frame(cfg, processed, frame_sample, boxes)
-            profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
-    finally:
-        stop_event.set()
-        runtime.video_run.close()
-        runtime.decode_run.close()
-        if runtime.save_run is not None:
-            runtime.save_run.close()
-        runtime.source_run.close()
-        pump.join(timeout=2.0)
+        processed += 1
+        maybe_save_debug_frame(cfg, processed, detection_sample, boxes)
+        profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
 
-    if pump_errors:
-        raise pump_errors[0]
     profile.flush()
     print(f"processed={processed} video_sender={cfg.insight_host}:{runtime.video_port}")
     return processed
@@ -803,11 +704,14 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
             os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
             os.environ.setdefault("SIMA_GST_BOUNDARY_PROBES", "1")
-        if save_frames_enabled(cfg):
+        if cfg.save_dir:
             Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
         runtime = build_pipeline(cfg)
-        run_pipeline(runtime, cfg)
+        try:
+            run_pipeline(runtime, cfg)
+        finally:
+            runtime.run.close()
         return 0
     except KeyboardInterrupt:
         return 130

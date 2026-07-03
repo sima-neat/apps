@@ -37,9 +37,13 @@ class OutputConfig:
 class AppConfig:
     model_path: str
     labels_path: Path
-    rtsp_url: str
+    source_url: str
+    source_type: str = "rtsp"
+    source_codec: str = "h264"
     latency_ms: int = 200
     tcp: bool = True
+    source_fps: int = 0
+    ssl_strict: bool = True
     frames: int = 0
     min_score: float = 0.55
     nms_iou: float = 0.60
@@ -209,9 +213,25 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def parse_source_type(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"rtsp", "http", "https"}:
+        return "http" if lowered == "https" else lowered
+    raise ValueError("source.type must be rtsp or http")
+
+
+def parse_source_codec(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"h264", "h.264"}:
+        return "h264"
+    if lowered in {"mjpeg", "jpeg"}:
+        return "mjpeg"
+    raise ValueError("source.codec must be h264 or mjpeg")
+
+
 def validate_config(cfg: AppConfig) -> None:
-    if not cfg.rtsp_url:
-        raise ValueError("source.rtsp_url must be set")
+    if not cfg.source_url:
+        raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
     if not str(cfg.labels_path):
@@ -220,6 +240,12 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.insight.host must be set")
     if cfg.latency_ms < 0:
         raise ValueError("source.latency_ms must be >= 0")
+    if cfg.source_fps < 0:
+        raise ValueError("source.fps must be >= 0")
+    if cfg.source_type == "http" and cfg.source_codec != "mjpeg":
+        raise ValueError("source.codec must be mjpeg for source.type=http")
+    if cfg.source_type == "http" and cfg.source_fps <= 0:
+        raise ValueError("source.fps must be > 0 for HTTP MJPEG sources")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -257,9 +283,13 @@ def load_app_config(config_path: Path) -> AppConfig:
     cfg = AppConfig(
         model_path=string_or(model, "path"),
         labels_path=Path(string_or(model, "labels", str(DEFAULT_LABELS))),
-        rtsp_url=string_or(source, "rtsp_url"),
+        source_url=string_or(source, "url", string_or(source, "rtsp_url")),
+        source_type=parse_source_type(string_or(source, "type", "rtsp")),
+        source_codec=parse_source_codec(string_or(source, "codec", "h264")),
         latency_ms=int_or(source, "latency_ms", 200),
         tcp=bool_or(source, "tcp", True),
+        source_fps=int_or(source, "fps", 0),
+        ssl_strict=bool_or(source, "ssl_strict", True),
         frames=int_or(inference, "frames", 0),
         min_score=float_or(inference, "min_score", 0.55),
         nms_iou=float_or(inference, "nms_iou", 0.60),
@@ -436,33 +466,102 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps if fps > 0 else DEFAULT_FPS
 
 
-def make_source_options(cfg: AppConfig, fps: int, width: int, height: int):
+def set_output_caps(caps, fps: int, width: int, height: int) -> None:
+    if width <= 0 or height <= 0 or fps <= 0:
+        return
+    caps.enable = True
+    caps.format = pyneat.Format.NV12
+    caps.width = width
+    caps.height = height
+    caps.fps = fps
+    caps.memory = pyneat.CapsMemory.Any
+
+
+def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt = pyneat.RtspDecodedInputOptions()
-    opt.url = cfg.rtsp_url
+    opt.url = cfg.source_url
     opt.latency_ms = cfg.latency_ms
     opt.tcp = cfg.tcp
-    opt.payload_type = 96
     opt.insert_queue = True
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
-    opt.auto_caps_from_stream = True
-    opt.fallback_h264_width = width
-    opt.fallback_h264_height = height
-    opt.fallback_h264_fps = fps
-    opt.output_caps.enable = True
-    opt.output_caps.format = pyneat.Format.NV12
-    opt.output_caps.width = width
-    opt.output_caps.height = height
-    opt.output_caps.fps = fps
-    opt.output_caps.memory = pyneat.CapsMemory.Any
+    opt.codec = pyneat.RtspCodec.H264 if cfg.source_codec == "h264" else pyneat.RtspCodec.MJPEG
+    if cfg.source_codec == "h264":
+        opt.payload_type = 96
+        opt.auto_caps_from_stream = True
+        opt.fallback_h264_width = width
+        opt.fallback_h264_height = height
+        opt.fallback_h264_fps = fps
+    else:
+        opt.mjpeg_payload_type = 26
+        opt.dec_width = width
+        opt.dec_height = height
+        opt.dec_fps = fps
+    set_output_caps(opt.output_caps, fps, width, height)
     return opt
 
 
-def make_model(cfg: AppConfig):
+def make_http_mjpeg_source_options(cfg: AppConfig, fps: int, width: int, height: int):
+    opt = pyneat.HttpMjpegDecodedInputOptions()
+    opt.url = cfg.source_url
+    opt.decoder_name = "decoder"
+    opt.decoder_raw_output = True
+    opt.dec_fps = fps
+    opt.ssl_strict = cfg.ssl_strict
+    set_output_caps(opt.output_caps, fps, width, height)
+    return opt
+
+
+def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int):
+    if cfg.source_type == "rtsp":
+        return pyneat.groups.rtsp_decoded_input(make_rtsp_source_options(cfg, fps, width, height))
+    return pyneat.groups.http_mjpeg_decoded_input(
+        make_http_mjpeg_source_options(cfg, fps, width, height)
+    )
+
+
+def probe_decoded_source(cfg: AppConfig) -> tuple[int, int, int]:
+    fps = cfg.source_fps
+    graph = pyneat.Graph("source_probe")
+    graph.add(make_source_graph(cfg, fps, 0, 0))
+    graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(1)))
+
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 3
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run = graph.build(run_options)
+    try:
+        sample = run.pull("frame", 20000)
+    finally:
+        run.close()
+    if sample is None:
+        raise RuntimeError("failed to probe decoded source frame")
+    tensors = extract_tensors(sample)
+    if not tensors:
+        raise RuntimeError("decoded source probe did not produce a tensor")
+    return tensor_dim(tensors[0], "width"), tensor_dim(tensors[0], "height"), fps
+
+
+def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
+    if cfg.source_type == "rtsp":
+        width, height, fps = probe_rtsp(cfg.source_url)
+        return width, height, cfg.source_fps if cfg.source_fps > 0 else fps
+    width, height, fps = probe_decoded_source(cfg)
+    if cfg.source_type == "rtsp" and fps <= 0:
+        fps = DEFAULT_FPS
+    return width, height, fps
+
+
+def make_model(cfg: AppConfig, frame_w: int, frame_h: int):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    if frame_w > 0 and frame_h > 0:
+        opt.preprocess.input_max_width = frame_w
+        opt.preprocess.input_max_height = frame_h
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26Seg
     opt.score_threshold = cfg.min_score
@@ -510,11 +609,11 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
 
 
 def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
-    frame_w, frame_h, fps = probe_rtsp(cfg.rtsp_url)
-    model = make_model(cfg)
+    frame_w, frame_h, fps = resolve_source_geometry(cfg)
+    model = make_model(cfg, frame_w, frame_h)
     labels = load_labels(cfg.labels_path)
 
-    source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, fps, frame_w, frame_h))
+    source = make_source_graph(cfg, fps, frame_w, frame_h)
     branch = pyneat.graphs.branch("source", ["frame", "model"])
 
     frame_graph = pyneat.Graph("frame")
@@ -550,7 +649,8 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     video_graph, video_run, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
     metadata_sender = build_metadata_sender(cfg)
     print(
-        f"rtsp={cfg.rtsp_url} stream={frame_w}x{frame_h}@{fps} "
+        f"source={cfg.source_url} type={cfg.source_type} codec={cfg.source_codec} "
+        f"stream={frame_w}x{frame_h}@{fps} "
         f"insight={cfg.insight_host} video={video_port} "
         f"metadata={metadata_sender.metadata_port()} channel=0"
     )
