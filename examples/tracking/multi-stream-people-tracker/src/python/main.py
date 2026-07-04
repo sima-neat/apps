@@ -435,9 +435,7 @@ def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> p
     decode = pyneat.Graph("decode_model")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.source_fps if opt.source_fps > 0 else (
-        opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
-    )
+    dec_fps = opt.source_fps
 
     decode.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     decode.add(
@@ -484,9 +482,7 @@ def build_save_frame_graph(input_name: str, opt) -> pyneat.Graph:
     save = pyneat.Graph("save_frame")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.source_fps if opt.source_fps > 0 else (
-        opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
-    )
+    dec_fps = opt.source_fps
 
     save.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     save.add(
