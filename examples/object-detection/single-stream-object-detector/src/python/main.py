@@ -433,18 +433,17 @@ def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt.insert_queue = True
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
+    opt.source_fps = fps
     opt.codec = pyneat.RtspCodec.H264 if cfg.source_codec == "h264" else pyneat.RtspCodec.MJPEG
     if cfg.source_codec == "h264":
         opt.payload_type = 96
         opt.auto_caps_from_stream = True
         opt.fallback_h264_width = width
         opt.fallback_h264_height = height
-        opt.fallback_h264_fps = fps
     else:
         opt.mjpeg_payload_type = 26
         opt.dec_width = width
         opt.dec_height = height
-        opt.dec_fps = fps
     set_output_caps(opt.output_caps, fps, width, height)
     return opt
 
@@ -454,7 +453,7 @@ def make_http_mjpeg_source_options(cfg: AppConfig, fps: int, width: int, height:
     opt.url = cfg.source_url
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
-    opt.dec_fps = fps
+    opt.source_fps = fps
     opt.ssl_strict = cfg.ssl_strict
     set_output_caps(opt.output_caps, fps, width, height)
     return opt
@@ -548,6 +547,11 @@ def make_model(cfg: AppConfig, frame_w: int, frame_h: int):
 
 def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     frame_w, frame_h, fps = resolve_source_geometry(cfg)
+    if fps <= 0:
+        raise RuntimeError(
+            "failed to resolve source frame rate; set source.fps or use a source with "
+            "probeable FPS metadata"
+        )
     model = make_model(cfg, frame_w, frame_h)
     labels = load_labels(cfg.labels_path)
 
