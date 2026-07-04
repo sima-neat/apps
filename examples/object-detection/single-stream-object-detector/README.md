@@ -94,7 +94,7 @@ source:
   codec: h264                                            # h264 or mjpeg.
   url: <rtsp-url-copied-from-insight>                     # RTSP or HTTP MJPEG stream URL.
   tcp: true                                               # Use TCP transport for RTSP.
-  fps: 0                                                  # 0 lets RTSP derive/probe FPS. HTTP MJPEG requires a positive FPS.
+  fps: 0                                                  # 0 probes FPS. MJPEG requires config FPS or probeable FPS metadata.
 
 inference:
   frames: 0                                               # Frame limit. 0 runs continuously.

@@ -27,9 +27,11 @@
 #include <opencv2/videoio.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cctype>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -43,8 +45,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-constexpr int kDefaultFps = 30;
 
 enum class SourceType { Rtsp, Http };
 enum class SourceCodec { H264, Mjpeg };
@@ -197,7 +197,6 @@ void validate_config(const AppConfig& cfg) {
   if (cfg.source_type == SourceType::Http) {
     sima_examples::require(cfg.source_codec == SourceCodec::Mjpeg,
                            "source.codec must be mjpeg for source.type=http");
-    sima_examples::require(cfg.source_fps > 0, "source.fps must be > 0 for HTTP MJPEG sources");
   }
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
@@ -317,6 +316,96 @@ struct SourceGeometry {
   int fps = 0;
 };
 
+int fps_from_rate(const std::string& value) {
+  if (value.empty() || value == "0/0" || value == "0/1")
+    return 0;
+  try {
+    const auto slash = value.find('/');
+    double fps = 0.0;
+    if (slash == std::string::npos) {
+      fps = std::stod(value);
+    } else {
+      const double den = std::stod(value.substr(slash + 1));
+      if (den <= 0.0)
+        return 0;
+      fps = std::stod(value.substr(0, slash)) / den;
+    }
+    return fps > 0.0 ? static_cast<int>(std::lround(fps)) : 0;
+  } catch (...) {
+    return 0;
+  }
+}
+
+std::string shell_quote(const std::string& value) {
+  std::string out = "'";
+  for (const char c : value) {
+    out += c == '\'' ? "'\\''" : std::string(1, c);
+  }
+  out += "'";
+  return out;
+}
+
+SourceGeometry probe_ffprobe_geometry(const AppConfig& cfg) {
+  SourceGeometry geometry;
+  std::string command =
+      "ffprobe -v error -rw_timeout 5000000 -select_streams v:0 "
+      "-show_entries stream=width,height,r_frame_rate,avg_frame_rate -of default=nw=1 ";
+  if (!cfg.ssl_strict) {
+    command += "-tls_verify 0 ";
+  }
+  command += shell_quote(cfg.source_url) + " 2>/dev/null";
+
+  FILE* pipe = popen(command.c_str(), "r");
+  if (!pipe) {
+    return geometry;
+  }
+
+  int avg_fps = 0;
+  int r_fps = 0;
+  std::array<char, 256> buffer{};
+  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
+    std::string line(buffer.data());
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+      line.pop_back();
+    }
+    const auto eq = line.find('=');
+    if (eq == std::string::npos) {
+      continue;
+    }
+    const std::string key = line.substr(0, eq);
+    const std::string value = line.substr(eq + 1);
+    if (key == "width") {
+      geometry.width = std::atoi(value.c_str());
+    } else if (key == "height") {
+      geometry.height = std::atoi(value.c_str());
+    } else if (key == "avg_frame_rate") {
+      avg_fps = fps_from_rate(value);
+    } else if (key == "r_frame_rate") {
+      r_fps = fps_from_rate(value);
+    }
+  }
+  pclose(pipe);
+  geometry.fps = avg_fps > 0 ? avg_fps : r_fps;
+  return geometry;
+}
+
+void fill_missing_geometry(SourceGeometry& dst, const SourceGeometry& src) {
+  if (dst.width <= 0)
+    dst.width = src.width;
+  if (dst.height <= 0)
+    dst.height = src.height;
+  if (dst.fps <= 0)
+    dst.fps = src.fps;
+}
+
+void require_mjpeg_fps(const AppConfig& cfg, const SourceGeometry& geometry) {
+  if (cfg.source_codec == SourceCodec::Mjpeg && geometry.fps <= 0) {
+    throw std::runtime_error(
+        "MJPEG source did not provide a valid frame rate; set source.fps or use a source with "
+        "probeable FPS metadata");
+  }
+}
+
 simaai::neat::nodes::groups::RtspDecodedInputOptions
 make_rtsp_source_options(const AppConfig& cfg, const SourceGeometry& geometry) {
   simaai::neat::nodes::groups::RtspDecodedInputOptions opt;
@@ -391,35 +480,47 @@ SourceGeometry probe_rtsp_h264_geometry(const AppConfig& cfg) {
   SourceGeometry geometry;
   geometry.width = probe.width;
   geometry.height = probe.height;
-  geometry.fps = cfg.source_fps > 0 ? cfg.source_fps : probe.fps;
+  geometry.fps = probe.fps;
   return geometry;
 }
 
 SourceGeometry probe_rtsp_geometry(const AppConfig& cfg) {
+  SourceGeometry geometry = probe_ffprobe_geometry(cfg);
+  if (cfg.source_fps > 0) {
+    geometry.fps = cfg.source_fps;
+  }
+
   if (cfg.source_codec == SourceCodec::H264) {
-    return probe_rtsp_h264_geometry(cfg);
+    SourceGeometry rtsp_geometry = probe_rtsp_h264_geometry(cfg);
+    if (cfg.source_fps > 0) {
+      rtsp_geometry.fps = cfg.source_fps;
+    }
+    fill_missing_geometry(geometry, rtsp_geometry);
+    return geometry;
   }
 
-  cv::VideoCapture cap(cfg.source_url);
-  if (!cap.isOpened()) {
-    throw std::runtime_error("failed to open RTSP source for probing: " + cfg.source_url);
+  if (geometry.width <= 0 || geometry.height <= 0 || geometry.fps <= 0) {
+    cv::VideoCapture cap(cfg.source_url);
+    if (!cap.isOpened()) {
+      throw std::runtime_error("failed to open RTSP source for probing: " + cfg.source_url);
+    }
+    SourceGeometry cv_geometry;
+    cv_geometry.width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    cv_geometry.height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    cv_geometry.fps = static_cast<int>(std::lround(cap.get(cv::CAP_PROP_FPS)));
+    cap.release();
+    fill_missing_geometry(geometry, cv_geometry);
   }
-
-  SourceGeometry geometry;
-  geometry.width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
-  geometry.height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
-  geometry.fps = cfg.source_fps > 0 ? cfg.source_fps
-                                    : static_cast<int>(std::lround(cap.get(cv::CAP_PROP_FPS)));
-  cap.release();
-  if (geometry.fps <= 0) {
-    geometry.fps = kDefaultFps;
+  if (cfg.source_fps > 0) {
+    geometry.fps = cfg.source_fps;
   }
+  require_mjpeg_fps(cfg, geometry);
   return geometry;
 }
 
-SourceGeometry probe_decoded_source_geometry(const AppConfig& cfg) {
+SourceGeometry probe_decoded_source_geometry(const AppConfig& cfg, int fps) {
   SourceGeometry geometry;
-  geometry.fps = cfg.source_fps;
+  geometry.fps = fps;
 
   simaai::neat::Graph probe_graph("source_probe");
   probe_graph.add(make_source_graph(cfg, geometry));
@@ -451,9 +552,13 @@ SourceGeometry resolve_source_geometry(const AppConfig& cfg) {
   if (cfg.source_type == SourceType::Rtsp) {
     return probe_rtsp_geometry(cfg);
   }
-  SourceGeometry geometry = probe_decoded_source_geometry(cfg);
-  if (geometry.fps <= 0 && cfg.source_type == SourceType::Rtsp) {
-    geometry.fps = kDefaultFps;
+  SourceGeometry geometry = probe_ffprobe_geometry(cfg);
+  if (cfg.source_fps > 0) {
+    geometry.fps = cfg.source_fps;
+  }
+  require_mjpeg_fps(cfg, geometry);
+  if (geometry.width <= 0 || geometry.height <= 0) {
+    fill_missing_geometry(geometry, probe_decoded_source_geometry(cfg, geometry.fps));
   }
   return geometry;
 }

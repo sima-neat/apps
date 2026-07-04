@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from fractions import Fraction
 import glob
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -15,7 +17,6 @@ import yaml
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 DEFAULT_LABELS = DEFAULT_CONFIG.parent / "coco_label.txt"
-DEFAULT_FPS = 30
 MASK_ALPHA = 0.55
 MASK_THRESHOLD = 0.50
 
@@ -244,8 +245,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("source.fps must be >= 0")
     if cfg.source_type == "http" and cfg.source_codec != "mjpeg":
         raise ValueError("source.codec must be mjpeg for source.type=http")
-    if cfg.source_type == "http" and cfg.source_fps <= 0:
-        raise ValueError("source.fps must be > 0 for HTTP MJPEG sources")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -453,6 +452,57 @@ def decode_segmentation_output(tensors: list, frame_w: int, frame_h: int, max_de
     return detections
 
 
+def fps_from_rate(value: str) -> int:
+    if not value or value in {"0/0", "0/1"}:
+        return 0
+    try:
+        fps = float(Fraction(value)) if "/" in value else float(value)
+    except (ValueError, ZeroDivisionError):
+        return 0
+    return int(round(fps)) if fps > 0 else 0
+
+
+def int_from_probe(value: str | None) -> int:
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
+
+
+def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-rw_timeout",
+        "5000000",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,r_frame_rate,avg_frame_rate",
+        "-of",
+        "default=nw=1",
+    ]
+    if not cfg.ssl_strict:
+        cmd.extend(["-tls_verify", "0"])
+    cmd.append(cfg.source_url)
+    try:
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return 0, 0, 0
+    if result.returncode != 0:
+        return 0, 0, 0
+    values = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key] = value
+    fps = fps_from_rate(values.get("avg_frame_rate", "")) or fps_from_rate(
+        values.get("r_frame_rate", "")
+    )
+    return int_from_probe(values.get("width")), int_from_probe(values.get("height")), fps
+
+
 def probe_rtsp(url: str) -> tuple[int, int, int]:
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
@@ -463,7 +513,7 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     cap.release()
     if width <= 0 or height <= 0:
         raise RuntimeError("failed to probe RTSP frame size")
-    return width, height, fps if fps > 0 else DEFAULT_FPS
+    return width, height, fps
 
 
 def set_output_caps(caps, fps: int, width: int, height: int) -> None:
@@ -520,8 +570,15 @@ def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int):
     )
 
 
-def probe_decoded_source(cfg: AppConfig) -> tuple[int, int, int]:
-    fps = cfg.source_fps
+def require_mjpeg_fps(cfg: AppConfig, fps: int) -> None:
+    if cfg.source_codec == "mjpeg" and fps <= 0:
+        raise RuntimeError(
+            "MJPEG source did not provide a valid frame rate; set source.fps or use a source "
+            "with probeable FPS metadata"
+        )
+
+
+def probe_decoded_source(cfg: AppConfig, fps: int) -> tuple[int, int, int]:
     graph = pyneat.Graph("source_probe")
     graph.add(make_source_graph(cfg, fps, 0, 0))
     graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(1)))
@@ -545,12 +602,22 @@ def probe_decoded_source(cfg: AppConfig) -> tuple[int, int, int]:
 
 
 def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
+    probed_w, probed_h, probed_fps = probe_ffprobe(cfg)
+    fps = cfg.source_fps if cfg.source_fps > 0 else probed_fps
     if cfg.source_type == "rtsp":
-        width, height, fps = probe_rtsp(cfg.source_url)
-        return width, height, cfg.source_fps if cfg.source_fps > 0 else fps
-    width, height, fps = probe_decoded_source(cfg)
-    if cfg.source_type == "rtsp" and fps <= 0:
-        fps = DEFAULT_FPS
+        width, height = probed_w, probed_h
+        if width <= 0 or height <= 0 or fps <= 0:
+            rtsp_w, rtsp_h, rtsp_fps = probe_rtsp(cfg.source_url)
+            width = width if width > 0 else rtsp_w
+            height = height if height > 0 else rtsp_h
+            fps = fps if fps > 0 else rtsp_fps
+        require_mjpeg_fps(cfg, fps)
+        return width, height, fps
+
+    require_mjpeg_fps(cfg, fps)
+    if probed_w > 0 and probed_h > 0:
+        return probed_w, probed_h, fps
+    width, height, _ = probe_decoded_source(cfg, fps)
     return width, height, fps
 
 

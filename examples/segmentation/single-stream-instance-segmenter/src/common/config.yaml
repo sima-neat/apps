@@ -9,7 +9,7 @@ source:
   rtsp_url: ""               # Legacy H.264 RTSP key. Used when source.url is empty.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
-  fps: 0                     # 0 lets RTSP derive/probe FPS. HTTP MJPEG requires a positive FPS.
+  fps: 0                     # 0 probes FPS. MJPEG requires config FPS or probeable FPS metadata.
   ssl_strict: true           # Set false for HTTPS MJPEG streams with self-signed certs.
 
 inference:
