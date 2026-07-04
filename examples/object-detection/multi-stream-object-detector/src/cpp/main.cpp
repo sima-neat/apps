@@ -419,23 +419,13 @@ simaai::neat::InputOptions h264_encoded_input_options() {
 simaai::neat::Graph
 build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::Graph source("rtsp_encoded_source");
-  const bool use_auto_caps = opt.auto_caps_from_stream &&
-                             (opt.h264_fps <= 0 || opt.h264_width <= 0 || opt.h264_height <= 0);
-  const bool insert_queue = opt.insert_queue && !opt.sync_mode;
-  source.add(simaai::neat::nodes::RTSPInput(opt.url, opt.latency_ms, opt.tcp));
-  if (insert_queue) {
-    source.add(simaai::neat::nodes::Queue());
-  }
-  source.add(simaai::neat::nodes::H264Depacketize(opt.payload_type, opt.h264_parse_config_interval,
-                                                  opt.h264_fps, opt.h264_width, opt.h264_height,
-                                                  /*enforce_h264_caps=*/!use_auto_caps));
-  if (insert_queue) {
-    source.add(simaai::neat::nodes::Queue());
-  }
-  if (use_auto_caps) {
-    source.add(simaai::neat::nodes::H264CapsFixup(opt.fallback_h264_fps, opt.fallback_h264_width,
-                                                  opt.fallback_h264_height));
-  }
+
+  simaai::neat::nodes::groups::RtspEncodedInputOptions encoded_opt;
+  encoded_opt.url = opt.url;
+  encoded_opt.codec = simaai::neat::nodes::groups::RtspCodec::H264;
+  encoded_opt.latency_ms = opt.latency_ms;
+  encoded_opt.tcp = opt.tcp;
+  source.add(simaai::neat::nodes::groups::RtspEncodedInput(encoded_opt));
   source.add(simaai::neat::nodes::Output("encoded", simaai::neat::OutputOptions::EveryFrame(3)));
   return source;
 }

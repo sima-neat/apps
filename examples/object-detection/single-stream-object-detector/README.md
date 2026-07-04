@@ -14,7 +14,7 @@
 ## Concept
 `single-stream-object-detector` is a focused reference example for a common deployment pattern:
 
-- ingest one RTSP camera stream
+- ingest one RTSP H.264/MJPEG or HTTP MJPEG stream
 - decode the stream into NV12 frames
 - run YOLO26 object detection
 - send H.264 video plus detection metadata to Insight
@@ -42,13 +42,13 @@ To create a reproducible RTSP input:
 2. In Insight, open `RTSP Source`.
 3. Use a sample video or upload your own video.
 4. Start the stream and copy the RTSP URL.
-5. Put that RTSP URL into `source.rtsp_url`.
+5. Put that RTSP URL into `source.url`.
 
 Use the same `neat` output to set `output.insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- RTSP source created in Insight or provided by your camera
+- RTSP H.264, RTSP MJPEG, or HTTP MJPEG source created in Insight or provided by your camera.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
@@ -90,8 +90,11 @@ model:
   path: <model-path>                                      # Path to the model package.
 
 source:
-  rtsp_url: <rtsp-url-copied-from-insight>                # RTSP stream URL.
+  type: rtsp                                             # rtsp or http.
+  codec: h264                                            # h264 or mjpeg.
+  url: <rtsp-url-copied-from-insight>                     # RTSP or HTTP MJPEG stream URL.
   tcp: true                                               # Use TCP transport for RTSP.
+  fps: 0                                                  # 0 probes FPS. MJPEG requires config FPS or probeable FPS metadata.
 
 inference:
   frames: 0                                               # Frame limit. 0 runs continuously.

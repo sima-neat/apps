@@ -14,7 +14,7 @@
 ## Concept
 `single-stream-instance-segmenter` is a single-camera YOLO26 instance segmentation example:
 
-- ingest one RTSP camera stream
+- ingest one RTSP H.264/MJPEG or HTTP MJPEG stream
 - decode the stream into frames
 - run YOLO26 instance segmentation
 - render mask overlays on the video
@@ -44,7 +44,7 @@ To create a reproducible RTSP input:
 2. In Insight, open `RTSP Source`.
 3. Use a sample video or upload your own video.
 4. Start the stream and copy the RTSP URL.
-5. Put that RTSP URL into `source.rtsp_url`.
+5. Put that RTSP URL into `source.url`.
 
 Use the same `neat` output to set `output.insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
 
@@ -68,9 +68,9 @@ The command stores the model under `assets/models/` as a repo-local convention. 
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- RTSP source created in Insight or provided by your camera.
+- RTSP H.264, RTSP MJPEG, or HTTP MJPEG source created in Insight or provided by your camera.
 - Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 segmentation model, or set `model.path` to another readable model package.
-- `model.path`, `model.labels`, `source.rtsp_url`, and `output.insight.host` set in `src/common/config.yaml`.
+- `model.path`, `model.labels`, `source.url`, and `output.insight.host` set in `src/common/config.yaml`.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
@@ -93,8 +93,11 @@ model:
   path: <model-path>                                                # Path to the model package.
 
 source:
-  rtsp_url: <rtsp-url-copied-from-insight>                          # RTSP stream URL.
+  type: rtsp                                                         # rtsp or http.
+  codec: h264                                                        # h264 or mjpeg.
+  url: <rtsp-url-copied-from-insight>                                # RTSP or HTTP MJPEG stream URL.
   tcp: true                                                          # Use TCP transport for RTSP.
+  fps: 0                                                             # 0 probes FPS. MJPEG requires config FPS or probeable FPS metadata.
 
 inference:
   frames: 0                                                          # Frame limit. 0 runs continuously.
@@ -123,7 +126,7 @@ python3 examples/segmentation/single-stream-instance-segmenter/src/python/main.p
 ```
 
 ## Debugging Notes
-- If startup fails, verify `model.path` and `source.rtsp_url`.
+- If startup fails, verify `model.path` and `source.url`.
 - If the app times out waiting for RTSP, verify source reachability first.
 - If Insight receives no video, verify `output.insight.host` and UDP ports.
 - If saved frames are needed for inspection, set `output.save_dir` and `output.save_every`.
