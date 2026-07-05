@@ -396,7 +396,7 @@ def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height:
     opt.auto_caps_from_stream = True
     opt.fallback_h264_width = width
     opt.fallback_h264_height = height
-    opt.fallback_h264_fps = fps
+    opt.source_fps = fps
     opt.output_caps.enable = True
     opt.output_caps.format = pyneat.Format.NV12
     opt.output_caps.width = width
@@ -418,6 +418,7 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
     encoded_opt.codec = pyneat.RtspCodec.H264
     encoded_opt.latency_ms = opt.latency_ms
     encoded_opt.tcp = opt.tcp
+    encoded_opt.source_fps = opt.source_fps
     source.add(pyneat.groups.rtsp_encoded_input(encoded_opt))
     source.add(pyneat.nodes.output("encoded", pyneat.OutputOptions.every_frame(3)))
     return source
@@ -433,7 +434,6 @@ def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> p
     decode = pyneat.Graph("decode_model")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
 
     decode.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     decode.add(
@@ -445,7 +445,6 @@ def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> p
             next_element=opt.decoder_next_element,
             dec_width=dec_w,
             dec_height=dec_h,
-            dec_fps=dec_fps,
         )
     )
     if opt.use_videoconvert:
@@ -480,7 +479,6 @@ def build_save_frame_graph(input_name: str, opt) -> pyneat.Graph:
     save = pyneat.Graph("save_frame")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
 
     save.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     save.add(
@@ -492,7 +490,6 @@ def build_save_frame_graph(input_name: str, opt) -> pyneat.Graph:
             next_element=opt.decoder_next_element,
             dec_width=dec_w,
             dec_height=dec_h,
-            dec_fps=dec_fps,
         )
     )
     if output_caps_enabled(opt.output_caps):

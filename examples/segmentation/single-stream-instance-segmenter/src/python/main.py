@@ -536,17 +536,16 @@ def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
     opt.codec = pyneat.RtspCodec.H264 if cfg.source_codec == "h264" else pyneat.RtspCodec.MJPEG
+    opt.source_fps = fps
     if cfg.source_codec == "h264":
         opt.payload_type = 96
         opt.auto_caps_from_stream = True
         opt.fallback_h264_width = width
         opt.fallback_h264_height = height
-        opt.fallback_h264_fps = fps
     else:
         opt.mjpeg_payload_type = 26
         opt.dec_width = width
         opt.dec_height = height
-        opt.dec_fps = fps
     set_output_caps(opt.output_caps, fps, width, height)
     return opt
 
@@ -556,7 +555,7 @@ def make_http_mjpeg_source_options(cfg: AppConfig, fps: int, width: int, height:
     opt.url = cfg.source_url
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
-    opt.dec_fps = fps
+    opt.source_fps = fps
     opt.ssl_strict = cfg.ssl_strict
     set_output_caps(opt.output_caps, fps, width, height)
     return opt
@@ -652,11 +651,11 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     input_opt.width = width
     input_opt.height = height
     input_opt.depth = 3
-    input_opt.fps_n = max(1, fps)
+    input_opt.fps_n = fps
     input_opt.fps_d = 1
     input_opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
 
-    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
+    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
     sender_opt.host = cfg.insight_host
     sender_opt.channel = 0
     sender_opt.video_port_base = cfg.video_port
@@ -677,6 +676,11 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
 
 def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     frame_w, frame_h, fps = resolve_source_geometry(cfg)
+    if fps <= 0:
+        raise RuntimeError(
+            "failed to resolve source frame rate; set source.fps or use a source with "
+            "probeable FPS metadata"
+        )
     model = make_model(cfg, frame_w, frame_h)
     labels = load_labels(cfg.labels_path)
 

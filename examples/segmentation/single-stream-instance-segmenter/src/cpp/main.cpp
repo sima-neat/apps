@@ -477,17 +477,16 @@ make_rtsp_source_options(const AppConfig& cfg, const SourceGeometry& geometry) {
   opt.decoder_raw_output = true;
   opt.codec = cfg.source_codec == SourceCodec::H264 ? simaai::neat::nodes::groups::RtspCodec::H264
                                                     : simaai::neat::nodes::groups::RtspCodec::MJPEG;
+  opt.source_fps = geometry.fps;
   if (cfg.source_codec == SourceCodec::H264) {
     opt.payload_type = 96;
     opt.auto_caps_from_stream = true;
     opt.fallback_h264_width = geometry.width;
     opt.fallback_h264_height = geometry.height;
-    opt.fallback_h264_fps = geometry.fps;
   } else {
     opt.mjpeg_payload_type = 26;
     opt.dec_width = geometry.width;
     opt.dec_height = geometry.height;
-    opt.dec_fps = geometry.fps;
   }
   if (geometry.width > 0 && geometry.height > 0 && geometry.fps > 0) {
     opt.output_caps.enable = true;
@@ -506,7 +505,7 @@ make_http_mjpeg_source_options(const AppConfig& cfg, const SourceGeometry& geome
   opt.url = cfg.source_url;
   opt.decoder_name = "decoder";
   opt.decoder_raw_output = true;
-  opt.dec_fps = geometry.fps;
+  opt.source_fps = geometry.fps;
   opt.ssl_strict = cfg.ssl_strict;
   if (geometry.width > 0 && geometry.height > 0 && geometry.fps > 0) {
     opt.output_caps.enable = true;

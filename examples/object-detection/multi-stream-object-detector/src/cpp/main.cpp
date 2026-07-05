@@ -391,7 +391,7 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
     height_out = probe.height;
   }
   if (probe.fps > 0) {
-    opt.fallback_h264_fps = probe.fps;
+    opt.source_fps = probe.fps;
     fps_out = probe.fps;
   }
   if (width_out > 0 && height_out > 0 && fps_out > 0) {
@@ -425,6 +425,7 @@ build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOp
   encoded_opt.codec = simaai::neat::nodes::groups::RtspCodec::H264;
   encoded_opt.latency_ms = opt.latency_ms;
   encoded_opt.tcp = opt.tcp;
+  encoded_opt.source_fps = opt.source_fps;
   source.add(simaai::neat::nodes::groups::RtspEncodedInput(encoded_opt));
   source.add(simaai::neat::nodes::Output("encoded", simaai::neat::OutputOptions::EveryFrame(3)));
   return source;
@@ -437,12 +438,11 @@ build_decode_model_graph(const std::string& input_name, const std::string& outpu
   simaai::neat::Graph decode("decode_model");
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
   const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
-  const int dec_fps = (opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps;
 
   decode.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
   decode.add(simaai::neat::nodes::H264Decode(opt.sima_allocator_type, opt.out_format,
                                              opt.decoder_name, opt.decoder_raw_output,
-                                             opt.decoder_next_element, dec_w, dec_h, dec_fps));
+                                             opt.decoder_next_element, dec_w, dec_h));
   if (opt.use_videoconvert) {
     decode.add(simaai::neat::nodes::VideoConvert());
   }
@@ -477,12 +477,11 @@ build_save_frame_graph(const std::string& input_name,
   simaai::neat::Graph save("save_frame");
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
   const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
-  const int dec_fps = (opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps;
 
   save.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
   save.add(simaai::neat::nodes::H264Decode(opt.sima_allocator_type, opt.out_format,
                                            opt.decoder_name, opt.decoder_raw_output,
-                                           opt.decoder_next_element, dec_w, dec_h, dec_fps));
+                                           opt.decoder_next_element, dec_w, dec_h));
   if (output_caps_enabled(opt.output_caps)) {
     const auto& caps = opt.output_caps;
     save.add(
