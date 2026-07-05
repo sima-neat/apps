@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
 
-  const std::vector<std::string> rtsp_urls = rtsp_urls_from_env();
+  const std::vector<std::string> rtsp_urls = rtsp_h264_urls_from_env();
   if (rtsp_urls.size() < 2) {
     return skip_or_fail("need at least two RTSP URLs for multistream e2e");
   }
@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
                     {"output.insight.host", kE2eInsightHost},
                     {"output.insight.video_port_base", std::to_string(video_port_base)},
                     {"output.insight.metadata_port_base", std::to_string(metadata_port_base)},
+                    {"inference.fps", "30"},
                     {"inference.frames", "140"}},
                    {{"streams", {rtsp_urls[0], rtsp_urls[1]}}});
 

@@ -393,6 +393,9 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
   if (probe.fps > 0) {
     opt.source_fps = probe.fps;
     fps_out = probe.fps;
+  } else if (cfg.fps > 0) {
+    opt.source_fps = cfg.fps;
+    fps_out = cfg.fps;
   }
   if (width_out > 0 && height_out > 0 && fps_out > 0) {
     opt.output_caps.enable = true;
