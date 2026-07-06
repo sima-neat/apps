@@ -85,9 +85,7 @@ jobs:
           fi
           cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          scope_file="$(mktemp)"
-          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
-          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --python --strict
+          ./tests/test.sh --e2e --python --strict
 
       - name: Run nightly C++ e2e tests from installed apps runtime
         shell: bash
@@ -106,9 +104,7 @@ jobs:
           fi
           cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          scope_file="$(mktemp)"
-          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
-          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --cpp --strict
+          ./tests/test.sh --e2e --cpp --strict
 
   modalix-manual-e2e:
     if: github.event_name == 'workflow_dispatch'
@@ -170,9 +166,7 @@ jobs:
           fi
           cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          scope_file="$(mktemp)"
-          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
-          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --python --strict
+          ./tests/test.sh --e2e --python --strict
 
       - name: Run manual C++ e2e tests from installed apps runtime
         shell: bash
@@ -191,6 +185,4 @@ jobs:
           fi
           cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          scope_file="$(mktemp)"
-          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
-          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --cpp --strict
+          ./tests/test.sh --e2e --cpp --strict

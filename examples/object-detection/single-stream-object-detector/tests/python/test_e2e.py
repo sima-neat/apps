@@ -11,6 +11,15 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 SOURCE_CASES = [
     pytest.param(
         {
+            "name": "rtsp_h264",
+            "type": "rtsp",
+            "codec": "h264",
+            "url_fixture": "rtsp_h264_url",
+        },
+        id="rtsp-h264",
+    ),
+    pytest.param(
+        {
             "name": "rtsp_mjpeg",
             "type": "rtsp",
             "codec": "mjpeg",

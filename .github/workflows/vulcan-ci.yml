@@ -314,9 +314,7 @@ jobs:
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
           cd "${RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          scope_file="$(mktemp)"
-          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
-          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --python --strict
+          ./tests/test.sh --e2e --python --strict
 
       - name: Run apps C++ e2e tests on devkit
         env:
@@ -331,9 +329,7 @@ jobs:
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
           cd "${RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          scope_file="$(mktemp)"
-          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
-          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --cpp --strict
+          ./tests/test.sh --e2e --cpp --strict
 
       - name: Cleanup test workspace tmp artifacts
         if: ${{ always() }}
