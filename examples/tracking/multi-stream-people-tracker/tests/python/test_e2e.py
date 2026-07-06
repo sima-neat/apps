@@ -64,7 +64,6 @@ class TestE2E:
                     "debug_dir": str(tmp_output_dir),
                 },
                 "inference": {
-                    "fps": 30,
                     "frames": 140,
                 },
             }

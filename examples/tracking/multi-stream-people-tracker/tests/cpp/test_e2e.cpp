@@ -54,7 +54,6 @@ int main(int argc, char** argv) {
                     {"output.insight.host", kE2eInsightHost},
                     {"output.insight.video_port_base", std::to_string(video_port_base)},
                     {"output.insight.metadata_port_base", std::to_string(metadata_port_base)},
-                    {"inference.fps", "30"},
                     {"inference.frames", "140"}},
                    {{"streams", {rtsp_urls[0], rtsp_urls[1]}}});
 
