@@ -847,7 +847,7 @@ run_pytest() {
     fi
 
     if [[ "${STRICT_MODE}" == "1" && "${marker}" == "e2e" ]] && \
-       rg -q '[0-9]+ skipped' "${log_file}"; then
+       grep -Eq '[0-9]+ skipped' "${log_file}"; then
       echo "  [FAIL] Strict mode is enabled but Python e2e tests were skipped."
       OVERALL_RC=1
       skipped_count=$((skipped_count + 1))
