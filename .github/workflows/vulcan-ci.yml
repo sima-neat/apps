@@ -300,21 +300,21 @@ jobs:
           "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
-      - name: Run apps unit tests on devkit
-        env:
-          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
-          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
-          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
-          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
-          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
-          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+      - name: Run apps Python unit tests on devkit
         run: |
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
           cd "${RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --unit
+          ./tests/test.sh --unit --python
 
-      - name: Run apps e2e tests on devkit
+      - name: Run apps C++ unit tests on devkit
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --unit --cpp
+
+      - name: Run apps Python e2e tests on devkit
         env:
           NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
@@ -329,7 +329,24 @@ jobs:
           source "${PYNEAT_ACTIVATE}"
           scope_file="$(mktemp)"
           "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
-          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --strict
+          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --python --strict
+
+      - name: Run apps C++ e2e tests on devkit
+        env:
+          NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          scope_file="$(mktemp)"
+          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
+          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --cpp --strict
 
       - name: Cleanup test workspace tmp artifacts
         if: ${{ always() }}
