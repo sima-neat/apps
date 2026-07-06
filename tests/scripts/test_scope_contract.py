@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from tests.utils.test_scope import load_scope
-from tests.utils.test_scope import scoped_model_files, scoped_models, validate_scope
+from tests.utils.test_scope import enabled_examples, scoped_model_files, scoped_models, validate_scope
 
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
@@ -168,6 +168,35 @@ def test_scoped_models_keeps_per_example_model_id_local():
     assert [model["file"] for _, model in scoped_models(scope, ["cpp"], "e2e")] == [
         "first_model_mpk.tar.gz",
         "second_model_mpk.tar.gz",
+    ]
+
+
+def test_codec_e2e_scope_selects_focused_ci_gate(tmp_path):
+    output = tmp_path / "codec-e2e-scope.yaml"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(APPS_ROOT / "tests" / "utils" / "codec_e2e_scope.py"),
+            "--scope-file",
+            str(APPS_ROOT / "examples"),
+            "--output",
+            str(output),
+        ],
+        cwd=APPS_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    scope = load_scope(output, APPS_ROOT)
+    assert validate_scope(scope, APPS_ROOT) == []
+    assert enabled_examples(scope, "python", "e2e") == [
+        "object-detection/single-stream-object-detector",
+        "segmentation/single-stream-instance-segmenter",
+    ]
+    assert enabled_examples(scope, "cpp", "e2e") == [
+        "segmentation/single-stream-instance-segmenter"
     ]
 
 

@@ -32,8 +32,9 @@ unit:
   cpp: true
 e2e:
   python:
-    enabled: false
-    models: []
+    enabled: true
+    models:
+    - yolo26m-det-int8-b1
   cpp:
     enabled: true
     models:

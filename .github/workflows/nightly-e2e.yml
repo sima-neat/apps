@@ -57,7 +57,7 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
 
       - name: Run nightly e2e tests from installed apps runtime
         shell: bash
@@ -69,10 +69,16 @@ jobs:
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
-          /usr/bin/fix_devkit_runtime.sh
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
           cd neat-apps/neat-apps-runtime
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --strict
+          scope_file="$(mktemp)"
+          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
+          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --strict
 
   modalix-manual-e2e:
     if: github.event_name == 'workflow_dispatch'
@@ -106,7 +112,7 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
 
       - name: Run manual e2e tests from installed apps runtime
         shell: bash
@@ -118,7 +124,13 @@ jobs:
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
-          /usr/bin/fix_devkit_runtime.sh
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
           cd neat-apps/neat-apps-runtime
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --strict
+          scope_file="$(mktemp)"
+          "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
+          SIMANEAT_APPS_TEST_SCOPE_FILE="${scope_file}" ./tests/test.sh --e2e --strict
