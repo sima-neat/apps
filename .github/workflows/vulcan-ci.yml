@@ -248,7 +248,7 @@ jobs:
       - name: Fix devkit runtime
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
-            /usr/bin/fix_devkit_runtime.sh
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
