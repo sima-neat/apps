@@ -140,8 +140,6 @@ struct StreamRuntime {
   simaai::neat::Run decode_run;
   simaai::neat::Graph video_graph;
   simaai::neat::Run video_run;
-  simaai::neat::Graph save_graph;
-  simaai::neat::Run save_run;
   std::optional<simaai::neat::Sample> pending_encoded_sample;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   PeopleTracker tracker;
@@ -435,9 +433,9 @@ build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOp
 }
 
 simaai::neat::Graph
-build_decode_model_graph(const std::string& input_name, const std::string& output_name,
-                         const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
-                         simaai::neat::Model& model) {
+build_decode_graph(const std::string& input_name,
+                   const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
+                   simaai::neat::Model& model, bool save_frames) {
   simaai::neat::Graph decode("decode_model");
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
   const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
@@ -460,9 +458,33 @@ build_decode_model_graph(const std::string& input_name, const std::string& outpu
   if (!opt.extra_fragment.empty()) {
     decode.add(simaai::neat::nodes::Custom(opt.extra_fragment));
   }
-  decode.add(model);
-  decode.add(simaai::neat::nodes::Output(output_name, simaai::neat::OutputOptions::EveryFrame(4)));
-  return decode;
+
+  if (!save_frames) {
+    decode.add(model);
+    decode.add(
+        simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
+    return decode;
+  }
+
+  auto branch = simaai::neat::graphs::Branch("decoded", {"frame", "model"});
+
+  simaai::neat::Graph frame_graph("debug_frame");
+  frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
+
+  simaai::neat::Graph model_graph("model");
+  model_graph.connect(simaai::neat::nodes::Input("model"), model);
+  model_graph.add(
+      simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
+
+  auto debug_output = simaai::neat::graphs::Combine({"frame", "detections"}, "debug_output",
+                                                    simaai::neat::CombinePolicy::ByPts);
+  simaai::neat::Graph graph("decode_model");
+  graph.connect(decode, branch);
+  graph.connect(branch, frame_graph);
+  graph.connect(branch, model_graph);
+  graph.connect(frame_graph, debug_output);
+  graph.connect(model_graph, debug_output);
+  return graph;
 }
 
 simaai::neat::Graph
@@ -472,26 +494,6 @@ build_video_sender_graph(const std::string& input_name,
   video.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
   video.add(simaai::neat::nodes::groups::VideoSender(video_options));
   return video;
-}
-
-simaai::neat::Graph
-build_save_frame_graph(const std::string& input_name,
-                       const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
-  simaai::neat::Graph save("save_frame");
-  const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
-  const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
-
-  save.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
-  save.add(simaai::neat::nodes::H264Decode(opt.sima_allocator_type, opt.out_format,
-                                           opt.decoder_name, opt.decoder_raw_output,
-                                           opt.decoder_next_element, dec_w, dec_h));
-  if (output_caps_enabled(opt.output_caps)) {
-    const auto& caps = opt.output_caps;
-    save.add(
-        simaai::neat::nodes::CapsRaw(caps.format, caps.width, caps.height, caps.fps, caps.memory));
-  }
-  save.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
-  return save;
 }
 
 std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
@@ -540,10 +542,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
 
   runtime.source_graph = build_encoded_source_graph(source_options);
   runtime.decode_graph =
-      build_decode_model_graph("encoded", "detections", source_options, *runtime.model);
-  if (save_frames_enabled(cfg)) {
-    runtime.save_graph = build_save_frame_graph("encoded", source_options);
-  }
+      build_decode_graph("encoded", source_options, *runtime.model, save_frames_enabled(cfg));
   if (cfg.video_enabled) {
     auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
     video_options.host = cfg.insight_host;
@@ -561,10 +560,6 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     if (cfg.video_enabled) {
       std::cout << "Video backend stream=" << stream_index << ":\n"
                 << runtime.video_graph.describe_backend() << "\n";
-    }
-    if (save_frames_enabled(cfg)) {
-      std::cout << "Save backend stream=" << stream_index << ":\n"
-                << runtime.save_graph.describe_backend() << "\n";
     }
   }
 
@@ -590,10 +585,6 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   if (cfg.video_enabled) {
     runtime.video_run =
         runtime.video_graph.build(*runtime.pending_encoded_sample, downstream_options);
-  }
-  if (save_frames_enabled(cfg)) {
-    runtime.save_run =
-        runtime.save_graph.build(*runtime.pending_encoded_sample, downstream_options);
   }
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -715,15 +706,6 @@ void pump_encoded_samples(StreamRuntime& stream, const AppConfig& cfg,
                                    " failed to push encoded sample to video sender graph");
         }
       }
-      if (stream.save_run) {
-        if (!stream.save_run.push("encoded", encoded_sample)) {
-          if (stop_requested.load()) {
-            break;
-          }
-          throw std::runtime_error("stream " + std::to_string(stream.index) +
-                                   " failed to push encoded sample to save graph");
-        }
-      }
     }
   } catch (...) {
     set_first_error(std::current_exception(), first_error, error_mutex);
@@ -736,7 +718,8 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;
   const double pull_start = sima_examples::time_ms();
-  const auto status = stream.decode_run.pull("detections", kPullTimeoutMs, sample, &pull_error);
+  const std::string output_name = save_frames_enabled(cfg) ? "debug_output" : "detections";
+  const auto status = stream.decode_run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
   const double pull_end = sima_examples::time_ms();
   if (status == simaai::neat::PullStatus::Timeout) {
     return false;
@@ -749,16 +732,6 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
     throw std::runtime_error("stream " + std::to_string(stream.index) +
                              " failed to pull detections: " + pull_error.message);
   }
-  simaai::neat::Sample frame_sample;
-  if (stream.save_run) {
-    simaai::neat::PullError frame_pull_error;
-    const auto frame_status = stream.save_run.pull("frame", 20000, frame_sample, &frame_pull_error);
-    if (frame_status != simaai::neat::PullStatus::Ok) {
-      throw std::runtime_error("stream " + std::to_string(stream.index) +
-                               " failed to pull decoded save frame: " + frame_pull_error.message);
-    }
-  }
-
   std::vector<std::uint8_t> payload;
   std::string err;
   if (!extract_bbox_payload(sample, payload, err)) {
@@ -778,8 +751,8 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
     const double metadata_start = sima_examples::time_ms();
     send_metadata(stream, sample, tracks);
     const double metadata_end = sima_examples::time_ms();
-    if (stream.save_run) {
-      maybe_save_debug_frame(cfg, stream, frame_sample, tracks);
+    if (save_frames_enabled(cfg)) {
+      maybe_save_debug_frame(cfg, stream, sample, tracks);
     }
     stream.profile.add(pull_end - pull_start, tracker_end - tracker_start,
                        metadata_end - metadata_start, static_cast<int>(tracks.size()));
@@ -845,9 +818,6 @@ void run_app(const AppConfig& cfg) {
       stream.video_run.close();
     }
     stream.decode_run.close();
-    if (stream.save_run) {
-      stream.save_run.close();
-    }
     stream.source_run.close();
   }
   for (auto& pump : pumps) {

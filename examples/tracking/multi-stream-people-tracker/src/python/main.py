@@ -59,8 +59,6 @@ class StreamRuntime:
     decode_run: object
     video_graph: object | None
     video_run: object | None
-    save_graph: object | None
-    save_run: object | None
     pending_encoded_sample: object
     metadata_sender: object
     tracker: PeopleTracker
@@ -430,7 +428,7 @@ def h264_encoded_input_options():
     return opt
 
 
-def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> pyneat.Graph:
+def build_decode_graph(input_name: str, opt, model, save_frames: bool) -> pyneat.Graph:
     decode = pyneat.Graph("decode_model")
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
@@ -463,9 +461,30 @@ def build_decode_model_graph(input_name: str, output_name: str, opt, model) -> p
         )
     if opt.extra_fragment:
         decode.add(pyneat.nodes.custom(opt.extra_fragment))
-    decode.add(model)
-    decode.add(pyneat.nodes.output(output_name, pyneat.OutputOptions.every_frame(4)))
-    return decode
+
+    if not save_frames:
+        decode.add(model)
+        decode.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+        return decode
+
+    branch = pyneat.graphs.branch("decoded", ["frame", "model"])
+    frame_graph = pyneat.Graph("debug_frame")
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+
+    model_graph = pyneat.Graph("model")
+    model_graph.connect(pyneat.nodes.input("model"), model)
+    model_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+
+    debug_output = pyneat.graphs.combine(
+        ["frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
+    )
+    graph = pyneat.Graph("decode_model")
+    graph.connect(decode, branch)
+    graph.connect(branch, frame_graph)
+    graph.connect(branch, model_graph)
+    graph.connect(frame_graph, debug_output)
+    graph.connect(model_graph, debug_output)
+    return graph
 
 
 def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
@@ -473,37 +492,6 @@ def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
     video.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
     video.add(pyneat.groups.video_sender(video_options))
     return video
-
-
-def build_save_frame_graph(input_name: str, opt) -> pyneat.Graph:
-    save = pyneat.Graph("save_frame")
-    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
-    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-
-    save.add(pyneat.nodes.input(input_name, h264_encoded_input_options()))
-    save.add(
-        pyneat.nodes.h264_decode(
-            sima_allocator_type=opt.sima_allocator_type,
-            out_format="NV12",
-            decoder_name=opt.decoder_name,
-            raw_output=opt.decoder_raw_output,
-            next_element=opt.decoder_next_element,
-            dec_width=dec_w,
-            dec_height=dec_h,
-        )
-    )
-    if output_caps_enabled(opt.output_caps):
-        save.add(
-            pyneat.nodes.caps_raw(
-                "NV12",
-                opt.output_caps.width,
-                opt.output_caps.height,
-                opt.output_caps.fps,
-                opt.output_caps.memory,
-            )
-        )
-    save.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
-    return save
 
 
 def build_model(cfg: AppConfig):
@@ -538,10 +526,7 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
     model = build_model(cfg)
     source_options = build_source_options(cfg, url, fps, frame_w, frame_h)
     source_graph = build_encoded_source_graph(source_options)
-    decode_graph = build_decode_model_graph("encoded", "detections", source_options, model)
-    save_graph = (
-        build_save_frame_graph("encoded", source_options) if save_frames_enabled(cfg) else None
-    )
+    decode_graph = build_decode_graph("encoded", source_options, model, save_frames_enabled(cfg))
 
     video_port = 0
     video_graph = None
@@ -557,8 +542,6 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
         print(f"Decode backend stream={stream_index}:\n{decode_graph.describe_backend()}")
         if video_graph is not None:
             print(f"Video backend stream={stream_index}:\n{video_graph.describe_backend()}")
-        if save_graph is not None:
-            print(f"Save backend stream={stream_index}:\n{save_graph.describe_backend()}")
 
     source_run = source_graph.build(build_run_options())
     pending_encoded_sample = source_run.pull("encoded", 20000)
@@ -571,11 +554,6 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
     video_run = (
         video_graph.build([pending_encoded_sample], options=downstream_options)
         if video_graph is not None
-        else None
-    )
-    save_run = (
-        save_graph.build([pending_encoded_sample], options=downstream_options)
-        if save_graph is not None
         else None
     )
 
@@ -601,8 +579,6 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
         decode_run=decode_run,
         video_graph=video_graph,
         video_run=video_run,
-        save_graph=save_graph,
-        save_run=save_run,
         pending_encoded_sample=pending_encoded_sample,
         metadata_sender=metadata_sender,
         tracker=PeopleTracker(cfg.tracker_iou_threshold, cfg.tracker_max_missing),
@@ -745,13 +721,6 @@ def pump_encoded_samples(
                     raise RuntimeError(
                         f"stream {stream.index} failed to push encoded sample to video sender graph"
                     )
-            if stream.save_run is not None:
-                if not stream.save_run.push("encoded", [encoded_sample]):
-                    if stop_event.is_set():
-                        break
-                    raise RuntimeError(
-                        f"stream {stream.index} failed to push encoded sample to save graph"
-                    )
             encoded_sample = None
     except Exception as exc:
         errors.append(exc)
@@ -760,7 +729,8 @@ def pump_encoded_samples(
 
 def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
     pull_start = time_ms()
-    sample = stream.decode_run.pull("detections", 50)
+    output_name = "debug_output" if save_frames_enabled(cfg) else "detections"
+    sample = stream.decode_run.pull(output_name, 50)
     pull_end = time_ms()
     if sample is None:
         last_error_fn = getattr(stream.decode_run, "last_error", None)
@@ -771,12 +741,6 @@ def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
         if callable(running_fn) and not running_fn():
             stream.closed = True
         return False
-    frame_sample = None
-    if stream.save_run is not None:
-        frame_sample = stream.save_run.pull("frame", 20000)
-        if frame_sample is None:
-            raise RuntimeError(f"stream {stream.index} timed out waiting for decoded save frame")
-
     payload = extract_bbox_payload(sample)
     boxes = parse_boxes_strict(payload, stream.frame_w, stream.frame_h, cfg.max_detections)
     people = filter_people(boxes, cfg.person_class_id)
@@ -790,8 +754,8 @@ def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
         metadata_start = time_ms()
         send_metadata(stream, sample, tracks)
         metadata_end = time_ms()
-        if frame_sample is not None:
-            maybe_save_debug_frame(cfg, stream, frame_sample, tracks)
+        if save_frames_enabled(cfg):
+            maybe_save_debug_frame(cfg, stream, sample, tracks)
         stream.profile.add(
             pull_end - pull_start,
             tracker_end - tracker_start,
@@ -864,8 +828,6 @@ def run_app(cfg: AppConfig) -> None:
             if stream.video_run is not None:
                 stream.video_run.close()
             stream.decode_run.close()
-            if stream.save_run is not None:
-                stream.save_run.close()
             stream.source_run.close()
         for pump in pumps:
             if pump.is_alive():
