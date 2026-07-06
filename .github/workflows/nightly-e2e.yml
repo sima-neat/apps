@@ -35,8 +35,22 @@ jobs:
     steps:
       - name: Install apps runtime for latest branch build
         run: |
-          wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
-          bash /tmp/install-neat-apps-from-a-branch.sh "${{ matrix.branch }}"
+          if ! command -v sima-cli >/dev/null 2>&1; then
+            curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
+            python3 sima-cli-install.py main latest --noninteractive
+            rm -f sima-cli-install.py
+            export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+          fi
+          rm -rf _nightly-test
+          sima-cli neat install --env production -d _nightly-test/install "apps@${{ matrix.branch }}" -f
+
+          mapfile -t runtime_dirs < <(find _nightly-test/install -type d -path '*/neat-apps/neat-apps-runtime' | sort)
+          if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
+            printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
+            exit 1
+          fi
+          echo "APPS_RUNTIME_DIR=${runtime_dirs[0]}" >> "${GITHUB_ENV}"
 
       - name: Locate pyneat
         shell: bash
@@ -74,7 +88,7 @@ jobs:
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
-          cd neat-apps/neat-apps-runtime
+          cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
           scope_file="$(mktemp)"
           "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
@@ -95,7 +109,7 @@ jobs:
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
-          cd neat-apps/neat-apps-runtime
+          cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
           scope_file="$(mktemp)"
           "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
@@ -111,8 +125,22 @@ jobs:
     steps:
       - name: Install apps runtime for latest branch build
         run: |
-          wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
-          bash /tmp/install-neat-apps-from-a-branch.sh "${{ inputs.branch }}"
+          if ! command -v sima-cli >/dev/null 2>&1; then
+            curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
+            python3 sima-cli-install.py main latest --noninteractive
+            rm -f sima-cli-install.py
+            export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+          fi
+          rm -rf _nightly-test
+          sima-cli neat install --env production -d _nightly-test/install "apps@${{ inputs.branch }}" -f
+
+          mapfile -t runtime_dirs < <(find _nightly-test/install -type d -path '*/neat-apps/neat-apps-runtime' | sort)
+          if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
+            printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
+            exit 1
+          fi
+          echo "APPS_RUNTIME_DIR=${runtime_dirs[0]}" >> "${GITHUB_ENV}"
 
       - name: Locate pyneat
         shell: bash
@@ -150,7 +178,7 @@ jobs:
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
-          cd neat-apps/neat-apps-runtime
+          cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
           scope_file="$(mktemp)"
           "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
@@ -171,7 +199,7 @@ jobs:
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
-          cd neat-apps/neat-apps-runtime
+          cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
           scope_file="$(mktemp)"
           "${PYTHON_TEST_BIN}" tests/utils/codec_e2e_scope.py --scope-file examples --output "${scope_file}"
