@@ -255,30 +255,17 @@ jobs:
 
       - name: Install apps runtime from Vulcan artifact
         run: |
-          if ! command -v sima-cli >/dev/null 2>&1; then
-            echo "sima-cli not found on test runner." >&2
-            exit 1
-          fi
-
           REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           SHORT_SHA="$(printf "%.12s" "${GITHUB_SHA}")"
           PACKAGE_SPEC="apps@${REF_NAME}:${SHORT_SHA}"
 
-          mkdir -p _vulcan-test/install
-          echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
-          sima-cli neat install --env "${VULCAN_ENV}" -d _vulcan-test/install "${PACKAGE_SPEC}" -f
-
-      - name: Locate installed apps runtime
-        run: |
-          mapfile -t runtime_dirs < <(find _vulcan-test/install -type d -path '*/neat-apps/neat-apps-runtime' | sort)
-          if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
-            echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
-            printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
-            find _vulcan-test/install -maxdepth 4 -mindepth 1 -type d -printf '  %p\n' | sort >&2 || true
-            exit 1
-          fi
-          printf '%s\n' "${runtime_dirs[0]}" > _vulcan-test/apps_runtime_dir.txt
-          echo "Using apps runtime: ${runtime_dirs[0]}"
+          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
+            --env "${VULCAN_ENV}" \
+            --target "${PACKAGE_SPEC}" \
+            --install-dir _vulcan-test/install \
+            --force)"
+          printf '%s\n' "${runtime_dir}" > _vulcan-test/apps_runtime_dir.txt
+          echo "Using apps runtime: ${runtime_dir}"
 
       - name: Locate pyneat
         run: |
