@@ -24,8 +24,12 @@ CONFIG_ENV_VARS=(
   SIMANEAT_APPS_TEST_KEEP_OUTPUT
   SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS
   SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS
-  SIMANEAT_APPS_TEST_RTSP_URL
-  SIMANEAT_APPS_TEST_RTSP_URLS
+  SIMANEAT_TEST_RTSP_H264_URL
+  SIMANEAT_TEST_RTSP_H264_URLS
+  SIMANEAT_TEST_RTSP_MJPEG_URL
+  SIMANEAT_TEST_RTSP_MJPEG_URLS
+  SIMANEAT_TEST_HTTP_MJPEG_URL
+  SIMANEAT_TEST_HTTP_MJPEG_URLS
   SIMANEAT_APPS_TEST_TIMEOUT_MS
   SIMANEAT_APPS_TEST_REQUIRE_E2E
   SIMANEAT_APPS_TEST_LABELS_FILE
@@ -97,8 +101,12 @@ Environment:
   SIMANEAT_APPS_TEST_KEEP_OUTPUT    Keep e2e output dirs (1=yes, default: 1)
   SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS    Write summary logs (1=yes, default: 1)
   SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS    Write command/stdout/stderr logs (1=yes, default: 1)
-  SIMANEAT_APPS_TEST_RTSP_URL       Single RTSP stream URL
-  SIMANEAT_APPS_TEST_RTSP_URLS      Comma-separated RTSP URLs (multistream)
+  SIMANEAT_TEST_RTSP_H264_URL       Single RTSP H.264 stream URL
+  SIMANEAT_TEST_RTSP_H264_URLS      Comma-separated RTSP H.264 URLs
+  SIMANEAT_TEST_RTSP_MJPEG_URL      Single RTSP MJPEG stream URL
+  SIMANEAT_TEST_RTSP_MJPEG_URLS     Comma-separated RTSP MJPEG URLs
+  SIMANEAT_TEST_HTTP_MJPEG_URL      Single HTTP MJPEG stream URL
+  SIMANEAT_TEST_HTTP_MJPEG_URLS     Comma-separated HTTP MJPEG URLs
   SIMANEAT_APPS_TEST_TIMEOUT_MS     Timeout in ms (default: 180000)
   SIMANEAT_APPS_TEST_REQUIRE_E2E    Backward-compatible strict e2e env flag
   SIMANEAT_APPS_TEST_SCOPE_FILE     Test scope source (default: examples)
@@ -203,8 +211,12 @@ resolve_test_runtime_env() {
   export SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS="${SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS:-1}"
   export SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS="${SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS:-1}"
   export SIMANEAT_APPS_TEST_TIMEOUT_MS="${SIMANEAT_APPS_TEST_TIMEOUT_MS:-180000}"
-  export SIMANEAT_APPS_TEST_RTSP_URL="${SIMANEAT_APPS_TEST_RTSP_URL:-}"
-  export SIMANEAT_APPS_TEST_RTSP_URLS="${SIMANEAT_APPS_TEST_RTSP_URLS:-}"
+  export SIMANEAT_TEST_RTSP_H264_URL="${SIMANEAT_TEST_RTSP_H264_URL:-}"
+  export SIMANEAT_TEST_RTSP_H264_URLS="${SIMANEAT_TEST_RTSP_H264_URLS:-}"
+  export SIMANEAT_TEST_RTSP_MJPEG_URL="${SIMANEAT_TEST_RTSP_MJPEG_URL:-}"
+  export SIMANEAT_TEST_RTSP_MJPEG_URLS="${SIMANEAT_TEST_RTSP_MJPEG_URLS:-}"
+  export SIMANEAT_TEST_HTTP_MJPEG_URL="${SIMANEAT_TEST_HTTP_MJPEG_URL:-}"
+  export SIMANEAT_TEST_HTTP_MJPEG_URLS="${SIMANEAT_TEST_HTTP_MJPEG_URLS:-}"
   export SIMANEAT_APPS_TEST_INSIGHT_HOST="${SIMANEAT_APPS_TEST_INSIGHT_HOST:-127.0.0.1}"
   export NEAT_APPS_SKIP_MODEL_DOWNLOAD="${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}"
 }
@@ -365,8 +377,12 @@ preflight_e2e_env() {
   local write_process_raw="${SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS:-1}"
   local insight_host_raw="${SIMANEAT_APPS_TEST_INSIGHT_HOST:-}"
   local skip_model_download_raw="${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}"
-  local rtsp_url="${SIMANEAT_APPS_TEST_RTSP_URL:-}"
-  local rtsp_urls="${SIMANEAT_APPS_TEST_RTSP_URLS:-}"
+  local rtsp_h264_url="${SIMANEAT_TEST_RTSP_H264_URL:-}"
+  local rtsp_h264_urls="${SIMANEAT_TEST_RTSP_H264_URLS:-}"
+  local rtsp_mjpeg_url="${SIMANEAT_TEST_RTSP_MJPEG_URL:-}"
+  local rtsp_mjpeg_urls="${SIMANEAT_TEST_RTSP_MJPEG_URLS:-}"
+  local http_mjpeg_url="${SIMANEAT_TEST_HTTP_MJPEG_URL:-}"
+  local http_mjpeg_urls="${SIMANEAT_TEST_HTTP_MJPEG_URLS:-}"
   local models_dir="${models_dir_raw:-${ROOT_DIR}/assets/models}"
   local input_dir="${input_dir_raw:-${ROOT_DIR}/assets/test_images}"
   local scope_file="${scope_file_raw:-${ROOT_DIR}/examples}"
@@ -394,8 +410,12 @@ preflight_e2e_env() {
   echo "  SIMANEAT_APPS_TEST_INSIGHT_HOST : $(format_env_status "${insight_host_raw}") -> $(format_env_value "${insight_host_raw}")"
   echo "  NEAT_APPS_SKIP_MODEL_DOWNLOAD : $(format_env_status "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-}") -> ${skip_model_download_raw}"
   echo "  SIMANEAT_APPS_TEST_TIMEOUT_MS  : $(format_env_status "${SIMANEAT_APPS_TEST_TIMEOUT_MS:-}") -> ${timeout_raw}"
-  echo "  SIMANEAT_APPS_TEST_RTSP_URL    : $(format_env_status "${rtsp_url}") -> $(format_env_value "${rtsp_url}")"
-  echo "  SIMANEAT_APPS_TEST_RTSP_URLS   : $(format_env_status "${rtsp_urls}") -> $(format_env_value "${rtsp_urls}")"
+  echo "  SIMANEAT_TEST_RTSP_H264_URL    : $(format_env_status "${rtsp_h264_url}") -> $(format_env_value "${rtsp_h264_url}")"
+  echo "  SIMANEAT_TEST_RTSP_H264_URLS   : $(format_env_status "${rtsp_h264_urls}") -> $(format_env_value "${rtsp_h264_urls}")"
+  echo "  SIMANEAT_TEST_RTSP_MJPEG_URL   : $(format_env_status "${rtsp_mjpeg_url}") -> $(format_env_value "${rtsp_mjpeg_url}")"
+  echo "  SIMANEAT_TEST_RTSP_MJPEG_URLS  : $(format_env_status "${rtsp_mjpeg_urls}") -> $(format_env_value "${rtsp_mjpeg_urls}")"
+  echo "  SIMANEAT_TEST_HTTP_MJPEG_URL   : $(format_env_status "${http_mjpeg_url}") -> $(format_env_value "${http_mjpeg_url}")"
+  echo "  SIMANEAT_TEST_HTTP_MJPEG_URLS  : $(format_env_status "${http_mjpeg_urls}") -> $(format_env_value "${http_mjpeg_urls}")"
 
   local preflight_fail=0
   if [[ ! "${timeout_raw}" =~ ^[0-9]+$ ]]; then
@@ -471,26 +491,38 @@ preflight_e2e_env() {
       preflight_fail=1
     fi
   fi
-  if [[ -z "${rtsp_url}" && -z "${rtsp_urls}" ]]; then
-    echo "  [WARN] no RTSP env configured; RTSP e2e tests will skip."
-    echo "  [WARN] RTSP e2e tests: single-stream-object-detector, multi-stream-object-detector."
-    echo "  [WARN] make sure RTSP source(s) are running before e2e. If you want a quick setup, tool-mediasources on the host is one option:"
+  if [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_mjpeg_url}" && \
+        -z "${rtsp_mjpeg_urls}" && -z "${http_mjpeg_url}" && -z "${http_mjpeg_urls}" ]]; then
+    echo "  [WARN] no codec stream env configured; stream e2e tests will skip."
+    echo "  [WARN] stream e2e tests: single-stream-object-detector, single-stream-instance-segmenter,"
+    echo "         multi-stream-object-detector, multi-stream-people-tracker."
+    echo "  [WARN] make sure stream source(s) are running before e2e. If you want a quick setup, tool-mediasources on the host is one option:"
     echo "         sima-cli install gh:sima-ai/tool-mediasources"
     echo "         open preview.html"
-    echo "         export SIMANEAT_APPS_TEST_RTSP_URL=<rtsp-url>"
-    echo "         export SIMANEAT_APPS_TEST_RTSP_URLS=<rtsp-url-0>,<rtsp-url-1>"
+    echo "         export SIMANEAT_TEST_RTSP_H264_URL=<rtsp-h264-url>"
+    echo "         export SIMANEAT_TEST_RTSP_H264_URLS=<rtsp-h264-url-0>,<rtsp-h264-url-1>"
+    echo "         export SIMANEAT_TEST_RTSP_MJPEG_URL=<rtsp-mjpeg-url>"
+    echo "         export SIMANEAT_TEST_HTTP_MJPEG_URL=<http-mjpeg-url>"
     if [[ "${strict}" == "1" ]]; then
-      echo "  [FAIL] strict mode requires RTSP config."
-      echo "         Local: cp tests/configs/.env.example tests/configs/.env.local and set RTSP URLs."
-      echo "         CI   : set SIMANEAT_APPS_TEST_RTSP_URL and SIMANEAT_APPS_TEST_RTSP_URLS."
+      echo "  [FAIL] strict mode requires codec stream config."
+      echo "         Local: cp tests/configs/.env.example tests/configs/.env.local and set stream URLs."
+      echo "         CI   : set SIMANEAT_TEST_RTSP_H264_URL, SIMANEAT_TEST_RTSP_H264_URLS,"
+      echo "                SIMANEAT_TEST_RTSP_MJPEG_URL, and SIMANEAT_TEST_HTTP_MJPEG_URL as needed."
       preflight_fail=1
     fi
-  elif [[ -n "${rtsp_url}" && -z "${rtsp_urls}" ]]; then
-    echo "  [WARN] SIMANEAT_APPS_TEST_RTSP_URLS is unset; multistream RTSP tests may skip."
-    echo "  [WARN] set SIMANEAT_APPS_TEST_RTSP_URLS with 2+ URLs for full multistream coverage."
-  elif [[ -z "${rtsp_url}" && -n "${rtsp_urls}" ]]; then
-    echo "  [WARN] SIMANEAT_APPS_TEST_RTSP_URL is unset; single-stream RTSP tests may skip."
-    echo "  [WARN] set SIMANEAT_APPS_TEST_RTSP_URL for full single-stream RTSP coverage."
+  else
+    if [[ -z "${rtsp_h264_url}" ]]; then
+      echo "  [WARN] SIMANEAT_TEST_RTSP_H264_URL is unset; single-stream RTSP H.264 tests may skip."
+    fi
+    if [[ -z "${rtsp_h264_urls}" ]]; then
+      echo "  [WARN] SIMANEAT_TEST_RTSP_H264_URLS is unset; multistream RTSP H.264 tests may skip."
+    fi
+    if [[ -z "${rtsp_mjpeg_url}" ]]; then
+      echo "  [WARN] SIMANEAT_TEST_RTSP_MJPEG_URL is unset; single-stream RTSP MJPEG tests may skip."
+    fi
+    if [[ -z "${http_mjpeg_url}" ]]; then
+      echo "  [WARN] SIMANEAT_TEST_HTTP_MJPEG_URL is unset; single-stream HTTP MJPEG tests may skip."
+    fi
   fi
   if [[ "${model_count}" == "0" ]]; then
     echo "  [WARN] no models discovered under SIMANEAT_APPS_TEST_MODELS_DIR; e2e tests may skip/fail."

@@ -8,6 +8,32 @@ import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+SOURCE_CASES = [
+    pytest.param(
+        {"name": "rtsp_h264", "type": "rtsp", "codec": "h264", "url_fixture": "rtsp_h264_url"},
+        id="rtsp-h264",
+    ),
+    pytest.param(
+        {
+            "name": "rtsp_mjpeg",
+            "type": "rtsp",
+            "codec": "mjpeg",
+            "url_fixture": "rtsp_mjpeg_url",
+        },
+        id="rtsp-mjpeg",
+    ),
+    pytest.param(
+        {
+            "name": "http_mjpeg",
+            "type": "http",
+            "codec": "mjpeg",
+            "url_fixture": "http_mjpeg_url",
+            "fps": 30,
+            "ssl_strict": False,
+        },
+        id="http-mjpeg",
+    ),
+]
 
 
 def _env_int_or_default(name: str, default: int) -> int:
@@ -21,20 +47,32 @@ def _env_str_or_default(name: str, default: str) -> str:
 
 @pytest.mark.e2e
 class TestE2E:
+    @pytest.mark.parametrize("source", SOURCE_CASES)
     def test_full_pipeline(
         self,
+        request,
+        source,
         e2e_model_path,
-        rtsp_url,
         tmp_output_dir,
         test_timeout_ms,
         e2e_config_section,
         e2e_config_writer,
         run_until_output_files,
     ):
+        source_url = request.getfixturevalue(source["url_fixture"])
         output_cfg = e2e_config_section("single-stream-object-detector", "testing.e2e.output")
+        source_config = {
+            "type": source["type"],
+            "codec": source["codec"],
+            "url": source_url,
+            "ssl_strict": source.get("ssl_strict", True),
+        }
+        if source.get("fps", 0) > 0:
+            source_config["fps"] = source["fps"]
+
         config_path = e2e_config_writer(
             {
-                "source": {"rtsp_url": rtsp_url},
+                "source": source_config,
                 "output": {
                     "save_dir": str(tmp_output_dir),
                     "insight": {
@@ -65,7 +103,7 @@ class TestE2E:
         )
 
         assert result.returncode == 0, (
-            f"main.py exited with code {result.returncode}\n"
+            f"{source['name']} main.py exited with code {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         output_files = [path for path in tmp_output_dir.iterdir() if path.is_file()]

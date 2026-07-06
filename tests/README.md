@@ -44,8 +44,12 @@ cp tests/configs/.env.example tests/configs/.env.local
 Edit `tests/configs/.env.local`:
 
 ```bash
-SIMANEAT_APPS_TEST_RTSP_URL=rtsp://<host>:<port>/<stream>
-SIMANEAT_APPS_TEST_RTSP_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_RTSP_H264_URL=rtsp://<host>:<port>/<stream>
+SIMANEAT_TEST_RTSP_H264_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_RTSP_MJPEG_URL=rtsp://<host>:<port>/<stream>
+SIMANEAT_TEST_RTSP_MJPEG_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_HTTP_MJPEG_URL=http://<host>:<port>/<stream>.mjpg
+SIMANEAT_TEST_HTTP_MJPEG_URLS=http://<host>:<port>/<stream0>.mjpg,http://<host>:<port>/<stream1>.mjpg
 ```
 
 `tests/configs/.env.local` is ignored by git and is auto-loaded by `tests/test.sh`.
@@ -214,8 +218,12 @@ python3 -m pytest \
 - `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `1`)
 - `SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS` (`1` writes summary logs, default: `1`)
 - `SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS` (`1` writes per-example command/stdout/stderr logs, default: `1`)
-- `SIMANEAT_APPS_TEST_RTSP_URL` (single RTSP stream URL)
-- `SIMANEAT_APPS_TEST_RTSP_URLS` (comma-separated RTSP URLs for multistream tests)
+- `SIMANEAT_TEST_RTSP_H264_URL` (single RTSP H.264 stream URL)
+- `SIMANEAT_TEST_RTSP_H264_URLS` (comma-separated RTSP H.264 URLs)
+- `SIMANEAT_TEST_RTSP_MJPEG_URL` (single RTSP MJPEG stream URL)
+- `SIMANEAT_TEST_RTSP_MJPEG_URLS` (comma-separated RTSP MJPEG URLs)
+- `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)
+- `SIMANEAT_TEST_HTTP_MJPEG_URLS` (comma-separated HTTP MJPEG URLs)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
 - `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
 - `SIMANEAT_APPS_TEST_LABELS_FILE` (optional labels file override)

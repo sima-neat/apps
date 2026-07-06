@@ -23,8 +23,12 @@ __all__ = [
     "apps_root",
     "e2e_config_section",
     "models_dir",
-    "rtsp_url",
-    "rtsp_urls",
+    "rtsp_h264_url",
+    "rtsp_h264_urls",
+    "rtsp_mjpeg_url",
+    "rtsp_mjpeg_urls",
+    "http_mjpeg_url",
+    "http_mjpeg_urls",
     "tmp_output_dir",
     "e2e_config_writer",
     "e2e_subprocess_artifacts",
@@ -81,19 +85,51 @@ def models_dir() -> Path:
     return APPS_ROOT / "assets" / "models"
 
 
-@pytest.fixture
-def rtsp_url() -> str:
-    """Resolve SIMANEAT_APPS_TEST_RTSP_URL; skip if unset."""
-    return _require_env("SIMANEAT_APPS_TEST_RTSP_URL", "single RTSP stream URL")
-
-
-@pytest.fixture
-def rtsp_urls() -> list[str]:
-    """Resolve SIMANEAT_APPS_TEST_RTSP_URLS (comma-separated); skip if unset."""
-    raw = _require_env(
-        "SIMANEAT_APPS_TEST_RTSP_URLS", "comma-separated RTSP URLs for multistream"
-    )
+def _csv_env(key: str, description: str) -> list[str]:
+    raw = _require_env(key, description)
     return [u.strip() for u in raw.split(",") if u.strip()]
+
+
+@pytest.fixture
+def rtsp_h264_url() -> str:
+    """Resolve SIMANEAT_TEST_RTSP_H264_URL; skip if unset."""
+    return _require_env("SIMANEAT_TEST_RTSP_H264_URL", "single RTSP H.264 stream URL")
+
+
+@pytest.fixture
+def rtsp_h264_urls() -> list[str]:
+    """Resolve SIMANEAT_TEST_RTSP_H264_URLS; skip if unset."""
+    return _csv_env(
+        "SIMANEAT_TEST_RTSP_H264_URLS", "comma-separated RTSP H.264 URLs for multistream"
+    )
+
+
+@pytest.fixture
+def rtsp_mjpeg_url() -> str:
+    """Resolve SIMANEAT_TEST_RTSP_MJPEG_URL; skip if unset."""
+    return _require_env("SIMANEAT_TEST_RTSP_MJPEG_URL", "single RTSP MJPEG stream URL")
+
+
+@pytest.fixture
+def rtsp_mjpeg_urls() -> list[str]:
+    """Resolve SIMANEAT_TEST_RTSP_MJPEG_URLS; skip if unset."""
+    return _csv_env(
+        "SIMANEAT_TEST_RTSP_MJPEG_URLS", "comma-separated RTSP MJPEG URLs"
+    )
+
+
+@pytest.fixture
+def http_mjpeg_url() -> str:
+    """Resolve SIMANEAT_TEST_HTTP_MJPEG_URL; skip if unset."""
+    return _require_env("SIMANEAT_TEST_HTTP_MJPEG_URL", "single HTTP MJPEG stream URL")
+
+
+@pytest.fixture
+def http_mjpeg_urls() -> list[str]:
+    """Resolve SIMANEAT_TEST_HTTP_MJPEG_URLS; skip if unset."""
+    return _csv_env(
+        "SIMANEAT_TEST_HTTP_MJPEG_URLS", "comma-separated HTTP MJPEG URLs"
+    )
 
 
 @pytest.fixture
