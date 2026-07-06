@@ -314,6 +314,21 @@ jobs:
           source "${PYNEAT_ACTIVATE}"
           ./tests/test.sh --unit
 
+      - name: Run apps e2e tests on devkit
+        env:
+          NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --e2e --strict
+
       - name: Cleanup test workspace tmp artifacts
         if: ${{ always() }}
         run: |
