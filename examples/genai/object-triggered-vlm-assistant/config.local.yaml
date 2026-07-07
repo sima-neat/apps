@@ -42,7 +42,7 @@ qa:
   max_tokens: 64
   past_tolerance_seconds: 10.0
   default_past_seconds: 3.0
-  crop_padding_ratio: 1.5
+  crop_padding_ratio: 0.25
 
 vlm:                             # OpenAI-compatible VLM server.
   enabled: false                  # Enable detector-triggered VLM requests.

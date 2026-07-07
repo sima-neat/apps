@@ -116,10 +116,25 @@ vlm: car of red color was just seen
 Set `vlm.enabled: false` to run only the RTSP, detector, and Insight path.
 
 ## Ask Questions
-The app exposes a small browser chat UI when `qa.enabled: true`. The top class selector supports one or more active classes and resets trigger-class memory when the selection changes. Prompt chips are regenerated for the selected class set, and clicking a chip sends the question immediately using the selected time dropdown:
+The app exposes a small browser chat UI when `qa.enabled: true`. The top class selector supports one or more active classes. Changing the selection updates which classes are tracked going forward while retaining already sampled history until `memory.retention_seconds` expires. Prompt chips are regenerated for the selected class set, and clicking a chip sends the question immediately using the selected time dropdown:
 
 ```text
 http://<target-ip>:8088/
+```
+
+When opening the UI from a host browser, use the Modalix/DevKit IP address for
+`<target-ip>`, not `127.0.0.1`. The loopback address only works from commands
+running on the board itself, or from the host after creating an SSH tunnel.
+To find the board address, run:
+
+```bash
+hostname -I
+```
+
+To verify the question server from the board:
+
+```bash
+curl -s http://127.0.0.1:8088/health
 ```
 
 The same server keeps the JSON API available. Chat answers include an evidence thumbnail so you can verify what the VLM saw. Current-frame questions use the latest frame directly, without detector metadata:

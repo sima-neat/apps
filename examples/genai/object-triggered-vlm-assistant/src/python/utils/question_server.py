@@ -50,7 +50,7 @@ def infer_class_from_question(question: str, classes: list[str]) -> str | None:
         plural = re.escape(plural_class_name(class_name.lower()))
         if re.search(rf"\b({escaped}|{plural})\b", text):
             return class_name.lower()
-    return classes[0].lower() if len(classes) == 1 else None
+    return None
 
 
 PERSON_CLASSES = {"person"}
@@ -553,7 +553,8 @@ class QuestionServer:
                 class_name: prompt_templates_for_class(class_name)
                 for class_name in self.cfg.trigger_classes
             },
-            "memory_reset": True,
+            "memory_reset": False,
+            "memory_retained": True,
         }, 200
 
     def answer(self, payload: dict) -> dict:
@@ -597,6 +598,73 @@ class QuestionServer:
             },
         }
 
+    def _answer_past_frame(
+        self,
+        question: str,
+        seconds_ago: float,
+        target_timestamp_ms: int,
+        latest_timestamp_ms: int,
+    ) -> dict:
+        frame = self.frame_memory.nearest(target_timestamp_ms)
+        if frame is None:
+            return {
+                "mode": "past",
+                "answer": "not visible",
+                "error": "no retained frame history is available yet",
+            }
+
+        offset_seconds = abs(frame.timestamp_ms - target_timestamp_ms) / 1000.0
+        if offset_seconds > self.cfg.qa_past_tolerance_seconds:
+            return {
+                "mode": "past",
+                "answer": "not visible",
+                "error": (
+                    f"no retained frame within {self.cfg.qa_past_tolerance_seconds:.1f} "
+                    "seconds of the requested time"
+                ),
+                "evidence": {
+                    "nearest_frame_id": frame.frame_id,
+                    "nearest_timestamp_ms": frame.timestamp_ms,
+                    "requested_seconds_ago": round(float(seconds_ago), 3),
+                    "offset_from_requested_seconds": round(offset_seconds, 3),
+                },
+            }
+
+        frame_rgb = decode_jpeg_rgb(frame.jpeg)
+        answer = request_vlm_answer(
+            frame_rgb,
+            self.cfg,
+            question,
+            system_prompt=(
+                "Answer about a past video moment using only the provided retained "
+                "video frame. Be precise and brief. If the requested detail is not "
+                "visible in the frame, say not visible."
+            ),
+            metadata_text=(
+                f"frame_id={frame.frame_id}; "
+                f"observation_age_seconds={(latest_timestamp_ms - frame.timestamp_ms) / 1000.0:.2f}; "
+                "source=nearest_retained_frame"
+            ),
+            max_tokens=self.cfg.qa_max_tokens,
+        )
+        return {
+            "mode": "past",
+            "answer": answer,
+            "evidence_image": preview_image_data_uri(frame_rgb),
+            "evidence": {
+                "frame_id": frame.frame_id,
+                "timestamp_ms": frame.timestamp_ms,
+                "requested_class": None,
+                "full_frame": True,
+                "requested_seconds_ago": round(float(seconds_ago), 3),
+                "offset_from_requested_seconds": round(offset_seconds, 3),
+                "age_seconds": round(
+                    (int(time.time() * 1000) - frame.timestamp_ms) / 1000.0,
+                    3,
+                ),
+            },
+        }
+
     def _answer_past(
         self,
         question: str,
@@ -618,6 +686,14 @@ class QuestionServer:
             if requested_class
             else infer_class_from_question(question, self.cfg.trigger_classes)
         )
+
+        if requested_class is None and track_id is None:
+            return self._answer_past_frame(
+                question,
+                seconds_ago=float(seconds_ago),
+                target_timestamp_ms=target_timestamp_ms,
+                latest_timestamp_ms=latest_timestamp_ms,
+            )
 
         observation = self.object_memory.find_near(
             target_timestamp_ms,
@@ -642,6 +718,26 @@ class QuestionServer:
                     f"no {requested_class or ', '.join(self.cfg.trigger_classes)} observation retained in the last "
                     f"{self.cfg.memory_retention_seconds:.0f} seconds"
                 ),
+            }
+
+        offset_seconds = abs(observation.timestamp_ms - target_timestamp_ms) / 1000.0
+        if fallback_used and offset_seconds > self.cfg.qa_past_tolerance_seconds:
+            return {
+                "mode": "past",
+                "answer": "not visible",
+                "error": (
+                    f"no {requested_class or ', '.join(self.cfg.trigger_classes)} observation within "
+                    f"{self.cfg.qa_past_tolerance_seconds:.1f} seconds of the requested time"
+                ),
+                "evidence": {
+                    "nearest_track_id": observation.track_id,
+                    "nearest_frame_id": observation.frame_id,
+                    "nearest_timestamp_ms": observation.timestamp_ms,
+                    "nearest_class": observation.class_name,
+                    "requested_seconds_ago": round(float(seconds_ago), 3),
+                    "offset_from_requested_seconds": round(offset_seconds, 3),
+                    "fallback_nearest_retained": True,
+                },
             }
 
         frame = self.frame_memory.get(observation.frame_id)
@@ -677,11 +773,13 @@ class QuestionServer:
             system_prompt=(
                 "Answer about a past video moment using only the provided image crop "
                 "and detector metadata. The detector metadata is the source of truth "
-                "only for class, time, and location; it does not contain color, brand, "
-                "writing, or logo information. Use the image crop only for visual details. "
-                "Do not infer or guess text, brand, logo, writing, or color. If text is "
-                "not clearly legible, say no readable text visible. If the requested detail "
-                "is not clearly visible, say not visible. Be precise and brief."
+                "only for class, time, and location. Use the image crop for visual "
+                "details such as color, readable text, brand markings, logos, and "
+                "writing. If readable text is visible, transcribe it exactly. If "
+                "only part of the text is readable, return the visible characters and "
+                "say partial. Do not invent hidden, cropped, blurry, or illegible "
+                "characters. If no text is readable, say no readable text visible. "
+                "Be precise and brief."
             ),
             metadata_text=metadata,
             max_tokens=self.cfg.qa_max_tokens,
@@ -702,7 +800,7 @@ class QuestionServer:
                 "fallback_nearest_retained": fallback_used,
                 "requested_seconds_ago": round(float(seconds_ago), 3),
                 "offset_from_requested_seconds": round(
-                    abs(observation.timestamp_ms - target_timestamp_ms) / 1000.0,
+                    offset_seconds,
                     3,
                 ),
                 "age_seconds": round(

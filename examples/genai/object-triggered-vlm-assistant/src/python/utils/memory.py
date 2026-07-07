@@ -165,10 +165,11 @@ class ObjectTrackMemory:
     def set_trigger_classes(self, trigger_classes) -> None:
         with self.lock:
             self.trigger_classes = self._normalize_classes(trigger_classes)
-            self.tracks.clear()
-            self.observations.clear()
-            self.next_track_id = 1
-            self.last_sample_ms = 0
+            self.tracks = {
+                track_id: track
+                for track_id, track in self.tracks.items()
+                if track.class_name in self.trigger_classes
+            }
 
     def set_trigger_class(self, trigger_class: str) -> None:
         self.set_trigger_classes([trigger_class])
