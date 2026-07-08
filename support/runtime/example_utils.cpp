@@ -351,42 +351,10 @@ bool parse_fps_from_caps(const std::string& caps, int& fps_out) {
 
 bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
                             RtspStreamInfo& out) {
+  (void)opt;
   out = RtspStreamInfo{};
   fill_missing_stream_info(out, probe_ffprobe_rtsp_stream_info(url));
-
-  simaai::neat::Graph probe;
-  probe.add(simaai::neat::nodes::RTSPInput(url, opt.latency_ms, opt.rtsp_tcp,
-                                           /*drop_on_latency=*/true, /*buffer_mode=*/"none"));
-  probe.add(simaai::neat::nodes::H264Depacketize(opt.payload_type,
-                                                 /*config_interval=*/1,
-                                                 /*fps=*/-1,
-                                                 /*w=*/-1,
-                                                 /*h=*/-1,
-                                                 /*enforce_caps=*/false));
-  probe.add(simaai::neat::nodes::Output());
-
-  simaai::neat::RunOptions run_opt;
-  simaai::neat::Run run = probe.build(run_opt);
-
-  simaai::neat::Sample sample;
-  simaai::neat::PullError err;
-  const auto st = run.pull(5000, sample, &err);
-  run.stop();
-  if (st == simaai::neat::PullStatus::Ok && !sample.caps_string.empty()) {
-    RtspStreamInfo caps_info;
-    (void)parse_dim_from_caps(sample.caps_string, "width", caps_info.width);
-    (void)parse_dim_from_caps(sample.caps_string, "height", caps_info.height);
-    (void)parse_fps_from_caps(sample.caps_string, caps_info.fps);
-    fill_missing_stream_info(out, caps_info);
-  }
-
-  if ((out.width <= 0 || out.height <= 0) &&
-      !probe_rtsp_decoded_dims(url, opt, /*tries=*/8, /*timeout_ms=*/1000, out.width, out.height)) {
-    return false;
-  }
-  if (out.fps <= 0) {
-    fill_missing_stream_info(out, probe_opencv_rtsp_stream_info(url));
-  }
+  fill_missing_stream_info(out, probe_opencv_rtsp_stream_info(url));
 
   return out.width > 0 && out.height > 0;
 }

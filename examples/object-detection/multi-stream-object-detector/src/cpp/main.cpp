@@ -627,15 +627,15 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
     app.graph.connect(source, decoder, realtime_link(stream.index, 3));
   }
 
-  if (save_frames_enabled(cfg)) {
-    auto decoded_branch =
-        simaai::neat::graphs::Branch("decoded", {"detector_frame", "debug_frame"});
-    app.graph.connect(decoder, decoded_branch, realtime_link(stream.index, 1));
-    app.graph.connect(decoded_branch, detector_graph, realtime_link(stream.index, 1));
+  const bool save_debug_frames = save_frames_enabled(cfg);
+  auto decoded_branch =
+      save_debug_frames ? simaai::neat::graphs::Branch("decoded", {"detector_frame", "debug_frame"})
+                        : simaai::neat::graphs::Branch("decoded", {"detector_frame"});
+  app.graph.connect(decoder, decoded_branch, realtime_link(stream.index, 1));
+  app.graph.connect(decoded_branch, detector_graph, realtime_link(stream.index, 1));
+  if (save_debug_frames) {
     app.graph.connect(decoded_branch, build_debug_frame_graph(stream.index),
                       realtime_link(stream.index, 4));
-  } else {
-    app.graph.connect(decoder, detector_graph, realtime_link(stream.index, 1));
   }
 }
 

@@ -617,15 +617,15 @@ def connect_stream_graph(
     else:
         app.graph.connect(source, decoder, realtime_link(stream.index, 3))
 
-    if save_frames_enabled(cfg):
-        decoded_branch = pyneat.graphs.branch("decoded", ["detector_frame", "debug_frame"])
-        app.graph.connect(decoder, decoded_branch, realtime_link(stream.index, 1))
-        app.graph.connect(decoded_branch, detector_graph, realtime_link(stream.index, 1))
+    save_debug_frames = save_frames_enabled(cfg)
+    decoded_outputs = ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
+    decoded_branch = pyneat.graphs.branch("decoded", decoded_outputs)
+    app.graph.connect(decoder, decoded_branch, realtime_link(stream.index, 1))
+    app.graph.connect(decoded_branch, detector_graph, realtime_link(stream.index, 1))
+    if save_debug_frames:
         app.graph.connect(
             decoded_branch, build_debug_frame_graph(stream.index), realtime_link(stream.index, 4)
         )
-    else:
-        app.graph.connect(decoder, detector_graph, realtime_link(stream.index, 1))
 
 
 def send_metadata(stream: StreamRuntime, sample, tracks: list[TrackedDetection]) -> None:
