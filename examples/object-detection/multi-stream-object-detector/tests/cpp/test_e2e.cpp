@@ -43,9 +43,9 @@ int main(int argc, char** argv) {
   }
 
   const fs::path labels_file =
-      fs::path(binary).parent_path() / "src" / "common" / "coco_label.txt";
+      example_common_config_path("multi-stream-object-detector").parent_path() / "coco_label.txt";
   if (!fs::exists(labels_file)) {
-    return skip_or_fail("src/common/coco_label.txt not found next to installed example binary");
+    return skip_or_fail("src/common/coco_label.txt not found for multi-stream-object-detector");
   }
 
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";

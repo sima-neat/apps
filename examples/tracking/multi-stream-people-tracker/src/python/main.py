@@ -538,10 +538,17 @@ def stream_index_from_sample(sample, stream_count: int) -> int:
     return index
 
 
-def realtime_link(stream_index: int, queue_depth: int):
+def realtime_link(
+    stream_index: int,
+    queue_depth: int,
+    max_inflight_per_stream: int = 4,
+    max_inflight_total: int = 16,
+):
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     link.queue_depth = queue_depth
+    link.max_inflight_per_stream = max_inflight_per_stream
+    link.max_inflight_total = max_inflight_total
     link.stream_id = stream_id_for(stream_index)
     return link
 
