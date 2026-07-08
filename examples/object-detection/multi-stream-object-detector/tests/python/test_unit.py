@@ -177,8 +177,6 @@ class TestMetadata:
             decode_run=None,
             video_graph=None,
             video_run=None,
-            save_graph=None,
-            save_run=None,
             pending_encoded_sample=None,
             metadata_sender=sender,
             labels=["person"],

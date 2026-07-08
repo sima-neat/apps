@@ -578,11 +578,11 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
 
   auto downstream_options = build_run_options();
   downstream_options.startup_preflight = false;
-  runtime.decode_run =
-      runtime.decode_graph.build(*runtime.pending_encoded_sample, downstream_options);
+  runtime.decode_run = runtime.decode_graph.build(*runtime.pending_encoded_sample,
+                                                  downstream_options);
   if (cfg.video_enabled) {
-    runtime.video_run =
-        runtime.video_graph.build(*runtime.pending_encoded_sample, downstream_options);
+    runtime.video_run = runtime.video_graph.build(*runtime.pending_encoded_sample,
+                                                  downstream_options);
   }
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -712,7 +712,14 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;
   const std::string output_name = save_frames_enabled(cfg) ? "debug_output" : "detections";
-  const auto status = stream.decode_run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
+  static std::mutex first_pull_mutex;
+  simaai::neat::PullStatus status;
+  if (stream.processed == 0) {
+    std::lock_guard<std::mutex> lock(first_pull_mutex);
+    status = stream.decode_run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
+  } else {
+    status = stream.decode_run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
+  }
   const double pull_end = sima_examples::time_ms();
   if (status == simaai::neat::PullStatus::Timeout) {
     return false;
