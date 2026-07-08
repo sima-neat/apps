@@ -27,21 +27,18 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
+#include <cctype>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <functional>
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -133,23 +130,24 @@ struct ProfileWindow {
 struct StreamRuntime {
   int index = 0;
   std::string url;
-  std::unique_ptr<simaai::neat::Model> model;
-  simaai::neat::Graph source_graph;
-  simaai::neat::Run source_run;
-  simaai::neat::Graph decode_graph;
-  simaai::neat::Run decode_run;
-  simaai::neat::Graph video_graph;
-  simaai::neat::Run video_run;
-  std::optional<simaai::neat::Sample> pending_encoded_sample;
+  simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   PeopleTracker tracker;
   ProfileWindow profile;
+  std::optional<cv::Mat> latest_debug_frame;
   int frame_w = 0;
   int frame_h = 0;
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
   bool closed = false;
+};
+
+struct AppRuntime {
+  simaai::neat::Graph graph;
+  simaai::neat::Run run;
+  std::unique_ptr<simaai::neat::Model> model;
+  std::vector<StreamRuntime> streams;
 };
 
 CliOptions parse_args(int argc, char** argv) {
@@ -428,22 +426,33 @@ build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOp
   encoded_opt.tcp = opt.tcp;
   encoded_opt.source_fps = opt.source_fps;
   source.add(simaai::neat::nodes::groups::RtspEncodedInput(encoded_opt));
-  source.add(simaai::neat::nodes::Output("encoded", simaai::neat::OutputOptions::EveryFrame(3)));
   return source;
 }
 
 simaai::neat::Graph
 build_decode_graph(const std::string& input_name,
-                   const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
-                   simaai::neat::Model& model, bool save_frames) {
-  simaai::neat::Graph decode("decode_model");
+                   const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+  simaai::neat::Graph decode("decode");
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
   const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
 
-  decode.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
-  decode.add(simaai::neat::nodes::H264Decode(opt.sima_allocator_type, opt.out_format,
-                                             opt.decoder_name, opt.decoder_raw_output,
-                                             opt.decoder_next_element, dec_w, dec_h));
+  simaai::neat::SimaDecodeOptions dec;
+  dec.type = simaai::neat::SimaDecodeType::H264;
+  dec.sima_allocator_type = opt.sima_allocator_type;
+  dec.out_format = opt.out_format;
+  dec.decoder_name = opt.decoder_name;
+  dec.raw_output = opt.decoder_raw_output;
+  dec.next_element = opt.decoder_next_element;
+  dec.dec_width = dec_w;
+  dec.dec_height = dec_h;
+  dec.dec_fps = opt.source_fps;
+  dec.num_buffers = opt.num_buffers;
+  dec.input_buffers = opt.decoder_input_buffers;
+  dec.decoder_tuning = opt.decoder_tuning;
+  dec.memory_opt = opt.decoder_memory_opt;
+
+  decode.connect(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()),
+                 simaai::neat::nodes::SimaDecode(dec));
   if (opt.use_videoconvert) {
     decode.add(simaai::neat::nodes::VideoConvert());
   }
@@ -458,41 +467,15 @@ build_decode_graph(const std::string& input_name,
   if (!opt.extra_fragment.empty()) {
     decode.add(simaai::neat::nodes::Custom(opt.extra_fragment));
   }
-
-  if (!save_frames) {
-    decode.add(model);
-    decode.add(
-        simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
-    return decode;
-  }
-
-  auto branch = simaai::neat::graphs::Branch("decoded", {"frame", "model"});
-
-  simaai::neat::Graph frame_graph("debug_frame");
-  frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
-
-  simaai::neat::Graph model_graph("model");
-  model_graph.connect(simaai::neat::nodes::Input("model"), model);
-  model_graph.add(
-      simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
-
-  auto debug_output = simaai::neat::graphs::Combine({"frame", "detections"}, "debug_output",
-                                                    simaai::neat::CombinePolicy::ByPts);
-  simaai::neat::Graph graph("decode_model");
-  graph.connect(decode, branch);
-  graph.connect(branch, frame_graph);
-  graph.connect(branch, model_graph);
-  graph.connect(frame_graph, debug_output);
-  graph.connect(model_graph, debug_output);
-  return graph;
+  return decode;
 }
 
 simaai::neat::Graph
 build_video_sender_graph(const std::string& input_name,
                          const simaai::neat::nodes::groups::VideoSenderOptions& video_options) {
   simaai::neat::Graph video("video_sender");
-  video.add(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()));
-  video.add(simaai::neat::nodes::groups::VideoSender(video_options));
+  video.connect(simaai::neat::nodes::Input(input_name, h264_encoded_input_options()),
+                simaai::neat::nodes::groups::VideoSender(video_options));
   return video;
 }
 
@@ -522,6 +505,64 @@ bool save_frames_enabled(const AppConfig& cfg) {
   return !cfg.save_dir.empty() && cfg.save_every > 0;
 }
 
+std::string stream_id_for(int stream_index) {
+  return "stream" + std::to_string(stream_index);
+}
+
+int stream_index_from_sample(const simaai::neat::Sample& sample, int stream_count) {
+  const std::string prefix = "stream";
+  if (sample.stream_id.rfind(prefix, 0) != 0) {
+    if (stream_count == 1) {
+      return 0;
+    }
+    throw std::runtime_error("detection sample missing stream id: " + sample.stream_id);
+  }
+  const std::string suffix = sample.stream_id.substr(prefix.size());
+  if (suffix.empty() || !std::all_of(suffix.begin(), suffix.end(),
+                                     [](unsigned char c) { return std::isdigit(c) != 0; })) {
+    throw std::runtime_error("invalid detection stream id: " + sample.stream_id);
+  }
+  const int index = std::stoi(suffix);
+  if (index < 0 || index >= stream_count) {
+    throw std::runtime_error("detection stream id out of range: " + sample.stream_id);
+  }
+  return index;
+}
+
+simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth) {
+  simaai::neat::GraphLinkOptions link;
+  link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
+  link.queue_depth = queue_depth;
+  link.stream_id = stream_id_for(stream_index);
+  return link;
+}
+
+simaai::neat::Graph build_detector_graph(const AppConfig& cfg,
+                                         std::unique_ptr<simaai::neat::Model>& model) {
+  model = build_model(cfg);
+  auto input_options = model->input_appsrc_options(false);
+  input_options.block = true;
+
+  simaai::neat::Graph detector("detector");
+  detector.connect(simaai::neat::nodes::Input("detector_frame", input_options), model->graph());
+  return detector;
+}
+
+simaai::neat::Graph build_detections_graph() {
+  simaai::neat::Graph detections("detections");
+  detections.add(
+      simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
+  return detections;
+}
+
+simaai::neat::Graph build_debug_frame_graph(int stream_index) {
+  simaai::neat::Graph frames("debug_frame");
+  frames.connect(simaai::neat::nodes::Input("debug_frame"),
+                 simaai::neat::nodes::Output("debug_frame_" + std::to_string(stream_index),
+                                             simaai::neat::OutputOptions::EveryFrame(4)));
+  return frames;
+}
+
 StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url) {
   StreamRuntime runtime;
   runtime.index = stream_index;
@@ -536,55 +577,15 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     runtime.output_fps = cfg.fps;
   }
 
-  runtime.model = build_model(cfg);
   runtime.profile.enabled = cfg.profile;
   runtime.profile.stream_index = stream_index;
-
-  runtime.source_graph = build_encoded_source_graph(source_options);
-  runtime.decode_graph =
-      build_decode_graph("encoded", source_options, *runtime.model, save_frames_enabled(cfg));
+  runtime.source_options = source_options;
   if (cfg.video_enabled) {
     auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
     video_options.host = cfg.insight_host;
     video_options.channel = stream_index;
     video_options.video_port_base = cfg.video_port_base;
     runtime.video_port = video_options.video_port();
-    runtime.video_graph = build_video_sender_graph("encoded", video_options);
-  }
-
-  if (cfg.profile) {
-    std::cout << "Source backend stream=" << stream_index << ":\n"
-              << runtime.source_graph.describe_backend() << "\n";
-    std::cout << "Decode backend stream=" << stream_index << ":\n"
-              << runtime.decode_graph.describe_backend() << "\n";
-    if (cfg.video_enabled) {
-      std::cout << "Video backend stream=" << stream_index << ":\n"
-                << runtime.video_graph.describe_backend() << "\n";
-    }
-  }
-
-  runtime.source_run = runtime.source_graph.build(build_run_options());
-  simaai::neat::Sample first_encoded_sample;
-  simaai::neat::PullError pull_error;
-  const auto first_status =
-      runtime.source_run.pull("encoded", 20000, first_encoded_sample, &pull_error);
-  if (first_status == simaai::neat::PullStatus::Timeout) {
-    throw std::runtime_error("stream " + std::to_string(stream_index) +
-                             " timed out waiting for encoded RTSP frame");
-  }
-  if (first_status != simaai::neat::PullStatus::Ok) {
-    throw std::runtime_error("stream " + std::to_string(stream_index) +
-                             " failed to pull encoded RTSP frame: " + pull_error.message);
-  }
-  runtime.pending_encoded_sample = std::move(first_encoded_sample);
-
-  auto downstream_options = build_run_options();
-  downstream_options.startup_preflight = false;
-  runtime.decode_run = runtime.decode_graph.build(*runtime.pending_encoded_sample,
-                                                  downstream_options);
-  if (cfg.video_enabled) {
-    runtime.video_run = runtime.video_graph.build(*runtime.pending_encoded_sample,
-                                                  downstream_options);
   }
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -608,6 +609,38 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   return runtime;
 }
 
+void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRuntime& stream,
+                          const simaai::neat::Graph& detector_graph) {
+  auto source = build_encoded_source_graph(stream.source_options);
+  auto decoder = build_decode_graph("decode_h264", stream.source_options);
+
+  if (cfg.video_enabled) {
+    auto encoded_branch = simaai::neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
+    app.graph.connect(source, encoded_branch);
+    app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3));
+
+    auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
+    video_options.host = cfg.insight_host;
+    video_options.channel = stream.index;
+    video_options.video_port_base = cfg.video_port_base;
+    app.graph.connect(encoded_branch, build_video_sender_graph("video_h264", video_options),
+                      realtime_link(stream.index, 3));
+  } else {
+    app.graph.connect(source, decoder, realtime_link(stream.index, 3));
+  }
+
+  if (save_frames_enabled(cfg)) {
+    auto decoded_branch =
+        simaai::neat::graphs::Branch("decoded", {"detector_frame", "debug_frame"});
+    app.graph.connect(decoder, decoded_branch, realtime_link(stream.index, 1));
+    app.graph.connect(decoded_branch, detector_graph, realtime_link(stream.index, 1));
+    app.graph.connect(decoded_branch, build_debug_frame_graph(stream.index),
+                      realtime_link(stream.index, 4));
+  } else {
+    app.graph.connect(decoder, detector_graph, realtime_link(stream.index, 1));
+  }
+}
+
 void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
                    const std::vector<TrackedDetection>& tracks) {
   const auto metadata_tracks = build_metadata_tracks(tracks, stream.frame_w, stream.frame_h);
@@ -622,24 +655,16 @@ void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
   }
 }
 
-void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream,
-                            const simaai::neat::Sample& sample,
+void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream, const cv::Mat* frame,
                             const std::vector<TrackedDetection>& tracks) {
   if (cfg.save_dir.empty() || cfg.save_every <= 0 || stream.processed % cfg.save_every != 0) {
     return;
   }
-
-  const auto tensors = simaai::neat::tensors_from_sample(sample, false);
-  if (tensors.empty()) {
+  if (frame == nullptr || frame->empty()) {
     return;
   }
 
-  cv::Mat bgr;
-  std::string err;
-  if (!sima_examples::nv12_to_bgr(tensors.front(), bgr, err)) {
-    std::cerr << "[warn] failed to prepare output frame: " << err << "\n";
-    return;
-  }
+  cv::Mat bgr = frame->clone();
   std::vector<objdet::Box> draw_boxes;
   draw_boxes.reserve(tracks.size());
   for (const auto& track : tracks) {
@@ -654,91 +679,21 @@ void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream,
   }
 }
 
-void set_first_error(std::exception_ptr error, std::exception_ptr& first_error,
-                     std::mutex& error_mutex) {
-  std::lock_guard<std::mutex> lock(error_mutex);
-  if (!first_error) {
-    first_error = error;
-  }
-}
-
-void pump_encoded_samples(StreamRuntime& stream, const AppConfig& cfg,
-                          std::atomic_bool& stop_requested, std::exception_ptr& first_error,
-                          std::mutex& error_mutex) {
-  try {
-    constexpr int kPullTimeoutMs = 50;
-    std::optional<simaai::neat::Sample> pending = std::move(stream.pending_encoded_sample);
-    stream.pending_encoded_sample.reset();
-    while (!stop_requested.load() && g_stop_requested == 0) {
-      simaai::neat::Sample encoded_sample;
-      if (pending.has_value()) {
-        encoded_sample = std::move(*pending);
-        pending.reset();
-      } else {
-        simaai::neat::PullError encoded_pull_error;
-        const auto encoded_status =
-            stream.source_run.pull("encoded", kPullTimeoutMs, encoded_sample, &encoded_pull_error);
-        if (encoded_status == simaai::neat::PullStatus::Timeout) {
-          continue;
-        }
-        if (encoded_status == simaai::neat::PullStatus::Closed || stop_requested.load()) {
-          break;
-        }
-        if (encoded_status != simaai::neat::PullStatus::Ok) {
-          throw std::runtime_error(
-              "stream " + std::to_string(stream.index) +
-              " failed to pull encoded RTSP frame: " + encoded_pull_error.message);
-        }
-      }
-      if (!stream.decode_run.push("encoded", encoded_sample)) {
-        if (stop_requested.load()) {
-          break;
-        }
-        throw std::runtime_error("stream " + std::to_string(stream.index) +
-                                 " failed to push encoded sample to decode graph");
-      }
-      if (cfg.video_enabled) {
-        if (!stream.video_run.push("encoded", encoded_sample)) {
-          if (stop_requested.load()) {
-            break;
-          }
-          throw std::runtime_error("stream " + std::to_string(stream.index) +
-                                   " failed to push encoded sample to video sender graph");
-        }
-      }
-    }
-  } catch (...) {
-    set_first_error(std::current_exception(), first_error, error_mutex);
-    stop_requested.store(true);
-  }
-}
-
-bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
-  constexpr int kPullTimeoutMs = 50;
-  simaai::neat::Sample sample;
-  simaai::neat::PullError pull_error;
-  const double pull_start = sima_examples::time_ms();
-  const std::string output_name = save_frames_enabled(cfg) ? "debug_output" : "detections";
-  static std::mutex first_pull_mutex;
-  simaai::neat::PullStatus status;
-  if (stream.processed == 0) {
-    std::lock_guard<std::mutex> lock(first_pull_mutex);
-    status = stream.decode_run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
-  } else {
-    status = stream.decode_run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
-  }
-  const double pull_end = sima_examples::time_ms();
-  if (status == simaai::neat::PullStatus::Timeout) {
+bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit) {
+  if (frame_limit <= 0) {
     return false;
   }
-  if (status == simaai::neat::PullStatus::Closed) {
-    stream.closed = true;
-    return false;
+  return std::all_of(streams.begin(), streams.end(), [frame_limit](const StreamRuntime& stream) {
+    return stream.processed >= frame_limit || stream.closed;
+  });
+}
+
+void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
+                           const simaai::neat::Sample& sample, double detection_pull_ms) {
+  if (cfg.frames > 0 && stream.processed >= cfg.frames) {
+    return;
   }
-  if (status != simaai::neat::PullStatus::Ok) {
-    throw std::runtime_error("stream " + std::to_string(stream.index) +
-                             " failed to pull detections: " + pull_error.message);
-  }
+
   std::vector<std::uint8_t> payload;
   std::string err;
   if (!extract_bbox_payload(sample, payload, err)) {
@@ -759,25 +714,70 @@ bool process_stream_once(StreamRuntime& stream, const AppConfig& cfg) {
     send_metadata(stream, sample, tracks);
     const double metadata_end = sima_examples::time_ms();
     if (save_frames_enabled(cfg)) {
-      maybe_save_debug_frame(cfg, stream, sample, tracks);
+      maybe_save_debug_frame(
+          cfg, stream, stream.latest_debug_frame ? &*stream.latest_debug_frame : nullptr, tracks);
     }
-    stream.profile.add(pull_end - pull_start, tracker_end - tracker_start,
+    stream.profile.add(detection_pull_ms, tracker_end - tracker_start,
                        metadata_end - metadata_start, static_cast<int>(tracks.size()));
   }
-  return true;
 }
 
-void consume_stream(StreamRuntime& stream, const AppConfig& cfg, std::atomic_bool& stop_requested,
-                    std::exception_ptr& first_error, std::mutex& error_mutex) {
-  try {
-    while (!stop_requested.load() && g_stop_requested == 0 && !stream.closed &&
-           (cfg.frames <= 0 || stream.processed < cfg.frames)) {
-      (void)process_stream_once(stream, cfg);
-    }
-  } catch (...) {
-    set_first_error(std::current_exception(), first_error, error_mutex);
-    stop_requested.store(true);
+std::string debug_frame_output_name(int stream_index) {
+  return "debug_frame_" + std::to_string(stream_index);
+}
+
+void drain_debug_frames(AppRuntime& app, const AppConfig& cfg) {
+  if (!save_frames_enabled(cfg)) {
+    return;
   }
+
+  for (auto& stream : app.streams) {
+    const std::string output_name = debug_frame_output_name(stream.index);
+    for (;;) {
+      simaai::neat::Sample sample;
+      simaai::neat::PullError pull_error;
+      const auto status = app.run.pull(output_name, 0, sample, &pull_error);
+      if (status == simaai::neat::PullStatus::Timeout ||
+          status == simaai::neat::PullStatus::Closed) {
+        break;
+      }
+      if (status != simaai::neat::PullStatus::Ok) {
+        throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
+      }
+      const auto tensors = simaai::neat::tensors_from_sample(sample, false);
+      if (tensors.empty()) {
+        continue;
+      }
+      cv::Mat bgr;
+      std::string err;
+      if (!sima_examples::nv12_to_bgr(tensors.front(), bgr, err)) {
+        std::cerr << "[warn] failed to prepare debug frame: " << err << "\n";
+        continue;
+      }
+      stream.latest_debug_frame = std::move(bgr);
+    }
+  }
+}
+
+bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& output_name) {
+  constexpr int kPullTimeoutMs = 50;
+  drain_debug_frames(app, cfg);
+  const double pull_start = sima_examples::time_ms();
+  simaai::neat::Sample sample;
+  simaai::neat::PullError pull_error;
+  const auto status = app.run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
+  const double pull_end = sima_examples::time_ms();
+  if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
+    return false;
+  }
+  if (status != simaai::neat::PullStatus::Ok) {
+    throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
+  }
+  const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
+  process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,
+                        pull_end - pull_start);
+  drain_debug_frames(app, cfg);
+  return true;
 }
 
 void run_app(const AppConfig& cfg) {
@@ -792,55 +792,33 @@ void run_app(const AppConfig& cfg) {
     fs::create_directories(cfg.save_dir);
   }
 
-  std::vector<StreamRuntime> streams;
-  streams.reserve(cfg.rtsp_urls.size());
+  AppRuntime app;
+  app.streams.reserve(cfg.rtsp_urls.size());
+  auto detector_graph = build_detector_graph(cfg, app.model);
+  auto detections_graph = build_detections_graph();
+
   for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
-    streams.push_back(build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index]));
+    app.streams.push_back(build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index]));
+    connect_stream_graph(app, cfg, app.streams.back(), detector_graph);
+  }
+  app.graph.connect(detector_graph, detections_graph);
+
+  if (cfg.profile) {
+    std::cout << "Backend:\n" << app.graph.describe_backend() << "\n";
   }
 
-  std::atomic_bool stop_requested{false};
-  std::exception_ptr first_error;
-  std::mutex error_mutex;
-  std::vector<std::thread> pumps;
-  pumps.reserve(streams.size());
-  for (auto& stream : streams) {
-    pumps.emplace_back(pump_encoded_samples, std::ref(stream), std::cref(cfg),
-                       std::ref(stop_requested), std::ref(first_error), std::ref(error_mutex));
+  app.run = app.graph.build(build_run_options());
+  while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
+    (void)process_run_once(app, cfg, "detections");
   }
-  std::vector<std::thread> consumers;
-  consumers.reserve(streams.size());
-  for (auto& stream : streams) {
-    consumers.emplace_back(consume_stream, std::ref(stream), std::cref(cfg),
-                           std::ref(stop_requested), std::ref(first_error), std::ref(error_mutex));
-  }
+  app.run.close();
 
-  for (auto& consumer : consumers) {
-    if (consumer.joinable())
-      consumer.join();
-  }
-
-  stop_requested.store(true);
-  for (auto& stream : streams) {
-    if (stream.video_run) {
-      stream.video_run.close();
-    }
-    stream.decode_run.close();
-    stream.source_run.close();
-  }
-  for (auto& pump : pumps) {
-    if (pump.joinable()) {
-      pump.join();
-    }
-  }
-  for (auto& stream : streams) {
+  for (auto& stream : app.streams) {
     stream.profile.flush();
     std::cout << "[stream " << stream.index << "] processed=" << stream.processed << "\n";
   }
 
   std::signal(SIGINT, previous_sigint);
-  if (first_error) {
-    std::rethrow_exception(first_error);
-  }
 }
 
 } // namespace
