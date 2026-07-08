@@ -230,7 +230,6 @@ jobs:
       labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
     env:
       VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
-      SIMA_CLI_CHECK_FOR_UPDATE: "0"
       NEAT_APPS_SKIP_MODEL_DOWNLOAD: "1"
 
     steps:

@@ -63,6 +63,8 @@ if ! command -v sima-cli >/dev/null 2>&1; then
   exit 1
 fi
 
+export SIMA_CLI_AUTO_ACCEPT_UPDATE="${SIMA_CLI_AUTO_ACCEPT_UPDATE:-1}"
+
 rm -rf "${install_dir}"
 mkdir -p "${install_dir}"
 
