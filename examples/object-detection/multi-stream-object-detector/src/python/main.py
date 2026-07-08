@@ -524,7 +524,7 @@ def build_detector_graph(cfg: AppConfig):
     input_options.block = True
 
     detector = pyneat.Graph("detector")
-    detector.connect(pyneat.nodes.input("detector_frame", input_options), model.graph())
+    detector.connect(pyneat.nodes.input("detector_frame", input_options), model)
     return model, detector
 
 

@@ -544,7 +544,7 @@ simaai::neat::Graph build_detector_graph(const AppConfig& cfg,
   input_options.block = true;
 
   simaai::neat::Graph detector("detector");
-  detector.connect(simaai::neat::nodes::Input("detector_frame", input_options), model->graph());
+  detector.connect(simaai::neat::nodes::Input("detector_frame", input_options), *model);
   return detector;
 }
 
