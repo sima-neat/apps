@@ -13,9 +13,11 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cctype>
 #include <cstring>
@@ -87,6 +89,98 @@ std::string gst_escape(const std::string& s) {
     out.push_back(c);
   }
   return out;
+}
+
+std::string shell_quote(const std::string& value) {
+  std::string out = "'";
+  for (const char c : value) {
+    out += c == '\'' ? "'\\''" : std::string(1, c);
+  }
+  out += "'";
+  return out;
+}
+
+int fps_from_rate(const std::string& value) {
+  if (value.empty() || value == "0/0" || value == "0/1")
+    return 0;
+  try {
+    const auto slash = value.find('/');
+    double fps = 0.0;
+    if (slash == std::string::npos) {
+      fps = std::stod(value);
+    } else {
+      const double den = std::stod(value.substr(slash + 1));
+      if (den <= 0.0)
+        return 0;
+      fps = std::stod(value.substr(0, slash)) / den;
+    }
+    return fps > 0.0 ? static_cast<int>(std::lround(fps)) : 0;
+  } catch (...) {
+    return 0;
+  }
+}
+
+void fill_missing_stream_info(RtspStreamInfo& dst, const RtspStreamInfo& src) {
+  if (dst.width <= 0)
+    dst.width = src.width;
+  if (dst.height <= 0)
+    dst.height = src.height;
+  if (dst.fps <= 0)
+    dst.fps = src.fps;
+}
+
+RtspStreamInfo probe_ffprobe_rtsp_stream_info(const std::string& url) {
+  RtspStreamInfo info;
+  const std::string command =
+      "ffprobe -v error -rw_timeout 5000000 -select_streams v:0 "
+      "-show_entries stream=width,height,r_frame_rate,avg_frame_rate -of default=nw=1 " +
+      shell_quote(url) + " 2>/dev/null";
+
+  FILE* pipe = popen(command.c_str(), "r");
+  if (!pipe) {
+    return info;
+  }
+
+  int avg_fps = 0;
+  int r_fps = 0;
+  std::array<char, 256> buffer{};
+  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
+    std::string line(buffer.data());
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+      line.pop_back();
+    }
+    const auto eq = line.find('=');
+    if (eq == std::string::npos) {
+      continue;
+    }
+    const std::string key = line.substr(0, eq);
+    const std::string value = line.substr(eq + 1);
+    if (key == "width") {
+      info.width = std::atoi(value.c_str());
+    } else if (key == "height") {
+      info.height = std::atoi(value.c_str());
+    } else if (key == "avg_frame_rate") {
+      avg_fps = fps_from_rate(value);
+    } else if (key == "r_frame_rate") {
+      r_fps = fps_from_rate(value);
+    }
+  }
+  pclose(pipe);
+  info.fps = avg_fps > 0 ? avg_fps : r_fps;
+  return info;
+}
+
+RtspStreamInfo probe_opencv_rtsp_stream_info(const std::string& url) {
+  RtspStreamInfo info;
+  cv::VideoCapture cap(url);
+  if (!cap.isOpened()) {
+    return info;
+  }
+  info.width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+  info.height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+  info.fps = static_cast<int>(std::lround(cap.get(cv::CAP_PROP_FPS)));
+  cap.release();
+  return info;
 }
 
 std::string trim_copy(const std::string& s) {
@@ -257,36 +351,10 @@ bool parse_fps_from_caps(const std::string& caps, int& fps_out) {
 
 bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
                             RtspStreamInfo& out) {
+  (void)opt;
   out = RtspStreamInfo{};
-
-  simaai::neat::Graph probe;
-  probe.add(simaai::neat::nodes::RTSPInput(url, opt.latency_ms, opt.rtsp_tcp,
-                                           /*drop_on_latency=*/true, /*buffer_mode=*/"none"));
-  probe.add(simaai::neat::nodes::H264Depacketize(opt.payload_type,
-                                                 /*config_interval=*/1,
-                                                 /*fps=*/-1,
-                                                 /*w=*/-1,
-                                                 /*h=*/-1,
-                                                 /*enforce_caps=*/false));
-  probe.add(simaai::neat::nodes::Output());
-
-  simaai::neat::RunOptions run_opt;
-  simaai::neat::Run run = probe.build(run_opt);
-
-  simaai::neat::Sample sample;
-  simaai::neat::PullError err;
-  const auto st = run.pull(5000, sample, &err);
-  run.stop();
-  if (st == simaai::neat::PullStatus::Ok && !sample.caps_string.empty()) {
-    (void)parse_dim_from_caps(sample.caps_string, "width", out.width);
-    (void)parse_dim_from_caps(sample.caps_string, "height", out.height);
-    (void)parse_fps_from_caps(sample.caps_string, out.fps);
-  }
-
-  if ((out.width <= 0 || out.height <= 0) &&
-      !probe_rtsp_decoded_dims(url, opt, /*tries=*/8, /*timeout_ms=*/1000, out.width, out.height)) {
-    return false;
-  }
+  fill_missing_stream_info(out, probe_ffprobe_rtsp_stream_info(url));
+  fill_missing_stream_info(out, probe_opencv_rtsp_stream_info(url));
 
   return out.width > 0 && out.height > 0;
 }

@@ -221,14 +221,27 @@ PY
   mkdir -p "${stage_dir}/scripts"
   cp "${ROOT_DIR}/scripts/download_models.sh" "${stage_dir}/scripts/download_models.sh"
   cp "${ROOT_DIR}/tests/conftest.py" "${stage_dir}/examples/conftest.py"
-  while IFS= read -r rel; do
+  local asset_files=()
+  if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    mapfile -t asset_files < <(git -C "${ROOT_DIR}" ls-files assets)
+  fi
+  if [[ "${#asset_files[@]}" -eq 0 ]]; then
+    mapfile -t asset_files < <(
+      find "${ROOT_DIR}/assets" -type f \
+        ! -path "${ROOT_DIR}/assets/models/*" \
+        ! -name '.DS_Store' \
+        | sed "s#^${ROOT_DIR}/##" \
+        | sort
+    )
+  fi
+  for rel in "${asset_files[@]}"; do
     local src_file target_dir
     src_file="${ROOT_DIR}/${rel}"
     [[ -f "${src_file}" ]] || continue
     target_dir="${stage_dir}/$(dirname "${rel}")"
     mkdir -p "${target_dir}"
     cp "${src_file}" "${target_dir}/"
-  done < <(git -C "${ROOT_DIR}" ls-files assets)
+  done
 
   find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
   find "${stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete

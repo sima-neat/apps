@@ -33,10 +33,19 @@ jobs:
           - develop
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
       - name: Install apps runtime for latest branch build
         run: |
-          wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
-          bash /tmp/install-neat-apps-from-a-branch.sh "${{ matrix.branch }}"
+          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
+            --env production \
+            --target "apps@${{ matrix.branch }}" \
+            --install-dir _nightly-test/install \
+            --force)"
+          echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
 
       - name: Locate pyneat
         shell: bash
@@ -57,9 +66,9 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
 
-      - name: Run nightly e2e tests from installed apps runtime
+      - name: Run nightly Python e2e tests from installed apps runtime
         shell: bash
         env:
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
@@ -69,10 +78,33 @@ jobs:
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
-          /usr/bin/fix_devkit_runtime.sh
-          cd neat-apps/neat-apps-runtime
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+          cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --strict
+          ./tests/test.sh --e2e --python --strict
+
+      - name: Run nightly C++ e2e tests from installed apps runtime
+        shell: bash
+        env:
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+        run: |
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+          cd "${APPS_RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --e2e --cpp --strict
 
   modalix-manual-e2e:
     if: github.event_name == 'workflow_dispatch'
@@ -82,10 +114,19 @@ jobs:
       labels: [self-hosted, Linux, ARM64, modalix]
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
       - name: Install apps runtime for latest branch build
         run: |
-          wget -O /tmp/install-neat-apps-from-a-branch.sh https://apps.sima-neat.com/tools/install-neat-apps.sh
-          bash /tmp/install-neat-apps-from-a-branch.sh "${{ inputs.branch }}"
+          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
+            --env production \
+            --target "apps@${{ inputs.branch }}" \
+            --install-dir _nightly-test/install \
+            --force)"
+          echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
 
       - name: Locate pyneat
         shell: bash
@@ -106,9 +147,9 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          "${PYTHON_TEST_BIN}" -m pip install pytest PyYAML
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
 
-      - name: Run manual e2e tests from installed apps runtime
+      - name: Run manual Python e2e tests from installed apps runtime
         shell: bash
         env:
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
@@ -118,7 +159,30 @@ jobs:
           SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
           SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
-          /usr/bin/fix_devkit_runtime.sh
-          cd neat-apps/neat-apps-runtime
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+          cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --strict
+          ./tests/test.sh --e2e --python --strict
+
+      - name: Run manual C++ e2e tests from installed apps runtime
+        shell: bash
+        env:
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+        run: |
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+          cd "${APPS_RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --e2e --cpp --strict

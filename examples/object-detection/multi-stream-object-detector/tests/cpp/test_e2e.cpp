@@ -42,6 +42,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  const fs::path labels_file =
+      example_common_config_path("multi-stream-object-detector").parent_path() / "coco_label.txt";
+  if (!fs::exists(labels_file)) {
+    return skip_or_fail("src/common/coco_label.txt not found for multi-stream-object-detector");
+  }
+
   const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
   const int video_port_base = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port_base =
@@ -50,6 +56,7 @@ int main(int argc, char** argv) {
       e2e_int("multi-stream-object-detector", "testing.e2e.output", "total_saved_frames");
   write_e2e_config("multi-stream-object-detector", config_path,
                    {{"model.path", model_path},
+                    {"model.labels", labels_file.string()},
                     {"output.debug_dir", output_dir},
                     {"output.insight.host", kE2eInsightHost},
                     {"output.insight.video_port_base", std::to_string(video_port_base)},

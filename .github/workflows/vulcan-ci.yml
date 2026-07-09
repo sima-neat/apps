@@ -230,7 +230,6 @@ jobs:
       labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
     env:
       VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
-      SIMA_CLI_CHECK_FOR_UPDATE: "0"
       NEAT_APPS_SKIP_MODEL_DOWNLOAD: "1"
 
     steps:
@@ -248,37 +247,24 @@ jobs:
       - name: Fix devkit runtime
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
-            /usr/bin/fix_devkit_runtime.sh
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
 
       - name: Install apps runtime from Vulcan artifact
         run: |
-          if ! command -v sima-cli >/dev/null 2>&1; then
-            echo "sima-cli not found on test runner." >&2
-            exit 1
-          fi
-
           REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           SHORT_SHA="$(printf "%.12s" "${GITHUB_SHA}")"
           PACKAGE_SPEC="apps@${REF_NAME}:${SHORT_SHA}"
 
-          mkdir -p _vulcan-test/install
-          echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
-          sima-cli neat install --env "${VULCAN_ENV}" -d _vulcan-test/install "${PACKAGE_SPEC}" -f
-
-      - name: Locate installed apps runtime
-        run: |
-          mapfile -t runtime_dirs < <(find _vulcan-test/install -type d -path '*/neat-apps/neat-apps-runtime' | sort)
-          if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
-            echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
-            printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
-            find _vulcan-test/install -maxdepth 4 -mindepth 1 -type d -printf '  %p\n' | sort >&2 || true
-            exit 1
-          fi
-          printf '%s\n' "${runtime_dirs[0]}" > _vulcan-test/apps_runtime_dir.txt
-          echo "Using apps runtime: ${runtime_dirs[0]}"
+          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
+            --env "${VULCAN_ENV}" \
+            --target "${PACKAGE_SPEC}" \
+            --install-dir _vulcan-test/install \
+            --force)"
+          printf '%s\n' "${runtime_dir}" > _vulcan-test/apps_runtime_dir.txt
+          echo "Using apps runtime: ${runtime_dir}"
 
       - name: Locate pyneat
         run: |
@@ -300,8 +286,23 @@ jobs:
           "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
-      - name: Run apps unit tests on devkit
+      - name: Run apps Python unit tests on devkit
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --unit --python
+
+      - name: Run apps C++ unit tests on devkit
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --unit --cpp
+
+      - name: Run apps Python e2e tests on devkit
         env:
+          NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
           SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
           SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
@@ -312,7 +313,22 @@ jobs:
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
           cd "${RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --unit
+          ./tests/test.sh --e2e --python --strict
+
+      - name: Run apps C++ e2e tests on devkit
+        env:
+          NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+        run: |
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          cd "${RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --e2e --cpp --strict
 
       - name: Cleanup test workspace tmp artifacts
         if: ${{ always() }}
