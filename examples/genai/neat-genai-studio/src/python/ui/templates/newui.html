@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neat GenAI Studio</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='icons/neat-logo.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/neat-logo.png') }}">
+  <meta name="theme-color" content="#12b3a2">
+  <script src="static/socket.io.min.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='newui.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/github-dark.min.css') }}">
+  <script src="/config.js"></script>
+  <!-- Local (offline) Markdown rendering + sanitizer + syntax highlighting -->
+  <script src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='vendor/highlight.min.js') }}"></script>
+  <!-- Local (offline) LaTeX math rendering (KaTeX + marked extension) -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/katex.min.css') }}">
+  <script src="{{ url_for('static', filename='vendor/katex.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='vendor/marked-katex.umd.js') }}"></script>
+</head>
+
+<body class="{% if llm_only %}llm-only{% endif %}">
+
+  <div id="mainDashboard" class="dashboard">
+
+    <!-- Brand header -->
+    <header class="app-header">
+      <div class="brand">
+        <img class="app-brand-mark" src="{{ url_for('static', filename='icons/neat-mark.png') }}" alt="Neat">
+        <div class="brand-text">
+          <span class="app-header-title">Neat GenAI Studio</span>
+          <span class="app-header-sub">On-device LLM · VLM · Speech</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="model-name-pill header-pill" id="headerModelPill" title="Active model" style="display: none;">
+          <span class="header-pill-dot"></span>
+          <span id="headerModelName"></span>
+        </div>
+        <button id="newChatButton" class="header-icon-btn" type="button" title="New chat" aria-label="New chat">
+          <img src="{{ url_for('static', filename='icons/refresh.png') }}" alt="New chat" width="16" height="16">
+        </button>
+        <button id="benchmarkButton" class="header-icon-btn" type="button" title="Performance benchmark (MoLE)" aria-label="Performance benchmark">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 18a9 9 0 1117 0"/><path d="M12 12l4-3"/></svg>
+        </button>
+        <button id="settingsButton" class="header-icon-btn desktop-only" type="button" title="Settings"
+          aria-label="Open settings">⚙</button>
+        <button id="railToggle" class="header-icon-btn mobile-only" type="button" title="Camera &amp; settings"
+          aria-label="Toggle camera and settings panel"
+          onclick="var w=document.querySelector('.workspace');var o=w.classList.toggle('rail-open');this.textContent=o?'✕':'☰';">☰</button>
+        <button id="fullscreenButton" class="header-icon-btn" type="button" title="Full screen"
+          aria-label="Toggle full screen">
+          <svg class="fs-icon fs-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+          <svg class="fs-icon fs-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+        </button>
+        <button id="themeToggle" class="header-icon-btn" title="Toggle Dark/Light Mode">
+          <span class="theme-icon" id="themeIcon">🌙</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace">
+
+      <!-- Chat main -->
+      <main id="chatSection" class="chat-section">
+
+        <div id="metricsSection" class="metrics-section">
+          <div class="metric-item"><span class="metric-value" id="transcribeTime">0s</span><span class="metric-label">Transcribe</span></div>
+          <div class="metric-item"><span class="metric-value" id="firstTokenTime">0s</span><span class="metric-label">First Token</span></div>
+          <div class="metric-item"><span class="metric-value" id="firstAudioTime">0s</span><span class="metric-label">First Audio</span></div>
+          <div class="metric-item"><span class="metric-value" id="tpsValue">0</span><span class="metric-label">TPS</span></div>
+          <div class="metric-item"><span class="metric-value" id="rtfValue">0</span><span class="metric-label">RTF</span></div>
+        </div>
+
+        <div id="chatMessages" class="chat-messages">
+          <div class="chat-empty">
+            <div class="chat-empty-hero">
+              <img class="chat-empty-logo js-themed-logo" src="{{ url_for('static', filename='icons/logo_bright.png') }}" alt="SiMa.ai">
+              <h1 class="chat-empty-title">Chat with On-Device AI</h1>
+            </div>
+            <p class="chat-empty-sub">Run entirely on your SiMa Modalix MLSoC. Ask anything, or point the
+              camera and snap a photo for a vision model.</p>
+            <button type="button" class="chat-empty-model empty" id="homeModelIndicator" title="Active model">
+              <span class="chat-empty-model-dot"></span>
+              <span id="homeModelName">No model loaded</span>
+            </button>
+            <div class="suggest-row">
+              <button class="suggest-chip" data-q="Explain Einstein's mass–energy equivalence, E = mc², and what it means."
+                onclick="useSuggestion(this)">Explain E = mc²</button>
+              <button class="suggest-chip" data-q="Write a Python snippet that calls an OpenAI-compatible chat API."
+                onclick="useSuggestion(this)">Write a code sample</button>
+              <button class="suggest-chip" data-q="What do you see in this image?"
+                onclick="useSuggestion(this)">Describe the camera</button>
+              <button class="suggest-chip" data-q="Give me three ideas for edge-AI demos using SiMa.ai Modalix MLSoC."
+                onclick="useSuggestion(this)">Brainstorm demo ideas</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stop button: shown only during generation, centered above the composer -->
+        <button id="abortButton" class="chat-abort-button" title="Stop generating" style="display: none;">
+          <img src="{{ url_for('static', filename='icons/cancel.png') }}" alt="" width="14" height="14">
+          Stop
+        </button>
+
+        <!-- Composer -->
+        <!-- The composer starts locked and is enabled once a model is fully loaded. -->
+        <div id="chatInput" class="chat-input composer-locked">
+          <div class="input-container">
+            <input type="text" id="messageInput" class="message-input" placeholder="Load a model in Settings to start chatting…" disabled>
+            <div class="input-buttons">
+              <button id="recordButton" class="input-button" title="Record Audio" disabled>
+                <img id="recordIcon" src="{{ url_for('static', filename='icons/muted.png') }}" alt="Record" width="24" height="24">
+              </button>
+              <button id="snapChatButton" class="input-button" title="Take Photo" disabled>
+                <img src="{{ url_for('static', filename='icons/snap.png') }}" alt="Snap" width="24" height="24">
+              </button>
+              <button id="uploadButton" class="input-button" title="Upload Image" disabled>
+                <img src="{{ url_for('static', filename='icons/images.png') }}" alt="Upload" width="24" height="24">
+              </button>
+              <button id="sendButton" class="input-button" title="Send" disabled>
+                <img src="{{ url_for('static', filename='icons/send.png') }}" alt="Send" width="24" height="24">
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </main>
+
+      <!-- Drag to resize the chat / camera split; double-click to reset -->
+      <div class="rail-resizer" id="railResizer" title="Drag to resize · double-click to reset">
+        <button class="rail-collapse-btn" id="railCollapseBtn" type="button"
+          title="Hide / show camera panel" aria-label="Toggle camera panel">⟩</button>
+      </div>
+
+      <!-- Side rail: live camera + settings -->
+      <aside id="sideRail" class="side-rail">
+
+        <!-- Live camera dock (VLM capture surface) -->
+        <section id="cameraSection" class="camera-section">
+          <img id="topCenterIcon" class="js-themed-logo" src="{{ url_for('static', filename='icons/logo_bright.png') }}" alt="SiMa.ai Logo">
+          <div class="camera-preview-container">
+            <video id="cameraPreview" autoplay muted playsinline></video>
+          </div>
+          <img id="snapAnimation" src="" alt="Snap Animation" style="display: none;">
+          <span class="camera-badge">Live camera</span>
+          <div class="camera-tools">
+            <button id="cameraVisionBtn" class="camera-tool-btn" type="button" title="Open full-screen vision" aria-label="Open full-screen vision">⛶</button>
+            <button id="cameraCollapseBtn" class="camera-tool-btn" type="button" title="Collapse camera" aria-label="Collapse camera">▾</button>
+          </div>
+        </section>
+
+        <button id="railSettingsButton" class="rail-settings-btn" type="button" title="Open settings">
+          <span class="gear">⚙</span> Settings
+        </button>
+      </aside>
+
+      <!-- Mobile: tap outside the camera drawer to close it -->
+      <div class="rail-scrim"
+        onclick="document.querySelector('.workspace').classList.remove('rail-open');var t=document.getElementById('railToggle');if(t)t.textContent='☰';"></div>
+
+    </div>
+  </div>
+
+  <!-- Settings popup modal -->
+  <div id="settingsModal" class="settings-modal" style="display: none;">
+    <div class="settings-modal-card">
+      <div class="settings-modal-head">
+        <span class="settings-modal-title">Settings</span>
+        <button id="settingsModalClose" class="header-icon-btn" type="button" title="Close"
+          aria-label="Close settings">✕</button>
+      </div>
+      <div class="settings-tabs-layout">
+        <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button class="settings-tab is-active" type="button" role="tab" data-tab="model">Model</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="huggingface" id="tabHuggingface" style="display: none;">Add Model</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="conversation">Conversation</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="generation">Generation</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="devices">Camera &amp; Microphone</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="appearance">Appearance</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="rag" id="tabRag">Knowledge (RAG)</button>
+        </nav>
+        <div class="settings-tab-content" id="settingsSection">
+          <section class="settings-tab-panel is-active" data-tab="model" role="tabpanel">
+              <div class="setting-row model-manager-row" id="chatModelRow" style="display: none;">
+                <label for="chatModelSelect" class="setting-label">Model</label>
+                <div class="model-select-wrap">
+                  <select id="chatModelSelect" class="setting-select"></select>
+                  <button id="modelRefreshButton" class="icon-button" type="button" title="Rescan model catalog">⟳</button>
+                  <button id="modelInfoButton" class="icon-button" type="button" title="Model card &amp; metadata">ℹ</button>
+                  <button id="modelDeleteButton" class="icon-button icon-button-danger" type="button" title="Delete model from disk">🗑</button>
+                </div>
+                <div class="model-load-actions">
+                  <button id="modelLoadButton" class="model-load-button" type="button" disabled>Load model</button>
+                  <button id="modelUnloadButton" class="model-unload-button" type="button" hidden>Unload</button>
+                </div>
+                <div class="model-load-progress" id="modelLoadProgress">
+                  <div class="model-load-progress-label">Load status</div>
+                  <div id="modelLoadBar" class="model-load-bar" style="display: none;">
+                    <div class="model-load-fill"></div>
+                  </div>
+                  <div id="modelStatus" class="model-status muted"></div>
+                  <div id="modelLoadError" class="model-load-error" style="display: none;">
+                    <div class="model-load-error-head">
+                      <span class="model-load-error-icon" aria-hidden="true">⚠</span>
+                      <span class="model-load-error-title">Model failed to load</span>
+                    </div>
+                    <div id="modelLoadErrorMsg" class="model-load-error-msg"></div>
+                    <div class="model-load-error-actions">
+                      <button id="modelLoadRetry" class="model-load-error-btn" type="button">Retry</button>
+                      <button id="modelLoadErrorLogs" class="model-load-error-btn ghost" type="button">View logs</button>
+                    </div>
+                  </div>
+                  <details id="modelLogDetails" class="model-log-details">
+                    <summary class="model-log-summary">
+                      <span>Load logs</span>
+                      <span id="modelLogCount" class="model-log-count"></span>
+                    </summary>
+                    <pre id="modelLogView" class="model-log-view" aria-live="polite"></pre>
+                  </details>
+                </div>
+                <div class="model-accel-row">
+                  <button id="modelResetMlaButton" class="model-accel-btn" type="button"
+                    title="Unload all models and reset the accelerator (restarts the model server briefly)">↻&nbsp; Reset MLA</button>
+                </div>
+              </div>
+          </section>
+          <section class="settings-tab-panel" data-tab="huggingface" id="hubSection" role="tabpanel">
+              <div class="setting-row hub-search-row">
+                <input type="text" id="hubSearchInput" class="setting-input" placeholder="Filter models by name…">
+                <button id="hubRefreshButton" class="icon-button" type="button" title="Refresh model list">⟳</button>
+              </div>
+              <div class="hub-filters">
+                <select id="hubFilterType" class="setting-select" title="Model type">
+                  <option value="">All types</option>
+                  <option value="LLM">LLM</option>
+                  <option value="VLM">VLM</option>
+                </select>
+                <select id="hubFilterParams" class="setting-select" title="Parameter count">
+                  <option value="">Any size</option>
+                  <option value="0-1">&lt; 1B</option>
+                  <option value="1-4">1–4B</option>
+                  <option value="4-8">4–8B</option>
+                  <option value="8-999">8B+</option>
+                </select>
+                <select id="hubFilterFamily" class="setting-select" title="Model family">
+                  <option value="">All families</option>
+                </select>
+                <select id="hubSortBy" class="setting-select" title="Sort by">
+                  <option value="downloads">Most downloads</option>
+                  <option value="size-desc">Largest</option>
+                  <option value="size-asc">Smallest</option>
+                  <option value="name">Name (A–Z)</option>
+                  <option value="params-desc">Most parameters</option>
+                  <option value="params-asc">Fewest parameters</option>
+                </select>
+                <span id="hubResultCount" class="hub-count"></span>
+              </div>
+              <div id="hubResults" class="hub-results"></div>
+          </section>
+          <section class="settings-tab-panel" data-tab="conversation" role="tabpanel">
+              <div class="setting-row">
+                <label class="setting-label">
+                  <input type="checkbox" id="toggleImagePrompt" checked>
+                  Include camera image in the prompt
+                </label>
+              </div>
+              <div class="setting-row">
+                <label class="setting-label">
+                  <input type="checkbox" id="toggleChatHistory">
+                  Include chat history
+                </label>
+              </div>
+              <div class="setting-row">
+                <label class="setting-label">
+                  <input type="checkbox" id="toggleTTS" checked>
+                  Speak responses (Text-to-Speech)
+                </label>
+              </div>
+              <div class="setting-row" id="languageRow">
+                <label for="languageSelect" class="setting-label">Transcription language</label>
+                <select id="languageSelect" class="setting-select">
+                  <option value="en" selected>English</option>
+                  <option value="es">Español (Spanish)</option>
+                  <option value="fr">Français (French)</option>
+                  <option value="de">Deutsch (German)</option>
+                  <option value="it">Italiano (Italian)</option>
+                  <option value="ja">日本語 (Japanese)</option>
+                  <option value="ko">한국어 (Korean)</option>
+                  <option value="zh">中文 (Chinese)</option>
+                  <option value="vi">Tiếng Việt (Vietnamese)</option>
+                </select>
+              </div>
+              <div class="setting-row voice-language-group" id="voiceRow">
+                <label for="voiceSelect" class="setting-label">Voice</label>
+                <select id="voiceSelect" class="setting-select">
+                  <option value="default" selected>Default</option>
+                  <option value="htc_female">HTC Female</option>
+                  <option value="ryan">Ryan</option>
+                  <option value="amy">Amy</option>
+                </select>
+                <div id="voiceStatus" class="voice-status"></div>
+              </div>
+              <div class="setting-row utterance-speed-row">
+                <label for="utteranceSpeedRange" class="setting-label">Utterance speed</label>
+                <div class="utterance-speed-control">
+                  <input type="range" id="utteranceSpeedRange" min="0.75" max="1.50" step="0.05" value="1.00">
+                  <span id="utteranceSpeedValue">1.00x</span>
+                </div>
+              </div>
+          </section>
+          <section class="settings-tab-panel" data-tab="generation" role="tabpanel">
+              <div class="setting-row system-prompt-row">
+                <button id="systemPromptButton" class="setting-button system-prompt-button">Set system prompt</button>
+              </div>
+              <div class="setting-row">
+                <label for="maxTokensRange" class="setting-label">Max response tokens</label>
+                <div class="utterance-speed-control">
+                  <input type="range" id="maxTokensRange" min="32" max="2048" step="32" value="256">
+                  <span id="maxTokensValue">256</span>
+                </div>
+              </div>
+              <div class="gen-note">This runtime decodes greedily, so there is no
+                temperature control, and each model's context window is fixed when it
+                is compiled. System prompt and max response tokens apply to the active
+                model.</div>
+          </section>
+          <section class="settings-tab-panel" data-tab="devices" role="tabpanel">
+              <div class="setting-row">
+                <label for="cameraSelect" class="setting-label">Camera</label>
+                <select id="cameraSelect" class="setting-select"></select>
+              </div>
+              <div class="setting-row">
+                <div class="device-preview" id="devicePreview">
+                  <video id="settingsCameraPreview" autoplay muted playsinline></video>
+                  <span id="settingsCameraOff" class="device-preview-off">Camera preview</span>
+                </div>
+              </div>
+              <div class="setting-row">
+                <label for="micSelect" class="setting-label">Microphone</label>
+                <select id="micSelect" class="setting-select"></select>
+              </div>
+              <div class="setting-row">
+                <label class="setting-label" for="micTestButton">Microphone test</label>
+                <div class="mic-test">
+                  <button id="micTestButton" class="setting-button" type="button">Test microphone</button>
+                  <div class="mic-level" title="Speak to see your microphone level">
+                    <div id="micLevelBar" class="mic-level-bar"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="gen-note">Device names appear after you allow camera/microphone
+                access in the browser.</div>
+          </section>
+          <section class="settings-tab-panel" data-tab="appearance" role="tabpanel">
+              <div class="setting-row">
+                <label for="fontFamilySelect" class="setting-label">Font</label>
+                <select id="fontFamilySelect" class="setting-select"></select>
+              </div>
+              <div class="setting-row">
+                <label for="fontSizeRange" class="setting-label">Font size</label>
+                <div class="utterance-speed-control">
+                  <input type="range" id="fontSizeRange" min="12" max="22" step="1" value="15">
+                  <span id="fontSizeValue">15px</span>
+                </div>
+              </div>
+              <div class="setting-row">
+                <label for="fontCustomInput" class="setting-label">Custom font</label>
+                <input type="text" id="fontCustomInput" class="setting-input"
+                  placeholder="Any installed family, e.g. Fira Code">
+              </div>
+          </section>
+          <section class="settings-tab-panel" data-tab="rag" role="tabpanel">
+            <div class="settings-right-container">
+                <div class="setting-row rag-toggle-row">
+                  <label class="setting-label">
+                    <input type="checkbox" id="toggleRAG">
+                    Search RAG database
+                  </label>
+                </div>
+                <div class="setting-row button-row rag-button-row">
+                  <button id="uploadToRagButton" class="setting-button">Upload to RAG</button>
+                  <button id="importRagDatabaseButton" class="setting-button">Import RAG DB</button>
+                </div>
+                <div id="settingsMessage" class="settings-message"></div>
+                <div id="ragStatus" class="rag-status"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio Visualizer (hidden by default, shown during TTS) -->
+  <canvas id="audioVisualizer" width="320" height="320" style="display: none;"></canvas>
+
+  <!-- Model card + metadata modal -->
+  <div id="modelCardModal" class="settings-modal" style="display: none;">
+    <div class="settings-modal-card">
+      <div class="settings-modal-head">
+        <span class="settings-modal-title" id="modelCardTitle">Model</span>
+        <button id="modelCardClose" class="header-icon-btn" type="button" title="Close"
+          aria-label="Close">✕</button>
+      </div>
+      <div class="settings-modal-body">
+        <div id="modelCardMeta" class="model-card-meta"></div>
+        <div id="modelCardBody" class="model-card-body message-text"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Modal -->
+  <div id="imageModal" class="image-modal" style="display: none;">
+    <div class="image-modal-content">
+      <img id="modalImage" class="modal-image" src="" alt="Enlarged view">
+    </div>
+  </div>
+
+  <!-- Full-screen Benchmark (web MoLE `perf`): TTFT / TPS on the loaded model -->
+  <div id="benchmarkModal" class="bench-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Performance benchmark">
+    <div class="bench-topbar">
+      <img class="fs-brand-mark" src="{{ url_for('static', filename='icons/neat-mark.png') }}" alt="Neat">
+      <span class="bench-title"><span class="bench-dot"></span>Benchmark<span class="bench-kicker">MoLE · performance</span></span>
+      <div class="bench-top-actions">
+        <button id="benchmarkCloseBtn" class="bench-top-btn bench-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
+      </div>
+    </div>
+    <div class="bench-body">
+      <div class="bench-config">
+        <div class="bench-field bench-field-grow">
+          <label for="benchModelSelect">Model to benchmark</label>
+          <select id="benchModelSelect" class="setting-select"></select>
+        </div>
+        <div class="bench-field">
+          <label for="benchRuns">Runs</label>
+          <input type="number" id="benchRuns" min="1" max="50" value="5">
+        </div>
+        <div class="bench-field">
+          <label for="benchMaxTokens">Output tokens</label>
+          <input type="number" id="benchMaxTokens" min="8" max="2048" step="8" value="128">
+        </div>
+        <div class="bench-field bench-field-grow">
+          <label for="benchPrompt">Prompt (optional)</label>
+          <input type="text" id="benchPrompt" placeholder="Leave blank for the default benchmark prompt">
+        </div>
+        <button id="benchRunBtn" class="bench-run-btn" type="button">Run benchmark</button>
+        <button id="benchStopBtn" class="bench-stop-btn" type="button" style="display: none;">Stop</button>
+      </div>
+      <div id="benchProgress" class="bench-progress" style="display: none;">
+        <div class="bench-progress-bar"><div id="benchProgressFill" class="bench-progress-fill"></div></div>
+        <span id="benchProgressText" class="bench-progress-text"></span>
+      </div>
+      <div id="benchPromptShown" class="bench-prompt-shown" style="display: none;">
+        <span class="bench-prompt-label">Prompt</span>
+        <span id="benchPromptText" class="bench-prompt-text"></span>
+      </div>
+      <div id="benchLive" class="bench-live" style="display: none;">
+        <div class="bench-live-head">
+          <span class="bench-live-title" id="benchLiveTitle">Generating…</span>
+          <span class="bench-live-stats" id="benchLiveStats"></span>
+        </div>
+        <div id="benchLiveText" class="bench-live-text message-text" aria-live="polite"></div>
+      </div>
+      <div id="benchHint" class="bench-hint"></div>
+      <div id="benchLoadPanel" class="bench-load" style="display: none;">
+        <div class="bench-load-head">
+          <span class="bench-load-title" id="benchLoadTitle">Loading model…</span>
+          <span class="bench-load-status loading" id="benchLoadStatus">Preparing…</span>
+        </div>
+        <div id="benchLoadBar" class="bench-load-bar"><div class="bench-load-fill"></div></div>
+        <pre id="benchLoadLog" class="bench-load-log" aria-live="polite"></pre>
+      </div>
+      <div id="benchSummary" class="bench-summary" style="display: none;">
+        <div class="bench-card">
+          <div class="bench-card-label">Time to first token</div>
+          <div class="bench-card-value"><span id="benchTtftMean">–</span><small> ms · mean</small></div>
+          <div class="bench-card-sub" id="benchTtftSub"></div>
+        </div>
+        <div class="bench-card">
+          <div class="bench-card-label">Tokens / second</div>
+          <div class="bench-card-value"><span id="benchTpsMean">–</span><small> tok/s · mean</small></div>
+          <div class="bench-card-sub" id="benchTpsSub"></div>
+        </div>
+      </div>
+      <div id="benchStats" class="bench-stats" style="display: none;">
+        <div class="bench-stats-label">Statistical analysis</div>
+        <div class="bench-stats-wrap">
+          <table class="bench-stats-table">
+            <thead><tr><th>Metric</th><th>Min</th><th>Max</th><th>Avg</th><th>Median</th><th>Std&nbsp;Dev</th><th>P90</th></tr></thead>
+            <tbody id="benchStatsBody"></tbody>
+          </table>
+        </div>
+        <div class="bench-stats-foot" id="benchStatsFoot"></div>
+      </div>
+      <div id="benchResults" class="bench-results" style="display: none;">
+        <div class="bench-chart-wrap">
+          <div class="bench-chart-label">Tokens / second per run</div>
+          <div class="bench-chart" id="benchChart"></div>
+        </div>
+        <div class="bench-table-wrap">
+          <table class="bench-table">
+            <thead><tr><th>#</th><th>TTFT (ms)</th><th>TPS</th><th>Tokens</th></tr></thead>
+            <tbody id="benchTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="benchResponses" class="bench-responses" style="display: none;">
+        <div class="bench-responses-label">Sample responses</div>
+        <div id="benchResponsesList" class="bench-responses-list"></div>
+      </div>
+      <div class="bench-note">Measures Time&nbsp;To&nbsp;First&nbsp;Token (TTFT) and Tokens&nbsp;Per&nbsp;Second (TPS) by streaming from the on-device model — the performance half of SiMa's MoLE (Modalix&nbsp;Language&nbsp;Model&nbsp;Evaluator). Accuracy tasks (hellaswag, piqa…) require the host <code>llima-benchmark</code> CLI.</div>
+    </div>
+  </div>
+
+  <!-- Full-screen Vision: big live camera / preloaded image + ask about it -->
+  <div id="visionModal" class="vision-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Full-screen vision">
+    <div class="vision-topbar">
+      <img class="fs-brand-mark" src="{{ url_for('static', filename='icons/neat-mark.png') }}" alt="Neat">
+      <span class="vision-title"><span class="vision-dot"></span>Vision</span>
+      <div class="vision-source-toggle" role="tablist" aria-label="Image source">
+        <button id="visionSourceCamera" class="vision-src-btn is-active" type="button" role="tab">Live camera</button>
+        <button id="visionSourceImage" class="vision-src-btn" type="button" role="tab">Image</button>
+      </div>
+      <div class="vision-top-actions">
+        <button id="visionUploadBtn" class="vision-top-btn" type="button" title="Upload an image">Upload image</button>
+        <button id="visionCloseBtn" class="vision-top-btn vision-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
+      </div>
+    </div>
+
+    <div class="vision-stage" id="visionStage">
+      <video id="visionVideo" autoplay muted playsinline></video>
+      <img id="visionImage" alt="Loaded image" style="display: none;">
+      <div id="visionStageHint" class="vision-stage-hint" style="display: none;"></div>
+      <span id="visionModelPill" class="vision-model-pill"></span>
+    </div>
+
+    <div class="vision-you" id="visionQuestion" aria-live="polite"></div>
+    <div class="vision-answer" id="visionAnswer" aria-live="polite"></div>
+
+    <div class="vision-ask">
+      <div class="vision-ask-hint" id="visionAskHint">Tap the mic and ask about what you see.</div>
+      <div class="vision-chips" id="visionChips">
+        <button class="vision-chip" type="button">What do you see?</button>
+        <button class="vision-chip" type="button">Read any text in view</button>
+        <button class="vision-chip" type="button">Describe the scene in detail</button>
+      </div>
+      <div class="vision-ask-row">
+        <button id="visionMicBtn" class="vision-mic-btn" type="button" aria-pressed="false" title="Tap to speak your question" aria-label="Ask by voice">
+          <svg class="vision-mic-svg" viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M12 14.5a3 3 0 0 0 3-3v-5a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z"/>
+            <path fill="currentColor" d="M17.5 11a1 1 0 0 0-2 0 3.5 3.5 0 0 1-7 0 1 1 0 0 0-2 0 5.5 5.5 0 0 0 4.5 5.41V19H8.75a1 1 0 0 0 0 2h6.5a1 1 0 0 0 0-2H13v-2.59A5.5 5.5 0 0 0 17.5 11Z"/>
+          </svg>
+        </button>
+        <input type="text" id="visionInput" class="vision-input" placeholder="…or type your question" autocomplete="off">
+        <button id="visionAskBtn" class="vision-ask-btn" type="button">Ask</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- System Prompt Modal -->
+  <div id="systemPromptModal" class="system-prompt-modal" style="display: none;">
+    <div class="system-prompt-modal-content">
+      <h3 class="system-prompt-title">System Prompt</h3>
+      <textarea id="systemPromptTextarea" class="system-prompt-textarea"
+        placeholder="Enter a system prompt or leave empty to clear it."></textarea>
+      <div id="systemPromptModalMessage" class="system-prompt-modal-message"></div>
+      <div class="system-prompt-actions">
+        <button id="systemPromptCancel" class="setting-button system-prompt-cancel">Cancel</button>
+        <button id="systemPromptSave" class="setting-button system-prompt-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.recordIconUrls = Object.freeze({
+      muted: "{{ url_for('static', filename='icons/muted.png') }}",
+      active: "{{ url_for('static', filename='icons/microphone.png') }}"
+    });
+  </script>
+  <script src="{{ url_for('static', filename='newui.js') }}"></script>
+  <script src="{{ url_for('static', filename='socket.io.min.js') }}"></script>
+</body>
+
+</html>

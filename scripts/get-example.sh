@@ -89,6 +89,9 @@ normalize_example_path() {
     multimodal-assistant|multimodal-assist)
       printf '%s\n' "examples/genai/multimodal-assistant"
       ;;
+    neat-genai-studio|genai-studio)
+      printf '%s\n' "examples/genai/neat-genai-studio"
+      ;;
     examples/*/*)
       printf '%s\n' "${raw}"
       ;;
