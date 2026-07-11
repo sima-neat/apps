@@ -1,0 +1,5 @@
+# Isolated venv for rhasspy piper-tts (German/Italian/Norwegian/Vietnamese +
+# English fallback). piper-tts ships a top-level `piper` package that collides
+# with piper-plus, so it lives in its OWN venv (.venv-pipertts) and the app
+# reaches it through pipertts_worker.py. Installed by setup.sh.
+piper-tts==1.3.0

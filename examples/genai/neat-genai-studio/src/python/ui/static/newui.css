@@ -40,6 +40,9 @@
   --radius: 14px;
   --radius-sm: 10px;
   --radius-lg: 20px;
+  /* SiMa / Neat multicolor spectrum — used as a signature accent when the
+     "SiMa multicolor accents" appearance option is on (default). */
+  --spectrum: linear-gradient(90deg, #16c8a6, #4bb54a, #a9c81c, #3a86ec, #f2801d);
   --ui-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --code-font: 'JetBrains Mono', ui-monospace, 'Courier New', monospace;
   --ui-font-size: 15px;
@@ -116,6 +119,56 @@ button { font-family: inherit; }
   :root.theme-anim, :root.theme-anim *, :root.theme-anim *::before, :root.theme-anim *::after { transition: none !important; }
 }
 ::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* SiMa / Neat multicolor accents — a signature applied to a few brand elements
+   when the "SiMa multicolor accents" appearance option is on (default). */
+body.spectrum-accents::before {
+  content: ""; position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 90;
+  background: var(--spectrum); pointer-events: none;
+}
+body.spectrum-accents #modelLoadBar .model-load-fill { background: var(--spectrum); }
+body.spectrum-accents .model-list-title { position: relative; padding-bottom: 6px; }
+body.spectrum-accents .model-list-title::after {
+  content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 30px;
+  border-radius: 2px; background: var(--spectrum);
+}
+body.spectrum-accents .chat-empty-title {
+  background: var(--spectrum); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+/* Benchmark ("this mode") wears the multicolor signature: the primary action
+   button and every performance metric render in the SiMa spectrum. */
+body.spectrum-accents .bench-run-btn:not(:disabled) {
+  background: var(--spectrum); background-size: 160% 100%; background-position: 0 0;
+  color: #05070b; border-color: transparent; transition: background-position .3s ease, transform .2s ease;
+}
+body.spectrum-accents .bench-run-btn:not(:disabled):hover { background-position: 100% 0; transform: translateY(-1px); }
+body.spectrum-accents .bench-card-value {
+  background: var(--spectrum); -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
+/* Units stay muted and legible (own color wins over the clipped parent). */
+body.spectrum-accents .bench-card-value small { -webkit-text-fill-color: var(--text-3); color: var(--text-3); }
+body.spectrum-accents .bench-bar { background: linear-gradient(180deg, #3a86ec, #a9c81c, #4bb54a, #16c8a6); }
+body.spectrum-accents .bench-cbar-fill { background: linear-gradient(90deg, color-mix(in srgb, #16c8a6 60%, var(--surface-3)), color-mix(in srgb, #3a86ec 60%, var(--surface-3))); }
+body.spectrum-accents .bench-cbar-fill.best { background: var(--spectrum); }
+body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
+
+/* Accent-color picker (Appearance). */
+.accent-swatches { display: flex; flex-wrap: wrap; gap: 9px; }
+.accent-swatch {
+  width: 26px; height: 26px; border-radius: 50%; cursor: pointer; padding: 0;
+  border: 2px solid var(--border); box-shadow: inset 0 0 0 2px var(--surface);
+  transition: transform .12s ease, border-color .12s ease;
+}
+.accent-swatch:hover { transform: scale(1.12); }
+.accent-swatch[aria-pressed="true"] { border-color: var(--text); transform: scale(1.08); }
+.accent-swatch.spectrum { background: var(--spectrum); }
+.accent-custom { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.accent-custom input[type="color"] {
+  width: 46px; height: 32px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); cursor: pointer; padding: 2px;
+}
+.accent-custom label { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
 
 /* Scrollbars */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -206,6 +259,8 @@ button { font-family: inherit; }
 .chat-empty-logo { width: auto; height: 46px; max-width: 100%; opacity: .95; filter: drop-shadow(0 6px 18px color-mix(in srgb, var(--accent) 35%, transparent)); }
 .chat-empty-title { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.02em; text-wrap: balance; }
 .chat-empty-sub { margin: 0; color: var(--text-2); font-size: 14.5px; max-width: 42ch; }
+.chat-empty-powered { margin: -6px 0 2px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
+.chat-empty-powered strong { color: var(--accent-strong); font-weight: 700; }
 /* Which model will answer — shown on the home screen; click to open Settings. */
 .chat-empty-model {
   display: inline-flex; align-items: center; gap: 8px; margin: 2px 0;
@@ -313,6 +368,9 @@ button { font-family: inherit; }
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 55%, var(--bg));
 }
+.rail-powered { margin-top: auto; padding: 10px 8px 4px; text-align: center; font-size: 11px; letter-spacing: .05em; color: var(--text-3); }
+.rail-powered strong { color: var(--accent-strong); font-weight: 600; }
+.rail-copyright { padding: 2px 8px 10px; text-align: center; font-size: 10px; letter-spacing: .04em; color: var(--text-3); }
 
 /* Camera dock — fills the rail so the live feed is the prominent element */
 .camera-section {
@@ -448,6 +506,110 @@ body.vision-open { overflow: hidden; }
 
 /* ---- Full-screen Benchmark (web MoLE perf) — theme-aware data view ------- */
 body.bench-open { overflow: hidden; }
+/* Showcase — the Modalix + LLiMa story, embedded full-screen over the app.
+   The deck itself lives in showcase.html, loaded into an iframe so the
+   standalone /showcase page stays the single source of truth. */
+.showcase-modal {
+  position: fixed; inset: 0; z-index: 3200; height: 100dvh;
+  display: flex; background: #05070b;
+  animation: showcaseIn .28s ease;
+}
+@keyframes showcaseIn { from { opacity: 0; } to { opacity: 1; } }
+.showcase-frame { flex: 1 1 auto; width: 100%; height: 100%; border: 0; display: block; }
+/* Host controls float over the embedded deck — kept small and recessive so
+   they don't compete with the slideshow; they brighten only when reached for.
+   The deck itself reserves this corner (see html.embedded in showcase.html). */
+.showcase-fab {
+  position: absolute; top: 12px; right: 14px; z-index: 2; display: flex; gap: 6px;
+  opacity: .5; transition: opacity .2s ease;
+}
+.showcase-fab:hover, .showcase-fab:focus-within { opacity: 1; }
+.showcase-fab-btn {
+  width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px; font-size: 13px; line-height: 1; text-decoration: none; cursor: pointer;
+  color: #cbd6e0; background: color-mix(in srgb, #0b1220 32%, transparent);
+  border: 1px solid color-mix(in srgb, #ffffff 9%, transparent);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  transition: background .16s ease, transform .16s ease, border-color .16s ease, color .16s ease;
+}
+.showcase-fab-btn:hover { color: #fff; background: color-mix(in srgb, #0b1220 72%, transparent); transform: translateY(-1px); border-color: color-mix(in srgb, #ffffff 26%, transparent); }
+.showcase-fab-btn:focus-visible { outline: 2px solid #16c8a6; outline-offset: 2px; opacity: 1; }
+.showcase-close { font-weight: 700; }
+body.showcase-open { overflow: hidden; }
+@media (max-width: 640px) { .showcase-fab { top: 10px; right: 10px; opacity: .6; } .showcase-fab-btn { width: 28px; height: 28px; } }
+
+/* ---- Solutions — SiMaSentry harness suites (Med/Safe/Sec), full-screen ----
+   A Studio-styled launcher grid; picking a card swaps to a fullscreen iframe
+   of the vendored harness (served at /solutions/<mode>/). Dark like showcase. */
+.solutions-modal {
+  position: fixed; inset: 0; z-index: 3200; height: 100dvh;
+  display: flex; background: #05070b; color: #cbd6e0;
+  animation: showcaseIn .28s ease;
+}
+.solutions-grid {
+  flex: 1 1 auto; overflow: auto; -webkit-overflow-scrolling: touch;
+  display: flex; flex-direction: column; gap: 26px; align-items: center;
+  padding: clamp(20px, 6vh, 64px) clamp(16px, 4vw, 48px);
+  padding-bottom: calc(clamp(20px, 6vh, 64px) + env(safe-area-inset-bottom, 0px));
+}
+.solutions-head { text-align: center; max-width: 640px; }
+.solutions-head h2 {
+  margin: 0; color: #fff; font-size: clamp(1.6rem, 4.5vw, 2.4rem);
+  font-weight: 800; letter-spacing: -.02em;
+}
+.solutions-grad {
+  background: linear-gradient(90deg, #16c8a6, #4bb54a, #a9c81c, #3a86ec, #f2801d);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.solutions-head p { margin: 10px 0 0; font-size: .95rem; color: #8fa0b0; }
+.solutions-model-note {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: .75rem !important; letter-spacing: .04em; color: #6c7a8a !important;
+}
+.solutions-model-note b { color: #16c8a6; font-weight: 600; }
+.solutions-cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px; width: 100%; max-width: 1100px; margin: 0 auto;
+}
+.solutions-card {
+  --sl-accent: #16c8a6;
+  position: relative; overflow: hidden; cursor: pointer; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 26px 20px 24px; border-radius: 16px; color: inherit;
+  background: color-mix(in srgb, #0b1220 72%, transparent);
+  border: 1px solid color-mix(in srgb, #ffffff 9%, transparent);
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+.solutions-card::before {
+  content: ""; position: absolute; left: 0; top: 0; right: 0; height: 3px;
+  background: var(--sl-accent); opacity: .85;
+}
+.solutions-card[data-accent="med"]  { --sl-accent: #16c8a6; }
+.solutions-card[data-accent="safe"] { --sl-accent: #f2801d; }
+.solutions-card[data-accent="sec"]  { --sl-accent: #3a86ec; }
+.solutions-card:hover, .solutions-card:focus-visible {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--sl-accent) 55%, transparent);
+  box-shadow: 0 18px 40px -18px color-mix(in srgb, var(--sl-accent) 45%, transparent);
+}
+.solutions-card:focus-visible { outline: 2px solid var(--sl-accent); outline-offset: 2px; }
+.solutions-card img {
+  width: min(150px, 38vw); height: auto; border-radius: 12px;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, .45));
+}
+.solutions-card h3 { margin: 4px 0 0; color: #fff; font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; }
+.solutions-card p { margin: 0; font-size: .82rem; line-height: 1.45; color: #8fa0b0; }
+.solutions-badge {
+  position: absolute; top: 12px; right: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: .62rem; letter-spacing: .08em; text-transform: uppercase;
+  color: #f2801d; background: color-mix(in srgb, #f2801d 14%, transparent);
+  border: 1px solid color-mix(in srgb, #f2801d 45%, transparent);
+  border-radius: 999px; padding: 3px 9px;
+}
+.solutions-frame { flex: 1 1 auto; width: 100%; height: 100%; border: 0; display: block; }
+body.solutions-open { overflow: hidden; }
+
 .bench-modal {
   position: fixed; inset: 0; z-index: 3000; height: 100dvh;
   display: flex; flex-direction: column; color: var(--text);
@@ -555,6 +717,54 @@ body.bench-open { overflow: hidden; }
 .bench-stats-table tbody tr:last-child td, .bench-stats-table tr:last-child td { border-bottom: none; }
 .bench-stats-metric { font-weight: 600; color: var(--text); }
 .bench-stats-foot { margin-top: 8px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* Benchmark: multi-model picker (multi-select dropdown). */
+.bench-model-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; text-align: left; cursor: pointer;
+}
+.bench-model-trigger:disabled { opacity: .55; cursor: not-allowed; }
+.bench-model-caret { color: var(--text-3); font-size: 11px; }
+.bench-model-menu { padding: 6px; }
+.bench-model-search { width: 100%; margin-bottom: 6px; box-sizing: border-box; }
+.bench-model-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+.bench-model-opt {
+  display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 12.5px; color: var(--text);
+}
+.bench-model-opt:hover { background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); }
+.bench-model-opt input { flex: none; }
+.bench-model-all { border-bottom: 1px solid var(--border); border-radius: 0; font-weight: 600; margin-bottom: 4px; }
+.bench-model-empty { padding: 8px; font-size: 12px; color: var(--text-3); }
+
+/* Benchmark: multi-model progress + comparison + export. */
+.bench-scope { font-size: 12.5px; font-weight: 600; color: var(--accent-strong); }
+.bench-compare { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
+.bench-compare-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bench-compare-label { font-size: 13px; font-weight: 700; letter-spacing: .02em; color: var(--text); }
+.bench-compare-actions { display: flex; gap: 8px; }
+.bench-export-btn {
+  font: inherit; font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-2); cursor: pointer; transition: .15s ease;
+}
+.bench-export-btn:hover { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.bench-compare-chart-label, .bench-chart-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); margin-bottom: 8px; }
+.bench-compare-chart { display: flex; flex-direction: column; gap: 8px; }
+.bench-cbar-row { display: grid; grid-template-columns: minmax(90px, 200px) 1fr auto; align-items: center; gap: 10px; }
+.bench-cbar-name { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bench-cbar-track { height: 14px; background: var(--surface-3); border-radius: 7px; overflow: hidden; }
+.bench-cbar-fill { height: 100%; background: color-mix(in srgb, var(--accent) 55%, var(--surface-3)); border-radius: 7px; transition: width .35s ease; }
+.bench-cbar-fill.best { background: linear-gradient(90deg, var(--accent-strong), var(--accent)); }
+.bench-cbar-val { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap; }
+.bench-compare-table-wrap { overflow-x: auto; }
+.bench-compare-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bench-compare-table th { text-align: right; padding: 7px 10px; color: var(--text-3); font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.bench-compare-table th:first-child, .bench-compare-model { text-align: left; }
+.bench-compare-table td { text-align: right; padding: 7px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); font-variant-numeric: tabular-nums; color: var(--text); }
+.bench-compare-model { font-weight: 600; word-break: break-all; }
+.bench-best { color: var(--ok); font-weight: 700; }
+.bench-compare-fail { text-align: left; color: var(--err); font-style: italic; }
 
 /* Runtime-injected image overlay (JS appends into .camera-preview-container) */
 .image-close-button {
@@ -759,6 +969,71 @@ body.bench-open { overflow: hidden; }
 .hub-progress { position: relative; width: 100%; height: 16px; background: var(--surface-3); border-radius: 8px; overflow: hidden; margin-top: 4px; }
 .hub-progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-strong), var(--accent)); transition: width .4s ease; }
 .hub-progress.error .hub-progress-fill { background: var(--err); }
+
+/* Unified Models tab: one searchable list of installed + downloadable models. */
+.model-manager { display: flex; flex-direction: column; gap: 4px; }
+.model-search-row { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.model-search-row .setting-input { flex: 1; min-width: 0; }
+.model-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 4px; }
+.model-filters .setting-select { width: auto; flex: 1 1 auto; min-width: 108px; font-size: 12.5px; padding: 7px 9px; }
+.model-list-group { margin-top: 12px; }
+.model-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 2px 2px 6px; }
+.model-list-title { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.model-list-count { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.model-list { display: flex; flex-direction: column; gap: 7px; max-height: 240px; overflow-y: auto; }
+.model-row { cursor: default; }
+.model-row.is-active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 9%, var(--surface-2)); }
+.model-state.is-loaded { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); color: var(--accent-strong); }
+.model-state.is-incomplete { background: color-mix(in srgb, var(--warn, #d98324) 18%, var(--surface)); border-color: color-mix(in srgb, var(--warn, #d98324) 45%, var(--border)); color: var(--warn, #d98324); }
+.hub-info.hub-danger { color: var(--text-3); }
+.hub-info.hub-danger:hover { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--border)); }
+.model-action { min-width: 84px; }
+.model-action.model-unload { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent-strong); }
+/* Free-space readout + per-model download-size badge. */
+.model-disk {
+  font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums;
+  padding: 6px 2px 2px; display: flex; align-items: center; gap: 6px;
+}
+.model-disk::before { content: "💾"; font-size: 12px; }
+.hub-badge-size { color: var(--text-2); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); font-variant-numeric: tabular-nums; }
+.hub-badge-muted { color: var(--text-3); }
+
+/* Searchable combobox (Benchmark "Model to benchmark"): input + floating list. */
+.model-combo { position: relative; }
+.model-combo-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28); max-height: 240px; overflow-y: auto; padding: 4px;
+}
+.model-combo-option {
+  padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.model-combo-option:hover, .model-combo-option.is-hi { background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)); }
+.model-combo-option.is-active { color: var(--accent-strong); font-weight: 600; }
+.model-combo-empty { padding: 8px 10px; font-size: 12px; color: var(--text-3); }
+
+/* While a load runs, pin the status panel to the top of the tab so its progress
+   bar stays visible even after you scroll the model list (key on phones). */
+.model-load-progress.is-busy {
+  position: sticky; top: 0; z-index: 6; margin-top: 0;
+  background: var(--surface); box-shadow: 0 6px 12px -8px rgba(0, 0, 0, .45);
+}
+
+/* Mobile: the Models tab now holds a search, filters and two lists — keep it
+   comfortable and tappable, and let the lists use more of the screen. */
+@media (max-width: 600px) {
+  .model-search-row { gap: 8px; }
+  .model-filters { gap: 6px; }
+  .model-filters .setting-select { flex: 1 1 44%; min-width: 0; }
+  .hub-count { flex: 1 1 100%; margin-left: 0; text-align: left; }
+  .model-list { max-height: 46vh; }
+  .hub-result { padding: 11px 12px; gap: 8px; }
+  .hub-info { width: 40px; min-height: 40px; }
+  .model-action, .hub-download-btn { min-width: 96px; min-height: 40px; }
+  .model-disk { font-size: 12px; }
+  .model-combo-menu { max-height: 55vh; }
+}
 .hub-progress-label { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--code-font); font-size: 10px; color: var(--text); }
 .hub-progress-meta { font-size: 10.5px; color: var(--text-3); margin-top: 3px; font-variant-numeric: tabular-nums; }
 
@@ -976,6 +1251,28 @@ body.bench-open { overflow: hidden; }
 .rail-settings-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .rail-settings-btn .gear { font-size: 15px; }
 @media (max-width: 760px) { .rail-settings-btn { display: flex; } }
+
+/* Shut-down control in the sidebar footer + the post-shutdown overlay. */
+.rail-shutdown-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin: 0 14px 6px; padding: 9px 14px; border-radius: 12px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
+  font: inherit; font-size: 12.5px; font-weight: 500; transition: .15s ease;
+}
+.rail-shutdown-btn:hover { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--border)); }
+.rail-shutdown-btn:disabled { opacity: .55; cursor: default; }
+.shutdown-overlay {
+  position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg, #0b0d10) 88%, transparent); backdrop-filter: blur(4px);
+}
+.shutdown-card {
+  display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+  padding: 34px 40px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg, 0 20px 60px rgba(0,0,0,.4)); max-width: 90vw;
+}
+.shutdown-icon { font-size: 40px; color: var(--text-3); }
+.shutdown-title { font-size: 18px; font-weight: 700; color: var(--text); }
+.shutdown-sub { font-size: 13px; color: var(--text-3); max-width: 340px; }
 
 .settings-modal {
   position: fixed; inset: 0; z-index: 110;

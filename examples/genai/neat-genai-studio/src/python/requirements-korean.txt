@@ -1,0 +1,10 @@
+# Optional Korean TTS engine (facebook/mms-tts-kor via Meta MMS).
+#
+# ⚠️  LICENSE: facebook/mms-tts-* is CC-BY-NC-4.0 (NON-COMMERCIAL). Install this
+#     ONLY if a non-commercial license is acceptable for your use. It also pulls
+#     in torch, which is much heavier than the default onnxruntime TTS path.
+#
+# Enable with:  pip install -r requirements-korean.txt   and   ENABLE_KOREAN_TTS=1
+transformers>=4.44
+torch
+numpy

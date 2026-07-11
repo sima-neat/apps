@@ -21,7 +21,7 @@ import queue
 import time
 
 # Flask imports
-from flask import Flask, Response, render_template, jsonify, request, stream_with_context
+from flask import Flask, Response, render_template, jsonify, request, send_from_directory, stream_with_context
 from flask_socketio import SocketIO
 from flask_cors import CORS
 
@@ -37,8 +37,29 @@ import subprocess
 
 from shared.config import HubConfig
 from server import hub as hub_helpers
+from tts_text import sanitize_for_tts   # Markdown/LaTeX → speakable text (stdlib only)
 
 APP_DIR = Path(__file__).resolve().parent
+
+
+def _supervisor_pid():
+    """PID of the run.sh supervisor so the GUI can trigger a graceful shutdown.
+    run.sh exports NEAT_RUN_PID and also writes its PID to a file."""
+    val = (os.environ.get('NEAT_RUN_PID') or '').strip()
+    if val.isdigit() and int(val) > 0:
+        return int(val)
+    candidates = [os.environ.get('RUN_PID_FILE'),
+                  str(Path(__file__).resolve().parents[3] / '.neat-genai-studio.pid')]
+    for p in candidates:
+        if p and os.path.exists(p):
+            try:
+                pid = int(Path(p).read_text().strip())
+                if pid > 0:
+                    return pid
+            except (OSError, ValueError):
+                pass
+    return None
+
 
 genai_app = None
 ttfs = 0
@@ -125,9 +146,20 @@ class TalkController:
         self.prefix = ''
         self.totalk = ''
         self.talk = []
-        self.pipers = {}
+        self.pipers = {}            # rhasspy piper-tts voices, keyed by language
+        self.pp = None              # active piper-plus engine (multilingual; adds Japanese)
+        self.pp_models = []         # installed piper-plus voices (selectable)
+        self.pp_current = None      # key of the active piper-plus voice
+        self.pp_lock = threading.Lock()   # guards runtime piper-plus voice switches
+        self.mms = None             # optional MMS engine (Korean; opt-in, CC-BY-NC)
+        self.prefer_piper_plus = False  # default engine: rhasspy piper-tts (ja still uses piper-plus)
+        self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
+        # Load piper-plus (and optional MMS) first so the rhasspy-voice loader
+        # knows which languages are already covered by another engine.
+        self._init_piper_plus()
+        self._init_mms_optional()
         self._init_pipers_threaded(supported_langs or ['en'])
         
         self.lock = threading.Lock()
@@ -162,9 +194,9 @@ class TalkController:
         except (TypeError, ValueError):
             speed = 1.0
         self.utterance_speed = max(0.5, min(2.0, speed))
-        for piper in self.pipers.values():
-            if hasattr(piper, 'set_utterance_speed'):
-                piper.set_utterance_speed(self.utterance_speed)
+        for eng in list(self.pipers.values()) + [self.pp, self.mms]:
+            if eng is not None and hasattr(eng, 'set_utterance_speed'):
+                eng.set_utterance_speed(self.utterance_speed)
 
     def _init_pipers_threaded(self, langs):
         threads = []
@@ -215,15 +247,196 @@ class TalkController:
                     found = True
                     break
             if not found:
-                logging.warning(f"No model found for language: {lang}")
+                # No rhasspy voice for this language — expected when piper-plus
+                # covers it (ja/en/zh/es/fr/pt) or when it is served by the
+                # opt-in MMS engine (ko). Only warn when nothing can speak it.
+                if (self.pp is not None and self.pp.supports(lang)) or lang == 'ko':
+                    logging.info(f"No rhasspy voice for '{lang}' — served by piper-plus/MMS.")
+                else:
+                    logging.warning(f"No TTS voice available for language: {lang}")
 
         for t in threads:
             t.join()
 
+    # Selectable piper-plus voices. Every checkpoint is the same 6-language
+    # model (ja/en/zh/es/fr/pt); these differ only by voice. Discovered under
+    # assets/piper-plus/<key>/{model.onnx,config.json} (see voice_install.sh);
+    # order sets the default (first available).
+    PIPER_PLUS_VOICES = [
+        {"key": "css10", "label": "CSS10 (neutral)"},
+        {"key": "tsukuyomi", "label": "Tsukuyomi-chan"},
+        {"key": "mera", "label": "MERA multilingual"},
+    ]
+
+    def _init_piper_plus(self):
+        """Discover installed piper-plus voices and load the default one. Each
+        voice is a full 6-language model; users switch between them at runtime.
+        Best-effort — no voices / unbuilt deps just leaves piper-plus off and the
+        router falls back to piper-tts."""
+        base = Path("assets") / "piper-plus"
+        self.pp_models = []          # [{key, label, onnx: Path, config: Path|None}]
+        for v in self.PIPER_PLUS_VOICES:
+            onnx = base / v["key"] / "model.onnx"
+            cfg = base / v["key"] / "config.json"
+            if onnx.exists():
+                self.pp_models.append({"key": v["key"], "label": v["label"],
+                                       "onnx": onnx, "config": cfg if cfg.exists() else None})
+        # Back-compat: a flat assets/piper-plus.onnx counts as one unnamed voice.
+        flat = Path("assets") / "piper-plus.onnx"
+        if not self.pp_models and flat.exists():
+            flat_cfg = Path("assets") / "piper-plus.config.json"
+            self.pp_models.append({"key": "default", "label": "piper-plus",
+                                   "onnx": flat, "config": flat_cfg if flat_cfg.exists() else None})
+
+        self.pp = None
+        self.pp_current = None
+        if not self.pp_models:
+            logging.info("No piper-plus voice found under assets/piper-plus/ — "
+                         "Japanese TTS disabled (run voice_install.sh).")
+            return
+        self._load_piper_plus(self.pp_models[0]["key"])
+
+    def _load_piper_plus(self, key):
+        """Load the piper-plus voice `key` into self.pp. Returns True on success."""
+        entry = next((m for m in getattr(self, "pp_models", []) if m["key"] == key), None)
+        if entry is None:
+            return False
+        try:
+            from piperplus_tts import PiperPlusTTS
+            pp = PiperPlusTTS(entry["onnx"], config_path=entry["config"])
+            pp.set_utterance_speed(self.utterance_speed)
+            self.pp = pp
+            self.pp_current = key
+            logging.info("piper-plus voice '%s' ready (languages: %s)",
+                         key, sorted(pp.languages))
+            return True
+        except Exception as e:  # noqa: BLE001
+            logging.warning("Failed to load piper-plus voice '%s': %s", key, e)
+            return False
+
+    def set_piper_plus_voice(self, key):
+        """Switch the active piper-plus voice at runtime (thread-safe)."""
+        with self.pp_lock:
+            return self._load_piper_plus(key)
+
+    def piper_plus_voices(self):
+        """Available piper-plus voices + the current one, for the UI picker."""
+        return {
+            "voices": [{"key": m["key"], "label": m["label"]}
+                       for m in getattr(self, "pp_models", [])],
+            "current": getattr(self, "pp_current", None),
+        }
+
+    def set_voice_engine(self, engine):
+        """Choose the preferred TTS engine for languages both can speak.
+        'piper-plus' -> prefer piper-plus; 'piper-tts' -> prefer rhasspy piper.
+        Languages only one engine supports are unaffected (ja is always
+        piper-plus; de/it/no/vi are always piper-tts)."""
+        engine = (engine or "").strip().lower()
+        if engine in ("browser", "web", "webspeech", "web-speech"):
+            self.browser_tts = True
+        elif engine in ("piper-plus", "piperplus", "pp"):
+            self.browser_tts = False
+            self.prefer_piper_plus = True
+        elif engine in ("piper-tts", "pipertts", "piper", "rhasspy"):
+            self.browser_tts = False
+            self.prefer_piper_plus = False
+        else:
+            return False
+        logging.info("Preferred TTS engine set to %s",
+                     "browser" if self.browser_tts
+                     else ("piper-plus" if self.prefer_piper_plus else "piper-tts"))
+        return True
+
+    def voice_engine(self, language=None):
+        """Engines that can speak `language` (all loaded engines when language is
+        None), plus the one actually used for it. Only engines that support the
+        language are returned, so the UI never offers an incompatible engine."""
+        engines = []
+        pp_ok = self.pp is not None and (language is None or self.pp.supports(language))
+        tts_ok = bool(self.pipers) and (language is None or language in self.pipers)
+        if pp_ok:
+            engines.append({"key": "piper-plus", "label": "piper-plus (multilingual · Japanese)"})
+        if tts_ok:
+            engines.append({"key": "piper-tts", "label": "piper-tts (rhasspy voices)"})
+        # Browser TTS runs entirely in the client via the Web Speech API, so it is
+        # always available and works for any language the device has a voice for.
+        engines.append({"key": "browser", "label": "Browser (device voices)"})
+        # The engine the router actually uses for this language.
+        if self.browser_tts:
+            current = "browser"
+        else:
+            current = "piper-plus" if self.prefer_piper_plus else "piper-tts"
+            if language:
+                _, eng = self._get_piper(language)
+                if eng is not None and eng is self.pp:
+                    current = "piper-plus"
+                elif eng is not None and eng in self.pipers.values():
+                    current = "piper-tts"
+        keys = [e["key"] for e in engines]
+        if current not in keys:
+            current = keys[0]
+        return {"engines": engines, "current": current}
+
+    def _init_mms_optional(self):
+        """Optionally load the MMS Korean engine, ONLY when explicitly enabled
+        (ENABLE_KOREAN_TTS=1) and the model is present. MMS is CC-BY-NC and pulls
+        in torch, so it is off by default."""
+        flag = os.environ.get("ENABLE_KOREAN_TTS", "0").strip().lower()
+        if flag not in ("1", "true", "yes", "on"):
+            return
+        model_dir = Path("assets") / "mms-tts-kor"
+        if not model_dir.is_dir():
+            logging.warning("ENABLE_KOREAN_TTS set but %s is missing — Korean TTS off.",
+                            model_dir)
+            return
+        try:
+            from mms_tts import MmsTTS
+            self.mms = MmsTTS(model_dir)
+            self.mms.set_utterance_speed(self.utterance_speed)
+            logging.info("MMS Korean TTS ready (CC-BY-NC 4.0, non-commercial).")
+        except Exception as e:  # noqa: BLE001
+            self.mms = None
+            logging.warning("Failed to load MMS Korean TTS: %s", e)
+
+    def _init_mms_optional(self):
+        """Optionally load the MMS Korean engine, ONLY when explicitly enabled
+        (ENABLE_KOREAN_TTS=1) and the model is present. MMS is CC-BY-NC and pulls
+        in torch, so it is off by default."""
+        flag = os.environ.get("ENABLE_KOREAN_TTS", "0").strip().lower()
+        if flag not in ("1", "true", "yes", "on"):
+            return
+        model_dir = Path("assets") / "mms-tts-kor"
+        if not model_dir.is_dir():
+            logging.warning("ENABLE_KOREAN_TTS set but %s is missing — Korean TTS off.",
+                            model_dir)
+            return
+        try:
+            from mms_tts import MmsTTS
+            self.mms = MmsTTS(model_dir)
+            self.mms.set_utterance_speed(self.utterance_speed)
+            logging.info("MMS Korean TTS ready (CC-BY-NC 4.0, non-commercial).")
+        except Exception as e:  # noqa: BLE001
+            self.mms = None
+            logging.warning("Failed to load MMS Korean TTS: %s", e)
+
     def _get_piper(self, language):
+        """Route a language to the best available TTS engine, returning
+        ``(effective_language, engine)`` or ``(None, None)`` when nothing can
+        speak it. Preference (with prefer_piper_plus): piper-plus for the
+        languages it supports (incl. Japanese) → MMS for Korean (if enabled) →
+        a rhasspy piper-tts voice → English as a *latin-script only* fallback.
+        CJK/Korean never fall back to an English voice — better silent than
+        mispronounced."""
+        if self.prefer_piper_plus and self.pp is not None and self.pp.supports(language):
+            return language, self.pp
+        if language == 'ko' and self.mms is not None:
+            return language, self.mms
         if language in self.pipers:
             return language, self.pipers[language]
-        if language != 'en' and 'en' in self.pipers:
+        if self.pp is not None and self.pp.supports(language):
+            return language, self.pp
+        if language not in ('ja', 'ko', 'zh') and 'en' in self.pipers:
             return 'en', self.pipers['en']
         return None, None
 
@@ -348,26 +561,42 @@ class TalkController:
                     if self.chunk_count < self.permissive_chunks and len(sanitized_sentence) < self.min_chars_first_chunks:
                         # Not enough content yet; keep buffering
                         return
-                    _, piper = self._get_piper(self.current_language)
-                    if piper is None:
-                        self._warn_missing_voice_once(self.current_language)
-                    else:
-                        buffer = piper.synthesize(sanitized_sentence)
+                    if self.browser_tts:
+                        # Browser TTS: skip server synthesis and hand the clean
+                        # sentence to the client, which speaks it with the Web
+                        # Speech API. Reuses the same chunking + sanitization.
                         if generation_id is not None and not genai_app.is_generation_current(generation_id):
                             return
-                        self.full_response.append(sanitized_sentence)
+                        if sanitized_sentence.strip():
+                            self.full_response.append(sanitized_sentence)
+                            genai_app.emit('audio_chunk', {
+                                'text': sanitized_sentence.strip(),
+                                'browser': True,
+                                'lang': self.current_language,
+                                'tps': round(self.tps, 2),
+                            })
+                            self.chunk_count += 1
+                    else:
+                        _, piper = self._get_piper(self.current_language)
+                        if piper is None:
+                            self._warn_missing_voice_once(self.current_language)
+                        else:
+                            buffer = piper.synthesize(sanitized_sentence, language=self.current_language)
+                            if generation_id is not None and not genai_app.is_generation_current(generation_id):
+                                return
+                            self.full_response.append(sanitized_sentence)
 
-                        elapsed_time = time.time() - start_time
-                        audio_duration = self._get_wav_duration(buffer)
-                        rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
-                        logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                        genai_app.emit('audio_chunk', {
-                            'text': sanitized_sentence.strip(),
-                            'audio': buffer.getvalue(),
-                            'tps': round(self.tps, 2),
-                            'rtf': round(rtf, 2)
-                        })
-                        self.chunk_count += 1
+                            elapsed_time = time.time() - start_time
+                            audio_duration = self._get_wav_duration(buffer)
+                            rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                            logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
+                            genai_app.emit('audio_chunk', {
+                                'text': sanitized_sentence.strip(),
+                                'audio': buffer.getvalue(),
+                                'tps': round(self.tps, 2),
+                                'rtf': round(rtf, 2)
+                            })
+                            self.chunk_count += 1
 
                 self.talk = []
                 if self._next is not None:
@@ -411,19 +640,9 @@ class TalkController:
         return "".join(self.talk)
 
     def _sanitize_for_tts(self, text: str) -> str:
-        # Remove newlines and asterisks first
-        text = text.replace('\n', ' ').replace('*', '').replace('＊', '')
-        # Collapse multiple whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
-        # Fix apostrophe spacing for contractions - remove spaces around apostrophes
-        # This handles cases like "don ' t" -> "don't", "can ' t" -> "can't", etc.
-        # Handle multiple spaces and various apostrophe characters
-        text = re.sub(r"(\w)\s*['']\s*(\w)", r"\1'\2", text)
-        # Remove space before punctuation .,;:!? and CJK equivalents where applicable
-        text = re.sub(r'\s+([\.,;:!\?])', r'\1', text)
-        # Join hyphenated words: letter - letter -> letter-letter
-        text = re.sub(r'(?<=\w)\s*-\s*(?=\w)', '-', text)
-        return text
+        # Strip Markdown and LaTeX so Piper utters the prose, not the formatting
+        # ("star star", "dollar x caret 2", raw URLs). See ui/tts_text.py.
+        return sanitize_for_tts(text)
 
     
     def tts_on_demand(self, text, language='en'):
@@ -439,7 +658,7 @@ class TalkController:
             raise RuntimeError("No Piper TTS voice model is loaded. Install Piper .onnx voice assets under assets/.")
 
         sanitized_text = self._sanitize_for_tts(text)
-        buffer = piper.synthesize(sanitized_text)
+        buffer = piper.synthesize(sanitized_text, language=language)
         elapsed_time = time.time() - start_time
         audio_duration = self._get_wav_duration(buffer)
         rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
@@ -679,7 +898,7 @@ class AppContext:
             self.set_system_prompt(self.system_prompt)
 
         if not self.apionly:
-            self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh', 'vi'])
+            self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh', 'vi', 'ja', 'pt', 'ko'])
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
@@ -743,6 +962,18 @@ class AppContext:
         self.app = Flask(__name__)
         CORS(self.app)
         self.socketio = SocketIO(self.app)
+
+        # Cache-bust static assets: append each file's mtime to its URL so the
+        # browser refetches newui.js / newui.css after an update instead of
+        # serving a stale cached copy (the cause of "I don't see your change").
+        @self.app.url_defaults
+        def _static_cache_bust(endpoint, values):
+            if endpoint == 'static' and 'filename' in values:
+                try:
+                    fp = os.path.join(self.app.static_folder, values['filename'])
+                    values['v'] = int(os.path.getmtime(fp))
+                except OSError:
+                    pass
 
         if not os.path.exists(AppConstants.DEFAULT_UPLOADS_DIR):
             os.makedirs(AppConstants.DEFAULT_UPLOADS_DIR)
@@ -825,6 +1056,60 @@ class AppContext:
                                      model_name=self.model_display_name)
 
             return render_template('apionly.html')
+
+        @self.app.route('/showcase')
+        def showcase():
+            # Conference / booth "present mode": a marketing slideshow about SiMa
+            # Modalix + LLiMa + Palette Neat. Its Launch buttons return to "/".
+            return render_template('showcase.html')
+
+        # SiMaSentry Solutions: vendored static harness suite (Mission Control
+        # portal + Med/Safe/Sec verticals) under ui/harnesses/. Served as plain
+        # files — the pages are self-contained and chat with the loaded model
+        # through the same-origin /v1/chat/completions proxy below.
+        harness_dir = str(APP_DIR / 'harnesses')
+
+        @self.app.route('/solutions/')
+        def solutions_portal():
+            return send_from_directory(harness_dir, 'index.html')
+
+        @self.app.route('/solutions/<path:filename>')
+        def solutions_asset(filename):
+            if filename.endswith('/'):
+                filename += 'index.html'
+            return send_from_directory(harness_dir, filename)
+
+        @self.app.route('/tts/engine', methods=['GET'])
+        def tts_engine_get():
+            if self.talk_ctrl is None:
+                return jsonify({'engines': [], 'current': None})
+            lang = (request.args.get('lang') or '').strip() or None
+            return jsonify(self.talk_ctrl.voice_engine(lang))
+
+        @self.app.route('/tts/engine', methods=['POST'])
+        def tts_engine_set():
+            data = request.get_json(silent=True) or {}
+            engine = (data.get('engine') or '').strip()
+            if self.talk_ctrl is None or not self.talk_ctrl.set_voice_engine(engine):
+                return jsonify({'status': 'error', 'error': 'unknown engine'}), 400
+            return jsonify({'status': 'ok', 'current': self.talk_ctrl.voice_engine()['current']})
+
+        @self.app.route('/piperplus/voices', methods=['GET'])
+        def piperplus_voices():
+            if self.talk_ctrl is None:
+                return jsonify({'voices': [], 'current': None})
+            return jsonify(self.talk_ctrl.piper_plus_voices())
+
+        @self.app.route('/piperplus/select', methods=['POST'])
+        def piperplus_select():
+            data = request.get_json(silent=True) or {}
+            key = (data.get('key') or '').strip()
+            if not key or self.talk_ctrl is None:
+                return jsonify({'status': 'error', 'error': 'no voice key'}), 400
+            if not self.talk_ctrl.set_piper_plus_voice(key):
+                return jsonify({'status': 'error',
+                                'error': f"could not load piper-plus voice '{key}'"}), 400
+            return jsonify({'status': 'ok', 'current': self.talk_ctrl.pp_current})
 
         @self.app.route('/voices', methods=['GET'])
         def list_voices():
@@ -1037,6 +1322,29 @@ class AppContext:
         def benchmark_stop():
             return _proxy_control('POST', '/control/benchmark/stop', 10)
 
+        @self.app.route('/shutdown', methods=['POST'])
+        def shutdown_studio():
+            # Stop the whole studio from the GUI. run.sh writes its PID (and
+            # exports NEAT_RUN_PID); a SIGTERM to it runs run.sh's cleanup, which
+            # gracefully stops both the UI and the model server — the same path as
+            # `./run.sh stop`. The kill is deferred so the HTTP response flushes.
+            def _shutdown():
+                time.sleep(0.6)
+                pid = _supervisor_pid()
+                if pid:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        return
+                    except OSError:
+                        pass
+                # No supervisor PID — fall back to our own process group / self.
+                try:
+                    os.killpg(os.getpgrp(), signal.SIGTERM)
+                except OSError:
+                    os._exit(0)
+            threading.Thread(target=_shutdown, name="gui-shutdown", daemon=True).start()
+            return jsonify({'status': 'shutting-down'})
+
         @self.app.route('/models/card', methods=['GET'])
         def models_card():
             name = request.args.get('name', '')
@@ -1083,6 +1391,50 @@ class AppContext:
 
             return Response(
                 stream_with_context(generate()), mimetype='application/x-ndjson'
+            )
+
+        @self.app.route('/v1/chat/completions', methods=['POST'])
+        def proxy_chat_completions():
+            # Same-origin streaming proxy to the model server's OpenAI API,
+            # used by the Solutions harnesses: the Studio page is HTTPS while
+            # the model server is HTTP on :9998, so direct browser calls would
+            # be blocked as mixed content (and lack CORS headers).
+            # These generations bypass the Studio's conversation history and
+            # TTS by design — the harness keeps its own history client-side.
+            payload = request.get_json(silent=True) or {}
+            if self.max_tokens:
+                payload.setdefault('max_tokens', int(self.max_tokens))
+            _normalize_openai_image_parts(payload)
+            url = f"http://{self.app.config['SIMAAI_IP_ADDR']}/v1/chat/completions"
+            try:
+                upstream = requests.post(url, json=payload, stream=True, timeout=(10, 600))
+            except requests.RequestException as exc:
+                logging.error(f"Chat proxy: model server unreachable: {exc}")
+                return jsonify({'error': f'model server unreachable: {exc}'}), 502
+
+            def relay():
+                try:
+                    for chunk in upstream.iter_content(chunk_size=None):
+                        if chunk:
+                            yield chunk
+                except GeneratorExit:
+                    # Browser aborted (harness Stop button or iframe unloaded):
+                    # free the accelerator instead of letting generation run out.
+                    # Note /stop is per-model, so a concurrent Studio generation
+                    # on the same model would also stop (single-user semantics).
+                    try:
+                        post_stop_to_sima(payload.get('model'))
+                    except Exception:
+                        pass
+                    raise
+                finally:
+                    upstream.close()
+
+            return Response(
+                stream_with_context(relay()),
+                status=upstream.status_code,
+                content_type=upstream.headers.get('Content-Type', 'text/event-stream'),
+                headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
             )
 
         @self.app.route('/stop', methods=['POST'])
@@ -1509,6 +1861,24 @@ def _read_gen_params(form):
     except (TypeError, ValueError):
         pass
     return params
+
+
+def _normalize_openai_image_parts(payload):
+    """Rewrite OpenAI-standard image parts to the pyneat server's schema.
+
+    The Solutions harnesses send {"type": "image_url", "image_url": {"url": u}}
+    while pyneat expects {"type": "image", "image": u} (the format the Studio
+    itself sends in add_user_message). Mutates payload in place.
+    """
+    for message in payload.get('messages') or []:
+        content = message.get('content') if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for i, part in enumerate(content):
+            if isinstance(part, dict) and part.get('type') == 'image_url':
+                url = (part.get('image_url') or {}).get('url')
+                if url:
+                    content[i] = {'type': 'image', 'image': url}
 
 
 def stream_chat_request(messages, model, config, generation_id, socketio_event='update', gen_params=None):

@@ -6,6 +6,8 @@ EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # discoverable and loadable on the fly from the UI (no restart).
 MODELS_DIR="${LLIMA_MODELS_PATH:-/media/nvme/llima/models}"
 APP_VENV="${APP_VENV:-${EXAMPLE_DIR}/.venv}"
+# Isolated venv for piper-tts (it and piper-plus both own the `piper` package).
+PIPERTTS_VENV="${PIPERTTS_VENV:-${EXAMPLE_DIR}/.venv-pipertts}"
 CONFIG_PATH="${CONFIG_PATH:-${EXAMPLE_DIR}/config.local.yaml}"
 PYNEAT_PYTHON="${PYNEAT_PYTHON:-${HOME}/pyneat/bin/python}"
 # No chat/VLM model is downloaded by default — the UI starts decoupled and you
@@ -27,6 +29,67 @@ HUB_ORGS="${HUB_ORGS:-simaai TDoSiMa}"
 INSTALL_TTS_VOICES="${INSTALL_TTS_VOICES:-1}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
+
+# ---------------------------------------------------------------------------
+# Pretty output: the Neat sparkle banner + colourised status lines. Degrades to
+# plain text when stdout is not a TTY, TERM is "dumb", or NO_COLOR is set.
+# ---------------------------------------------------------------------------
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+  P_TEAL=$'\033[38;2;61;179;138m'
+  P_GREEN=$'\033[38;2;74;168;54m'
+  P_LIME=$'\033[38;2;154;190;30m'
+  P_BLUE=$'\033[38;2;58;125;216m'
+  P_ORANGE=$'\033[38;2;223;108;30m'
+  P_INK=$'\033[38;2;60;66;74m'
+  C_ACCENT="${P_LIME}"; C_MUTED=$'\033[38;2;140;150;160m'
+  C_OK=$'\033[38;2;53;196;137m'; C_WARN=$'\033[38;2;224;173;74m'; C_ERR=$'\033[38;2;239;91;98m'
+else
+  C_RESET=''; C_BOLD=''; C_DIM=''
+  P_TEAL=''; P_GREEN=''; P_LIME=''; P_BLUE=''; P_ORANGE=''; P_INK=''
+  C_ACCENT=''; C_MUTED=''; C_OK=''; C_WARN=''; C_ERR=''
+fi
+
+step() { printf '\n%s\n' "${C_ACCENT}${C_BOLD}▸${C_RESET} $*"; }
+info() { printf '%s\n' "${C_MUTED}·${C_RESET} $*"; }
+ok()   { printf '%s\n' "${C_OK}✔${C_RESET} $*"; }
+warn() { printf '%s\n' "${C_WARN}⚠${C_RESET} $*" >&2; }
+errln(){ printf '%s\n' "${C_ERR}✘${C_RESET} $*" >&2; }
+
+# The Neat sparkle, formed from the logo palette, plus the wordmark + tagline.
+banner() {
+  printf '\n'
+  printf '        %s▲%s\n'                   "${P_TEAL}"   "${C_RESET}"
+  printf '       %s███%s\n'                  "${P_GREEN}"  "${C_RESET}"
+  printf '      %s█████%s\n'                 "${P_GREEN}"  "${C_RESET}"
+  printf '   %s◀████%s█%s████▶%s\n'          "${P_BLUE}" "${P_INK}" "${P_LIME}" "${C_RESET}"
+  printf '      %s█████%s\n'                 "${P_ORANGE}" "${C_RESET}"
+  printf '       %s███%s\n'                  "${P_ORANGE}" "${C_RESET}"
+  printf '        %s▼%s\n'                   "${P_ORANGE}" "${C_RESET}"
+  printf '\n'
+  printf '   %sNEAT%s %sGenAI Studio%s  %s· setup%s\n' \
+    "${C_BOLD}" "${C_RESET}" "${C_ACCENT}${C_BOLD}" "${C_RESET}" "${C_MUTED}" "${C_RESET}"
+  printf '   %sInstalls the environment, models, voices and local config%s\n' "${C_MUTED}" "${C_RESET}"
+  printf '\n'
+}
+
+# A slim divider formed from the palette Neat sparkle (✦), cycling the logo
+# colours — used as the spacer between explicit setup sections.
+spacer() {
+  local palette=("${P_TEAL}" "${P_GREEN}" "${P_LIME}" "${P_BLUE}" "${P_ORANGE}")
+  local line="   " i
+  for ((i = 0; i < 12; i++)); do
+    line+="${palette[i % 5]}✦${C_RESET} "
+  done
+  printf '%s\n' "${line}"
+}
+
+# A titled section break: a blank line, a sparkle divider, then a bold heading.
+section() {
+  printf '\n'
+  spacer
+  printf '   %s%s%s\n' "${C_BOLD}" "$1" "${C_RESET}"
+}
 
 usage() {
   cat <<'USAGE'
@@ -65,19 +128,23 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 if [[ $# -gt 0 ]]; then
-  echo "Unknown argument: $1" >&2
+  errln "Unknown argument: $1"
   usage
   exit 2
 fi
 
+banner
+
+section "Environment"
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required." >&2
+  errln "python3 is required."
   exit 1
 fi
+info "python3: ${C_DIM}$(command -v python3)${C_RESET}"
 
 if [[ ! -x "${PYNEAT_PYTHON}" ]]; then
-  echo "Neat Python environment not found: ${PYNEAT_PYTHON}" >&2
-  echo "Install Neat first, or set PYNEAT_PYTHON=/path/to/python-with-pyneat." >&2
+  errln "Neat Python environment not found: ${PYNEAT_PYTHON}"
+  info "Install Neat first, or set PYNEAT_PYTHON=/path/to/python-with-pyneat."
   exit 1
 fi
 
@@ -85,15 +152,16 @@ if ! "${PYNEAT_PYTHON}" - <<'PY' >/dev/null 2>&1
 import pyneat
 PY
 then
-  echo "pyneat is not importable from ${PYNEAT_PYTHON}." >&2
-  echo "Install Neat first, or set PYNEAT_PYTHON=/path/to/python-with-pyneat." >&2
+  errln "pyneat is not importable from ${PYNEAT_PYTHON}."
+  info "Install Neat first, or set PYNEAT_PYTHON=/path/to/python-with-pyneat."
   exit 1
 fi
+ok "pyneat available (${C_DIM}${PYNEAT_PYTHON}${C_RESET})"
 
 install_cpu_torch_if_needed() {
   case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64)
-      echo "Installing CPU-only PyTorch for RAG embeddings..."
+      info "Installing CPU-only PyTorch for RAG embeddings…"
       "${APP_VENV}/bin/python" -m pip install \
         --index-url https://download.pytorch.org/whl/cpu \
         "torch==${CPU_TORCH_VERSION}"
@@ -101,51 +169,55 @@ install_cpu_torch_if_needed() {
   esac
 }
 
-echo "Creating UI virtual environment:"
-echo "  ${APP_VENV}"
+section "Python environment"
+step "Creating UI virtual environment: ${C_DIM}${APP_VENV}${C_RESET}"
 python3 -m venv "${APP_VENV}"
 "${APP_VENV}/bin/python" -m pip install --upgrade pip
 install_cpu_torch_if_needed
+info "Installing UI + RAG requirements (incl. piper-plus)…"
 "${APP_VENV}/bin/python" -m pip install \
   -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
   -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
+ok "UI virtual environment ready."
+
+# piper-tts ships the same top-level `piper` package as piper-plus, so it gets
+# its own venv; the UI reaches it through a subprocess worker.
+step "Creating isolated piper-tts venv: ${C_DIM}${PIPERTTS_VENV}${C_RESET}"
+python3 -m venv "${PIPERTTS_VENV}"
+"${PIPERTTS_VENV}/bin/python" -m pip install --upgrade pip >/dev/null
+info "Installing piper-tts (isolated)…"
+"${PIPERTTS_VENV}/bin/python" -m pip install \
+  -r "${EXAMPLE_DIR}/src/python/requirements-pipertts.txt"
+ok "piper-tts venv ready."
 
 mkdir -p "${MODELS_DIR}"
 CHAT_MODEL_DIR="${MODELS_DIR}/${CHAT_MODEL_NAME}"
 ASR_MODEL_DIR="${MODELS_DIR}/whisper-small-a16w8"
 RAG_EMBEDDING_DIR="${MODELS_DIR}/gte-small"
 
+section "Models"
 if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
   if [[ -n "${CHAT_MODEL_REPO}" ]]; then
-    echo ""
-    echo "Downloading chat/VLM model:"
-    echo "  ${CHAT_MODEL_REPO}"
+    step "Downloading chat/VLM model: ${CHAT_MODEL_REPO}"
     "${APP_VENV}/bin/hf" download "${CHAT_MODEL_REPO}" --local-dir "${CHAT_MODEL_DIR}"
   else
-    echo ""
-    echo "No default chat/VLM model — download one from the UI (or set CHAT_MODEL_REPO)."
+    info "No default chat/VLM model — download one from the UI (or set CHAT_MODEL_REPO)."
   fi
 
-  echo ""
-  echo "Downloading ASR model:"
-  echo "  ${ASR_MODEL_REPO}"
+  step "Downloading ASR model: ${ASR_MODEL_REPO}"
   "${APP_VENV}/bin/hf" download "${ASR_MODEL_REPO}" --local-dir "${ASR_MODEL_DIR}"
 
-  echo ""
-  echo "Downloading RAG embedding model:"
-  echo "  ${RAG_EMBEDDING_REPO}"
+  step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
   "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
 
   for repo in ${CATALOG_MODEL_REPOS}; do
     name="$(basename "${repo}")"
-    echo ""
-    echo "Downloading catalog model:"
-    echo "  ${repo}"
+    step "Downloading catalog model: ${repo}"
     "${APP_VENV}/bin/hf" download "${repo}" --local-dir "${MODELS_DIR}/${name}"
   done
+  ok "Model downloads complete."
 else
-  echo ""
-  echo "Skipping model downloads because SKIP_MODEL_DOWNLOAD=1."
+  info "Skipping model downloads because SKIP_MODEL_DOWNLOAD=1."
 fi
 
 if [[ -n "${CHAT_MODEL_REPO}" ]]; then
@@ -162,6 +234,8 @@ fi
 # Render "simaai TDoSiMa" -> "simaai, TDoSiMa" for the YAML flow list.
 HUB_ORGS_YAML="$(echo "${HUB_ORGS}" | tr -s ' ' | sed 's/^ //; s/ $//; s/ /, /g')"
 
+section "Configuration"
+step "Writing local config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
 mkdir -p "$(dirname "${CONFIG_PATH}")"
 cat > "${CONFIG_PATH}" <<YAML
 server:
@@ -196,9 +270,10 @@ app:
     port: 9997
 
   request:
-    max_tokens: 128
+    max_tokens: 256
     system_prompt: >-
       Answer clearly and concisely. Use Markdown formatting when it helps.
+      Answer the question in the language it was asked in.
 
   web:
     host: 0.0.0.0
@@ -213,10 +288,11 @@ app:
     enabled: true
     embedding_model_dir: ${RAG_EMBEDDING_DIR}
 YAML
+ok "Config written."
 
 if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
-  echo ""
-  echo "Creating default RAG database..."
+  section "RAG database"
+  step "Creating default RAG database…"
   (
     cd "${EXAMPLE_DIR}/src/python"
     "${APP_VENV}/bin/python" rag/create_db.py \
@@ -224,21 +300,65 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
       --output ui/milvus.db \
       --embedding-model "${RAG_EMBEDDING_DIR}"
   )
+  ok "RAG database ready."
 fi
 
 if [[ "${INSTALL_TTS_VOICES}" == "1" ]]; then
-  echo ""
-  echo "Installing Piper TTS voices..."
+  section "Text-to-speech"
+  step "Installing piper-tts voices + the piper-plus model…"
   (
     cd "${EXAMPLE_DIR}/src/python"
-    bash voice_install.sh
+    ENABLE_KOREAN_TTS="${ENABLE_KOREAN_TTS:-0}" bash voice_install.sh
   )
+  # piper-plus English G2P (g2p-en) pulls NLTK tagger data at runtime; fetch it
+  # now so English TTS works offline on the board.
+  info "Pre-fetching NLTK data for piper-plus English G2P…"
+  "${APP_VENV}/bin/python" - <<'PY' 2>/dev/null || warn "NLTK data prefetch skipped (English piper-plus may need it on first online run)"
+try:
+    import nltk
+    for pkg in ("averaged_perceptron_tagger_eng", "averaged_perceptron_tagger", "cmudict"):
+        try:
+            nltk.download(pkg, quiet=True)
+        except Exception:
+            pass
+except Exception:
+    pass
+PY
+  ok "Voices installed."
 fi
 
-echo ""
-echo "Install complete."
-echo "Generated config:"
-echo "  ${CONFIG_PATH}"
-echo ""
-echo "Run:"
-echo "  ./run.sh"
+# Always set up (and show) a convenient `neat-ai` shell alias for ./run.sh.
+# Set CREATE_ALIAS=0 to opt out.
+maybe_create_alias() {
+  local run_path="${EXAMPLE_DIR}/run.sh"
+  # Target is eLxr, where interactive board sessions (e.g. over SSH) are login
+  # shells that read ~/.bash_profile — so put the alias there for bash.
+  local rc
+  case "$(basename "${SHELL:-bash}")" in
+    zsh) rc="${HOME}/.zshrc" ;;
+    *)   rc="${HOME}/.bash_profile" ;;
+  esac
+
+  chmod +x "${run_path}" 2>/dev/null || true
+  if [[ "${CREATE_ALIAS:-1}" != "0" ]]; then
+    if [[ -f "${rc}" ]] && grep -q "alias neat-ai=" "${rc}"; then
+      ok "'neat-ai' alias already set in ${rc}."
+    else
+      {
+        printf '\n# Neat GenAI Studio — added by setup.sh\n'
+        printf "alias neat-ai='%s'\n" "${run_path}"
+      } >> "${rc}"
+      ok "Added a 'neat-ai' alias to ${rc}."
+    fi
+  fi
+  # Always show how to start it.
+  info "Start the studio with ${C_BOLD}neat-ai${C_RESET} (alias for ./run.sh) — run ${C_BOLD}source ${rc}${C_RESET} or open a new shell first."
+  info "Alias: ${C_DIM}neat-ai='${run_path}'${C_RESET}"
+}
+
+section "Done"
+ok "Install complete."
+maybe_create_alias
+info "Config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
+info "Start the studio with ${C_BOLD}./run.sh${C_RESET}"
+printf '\n'

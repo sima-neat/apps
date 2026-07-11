@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="SiMaSentry Intelligence Agent — air-gapped Mission Control portal for SiMa.ai Llima edge AI harnesses." />
+  <title>SiMaSentry Intelligence Agent</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/png" href="SiMaSentry.png" />
+</head>
+<body class="theme-mc">
+  <a class="skip-link" href="#cards">Skip to product modes</a>
+
+  <header class="mc-header" role="banner">
+    <div class="mc-brand">
+      <span class="mc-brand-mark" aria-hidden="true">
+        <img src="SiMaSentry.png" alt="" width="42" height="42" decoding="async" />
+      </span>
+      <div class="mc-brand-text">
+        <p class="mc-brand-eyebrow">Mission Control</p>
+        <h1 class="mc-brand-title">SiMaSentry Intelligence Agent</h1>
+        <p class="mc-brand-sub">powered by SiMa.ai Llima</p>
+      </div>
+    </div>
+    <div class="mc-header-actions">
+      <span id="mc-net-pill" class="mc-env-pill" data-state="online" aria-live="polite" aria-label="Network status">
+        <span class="mc-env-dot" aria-hidden="true"></span>
+        <span id="mc-net-label">Online</span>
+      </span>
+      <button type="button" id="config-btn" class="btn config-btn" aria-haspopup="dialog" aria-controls="config-drawer">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path fill="currentColor" d="M12 8a4 4 0 1 0 4 4 4 4 0 0 0-4-4Zm8.94 4a7.94 7.94 0 0 0-.13-1.4l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.78 7.78 0 0 0-2.42-1.4l-.38-2.65A.5.5 0 0 0 14.66 1h-4a.5.5 0 0 0-.49.42l-.38 2.65a7.78 7.78 0 0 0-2.42 1.4l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65A7.94 7.94 0 0 0 3.06 12a7.94 7.94 0 0 0 .13 1.4l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1a7.78 7.78 0 0 0 2.42 1.4l.38 2.65a.5.5 0 0 0 .49.42h4a.5.5 0 0 0 .49-.42l.38-2.65a7.78 7.78 0 0 0 2.42-1.4l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65A7.94 7.94 0 0 0 20.94 12Z"/>
+        </svg>
+        <span class="config-btn-label">Configure</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="mc-main">
+    <section class="mc-hero" aria-labelledby="hero-title">
+      <p class="mc-eyebrow">Mission Control</p>
+      <h2 id="hero-title">Three verticals. One edge runtime.</h2>
+      <p class="mc-lede">
+        Select a deployment mode to launch its harness in this window. Each
+        harness runs entirely in your browser against the local llima engine.
+      </p>
+    </section>
+
+    <div class="mc-grid">
+      <section id="cards" class="mc-cards" aria-label="Product modes">
+        <a class="mc-card" data-mode="medical" data-folder="health" data-accent="medical" href="?mode=medical">
+          <span class="mc-card-icon" aria-hidden="true">
+            <img src="health/SiMaSentry-Med.png" alt="" loading="lazy" decoding="async" />
+          </span>
+          <h3>SiMaSentry-Med</h3>
+          <p class="mc-card-tag">Clinical-Grade Edge Radiology</p>
+          <span class="mc-card-cta">
+            Launch
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M13 5l7 7-7 7-1.4-1.4L16.2 13H4v-2h12.2l-4.6-4.6z"/></svg>
+          </span>
+        </a>
+
+        <a class="mc-card" data-mode="safety" data-folder="safety" data-accent="safety" href="?mode=safety">
+          <span class="mc-card-icon" aria-hidden="true">
+            <img src="safety/SiMaSentry-Safe.png" alt="" loading="lazy" decoding="async" />
+          </span>
+          <h3>SiMaSentry-Safe</h3>
+          <p class="mc-card-tag">Industrial PPE &amp; Hazard Compliance</p>
+          <span class="mc-card-cta">
+            Launch
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M13 5l7 7-7 7-1.4-1.4L16.2 13H4v-2h12.2l-4.6-4.6z"/></svg>
+          </span>
+        </a>
+
+        <a class="mc-card" data-mode="security" data-folder="security" data-accent="security" href="?mode=security">
+          <span class="mc-card-icon" aria-hidden="true">
+            <img src="security/SiMaSentry-Sec.png" alt="" loading="lazy" decoding="async" />
+          </span>
+          <h3>SiMaSentry-Sec</h3>
+          <p class="mc-card-tag">High-Security SOC &amp; Change Detection</p>
+          <span class="mc-card-cta">
+            Launch
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M13 5l7 7-7 7-1.4-1.4L16.2 13H4v-2h12.2l-4.6-4.6z"/></svg>
+          </span>
+        </a>
+      </section>
+
+      <aside class="mc-status" aria-label="System status">
+        <details class="mc-status-details">
+          <summary class="mc-status-title">
+            <span class="mc-status-glyph" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 13h4l2-6 4 12 2-6h6v-2h-7l-2 6-4-12-2 6H3z"/></svg>
+            </span>
+            <span class="mc-status-label">Edge Diagnostics</span>
+            <span class="mc-status-chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+            </span>
+          </summary>
+        <dl class="mc-status-list">
+          <div class="mc-status-row">
+            <dt>Hardware</dt>
+            <dd>
+              <a href="https://sima.ai/boards-devkits/?section=som" target="_blank" rel="noopener noreferrer">
+                SiMa.ai MLSoC Modalix SOM
+                <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true" class="mc-ext-icon"><path fill="currentColor" d="M14 3v2h3.6l-9.3 9.3 1.4 1.4L19 6.4V10h2V3zM5 5h7v2H7v10h10v-5h2v7H5z"/></svg>
+              </a>
+            </dd>
+          </div>
+          <div class="mc-status-row">
+            <dt>Environment</dt>
+            <dd>Air-Gapped Secure</dd>
+          </div>
+          <div class="mc-status-row">
+            <dt>Engine</dt>
+            <dd>SiMa.ai Llima · OpenAI-compatible</dd>
+          </div>
+          <div class="mc-status-row">
+            <dt>
+              Configured endpoint
+              <button type="button" class="mc-edit-link" data-action="open-config">Edit</button>
+            </dt>
+            <dd id="mc-endpoint" class="mono">http://localhost:9998/v1/chat/completions</dd>
+          </div>
+          <div class="mc-status-row">
+            <dt>Default model</dt>
+            <dd id="mc-model" class="mono">gemma3</dd>
+          </div>
+          <div class="mc-status-row">
+            <dt>Provider</dt>
+            <dd id="mc-provider">Ollama / llima</dd>
+          </div>
+        </dl>
+        <p class="mc-status-note">
+          Diagnostics are static. Use <button type="button" class="mc-inline-link" data-action="open-config">Global Configuration</button> to change the endpoint and model the cards use to launch each harness.
+        </p>
+        </details>
+      </aside>
+    </div>
+
+    <section class="mc-value" aria-labelledby="value-title">
+      <div class="mc-value-brand">
+        <img src="SiMaSentry.png" alt="SiMaSentry" loading="lazy" decoding="async" />
+      </div>
+      <div class="mc-value-content">
+        <p class="mc-eyebrow">Why SiMaSentry</p>
+        <h2 id="value-title">Conversational Intelligence, Ready for Operators.</h2>
+        <p class="mc-value-lede">
+          SiMaSentry is the air-gapped product layer that lives on the
+          Modalix SOM — three production-grade browser apps with camera,
+          voice, and domain prompts already wired in. Open it, pick a
+          mode, and start working.
+        </p>
+
+        <ul class="mc-value-points">
+          <li class="mc-value-point">
+            <span class="mc-value-point-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor" d="M9 4 7 6H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3l-2-2Zm3 14a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+              </svg>
+            </span>
+            <div class="mc-value-point-text">
+              <strong>Operator-grade UI</strong>
+              <p>Camera, microphone, and image attach are wired into every vertical. No terminal, no SDK.</p>
+            </div>
+          </li>
+          <li class="mc-value-point">
+            <span class="mc-value-point-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5zm-1 14-4-4 1.4-1.4L11 13.2l4.6-4.6L17 10z"/>
+              </svg>
+            </span>
+            <div class="mc-value-point-text">
+              <strong>Domain-tuned prompts</strong>
+              <p>Radiology, OSHA / PPE compliance, SOC alert levels. Each harness ships ready for its job.</p>
+            </div>
+          </li>
+          <li class="mc-value-point">
+            <span class="mc-value-point-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor" d="M3 13h2v-2H3zm0 4h2v-2H3zm0-8h2V7H3zm4 4h14v-2H7zm0 4h14v-2H7zm0-10v2h14V7z"/>
+              </svg>
+            </span>
+            <div class="mc-value-point-text">
+              <strong>Mission Control orchestration</strong>
+              <p>One portal, three verticals. Switch modes without switching apps or losing context.</p>
+            </div>
+          </li>
+          <li class="mc-value-point">
+            <span class="mc-value-point-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor" d="M12 1 3 5v6c0 5.6 3.8 10.7 9 12 5.2-1.3 9-6.4 9-12V5zm0 11h7c-.5 4.1-3.3 7.7-7 8.9z"/>
+              </svg>
+            </span>
+            <div class="mc-value-point-text">
+              <strong>Air-gapped, zero install</strong>
+              <p>Static files only. No build, no runtime on the workstation. Safe for factory devices that never see the internet.</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <aside id="config-drawer" class="mc-drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title" hidden>
+    <header class="mc-drawer-header">
+      <h2 id="drawer-title">Global Configuration</h2>
+      <button type="button" id="config-close" class="icon-button" aria-label="Close drawer">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+      </button>
+    </header>
+    <form id="config-form" class="mc-drawer-body" autocomplete="off" novalidate>
+      <p class="mc-drawer-hint">
+        These values pre-fill each harness via URL parameters when you launch
+        a card. Each harness still owns its own settings drawer.
+      </p>
+
+      <div class="field">
+        <span class="field-label">Provider</span>
+        <div class="radio-group" role="radiogroup" aria-label="Provider">
+          <label class="radio">
+            <input type="radio" name="provider" value="ollama" checked />
+            <span>Ollama / llima</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="provider" value="openai" />
+            <span>OpenAI</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="cfg-base-url">Base URL</label>
+        <input id="cfg-base-url" name="baseUrl" type="url"
+          placeholder="http://localhost:9998/v1/chat/completions" spellcheck="false" />
+        <span class="field-hint">llima default port is <code>9998</code>. Use the device IP if browsing from another workstation.</span>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="cfg-model">Model</label>
+        <input id="cfg-model" name="model" type="text" placeholder="gemma3" spellcheck="false" />
+        <span class="field-hint">Whatever llima loaded — default <code>gemma3</code>.</span>
+      </div>
+
+      <div class="field" id="cfg-api-key-row" hidden>
+        <label class="field-label" for="cfg-api-key">API key</label>
+        <input id="cfg-api-key" name="apiKey" type="password" autocomplete="off" />
+        <span class="field-hint">OpenAI provider only. Stored in this browser only.</span>
+      </div>
+
+      <div class="mc-drawer-actions">
+        <button type="button" id="config-clear" class="btn ghost">Clear</button>
+        <button type="submit" id="config-save" class="btn primary">Save</button>
+      </div>
+
+      <div id="config-message" class="mc-drawer-message" role="status" aria-live="polite" hidden></div>
+    </form>
+  </aside>
+  <div class="mc-drawer-scrim" id="config-scrim" hidden></div>
+
+  <section class="mc-frame" id="frame-view" aria-label="Embedded harness" hidden>
+    <div class="mc-frame-bar">
+      <button type="button" class="btn frame-back" id="frame-back-btn">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path fill="currentColor" d="M14 6 8 12l6 6 1.4-1.4L10.8 12l4.6-4.6z"/>
+        </svg>
+        Mission Control
+      </button>
+      <div class="mc-frame-switcher" role="tablist" aria-label="Switch mode">
+        <button type="button" class="frame-switch" role="tab" data-target="medical" data-accent="medical">
+          <span class="swatch" aria-hidden="true"></span>Med
+        </button>
+        <button type="button" class="frame-switch" role="tab" data-target="safety" data-accent="safety">
+          <span class="swatch" aria-hidden="true"></span>Safe
+        </button>
+        <button type="button" class="frame-switch" role="tab" data-target="security" data-accent="security">
+          <span class="swatch" aria-hidden="true"></span>Sec
+        </button>
+      </div>
+    </div>
+    <iframe id="harness-frame" class="harness-frame"
+      title="Harness"
+      allow="camera; microphone; clipboard-read; clipboard-write"
+      referrerpolicy="no-referrer"></iframe>
+  </section>
+
+  <footer class="mc-footer">
+    <span>
+      Running on <strong>SiMa.ai Llima</strong> — air-gapped, OpenAI- and Ollama-compatible edge runtime.
+      <a href="https://docs.sima.ai/pages/genai/runtime.html" target="_blank" rel="noopener noreferrer">
+        View the Llima documentation
+        <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true" class="mc-ext-icon"><path fill="currentColor" d="M14 3v2h3.6l-9.3 9.3 1.4 1.4L19 6.4V10h2V3zM5 5h7v2H7v10h10v-5h2v7H5z"/></svg>
+      </a>
+    </span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

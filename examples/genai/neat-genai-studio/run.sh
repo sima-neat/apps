@@ -29,6 +29,14 @@ if [[ -z "${APP_PYTHON:-}" ]]; then
     APP_PYTHON="python3"
   fi
 fi
+
+# Interpreter of the isolated piper-tts venv — the UI's subprocess TTS worker
+# uses it for the de/it/no/vi rhasspy voices (piper-tts and piper-plus can't
+# share a venv). Exported so the UI child process inherits it.
+if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python" ]]; then
+  PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
+fi
+export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
@@ -47,6 +55,10 @@ MLA_SUDO_PASSWORD="${MLA_SUDO_PASSWORD:-edgeai}"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
+# Terminal chat instead of the web UI (set by `./run.sh --cli`).
+CLI_MODE="${CLI_MODE:-0}"
+# In CLI mode the model server's logs go here (kept off the chat terminal).
+SERVER_LOG="${SERVER_LOG:-${EXAMPLE_DIR}/.neat-genai-server.log}"
 
 # ---------------------------------------------------------------------------
 # Pretty output: the Neat sparkle banner + colourised status lines. Everything
@@ -199,11 +211,19 @@ system_info() {
 }
 
 usage() {
+  banner
   cat <<'USAGE'
 Usage:
   ./run.sh            Start the model server and web UI (Ctrl+C to stop).
+                      Runs ./setup.sh automatically on the first launch.
+  ./run.sh --cli      Start the model server and a terminal chat (no web UI).
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
+  ./run.sh --clean    Remove app-generated data (venvs, config, RAG db, TTS
+                      voices, caches, logs). Add -y to skip the prompt.
+
+Environment:
+  AUTO_SETUP=0        Do not auto-run ./setup.sh on first launch (error instead).
 USAGE
 }
 
@@ -257,15 +277,102 @@ do_stop() {
   ok "Done."
 }
 
+# Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
+# voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
+# Downloaded chat/VLM/ASR models under catalog_dir are left intact.
+do_clean() {
+  local yes="${1:-}"
+  # Never delete files out from under a running instance.
+  if do_status >/dev/null 2>&1; then
+    info "Stopping the running instance first…"
+    do_stop >/dev/null 2>&1 || true
+  fi
+
+  local -a targets=() t
+  for t in \
+    "${DEFAULT_APP_VENV}" \
+    "${EXAMPLE_DIR}/.venv-pipertts" \
+    "${DEFAULT_LOCAL_CONFIG}" \
+    "${PID_FILE}" \
+    "${PYTHON_DIR}/ui/milvus.db" \
+    "${PYTHON_DIR}/ui/milvus.meta.json" \
+    "${PYTHON_DIR}/ui/assets/piper-plus" \
+    "${PYTHON_DIR}/ui/assets/mms-tts-kor"; do
+    [[ -e "$t" ]] && targets+=("$t")
+  done
+  # Downloaded rhasspy .onnx voices (committed .onnx.json configs are kept),
+  # __pycache__ dirs, and any *.log files the app produced.
+  while IFS= read -r -d '' t; do targets+=("$t"); done \
+    < <(find "${PYTHON_DIR}/ui/assets" -maxdepth 1 -name '*.onnx' -print0 2>/dev/null)
+  while IFS= read -r -d '' t; do targets+=("$t"); done \
+    < <(find "${PYTHON_DIR}" -type d -name '__pycache__' -print0 2>/dev/null)
+  while IFS= read -r -d '' t; do targets+=("$t"); done \
+    < <(find "${EXAMPLE_DIR}" -maxdepth 2 -name '*.log' -print0 2>/dev/null)
+
+  step "Cleaning generated data"
+  if [[ ${#targets[@]} -eq 0 ]]; then
+    ok "Nothing to clean — no generated data found."
+    return 0
+  fi
+
+  info "These will be removed:"
+  for t in "${targets[@]}"; do
+    printf '     %s%s%s\n' "${C_DIM}" "${t#"${EXAMPLE_DIR}"/}" "${C_RESET}"
+  done
+  local size; size="$(du -sch "${targets[@]}" 2>/dev/null | tail -n1 | awk '{print $1}')"
+  [[ -n "${size}" ]] && info "Total size: ${C_BOLD}${size}${C_RESET}"
+  local catalog; catalog="$(sed -n 's/^[[:space:]]*catalog_dir:[[:space:]]*\(.*\)/\1/p' \
+    "${CONFIG_PATH}" 2>/dev/null | head -n1)"
+  [[ -n "${catalog}" ]] && info "Downloaded models under ${C_DIM}${catalog}${C_RESET} are kept."
+
+  if [[ "${yes}" != "-y" && "${yes}" != "--yes" && "${CLEAN_YES:-0}" != "1" ]]; then
+    printf '   Remove these? [y/N] '
+    local reply=""; read -r reply || true
+    if [[ ! "${reply}" =~ ^[Yy] ]]; then
+      info "Aborted — nothing removed."
+      return 0
+    fi
+  fi
+
+  for t in "${targets[@]}"; do rm -rf "$t"; done
+  ok "Clean complete. Re-run ./setup.sh to reinstall."
+}
+
 case "${1:-run}" in
   stop) do_stop; exit 0 ;;
   status) if do_status; then exit 0; else exit 1; fi ;;
+  --clean|clean) do_clean "${2:-}"; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
+  --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
   run|start) ;;  # fall through to launch
   *) errln "unknown command: $1"; usage; exit 2 ;;
 esac
 
 banner
+
+# First launch: if setup.sh hasn't created the app venv (and local config) yet,
+# run it now so `./run.sh` works out of the box. AUTO_SETUP=0 opts out.
+if [[ ! -x "${DEFAULT_APP_VENV}/bin/python" || ! -f "${DEFAULT_LOCAL_CONFIG}" ]]; then
+  if [[ "${AUTO_SETUP:-1}" == "0" ]]; then
+    errln "Setup has not been run yet (no ${DEFAULT_APP_VENV##*/} / config.local.yaml)."
+    errln "Run ./setup.sh first, or unset AUTO_SETUP=0 to let run.sh do it."
+    exit 1
+  fi
+  step "First launch — running ./setup.sh (this installs deps and downloads a model)…"
+  if ! bash "${EXAMPLE_DIR}/setup.sh"; then
+    errln "setup.sh failed — fix the errors above and re-run ./run.sh."
+    exit 1
+  fi
+  ok "Setup complete."
+  # Pick up what setup just created (these were resolved to fallbacks at startup).
+  [[ -x "${DEFAULT_APP_VENV}/bin/python" ]] && APP_PYTHON="${DEFAULT_APP_VENV}/bin/python"
+  if [[ "${CONFIG_PATH}" == "${EXAMPLE_DIR}/src/common/config.yaml" && -f "${DEFAULT_LOCAL_CONFIG}" ]]; then
+    CONFIG_PATH="${DEFAULT_LOCAL_CONFIG}"
+  fi
+  if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python" ]]; then
+    export PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
+  fi
+fi
 
 if [[ ! -f "${CONFIG_PATH}" ]]; then
   errln "config does not exist: ${CONFIG_PATH}"
@@ -443,6 +550,13 @@ cleanup() {
   for pid in "${pids[@]}"; do
     wait "${pid}" 2>/dev/null || true
   done
+  # In --cli mode the watchdog may have relaunched the model server under a new
+  # process group (not in our remembered groups) — sweep any stray one.
+  if [[ "${CLI_MODE}" == "1" ]] && command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
+  fi
   stop_stale_rag_worker
   rm -f "${PID_FILE}"
   ok "Neat GenAI Studio stopped."
@@ -466,16 +580,49 @@ trap 'exit 143' TERM
 
 # Record this instance so `./run.sh stop` can find it (removed by cleanup).
 echo "$$" > "${PID_FILE}"
+# Expose the supervisor PID + PID file to the UI so it can offer a GUI "Shut down"
+# button (it SIGTERMs this process, which runs cleanup — same as `./run.sh stop`).
+export NEAT_RUN_PID="$$"
+export RUN_PID_FILE="${PID_FILE}"
 
 # Sentinel exit code the model server uses to ask for an MLA reset + relaunch.
 MLA_RESET_EXIT_CODE="${MLA_RESET_EXIT_CODE:-75}"
 
 launch_server() {
   step "Starting the Neat model server (OpenAI-compatible)…"
-  setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
+  # In CLI mode the model server shares the terminal with the interactive chat,
+  # so its logs would land on the "you ▸" prompt. Send them to a log file
+  # instead; the CLI drives the server over HTTP and doesn't need its stdout.
+  if [[ "${CLI_MODE}" == "1" ]]; then
+    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" \
+      >"${SERVER_LOG}" 2>&1 &
+  else
+    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
+  fi
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
+}
+
+# Background watchdog for --cli mode. CLI mode has no supervisor loop, so if the
+# model server exits to service an MLA reset (the CLI's /reset) — or crashes —
+# relaunch it here so the CLI can reconnect. Poll-based, since a backgrounded
+# subshell can't `wait` a sibling PID; bounded so a broken server won't respawn
+# forever. Strays it may spawn are swept by cleanup().
+cli_supervise() {
+  local tries=0
+  while true; do
+    sleep 2
+    if kill -0 "${server_pid}" 2>/dev/null; then
+      tries=0
+      continue
+    fi
+    [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES:-4}" ]] && return 0
+    tries=$((tries + 1))
+    reset_mla_dispatcher
+    launch_server
+    sleep "${MODEL_SERVER_START_DELAY:-2}"
+  done
 }
 
 section "Accelerator"
@@ -499,6 +646,22 @@ if ! child_running "${server_pid}"; then
   else
     exit "${status}"
   fi
+fi
+
+# CLI mode: skip the web UI and run an interactive terminal chat in the
+# foreground against the model server we just started. When it exits, the EXIT
+# trap tears the model server down.
+if [[ "${CLI_MODE}" == "1" ]]; then
+  section "Terminal chat"
+  step "Launching the CLI — type ${C_BOLD}/help${C_RESET} for commands, ${C_BOLD}/quit${C_RESET} to exit."
+  info "Model server logs → ${C_DIM}${SERVER_LOG}${C_RESET}"
+  printf '\n'
+  cli_supervise &       # relaunch the server on an MLA-reset request so /reset works
+  cli_sup_pid="$!"
+  trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
+  "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" || true
+  kill "${cli_sup_pid}" 2>/dev/null || true
+  exit 0                # -> EXIT trap stops the model server
 fi
 
 section "Web UI"

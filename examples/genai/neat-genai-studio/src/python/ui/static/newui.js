@@ -50,7 +50,13 @@ let ragServerStatusText = "";
 
 let currentSystemPrompt = '';
 let systemPromptRequestInFlight = false;
-let imagePromptWasCheckedBeforeModelDisable = true;
+// Chat-first: the camera image is off by default (even after a VLM loads) so the
+// UI opens on just the chat; enabling "Include camera image" reveals the camera.
+let imagePromptWasCheckedBeforeModelDisable = false;
+// Preferred TTS engine (defaults to piper-tts, matching the backend). Drives
+// which voice-selection setting is shown (rhasspy voice vs piper-plus voice).
+let _currentTtsEngine = 'piper-tts';
+let _ppVoicesAvailable = false;
 
 function isLlmOnlyMode() {
   return document.body.classList.contains('llm-only') || !selectedChatModelSupportsVision();
@@ -427,7 +433,7 @@ function activateSettingsTab(key) {
   // The camera preview / mic test run only while the Devices tab is showing.
   if (key === 'devices') { startSettingsCameraPreview(); }
   else { stopSettingsCameraPreview(); stopMicTest(); }
-  // Lazily list the Hugging Face models the first time that tab opens.
+  // Lazily list the Hugging Face models the first time the Add Model tab opens.
   if (key === 'huggingface') ensureHubLoaded();
   // Keep the active tab in view within the strip/sidebar (esp. the mobile strip).
   const active = document.querySelector('.settings-tab.is-active');
@@ -726,8 +732,11 @@ window.onload = function () {
   initializeUtteranceSpeedControl();
   initStudioModelManager();
   initFontControls();
+  initAccentControls();
+  try { const cy = document.getElementById('copyYear'); if (cy) cy.textContent = new Date().getFullYear(); } catch (e) { /* ignore */ }
   initHubControls();
   initTtsToggle();
+  initSpokenHighlightToggle();
   initFullscreenButton();
   initGenerationControls();
   initDeviceControls();
@@ -739,6 +748,9 @@ window.onload = function () {
   initCameraCollapse();
   initVision();
   initBenchmark();
+  initShowcase();
+  initSolutions();
+  initShutdownButton();
   hideRagControlsIfDisabled();
   if (isRagEnabled()) {
     initializeRagHealth();
@@ -1570,6 +1582,8 @@ function stopAudio() {
   pendingNewGenerationAudio = false;
   isPlaying = false;
   audioQueue.length = 0;
+  // Cancel any in-flight / queued browser (Web Speech) utterances too.
+  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
   clearTtsHighlight();
 
   try {
@@ -1620,7 +1634,29 @@ function ttsAnswerContainer() {
   return last ? (last.querySelector('.message-text') || last) : null;
 }
 
+// Highlighting the spoken sentence is a user setting (off by default). It is
+// best-effort: matching a spoken sentence back to heavily Markdown-formatted
+// text is fuzzy, so it may not highlight every sentence.
+function ttsHighlightEnabled() {
+  const el = document.getElementById('toggleSpokenHighlight');
+  if (el) return el.checked;
+  // On by default: enabled unless the user has explicitly turned it off.
+  try { return localStorage.getItem('studioSpokenHighlight') !== '0'; } catch (e) { return true; }
+}
+
+function initSpokenHighlightToggle() {
+  const el = document.getElementById('toggleSpokenHighlight');
+  if (!el) return;
+  // On by default: only an explicit '0' unchecks it.
+  try { el.checked = localStorage.getItem('studioSpokenHighlight') !== '0'; } catch (e) { el.checked = true; }
+  el.addEventListener('change', () => {
+    try { localStorage.setItem('studioSpokenHighlight', el.checked ? '1' : '0'); } catch (e) { /* ignore */ }
+    if (!el.checked) clearTtsHighlight();
+  });
+}
+
 function setTtsHighlight(container, text) {
+  if (!ttsHighlightEnabled()) { clearTtsHighlight(); return; }
   if (!container || !text) { clearTtsHighlight(); return; }
   // A new chunk: search forward from just past the previous sentence's start so
   // a repeated identical sentence matches its NEXT occurrence. A container swap
@@ -1642,11 +1678,84 @@ function clearTtsHighlight() {
 // recreated, so prior Ranges are stale). Uses a fixed searchFrom so re-applying
 // the SAME chunk re-finds the same sentence; only a new chunk advances it.
 function applyTtsHighlight() {
-  if (!_ttsSupported() || !_ttsHi.container || !_ttsHi.text) return;
+  if (!ttsHighlightEnabled() || !_ttsSupported() || !_ttsHi.container || !_ttsHi.text) return;
   const range = _findTextRange(_ttsHi.container, _ttsHi.text, _ttsHi.searchFrom);
   if (!range) { try { CSS.highlights.delete('tts'); } catch (e) { /* ignore */ } return; }
   _ttsHi.lastStart = range._startNorm;   // remembered so the NEXT chunk searches past it
   try { CSS.highlights.set('tts', new Highlight(range)); } catch (e) { /* ignore */ }
+}
+
+/* ---- Browser (Web Speech API) TTS -------------------------------------
+ * The "Browser" voice engine speaks entirely on the device: the server sends
+ * only the (already sanitized) sentence text, and we utter it here with
+ * speechSynthesis. Honors the global stop (audioEpoch) and the spoken-sentence
+ * highlight, just like the server-audio path. */
+const BROWSER_LANG_MAP = {
+  en: 'en-US', ja: 'ja-JP', zh: 'zh-CN', ko: 'ko-KR', es: 'es-ES', fr: 'fr-FR',
+  pt: 'pt-BR', de: 'de-DE', it: 'it-IT', no: 'nb-NO', vi: 'vi-VN', nl: 'nl-NL',
+  ru: 'ru-RU', hi: 'hi-IN', ar: 'ar-SA', tr: 'tr-TR', pl: 'pl-PL', sv: 'sv-SE',
+};
+let _browserTtsWarned = false;
+
+function browserTtsSupported() {
+  return typeof window !== 'undefined' && 'speechSynthesis' in window
+    && typeof SpeechSynthesisUtterance !== 'undefined';
+}
+
+// The browser voice to use: the user's pick if it matches the language, else the
+// best default the device has for that language.
+function browserVoiceForLang(langCode) {
+  if (!browserTtsSupported()) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+  const bcp = (BROWSER_LANG_MAP[langCode] || langCode || 'en-US').toLowerCase();
+  const base = bcp.split('-')[0];
+  const picked = localStorage.getItem('studioBrowserVoice');
+  if (picked) {
+    const byName = voices.find(v => v.name === picked);
+    if (byName && (byName.lang || '').toLowerCase().startsWith(base)) return byName;
+  }
+  return voices.find(v => (v.lang || '').toLowerCase() === bcp)
+      || voices.find(v => (v.lang || '').toLowerCase().startsWith(base))
+      || null;
+}
+
+function speakBrowserTts(text, lang) {
+  if (!text || !text.trim()) return;
+  if (!browserTtsSupported()) {
+    if (!_browserTtsWarned) {
+      _browserTtsWarned = true;
+      console.warn('This browser has no Web Speech (speechSynthesis) support.');
+    }
+    return;
+  }
+  if (!shouldPlayAudio) return;
+  const myEpoch = audioEpoch;                 // honor the global stop mechanism
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = BROWSER_LANG_MAP[lang] || lang || 'en-US';
+  const voice = browserVoiceForLang(lang);
+  if (voice) u.voice = voice;
+  const speed = (typeof getUtteranceSpeed === 'function') ? getUtteranceSpeed() : 1;
+  u.rate = Math.min(2, Math.max(0.5, speed || 1));
+  u.onstart = () => {
+    if (myEpoch !== audioEpoch || !shouldPlayAudio) {
+      try { window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+      return;
+    }
+    // Time to first audio: measured from send to when speech actually begins —
+    // the same metric the server-audio path records at source.start().
+    if (!firstAudioStarted && userInputStartTime) {
+      const firstAudioTime = (Date.now() - userInputStartTime) / 1000;
+      const el = document.getElementById('firstAudioTime');
+      if (el) el.textContent = firstAudioTime.toFixed(2) + 's';
+      firstAudioStarted = true;
+    }
+    const container = (typeof ttsAnswerContainer === 'function') ? ttsAnswerContainer() : null;
+    if (container) setTtsHighlight(container, text);
+  };
+  u.onend = () => { if (myEpoch === audioEpoch) clearTtsHighlight(); };
+  u.onerror = () => { if (myEpoch === audioEpoch) clearTtsHighlight(); };
+  try { window.speechSynthesis.speak(u); } catch (e) { console.warn('speechSynthesis.speak failed', e); }
 }
 
 // Collapse runs of whitespace to a single space, keeping a map from each output
@@ -1792,8 +1901,15 @@ socket.on('audio_chunk', (data) => {
 
   console.log('Received text & audio :', text);
 
-  document.getElementById('tpsValue').textContent = data.tps;
-  document.getElementById('rtfValue').textContent = data.rtf;
+  if (data.tps != null) { const t = document.getElementById('tpsValue'); if (t) t.textContent = data.tps; }
+  if (data.rtf != null) { const r = document.getElementById('rtfValue'); if (r) r.textContent = data.rtf; }
+
+  // Browser TTS: the server sent only the (already sanitized) sentence text —
+  // speak it locally with the Web Speech API instead of playing server audio.
+  if (data.browser) {
+    speakBrowserTts(text || '', data.lang);
+    return;
+  }
 
   // Keep the spoken text with its audio so we can highlight the sentence being
   // uttered when this chunk actually starts playing.
@@ -1862,6 +1978,9 @@ function handleTextUpdate(data) {
     // reply shows live formatting instead of literal Markdown source.
     const textContainer = currentAssistantMessage.querySelector('.message-text') || currentAssistantMessage;
     appendMarkdownChunk(textContainer, cleanText);
+
+    // Live token counter — updates as the reply (incl. VLM) streams in.
+    setMessageTokens(currentAssistantMessage, currentGenTokens);
 
     // Scroll chat to bottom
     scrollChatToBottom();
@@ -2115,8 +2234,65 @@ function getVoiceStorageKey(lang) {
 function setVoiceRowVisible(visible) {
   const voiceRow = document.getElementById('voiceRow');
   if (voiceRow) {
-    voiceRow.style.display = visible ? 'block' : 'none';
+    // The rhasspy voice picker is only relevant when piper-tts is the engine.
+    const show = visible && _currentTtsEngine !== 'piper-plus' && _currentTtsEngine !== 'browser';
+    voiceRow.style.display = show ? 'block' : 'none';
   }
+}
+
+// Show only the voice-selection setting relevant to the active engine:
+// piper-plus -> its voice picker; piper-tts -> the rhasspy voice picker;
+// browser -> the device-voice picker.
+function applyEngineVoiceVisibility() {
+  const ppRow = document.getElementById('piperPlusVoiceRow');
+  if (ppRow) {
+    ppRow.style.display = (_currentTtsEngine === 'piper-plus' && _ppVoicesAvailable) ? '' : 'none';
+  }
+  const brRow = document.getElementById('browserVoiceRow');
+  if (brRow) {
+    const show = _currentTtsEngine === 'browser' && browserTtsSupported();
+    brRow.style.display = show ? '' : 'none';
+    if (show) populateBrowserVoices();
+  }
+  refreshVoiceOptions();   // recompute the rhasspy voice row (respects the engine)
+}
+
+// Fill the Browser-voice dropdown from the device's Web Speech voices for the
+// selected language. speechSynthesis voices can load asynchronously, so this is
+// also re-run on the 'voiceschanged' event.
+function populateBrowserVoices() {
+  const sel = document.getElementById('browserVoiceSelect');
+  const status = document.getElementById('browserVoiceStatus');
+  if (!sel) return;
+  if (!browserTtsSupported()) {
+    sel.innerHTML = '';
+    if (status) status.textContent = 'This browser has no built-in speech voices.';
+    return;
+  }
+  const lang = (typeof getSelectedVoiceLanguage === 'function') ? getSelectedVoiceLanguage() : 'en';
+  const bcp = (BROWSER_LANG_MAP[lang] || lang || 'en-US').toLowerCase();
+  const base = bcp.split('-')[0];
+  const all = window.speechSynthesis.getVoices() || [];
+  const matches = all.filter(v => (v.lang || '').toLowerCase().startsWith(base));
+  const voices = matches.length ? matches : all;
+  sel.innerHTML = '';
+  if (!voices.length) {
+    if (status) status.textContent = 'No device voices found yet — the browser may still be loading them.';
+    return;
+  }
+  const stored = localStorage.getItem('studioBrowserVoice');
+  voices.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.name;
+    o.textContent = `${v.name} (${v.lang})${v.default ? ' · default' : ''}`;
+    sel.appendChild(o);
+  });
+  sel.value = voices.some(v => v.name === stored) ? stored : voices[0].name;
+  if (status) status.textContent = matches.length ? '' : 'No voice for this language — using a default device voice.';
+  sel.onchange = () => {
+    try { localStorage.setItem('studioBrowserVoice', sel.value); } catch (e) { /* ignore */ }
+    if (status) status.textContent = 'Active';
+  };
 }
 
 function setVoiceLabel(lang) {
@@ -2230,16 +2406,119 @@ function initializeRagHealth(attempt = 1) {
 // Settings panel is always visible, no close button needed
 
 // The transcription language selector is available by default.
+// ---- piper-plus voice picker (one multilingual model; ja/en/zh/es/fr/pt) ----
+// Every piper-plus voice speaks all six languages; this switches which voice is
+// active. Hidden when no piper-plus voice is installed.
+async function initPiperPlusVoices() {
+  const sel = document.getElementById('piperPlusVoiceSelect');
+  const row = document.getElementById('piperPlusVoiceRow');
+  if (!sel || !row) return;
+  let data;
+  try {
+    data = await (await fetch('/piperplus/voices')).json();
+  } catch (e) { _ppVoicesAvailable = false; row.style.display = 'none'; return; }
+  const voices = (data && data.voices) || [];
+  _ppVoicesAvailable = voices.length > 0;
+  if (!voices.length) { row.style.display = 'none'; return; }
+  sel.innerHTML = '';
+  voices.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.key;
+    o.textContent = v.label || v.key;
+    sel.appendChild(o);
+  });
+  if (data.current) sel.value = data.current;
+  applyEngineVoiceVisibility();   // show only if piper-plus is the active engine
+  sel.onchange = async () => {
+    const status = document.getElementById('piperPlusVoiceStatus');
+    if (status) status.textContent = 'Loading…';
+    sel.disabled = true;
+    try {
+      const r = await fetch('/piperplus/select', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: sel.value })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed to load');
+      if (status) status.textContent = 'Active';
+    } catch (err) {
+      if (status) status.textContent = 'Failed: ' + err.message;
+    } finally {
+      sel.disabled = false;
+    }
+  };
+}
+
+// ---- Voice engine picker (piper-plus vs rhasspy piper-tts) ----------------
+// Shows ONLY the engine(s) that can speak the currently selected language, so a
+// language is never offered an incompatible engine. When both engines support
+// it, the user can choose which is preferred; when only one does, it's shown
+// read-only. Re-runs whenever the language changes.
+async function updateVoiceEngineForLanguage() {
+  const sel = document.getElementById('voiceEngineSelect');
+  const row = document.getElementById('voiceEngineRow');
+  if (!sel || !row) return;
+  const lang = getSelectedVoiceLanguage();
+  let data;
+  try {
+    data = await (await fetch('/tts/engine?lang=' + encodeURIComponent(lang))).json();
+  } catch (e) { row.style.display = 'none'; return; }
+  const engines = (data && data.engines) || [];
+  if (data.current) _currentTtsEngine = data.current;
+  if (!engines.length) { row.style.display = 'none'; applyEngineVoiceVisibility(); return; }
+  sel.innerHTML = '';
+  engines.forEach(e => {
+    const o = document.createElement('option');
+    o.value = e.key;
+    o.textContent = e.label || e.key;
+    sel.appendChild(o);
+  });
+  sel.value = engines.some(e => e.key === _currentTtsEngine) ? _currentTtsEngine : engines[0].value;
+  _currentTtsEngine = sel.value;
+  sel.disabled = engines.length < 2;   // only one engine supports this language → read-only
+  row.style.display = '';              // always show the supported engine(s)
+  sel.onchange = async () => {
+    const status = document.getElementById('voiceEngineStatus');
+    if (status) status.textContent = 'Saving…';
+    sel.disabled = true;
+    try {
+      const r = await fetch('/tts/engine', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine: sel.value })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed');
+      _currentTtsEngine = sel.value;
+      applyEngineVoiceVisibility();     // swap which voice picker is shown
+      if (status) status.textContent = 'Active';
+    } catch (err) {
+      if (status) status.textContent = 'Failed: ' + err.message;
+    } finally {
+      sel.disabled = engines.length < 2;
+    }
+  };
+  applyEngineVoiceVisibility();
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   const langRow = document.getElementById('languageRow');
   if (langRow) langRow.style.display = 'block';
-  refreshVoiceOptions();
+  initPiperPlusVoices();
+  updateVoiceEngineForLanguage();   // also drives refreshVoiceOptions via applyEngineVoiceVisibility
+  // Device speech voices often load asynchronously — repopulate the Browser
+  // voice picker when they arrive (only relevant while that engine is active).
+  if (browserTtsSupported() && window.speechSynthesis.addEventListener) {
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      if (_currentTtsEngine === 'browser') populateBrowserVoices();
+    });
+    try { window.speechSynthesis.getVoices(); } catch (e) { /* prompt the browser to load voices */ }
+  }
 });
 
-// Toggle voice selector on language change
+// The engine + voice pickers depend on the language — refresh them on change.
 const languageSelectEl = document.getElementById('languageSelect');
 if (languageSelectEl) {
-  languageSelectEl.addEventListener('change', refreshVoiceOptions);
+  languageSelectEl.addEventListener('change', updateVoiceEngineForLanguage);
 }
 
 // Chat functionality now handled by new dashboard interface
@@ -2859,18 +3138,15 @@ function fmtDuration(s) {
 
 async function initStudioModelManager() {
   const row = document.getElementById('chatModelRow');
-  if (row) row.style.display = 'block';
+  if (row) row.style.display = '';   // reveal (CSS gives it the flex-column layout)
   if (!controlEnabled()) {
-    // Static mode: models are preloaded server-side and switching is instant,
-    // so there is nothing to load — hide the Load button and treat a dropdown
-    // change as an immediate switch of the active model.
-    const loadBtn = document.getElementById('modelLoadButton');
-    if (loadBtn) loadBtn.style.display = 'none';
-    // Unload / reset need the control API — hide them without it.
+    // Static mode: models are preloaded server-side and switching is instant, so
+    // there is nothing to load/unload/reset — hide those controls and treat a row
+    // pick (which writes the hidden <select>) as an immediate switch.
     const accelRow = document.querySelector('.model-accel-row');
     if (accelRow) accelRow.style.display = 'none';
-    const unloadBtn0 = document.getElementById('modelUnloadButton');
-    if (unloadBtn0) unloadBtn0.hidden = true;
+    const progress = document.getElementById('modelLoadProgress');
+    if (progress) progress.style.display = 'none';
     populateModelSelect(getConfiguredChatModels().map(name => ({ name, loaded: true, type: 'chat' })));
     const select = document.getElementById('chatModelSelect');
     if (select) {
@@ -2882,20 +3158,10 @@ async function initStudioModelManager() {
     }
     return;
   }
+  // Control mode: models load on demand. The unified list's per-row Load/Unload
+  // buttons drive everything (wired in renderInstalledList); refresh + search are
+  // wired in initHubControls.
   await refreshCatalog();
-
-  // Selecting a model no longer loads it — the user browses freely, then
-  // commits with the dedicated Load button (change → button state is wired in
-  // initModelManage).
-  const loadBtn = document.getElementById('modelLoadButton');
-  if (loadBtn) {
-    loadBtn.addEventListener('click', () => {
-      const s = document.getElementById('chatModelSelect');
-      if (s && s.value) loadModelAndActivate(s.value);
-    });
-  }
-  const refreshBtn = document.getElementById('modelRefreshButton');
-  if (refreshBtn) refreshBtn.addEventListener('click', () => refreshCatalog());
 }
 
 async function refreshCatalog() {
@@ -2923,6 +3189,7 @@ async function refreshCatalog() {
 function populateModelSelect(catalog) {
   const select = document.getElementById('chatModelSelect');
   if (!select) return;
+  _catalog = catalog || [];
   const chatModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
   const previous = select.value;
   while (select.firstChild) select.removeChild(select.firstChild);
@@ -2984,6 +3251,172 @@ function populateModelSelect(catalog) {
   if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
 }
 
+// ---- Unified, searchable model list -----------------------------------
+// The visible Models tab is a single searchable list: installed models (from the
+// catalog) plus, when online, models available on Hugging Face. The hidden
+// <select id="chatModelSelect"> stays the source of truth for the rest of the app.
+let _catalog = [];
+let _pendingLoad = '';    // name of the model currently loading (for the row label)
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// Static mode (no control API): clicking a model row switches to it instantly.
+function selectInstalledModel(name) {
+  if (controlEnabled()) return;   // control mode uses the per-row Load button
+  const select = document.getElementById('chatModelSelect');
+  if (select) { select.value = name; select.dispatchEvent(new Event('change')); }
+  renderInstalledList();
+}
+
+// Fill the Models-tab family filter from the installed models (rebuilt only when
+// the set of families actually changes, so it doesn't churn on every render).
+function populateModelFamilyFilter(models) {
+  const sel = document.getElementById('modelFilterFamily');
+  if (!sel) return;
+  const fams = Array.from(new Set(models.map(m => hubModelFamily(m.name)))).sort((a, b) => a.localeCompare(b));
+  const want = fams.join('\n');
+  if (sel.dataset.fams === want) return;
+  sel.dataset.fams = want;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All families</option>'
+    + fams.map(f => `<option value="${escHtml(f)}">${escHtml(f)}</option>`).join('');
+  if (fams.includes(cur)) sel.value = cur;
+}
+
+// Render the installed models into #modelInstalledList, honouring the search box
+// + the type / size / family / sort filters. Called on catalog or state changes.
+function renderInstalledList() {
+  const list = document.getElementById('modelInstalledList');
+  if (!list) return;
+  const text = (document.getElementById('modelSearchInput')?.value || '').trim().toLowerCase();
+  const ft = document.getElementById('modelFilterType')?.value || '';
+  const fp = document.getElementById('modelFilterParams')?.value || '';
+  const ff = document.getElementById('modelFilterFamily')?.value || '';
+  const sort = document.getElementById('modelSortBy')?.value || 'loaded';
+  const models = _catalog.filter(m => (m.type || 'chat') !== 'asr');
+  populateModelFamilyFilter(models);
+  const filtered = models.filter(m => {
+    if (text && !m.name.toLowerCase().includes(text)) return false;
+    if (ft && (m.supportsVision ? 'VLM' : 'LLM') !== ft) return false;
+    if (fp && hubParamsBucket(hubModelParams(m.name)) !== fp) return false;
+    if (ff && hubModelFamily(m.name) !== ff) return false;
+    return true;
+  });
+  const pv = (n) => hubModelParams(n);
+  filtered.sort((a, b) => {
+    switch (sort) {
+      case 'name': return a.name.localeCompare(b.name);
+      case 'size-desc': return (b.sizeBytes || 0) - (a.sizeBytes || 0);
+      case 'size-asc': return (a.sizeBytes || Infinity) - (b.sizeBytes || Infinity);
+      case 'params-desc': return (pv(b.name) || 0) - (pv(a.name) || 0);
+      case 'params-asc': return (pv(a.name) == null ? Infinity : pv(a.name)) - (pv(b.name) == null ? Infinity : pv(b.name));
+      default: return (b.loaded ? 1 : 0) - (a.loaded ? 1 : 0) || a.name.localeCompare(b.name);
+    }
+  });
+
+  const countEl = document.getElementById('modelInstalledCount');
+  if (countEl) countEl.textContent = models.length ? `${filtered.length} of ${models.length}` : '';
+
+  list.innerHTML = '';
+  if (!models.length) {
+    list.innerHTML = `<div class="hub-note">Nothing downloaded yet${_hubEnabled ? ' — get one from the “Add Model” tab.' : '.'}</div>`;
+    return;
+  }
+  if (!filtered.length) {
+    list.innerHTML = '<div class="hub-note">No downloaded models match the search.</div>';
+    return;
+  }
+
+  const control = controlEnabled();
+  const busy = _modelBusy || _resetting;
+  const activeName = control ? _activeChatModel : getSelectedChatModel();
+  filtered.forEach(m => {
+    const incomplete = m.complete === false;
+    const isActive = !!m.name && m.name === activeName;
+    const row = document.createElement('div');
+    row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
+
+    const meta = document.createElement('div');
+    meta.className = 'hub-result-meta';
+    const t = m.supportsVision ? 'VLM' : 'LLM';
+    const size = m.sizeBytes ? fmtBytes(m.sizeBytes) : '';
+    const stateCls = incomplete ? 'is-incomplete' : (m.loaded ? 'is-loaded' : '');
+    // "downloaded" (on disk, ready to load) vs "loaded" (in memory now) — never
+    // "available", which reads like "available to download".
+    const stateTxt = incomplete ? '⚠ incomplete' : (m.loaded ? '● loaded' : '○ downloaded');
+    const badges = `<span class="hub-badge hub-badge-${t.toLowerCase()}">${t}</span>`
+      + (size ? `<span class="hub-badge">${size}</span>` : '')
+      + `<span class="hub-badge model-state ${stateCls}">${stateTxt}</span>`;
+    meta.innerHTML = `<span class="hub-repo">${escHtml(m.name)}</span><span class="hub-badges">${badges}</span>`;
+    row.appendChild(meta);
+    if (!control) row.addEventListener('click', (e) => { if (!e.target.closest('button')) selectInstalledModel(m.name); });
+
+    const info = document.createElement('button');
+    info.className = 'hub-info'; info.type = 'button'; info.textContent = 'ℹ';
+    info.title = `Model card & metadata for ${m.name}`;
+    info.addEventListener('click', (e) => { e.stopPropagation(); showModelCard(m.name); });
+    row.appendChild(info);
+
+    if (control) {
+      const del = document.createElement('button');
+      del.className = 'hub-info hub-danger'; del.type = 'button'; del.textContent = '🗑';
+      del.title = `Delete ${m.name} from disk`;
+      del.disabled = busy;
+      del.addEventListener('click', (e) => { e.stopPropagation(); deleteModel(m.name); });
+      row.appendChild(del);
+
+      const btn = document.createElement('button');
+      btn.className = 'setting-button model-action'; btn.type = 'button';
+      if (m.loaded) {
+        btn.textContent = 'Unload'; btn.classList.add('model-unload'); btn.disabled = busy;
+        btn.addEventListener('click', (e) => { e.stopPropagation(); unloadModel(m.name); });
+      } else if (incomplete) {
+        btn.textContent = 'Incomplete'; btn.disabled = true;
+        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from Hugging Face below.`;
+      } else if (_modelBusy && m.name === _pendingLoad) {
+        btn.textContent = 'Loading…'; btn.disabled = true;
+      } else {
+        btn.textContent = 'Load'; btn.classList.add('model-load'); btn.disabled = busy;
+        btn.addEventListener('click', (e) => { e.stopPropagation(); loadModelAndActivate(m.name); });
+      }
+      row.appendChild(btn);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'setting-button model-action'; btn.type = 'button';
+      btn.textContent = isActive ? 'Active' : 'Use';
+      btn.disabled = isActive;
+      btn.addEventListener('click', (e) => { e.stopPropagation(); selectInstalledModel(m.name); });
+      row.appendChild(btn);
+    }
+    list.appendChild(row);
+  });
+}
+
+// Show how much room is left on the NVMe (the filesystem holding the catalog),
+// so the user can judge whether a download will fit.
+function renderDiskInfo(disk) {
+  const el = document.getElementById('modelDiskInfo');
+  if (!el) return;
+  if (disk && typeof disk.freeBytes === 'number') {
+    const total = disk.totalBytes ? ` of ${fmtBytes(disk.totalBytes)}` : '';
+    el.textContent = `NVMe storage: ${fmtBytes(disk.freeBytes)} free${total}`;
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+// Re-read free space after a download or delete changes it.
+async function refreshDiskInfo() {
+  try {
+    const r = await fetch('/models/status', { cache: 'no-store' });
+    const d = await r.json();
+    renderDiskInfo(d && d.disk);
+  } catch (e) { /* leave the current value */ }
+}
+
 // The header pill persists in the chat view (unlike the home-screen indicator,
 // which is hidden once messages appear), so the active model stays visible while
 // chatting. Show it when a model is resident; hide it when none.
@@ -3023,36 +3456,13 @@ function updateHomeModelIndicator() {
   }
 }
 
-// The model dropdown (#chatModelSelect) doubles as the manager: Load activates
-// the selection; info + delete act on the selected model.
+// Refresh the per-row actions in the model list (Load / Unload / active state)
+// plus the shared Reset button and composer, whenever model state changes.
 function updateManageButtons() {
-  const sel = document.getElementById('chatModelSelect');
-  const has = !!(sel && sel.value);
-  const info = document.getElementById('modelInfoButton');
-  const del = document.getElementById('modelDeleteButton');
-  const load = document.getElementById('modelLoadButton');
-  // A reset restarts the whole model server, so freeze the other actions while
-  // it runs (only the Reset button itself stays live).
-  const busy = _modelBusy || _resetting;
-  if (info) info.disabled = !has || _resetting;
-  if (del) del.disabled = !has || busy;
-  if (load) {
-    const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
-    const alreadyLoaded = !!(opt && opt.dataset.loaded === 'true');
-    load.disabled = !has || alreadyLoaded || busy;
-    load.textContent = _modelBusy ? 'Loading…' : (has && alreadyLoaded ? 'Loaded' : 'Load model');
-  }
-  // Unload is offered only with the control API and while a model is resident.
-  const unload = document.getElementById('modelUnloadButton');
-  if (unload) {
-    const active = controlEnabled() ? _activeChatModel : '';
-    unload.hidden = !active;
-    unload.disabled = !active || busy;
-    unload.title = active ? `Unload ${active} from the accelerator` : 'Unload';
-  }
   // Reset stays available even mid-load — it is the way out of a wedged state.
   const reset = document.getElementById('modelResetMlaButton');
   if (reset) reset.disabled = _resetting;
+  renderInstalledList();
   updateComposerEnabled();
 }
 
@@ -3088,12 +3498,11 @@ function updateComposerEnabled() {
 }
 
 function initModelManage() {
+  // Info / delete / load / unload are per-row buttons in the list now
+  // (wired in renderInstalledList). Only the shared load-error + reset controls
+  // are wired here.
   const sel = document.getElementById('chatModelSelect');
-  const info = document.getElementById('modelInfoButton');
-  const del = document.getElementById('modelDeleteButton');
   if (sel) sel.addEventListener('change', updateManageButtons);
-  if (info) info.addEventListener('click', () => { if (sel && sel.value) showModelCard(sel.value); });
-  if (del) del.addEventListener('click', () => { if (sel && sel.value) deleteModel(sel.value); });
 
   const retry = document.getElementById('modelLoadRetry');
   const viewLogs = document.getElementById('modelLoadErrorLogs');
@@ -3109,8 +3518,6 @@ function initModelManage() {
     const det = document.getElementById('modelLogDetails');
     if (det) { det.open = true; det.scrollIntoView({ block: 'nearest' }); }
   });
-  const unloadBtn = document.getElementById('modelUnloadButton');
-  if (unloadBtn) unloadBtn.addEventListener('click', () => { if (_activeChatModel) unloadModel(_activeChatModel); });
   const resetBtn = document.getElementById('modelResetMlaButton');
   if (resetBtn) resetBtn.addEventListener('click', () => resetMla());
   updateManageButtons();
@@ -3170,9 +3577,11 @@ async function resetMla(opts) {
     updateManageButtons();
     if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
   }
-  // After a clean-slate reset, load the requested model (used by Retry).
+  // After a clean-slate reset, load the requested model (used by Retry and by the
+  // one-shot auto-recovery). Disable autoRetry so a second failure is surfaced
+  // rather than triggering another reset loop.
   if (opts.thenLoad) {
-    await loadModelAndActivate(opts.thenLoad);
+    await loadModelAndActivate(opts.thenLoad, { autoRetry: false });
   }
 }
 
@@ -3214,6 +3623,7 @@ async function deleteModel(name) {
     setModelStatus(`Failed to delete ${name}: ${err.message}`, 'error');
   } finally {
     await refreshCatalog();
+    refreshDiskInfo();    // freeing weights returns space to the NVMe
   }
 }
 
@@ -3283,7 +3693,9 @@ function initModelCardModal() {
   });
 }
 
-async function loadModelAndActivate(name) {
+async function loadModelAndActivate(name, opts) {
+  opts = opts || {};
+  const autoRetry = opts.autoRetry !== false;   // a fresh load auto-recovers once
   if (!name || _modelBusy || _resetting) return;
   const select = document.getElementById('chatModelSelect');
   const option = select && Array.from(select.options).find(o => o.value === name);
@@ -3294,18 +3706,25 @@ async function loadModelAndActivate(name) {
   // Incomplete weights can't load — surface it directly (a reset won't help).
   if (option && option.dataset.complete === 'false') {
     setModelStatus('Model weights are incomplete', 'error');
-    showModelError(name, `${option.dataset.incompleteReason || 'The weights are incomplete'}. Re-download it from Add Model.`);
+    showModelError(name, `${option.dataset.incompleteReason || 'The weights are incomplete'}. Re-download it from the Add Model tab.`);
     return;
   }
 
   _modelBusy = true;
+  _pendingLoad = name;   // the list row shows "Loading…" for this model
   if (select) select.disabled = true;
   updateManageButtons();
   clearModelError();
   await resetLoadLog();
-  setModelStatus(`Loading ${name}… preparing`, 'loading');
+  // Loading a chat/VLM model evicts the currently-resident one — say so explicitly.
+  const resident = select
+    ? Array.from(select.options).filter(o => o.dataset.loaded === 'true' && o.value !== name).map(o => o.value)
+    : [];
+  const switchNote = resident.length ? `Unloading ${resident.join(', ')} — ` : '';
+  setModelStatus(`${switchNote}Loading ${name}… preparing`, 'loading');
   setModelLoadBar('active');
   startLoadPolling(name);
+  let recover = false;   // set when we should auto reset the MLA and retry once
   try {
     const resp = await fetch('/models/load', {
       method: 'POST',
@@ -3314,8 +3733,9 @@ async function loadModelAndActivate(name) {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      // 503 = accelerator (MLA) busy/wedged.
+      // 503 = accelerator (MLA) busy/wedged. Auto-recover once before notifying.
       if (resp.status === 503) {
+        if (autoRetry && !_resetting) { recover = true; return; }
         if (!_resetting) {
           setModelStatus('Load failed — see details below', 'error');
           showModelError(name, data.error || 'The accelerator (MLA) is busy or wedged. Restart the studio (run.sh) to clear it.');
@@ -3331,13 +3751,17 @@ async function loadModelAndActivate(name) {
     }
     const ev = Array.isArray(data.evicted) ? data.evicted : (data.evicted ? [data.evicted] : []);
     const evictedNote = ev.length ? ` · unloaded ${ev.join(', ')}` : '';
-    setModelStatus(`Ready: ${name}${evictedNote}`, 'ready');
+    const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
+    const timeNote = (secs != null && secs > 0) ? ` in ${secs.toFixed(1)}s` : '';
+    setModelStatus(`Ready: ${name}${timeNote}${evictedNote}`, 'ready');
     // A newly loaded model starts with a fresh context — clear the chat.
     newChat();
   } catch (err) {
-    // If a reset is in progress the load's failure is a side effect of the
-    // server going down — resetMla owns the UI, so don't surface an error.
-    if (!_resetting) {
+    // First failure of a fresh load: auto-recover (reset + retry) before showing
+    // anything. If a reset is already in progress, resetMla owns the UI.
+    if (autoRetry && !_resetting) {
+      recover = true;
+    } else if (!_resetting) {
       setModelStatus('Load failed — see details below', 'error');
       showModelError(name, err.message);
     }
@@ -3345,9 +3769,15 @@ async function loadModelAndActivate(name) {
     stopLoadPolling();
     if (select) select.disabled = false;
     _modelBusy = false;
-    // During a reset, leave the status/bar/catalog to resetMla so its progress
-    // and this doomed load don't fight over the UI.
-    if (!_resetting) {
+    _pendingLoad = '';
+    if (recover) {
+      // Auto-recover: reset the MLA and retry the load once. The retry runs with
+      // autoRetry disabled, so a second failure surfaces the error to the user.
+      setModelStatus(`Load failed — resetting the accelerator and retrying ${name}…`, 'loading');
+      await resetMla({ skipConfirm: true, thenLoad: name });
+    } else if (!_resetting) {
+      // During a reset, leave the status/bar/catalog to resetMla so its progress
+      // and this doomed load don't fight over the UI.
       await pollLoadLogsOnce(name);   // flush any remaining load-log lines
       setModelLoadBar(null);
       await refreshCatalog();
@@ -3527,43 +3957,64 @@ function clearModelError() {
 // INDETERMINATE animated bar: setModelLoadBar('active') shows it, null hides it.
 function setModelLoadBar(state) {
   const bar = document.getElementById('modelLoadBar');
+  const panel = document.getElementById('modelLoadProgress');
   if (!bar) return;
   const fill = bar.querySelector('.model-load-fill');
   if (!state) {
     bar.style.display = 'none';
     if (fill) { fill.style.width = '0%'; fill.classList.remove('indeterminate'); }
+    if (panel) panel.classList.remove('is-busy');
     return;
   }
   bar.style.display = 'block';
   if (fill) { fill.style.width = '100%'; fill.classList.add('indeterminate'); }
+  // Pin the status panel to the top and bring it into view — with per-row Load
+  // buttons the click may happen far below it (especially on a small screen).
+  if (panel) {
+    panel.classList.add('is-busy');
+    if (panel.scrollIntoView) {
+      try { panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
+    }
+  }
 }
 
 // ---- Hugging Face download --------------------------------------------
 
+let _hubEnabled = false;
+
 async function initHubControls() {
-  const section = document.getElementById('hubSection');
-  if (!section) return;
-  // Probe availability (online + allowed) via status.
-  let enabled = false;
-  try {
-    const resp = await fetch('/models/status');
-    const data = await resp.json();
-    enabled = !!data.hubEnabled;
-  } catch (err) { enabled = false; }
+  // Models tab: search + type/size/family/sort filters + rescan act on the
+  // DOWNLOADED list only.
+  const modelSearch = document.getElementById('modelSearchInput');
+  if (modelSearch) modelSearch.addEventListener('input', renderInstalledList);
+  ['modelFilterType', 'modelFilterParams', 'modelFilterFamily', 'modelSortBy'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.addEventListener('change', renderInstalledList);
+  });
+  const modelRefresh = document.getElementById('modelRefreshButton');
+  if (modelRefresh) modelRefresh.addEventListener('click', () => refreshCatalog());
 
-  // The panel is a tab now (shown via .is-active); toggle its TAB instead.
-  const hubTab = document.getElementById('tabHuggingface');
-  if (hubTab) hubTab.style.display = enabled ? '' : 'none';
-  if (!enabled) return;
-
-  // Search box now FILTERS the already-listed models client-side (live).
-  const input = document.getElementById('hubSearchInput');
-  if (input) input.addEventListener('input', applyHubFilters);
-  const refresh = document.getElementById('hubRefreshButton');
-  if (refresh) refresh.addEventListener('click', () => { _hubLoaded = true; loadHubModels(); });
+  // Add Model tab: its own search + filters + refresh act on the Hugging Face list.
+  const hubSearch = document.getElementById('hubSearchInput');
+  if (hubSearch) hubSearch.addEventListener('input', applyHubFilters);
+  const hubRefresh = document.getElementById('hubRefreshButton');
+  if (hubRefresh) hubRefresh.addEventListener('click', () => { _hubLoaded = true; loadHubModels(); });
   ['hubFilterType', 'hubFilterParams', 'hubFilterFamily', 'hubSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', applyHubFilters);
   });
+
+  // Probe availability (online + allowed); the Add Model TAB shows only then.
+  let enabled = false;
+  let data = null;
+  try {
+    const resp = await fetch('/models/status');
+    data = await resp.json();
+    enabled = !!(data && data.hubEnabled);
+  } catch (err) { enabled = false; }
+  _hubEnabled = enabled;
+  renderDiskInfo(data && data.disk);   // NVMe free space (from the same status call)
+  const hubTab = document.getElementById('tabHuggingface');
+  if (hubTab) hubTab.style.display = enabled ? '' : 'none';
+  renderInstalledList();   // refresh the empty-state hint now that hub status is known
 }
 
 // Every compatible model is listed up front; the search box + dropdowns filter it.
@@ -3571,13 +4022,13 @@ let _hubAllModels = [];
 let _hubLoaded = false;
 
 function ensureHubLoaded() {
-  if (_hubLoaded) return;
+  if (_hubLoaded || !_hubEnabled) return;
   _hubLoaded = true;
   loadHubModels();
 }
 
 async function loadHubModels() {
-  const results = document.getElementById('hubResults');
+  const results = document.getElementById('modelHubList');
   if (results) results.innerHTML = '<div class="hub-note">Loading available models…</div>';
   try {
     const resp = await fetch('/models/hub/search?q=');   // empty query = list all
@@ -3644,6 +4095,9 @@ function applyHubFilters() {
   const fp = document.getElementById('hubFilterParams')?.value || '';
   const ff = document.getElementById('hubFilterFamily')?.value || '';
   const filtered = _hubAllModels.filter(m => {
+    // Fully-installed models live in the Installed section above; only offer the
+    // Hugging Face row for new models and incomplete ones (which need re-download).
+    if (m.alreadyInCatalog && m.catalogComplete !== false) return false;
     if (text && !m.repoId.toLowerCase().includes(text)) return false;
     if (ft && m._type !== ft) return false;
     if (fp && m._bucket !== fp) return false;
@@ -3663,11 +4117,11 @@ function applyHubFilters() {
   });
   renderHubResults({ enabled: true, results: filtered });
   const count = document.getElementById('hubResultCount');
-  if (count) count.textContent = _hubAllModels.length ? `${filtered.length} of ${_hubAllModels.length}` : '';
+  if (count) count.textContent = filtered.length ? `${filtered.length} to download` : '';
 }
 
 function renderHubResults(data) {
-  const results = document.getElementById('hubResults');
+  const results = document.getElementById('modelHubList');
   if (!results) return;
   results.innerHTML = '';
   const items = (data && data.results) || [];
@@ -3676,7 +4130,10 @@ function renderHubResults(data) {
     return;
   }
   if (items.length === 0) {
-    results.innerHTML = '<div class="hub-note">No models match the current filters.</div>';
+    const searching = !!(document.getElementById('hubSearchInput')?.value || '').trim();
+    results.innerHTML = searching
+      ? '<div class="hub-note">No Hugging Face models match your search.</div>'
+      : '<div class="hub-note">Everything available has already been downloaded — see the Models tab.</div>';
     return;
   }
   items.forEach(item => {
@@ -3685,15 +4142,19 @@ function renderHubResults(data) {
     const meta = document.createElement('div');
     meta.className = 'hub-result-meta';
     const parts = [];
-    if (item.sizeBytes) parts.push(fmtBytes(item.sizeBytes));
     if (item.downloads != null) parts.push(`${item.downloads.toLocaleString()} downloads`);
     const sub = parts.length ? parts.join(' · ') : '';
     const t = item._type || hubModelType(item.repoId);
     const p = (item._params != null) ? item._params : hubModelParams(item.repoId);
     const fam = item._family || hubModelFamily(item.repoId);
     const incomplete = item.alreadyInCatalog && item.catalogComplete === false;
+    // Download size (≈ on-disk footprint) is called out as its own badge.
+    const sizeBadge = item.sizeBytes
+      ? `<span class="hub-badge hub-badge-size" title="Download size — space it will take on the NVMe">⬇ ${fmtBytes(item.sizeBytes)}</span>`
+      : '<span class="hub-badge hub-badge-size hub-badge-muted" title="Download size unknown (open ℹ for details)">⬇ size —</span>';
     const badges = `<span class="hub-badge hub-badge-${t.toLowerCase()}">${t}</span>` +
       (p != null ? `<span class="hub-badge">${p}B</span>` : '') +
+      sizeBadge +
       `<span class="hub-badge hub-badge-fam">${fam}</span>` +
       (incomplete ? `<span class="hub-badge hub-badge-warn" title="Local copy is missing files — re-download to fix">⚠ incomplete</span>` : '');
     meta.innerHTML = `<span class="hub-repo">${item.repoId}</span><span class="hub-badges">${badges}</span><span class="hub-sub">${sub}</span>`;
@@ -3778,7 +4239,14 @@ async function hubDownload(repoId, row, btn) {
           if (label) label.textContent = evt.total ? `Done · ${fmtBytes(evt.total)}` : 'Done';
           if (progMeta) progMeta.textContent = '';
           if (btn) btn.textContent = 'In catalog';
-          await refreshCatalog();
+          if (btn) btn.disabled = true;
+          await refreshCatalog();   // the model now appears in the Installed section.
+          refreshDiskInfo();        // free space just dropped
+          // Mark it installed so the NEXT re-filter drops it from the Hugging Face
+          // section — but don't re-render now: a re-render here would wipe any OTHER
+          // download still in flight (its row + progress live in the same list).
+          const hit = _hubAllModels.find(x => x.repoId === repoId);
+          if (hit) { hit.alreadyInCatalog = true; hit.catalogComplete = true; }
         } else if (evt.state === 'error') {
           if (label) label.textContent = 'Error: ' + (evt.message || 'failed');
           bar.classList.add('error');
@@ -3807,6 +4275,98 @@ function applyFont(family, size) {
   const stack = FONT_PRESETS[family] || (family ? `'${family}', system-ui, sans-serif` : FONT_PRESETS['Inter']);
   root.style.setProperty('--ui-font', stack);
   if (size) root.style.setProperty('--ui-font-size', size + 'px');
+}
+
+// ---- Accent colour + SiMa multicolor accents ----------------------------
+const ACCENT_PRESETS = [
+  { name: 'Teal (default)', hex: '' },
+  { name: 'Sky', hex: '#3a86ec' },
+  { name: 'Indigo', hex: '#6366f1' },
+  { name: 'Violet', hex: '#a855f7' },
+  { name: 'Emerald', hex: '#1fb866' },
+  { name: 'Lime', hex: '#7bb318' },
+  { name: 'Amber', hex: '#f2801d' },
+  { name: 'Rose', hex: '#ef4d6a' },
+];
+
+function _accentLuminance(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return 0.5;
+  const n = parseInt(m[1], 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+  const f = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+
+// Set (or clear, when hex is falsy) the accent CSS vars, deriving the shades so a
+// single colour recolours buttons, links, focus rings and highlights.
+function applyAccent(hex) {
+  const r = document.documentElement.style;
+  const vars = ['--accent', '--accent-2', '--accent-strong', '--accent-weak', '--accent-contrast', '--user-bubble'];
+  if (!hex) { vars.forEach(v => r.removeProperty(v)); return; }
+  r.setProperty('--accent', hex);
+  r.setProperty('--accent-2', `color-mix(in srgb, ${hex} 85%, #fff)`);
+  r.setProperty('--accent-strong', `color-mix(in srgb, ${hex} 80%, #000)`);
+  r.setProperty('--accent-weak', `color-mix(in srgb, ${hex} 15%, transparent)`);
+  r.setProperty('--accent-contrast', _accentLuminance(hex) > 0.6 ? '#0b1015' : '#ffffff');
+  r.setProperty('--user-bubble', `color-mix(in srgb, ${hex} 88%, #000)`);
+}
+
+function setSpectrum(on) {
+  document.body.classList.toggle('spectrum-accents', on);
+  const cb = document.getElementById('toggleSpectrum'); if (cb) cb.checked = on;
+  try { localStorage.setItem('studioSpectrum', on ? '1' : '0'); } catch (e) { /* ignore */ }
+}
+
+function markAccentSwatch(hex) {
+  document.querySelectorAll('#accentSwatches .accent-swatch').forEach(b => {
+    b.setAttribute('aria-pressed', (!b.dataset.spectrum && (b.dataset.hex || '') === (hex || '')) ? 'true' : 'false');
+  });
+}
+
+function selectAccent(hex) {
+  applyAccent(hex);
+  try { localStorage.setItem('studioAccent', hex || ''); } catch (e) { /* ignore */ }
+  const custom = document.getElementById('accentCustom');
+  if (custom && hex) custom.value = hex;
+  markAccentSwatch(hex);
+}
+
+function initAccentControls() {
+  let saved = '';
+  try { saved = localStorage.getItem('studioAccent') || ''; } catch (e) { /* ignore */ }
+  applyAccent(saved);
+  let specOn = true;   // multicolor accents on by default (matches the marketing look)
+  try { specOn = localStorage.getItem('studioSpectrum') !== '0'; } catch (e) { /* ignore */ }
+  document.body.classList.toggle('spectrum-accents', specOn);
+
+  const wrap = document.getElementById('accentSwatches');
+  if (wrap) {
+    wrap.innerHTML = '';
+    ACCENT_PRESETS.forEach(p => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'accent-swatch';
+      b.style.background = p.hex || '#12b3a2';
+      b.dataset.hex = p.hex; b.title = p.name; b.setAttribute('aria-label', p.name);
+      b.addEventListener('click', () => selectAccent(p.hex));
+      wrap.appendChild(b);
+    });
+    const sp = document.createElement('button');
+    sp.type = 'button'; sp.className = 'accent-swatch spectrum';
+    sp.dataset.spectrum = '1'; sp.title = 'SiMa multicolor'; sp.setAttribute('aria-label', 'SiMa multicolor accents');
+    sp.addEventListener('click', () => { selectAccent(''); setSpectrum(true); });
+    wrap.appendChild(sp);
+    markAccentSwatch(saved);
+  }
+  const custom = document.getElementById('accentCustom');
+  if (custom) {
+    if (saved) custom.value = saved;
+    custom.addEventListener('input', () => selectAccent(custom.value));
+  }
+  const spectrum = document.getElementById('toggleSpectrum');
+  if (spectrum) {
+    spectrum.checked = specOn;
+    spectrum.addEventListener('change', () => setSpectrum(spectrum.checked));
+  }
 }
 
 function getSavedFont() {
@@ -3964,8 +4524,12 @@ function initCameraCollapse() {
     btn.title = collapsed ? 'Expand camera' : 'Collapse camera';
     btn.setAttribute('aria-label', btn.title);
   };
-  let collapsed = false;
-  try { collapsed = localStorage.getItem(KEY) === '1'; } catch (e) { /* ignore */ }
+  // Collapsed by default (chat-first); respect the user's saved preference once set.
+  let collapsed = true;
+  try {
+    const saved = localStorage.getItem(KEY);
+    if (saved !== null) collapsed = saved === '1';
+  } catch (e) { /* ignore */ }
   apply(collapsed);
   btn.addEventListener('click', () => {
     collapsed = !section.classList.contains('collapsed');
@@ -4345,6 +4909,233 @@ function stopVisionMirror() {
 // ---- Full-screen Benchmark (web MoLE `perf`: TTFT / TPS) ---------------
 let _benchPoll = null;
 
+// GUI shutdown: stops the whole studio (UI + model server) via the supervisor.
+function initShutdownButton() {
+  const btn = document.getElementById('shutdownButton');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (!window.confirm('Shut down the GenAI Studio?\n\nThis stops the web app and the model server on the board. You will need to run ./run.sh again to restart it.')) return;
+    btn.disabled = true;
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+    try {
+      await fetch('/shutdown', { method: 'POST' });
+    } catch (e) { /* the server is going down — a dropped request is expected */ }
+    const overlay = document.getElementById('shutdownOverlay');
+    if (overlay) overlay.style.display = 'flex';
+  });
+}
+
+// ---- Showcase: the Modalix + LLiMa story, embedded full-screen in-app ----
+// The header prism button opens the deck (showcase.html) inside an iframe overlay
+// so it feels like a native mode (Vision/Benchmark) instead of navigating away.
+// Modifier-clicks and middle-clicks still open /showcase in a new tab.
+let _showcaseEntered = false;   // did we request browser fullscreen on open?
+
+function initShowcase() {
+  const modal = document.getElementById('showcaseModal');
+  const btn = document.getElementById('showcaseButton');
+  if (!modal || !btn) return;
+  const close = document.getElementById('showcaseCloseBtn');
+  btn.addEventListener('click', (e) => {
+    // Let the browser handle new-tab intents (ctrl/cmd/shift/alt/middle-click).
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button && e.button !== 0)) return;
+    e.preventDefault();
+    openShowcase();
+  });
+  if (close) close.addEventListener('click', closeShowcase);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display !== 'none') closeShowcase();
+  });
+  // The deck runs inside the iframe; when it has focus, Escape can't reach us,
+  // so showcase.html posts this message up so Esc still closes the overlay.
+  window.addEventListener('message', (e) => {
+    if (e && e.origin === window.location.origin && e.data === 'neat-showcase-close') closeShowcase();
+  });
+}
+
+function openShowcase() {
+  const modal = document.getElementById('showcaseModal');
+  const frame = document.getElementById('showcaseFrame');
+  if (!modal || !frame) return;
+  // (Re)load fresh each time so the deck resets to slide 1 with autoplay stopped.
+  frame.src = '/showcase';
+  modal.style.display = 'flex';
+  document.body.classList.add('showcase-open');
+  _showcaseEntered = false;
+  try {
+    const rf = modal.requestFullscreen || modal.webkitRequestFullscreen;
+    if (rf) { const p = rf.call(modal); if (p && p.then) { _showcaseEntered = true; p.catch(() => { _showcaseEntered = false; }); } }
+  } catch (e) { /* ignore */ }
+  // Hand keyboard control to the deck so arrows/dots/autoplay work immediately.
+  setTimeout(() => { try { frame.contentWindow && frame.contentWindow.focus(); } catch (e) { /* ignore */ } }, 80);
+}
+
+function closeShowcase() {
+  const modal = document.getElementById('showcaseModal');
+  const frame = document.getElementById('showcaseFrame');
+  if (!modal) return;
+  modal.style.display = 'none';
+  document.body.classList.remove('showcase-open');
+  // Unload the deck so autoplay timers/audio stop and state is clean next open.
+  if (frame) frame.src = 'about:blank';
+  if (_showcaseEntered) {
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) { /* ignore */ }
+  }
+  _showcaseEntered = false;
+}
+
+// ---- Solutions: SiMaSentry harness suites (Med/Safe/Sec), embedded in-app ----
+// The header shield button opens a Studio-styled launcher grid; picking a card
+// loads the vendored harness (/solutions/<mode>/) in a fullscreen iframe,
+// pre-wired to the loaded model through the same-origin /v1/chat/completions
+// proxy (the HTTPS page can't call the HTTP :9998 model server directly).
+// The harness's own ⌂ Home action posts {type:'sima-sentry:home'} → back to grid.
+const SOLUTIONS_MODES = {
+  health:   { label: 'SiMaSentry-Med' },
+  safety:   { label: 'SiMaSentry-Safe' },
+  security: { label: 'SiMaSentry-Sec' },
+};
+let _solutionsEntered = false;   // did we request browser fullscreen on open?
+
+function buildSolutionsHarnessUrl(mode) {
+  // provider=ollama keeps the harness from requiring an API key; URL params
+  // override its localStorage so every open reflects the current model.
+  const params = new URLSearchParams({ provider: 'ollama', base_url: '/v1/chat/completions' });
+  const model = getSelectedChatModel();
+  if (model) params.set('model', model);
+  return `/solutions/${mode}/index.html?${params.toString()}`;
+}
+
+function initSolutions() {
+  const modal = document.getElementById('solutionsModal');
+  const btn = document.getElementById('solutionsButton');
+  if (!modal || !btn) return;
+  btn.addEventListener('click', (e) => {
+    // Let the browser handle new-tab intents (ctrl/cmd/shift/alt/middle-click).
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button && e.button !== 0)) return;
+    e.preventDefault();
+    openSolutions();
+  });
+  modal.querySelectorAll('.solutions-card').forEach((card) => {
+    card.addEventListener('click', () => openSolutionsHarness(card.dataset.mode));
+  });
+  const home = document.getElementById('solutionsHomeBtn');
+  if (home) home.addEventListener('click', showSolutionsGrid);
+  const close = document.getElementById('solutionsCloseBtn');
+  if (close) close.addEventListener('click', closeSolutions);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || modal.style.display === 'none') return;
+    const frame = document.getElementById('solutionsFrame');
+    const frameVisible = frame && frame.style.display !== 'none';
+    frameVisible ? showSolutionsGrid() : closeSolutions();
+  });
+  // Harnesses post {type:'sima-sentry:home'} when their Home action is used
+  // while embedded — return to the launcher grid rather than closing outright.
+  // (The showcase listener compares e.data to a string, so it ignores this.)
+  window.addEventListener('message', (e) => {
+    const frame = document.getElementById('solutionsFrame');
+    if (!frame || e.source !== frame.contentWindow) return;
+    if (e.origin !== window.location.origin) return;   // vendored ⇒ same origin
+    if (e.data && typeof e.data === 'object' && e.data.type === 'sima-sentry:home') {
+      showSolutionsGrid();
+    }
+  });
+}
+
+function updateSolutionsBadges() {
+  const model = getSelectedChatModel();
+  const vision = model && selectedChatModelSupportsVision();
+  document.querySelectorAll('#solutionsModal .solutions-badge').forEach((badge) => {
+    badge.hidden = !!vision;
+    if (!model) badge.textContent = 'no model loaded';
+    else if (!vision) badge.textContent = 'no vision support';
+  });
+  const note = document.getElementById('solutionsModelNote');
+  if (note) {
+    note.innerHTML = model
+      ? `Using <b></b>${vision ? '' : ' — load a vision model for image features'}`
+      : 'No model loaded — open Settings to load one';
+    const slot = note.querySelector('b');
+    if (slot) slot.textContent = model;
+  }
+}
+
+function openSolutions() {
+  const modal = document.getElementById('solutionsModal');
+  if (!modal) return;
+  updateSolutionsBadges();
+  modal.style.display = 'flex';
+  document.body.classList.add('solutions-open');
+  _solutionsEntered = false;
+  try {
+    const rf = modal.requestFullscreen || modal.webkitRequestFullscreen;
+    if (rf) { const p = rf.call(modal); if (p && p.then) { _solutionsEntered = true; p.catch(() => { _solutionsEntered = false; }); } }
+  } catch (e) { /* ignore */ }
+}
+
+function openSolutionsHarness(mode) {
+  if (!SOLUTIONS_MODES[mode]) return;
+  const model = getSelectedChatModel();
+  const vision = model && selectedChatModelSupportsVision();
+  if (!vision) {
+    const msg = model
+      ? `${model} has no vision support — the ${SOLUTIONS_MODES[mode].label} image features won't work. Open anyway?`
+      : `No model is loaded — ${SOLUTIONS_MODES[mode].label} cannot chat until one is loaded in Settings. Open anyway?`;
+    if (!window.confirm(msg)) return;
+  }
+  const frame = document.getElementById('solutionsFrame');
+  const grid = document.getElementById('solutionsGrid');
+  if (!frame || !grid) return;
+  const url = buildSolutionsHarnessUrl(mode);
+  frame.src = url;
+  const newTab = document.getElementById('solutionsNewTab');
+  if (newTab) newTab.href = url;
+  grid.style.display = 'none';
+  frame.style.display = 'block';
+  const home = document.getElementById('solutionsHomeBtn');
+  if (home) home.style.display = 'inline-flex';
+  setTimeout(() => { try { frame.contentWindow && frame.contentWindow.focus(); } catch (e) { /* ignore */ } }, 80);
+}
+
+function showSolutionsGrid() {
+  const frame = document.getElementById('solutionsFrame');
+  const grid = document.getElementById('solutionsGrid');
+  if (frame) {
+    // Unloading the iframe releases camera/mic and aborts any in-flight chat
+    // fetch (the proxy then posts /stop so the accelerator is freed).
+    frame.removeAttribute('src');
+    frame.style.display = 'none';
+  }
+  if (grid) grid.style.display = 'flex';
+  const home = document.getElementById('solutionsHomeBtn');
+  if (home) home.style.display = 'none';
+  const newTab = document.getElementById('solutionsNewTab');
+  if (newTab) newTab.href = '/solutions/';
+  updateSolutionsBadges();
+}
+
+function closeSolutions() {
+  const modal = document.getElementById('solutionsModal');
+  if (!modal) return;
+  showSolutionsGrid();
+  modal.style.display = 'none';
+  document.body.classList.remove('solutions-open');
+  if (_solutionsEntered) {
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        const p = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) { /* ignore */ }
+  }
+  _solutionsEntered = false;
+}
+
 function initBenchmark() {
   const modal = document.getElementById('benchmarkModal');
   if (!modal) return;
@@ -4356,6 +5147,11 @@ function initBenchmark() {
   if (close) close.addEventListener('click', closeBenchmark);
   if (run) run.addEventListener('click', runBenchmark);
   if (stop) stop.addEventListener('click', stopBenchmark);
+  const csv = document.getElementById('benchExportCsv');
+  const json = document.getElementById('benchExportJson');
+  if (csv) csv.addEventListener('click', exportBenchCsv);
+  if (json) json.addEventListener('click', exportBenchJson);
+  initBenchCombo();
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modal.style.display !== 'none') closeBenchmark();
   });
@@ -4374,11 +5170,18 @@ function openBenchmark() {
   } catch (e) { /* ignore */ }
 }
 
-// List the catalog models so the user can pick what to benchmark — even when
-// nothing is loaded yet (the run will load the chosen model first).
+// ---- Benchmark: multi-model selection, sequential runs, comparison, export ----
+// The "Models to benchmark" picker is a multi-select dropdown: check one, several,
+// or all downloaded models. Running benchmarks each selected model in turn (loading
+// it first) and then shows a side-by-side comparison that can be exported.
+let _benchModels = [];              // catalog models (chat/VLM) shown in the picker
+let _benchSelected = new Set();     // model names checked to benchmark
+let _benchComparison = [];          // [{model, summary, runs, loadFailed}] this session
+let _benchAbort = false;            // set by Stop to break the multi-model loop
+
 async function populateBenchModels() {
-  const sel = document.getElementById('benchModelSelect');
-  if (!sel) return;
+  const trigger = document.getElementById('benchModelTrigger');
+  if (!trigger) return;
   let catalog = [];
   try {
     if (controlEnabled()) {
@@ -4389,30 +5192,277 @@ async function populateBenchModels() {
       catalog = getConfiguredChatModels().map(name => ({ name, loaded: true, type: 'chat' }));
     }
   } catch (e) { catalog = []; }
-  const chat = catalog.filter(m => (m.type || 'chat') !== 'asr');
-  const prev = sel.value;
-  const active = getSelectedChatModel();
-  sel.innerHTML = '';
-  if (!chat.length) {
-    const o = document.createElement('option');
-    o.value = ''; o.textContent = 'No models available';
-    sel.appendChild(o); sel.disabled = true;
-    updateBenchModelState();
+  _benchModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
+  // Keep any prior selection that still exists; default to the active model.
+  const names = new Set(_benchModels.map(m => m.name));
+  _benchSelected = new Set(Array.from(_benchSelected).filter(n => names.has(n)));
+  if (!_benchSelected.size) {
+    const active = getSelectedChatModel();
+    if (active && names.has(active)) _benchSelected.add(active);
+  }
+  renderBenchModelList(document.getElementById('benchModelSearch')?.value || '');
+  updateBenchModelSummary();
+  updateBenchModelState();
+}
+
+function renderBenchModelList(filter) {
+  const list = document.getElementById('benchModelList');
+  if (!list) return;
+  const f = (filter || '').trim().toLowerCase();
+  const items = _benchModels.filter(m => !f || m.name.toLowerCase().includes(f));
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="bench-model-empty">No downloaded models match.</div>';
     return;
   }
-  sel.disabled = false;
-  chat.forEach(m => {
-    const o = document.createElement('option');
-    o.value = m.name;
+  items.forEach(m => {
+    const label = document.createElement('label');
+    label.className = 'bench-model-opt';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = m.name; cb.checked = _benchSelected.has(m.name);
+    cb.addEventListener('change', () => {
+      if (cb.checked) _benchSelected.add(m.name); else _benchSelected.delete(m.name);
+      updateBenchModelSummary(); updateBenchModelState();
+    });
+    const txt = document.createElement('span');
     const size = m.sizeBytes ? `  ·  ${fmtBytes(m.sizeBytes)}` : '';
-    o.textContent = `${m.loaded ? '● ' : '○ '}${m.name}  ·  ${typeBadge(m.type)}${size}`;
-    o.dataset.loaded = m.loaded ? 'true' : 'false';
-    sel.appendChild(o);
+    txt.textContent = `${m.loaded ? '● ' : ''}${m.name}  ·  ${typeBadge(m.type)}${size}`;
+    label.appendChild(cb); label.appendChild(txt);
+    list.appendChild(label);
   });
-  sel.value = (active && chat.some(m => m.name === active)) ? active
-            : (prev && chat.some(m => m.name === prev)) ? prev : chat[0].name;
-  sel.onchange = updateBenchModelState;
-  updateBenchModelState();
+}
+
+// Selected model names in catalog order (only ones that still exist).
+function benchSelectedModels() {
+  return _benchModels.map(m => m.name).filter(n => _benchSelected.has(n));
+}
+
+function updateBenchModelSummary() {
+  const summary = document.getElementById('benchModelSummary');
+  const all = document.getElementById('benchModelAll');
+  const total = _benchModels.length;
+  const sel = benchSelectedModels();
+  const n = sel.length;
+  if (summary) {
+    summary.textContent = n === 0 ? 'Select models…'
+      : (total && n === total ? `All ${total} models`
+        : (n === 1 ? sel[0] : `${n} models`));
+  }
+  if (all) { all.checked = total > 0 && n === total; all.indeterminate = n > 0 && n < total; }
+}
+
+function openBenchMenu() {
+  const menu = document.getElementById('benchModelMenu');
+  const trigger = document.getElementById('benchModelTrigger');
+  if (!menu) return;
+  renderBenchModelList(document.getElementById('benchModelSearch')?.value || '');
+  menu.hidden = false;
+  if (trigger) trigger.setAttribute('aria-expanded', 'true');
+}
+function closeBenchMenu() {
+  const menu = document.getElementById('benchModelMenu');
+  const trigger = document.getElementById('benchModelTrigger');
+  if (menu) menu.hidden = true;
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+function initBenchCombo() {
+  const trigger = document.getElementById('benchModelTrigger');
+  const menu = document.getElementById('benchModelMenu');
+  const search = document.getElementById('benchModelSearch');
+  const all = document.getElementById('benchModelAll');
+  if (!trigger || !menu) return;
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu.hidden) openBenchMenu(); else closeBenchMenu();
+  });
+  if (search) search.addEventListener('input', () => renderBenchModelList(search.value));
+  if (all) all.addEventListener('change', () => {
+    if (all.checked) _benchModels.forEach(m => _benchSelected.add(m.name));
+    else _benchSelected.clear();
+    renderBenchModelList(search ? search.value : '');
+    updateBenchModelSummary(); updateBenchModelState();
+  });
+  document.addEventListener('click', (e) => {
+    const combo = document.getElementById('benchModelCombo');
+    if (combo && !combo.contains(e.target)) closeBenchMenu();
+  });
+}
+
+// "Model N of M: name" while a multi-model run is in flight.
+function setBenchScope(idx, total, model) {
+  const el = document.getElementById('benchScope');
+  if (!el) return;
+  if (total <= 1) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.textContent = `Benchmarking model ${idx + 1} of ${total}: ${model}`;
+}
+function clearBenchScope() {
+  const el = document.getElementById('benchScope');
+  if (el) el.style.display = 'none';
+}
+
+// Poll /benchmark/status (rendering live) until the current model's run finishes.
+function pollBenchmarkUntilDone() {
+  return new Promise((resolve) => {
+    const tick = async () => {
+      if (_benchAbort) {
+        // Make sure any run that DID start server-side is actually stopped, so it
+        // doesn't keep occupying the accelerator after we abort.
+        try { await fetch('/benchmark/stop', { method: 'POST' }); } catch (e) { /* ignore */ }
+        resolve({ summary: null, runs: [] });
+        return;
+      }
+      let d = null;
+      try { const r = await fetch('/benchmark/status'); d = await r.json(); } catch (e) { d = null; }
+      if (d) renderBenchmark(d);
+      if (d && !d.running) { resolve(d); return; }
+      setTimeout(tick, 500);
+    };
+    tick();
+  });
+}
+
+// Load (if needed) + benchmark ONE model; returns {summary, runs, loadFailed}.
+async function runOneBenchmark(model, runs, maxTokens, prompt) {
+  const hint = document.getElementById('benchHint');
+  if (controlEnabled() && getSelectedChatModel() !== model) {
+    showBenchLoadPanel(model);
+    beginLoadMirror('benchLoadStatus', 'benchLoadLog', 'benchLoadBar');
+    try { await loadModelAndActivate(model); } finally { endLoadMirror(); }
+    hideBenchLoadPanel();
+    if (getSelectedChatModel() !== model) return { summary: null, runs: [], loadFailed: true };
+  }
+  // Stop pressed during the (multi-second) load — don't start a server run that
+  // would then be orphaned.
+  if (_benchAbort) return { summary: null, runs: [] };
+  let started;
+  try {
+    const resp = await fetch('/benchmark/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ num_samples: runs, max_new_tokens: maxTokens, prompt, model }),
+    });
+    started = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(started.error || 'failed to start');
+  } catch (err) {
+    if (hint) hint.textContent = `Could not benchmark ${model}: ${err.message}`;
+    return { summary: null, runs: [] };
+  }
+  renderBenchmark(started);
+  const final = await pollBenchmarkUntilDone();
+  return { summary: (final && final.summary) || null, runs: (final && final.runs) || [] };
+}
+
+// Side-by-side comparison table + bar chart (shown once 2+ models are involved).
+function renderBenchComparison(list) {
+  const wrap = document.getElementById('benchCompare');
+  const body = document.getElementById('benchCompareBody');
+  if (!wrap || !body) return;
+  if (list.length < 2) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  const done = list.filter(e => e.summary);
+  const bestTps = done.length ? Math.max(...done.map(e => e.summary.tps.mean)) : null;
+  const bestTtft = done.length ? Math.min(...done.map(e => e.summary.ttftMs.mean)) : null;
+  body.innerHTML = '';
+  list.forEach(e => {
+    const tr = document.createElement('tr');
+    const cell = (txt, cls) => { const td = document.createElement('td'); td.textContent = txt; if (cls) td.className = cls; return td; };
+    tr.appendChild(cell(e.model, 'bench-compare-model'));
+    const s = e.summary;
+    if (!s) {
+      const td = document.createElement('td');
+      td.colSpan = 6; td.className = 'bench-compare-fail';
+      td.textContent = e.loadFailed ? 'failed to load' : 'no valid result';
+      tr.appendChild(td); body.appendChild(tr); return;
+    }
+    const tpsTd = cell(benchFmt(s.tps.mean)); if (s.tps.mean === bestTps) tpsTd.classList.add('bench-best');
+    const ttftTd = cell(benchFmt(s.ttftMs.mean)); if (s.ttftMs.mean === bestTtft) ttftTd.classList.add('bench-best');
+    tr.appendChild(tpsTd);
+    tr.appendChild(cell(benchFmt(s.tps.p90)));
+    tr.appendChild(ttftTd);
+    tr.appendChild(cell(benchFmt(s.tokens.mean)));
+    tr.appendChild(cell(benchFmt(s.tps.stdev)));
+    tr.appendChild(cell(`${s.count}${s.errors ? ' · ' + s.errors + ' err' : ''}`));
+    body.appendChild(tr);
+  });
+  renderBenchCompareChart(list);
+}
+
+function renderBenchCompareChart(list) {
+  const chart = document.getElementById('benchCompareChart');
+  if (!chart) return;
+  chart.innerHTML = '';
+  const done = list.filter(e => e.summary && e.summary.tps);
+  if (!done.length) return;
+  const maxT = Math.max(1, ...done.map(e => e.summary.tps.mean || 0));
+  const best = Math.max(...done.map(e => e.summary.tps.mean || 0));
+  done.forEach(e => {
+    const tps = e.summary.tps.mean || 0;
+    const row = document.createElement('div'); row.className = 'bench-cbar-row';
+    const name = document.createElement('span'); name.className = 'bench-cbar-name';
+    name.textContent = e.model; name.title = e.model;
+    const track = document.createElement('div'); track.className = 'bench-cbar-track';
+    const fill = document.createElement('div'); fill.className = 'bench-cbar-fill' + (tps === best ? ' best' : '');
+    fill.style.width = Math.max(2, Math.round(tps / maxT * 100)) + '%';
+    const val = document.createElement('span'); val.className = 'bench-cbar-val'; val.textContent = benchFmt(tps) + ' tok/s';
+    track.appendChild(fill);
+    row.appendChild(name); row.appendChild(track); row.appendChild(val);
+    chart.appendChild(row);
+  });
+}
+
+// ---- Export -----------------------------------------------------------
+function benchExportStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function downloadBlob(filename, text, type) {
+  try {
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+  } catch (e) { console.warn('export failed', e); }
+}
+
+function benchExportRows() {
+  return _benchComparison.filter(e => e.summary).map(e => ({
+    model: e.model,
+    tpsMean: e.summary.tps.mean, tpsMedian: e.summary.tps.median, tpsMin: e.summary.tps.min,
+    tpsMax: e.summary.tps.max, tpsP90: e.summary.tps.p90, tpsStdev: e.summary.tps.stdev,
+    ttftMeanMs: e.summary.ttftMs.mean, ttftP90Ms: e.summary.ttftMs.p90,
+    tokensMean: e.summary.tokens.mean, validRuns: e.summary.count, errors: e.summary.errors,
+  }));
+}
+
+function exportBenchCsv() {
+  const rows = benchExportRows();
+  if (!rows.length) return;
+  const cols = ['model', 'tpsMean', 'tpsMedian', 'tpsMin', 'tpsMax', 'tpsP90', 'tpsStdev',
+    'ttftMeanMs', 'ttftP90Ms', 'tokensMean', 'validRuns', 'errors'];
+  const esc = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const lines = [cols.join(',')].concat(rows.map(r => cols.map(c => esc(r[c])).join(',')));
+  downloadBlob(`neat-benchmark-${benchExportStamp()}.csv`, lines.join('\n'), 'text/csv');
+}
+
+function exportBenchJson() {
+  if (!_benchComparison.some(e => e.summary)) return;
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    config: {
+      runs: benchClampInt('benchRuns', 1, 50, 5),
+      maxNewTokens: benchClampInt('benchMaxTokens', 8, 2048, 128),
+      prompt: (document.getElementById('benchPrompt') || {}).value || '(default)',
+    },
+    results: _benchComparison.map(e => ({
+      model: e.model, summary: e.summary, runs: e.runs, loadFailed: !!e.loadFailed,
+    })),
+  };
+  downloadBlob(`neat-benchmark-${benchExportStamp()}.json`, JSON.stringify(payload, null, 2), 'application/json');
 }
 
 function closeBenchmark() {
@@ -4420,6 +5470,10 @@ function closeBenchmark() {
   if (!modal) return;
   modal.style.display = 'none';
   document.body.classList.remove('bench-open');
+  // Abort any in-flight multi-model run so it doesn't keep loading models and
+  // benchmarking in the background (the Stop button leaves with the modal).
+  const stopBtn = document.getElementById('benchStopBtn');
+  if (stopBtn && stopBtn.style.display !== 'none') stopBenchmark();
   stopBenchPolling();
   endLoadMirror();
   hideBenchLoadPanel();
@@ -4432,13 +5486,19 @@ function closeBenchmark() {
 }
 
 function updateBenchModelState() {
-  const sel = document.getElementById('benchModelSelect');
   const run = document.getElementById('benchRunBtn');
   const hint = document.getElementById('benchHint');
-  const model = sel ? sel.value : '';
+  const n = benchSelectedModels().length;
   const busy = _modelBusy || _resetting;
-  if (run) run.disabled = !model || busy;
-  if (hint) hint.textContent = model ? '' : 'No models available — add or download one in Settings → Add Model.';
+  if (run) {
+    run.disabled = n === 0 || busy;
+    run.textContent = n > 1 ? `Run benchmark · ${n} models` : 'Run benchmark';
+  }
+  if (hint) {
+    hint.textContent = n ? ''
+      : (_benchModels.length ? 'Select one or more models to benchmark.'
+        : 'No models available — add or download one in Settings → Models.');
+  }
 }
 
 function benchClampInt(id, min, max, def) {
@@ -4452,51 +5512,34 @@ function benchClampInt(id, min, max, def) {
 function benchFmt(n) { return (n == null) ? '–' : (Math.round(n * 100) / 100).toLocaleString(); }
 
 async function runBenchmark() {
-  const sel = document.getElementById('benchModelSelect');
-  const model = sel ? sel.value : '';
+  const models = benchSelectedModels();
   const hint = document.getElementById('benchHint');
-  if (!model || _modelBusy || _resetting) { updateBenchModelState(); return; }
+  if (!models.length || _modelBusy || _resetting) { updateBenchModelState(); return; }
   const runs = benchClampInt('benchRuns', 1, 50, 5);
   const maxTokens = benchClampInt('benchMaxTokens', 8, 2048, 128);
   const promptEl = document.getElementById('benchPrompt');
   const prompt = promptEl ? promptEl.value : '';
   if (hint) hint.textContent = '';
+  _benchComparison = [];
+  _benchAbort = false;
+  renderBenchComparison(_benchComparison);   // clear any prior comparison
   applyBenchRunning(true);
-  // Load the chosen model first if it isn't the one currently resident — show the
-  // live load progress (status + streaming load log) right here in the benchmark.
-  if (controlEnabled() && getSelectedChatModel() !== model) {
-    showBenchLoadPanel(model);
-    beginLoadMirror('benchLoadStatus', 'benchLoadLog', 'benchLoadBar');
-    try {
-      await loadModelAndActivate(model);
-    } finally {
-      endLoadMirror();
-    }
-    if (getSelectedChatModel() !== model) {
-      hideBenchLoadPanel();
-      applyBenchRunning(false);
-      if (hint) hint.textContent = `Could not load ${model}. Check Settings → Model for details.`;
-      return;
-    }
-    hideBenchLoadPanel();
-    if (hint) hint.textContent = '';
+  const total = models.length;
+  for (let i = 0; i < total; i++) {
+    if (_benchAbort) break;
+    const model = models[i];
+    setBenchScope(i, total, model);
+    const res = await runOneBenchmark(model, runs, maxTokens, prompt);
+    _benchComparison.push({ model, summary: res.summary, runs: res.runs, loadFailed: !!res.loadFailed });
+    renderBenchComparison(_benchComparison);   // update the table/chart as each finishes
   }
-  try {
-    const resp = await fetch('/benchmark/run', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ num_samples: runs, max_new_tokens: maxTokens, prompt, model }),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.error || 'failed to start');
-    renderBenchmark(data);
-    startBenchPolling();
-  } catch (err) {
-    applyBenchRunning(false);
-    if (hint) hint.textContent = 'Could not start: ' + err.message;
-  }
+  clearBenchScope();
+  applyBenchRunning(false);
+  if (_benchAbort && hint) hint.textContent = 'Benchmark stopped.';
 }
 
 async function stopBenchmark() {
+  _benchAbort = true;                         // break the multi-model loop
   try { await fetch('/benchmark/stop', { method: 'POST' }); } catch (e) { /* ignore */ }
 }
 
@@ -4517,9 +5560,10 @@ function applyBenchRunning(running) {
   const stop = document.getElementById('benchStopBtn');
   if (run) run.style.display = running ? 'none' : '';
   if (stop) stop.style.display = running ? '' : 'none';
-  ['benchModelSelect', 'benchRuns', 'benchMaxTokens', 'benchPrompt'].forEach(id => {
+  ['benchModelTrigger', 'benchRuns', 'benchMaxTokens', 'benchPrompt'].forEach(id => {
     const el = document.getElementById(id); if (el) el.disabled = !!running;
   });
+  if (running) closeBenchMenu();
   if (!running) updateBenchModelState();
 }
 

@@ -37,9 +37,10 @@ app:                         # Assistant web app settings.
     port: 9997               # Control API port.
 
   request:                   # Default generation settings.
-    max_tokens: 128          # Max generated tokens per response.
+    max_tokens: 256          # Max generated tokens per response.
     system_prompt: >-
       Answer clearly and concisely. Use Markdown formatting when it helps.
+      Answer the question in the language it was asked in.
 
   web:                       # Browser UI settings.
     host: 0.0.0.0            # Host interface to bind.

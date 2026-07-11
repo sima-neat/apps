@@ -279,7 +279,8 @@ class ModelManager:
 
             if name in self._server_model_names():
                 self.touch(name)
-                return {"name": name, "state": "ready", "evicted": [], "cold_start": False}
+                return {"name": name, "state": "ready", "evicted": [], "cold_start": False,
+                        "load_seconds": 0.0}
 
             if not path or not Path(path).is_dir():
                 raise ValueError(f"Model directory not found for: {name}")
@@ -339,12 +340,14 @@ class ModelManager:
                 # inference. Warm synchronously so a load failure is catchable and
                 # so we can time the load (this is where the wait actually happens).
                 if is_asr or not self._warmup:
-                    return {"name": name, "state": "ready", "evicted": evicted, "cold_start": True}
+                    return {"name": name, "state": "ready", "evicted": evicted,
+                            "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
                 ok, detail = self._warm_check(name)
                 if ok:
                     self._record_load_duration(name, size_bytes, time.monotonic() - started)
-                    return {"name": name, "state": "ready", "evicted": evicted, "cold_start": True}
+                    return {"name": name, "state": "ready", "evicted": evicted,
+                            "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
                 if _is_mla_failure(detail):
                     return self._handle_mla_failure(name, evicted, detail)
@@ -879,6 +882,28 @@ class ModelManager:
     def hub_enabled(self) -> bool:
         return hub_helpers.hub_enabled(self._hub)
 
+    def disk_info(self) -> dict | None:
+        """Free / total bytes of the filesystem that holds the model catalog (the
+        NVMe on the board), so the UI can show how much room is left for
+        downloads. Walks up to an existing directory when the catalog dir has not
+        been created yet."""
+        probe = self._catalog_dir or Path.cwd()
+        while probe and not probe.exists():
+            parent = probe.parent
+            probe = parent if parent != probe else None
+        if probe is None:
+            return None
+        try:
+            usage = shutil.disk_usage(str(probe))
+        except Exception:  # noqa: BLE001
+            return None
+        return {
+            "freeBytes": usage.free,
+            "totalBytes": usage.total,
+            "usedBytes": usage.used,
+            "path": str(self._catalog_dir or probe),
+        }
+
     def status(self) -> dict:
         return {
             "catalog": self.catalog(),
@@ -887,4 +912,5 @@ class ModelManager:
             "asrModel": self._asr_name,
             "hubEnabled": self.hub_enabled(),
             "loading": self.loading_status(),
+            "disk": self.disk_info(),
         }
