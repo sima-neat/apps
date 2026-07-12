@@ -73,9 +73,9 @@ enabled in the scope file but the matching Python or C++ test file is missing,
 `tests/test.sh` fails before running tests. If a test is disabled, it is skipped
 even if a test file exists.
 
-Package installation does not download models by default. Use
-`NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL=1` only when an install step should also
-preload the scoped e2e models.
+Package installation does not include the test harness or download test models.
+CI and Nightly overlay the internal test bundle and let `tests/test.sh` download
+the models selected by the test scope.
 
 ## Test Layout
 
@@ -245,7 +245,10 @@ URLs instead of `127.0.0.1`.
 
 ## Two-Stage CI
 
-- Stage 1 (eLxr runner): `./build.sh --all --clean` builds and packages apps.
-- Stage 2 (Modalix runner): installs the packaged runtime and runs `tests/test.sh`.
-- Regular CI runs unit tests with `./tests/test.sh --unit`.
-- Nightly/manual e2e runs `./tests/test.sh --e2e --strict`.
+- Stage 1 (eLxr runner): `./build.sh --all --clean` builds a runtime candidate
+  and a separate internal test bundle.
+- Stage 2 (Modalix runner): overlays the test bundle, runs
+  `./tests/test.sh --all --strict`, and packages the runtime for publication only
+  after every activated test passes.
+- Nightly/manual runs overlay the matching test bundle and execute
+  `./tests/test.sh --e2e --strict` without publishing a release.
