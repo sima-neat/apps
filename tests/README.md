@@ -251,5 +251,3 @@ URLs instead of `127.0.0.1`.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
   `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
   every activated test passes.
-
-Portal publication runs in the separate Apps Portal workflow.
