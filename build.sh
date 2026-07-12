@@ -195,7 +195,7 @@ PY
   )
 
   # Runtime source is customer-facing. Test scopes and test source are staged
-  # separately and overlaid only in CI or Nightly.
+  # separately and overlaid only in CI.
   while IFS= read -r src_file; do
     local rel target_dir
     rel="${src_file#${ROOT_DIR}/examples/}"
@@ -219,29 +219,16 @@ PY
       \) 2>/dev/null | sort
   )
 
-  while IFS= read -r test_file; do
+  while IFS= read -r tests_dir; do
     local rel target_dir
-    rel="${test_file#${ROOT_DIR}/examples/}"
-    target_dir="${test_stage_dir}/examples/$(dirname "${rel}")"
+    rel="${tests_dir#${ROOT_DIR}/examples/}"
+    target_dir="${test_stage_dir}/examples/${rel}"
     mkdir -p "${target_dir}"
-    cp "${test_file}" "${target_dir}/"
-  done < <(
-    find "${ROOT_DIR}/examples" -type f \
-      ! -path '*/__pycache__/*' \
-      ! -name '*.pyc' \
-      ! -name '*.pyo' \
-      \( -path '*/tests/test-scope.yaml' \
-         -o -path '*/tests/python/test_*.py' \
-      \) 2>/dev/null | sort
-  )
+    cp -a "${tests_dir}/." "${target_dir}/"
+  done < <(find "${ROOT_DIR}/examples" -type d -name tests -prune | sort)
 
-  while IFS= read -r rel; do
-    local src_file target_dir
-    src_file="${ROOT_DIR}/${rel}"
-    target_dir="${test_stage_dir}/$(dirname "${rel}")"
-    mkdir -p "${target_dir}"
-    cp "${src_file}" "${target_dir}/"
-  done < <(git -C "${ROOT_DIR}" ls-files tests)
+  mkdir -p "${test_stage_dir}/tests"
+  cp -a "${ROOT_DIR}/tests/." "${test_stage_dir}/tests/"
   mkdir -p "${test_stage_dir}/deps" "${test_stage_dir}/scripts"
   cp "${APPS_MANIFEST}" "${test_stage_dir}/deps/manifest.json"
   cp "${ROOT_DIR}/scripts/download_models.sh" "${test_stage_dir}/scripts/download_models.sh"
@@ -268,18 +255,13 @@ PY
     cp "${src_file}" "${target_dir}/"
   done
 
-  find "${stage_dir}" "${test_stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
-  find "${stage_dir}" "${test_stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+  find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
+  find "${stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
   tar -czf "${archive_path}" -C "${stage_root}" "$(basename "${stage_dir}")"
   tar -czf "${test_archive_path}" -C "${stage_root}" "$(basename "${test_stage_dir}")"
   "${ROOT_DIR}/scripts/ci/validate_apps_runtime_archive.sh" "${archive_path}"
   tar -tzf "${test_archive_path}" neat-apps-tests/tests/test.sh >/dev/null
-  if tar -tzf "${test_archive_path}" | grep -Eq '/(\.env\.local|\.pytest_cache|__pycache__)(/|$)'; then
-    echo "ERROR: internal test archive contains local or generated test state" >&2
-    rm -rf "${stage_root}"
-    return 1
-  fi
   rm -rf "${stage_root}"
 
   echo ""

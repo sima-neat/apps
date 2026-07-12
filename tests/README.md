@@ -74,8 +74,9 @@ enabled in the scope file but the matching Python or C++ test file is missing,
 even if a test file exists.
 
 Package installation does not include the test harness or download test models.
-CI and Nightly overlay the internal test bundle and let `tests/test.sh` download
-the models selected by the test scope.
+Vulcan overlays an ephemeral internal test bundle and lets `tests/test.sh`
+download the models selected by the test scope. Only the customer runtime is
+published after the activated tests pass.
 
 ## Test Layout
 
@@ -243,12 +244,12 @@ RTSP e2e tests require live reachable RTSP streams at test time:
 Any RTSP source works. If streams are host-served, use the host IP in the RTSP
 URLs instead of `127.0.0.1`.
 
-## Two-Stage CI
+## Two-Stage Vulcan CI
 
-- Stage 1 (eLxr runner): `./build.sh --all --clean` builds a runtime candidate
-  and a separate internal test bundle.
+- Stage 1 (eLxr runner): `./build.sh --all --clean` validates the Apps and portal
+  builds, then creates a runtime candidate and an ephemeral test bundle.
 - Stage 2 (Modalix runner): overlays the test bundle, runs
-  `./tests/test.sh --all --strict`, and packages the runtime for publication only
-  after every activated test passes.
-- Nightly/manual runs overlay the matching test bundle and execute
-  `./tests/test.sh --e2e --strict` without publishing a release.
+  `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
+  every activated test passes.
+
+Portal publication runs in the separate Apps Portal workflow.

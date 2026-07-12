@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: "Branch artifact to test"
+        description: "Branch artifact to install. Runner selection uses the workflow run ref."
         required: true
         default: main
         type: string
@@ -15,67 +15,40 @@ permissions:
   contents: read
 
 jobs:
-  resolve-vulcan-config:
-    name: Resolve Vulcan Config
-    uses: sima-neat/.github/.github/workflows/vulcan-resolve-config.yml@main
-    with:
-      vulcan_env: production
-
   resolve-test-runner:
     name: Resolve Test Runner
     uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
 
   modalix-nightly-e2e:
-    needs:
-      - resolve-vulcan-config
-      - resolve-test-runner
+    if: github.event_name == 'schedule'
+    needs: resolve-test-runner
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
       labels: [self-hosted, Linux, ARM64, modalix]
     strategy:
       fail-fast: false
       matrix:
-        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "develop"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
-    env:
-      ARTIFACT_BASE_URL: ${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}
-      VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
+        branch:
+          - main
+          - develop
 
     steps:
-      - name: Checkout matching Apps source
+      - name: Checkout code
         uses: actions/checkout@v5
         with:
           clean: true
-          ref: ${{ matrix.branch }}
 
-      - name: Resolve exact Apps artifact
-        run: |
-          branch_key="$(python3 -c 'import sys, urllib.parse; key = urllib.parse.quote(sys.argv[1], safe=""); print(urllib.parse.quote(key, safe=""))' "${{ matrix.branch }}")"
-          artifact_tag="$(curl -fsSL "${ARTIFACT_BASE_URL%/}/apps/${branch_key}/latest.tag" | tr -d '[:space:]')"
-          if [[ -z "${artifact_tag}" ]]; then
-            echo "latest.tag is empty for Apps branch ${{ matrix.branch }}" >&2
-            exit 1
-          fi
-          echo "APPS_ARTIFACT_BRANCH_KEY=${branch_key}" >> "${GITHUB_ENV}"
-          echo "APPS_ARTIFACT_TAG=${artifact_tag}" >> "${GITHUB_ENV}"
-
-      - name: Install exact Apps runtime
+      - name: Install apps runtime for latest branch build
         run: |
           runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
-            --env "${VULCAN_ENV}" \
-            --target "apps@${{ matrix.branch }}:${APPS_ARTIFACT_TAG}" \
+            --env production \
+            --target "apps@${{ matrix.branch }}" \
             --install-dir _nightly-test/install \
             --force)"
           echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
 
-      - name: Overlay matching internal tests
-        run: |
-          test_archive="${RUNNER_TEMP}/neat-apps-tests.tar.gz"
-          curl -fsSL \
-            "${ARTIFACT_BASE_URL%/}/apps/${APPS_ARTIFACT_BRANCH_KEY}/${APPS_ARTIFACT_TAG}/neat-apps-tests.tar.gz" \
-            -o "${test_archive}"
-          scripts/ci/overlay_apps_tests.sh "${test_archive}" "${APPS_RUNTIME_DIR}"
-
       - name: Locate pyneat
+        shell: bash
         run: |
           if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
             echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
@@ -89,12 +62,14 @@ jobs:
           fi
 
       - name: Install Python test dependencies
+        shell: bash
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
           "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
 
-      - name: Run activated Apps e2e tests
+      - name: Run nightly Python e2e tests from installed apps runtime
+        shell: bash
         env:
           SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
           SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
@@ -105,13 +80,109 @@ jobs:
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
             /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
           cd "${APPS_RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --e2e --strict
+          ./tests/test.sh --e2e --python --strict
 
-      - name: Cleanup Nightly workspace
-        if: ${{ always() }}
+      - name: Run nightly C++ e2e tests from installed apps runtime
+        shell: bash
+        env:
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
-          rm -rf _nightly-test
-          rm -f "${RUNNER_TEMP}/neat-apps-tests.tar.gz"
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+          cd "${APPS_RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --e2e --cpp --strict
+
+  modalix-manual-e2e:
+    if: github.event_name == 'workflow_dispatch'
+    needs: resolve-test-runner
+    runs-on:
+      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+      labels: [self-hosted, Linux, ARM64, modalix]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Install apps runtime for latest branch build
+        run: |
+          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
+            --env production \
+            --target "apps@${{ inputs.branch }}" \
+            --install-dir _nightly-test/install \
+            --force)"
+          echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+
+      - name: Locate pyneat
+        shell: bash
+        run: |
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          else
+            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
+            exit 1
+          fi
+
+      - name: Install Python test dependencies
+        shell: bash
+        run: |
+          source "${PYNEAT_ACTIVATE}"
+          echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+
+      - name: Run manual Python e2e tests from installed apps runtime
+        shell: bash
+        env:
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+        run: |
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+          cd "${APPS_RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --e2e --python --strict
+
+      - name: Run manual C++ e2e tests from installed apps runtime
+        shell: bash
+        env:
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
+        run: |
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+          cd "${APPS_RUNTIME_DIR}"
+          source "${PYNEAT_ACTIVATE}"
+          ./tests/test.sh --e2e --cpp --strict
