@@ -73,9 +73,10 @@ enabled in the scope file but the matching Python or C++ test file is missing,
 `tests/test.sh` fails before running tests. If a test is disabled, it is skipped
 even if a test file exists.
 
-Package installation does not download models by default. Use
-`NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL=1` only when an install step should also
-preload the scoped e2e models.
+Package installation does not include the test harness or download test models.
+Vulcan overlays an ephemeral internal test bundle and lets `tests/test.sh`
+download the models selected by the test scope. Only the customer runtime is
+published after the activated tests pass.
 
 ## Test Layout
 
@@ -243,9 +244,10 @@ RTSP e2e tests require live reachable RTSP streams at test time:
 Any RTSP source works. If streams are host-served, use the host IP in the RTSP
 URLs instead of `127.0.0.1`.
 
-## Two-Stage CI
+## Two-Stage Vulcan CI
 
-- Stage 1 (eLxr runner): `./build.sh --all --clean` builds and packages apps.
-- Stage 2 (Modalix runner): installs the packaged runtime and runs `tests/test.sh`.
-- Regular CI runs unit tests with `./tests/test.sh --unit`.
-- Nightly/manual e2e runs `./tests/test.sh --e2e --strict`.
+- Stage 1 (eLxr runner): `./build.sh --all --clean` validates the Apps and portal
+  builds, then creates a runtime candidate and an ephemeral test bundle.
+- Stage 2 (Modalix runner): overlays the test bundle, runs
+  `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
+  every activated test passes.
