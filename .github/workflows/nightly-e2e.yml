@@ -49,7 +49,7 @@ jobs:
 
       - name: Resolve exact Apps artifact
         run: |
-          branch_key="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${{ matrix.branch }}")"
+          branch_key="$(python3 -c 'import sys, urllib.parse; key = urllib.parse.quote(sys.argv[1], safe=""); print(urllib.parse.quote(key, safe=""))' "${{ matrix.branch }}")"
           artifact_tag="$(curl -fsSL "${ARTIFACT_BASE_URL%/}/apps/${branch_key}/latest.tag" | tr -d '[:space:]')"
           if [[ -z "${artifact_tag}" ]]; then
             echo "latest.tag is empty for Apps branch ${{ matrix.branch }}" >&2
