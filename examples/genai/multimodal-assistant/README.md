@@ -93,9 +93,29 @@ Override the default chat/VLM download with an environment variable when needed:
 CHAT_MODEL_REPO=simaai/<chat-model-repo> ./setup.sh
 ```
 
-Downloaded models are stored under `/media/nvme/llima/models` by default. On a
-system without NVMe, set `LLIMA_MODELS_PATH` to another writable location, for
-example:
+Downloaded models use this layout by default:
+
+```text
+/media/nvme/llima/models/
+├── Qwen3-VL-4B-Instruct-GPTQ-a16w4/
+├── whisper-small-a16w8/
+└── gte-small/
+```
+
+On a SoM board, mount NVMe before running setup. If NVMe is mounted but the
+model directory is not writable, create it with ownership for the current
+user:
+
+```bash
+sudo install -d \
+  -o "$(id -u)" \
+  -g "$(id -g)" \
+  /media/nvme/llima/models
+```
+
+On a system without NVMe, set `LLIMA_MODELS_PATH` to another writable
+location. The same three model directories are created under the selected
+path:
 
 ```bash
 LLIMA_MODELS_PATH=/workspace/neat/models_genai ./setup.sh
