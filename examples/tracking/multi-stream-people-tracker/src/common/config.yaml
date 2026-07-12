@@ -18,6 +18,8 @@ runtime:                     # Runtime and profiling settings.
 inference:                   # Detection controls.
   frames: 0                  # Frame limit per stream. 0 means unlimited.
   fps: 0                     # Max per-stream processing and output FPS. 0 means use source FPS.
+  max_inflight_per_stream: 4 # Raw decoder-backed frames admitted per stream to the shared detector.
+  max_inflight_total: 16     # Raw decoder-backed frames admitted across all detector streams.
   person_class_id: 0         # Class id to track. COCO id 0 is person.
   min_score: 0.30            # Detection score threshold.
   nms_iou: 0.60              # NMS IoU threshold.
