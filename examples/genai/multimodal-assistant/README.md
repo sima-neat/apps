@@ -114,12 +114,16 @@ sudo install -d \
 ```
 
 On a system without NVMe, set `LLIMA_MODELS_PATH` to another writable
-location. The same three model directories are created under the selected
-path:
+location. For a full Apps checkout, `assets/models/` is the repo-local model
+convention:
 
 ```bash
-LLIMA_MODELS_PATH=/workspace/neat/models_genai ./setup.sh
+export APPS_ROOT=/path/to/apps
+LLIMA_MODELS_PATH="${APPS_ROOT}/assets/models/genai" ./setup.sh
 ```
+
+The same three model directories are created under the selected path. For a
+standalone example, set `LLIMA_MODELS_PATH` to any writable absolute path.
 
 The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set.
 The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is
