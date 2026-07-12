@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,8 +22,20 @@ if str(PYTHON_DIR) not in sys.path:
 pytestmark = pytest.mark.unit
 
 
-def write_config(tmp_path: Path, streams: list[str]) -> Path:
+def write_config(
+    tmp_path: Path,
+    streams: list[str],
+    max_inflight_per_stream: int | None = None,
+    max_inflight_total: int | None = None,
+) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
+    inference = []
+    if max_inflight_per_stream is not None or max_inflight_total is not None:
+        inference.append("inference:")
+        if max_inflight_per_stream is not None:
+            inference.append(f"  max_inflight_per_stream: {max_inflight_per_stream}")
+        if max_inflight_total is not None:
+            inference.append(f"  max_inflight_total: {max_inflight_total}")
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
@@ -31,6 +44,7 @@ def write_config(tmp_path: Path, streams: list[str]) -> Path:
                 "  path: assets/models/yolo26m-det-int8-b1.tar.gz",
                 "streams:",
                 stream_lines,
+                *inference,
                 "output:",
                 "  insight:",
                 "    host: 127.0.0.1",
@@ -89,6 +103,35 @@ class TestConfigLoading:
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.warmup_frames == 30
         assert cfg.tracker_max_missing == 15
+        assert cfg.max_inflight_per_stream == 4
+        assert cfg.max_inflight_total == 16
+
+    def test_load_app_config_accepts_custom_inflight_limits(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            ["rtsp://127.0.0.1:8554/src1"],
+            max_inflight_per_stream=3,
+            max_inflight_total=12,
+        )
+
+        cfg = load_app_config(config_path)
+
+        assert cfg.max_inflight_per_stream == 3
+        assert cfg.max_inflight_total == 12
+
+    def test_load_app_config_rejects_invalid_inflight_limit(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            ["rtsp://127.0.0.1:8554/src1"],
+            max_inflight_per_stream=0,
+        )
+
+        with pytest.raises(ValueError, match="max_inflight_per_stream must be -1 or > 0"):
+            load_app_config(config_path)
 
     def test_default_config_uses_tracking_threshold(self):
         from main import load_app_config
@@ -154,6 +197,27 @@ class TestConfigLoading:
 
         assert result.returncode == 0
         assert "streams=2" in result.stdout
+        assert "max_inflight_per_stream=4" in result.stdout
+        assert "max_inflight_total=16" in result.stdout
+
+
+class TestRuntimeOptions:
+    def test_realtime_link_sets_inflight_limits(self, monkeypatch):
+        import main
+
+        fake_pyneat = SimpleNamespace(
+            GraphLinkOptions=type("GraphLinkOptions", (), {}),
+            GraphLinkPolicy=SimpleNamespace(RealtimeLatestByStream="latest-by-stream"),
+        )
+        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+
+        link = main.realtime_link(2, 4, 3, 12)
+
+        assert link.policy == "latest-by-stream"
+        assert link.queue_depth == 4
+        assert link.stream_id == "stream2"
+        assert link.max_inflight_per_stream == 3
+        assert link.max_inflight_total == 12
 
 
 class FakeMetadataSender:

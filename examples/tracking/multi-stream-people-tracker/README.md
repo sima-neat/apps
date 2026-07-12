@@ -90,6 +90,8 @@ streams:
 
 inference:
   frames: 0                                            # Frame limit per stream. 0 runs continuously.
+  max_inflight_per_stream: 4                           # Raw frames admitted per stream to the detector.
+  max_inflight_total: 16                               # Raw frames admitted across detector streams.
   min_score: 0.30                                      # Minimum person confidence.
 
 tracking:
@@ -121,6 +123,7 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
 - Start with one RTSP stream and confirm the config before scaling to multiple cameras.
 - Confirm `model.path` points to a readable model package.
 - Confirm each RTSP URL is reachable from the board or host running the example.
+- `max_inflight_per_stream` and `max_inflight_total` tune raw decoder-backed frame admission at the shared detector fan-in. Set either to `-1` to use Core defaults.
 - If Insight appears idle, verify `output.insight.host`, `video_port_base`, and `metadata_port_base`.
 - If you want saved overlay frames, set both `output.debug_dir` and `output.save_every`.
 

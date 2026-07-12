@@ -58,6 +58,8 @@ struct AppConfig {
   bool tcp = true;
   int frames = 0;
   int fps = 0;
+  int max_inflight_per_stream = 4;
+  int max_inflight_total = 16;
   double min_score = 0.55;
   double nms_iou = 0.60;
   int max_detections = 50;
@@ -244,6 +246,10 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.fps >= 0, "inference.fps must be >= 0");
+  sima_examples::require(cfg.max_inflight_per_stream == -1 || cfg.max_inflight_per_stream > 0,
+                         "inference.max_inflight_per_stream must be -1 or > 0");
+  sima_examples::require(cfg.max_inflight_total == -1 || cfg.max_inflight_total > 0,
+                         "inference.max_inflight_total must be -1 or > 0");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
                          "inference.min_score must be between 0 and 1");
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
@@ -269,6 +275,8 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.fps = raw.int_or("inference.fps", 0);
+  cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
+  cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", 16);
   cfg.min_score = raw.double_or("inference.min_score", 0.55);
   cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
@@ -539,8 +547,8 @@ int stream_index_from_sample(const simaai::neat::Sample& sample, int stream_coun
 }
 
 simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth,
-                                             int max_inflight_per_stream = 4,
-                                             int max_inflight_total = 16) {
+                                             int max_inflight_per_stream = -1,
+                                             int max_inflight_total = -1) {
   simaai::neat::GraphLinkOptions link;
   link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   link.queue_depth = queue_depth;
@@ -648,8 +656,10 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
   auto decoded_branch =
       save_debug_frames ? simaai::neat::graphs::Branch("decoded", {"detector_frame", "debug_frame"})
                         : simaai::neat::graphs::Branch("decoded", {"detector_frame"});
-  app.graph.connect(decoder, decoded_branch, realtime_link(stream.index, 4));
-  app.graph.connect(decoded_branch, detector_graph, realtime_link(stream.index, 4));
+  app.graph.connect(decoder, decoded_branch);
+  app.graph.connect(
+      decoded_branch, detector_graph,
+      realtime_link(stream.index, 4, cfg.max_inflight_per_stream, cfg.max_inflight_total));
   if (save_debug_frames) {
     app.graph.connect(decoded_branch, build_debug_frame_graph(stream.index),
                       realtime_link(stream.index, 4));
@@ -841,7 +851,8 @@ int main(int argc, char** argv) {
     const AppConfig cfg = load_app_config(cli.config_path);
     if (cli.validate_config_only) {
       std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.rtsp_urls.size()
-                << ")\n";
+                << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
+                << ", max_inflight_total=" << cfg.max_inflight_total << ")\n";
       return 0;
     }
     run_app(cfg);

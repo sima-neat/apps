@@ -31,6 +31,8 @@ class AppConfig:
     tcp: bool = True
     frames: int = 0
     fps: int = 0
+    max_inflight_per_stream: int = 4
+    max_inflight_total: int = 16
     person_class_id: int = 0
     min_score: float = 0.55
     nms_iou: float = 0.60
@@ -208,6 +210,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.frames must be >= 0")
     if cfg.fps < 0:
         raise ValueError("inference.fps must be >= 0")
+    if cfg.max_inflight_per_stream != -1 and cfg.max_inflight_per_stream <= 0:
+        raise ValueError("inference.max_inflight_per_stream must be -1 or > 0")
+    if cfg.max_inflight_total != -1 and cfg.max_inflight_total <= 0:
+        raise ValueError("inference.max_inflight_total must be -1 or > 0")
     if cfg.person_class_id < 0:
         raise ValueError("inference.person_class_id must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -259,6 +265,8 @@ def load_app_config(config_path: Path) -> AppConfig:
         tcp=bool_or(input_cfg, "tcp", True),
         frames=int_or(inference, "frames", 0),
         fps=int_or(inference, "fps", 0),
+        max_inflight_per_stream=int_or(inference, "max_inflight_per_stream", 4),
+        max_inflight_total=int_or(inference, "max_inflight_total", 16),
         person_class_id=int_or(inference, "person_class_id", 0),
         min_score=float_or(inference, "min_score", 0.55),
         nms_iou=float_or(inference, "nms_iou", 0.60),
@@ -541,8 +549,8 @@ def stream_index_from_sample(sample, stream_count: int) -> int:
 def realtime_link(
     stream_index: int,
     queue_depth: int,
-    max_inflight_per_stream: int = 4,
-    max_inflight_total: int = 16,
+    max_inflight_per_stream: int = -1,
+    max_inflight_total: int = -1,
 ):
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
@@ -645,8 +653,17 @@ def connect_stream_graph(
     save_debug_frames = save_frames_enabled(cfg)
     decoded_outputs = ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
     decoded_branch = pyneat.graphs.branch("decoded", decoded_outputs)
-    app.graph.connect(decoder, decoded_branch, realtime_link(stream.index, 4))
-    app.graph.connect(decoded_branch, detector_graph, realtime_link(stream.index, 4))
+    app.graph.connect(decoder, decoded_branch)
+    app.graph.connect(
+        decoded_branch,
+        detector_graph,
+        realtime_link(
+            stream.index,
+            4,
+            cfg.max_inflight_per_stream,
+            cfg.max_inflight_total,
+        ),
+    )
     if save_debug_frames:
         app.graph.connect(
             decoded_branch, build_debug_frame_graph(stream.index), realtime_link(stream.index, 4)
@@ -858,7 +875,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         cfg = load_app_config(args.config)
         if args.validate_config_only:
-            print(f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)})")
+            print(
+                f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)}, "
+                f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
+                f"max_inflight_total={cfg.max_inflight_total})"
+            )
             return 0
 
         load_runtime_dependencies()
