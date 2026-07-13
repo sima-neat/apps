@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Package installation is noninteractive.  Prevent sima-cli's optional update
+# prompt from aborting CI or unattended installs when a newer CLI is available.
+export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
+
 DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
 RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-neat-apps-runtime}"
 RUNTIME_DST="${DEST_DIR}/neat-apps-runtime"
