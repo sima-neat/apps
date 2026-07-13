@@ -58,8 +58,9 @@ constexpr int kDetectorResultTimeoutMs = 5000;
 constexpr int kDefaultQueueDepth = 4;
 constexpr int kDefaultInternalQueueDepth = 1;
 constexpr int kDefaultMaxInflightPerStream = 4;
-// Keep MLA completion inline while the bounded queues still overlap adjacent model stages.
-constexpr bool kInferenceAsync = false;
+// Complete MLA work asynchronously so a busy model stage cannot hold the
+// fused fan-in callback and starve a subset of decoder streams.
+constexpr bool kInferenceAsync = true;
 constexpr int kDefaultDecoderBuffers = 16;
 constexpr int kDefaultDecoderInputBuffers = 2;
 constexpr int kAllInsightStreams = -1;

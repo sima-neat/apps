@@ -22,8 +22,9 @@ DETECTOR_RESULT_TIMEOUT_MS = 5_000
 DEFAULT_QUEUE_DEPTH = 4
 DEFAULT_INTERNAL_QUEUE_DEPTH = 1
 DEFAULT_MAX_INFLIGHT_PER_STREAM = 4
-# Keep MLA completion inline while the bounded queues still overlap adjacent model stages.
-INFERENCE_ASYNC = False
+# Complete MLA work asynchronously so a busy model stage cannot hold the
+# fused fan-in callback and starve a subset of decoder streams.
+INFERENCE_ASYNC = True
 DEFAULT_FAN_IN_POLICY = "latest"
 DEFAULT_DECODER_BUFFERS = 16
 DEFAULT_DECODER_INPUT_BUFFERS = 2

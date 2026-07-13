@@ -664,7 +664,7 @@ class TestRuntimeOptions:
         assert options.overflow_policy == "KeepLatest"
         assert options.output_memory == "ZeroCopy"
 
-    def test_graph_options_apply_internal_queue_depth_and_sync_mla(self, monkeypatch):
+    def test_graph_options_apply_internal_queue_depth_and_async_mla(self, monkeypatch):
         import main
 
         class FakeGraphOptions:
@@ -678,9 +678,9 @@ class TestRuntimeOptions:
         options = main.graph_options(2)
 
         assert options.advanced_execution.internal_queue_depth == 2
-        assert options.advanced_execution.inference_async is False
+        assert options.advanced_execution.inference_async is True
 
-    def test_graph_options_require_sync_mla_public_surface(self, monkeypatch):
+    def test_graph_options_require_async_mla_public_surface(self, monkeypatch):
         import main
 
         class FakeGraphOptions:
