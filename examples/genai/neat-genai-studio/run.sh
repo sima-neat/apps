@@ -628,7 +628,7 @@ cli_supervise() {
 section "Accelerator"
 reset_mla_clean_slate
 
-section "Model server"
+section "Model Server"
 launch_server
 
 sleep "${MODEL_SERVER_START_DELAY:-2}"
