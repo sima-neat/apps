@@ -7,6 +7,37 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
 
+# Keep target sysroot C library headers visible to GCC's libstdc++ wrapper headers.
+# Do not force them before the compiler's C++ include directories: <cstdlib> uses
+# include_next for <stdlib.h>, so early sysroot -isystem entries can be skipped and
+# break minimal SDK containers that do not provide host cross libc headers.
+if (CMAKE_SYSROOT)
+  if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # GCC predefines _GNU_SOURCE for C++, which makes newer host glibc
+    # headers redirect strtol-family calls to __isoc23_* symbols. Modalix
+    # runtimes do not provide those symbols. Keep GNU/POSIX feature exposure
+    # for libstdc++ while disabling only the C2X strtol redirection.
+    add_compile_options("SHELL:-include ${CMAKE_CURRENT_LIST_DIR}/cmake/glibc-no-c23-strtol.h")
+  endif()
+
+  set(_sima_neat_apps_sysroot_include_dirs)
+  set(_sima_neat_apps_sysroot_triplet "${CMAKE_LIBRARY_ARCHITECTURE}")
+  if (NOT _sima_neat_apps_sysroot_triplet AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    set(_sima_neat_apps_sysroot_triplet "aarch64-linux-gnu")
+  endif()
+  if (_sima_neat_apps_sysroot_triplet AND
+      EXISTS "${CMAKE_SYSROOT}/usr/include/${_sima_neat_apps_sysroot_triplet}")
+    list(APPEND _sima_neat_apps_sysroot_include_dirs
+      "${CMAKE_SYSROOT}/usr/include/${_sima_neat_apps_sysroot_triplet}")
+  endif()
+  if (EXISTS "${CMAKE_SYSROOT}/usr/include")
+    list(APPEND _sima_neat_apps_sysroot_include_dirs "${CMAKE_SYSROOT}/usr/include")
+  endif()
+  foreach(_sima_neat_apps_sysroot_include_dir IN LISTS _sima_neat_apps_sysroot_include_dirs)
+    add_compile_options("SHELL:-idirafter ${_sima_neat_apps_sysroot_include_dir}")
+  endforeach()
+endif()
+
 option(SIMANEAT_APPS_BUILD_CPP "Build C++ examples" ON)
 
 function(_sima_neat_apps_ensure_neat_target)

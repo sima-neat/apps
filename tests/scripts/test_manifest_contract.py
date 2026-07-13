@@ -119,6 +119,16 @@ def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     curl_path.chmod(0o755)
+
+    # Keep dependency-resolution tests independent of a host-installed `neat`
+    # command.  The real command may contact the same artifact index while
+    # build.sh checks installed state, which makes curl-count assertions depend
+    # on the developer machine.  Tests that exercise a matching installed Core
+    # create their own fake `neat` before _run_build and retain it here.
+    neat_path = bin_dir / "neat"
+    if not neat_path.exists():
+        neat_path.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+        neat_path.chmod(0o755)
     return bin_dir, log_path
 
 

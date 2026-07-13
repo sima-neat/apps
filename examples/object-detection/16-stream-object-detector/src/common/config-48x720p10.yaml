@@ -1,0 +1,92 @@
+# Validated B4 profile: 48 x 720p @ 10 FPS (q1/i2/m1).
+# Model and label paths are resolved relative to this file.
+model:
+  path: yolo26n_raw_supported_einsum_mpk.tar.gz
+  labels: coco_label.txt
+  decode_type: yolo26
+
+streams:
+  - rtsp://192.168.1.9:25689/src1
+  - rtsp://192.168.1.9:25689/src2
+  - rtsp://192.168.1.9:25689/src3
+  - rtsp://192.168.1.9:25689/src4
+  - rtsp://192.168.1.9:25689/src5
+  - rtsp://192.168.1.9:25689/src6
+  - rtsp://192.168.1.9:25689/src7
+  - rtsp://192.168.1.9:25689/src8
+  - rtsp://192.168.1.9:25689/src9
+  - rtsp://192.168.1.9:25689/src10
+  - rtsp://192.168.1.9:25689/src11
+  - rtsp://192.168.1.9:25689/src12
+  - rtsp://192.168.1.9:25689/src13
+  - rtsp://192.168.1.9:25689/src14
+  - rtsp://192.168.1.9:25689/src15
+  - rtsp://192.168.1.9:25689/src16
+  - rtsp://192.168.1.9:25689/src17
+  - rtsp://192.168.1.9:25689/src18
+  - rtsp://192.168.1.9:25689/src19
+  - rtsp://192.168.1.9:25689/src20
+  - rtsp://192.168.1.9:25689/src21
+  - rtsp://192.168.1.9:25689/src22
+  - rtsp://192.168.1.9:25689/src23
+  - rtsp://192.168.1.9:25689/src24
+  - rtsp://192.168.1.9:25689/src25
+  - rtsp://192.168.1.9:25689/src26
+  - rtsp://192.168.1.9:25689/src27
+  - rtsp://192.168.1.9:25689/src28
+  - rtsp://192.168.1.9:25689/src29
+  - rtsp://192.168.1.9:25689/src30
+  - rtsp://192.168.1.9:25689/src31
+  - rtsp://192.168.1.9:25689/src32
+  - rtsp://192.168.1.9:25689/src33
+  - rtsp://192.168.1.9:25689/src34
+  - rtsp://192.168.1.9:25689/src35
+  - rtsp://192.168.1.9:25689/src36
+  - rtsp://192.168.1.9:25689/src37
+  - rtsp://192.168.1.9:25689/src38
+  - rtsp://192.168.1.9:25689/src39
+  - rtsp://192.168.1.9:25689/src40
+  - rtsp://192.168.1.9:25689/src41
+  - rtsp://192.168.1.9:25689/src42
+  - rtsp://192.168.1.9:25689/src43
+  - rtsp://192.168.1.9:25689/src44
+  - rtsp://192.168.1.9:25689/src45
+  - rtsp://192.168.1.9:25689/src46
+  - rtsp://192.168.1.9:25689/src47
+  - rtsp://192.168.1.9:25689/src48
+
+input:
+  tcp: true
+  latency_ms: 100
+  drop_on_latency: true
+  skip_rtsp_probe: true
+  width: 1280
+  height: 720
+  fps: 10
+  decoder_buffers: 4
+  decoder_input_buffers: 2
+  decoder_tuning: throughput-low-latency
+
+runtime:
+  profile: false
+  warmup_frames: 0
+  initial_detection_timeout_ms: 600000
+
+inference:
+  workers: 1
+  fan_in_policy: latest
+  queue_depth: 1
+  internal_queue_depth: 2
+  max_inflight_per_stream: 1
+  min_score: 0.30
+  nms_iou: 0.60
+  max_detections: 50
+
+output:
+  insight:
+    host: 192.168.1.9
+    video_port_base: 9000
+    metadata_port_base: 9100
+    max_visible_streams: 48
+    sync_delay_ms: 400
+  video_enabled: true
