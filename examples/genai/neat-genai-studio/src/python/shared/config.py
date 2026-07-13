@@ -138,7 +138,7 @@ def load_server_config(path: Path = DEFAULT_SERVER_CONFIG, apps_root: Path = PAT
         chat_models=chat_models,
         asr_model=_load_optional_model(models, "asr", apps_root),
         request=RequestConfig(
-            max_tokens=int(request.get("max_tokens", 256)),
+            max_tokens=int(request.get("max_tokens", 512)),
             system_prompt=str(request.get("system_prompt", "") or ""),
         ),
         web=WebConfig(
@@ -180,7 +180,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
         chat_models=chat_models,
         asr_model=_load_optional_model_name(server_models, "asr"),
         request=RequestConfig(
-            max_tokens=int(request.get("max_tokens", 256)),
+            max_tokens=int(request.get("max_tokens", 512)),
             system_prompt=str(request.get("system_prompt", "") or ""),
         ),
         web=WebConfig(

@@ -223,19 +223,23 @@ models and the OpenAI endpoint to stream replies). Type a message to chat; comma
 /load [name]     load a model — no name pops an arrow-key picker (↑/↓, Enter)
 /download        browse Hugging Face, download a model, and load it
 /unload [name]   unload a model — no name unloads the loaded LLM/VLM
+/delete [name]   delete a model's weights from disk — no name pops a picker;
+                 asks to confirm (irreversible; /rm, /remove)
 /image [path]    attach an image to the next message (VLM only; no path prompts)
 /camera [device] arm the board camera — every message then auto-sends a fresh
                  frame to the VLM (/camera off to stop; /dev/video0 — /cam, /webcam)
 /benchmark …     TTFT/TPS benchmark — see the Benchmark section below
 /system <text>   set a system prompt (empty clears it)
 /new             clear the conversation
+/export [file]   save this chat to a .log file (default neat-chat-<time>.log)
 /reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
 /help  /quit     help / exit (aliases: /exit, /bye, /q, Ctrl+D)
 ```
 
 Ctrl+C stops the current reply; it prints per-response timing (tokens, TTFT,
-tok/s). Exiting shuts the model server down.
+tok/s). Exiting shuts the model server down. Use **↑/↓** at the prompt to recall
+previous prompts (history persists across sessions in `~/.neat_ai_history`).
 
 `/camera <index>` **arms** a camera attached **to the board** (the CLI runs on
 the board, unlike the web UI, which uses the browser's camera). Once armed, every

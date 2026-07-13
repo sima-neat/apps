@@ -43,6 +43,10 @@
         <button id="newChatButton" class="header-icon-btn" type="button" title="New chat" aria-label="New chat">
           <img src="{{ url_for('static', filename='icons/refresh.png') }}" alt="New chat" width="16" height="16">
         </button>
+        <button id="exportChatButton" class="header-icon-btn" type="button" title="Export chat (.log)" aria-label="Export chat">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 11l4 4 4-4M5 21h14"/></svg>
+        </button>
         <a id="showcaseButton" class="header-icon-btn" href="/showcase" title="Showcase — the SiMa Modalix + LLiMa story (present mode)" aria-label="Open showcase">
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><defs>
             <linearGradient id="scMark" x1="0" y1="0" x2="0" y2="1">
@@ -422,8 +426,8 @@
               <div class="setting-row">
                 <label for="maxTokensRange" class="setting-label">Max response tokens</label>
                 <div class="utterance-speed-control">
-                  <input type="range" id="maxTokensRange" min="32" max="2048" step="32" value="256">
-                  <span id="maxTokensValue">256</span>
+                  <input type="range" id="maxTokensRange" min="32" max="2048" step="32" value="512">
+                  <span id="maxTokensValue">512</span>
                 </div>
               </div>
               <div class="gen-note">This runtime decodes greedily, so there is no

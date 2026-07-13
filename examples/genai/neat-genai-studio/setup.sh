@@ -270,7 +270,7 @@ app:
     port: 9997
 
   request:
-    max_tokens: 256
+    max_tokens: 512
     system_prompt: >-
       Answer clearly and concisely. Use Markdown formatting when it helps.
       Answer the question in the language it was asked in.

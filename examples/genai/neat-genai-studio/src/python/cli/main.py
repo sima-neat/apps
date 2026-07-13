@@ -44,6 +44,32 @@ else:
     RESET = BOLD = DIM = ACCENT = TEAL = MUTED = OK = ERR = CODE = ITAL = ULINE = ""
 
 
+# Optional readline: gives the chat prompt up/down history recall + line editing.
+# We record only the main chat prompts (not sub-prompts like confirmations), and
+# persist history across sessions in a dotfile.
+try:
+    import readline as _readline
+    _HAS_READLINE = True
+    try:
+        _readline.set_auto_history(False)   # we add only the main prompts, by hand
+        _MANUAL_HISTORY = True
+    except Exception:  # noqa: BLE001 — libedit may lack it; fall back to auto history
+        _MANUAL_HISTORY = False
+except Exception:  # noqa: BLE001 — no readline (rare); prompt still works, no history
+    _readline = None
+    _HAS_READLINE = False
+    _MANUAL_HISTORY = False
+
+_HISTORY_FILE = os.path.expanduser("~/.neat_ai_history")
+
+
+def _rl(code):
+    """Wrap a non-printing ANSI escape with readline's ignore markers so it
+    measures the prompt width correctly. Only when readline is actually driving
+    an interactive prompt (and the code is non-empty)."""
+    return f"\001{code}\002" if (_HAS_READLINE and code and sys.stdin.isatty()) else code
+
+
 _CTRL_TOKENS = re.compile(r"</s>|<pad>|<0x[0-9A-Fa-f]+>")
 
 
@@ -64,6 +90,34 @@ def fmt_bytes(n):
             return f"{n:.1f} {unit}" if (n < 10 and unit != "B") else f"{n:.0f} {unit}"
         n /= 1024
     return ""
+
+
+def write_chat_log(path, active, system, messages):
+    """Write the current conversation to a plain-text .log file and return the path."""
+    lines = ["Neat GenAI Studio — chat export",
+             f"Exported: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+             f"Model: {active or '(none)'}",
+             f"System: {system if system else '(none)'}",
+             "=" * 60, ""]
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # Defensive: multimodal content (text + image parts) — keep the text.
+            parts = []
+            for p in content:
+                if isinstance(p, dict) and p.get("type") == "text":
+                    parts.append(p.get("text", ""))
+                elif isinstance(p, dict) and p.get("type") == "image":
+                    parts.append("[image]")
+            content = "\n".join(parts)
+        who = {"user": "You", "assistant": "Assistant", "system": "System"}.get(
+            msg.get("role", ""), str(msg.get("role", "")).capitalize())
+        lines.append(f"{who}:")
+        lines.append(str(content).rstrip())
+        lines.append("")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    return path
 
 
 def _inline_md(s):
@@ -115,7 +169,7 @@ def load_config(config_path):
     """Return ((ctrl_host, ctrl_port), (oai_host, oai_port), max_tokens)."""
     ctrl = ("127.0.0.1", 9997)
     oai = ("127.0.0.1", 9998)
-    max_tokens = 256
+    max_tokens = 512
     try:
         import yaml
         with open(config_path, "r", encoding="utf-8") as fh:
@@ -266,12 +320,15 @@ HELP = f"""{MUTED}Commands:
   /load [name]       load a model (no name → arrow-key menu)
   /download          browse Hugging Face, download a model, and load it
   /unload [name]     unload a model (no name → unload the loaded LLM/VLM)
+  /delete [name]     delete a model's weights from disk (no name → menu; asks to
+                     confirm; aliases /rm, /remove)
   /image [path]      attach an image to your next message (VLM only; no path → prompt)
   /camera [device]   arm the board camera: every message then auto-sends a fresh
                      frame to the VLM. /camera off to stop; device defaults to
                      /dev/video0 (aliases /cam, /webcam)
   /system <text>     set a system prompt (empty clears it)
   /new               clear the conversation history
+  /export [file]     save this chat to a .log file (default neat-chat-<time>.log)
   /reset             reset the accelerator (MLA) and restart the model server
   /tokens <n>        set the max response tokens
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
@@ -922,7 +979,19 @@ def main():
     elif not active:
         active = choose_and_load_model(ctrl, args.config, oai=oai)
 
-    print(f"{MUTED}  /help for commands, /quit to exit.{RESET}\n")
+    hist_hint = "  ·  ↑/↓ recalls previous prompts" if (_HAS_READLINE and sys.stdin.isatty()) else ""
+    print(f"{MUTED}  /help for commands, /quit to exit.{hist_hint}{RESET}\n")
+
+    # Restore prior-session prompt history for up/down recall.
+    if _HAS_READLINE:
+        try:
+            _readline.read_history_file(_HISTORY_FILE)
+        except OSError:
+            pass
+        try:
+            _readline.set_history_length(1000)
+        except Exception:  # noqa: BLE001
+            pass
 
     messages, system, pending_image, camera_device = [], None, None, None
     while True:
@@ -931,12 +1000,13 @@ def main():
         mlabel = active if active else "no model"
         marks = ""
         if pending_image:
-            marks += f" {ACCENT}🖼{RESET}"
+            marks += f" {_rl(ACCENT)}🖼{_rl(RESET)}"
         if camera_device is not None:
-            marks += f" {ACCENT}📷{RESET}"
+            marks += f" {_rl(ACCENT)}📷{_rl(RESET)}"
         try:
-            line = input(f"{ACCENT}{BOLD}you{RESET} {DIM}[{mlabel}]{RESET}{marks} "
-                         f"{ACCENT}{BOLD}▸{RESET} ").strip()
+            line = input(f"{_rl(ACCENT)}{_rl(BOLD)}you{_rl(RESET)} "
+                         f"{_rl(DIM)}[{mlabel}]{_rl(RESET)}{marks} "
+                         f"{_rl(ACCENT)}{_rl(BOLD)}▸{_rl(RESET)} ").strip()
         except EOFError:
             print()
             break
@@ -945,6 +1015,9 @@ def main():
             continue
         if not line:
             continue
+        # Record the main chat prompt for up/down recall (sub-prompts are excluded).
+        if _HAS_READLINE and _MANUAL_HISTORY:
+            _readline.add_history(line)
 
         if line.startswith("/"):
             cmd, _, arg = line[1:].partition(" ")
@@ -1074,6 +1147,51 @@ def main():
                             camera_device = None   # no model → live camera can't send
                     except Exception as exc:  # noqa: BLE001
                         print(f"{ERR}  {exc}{RESET}")
+            elif cmd in ("delete", "rm", "remove"):
+                # Delete a model's weights from disk (server unloads it first if
+                # resident and refuses the pinned ASR model). Irreversible, so
+                # pick from a menu when no name is given and always confirm.
+                cat = catalog(ctrl)
+                if arg:
+                    name = arg
+                    if name not in [m.get("name") for m in cat]:
+                        print(f"{ERR}  no model named '{name}' in the catalog — /models to list.{RESET}")
+                        continue
+                else:
+                    items = [
+                        (f"{m.get('name')}  [{type_label(m.get('type'))}]"
+                         f"{'  ● loaded' if m.get('loaded') else ''}", m.get("name"))
+                        for m in cat if m.get("type", "chat") != "asr"]
+                    if not items:
+                        print(f"{MUTED}  no deletable models in the catalog.{RESET}")
+                        continue
+                    name = select_menu(items, "Delete which model from disk?")
+                    if not name:
+                        continue
+                try:
+                    ans = input(f"{ERR}  delete '{name}' from disk? this removes the "
+                                f"weights and cannot be undone [y/N] ▸ {RESET}").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    continue
+                if ans not in ("y", "yes"):
+                    print(f"{MUTED}  cancelled — nothing deleted.{RESET}")
+                    continue
+                try:
+                    ctrl_post(ctrl, "/control/delete", {"name": name})
+                    print(f"{OK}✔ deleted {name} from disk.{RESET}")
+                    if name == active:
+                        active, messages, pending_image = "", [], None
+                        camera_device = None   # no model → live camera can't send
+                except urllib.error.HTTPError as exc:
+                    detail = exc.read().decode("utf-8", "replace")
+                    try:
+                        detail = json.loads(detail).get("error", detail)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    print(f"{ERR}  delete failed: {detail[:200]}{RESET}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"{ERR}  {exc}{RESET}")
             elif cmd == "system":
                 system = arg or None
                 messages = []
@@ -1081,6 +1199,20 @@ def main():
             elif cmd in ("new", "clear"):
                 messages = []
                 print(f"{OK}✔ conversation cleared.{RESET}")
+            elif cmd in ("export", "save"):
+                if not messages:
+                    print(f"{MUTED}  nothing to export yet — have a conversation first.{RESET}")
+                    continue
+                path = arg.strip() if arg else f"neat-chat-{time.strftime('%Y%m%d-%H%M%S')}.log"
+                path = os.path.expanduser(path)
+                if not path.lower().endswith(".log"):
+                    path += ".log"
+                try:
+                    write_chat_log(path, active, system, messages)
+                    turns = sum(1 for m in messages if m.get("role") == "user")
+                    print(f"{OK}✔ exported {turns} turn(s) to {path}{RESET}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"{ERR}  export failed: {exc}{RESET}")
             elif cmd in ("reset", "reset-mla"):
                 if reset_mla_wait(ctrl, oai):
                     print(f"{OK}✔ MLA reset — server back online. Load a model to continue.{RESET}")
@@ -1174,6 +1306,11 @@ def main():
         print()
 
     print(f"{MUTED}bye.{RESET}")
+    if _HAS_READLINE:
+        try:
+            _readline.write_history_file(_HISTORY_FILE)
+        except OSError:
+            pass
     return 0
 
 

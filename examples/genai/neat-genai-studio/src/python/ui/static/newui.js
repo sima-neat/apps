@@ -674,6 +674,11 @@ newChatButton.addEventListener('click', () => {
   newChat();
 });
 
+const exportChatButton = document.getElementById('exportChatButton');
+if (exportChatButton) {
+  exportChatButton.addEventListener('click', () => exportChat());
+}
+
 abortButton.addEventListener('click', () => {
   abortResponse();
 });
@@ -1222,6 +1227,53 @@ function newChat() {
 
   // Hide abort button if visible
   hideAbortButton();
+}
+
+// Export the current conversation to a downloaded .log file — fully client-side.
+// Reads the rendered messages straight from the DOM (streamed assistant replies
+// build into the DOM, not chatHistory), so the export matches what's on screen.
+function exportChat() {
+  const container = document.getElementById('chatMessages');
+  const nodes = container ? container.querySelectorAll('.message') : [];
+  const body = [];
+  let turns = 0;
+  nodes.forEach((node) => {
+    const who = node.classList.contains('user') ? 'You' : 'Assistant';
+    if (node.classList.contains('image-message')) {
+      body.push(who + ':', '[image]', '');
+      turns++;
+      return;
+    }
+    const textEl = node.querySelector('.message-text');
+    const text = ((textEl ? textEl.textContent : node.textContent) || '').trim();
+    if (!text) return;
+    body.push(who + ':', text, '');
+    turns++;
+  });
+  if (!turns) {
+    alert('No chat to export yet — start a conversation first.');
+    return;
+  }
+  const modelEl = document.getElementById('headerModelName');
+  const model = modelEl && modelEl.textContent.trim() ? modelEl.textContent.trim() : '(none)';
+  const now = new Date();
+  const header = [
+    'Neat GenAI Studio — chat export',
+    'Exported: ' + now.toLocaleString(),
+    'Model: ' + model,
+    '='.repeat(60), '',
+  ];
+  const blob = new Blob([header.concat(body).join('\n')], { type: 'text/plain;charset=utf-8' });
+  const pad = (n) => String(n).padStart(2, '0');
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
+             `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `neat-chat-${ts}.log`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
 }
 
 // Reset all settings to defaults
@@ -4463,7 +4515,7 @@ function initTtsToggle() {
 
 function getMaxTokens() {
   const el = document.getElementById('maxTokensRange');
-  return el ? parseInt(el.value, 10) : 256;
+  return el ? parseInt(el.value, 10) : 512;
 }
 
 function initGenerationControls() {
