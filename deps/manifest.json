@@ -1,7 +1,6 @@
 {
   "neat-core": {
-    "branch": "codex/app16-core-pr-final",
-    "spec": "62fefef01bf7"
+    "policy": "snap"
   },
   "sdk": {
     "channel": "develop"
