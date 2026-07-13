@@ -588,13 +588,18 @@ def main() -> int:
             f"interval={cfg.genai_interval_seconds:g}s\n"
         )
 
-        frame_id = 0
-        while cfg.frames <= 0 or frame_id < cfg.frames:
-            tensors = rtsp_run.pull_tensors(timeout_ms=cfg.timeout_ms)
-            if not tensors:
+        processed = 0
+        while cfg.frames <= 0 or processed < cfg.frames:
+            source_sample = rtsp_run.pull(timeout_ms=cfg.timeout_ms)
+            if source_sample is None:
                 print("RTSP stream ended or pull timed out", file=sys.stderr)
                 break
-            decoded_frame = tensors[0]
+            if source_sample.kind == pyneat.SampleKind.Tensor and source_sample.tensor is not None:
+                decoded_frame = source_sample.tensor
+            elif source_sample.kind == pyneat.SampleKind.TensorSet and source_sample.tensors:
+                decoded_frame = source_sample.tensors[0]
+            else:
+                raise RuntimeError("RTSP output did not contain a decoded frame tensor")
             rgb_frame = decoded_tensor_to_rgb(decoded_frame)
             model_input = pyneat.Tensor.from_numpy(
                 rgb_to_bgr(rgb_frame),
@@ -604,22 +609,32 @@ def main() -> int:
             )
             boxes = parse_boxes(detector_run.run([model_input], timeout_ms=cfg.timeout_ms))
             commenter.try_enqueue(rgb_frame, boxes)
-            if not video_run.push(
-                [rgb_frame], copy=True, image_format=pyneat.PixelFormat.RGB
-            ):
+            video_tensor = pyneat.Tensor.from_numpy(
+                rgb_frame,
+                copy=True,
+                image_format=pyneat.PixelFormat.RGB,
+                memory=pyneat.TensorMemory.EV74,
+            )
+            video_sample = pyneat.make_tensor_sample("", video_tensor)
+            video_sample.pts_ns = source_sample.pts_ns
+            video_sample.dts_ns = source_sample.dts_ns
+            video_sample.duration_ns = source_sample.duration_ns
+            video_sample.frame_id = source_sample.frame_id
+            video_sample.stream_id = source_sample.stream_id
+            if not video_run.push([video_sample]):
                 raise RuntimeError("Insight video push failed")
             ok = metadata.send_metadata(
                 "object-detection",
                 metadata_json(boxes, labels, cfg.classes),
-                int(time.time() * 1000),
-                str(frame_id),
+                int(source_sample.pts_ns // 1_000_000) if source_sample.pts_ns >= 0 else -1,
+                str(source_sample.frame_id) if source_sample.frame_id >= 0 else "",
             )
             if not ok:
                 raise RuntimeError("failed to send metadata to Insight")
-            frame_id += 1
+            processed += 1
             if cfg.debug:
-                print(f"[detector] frame={frame_id} detections={len(boxes)}")
-        return 0 if frame_id > 0 else 3
+                print(f"[detector] frame={processed} detections={len(boxes)}")
+        return 0 if processed > 0 else 3
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

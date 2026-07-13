@@ -27,7 +27,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdio>
@@ -897,23 +896,29 @@ void send_metadata(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
                    const std::vector<SegmentationDetection>& detections) {
   const auto boxes =
       build_metadata_boxes(detections, runtime.labels, runtime.frame_w, runtime.frame_h);
-  const auto now = std::chrono::system_clock::now().time_since_epoch();
-  const int64_t ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-  const int64_t frame_id = sample.frame_id >= 0 ? sample.frame_id : 0;
+  const int64_t ts_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
+  const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
   if (!runtime.metadata_sender->send_metadata(
           "instance-segmentation", sima_examples::metadata_boxes_data_json("objects", boxes), ts_ms,
-          std::to_string(frame_id), &err)) {
+          frame_id, &err)) {
     std::cerr << "[warn] insight metadata send failed: " << err << "\n";
   }
 }
 
-void push_annotated_video(PipelineRuntime& runtime, const cv::Mat& annotated_bgr) {
+void push_annotated_video(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
+                          const cv::Mat& annotated_bgr) {
   cv::Mat rgb;
   cv::cvtColor(annotated_bgr, rgb, cv::COLOR_BGR2RGB);
   const auto tensor = simaai::neat::Tensor::from_cv_mat(
       rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
-  if (!runtime.video_run.push(simaai::neat::TensorList{tensor})) {
+  auto video_sample = simaai::neat::make_tensor_sample("", tensor);
+  video_sample.pts_ns = sample.pts_ns;
+  video_sample.dts_ns = sample.dts_ns;
+  video_sample.duration_ns = sample.duration_ns;
+  video_sample.frame_id = sample.frame_id;
+  video_sample.stream_id = sample.stream_id;
+  if (!runtime.video_run.push(video_sample)) {
     throw std::runtime_error("Insight video push failed");
   }
 }
@@ -962,7 +967,7 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     const double overlay_end = time_ms();
 
     const double video_start = time_ms();
-    push_annotated_video(runtime, annotated);
+    push_annotated_video(runtime, sample, annotated);
     const double video_end = time_ms();
 
     const double metadata_start = time_ms();
