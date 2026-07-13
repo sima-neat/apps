@@ -664,7 +664,23 @@ class TestRuntimeOptions:
         assert options.overflow_policy == "KeepLatest"
         assert options.output_memory == "ZeroCopy"
 
-    def test_graph_options_apply_internal_queue_depth(self, monkeypatch):
+    def test_graph_options_apply_internal_queue_depth_and_sync_mla(self, monkeypatch):
+        import main
+
+        class FakeGraphOptions:
+            def __init__(self):
+                self.advanced_execution = SimpleNamespace(
+                    internal_queue_depth=None, inference_async=None
+                )
+
+        monkeypatch.setattr(main, "pyneat", SimpleNamespace(GraphOptions=FakeGraphOptions))
+
+        options = main.graph_options(2)
+
+        assert options.advanced_execution.internal_queue_depth == 2
+        assert options.advanced_execution.inference_async is False
+
+    def test_graph_options_require_sync_mla_public_surface(self, monkeypatch):
         import main
 
         class FakeGraphOptions:
@@ -673,9 +689,8 @@ class TestRuntimeOptions:
 
         monkeypatch.setattr(main, "pyneat", SimpleNamespace(GraphOptions=FakeGraphOptions))
 
-        options = main.graph_options(2)
-
-        assert options.advanced_execution.internal_queue_depth == 2
+        with pytest.raises(RuntimeError, match="inference_async"):
+            main.graph_options(2)
 
     def test_decode_options_apply_input_pool_and_tuning(self, monkeypatch):
         import main

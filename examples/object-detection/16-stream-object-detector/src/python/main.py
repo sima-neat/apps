@@ -22,6 +22,8 @@ DETECTOR_RESULT_TIMEOUT_MS = 5_000
 DEFAULT_QUEUE_DEPTH = 4
 DEFAULT_INTERNAL_QUEUE_DEPTH = 1
 DEFAULT_MAX_INFLIGHT_PER_STREAM = 4
+# Keep MLA completion inline while the bounded queues still overlap adjacent model stages.
+INFERENCE_ASYNC = False
 DEFAULT_FAN_IN_POLICY = "latest"
 DEFAULT_DECODER_BUFFERS = 16
 DEFAULT_DECODER_INPUT_BUFFERS = 2
@@ -696,13 +698,17 @@ def graph_options(internal_queue_depth: int):
         )
     options = pyneat.GraphOptions()
     advanced = getattr(options, "advanced_execution", None)
-    if advanced is None or not hasattr(advanced, "internal_queue_depth"):
+    if advanced is None or not all(
+        hasattr(advanced, field) for field in ("internal_queue_depth", "inference_async")
+    ):
         raise RuntimeError(
             "installed pyneat does not expose "
-            "GraphOptions.advanced_execution.internal_queue_depth; "
+            "GraphOptions.advanced_execution.internal_queue_depth and "
+            "GraphOptions.advanced_execution.inference_async; "
             "install the matching Neat package before running this graph-native app"
         )
     advanced.internal_queue_depth = internal_queue_depth
+    advanced.inference_async = INFERENCE_ASYNC
     return options
 
 
@@ -1168,6 +1174,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"(streams={len(cfg.rtsp_urls)}, workers={cfg.workers}, "
                 f"queue_depth={cfg.queue_depth}, "
                 f"internal_queue_depth={cfg.internal_queue_depth}, "
+                f"inference_async={str(INFERENCE_ASYNC).lower()}, "
                 f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
                 f"fan_in_policy={cfg.fan_in_policy}, "
                 f"insight_visible_streams={effective_insight_visible_streams(cfg)}, "

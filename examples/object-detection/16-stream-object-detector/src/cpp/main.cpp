@@ -58,6 +58,8 @@ constexpr int kDetectorResultTimeoutMs = 5000;
 constexpr int kDefaultQueueDepth = 4;
 constexpr int kDefaultInternalQueueDepth = 1;
 constexpr int kDefaultMaxInflightPerStream = 4;
+// Keep MLA completion inline while the bounded queues still overlap adjacent model stages.
+constexpr bool kInferenceAsync = false;
 constexpr int kDefaultDecoderBuffers = 16;
 constexpr int kDefaultDecoderInputBuffers = 2;
 constexpr int kAllInsightStreams = -1;
@@ -356,6 +358,7 @@ struct AppRuntime {
       : graph([internal_queue_depth] {
           simaai::neat::GraphOptions options;
           options.advanced_execution.internal_queue_depth = internal_queue_depth;
+          options.advanced_execution.inference_async = kInferenceAsync;
           return options;
         }()) {}
 
@@ -1772,6 +1775,7 @@ int main(int argc, char** argv) {
                 << ", model_path=" << cfg.model_path << ", labels_path=" << cfg.labels_path.string()
                 << ", workers=" << cfg.workers << ", queue_depth=" << cfg.queue_depth
                 << ", internal_queue_depth=" << cfg.internal_queue_depth
+                << ", inference_async=" << (kInferenceAsync ? "true" : "false")
                 << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
                 << ", fan_in_policy=" << fan_in_policy_name(cfg.fan_in_policy)
                 << ", input=" << cfg.input_width << "x" << cfg.input_height << "@" << cfg.input_fps

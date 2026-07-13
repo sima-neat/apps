@@ -102,6 +102,8 @@ bool test_validate_config_only_accepts_twenty_four_streams(const std::string& bi
                       "validate output reports the proven detector queue default") &&
       expect_contains(result.stdout_text, "internal_queue_depth=1",
                       "validate output reports the bounded global stage queue default") &&
+      expect_contains(result.stdout_text, "inference_async=false",
+                      "validate output reports synchronous MLA inference") &&
       expect_contains(result.stdout_text, "max_inflight_per_stream=4",
                       "validate output reports the proven public per-stream credit default") &&
       expect_contains(result.stdout_text, "fan_in_policy=latest",
