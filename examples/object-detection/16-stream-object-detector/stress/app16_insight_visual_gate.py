@@ -226,6 +226,8 @@ CANVAS_HOOK_JS = r"""
           ptsNs: Number.isFinite(payload.pts_ns) ? payload.pts_ns : null,
           rtpTimestamp: Number.isFinite(payload.rtp_timestamp)
             ? payload.rtp_timestamp : null,
+          insightRtpTimestamp: Number.isFinite(payload?._insight?.rtp_timestamp)
+            ? payload._insight.rtp_timestamp : null,
           frameId: payload.frame_id ?? null,
           receivedAtMs: performance.now(),
         };
@@ -371,7 +373,7 @@ def sample_js(
           ? video.webkitDecodedFrameCount : null);
     const presentedFrame = video && window.__app16VideoFrameMetadataFor
       ? window.__app16VideoFrameMetadataFor(video) : null;
-    let videoRtp = null;
+    let receiverRtp = null;
     if (video && video.srcObject && video.srcObject.getVideoTracks) {
       const track = video.srcObject.getVideoTracks()[0] || null;
       if (track) {
@@ -385,7 +387,7 @@ def sample_js(
             return selected;
           }, null);
           if (latest) {
-            videoRtp = {
+            receiverRtp = {
               rtpTimestamp: latest.rtpTimestamp,
               sourceTimestamp: Number.isFinite(latest.timestamp) ? latest.timestamp : null,
               source: 'receiver-synchronization-source',
@@ -395,13 +397,13 @@ def sample_js(
         }
       }
     }
-    if (!videoRtp && presentedFrame && Number.isFinite(presentedFrame.rtpTimestamp)) {
-      videoRtp = {
+    const videoRtp = presentedFrame && Number.isFinite(presentedFrame.rtpTimestamp)
+      ? {
         rtpTimestamp: presentedFrame.rtpTimestamp,
         sourceTimestamp: null,
         source: 'presented-video-frame',
-      };
-    }
+      }
+      : receiverRtp;
     return {
       index,
       expectedChannelId: expected[index] ?? null,
@@ -418,6 +420,7 @@ def sample_js(
       temporalCode,
       videoFrame: presentedFrame,
       videoRtp,
+      receiverRtp,
       metadata: channelId === null
         ? null
         : (window.__app16MetadataByChannel[channelId] || null),
@@ -692,21 +695,26 @@ def analyze_temporal_samples(
         and segment["video_callback_delta"] > 0
         for segment in segments
     )
-    rtp_sync_tolerance_ticks = round(sync_tolerance * 90000 / fps)
+    # Diagnostic only. Installed Insight versions before the source-to-egress
+    # RTP correlator rewrite the video RTP clock from arrival time while
+    # forwarding App metadata in the source clock domain. In addition, these
+    # are independently sampled latest values rather than one presented pair.
+    # Their delta is therefore not a synchronization contract and must not be
+    # promoted to a pass/fail check. The fixture temporal code versus metadata
+    # PTS offset above is in one source-frame domain and is the valid no-drift
+    # visual check on those versions. Insight versions that add
+    # `_insight.rtp_timestamp` can expose exact presented-frame pairing to a
+    # future gate without changing the App metadata contract.
     rtp_translation_baseline = (
         rtp_translation_offsets[0] if rtp_translation_offsets else None
     )
-    rtp_translation_deviations = (
+    rtp_translation_observed_deviations = (
         [
             signed_circular_delta(offset, rtp_translation_baseline, 1 << 32)
             for offset in rtp_translation_offsets
         ]
         if rtp_translation_baseline is not None
         else []
-    )
-    rtp_translation_stable = bool(rtp_translation_deviations) and all(
-        abs(deviation) <= rtp_sync_tolerance_ticks
-        for deviation in rtp_translation_deviations
     )
     return {
         "codes": codes,
@@ -716,13 +724,16 @@ def analyze_temporal_samples(
         "media_origin_offsets_frames": media_origin_offsets,
         "video_metadata_rtp_translation_offsets": rtp_translation_offsets,
         "video_metadata_rtp_translation_baseline": rtp_translation_baseline,
-        "video_metadata_rtp_translation_deviations": rtp_translation_deviations,
-        "video_metadata_rtp_translation_range_ticks": (
-            max(rtp_translation_deviations) - min(rtp_translation_deviations)
-            if rtp_translation_deviations
+        "video_metadata_rtp_translation_observed_deviations": (
+            rtp_translation_observed_deviations
+        ),
+        "video_metadata_rtp_translation_observed_range_ticks": (
+            max(rtp_translation_observed_deviations)
+            - min(rtp_translation_observed_deviations)
+            if rtp_translation_observed_deviations
             else None
         ),
-        "rtp_sync_tolerance_ticks": rtp_sync_tolerance_ticks,
+        "video_metadata_rtp_translation_is_diagnostic_only": True,
         "segments": segments,
         "codes_valid": all_codes_valid,
         "metadata_valid": all_metadata_valid,
@@ -730,7 +741,6 @@ def analyze_temporal_samples(
         "video_rtp_valid": all_video_rtp_valid,
         "media_origin_offset_stable": media_origin_offset_stable,
         "video_callbacks_forward": video_callbacks_forward,
-        "video_metadata_rtp_translation_stable": rtp_translation_stable,
         "video_forward": all_codes_valid
         and bool(segments)
         and all(segment["video_forward"] for segment in segments),
@@ -742,7 +752,7 @@ def analyze_temporal_samples(
         and bool(segments)
         and all(segment["passed"] for segment in segments)
         and video_callbacks_forward
-        and rtp_translation_stable,
+        and media_origin_offset_stable,
     }
 
 
@@ -908,9 +918,9 @@ def main() -> int:
                 and record["temporal"]["metadata_forward"]
                 for record in records
             )
-            checks["all_video_metadata_rtp_translation_stable"] = all(
+            checks["all_video_metadata_source_alignment_stable"] = all(
                 record["temporal"]
-                and record["temporal"]["video_metadata_rtp_translation_stable"]
+                and record["temporal"]["media_origin_offset_stable"]
                 for record in records
             )
         summary = {

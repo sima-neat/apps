@@ -361,27 +361,31 @@ marker, the gate samples it seven times by default and also requires:
   forward at the requested rate (backward/repeated content fails without per-bit tearing);
 - metadata message count and metadata PTS-derived frame code to advance on every segment;
 - metadata `rtp_timestamp` to equal the 90 kHz value derived from its PTS; and
-- the circular translation offset between the tile's live inbound RTP timestamp from
-  `RTCRtpReceiver.getSynchronizationSources()` and App metadata `rtp_timestamp` to remain stable
-  within `sync_tolerance_frames * 90000 / fps` ticks. The gate records the baseline, deviations,
-  and range; a large drift/jump fails. It falls back to `VideoFrameMetadata.rtpTimestamp` on
-  browsers that expose it.
+- the circular source-frame offset between the presented fixture code and metadata PTS to remain
+  stable within `sync_tolerance_frames`. This visual no-drift check detects a growing metadata
+  backlog without assuming that the publisher and App joined at the same loop frame.
 
 The fixture frame code and pipeline PTS can have an arbitrary channel-specific origin offset when
-the publisher was already running before App16 joined. WebRTC also applies a random per-peer RTP
-timestamp translation, so neither offset is required to be near zero. Focused queue tests prove
-that App16 resolves the metadata epoch from the exact source PTS and never releases metadata newer
-than the video AU. The runtime gate proves that video and metadata both advance without relative
-RTP drift while the temporal code independently proves
-displayed-frame direction and freshness. Receiver synchronization sources describe the latest
-inbound packet rather than necessarily the exact frame presented, so this is an explicit
-no-drift inference with a frame tolerance, not a claim of absolute browser presentation skew.
+the publisher was already running before App16 joined, so the offset need not be near zero. Focused
+gate tests cover forward, backward, stale, and progressively delayed metadata. Focused queue tests
+prove that App16 resolves the metadata epoch from the exact source PTS and never releases metadata
+newer than the video AU. Together, the runtime temporal check and encoded-AU/metadata pairing tests
+prove displayed-frame direction, freshness, and stable relative alignment.
+
+The JSON also records the observed delta between App metadata `rtp_timestamp` and the browser video
+RTP timestamp, but marks it diagnostic-only. Insight releases before the source-to-egress RTP
+correlator rewrite video RTP from arrival time while forwarding metadata in the source RTP clock;
+subtracting those two clocks is not a synchronization verdict. Receiver synchronization sources
+also describe the latest inbound packet, not necessarily the frame being presented. When Insight
+provides `_insight.rtp_timestamp`, the pre-document hook records that correlated timestamp so an
+Insight-side exact presented-frame matcher can be audited without changing the App metadata
+contract.
 
 The pre-document hook observes both viewer-created DataChannels and remotely created channels
 delivered through the browser's `datachannel` event, before Insight installs its own handler. It
 also starts a `requestVideoFrameCallback` loop for each video tile and retains the latest presented
-frame callback count. It maps each tile's `MediaStreamTrack` back to its peer receiver to sample
-the inbound RTP timestamp even when Chrome omits RTP from `VideoFrameMetadata`.
+frame callback count and RTP timestamp. It maps each tile's `MediaStreamTrack` back to its peer
+receiver only as a diagnostic fallback when Chrome omits RTP from `VideoFrameMetadata`.
 
 Insight currently assigns each channel's metadata DataChannel to one viewer. Close the
 operator viewer before this active gate, then refresh it after the gate closes. Running two

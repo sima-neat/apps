@@ -1183,9 +1183,13 @@ class TestHandoffGates:
         assert forward_result["media_origin_offset_stable"]
         assert forward_result["media_origin_offsets_frames"] == [800, 800, 800]
         assert forward_result["video_metadata_rtp_translation_baseline"] == rtp_translation
-        assert forward_result["video_metadata_rtp_translation_deviations"] == [0, 0, 0]
-        assert forward_result["video_metadata_rtp_translation_range_ticks"] == 0
-        assert forward_result["video_metadata_rtp_translation_stable"]
+        assert forward_result[
+            "video_metadata_rtp_translation_observed_deviations"
+        ] == [0, 0, 0]
+        assert forward_result[
+            "video_metadata_rtp_translation_observed_range_ticks"
+        ] == 0
+        assert forward_result["video_metadata_rtp_translation_is_diagnostic_only"]
         assert forward_result["passed"]
 
         backward = [
@@ -1213,9 +1217,39 @@ class TestHandoffGates:
             rtp_translation_jump, [0.0, 1.0, 2.0], temporal
         )
         assert mismatch_result["media_origin_offset_stable"]
-        assert mismatch_result["video_metadata_rtp_translation_range_ticks"] == 100 * 4500
-        assert not mismatch_result["video_metadata_rtp_translation_stable"]
-        assert not mismatch_result["passed"]
+        assert mismatch_result[
+            "video_metadata_rtp_translation_observed_range_ticks"
+        ] == 100 * 4500
+        # This cross-clock observation is retained for diagnosis, but cannot
+        # fail a visual gate: legacy Insight rewrites video RTP from arrival
+        # time and forwards metadata in the source clock domain.
+        assert mismatch_result["video_metadata_rtp_translation_is_diagnostic_only"]
+        assert mismatch_result["passed"]
+
+        # Browser video and metadata are sampled independently.  Here the
+        # latest metadata message becomes two more frames behind at every
+        # sample, while both paths remain forward and retain one stable RTP
+        # translation for the corresponding source frames.  That delivery
+        # skew is not timestamp drift and must not fail the synchronization
+        # check.
+        delayed_metadata = [
+            sample(0, 800, 10, 10, rtp_translation),
+            sample(20, 818, 28, 30, rtp_translation + 2 * 4500),
+            sample(40, 836, 46, 50, rtp_translation + 4 * 4500),
+        ]
+        delayed_result = gate.analyze_temporal_samples(
+            delayed_metadata, [0.0, 1.0, 2.0], temporal
+        )
+        assert delayed_result["media_origin_offsets_frames"] == [800, 798, 796]
+        assert delayed_result[
+            "video_metadata_rtp_translation_observed_deviations"
+        ] == [
+            0,
+            2 * 4500,
+            4 * 4500,
+        ]
+        assert delayed_result["media_origin_offset_stable"]
+        assert delayed_result["passed"]
 
     def test_visual_gate_hooks_local_and_remote_data_channels(self, monkeypatch):
         gate = load_script_module("app16_insight_visual_gate")
@@ -1224,6 +1258,7 @@ class TestHandoffGates:
         assert "setRemoteDescription" in gate.CANVAS_HOOK_JS
         assert "requestVideoFrameCallback" in gate.CANVAS_HOOK_JS
         assert "window.__app16Peers.push(this)" in gate.CANVAS_HOOK_JS
+        assert "payload?._insight?.rtp_timestamp" in gate.CANVAS_HOOK_JS
 
         temporal = {
             "x": 8,
@@ -1242,6 +1277,7 @@ class TestHandoffGates:
         assert "getReceivers()" in sample_script
         assert "getSynchronizationSources()" in sample_script
         assert "presented-video-frame" in sample_script
+        assert "receiverRtp" in sample_script
 
         monkeypatch.setattr(
             sys,
