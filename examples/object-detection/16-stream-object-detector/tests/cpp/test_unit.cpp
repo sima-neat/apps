@@ -568,6 +568,19 @@ bool test_delayed_video_metadata_matching() {
   ok &= expect_true(queue.take_metadata_through(400) == "metadata-400-second",
                     "equal-PTS coalescing deterministically keeps the newest arrival");
 
+  ok &= expect_true(queue.enqueue_frame(TestEncodedFrame{8}, now, /*payload_bytes=*/1,
+                                        /*pts_ns=*/500) &&
+                        !queue.enqueue_metadata(500, "metadata-before-video"),
+                    "matching metadata and its encoded AU can be staged together");
+  std::uint64_t frame_epoch = 99;
+  ok &= expect_true(queue.peek_due_frame(now, frame, &frame_epoch) && frame.id == 8,
+                    "dispatcher can inspect a due AU before submitting it");
+  ok &= expect_true(queue.take_metadata_through(frame_epoch, 500) == "metadata-before-video" &&
+                        queue.frame_count() == 1,
+                    "metadata can be sent first without consuming its encoded AU");
+  ok &= expect_true(queue.pop_due_frame(now, frame) && frame.id == 8,
+                    "encoded AU remains available after metadata pre-send");
+
   ok &= expect_true(queue.pending_count() == 0, "matched video and metadata leave no backlog");
   return ok;
 }

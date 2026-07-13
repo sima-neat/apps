@@ -1411,6 +1411,31 @@ void encoded_video_dispatch_loop(AppRuntime& app) {
         if (!have_frame) {
           continue;
         }
+
+        // Publish matching metadata before admitting the encoded AU. Insight
+        // can retain metadata until the corresponding RTP frame arrives, but
+        // it cannot recover an exact match after the browser has already
+        // presented that frame. Sending video first caused occasional
+        // one-to-three-frame stale overlays even though both payloads carried
+        // the same source PTS.
+        std::string metadata_payload;
+        {
+          std::lock_guard<std::mutex> lock(*source.video_mu);
+          std::size_t stale_epoch_metadata = 0;
+          metadata_payload = source.delivery.take_metadata_through(frame_epoch, frame.pts_ns,
+                                                                   &stale_epoch_metadata);
+          source.video_match_miss += stale_epoch_metadata;
+          if (!metadata_payload.empty()) {
+            ++source.video_match_ok;
+          }
+        }
+        if (!metadata_payload.empty() && source.metadata_sender) {
+          const auto metadata_send_start = std::chrono::steady_clock::now();
+          send_metadata_nonblocking(source, metadata_payload);
+          log_encoded_dispatch_stall("metadata_send_before_video", source.index,
+                                     std::chrono::steady_clock::now() - metadata_send_start);
+        }
+
         // Try each channel at most once per round. A blocked sender keeps its
         // AU at the head of its own queue while the other channels continue.
         // Busy-waiting here creates global head-of-line blocking at 24/48
@@ -1443,7 +1468,6 @@ void encoded_video_dispatch_loop(AppRuntime& app) {
         }
         did_work = true;
         const std::int64_t frame_pts_ns = frame.pts_ns;
-        std::string metadata_payload;
         const auto consume_start = std::chrono::steady_clock::now();
         {
           std::lock_guard<std::mutex> lock(*source.video_mu);
@@ -1456,22 +1480,9 @@ void encoded_video_dispatch_loop(AppRuntime& app) {
           ++source.video_push_ok;
           source.video_try_busy_streak = 0;
           source.last_video_pts_ns = frame_pts_ns;
-          std::size_t stale_epoch_metadata = 0;
-          metadata_payload = source.delivery.take_metadata_through(frame_epoch, frame_pts_ns,
-                                                                   &stale_epoch_metadata);
-          source.video_match_miss += stale_epoch_metadata;
-          if (!metadata_payload.empty()) {
-            ++source.video_match_ok;
-          }
         }
         log_encoded_dispatch_stall("consume", source.index,
                                    std::chrono::steady_clock::now() - consume_start);
-        if (!metadata_payload.empty() && source.metadata_sender) {
-          const auto metadata_send_start = std::chrono::steady_clock::now();
-          send_metadata_nonblocking(source, metadata_payload);
-          log_encoded_dispatch_stall("metadata_send", source.index,
-                                     std::chrono::steady_clock::now() - metadata_send_start);
-        }
       }
       if (!did_work) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
