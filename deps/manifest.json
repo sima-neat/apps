@@ -1,7 +1,7 @@
 {
   "neat-core": {
     "branch": "codex/app16-core-pr-final",
-    "spec": "edacf0b19933"
+    "spec": "1c7545ddad40"
   },
   "sdk": {
     "channel": "develop"
