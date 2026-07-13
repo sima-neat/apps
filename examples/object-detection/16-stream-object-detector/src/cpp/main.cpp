@@ -1160,7 +1160,7 @@ void complete_passthrough_sample(SourceRuntime& source, const AppConfig& cfg,
 void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& source,
                           const simaai::neat::Graph& detector_graph) {
   auto branch = simaai::neat::graphs::Branch("source", {"detector_frame"});
-  simaai::neat::GraphLinkOptions detector_link;
+  simaai::neat::RealtimeGraphLinkOptions detector_link;
   detector_link.policy = graph_link_policy(cfg.fan_in_policy);
   detector_link.queue_depth = cfg.queue_depth;
   detector_link.stream_id = stream_id_for(source.index);
@@ -1168,7 +1168,7 @@ void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& 
 
   auto rtsp = make_rtsp_decoded_input(source.source_options, cfg.decoder_buffers);
   app.graph.connect(rtsp, branch);
-  app.graph.connect(branch, detector_graph, detector_link);
+  app.graph.connect_realtime(branch, detector_graph, detector_link);
 
   if (cfg.video_enabled && is_insight_visible_stream(cfg, source.index)) {
     source.video_port = make_video_options(cfg, source).video_port();
