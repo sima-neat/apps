@@ -1,5 +1,3 @@
-"""Graph-native multi-stream RTSP YOLO26 Insight example using pyneat."""
-
 from __future__ import annotations
 
 import argparse
@@ -898,7 +896,6 @@ def make_rtsp_decoded_input(
 def make_model(cfg: AppConfig):
     opt = pyneat.ModelOptions()
     if hasattr(opt, "verbose") and not app_verbose():
-        # C++ sets quiet verbose options. pyneat versions without VerboseOptions simply ignore this.
         verbose_options = getattr(pyneat, "VerboseOptions", None)
         if verbose_options is not None and hasattr(verbose_options, "quiet"):
             opt.verbose = verbose_options.quiet()

@@ -50,19 +50,10 @@
 #include <utility>
 #include <vector>
 
-namespace app16 {
+namespace encoded_delivery {
 
-/**
- * Size the CPU-owned encoded-AU queue for both the intentional presentation
- * delay and a bounded RTSP catch-up burst.
- *
- * GStreamer's RTSP ingress can legally release roughly one second of queued
- * media at once after a short scheduling or network pause. Counting only the
- * nominal delay plus one source-second leaves no admission margin: at 10 fps,
- * a 400 ms delay produced the former 4 + 10 == 14 frame limit and the 15th AU
- * stopped the whole application. Encoded AUs live in ordinary CPU memory;
- * the separate byte limit remains the hard memory bound.
- */
+// Encoded AUs are CPU-owned, so retain two source-seconds (at least 64 frames)
+// beyond the presentation delay while the byte limit remains the hard bound.
 inline std::size_t encoded_delivery_frame_capacity(int fps, int delay_ms) {
   if (fps <= 0 || delay_ms < 0) {
     return 0;
@@ -75,12 +66,6 @@ inline std::size_t encoded_delivery_frame_capacity(int fps, int delay_ms) {
   return delay_frames + catch_up_frames;
 }
 
-/**
- * CPU-owned delay and metadata queues for one Insight channel.
- *
- * The caller provides synchronization. Keeping this type independent of Neat
- * keeps the ordering and overflow contract local to the application.
- */
 template <typename Frame> class EncodedDeliveryQueue {
 public:
   using Clock = std::chrono::steady_clock;
@@ -101,7 +86,6 @@ public:
         max_frame_history_(max_frame_history > 0 ? max_frame_history
                                                  : std::max<std::size_t>(256, max_frames * 4)) {}
 
-  /** Reject a new encoded AU when full; never discard part of an H.264 stream. */
   bool enqueue_frame(Frame frame, TimePoint due, std::size_t payload_bytes = 0,
                      std::int64_t pts_ns = -1) {
     if (max_frames_ == 0 || frames_.size() >= max_frames_ ||
@@ -123,7 +107,6 @@ public:
     return true;
   }
 
-  /** Pop the oldest AU only after its synchronization delay has elapsed. */
   bool pop_due_frame(TimePoint now, Frame& frame, std::uint64_t* epoch = nullptr) {
     if (frames_.empty() || frames_.front().due > now) {
       return false;
@@ -137,14 +120,6 @@ public:
     return true;
   }
 
-  /**
-   * Copy the oldest due AU without consuming it.
-   *
-   * A nonblocking sender can use this to try one channel and move on when
-   * that channel is backpressured. The caller removes the AU with
-   * pop_due_frame() only after the sender accepted it, preserving H.264 order
-   * without introducing head-of-line blocking across channels.
-   */
   bool peek_due_frame(TimePoint now, Frame& frame, std::uint64_t* epoch = nullptr) const {
     if (frames_.empty() || frames_.front().due > now) {
       return false;
@@ -156,10 +131,6 @@ public:
     return true;
   }
 
-  /**
-   * Queue detection metadata in PTS order. If inference ever outruns video,
-   * discard the oldest metadata object and report that event to the caller.
-   */
   MetadataEnqueueStatus enqueue_metadata_status(std::int64_t pts_ns, std::string payload) {
     bool dropped_oldest = false;
     if (max_metadata_ == 0) {
@@ -191,19 +162,11 @@ public:
                           : MetadataEnqueueStatus::Accepted;
   }
 
-  /**
-   * Compatibility helper: true means metadata was not admitted cleanly.
-   * Call enqueue_metadata_status() when the exact reason matters.
-   */
   bool enqueue_metadata(std::int64_t pts_ns, std::string payload) {
     return enqueue_metadata_status(pts_ns, std::move(payload)) != MetadataEnqueueStatus::Accepted;
   }
 
-  /**
-   * Return the newest detection not newer than the video AU being sent.
-   * Older eligible detections are intentionally coalesced so Insight remains
-   * current rather than drawing stale intermediate results.
-   */
+  // Coalesce eligible detections so Insight receives the freshest result for the video AU.
   std::string take_metadata_through(std::uint64_t video_epoch, std::int64_t video_pts_ns,
                                     std::size_t* stale_epoch_count = nullptr) {
     std::string payload;
@@ -223,7 +186,6 @@ public:
     return payload;
   }
 
-  /** Backward-compatible single-epoch helper used by small unit fixtures. */
   std::string take_metadata_through(std::int64_t video_pts_ns) {
     return take_metadata_through(frame_epoch_, video_pts_ns);
   }
@@ -267,14 +229,6 @@ public:
   [[nodiscard]] std::size_t frame_history_count() const {
     return frame_history_.size();
   }
-  /**
-   * Milliseconds until the oldest encoded AU becomes due.
-   *
-   * A negative value means the dispatcher is behind rather than the delay
-   * window legitimately retaining the queue.  This is intentionally exposed
-   * for low-rate failure diagnostics; callers must still provide the same
-   * synchronization used for the other queue operations.
-   */
   [[nodiscard]] std::int64_t oldest_frame_due_in_ms(TimePoint now) const {
     if (frames_.empty()) {
       return 0;
@@ -373,7 +327,7 @@ private:
   std::deque<FrameEpochStamp> frame_history_;
 };
 
-} // namespace app16
+} // namespace encoded_delivery
 
 namespace fs = std::filesystem;
 
@@ -616,7 +570,7 @@ struct SourceRuntime {
   int processed = 0;
   simaai::neat::Run video_run;
   std::shared_ptr<std::mutex> video_mu = std::make_shared<std::mutex>();
-  app16::EncodedDeliveryQueue<simaai::neat::Sample> delivery;
+  encoded_delivery::EncodedDeliveryQueue<simaai::neat::Sample> delivery;
   std::uint64_t video_cached = 0;
   std::uint64_t video_match_ok = 0;
   std::uint64_t video_match_miss = 0;
@@ -1076,7 +1030,7 @@ int app_liveness_ms() {
 void print_pull_liveness(const std::vector<SourceRuntime>& sources, const char* reason,
                          std::uint64_t total_pulls) {
   if (sources.empty()) {
-    std::cerr << "[app16][liveness] reason=" << (reason ? reason : "snapshot")
+    std::cerr << "[detector][liveness] reason=" << (reason ? reason : "snapshot")
               << " streams=0 total_pulls=" << total_pulls << "\n";
     return;
   }
@@ -1130,7 +1084,7 @@ void print_pull_liveness(const std::vector<SourceRuntime>& sources, const char* 
     return a->index < b->index;
   });
 
-  std::cerr << "[app16][liveness] reason=" << (reason ? reason : "snapshot")
+  std::cerr << "[detector][liveness] reason=" << (reason ? reason : "snapshot")
             << " streams=" << sources.size() << " total_pulls=" << total_pulls
             << " min_processed=" << min_processed << " max_processed=" << max_processed
             << " zero_streams=" << zero_streams << " video_min=" << min_video
@@ -1381,9 +1335,9 @@ SourceRuntime make_source_runtime(const AppConfig& cfg, int stream_index,
   source.labels = labels;
   source.profile.enabled = cfg.profile;
   source.profile.stream_index = stream_index;
-  const std::size_t encoded_queue_frames =
-      app16::encoded_delivery_frame_capacity(source.source_fps, cfg.insight_video_sync_delay_ms);
-  source.delivery = app16::EncodedDeliveryQueue<simaai::neat::Sample>(
+  const std::size_t encoded_queue_frames = encoded_delivery::encoded_delivery_frame_capacity(
+      source.source_fps, cfg.insight_video_sync_delay_ms);
+  source.delivery = encoded_delivery::EncodedDeliveryQueue<simaai::neat::Sample>(
       encoded_queue_frames, /*max_metadata=*/128, kEncodedQueueMaxBytesPerStream);
 
   if (should_send_metadata(cfg, stream_index)) {
@@ -1600,7 +1554,7 @@ void install_encoded_video_frame_tap(AppRuntime& app, const AppConfig& cfg) {
   }
   if (visible_video_runs < app.sources.size()) {
     std::cerr << "[warn] encoded AU tap is graph-global: Core copies encoded CPU AUs for "
-              << app.sources.size() << " source branches before App16 discards the "
+              << app.sources.size() << " source branches before the application discards the "
               << (app.sources.size() - visible_video_runs)
               << " non-published channels; use all-visible output for the validated profile\n";
   }
@@ -1665,7 +1619,7 @@ void install_encoded_video_frame_tap(AppRuntime& app, const AppConfig& cfg) {
     } catch (...) {
       // Core deliberately catches subscriber exceptions so an observability
       // tap cannot tear down a GStreamer streaming thread. Convert every
-      // App16 callback failure into an explicit app stop here; otherwise
+      // application callback failure into an explicit app stop here; otherwise
       // one silently lost H.264 AU could corrupt only the Insight branch.
       request_encoded_video_stop(app, std::current_exception());
     }
