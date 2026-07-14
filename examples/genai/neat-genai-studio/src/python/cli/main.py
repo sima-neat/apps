@@ -131,18 +131,188 @@ def _inline_md(s):
     return s
 
 
+# ---- LaTeX → Unicode (terminal-friendly math) --------------------------------
+# We can't render real math in a terminal, but converting the common LaTeX a chat
+# model emits ($x^2$, \frac, \alpha, \sqrt, \sum, …) to Unicode makes replies far
+# more readable. This is a best-effort transform, not a TeX engine.
+_SUP = {c: u for c, u in zip(
+    "0123456789+-=()niabcdefghklmoprstuvwxyzABDEGHIJKLMNOPRTUVW",
+    "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱᵃᵇᶜᵈᵉᶠᵍʰᵏˡᵐᵒᵖʳˢᵗᵘᵛʷˣʸᶻᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁⱽᵂ")}
+_SUB = {c: u for c, u in zip(
+    "0123456789+-=()aehijklmnoprstuvx",
+    "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ")}
+_GREEK = {
+    r"\alpha": "α", r"\beta": "β", r"\gamma": "γ", r"\delta": "δ", r"\epsilon": "ε",
+    r"\varepsilon": "ε", r"\zeta": "ζ", r"\eta": "η", r"\theta": "θ", r"\vartheta": "ϑ",
+    r"\iota": "ι", r"\kappa": "κ", r"\lambda": "λ", r"\mu": "μ", r"\nu": "ν", r"\xi": "ξ",
+    r"\pi": "π", r"\rho": "ρ", r"\sigma": "σ", r"\tau": "τ", r"\upsilon": "υ", r"\phi": "φ",
+    r"\varphi": "φ", r"\chi": "χ", r"\psi": "ψ", r"\omega": "ω",
+    r"\Gamma": "Γ", r"\Delta": "Δ", r"\Theta": "Θ", r"\Lambda": "Λ", r"\Xi": "Ξ",
+    r"\Pi": "Π", r"\Sigma": "Σ", r"\Phi": "Φ", r"\Psi": "Ψ", r"\Omega": "Ω",
+}
+_SYMBOLS = {
+    r"\times": "×", r"\cdot": "·", r"\div": "÷", r"\pm": "±", r"\mp": "∓",
+    r"\leq": "≤", r"\le": "≤", r"\geq": "≥", r"\ge": "≥", r"\neq": "≠", r"\ne": "≠",
+    r"\ll": "≪", r"\gg": "≫", r"\approx": "≈", r"\equiv": "≡", r"\cong": "≅",
+    r"\sim": "∼", r"\simeq": "≃", r"\propto": "∝", r"\infty": "∞", r"\partial": "∂",
+    r"\nabla": "∇", r"\sum": "∑", r"\prod": "∏", r"\int": "∫", r"\oint": "∮",
+    r"\forall": "∀", r"\exists": "∃", r"\nexists": "∄", r"\in": "∈", r"\notin": "∉",
+    r"\ni": "∋", r"\subset": "⊂", r"\subseteq": "⊆", r"\supset": "⊃", r"\supseteq": "⊇",
+    r"\cup": "∪", r"\cap": "∩", r"\setminus": "∖", r"\emptyset": "∅", r"\varnothing": "∅",
+    r"\rightarrow": "→", r"\to": "→", r"\leftarrow": "←", r"\Rightarrow": "⇒",
+    r"\Leftarrow": "⇐", r"\leftrightarrow": "↔", r"\Leftrightarrow": "⇔", r"\iff": "⇔",
+    r"\mapsto": "↦", r"\langle": "⟨", r"\rangle": "⟩", r"\lceil": "⌈", r"\rceil": "⌉",
+    r"\lfloor": "⌊", r"\rfloor": "⌋", r"\cdots": "⋯", r"\ldots": "…", r"\dots": "…",
+    r"\vdots": "⋮", r"\ddots": "⋱", r"\prime": "′", r"\ast": "∗", r"\star": "⋆",
+    r"\circ": "∘", r"\bullet": "•", r"\deg": "°", r"\angle": "∠", r"\perp": "⊥",
+    r"\parallel": "∥", r"\hbar": "ℏ", r"\ell": "ℓ", r"\Re": "ℜ", r"\Im": "ℑ",
+    r"\aleph": "ℵ", r"\wedge": "∧", r"\land": "∧", r"\vee": "∨", r"\lor": "∨",
+    r"\neg": "¬", r"\lnot": "¬", r"\oplus": "⊕", r"\otimes": "⊗", r"\odot": "⊙",
+    r"\mathbb{R}": "ℝ", r"\mathbb{Z}": "ℤ", r"\mathbb{N}": "ℕ", r"\mathbb{Q}": "ℚ",
+    r"\mathbb{C}": "ℂ",
+}
+_MATH_CMDS = {**_GREEK, **_SYMBOLS}
+_CMD_RE = re.compile(r"\\[a-zA-Z]+")
+
+
+def _script(content, table):
+    """Map ``content`` to Unicode super/subscripts; fall back to ^(..)/_(..)."""
+    content = content.strip()
+    if content and all(c in table for c in content):
+        return "".join(table[c] for c in content)
+    marker = "^" if table is _SUP else "_"
+    return f"{marker}({content})" if len(content) > 1 else f"{marker}{content}"
+
+
+def _frac(a, b):
+    a, b = a.strip(), b.strip()
+    aw = a if len(a) <= 1 else f"({a})"
+    bw = b if len(b) <= 1 else f"({b})"
+    return f"{aw}/{bw}"
+
+
+def _convert_math(s):
+    """Convert a LaTeX math fragment (no delimiters) to a Unicode approximation."""
+    # \mathbb{R} etc. that map to a single glyph first (before brace stripping).
+    for cmd, sym in _SYMBOLS.items():
+        if "{" in cmd and cmd in s:
+            s = s.replace(cmd, sym)
+    # size/spacing wrappers and accents that just wrap their argument.
+    s = re.sub(r"\\(?:left|right|big|Big|bigg|Bigg)\b", "", s)
+    s = re.sub(r"\\(?:text|mathrm|mathbf|mathbb|mathcal|mathit|mathsf|operatorname|mbox)"
+               r"\s*\{([^{}]*)\}", r"\1", s)
+    s = re.sub(r"\\(?:vec|hat|bar|tilde|dot|ddot|overline|underline|widehat|widetilde)"
+               r"\s*\{([^{}]*)\}", r"\1", s)
+    # Known Greek/symbol commands first (longest match is intrinsic to \[a-zA-Z]+).
+    s = _CMD_RE.sub(lambda m: _MATH_CMDS.get(m.group(0), m.group(0)), s)
+    # \sqrt[n]{x}, \sqrt{x} and \frac{a}{b} → (a)/(b). Each regex only matches a
+    # brace group with no nested braces, so run them together to a fixpoint: the
+    # innermost construct converts first each pass, exposing the next one out —
+    # this handles either nesting order (frac-in-sqrt or sqrt-in-frac). Done BEFORE
+    # scripts so ^/​_ applied to a \frac/\sqrt macro doesn't eat the backslash.
+    # Each pass strips ≥1 macro, so the command count bounds the iterations.
+    for _ in range(s.count("\\frac") + s.count("\\sqrt") + 1):
+        before = s
+        s = re.sub(r"\\sqrt\s*\[([^\]]*)\]\s*\{([^{}]*)\}",
+                   lambda m: f"{_script(m.group(1), _SUP)}√({m.group(2)})", s)
+        s = re.sub(r"\\sqrt\s*\{([^{}]*)\}",
+                   lambda m: (f"√({m.group(1)})" if len(m.group(1)) > 1 else f"√{m.group(1)}"), s)
+        s = re.sub(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}",
+                   lambda m: _frac(m.group(1), m.group(2)), s)
+        if s == before:
+            break
+    # Superscripts / subscripts (braced form first, then single token). The single
+    # token class excludes () so it won't re-mangle a ^(…)/_(…) fallback, and
+    # excludes \ so a script on an unbraced macro can't swallow its backslash.
+    s = re.sub(r"\^\{([^{}]*)\}", lambda m: _script(m.group(1), _SUP), s)
+    s = re.sub(r"\^([^\s{}()^_\\])", lambda m: _script(m.group(1), _SUP), s)
+    s = re.sub(r"_\{([^{}]*)\}", lambda m: _script(m.group(1), _SUB), s)
+    s = re.sub(r"_([^\s{}()^_\\])", lambda m: _script(m.group(1), _SUB), s)
+    # Spacing commands and math line breaks → a space.
+    s = re.sub(r"\\(?:quad|qquad|,|;|:|!|\s)", " ", s)
+    s = s.replace("\\\\", " ")
+    # Remaining unknown \command → its bare name; then drop grouping braces.
+    s = re.sub(r"\\([a-zA-Z]+)", r"\1", s)
+    s = s.replace("{", "").replace("}", "")
+    return re.sub(r"[ \t]{2,}", " ", s)
+
+
+def _looks_mathy(inner):
+    """Heuristic: is ``inner`` (between $…$) real math, not currency/prose?"""
+    if re.search(r"[\\^_{}]", inner):          # LaTeX structure → definitely math
+        return True
+    s = inner.strip()
+    if not s or re.fullmatch(r"[\s\d.,]+", s):  # empty / pure number → currency
+        return False
+    words = s.split()
+    if re.search(r"[=<>+\-*/]", s):            # has an operator → a compact expression
+        # A dangling operator at either end means the closing '$' was really the
+        # next currency amount's '$' ("$5 + $10" → inner "5 +", "$5-$10" → "5-");
+        # reject so the '$' pair is left intact. Real math won't start/end on a
+        # bare operator (a leading '-' is a valid unary minus, so it's excluded).
+        if re.match(r"^[=<>+*/]", s) or re.search(r"[=<>+\-*/]$", s):
+            return False
+        # Only multi-letter words count as prose; chained operators and lone
+        # single-letter variables ("a + b + c + d") shouldn't be penalized.
+        prose = [w for w in words if re.fullmatch(r"[A-Za-z]{2,}", w)]
+        return len(s) <= 60 and len(prose) < 4
+    # No operator/structure: accept only a single short token (a lone variable),
+    # so prose or "$5 and $10"-style currency runs are left untouched.
+    return len(words) == 1 and len(s) <= 12 and bool(re.search(r"[A-Za-z]", s))
+
+
+def latex_to_unicode(text):
+    """Convert inline/single-line LaTeX math in ``text`` to Unicode (best effort)."""
+    if "$" not in text and "\\(" not in text and "\\[" not in text:
+        return text
+    text = re.sub(r"\$\$(.+?)\$\$", lambda m: _convert_math(m.group(1)), text, flags=re.S)
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: _convert_math(m.group(1)), text, flags=re.S)
+    text = re.sub(r"\\\((.+?)\\\)", lambda m: _convert_math(m.group(1)), text, flags=re.S)
+    text = re.sub(
+        r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)",
+        lambda m: _convert_math(m.group(1)) if _looks_mathy(m.group(1)) else m.group(0),
+        text)
+    return text
+
+
 def render_md_line(ln, state):
-    """Render one Markdown line to ANSI. `state` is a 1-item list tracking whether
-    we're inside a ``` code fence across lines (so it works line-by-line while
-    streaming)."""
-    if not _use_color():
-        return ln
+    """Render one Markdown line to ANSI. `state` tracks cross-line context so it
+    works while streaming: state[0] = inside a ``` code fence, state[1] = inside a
+    $$…$$ / \\[…\\] display-math block."""
+    if len(state) < 2:          # tolerate the older 1-item state shape
+        state.append(False)
     stripped = ln.strip()
     if stripped.startswith("```"):
         state[0] = not state[0]
-        return f"{DIM}{'─' * 40}{RESET}"
+        return f"{DIM}{'─' * 40}{RESET}" if _use_color() else ln
     if state[0]:
-        return f"{CODE}{ln}{RESET}"
+        return f"{CODE}{ln}{RESET}" if _use_color() else ln
+    # Display-math block: lone $$ or \[ … \] on their own lines.
+    if state[1]:
+        if stripped in ("$$", "\\]"):
+            state[1] = False
+            return ""
+        # Guard against an unterminated opener (e.g. the reply is truncated
+        # mid-equation): a line that is clearly Markdown structure, or has no math
+        # markers at all, implicitly closes the block and renders normally — so a
+        # stray $$ can't turn the rest of the reply into indented pseudo-math.
+        if stripped and (stripped.startswith(("```", "#", ">", "|"))
+                         or re.match(r"^\s*[-*+]\s", ln)
+                         or re.match(r"^\s*\d+[.)]\s", ln)
+                         or not re.search(r"[\\^_{}=]", stripped)):
+            state[1] = False
+            # fall through to normal rendering below
+        else:
+            conv = _convert_math(ln)
+            return f"  {ACCENT}{conv}{RESET}" if _use_color() else f"  {conv}"
+    if stripped in ("$$", "\\["):
+        state[1] = True
+        return ""
+    # Convert inline / single-line LaTeX math to Unicode (also on non-TTY).
+    ln = latex_to_unicode(ln)
+    if not _use_color():
+        return ln
+    stripped = ln.strip()
     m = re.match(r"^(#{1,6})\s+(.*)$", ln)
     if m:
         return f"{BOLD}{ACCENT}{m.group(2)}{RESET}"
@@ -158,10 +328,9 @@ def render_md_line(ln, state):
 
 
 def render_markdown_ansi(text):
-    """Render a whole Markdown block to ANSI. Plain text on non-TTY."""
-    if not _use_color():
-        return text
-    state = [False]
+    """Render a whole Markdown block. ANSI styling on a TTY; either way LaTeX math
+    is converted to Unicode for readability (render_md_line handles both cases)."""
+    state = [False, False]
     return "\n".join(render_md_line(ln, state) for ln in text.split("\n"))
 
 
@@ -250,7 +419,7 @@ def stream_chat(oai, model, messages, max_tokens, render=False):
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     parts, ttft, tps, tokens = [], None, None, 0
-    buf, md_state = "", [False]   # render mode: current incomplete line + code-fence state
+    buf, md_state = "", [False, False]   # render: [in code fence, in $$ math block]
 
     def _redraw_partial():
         # Show the in-progress line live with a trailing "… N tok" count, redrawn
@@ -318,7 +487,8 @@ def stream_chat(oai, model, messages, max_tokens, render=False):
 HELP = f"""{MUTED}Commands:
   /models            list catalog models with metadata (● loaded, ○ not)
   /load [name]       load a model (no name → arrow-key menu)
-  /download          browse Hugging Face, download a model, and load it
+  /download          browse Hugging Face — pick one, several, or all models to
+                     download (Space to multi-select, 'a' for all), then load one
   /unload [name]     unload a model (no name → unload the loaded LLM/VLM)
   /delete [name]     delete a model's weights from disk (no name → menu; asks to
                      confirm; aliases /rm, /remove)
@@ -546,6 +716,113 @@ def _arrow_menu(items, prompt):
     return sel
 
 
+def select_multi(items, prompt="Select"):
+    """Pick one *or more* of ``items`` (a list of ``(label, value)``). Returns a
+    list of chosen values (order preserved), or None if cancelled. Arrow-key
+    checkbox menu on a real terminal, numbered multi-select otherwise."""
+    items = list(items)
+    if not items:
+        return None
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            return _arrow_multiselect(items, prompt)
+        except Exception:  # noqa: BLE001 - fall back to a numbered prompt
+            pass
+    return _numbered_multi(items, prompt)
+
+
+def _numbered_multi(items, prompt):
+    print(f"{MUTED}{prompt}{RESET}")
+    for i, (label, _v) in enumerate(items, 1):
+        print(f"  {DIM}{i}.{RESET} {label}")
+    try:
+        raw = input(f"{MUTED}  numbers (e.g. 1,3-5), 'all', blank to cancel ▸ {RESET}").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if not raw:
+        return None
+    if raw.lower() in ("all", "a", "*"):
+        return [v for _l, v in items]
+    picked, seen = [], set()
+    for tok in re.split(r"[,\s]+", raw):
+        if not tok:
+            continue
+        rng = re.fullmatch(r"(\d+)-(\d+)", tok)
+        if rng:
+            lo, hi = int(rng.group(1)), int(rng.group(2))
+            if lo > hi:
+                lo, hi = hi, lo
+            lo, hi = max(lo, 1), min(hi, len(items))   # clamp: "1-999999" can't freeze
+            nums = range(lo, hi + 1)
+        elif tok.isdigit():
+            nums = [int(tok)]
+        else:
+            continue
+        for n in nums:
+            if 1 <= n <= len(items) and n not in seen:
+                seen.add(n)
+                picked.append(items[n - 1][1])
+    return picked or None
+
+
+def _arrow_multiselect(items, prompt):
+    import select as _select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    idx, chosen = 0, set()
+
+    def draw(first):
+        if not first:
+            sys.stdout.write(f"\x1b[{len(items)}A")   # move up over the previous list
+        for i, (label, _v) in enumerate(items):
+            box = f"{ACCENT}[x]{RESET}" if i in chosen else f"{DIM}[ ]{RESET}"
+            if i == idx:
+                sys.stdout.write(f"\x1b[2K  {ACCENT}{BOLD}▸{RESET} {box} {BOLD}{label}{RESET}\n")
+            else:
+                sys.stdout.write(f"\x1b[2K    {box} {MUTED}{label}{RESET}\n")
+        sys.stdout.flush()
+
+    print(f"{MUTED}{prompt}\n  ↑/↓ move · Space toggle · a all · Enter confirm · Esc cancel{RESET}")
+    draw(True)
+    result = None
+    try:
+        tty.setcbreak(fd)
+        while True:
+            ch = os.read(fd, 1)
+            if ch in (b"\r", b"\n"):
+                # Nothing ticked → treat like single-select on the cursor item.
+                result = [items[i][1] for i in sorted(chosen)] if chosen else [items[idx][1]]
+                break
+            if ch == b" ":
+                chosen.discard(idx) if idx in chosen else chosen.add(idx)
+                draw(False)
+            elif ch in (b"a", b"A"):
+                chosen = set() if len(chosen) == len(items) else set(range(len(items)))
+                draw(False)
+            elif ch == b"q":
+                break
+            elif ch == b"\x1b":
+                ready, _, _ = _select.select([fd], [], [], 0.05)
+                if not ready:
+                    break                      # bare Esc -> cancel
+                seq = os.read(fd, 2)
+                if seq == b"[A":
+                    idx = (idx - 1) % len(items)
+                    draw(False)
+                elif seq == b"[B":
+                    idx = (idx + 1) % len(items)
+                    draw(False)
+    except (KeyboardInterrupt, OSError):
+        result = None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return result
+
+
 # ---- model loading + Hugging Face (reuses server/hub.py, like the UI) --------
 def load_model(ctrl, name, oai=None, auto_retry=True):
     """Load a model via the control API. Returns True on success. Loading a
@@ -632,11 +909,52 @@ def hub_available(config_path):
         return False
 
 
-def browse_and_download(ctrl, config_path, oai=None):
-    """Browse Hugging Face (same models the UI lists), download one with a live
-    progress bar, then load it. Returns the loaded model name, or None."""
+def _download_one(catalog_dir, hub, repo_id):
+    """Download a single Hugging Face repo with a live progress bar. Returns the
+    catalog model name on success, or None on failure."""
+    from server.hub import hub_download_stream, safe_name
+    name = safe_name(repo_id)
+    print(f"{MUTED}  downloading {repo_id}…{RESET}")
     try:
-        from server.hub import hub_download_stream, hub_search, safe_name
+        for line in hub_download_stream(catalog_dir, hub, repo_id):
+            try:
+                evt = json.loads(line)
+            except Exception:
+                continue
+            state = evt.get("state")
+            if state == "downloading":
+                pct = evt.get("pct")
+                sz = (f"{fmt_bytes(evt.get('downloaded'))} / {fmt_bytes(evt.get('total'))}"
+                      if evt.get("total") else fmt_bytes(evt.get("downloaded")))
+                bar = ""
+                if pct is not None:
+                    filled = int(pct / 5)
+                    bar = f"[{'█' * filled}{'░' * (20 - filled)}] {pct}%"
+                sys.stdout.write(f"\r\x1b[K{MUTED}  {bar} {sz}{RESET}")
+                sys.stdout.flush()
+            elif state == "resolving":
+                sys.stdout.write(f"\r\x1b[K{MUTED}  resolving…{RESET}")
+                sys.stdout.flush()
+            elif state == "done":
+                name = evt.get("name") or name
+                sys.stdout.write(f"\r\x1b[K{OK}✔ downloaded {name}{RESET}\n")
+            elif state == "error":
+                sys.stdout.write(f"\r\x1b[K{ERR}  download failed ({repo_id}): "
+                                 f"{evt.get('message')}{RESET}\n")
+                return None
+    except Exception as exc:  # noqa: BLE001
+        sys.stdout.write("\n")
+        print(f"{ERR}  download error ({repo_id}): {exc}{RESET}")
+        return None
+    return name
+
+
+def browse_and_download(ctrl, config_path, oai=None):
+    """Browse Hugging Face (same models the UI lists), download one, several, or
+    all with a live progress bar, then load one. Returns the loaded model name (the
+    first successfully downloaded), or None."""
+    try:
+        from server.hub import hub_search  # noqa: F401 - probe availability early
     except Exception as exc:  # noqa: BLE001
         print(f"{ERR}  Hugging Face support unavailable: {exc}{RESET}")
         return None
@@ -665,46 +983,37 @@ def browse_and_download(ctrl, config_path, oai=None):
             meta.append("in catalog")
         label = m.get("repoId") + (f"  {DIM}{' · '.join(meta)}{RESET}" if meta else "")
         items.append((label, m.get("repoId")))
-    repo_id = select_menu(items, "Download which model from Hugging Face?")
-    if not repo_id:
+    repo_ids = select_multi(items, "Download which model(s) from Hugging Face?")
+    if not repo_ids:
         print(f"{MUTED}  (cancelled){RESET}")
         return None
-    name = safe_name(repo_id)
-    print(f"{MUTED}  downloading {repo_id}…{RESET}")
-    try:
-        for line in hub_download_stream(catalog_dir, hub, repo_id):
-            try:
-                evt = json.loads(line)
-            except Exception:
-                continue
-            state = evt.get("state")
-            if state == "downloading":
-                pct = evt.get("pct")
-                sz = (f"{fmt_bytes(evt.get('downloaded'))} / {fmt_bytes(evt.get('total'))}"
-                      if evt.get("total") else fmt_bytes(evt.get("downloaded")))
-                bar = ""
-                if pct is not None:
-                    filled = int(pct / 5)
-                    bar = f"[{'█' * filled}{'░' * (20 - filled)}] {pct}%"
-                sys.stdout.write(f"\r\x1b[K{MUTED}  {bar} {sz}{RESET}")
-                sys.stdout.flush()
-            elif state == "resolving":
-                sys.stdout.write(f"\r\x1b[K{MUTED}  resolving…{RESET}")
-                sys.stdout.flush()
-            elif state == "done":
-                name = evt.get("name") or name
-                sys.stdout.write(f"\r\x1b[K{OK}✔ downloaded {name}{RESET}\n")
-            elif state == "error":
-                sys.stdout.write(f"\r\x1b[K{ERR}  download failed: {evt.get('message')}{RESET}\n")
-                return None
-    except Exception as exc:  # noqa: BLE001
-        print(f"\n{ERR}  download error: {exc}{RESET}")
+    total = len(repo_ids)
+    downloaded, failed = [], []
+    for i, repo_id in enumerate(repo_ids, 1):
+        if total > 1:
+            print(f"{MUTED}  [{i}/{total}] {repo_id}{RESET}")
+        try:
+            name = _download_one(catalog_dir, hub, repo_id)
+        except KeyboardInterrupt:
+            sys.stdout.write("\n")
+            print(f"{MUTED}  (download cancelled — keeping what finished){RESET}")
+            break
+        (downloaded if name else failed).append(name or repo_id)
+    if not downloaded:
+        print(f"{ERR}  nothing downloaded.{RESET}")
         return None
     try:
-        ctrl_post(ctrl, "/control/rescan", {})   # make the server aware of it
+        ctrl_post(ctrl, "/control/rescan", {})   # make the server aware of them
     except Exception:
         pass
-    return name if load_model(ctrl, name, oai=oai) else None
+    if total > 1:
+        print(f"{OK}✔ downloaded {len(downloaded)}/{total}: {', '.join(downloaded)}{RESET}")
+        if failed:
+            print(f"{ERR}  failed: {', '.join(failed)}{RESET}")
+        print(f"{MUTED}  loading {downloaded[0]} (only one model is resident; "
+              f"/load to switch).{RESET}")
+    first = downloaded[0]
+    return first if load_model(ctrl, first, oai=oai) else None
 
 
 def choose_and_load_model(ctrl, config_path, oai=None):

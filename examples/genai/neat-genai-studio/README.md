@@ -221,7 +221,8 @@ models and the OpenAI endpoint to stream replies). Type a message to chat; comma
 ```text
 /models          list catalog models (● loaded, ○ not)
 /load [name]     load a model — no name pops an arrow-key picker (↑/↓, Enter)
-/download        browse Hugging Face, download a model, and load it
+/download        browse Hugging Face — pick one, several, or all models to
+                 download (Space to multi-select, 'a' for all), then load one
 /unload [name]   unload a model — no name unloads the loaded LLM/VLM
 /delete [name]   delete a model's weights from disk — no name pops a picker;
                  asks to confirm (irreversible; /rm, /remove)
@@ -236,6 +237,9 @@ models and the OpenAI endpoint to stream replies). Type a message to chat; comma
 /tokens <n>      set max response tokens
 /help  /quit     help / exit (aliases: /exit, /bye, /q, Ctrl+D)
 ```
+
+Replies render live as Markdown, and LaTeX math is converted to Unicode for the
+terminal (`$E = mc^2$` → `E = mc²`, `\frac`, `\sqrt`, Greek letters, `\sum`, …).
 
 Ctrl+C stops the current reply; it prints per-response timing (tokens, TTFT,
 tok/s). Exiting shuts the model server down. Use **↑/↓** at the prompt to recall
