@@ -28,7 +28,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdio>
@@ -673,12 +672,11 @@ void send_metadata(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
   const auto metadata_boxes =
       build_metadata_boxes(boxes, runtime.labels, runtime.frame_w, runtime.frame_h);
   const std::string data_json = sima_examples::metadata_boxes_data_json("objects", metadata_boxes);
-  const auto now = std::chrono::system_clock::now().time_since_epoch();
-  const int64_t ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-  const int64_t frame_id = sample.frame_id >= 0 ? sample.frame_id : 0;
+  const int64_t ts_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
+  const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
-  if (!runtime.metadata_sender->send_metadata("object-detection", data_json, ts_ms,
-                                              std::to_string(frame_id), &err)) {
+  if (!runtime.metadata_sender->send_metadata("object-detection", data_json, ts_ms, frame_id,
+                                              &err)) {
     std::cerr << "[warn] insight metadata send failed: " << err << "\n";
   }
 }

@@ -632,14 +632,13 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
 
 def send_metadata(runtime: PipelineRuntime, sample, boxes: list[dict]) -> None:
     metadata_boxes = build_metadata_boxes(boxes, runtime.labels, runtime.frame_w, runtime.frame_h)
-    frame_id = getattr(sample, "frame_id", -1)
-    if frame_id is None or frame_id < 0:
-        frame_id = 0
+    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     runtime.metadata_sender.send_metadata(
         "object-detection",
         json.dumps({"objects": metadata_boxes}, separators=(",", ":")),
-        int(time.time() * 1000),
-        str(frame_id),
+        timestamp_ms,
+        frame_id,
     )
 
 
