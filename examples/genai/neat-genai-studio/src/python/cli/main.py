@@ -25,21 +25,45 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ---- colour (matches run.sh; degrades on non-TTY / NO_COLOR / dumb) ----------
+def _in_tmux():
+    """True when running inside tmux or GNU screen. They multiplex the terminal
+    and, unless explicitly configured for RGB, swallow 24-bit truecolor escapes."""
+    return (bool(os.environ.get("TMUX"))
+            or os.environ.get("TERM", "").startswith(("tmux", "screen")))
+
+
 def _use_color():
     return (sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
             and os.environ.get("TERM") != "dumb")
 
 
+def _truecolor():
+    """Whether emitting 24-bit colour is safe. Inside tmux/screen it is only safe
+    when the terminal advertises it (COLORTERM); otherwise fall back to 256-colour
+    so the CLI stays colourful instead of rendering as no colour. Outside a
+    multiplexer, keep truecolor (unchanged behaviour)."""
+    if _in_tmux():
+        return os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
+    return True
+
+
 if _use_color():
-    RESET, BOLD, DIM = "\033[0m", "\033[1m", "\033[2m"
-    ACCENT = "\033[38;2;154;190;30m"      # lime
-    TEAL = "\033[38;2;61;179;138m"
-    MUTED = "\033[38;2;140;150;160m"
-    OK = "\033[38;2;53;196;137m"
-    ERR = "\033[38;2;239;91;98m"
-    CODE = "\033[38;2;120;200;230m"       # inline code
-    ITAL = "\033[3m"
-    ULINE = "\033[4m"
+    RESET, BOLD, DIM, ITAL, ULINE = "\033[0m", "\033[1m", "\033[2m", "\033[3m", "\033[4m"
+    if _truecolor():
+        ACCENT = "\033[38;2;154;190;30m"      # lime
+        TEAL = "\033[38;2;61;179;138m"
+        MUTED = "\033[38;2;140;150;160m"
+        OK = "\033[38;2;53;196;137m"
+        ERR = "\033[38;2;239;91;98m"
+        CODE = "\033[38;2;120;200;230m"       # inline code
+    else:
+        # 256-colour approximations — render in tmux/screen without truecolor.
+        ACCENT = "\033[38;5;148m"
+        TEAL = "\033[38;5;36m"
+        MUTED = "\033[38;5;245m"
+        OK = "\033[38;5;42m"
+        ERR = "\033[38;5;203m"
+        CODE = "\033[38;5;117m"
 else:
     RESET = BOLD = DIM = ACCENT = TEAL = MUTED = OK = ERR = CODE = ITAL = ULINE = ""
 
@@ -1217,6 +1241,27 @@ def do_benchmark(ctrl, oai, active, arg):
         export_benchmark(results, {"runs": runs, "maxNewTokens": max_new})
 
 
+def _startup_chat(ctrl, config_path, active, oai=None):
+    """Ensure a model is loaded so the REPL can chat; returns the active name."""
+    if active and any(m.get("name") == active and m.get("loaded") for m in catalog(ctrl)):
+        return active
+    return choose_and_load_model(ctrl, config_path, oai=oai)
+
+
+def _startup_benchmark(ctrl, oai, active):
+    """Prompt for which models to benchmark, run it, and return the (possibly
+    changed) active model so the REPL can continue."""
+    try:
+        sel = input(f"{MUTED}  which models? (blank = active · 'all' · comma-list) ▸ {RESET}").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return active
+    do_benchmark(ctrl, oai, active, sel)
+    loaded = [m for m in catalog(ctrl)
+              if m.get("loaded") and m.get("type", "chat") != "asr"]
+    return loaded[0]["name"] if loaded else active
+
+
 def startup_menu(ctrl, oai, config_path, active):
     """Ask the user what they want to do on start. Returns the active model name
     (possibly changed by loading/downloading), then the REPL begins."""
@@ -1233,21 +1278,11 @@ def startup_menu(ctrl, oai, config_path, active):
     if not choice or choice == "prompt":
         return active
     if choice == "chat":
-        if active and any(m.get("name") == active and m.get("loaded") for m in catalog(ctrl)):
-            return active
-        return choose_and_load_model(ctrl, config_path, oai=oai)
+        return _startup_chat(ctrl, config_path, active, oai=oai)
     if choice == "download":
         return browse_and_download(ctrl, config_path, oai=oai) or active
     if choice == "bench":
-        try:
-            sel = input(f"{MUTED}  which models? (blank = active · 'all' · comma-list) ▸ {RESET}").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return active
-        do_benchmark(ctrl, oai, active, sel)
-        loaded = [m for m in catalog(ctrl)
-                  if m.get("loaded") and m.get("type", "chat") != "asr"]
-        return loaded[0]["name"] if loaded else active
+        return _startup_benchmark(ctrl, oai, active)
     return active
 
 
@@ -1256,6 +1291,13 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--model", default="", help="model to make active on start")
     ap.add_argument("--max-tokens", type=int, default=0)
+    # Jump straight to an action, skipping the interactive startup menu.
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--chat", action="store_true", help="go straight into chat")
+    mode.add_argument("--download", action="store_true",
+                      help="prompt for a model to download, then chat")
+    mode.add_argument("--benchmark", "--bench", action="store_true", dest="benchmark",
+                      help="benchmark model(s), then chat")
     args = ap.parse_args()
 
     ctrl, oai, cfg_max = load_config(args.config)
@@ -1280,10 +1322,16 @@ def main():
     elif active:
         print(f"{OK}✔ active model: {active}{RESET}")
 
-    # On an interactive start (no explicit --model), ask what the user wants to do:
-    # chat, benchmark, download, or drop straight to the prompt. Otherwise fall
-    # back to the load/download prompt when nothing is loaded.
-    if not args.model.strip() and sys.stdin.isatty():
+    # A --chat/--download/--benchmark flag jumps straight to that action; then the
+    # REPL begins. Otherwise, on an interactive start (no explicit --model), ask
+    # what the user wants to do; else fall back to the load prompt when idle.
+    if args.download:
+        active = browse_and_download(ctrl, args.config, oai=oai) or active
+    elif args.benchmark:
+        active = _startup_benchmark(ctrl, oai, active)
+    elif args.chat:
+        active = _startup_chat(ctrl, args.config, active, oai=oai)
+    elif not args.model.strip() and sys.stdin.isatty():
         active = startup_menu(ctrl, oai, args.config, active)
     elif not active:
         active = choose_and_load_model(ctrl, args.config, oai=oai)

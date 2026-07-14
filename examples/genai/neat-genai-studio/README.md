@@ -215,8 +215,16 @@ as usual) and drops you into an interactive chat instead of the web UI:
 
 On an interactive start it first asks what you want to do — **Chat with a model**,
 **Benchmark model(s)**, **Download a model** (when online), or **go straight to the
-prompt** — then talks straight to the model server (the control API to list/load
-models and the OpenAI endpoint to stream replies). Type a message to chat; commands:
+prompt**. Skip the menu by jumping straight to a mode:
+
+```bash
+./run.sh --chat       # straight into chat
+./run.sh --download   # prompt for a model to download first
+./run.sh --benchmark  # run a benchmark first (alias --bench)
+```
+
+It then talks straight to the model server (the control API to list/load models
+and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 
 ```text
 /models          list catalog models (● loaded, ○ not)

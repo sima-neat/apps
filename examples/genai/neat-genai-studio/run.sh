@@ -57,6 +57,7 @@ PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
 # Terminal chat instead of the web UI (set by `./run.sh --cli`).
 CLI_MODE="${CLI_MODE:-0}"
+CLI_EXTRA_ARGS=()   # flags forwarded to cli/main.py (e.g. --chat, --download, --benchmark)
 # In CLI mode the model server's logs go here (kept off the chat terminal).
 SERVER_LOG="${SERVER_LOG:-${EXAMPLE_DIR}/.neat-genai-server.log}"
 
@@ -217,6 +218,9 @@ Usage:
   ./run.sh            Start the model server and web UI (Ctrl+C to stop).
                       Runs ./setup.sh automatically on the first launch.
   ./run.sh --cli      Start the model server and a terminal chat (no web UI).
+  ./run.sh --chat     Terminal chat, straight into a chat (skips the menu).
+  ./run.sh --download Terminal chat, prompt for a model to download first.
+  ./run.sh --benchmark  Terminal chat, run a benchmark first (alias --bench).
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh --clean    Remove app-generated data (venvs, config, RAG db, TTS
@@ -344,6 +348,10 @@ case "${1:-run}" in
   --clean|clean) do_clean "${2:-}"; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
   --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
+  # CLI shortcuts: launch the terminal chat straight into a mode.
+  --chat|chat)             CLI_MODE=1; CLI_EXTRA_ARGS+=(--chat) ;;
+  --download|download|dl)  CLI_MODE=1; CLI_EXTRA_ARGS+=(--download) ;;
+  --benchmark|--bench|benchmark|bench) CLI_MODE=1; CLI_EXTRA_ARGS+=(--benchmark) ;;
   run|start) ;;  # fall through to launch
   *) errln "unknown command: $1"; usage; exit 2 ;;
 esac
@@ -659,7 +667,8 @@ if [[ "${CLI_MODE}" == "1" ]]; then
   cli_supervise &       # relaunch the server on an MLA-reset request so /reset works
   cli_sup_pid="$!"
   trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
-  "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" || true
+  "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" \
+    ${CLI_EXTRA_ARGS[@]+"${CLI_EXTRA_ARGS[@]}"} || true
   kill "${cli_sup_pid}" 2>/dev/null || true
   exit 0                # -> EXIT trap stops the model server
 fi
