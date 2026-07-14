@@ -618,11 +618,11 @@ def env_int(key: str, fallback: int) -> int:
 
 
 def app_verbose() -> bool:
-    return env_bool("APP16_VERBOSE", False)
+    return env_bool("HIGH_DENSITY_DETECTOR_VERBOSE", False)
 
 
 def app_print_backend() -> bool:
-    return app_verbose() or env_bool("APP16_PRINT_BACKEND", False)
+    return app_verbose() or env_bool("HIGH_DENSITY_DETECTOR_PRINT_BACKEND", False)
 
 
 def stream_id_for(stream_index: int) -> str:
@@ -660,7 +660,7 @@ def stream_index_from_detection(sample, stream_count: int) -> int:
 
 
 def target_frames_per_stream() -> int:
-    return max(0, env_int("APP16_FRAMES_PER_STREAM", 0))
+    return max(0, env_int("HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM", 0))
 
 
 def target_reached(sources: list[SourceRuntime]) -> bool:

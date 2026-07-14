@@ -1016,15 +1016,15 @@ int env_int(const char* key, int fallback) {
 }
 
 bool app_verbose() {
-  return env_bool("APP16_VERBOSE", false);
+  return env_bool("HIGH_DENSITY_DETECTOR_VERBOSE", false);
 }
 
 bool app_print_backend() {
-  return app_verbose() || env_bool("APP16_PRINT_BACKEND", false);
+  return app_verbose() || env_bool("HIGH_DENSITY_DETECTOR_PRINT_BACKEND", false);
 }
 
 int app_liveness_ms() {
-  return std::max(0, env_int("APP16_LIVENESS_MS", 0));
+  return std::max(0, env_int("HIGH_DENSITY_DETECTOR_LIVENESS_MS", 0));
 }
 
 void print_pull_liveness(const std::vector<SourceRuntime>& sources, const char* reason,
@@ -1148,7 +1148,7 @@ int stream_index_from_detection(const simaai::neat::Sample& sample, int stream_c
 }
 
 int target_frames_per_stream() {
-  return std::max(0, env_int("APP16_FRAMES_PER_STREAM", 0));
+  return std::max(0, env_int("HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM", 0));
 }
 
 bool target_reached(const std::vector<SourceRuntime>& sources) {
