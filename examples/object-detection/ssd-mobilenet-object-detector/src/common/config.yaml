@@ -1,0 +1,21 @@
+model:                       # SSD-MobileNetV2 detector selection.
+  path: <model-path>         # Example: assets/models/ssd_mobilenet_v2_heads_mpk.tar.gz
+  labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt      # 91 lines: 0=background, 1..90 COCO.
+
+io:                          # Input and output paths.
+  input_dir: assets/test_images                       # Folder containing input images.
+  output_dir: sandbox/ssd-mobilenet-object-detector   # Folder for annotated images.
+
+decode:                      # SSD decode settings.
+  score_threshold: 0.30      # Minimum sigmoid object confidence.
+  nms_iou: 0.60              # Overlap threshold for per-class NMS.
+  max_detections: 100        # Max detections to keep per image.
+
+runtime:                     # Runtime settings.
+  timeout_ms: 20000          # Inference timeout in milliseconds.
+  num_runs: 1                # Number of repeated runs (profiling).
+  profile: false             # Print profiling summaries.
+  verbose: false             # Print verbose runtime output.
+
+output:                      # Output rendering settings.
+  overlay: true              # Draw boxes and labels on output images.
