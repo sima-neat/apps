@@ -1,8 +1,7 @@
-"""Unit tests for the graph-native 16-stream object detection Insight example."""
+"""Unit tests for the high-density multi-stream object detector."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -17,23 +16,13 @@ import yaml
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
-STRESS_DIR = EXAMPLE_DIR / "stress"
-MODEL_PATH = "assets/models/yolo26m-det-int8-b1.tar.gz"
+MODEL_PATH = "assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz"
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
 pytestmark = pytest.mark.unit
-
-
-def load_script_module(name: str):
-    path = STRESS_DIR / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _extra_lines(block: str) -> list[str]:
@@ -127,10 +116,21 @@ class TestConfigLoading:
             "fan_in_policy",
         ),
         [
-            ("config-16x720p25.yaml", 16, 25, 8, 2, "auto", 16, 1, 1, "latest"),
-            ("config-24x720p20.yaml", 24, 20, 16, 2, "auto", 4, 1, 4, "every_frame"),
+            ("config.yaml", 16, 25, 8, 2, "auto", 16, 1, 1, "latest"),
             (
-                "config-48x720p10.yaml",
+                "config-24x720p20fps.yaml",
+                24,
+                20,
+                16,
+                2,
+                "auto",
+                4,
+                1,
+                4,
+                "every_frame",
+            ),
+            (
+                "config-48x720p10fps.yaml",
                 48,
                 10,
                 4,
@@ -184,12 +184,10 @@ class TestConfigLoading:
         assert not Path(raw["model"]["path"]).is_absolute()
         assert not Path(raw["model"]["labels"]).is_absolute()
 
-    def test_default_config_is_the_named_24x20_profile(self):
+    def test_default_config_is_the_16x25_profile(self):
         default = yaml.safe_load((COMMON_DIR / "config.yaml").read_text(encoding="utf-8"))
-        named = yaml.safe_load(
-            (COMMON_DIR / "config-24x720p20.yaml").read_text(encoding="utf-8")
-        )
-        assert default == named
+        assert len(default["streams"]) == 16
+        assert default["input"]["fps"] == 25
 
     def test_config_rejects_invalid_fan_in_policy(self, tmp_path: Path):
         from main import load_app_config
@@ -810,537 +808,6 @@ class TestRuntimeOptions:
             main.stream_index_from_detection(SimpleNamespace(stream_id="stream4"), 4)
 
 
-class TestHandoffGates:
-    def test_stability_gate_selects_current_metadata_owner_over_stale_video_peer(self):
-        gate = load_script_module("app16_insight_stability_gate")
-
-        def candidate(
-            peer_id: int,
-            browser_report_at: str,
-            metadata_sent_at: str | None,
-        ) -> dict:
-            metadata = {"messages_sent": peer_id * 100}
-            if metadata_sent_at is not None:
-                metadata["last_sent_at"] = metadata_sent_at
-            return {
-                "id": peer_id,
-                "active": True,
-                "connection_state": "connected",
-                "data_channel_state": "open",
-                "browser": {"inbound_rtp": {"frames_decoded": peer_id * 1000}},
-                "last_browser_report_at": browser_report_at,
-                "metadata": metadata,
-            }
-
-        stale_video_peer = candidate(
-            1,
-            "2026-07-12T23:10:05Z",
-            "2026-07-12T23:09:55Z",
-        )
-        current_metadata_owner = candidate(
-            2,
-            "2026-07-12T23:10:04Z",
-            "2026-07-12T23:10:06Z",
-        )
-        payload = {
-            "channels": [
-                {"channel": 7, "peers": [stale_video_peer, current_metadata_owner]}
-            ]
-        }
-
-        assert gate.selected_browser_peers(payload)[7]["id"] == 2
-
-    def test_stability_gate_falls_back_to_newest_browser_report_before_metadata(self):
-        gate = load_script_module("app16_insight_stability_gate")
-        payload = {
-            "channels": [
-                {
-                    "channel": 3,
-                    "peers": [
-                        {
-                            "id": 10,
-                            "active": True,
-                            "connection_state": "connected",
-                            "data_channel_state": "open",
-                            "browser": {"video": {}},
-                            "last_browser_report_at": "2026-07-12T23:10:04Z",
-                            "metadata": {"messages_sent": 0},
-                        },
-                        {
-                            "id": 11,
-                            "active": True,
-                            "connection_state": "connected",
-                            "data_channel_state": "open",
-                            "browser": {"video": {}},
-                            "last_browser_report_at": "2026-07-12T23:10:05Z",
-                            "metadata": {"messages_sent": 0},
-                        },
-                    ],
-                }
-            ]
-        }
-
-        assert gate.selected_browser_peers(payload)[3]["id"] == 11
-
-    def test_stability_gate_accounts_for_target_rates(self):
-        gate = load_script_module("app16_insight_stability_gate")
-
-        def ingest(packets: int, metadata: int):
-            return {
-                "active": True,
-                "rtp": {"packets_received": packets},
-                "metadata": {"active": True, "messages_received": metadata},
-            }
-
-        def peer(frames: int, metadata: int, report_time: str):
-            return {
-                "id": 7,
-                "browser": {
-                    "time": report_time,
-                    "video": {"active": True},
-                    "inbound_rtp": {"frames_decoded": frames},
-                },
-                "metadata": {"messages_sent": metadata},
-            }
-
-        record = gate.sample(
-            [0],
-            {0: ingest(100, 100)},
-            {0: ingest(200, 200)},
-            {0: peer(100, 100, "2026-07-13T08:18:00Z")},
-            {0: peer(200, 200, "2026-07-13T08:18:05Z")},
-            5.0,
-            18.0,
-            18.0,
-        )
-
-        assert record["passed"] is True
-        assert record["channels"][0]["browser_video_fps"] == 20.0
-        distribution = gate.rate_summary([18.0, 19.0, 20.0, 20.0, 21.0], 18.0)
-        assert distribution["median"] == 20.0
-        assert distribution["rate_misses"] == 0
-
-    def test_stability_gate_uses_each_browser_report_interval_for_video_only(self):
-        gate = load_script_module("app16_insight_stability_gate")
-
-        def ingest(packets: int, metadata: int):
-            return {
-                "active": True,
-                "rtp": {"packets_received": packets},
-                "metadata": {"active": True, "messages_received": metadata},
-            }
-
-        def peer(frames: int, metadata: int, report_time: str):
-            return {
-                "id": 7,
-                "browser": {
-                    "time": report_time,
-                    "video": {"active": True},
-                    "inbound_rtp": {"frames_decoded": frames},
-                },
-                "metadata": {"messages_sent": metadata},
-            }
-
-        record = gate.sample(
-            [0, 1],
-            {0: ingest(100, 100), 1: ingest(100, 100)},
-            {0: ingest(200, 149), 1: ingest(200, 149)},
-            {
-                0: peer(100, 100, "2026-07-13T08:18:00.000Z"),
-                1: peer(100, 100, "2026-07-13T08:18:01.000Z"),
-            },
-            {
-                0: peer(150, 149, "2026-07-13T08:18:05.000Z"),
-                1: peer(140, 149, "2026-07-13T08:18:05.000Z"),
-            },
-            4.9,
-            9.0,
-            9.0,
-        )
-
-        assert record["passed"] is True
-        first, staggered = record["channels"]
-        assert first["browser_report_elapsed_s"] == 5.0
-        assert staggered["browser_report_elapsed_s"] == 4.0
-        assert first["browser_video_fps"] == 10.0
-        assert staggered["browser_video_fps"] == 10.0
-        assert first["browser_report_time_source"] == "browser.time"
-        assert staggered["browser_report_time_source"] == "browser.time"
-        assert first["browser_report_time_valid"] is True
-        assert staggered["browser_report_time_valid"] is True
-        assert first["ingest_metadata_fps"] == pytest.approx(10.0)
-        assert staggered["egress_metadata_fps"] == pytest.approx(10.0)
-
-    def test_stability_gate_falls_back_from_nonadvancing_browser_time(self):
-        gate = load_script_module("app16_insight_stability_gate")
-        previous = {
-            "id": 7,
-            "browser": {"time": "2026-07-13T08:18:00Z"},
-            "last_browser_report_at": "2026-07-13T08:18:00.100Z",
-        }
-        current = {
-            "id": 7,
-            "browser": {"time": "2026-07-13T08:18:00Z"},
-            "last_browser_report_at": "2026-07-13T08:18:04.100Z",
-        }
-
-        interval, source, valid = gate.browser_report_interval(previous, current, 4.9)
-
-        assert interval == 4.0
-        assert source == "last_browser_report_at"
-        assert valid is True
-
-    @pytest.mark.parametrize(
-        ("before_time", "after_time"),
-        [
-            ("not-a-time", "still-not-a-time"),
-            ("2026-07-13T08:18:00Z", "2026-07-13T08:18:00Z"),
-            ("2026-07-13T08:18:01Z", "2026-07-13T08:18:00Z"),
-        ],
-    )
-    def test_stability_gate_uses_wall_fallback_for_invalid_report_intervals(
-        self, before_time: str, after_time: str
-    ):
-        gate = load_script_module("app16_insight_stability_gate")
-        previous = {
-            "id": 7,
-            "browser": {"time": before_time},
-            "last_browser_report_at": before_time,
-        }
-        current = {
-            "id": 7,
-            "browser": {"time": after_time},
-            "last_browser_report_at": after_time,
-        }
-
-        assert gate.browser_report_interval(previous, current, 4.9) == (
-            4.9,
-            "wall_elapsed",
-            False,
-        )
-
-    def test_stability_gate_invalid_report_clock_cannot_false_pass(self):
-        gate = load_script_module("app16_insight_stability_gate")
-        ingest_before = {
-            "active": True,
-            "rtp": {"packets_received": 100},
-            "metadata": {"active": True, "messages_received": 100},
-        }
-        ingest_after = {
-            "active": True,
-            "rtp": {"packets_received": 200},
-            "metadata": {"active": True, "messages_received": 200},
-        }
-
-        def peer(frames: int, metadata: int):
-            return {
-                "id": 7,
-                "browser": {
-                    "video": {"active": True},
-                    "inbound_rtp": {"frames_decoded": frames},
-                },
-                "metadata": {"messages_sent": metadata},
-            }
-
-        record = gate.sample(
-            [0],
-            {0: ingest_before},
-            {0: ingest_after},
-            {0: peer(100, 100)},
-            {0: peer(200, 200)},
-            5.0,
-            18.0,
-            18.0,
-        )
-
-        channel = record["channels"][0]
-        assert channel["browser_video_fps"] == 20.0
-        assert channel["browser_report_time_valid"] is False
-        assert channel["checks"]["browser_video_rate"] is False
-        assert record["passed"] is False
-
-    def test_stability_gate_does_not_accept_a_replaced_browser_peer(self):
-        gate = load_script_module("app16_insight_stability_gate")
-
-        def ingest(count: int):
-            return {
-                "active": True,
-                "rtp": {"packets_received": count},
-                "metadata": {"active": True, "messages_received": count},
-            }
-
-        def peer(peer_id: int, count: int, report_time: str):
-            return {
-                "id": peer_id,
-                "browser": {
-                    "time": report_time,
-                    "video": {"active": True},
-                    "inbound_rtp": {"frames_decoded": count},
-                },
-                "metadata": {"messages_sent": count},
-            }
-
-        record = gate.sample(
-            [0],
-            {0: ingest(100)},
-            {0: ingest(200)},
-            {0: peer(7, 100, "2026-07-13T08:18:00Z")},
-            {0: peer(8, 200, "2026-07-13T08:18:05Z")},
-            5.0,
-            18.0,
-            18.0,
-        )
-
-        channel = record["channels"][0]
-        assert record["passed"] is False
-        assert channel["checks"]["operator_peer_stable"] is False
-        assert channel["checks"]["browser_video_rate"] is False
-        assert channel["checks"]["browser_metadata_rate"] is False
-        assert channel["browser_report_time_source"] == "wall_elapsed"
-        assert channel["browser_report_time_valid"] is False
-
-    def test_visual_gate_loads_exact_channel_identity_manifest(self, tmp_path: Path):
-        gate = load_script_module("app16_insight_visual_gate")
-        manifest_path = tmp_path / "identity.json"
-        manifest_path.write_text(
-            json.dumps(
-                {
-                    "width": 1280,
-                    "height": 720,
-                    "marker": {"x": 8, "y": 8, "width": 24, "height": 24},
-                    "temporal": {
-                        "x": 8,
-                        "y": 70,
-                        "bit_width": 8,
-                        "bit_height": 20,
-                        "bit_stride": 12,
-                        "bits": 12,
-                        "period_frames": 2400,
-                        "fps": 20,
-                        "luma_threshold": 128,
-                        "sync_tolerance_frames": 6,
-                    },
-                    "channels": {
-                        "0": {"rgb": [230, 34, 34]},
-                        "1": {"rgb": [34, 230, 230]},
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        identity = gate.load_identity_manifest(manifest_path, [0, 1], 1280, 720)
-
-        assert identity["colors"][0] == [230.0, 34.0, 34.0]
-        assert identity["temporal"]["period_frames"] == 2400
-        assert gate.rgb_distance([230.0, 35.0, 35.0], identity["colors"][0]) < 2.0
-        with pytest.raises(ValueError, match="no valid RGB marker for channel 2"):
-            gate.load_identity_manifest(manifest_path, [0, 2], 1280, 720)
-
-    def test_visual_gate_rejects_backward_or_stale_temporal_metadata(self):
-        gate = load_script_module("app16_insight_visual_gate")
-        temporal = {
-            "period_frames": 2400,
-            "fps": 20.0,
-            "sync_tolerance_frames": 6.0,
-        }
-
-        def metadata(frame: int, count: int):
-            pts_ns = frame * 1_000_000_000 // 20
-            return {
-                "count": count,
-                "ptsNs": pts_ns,
-                "rtpTimestamp": (pts_ns * 90000 // 1_000_000_000) & 0xFFFFFFFF,
-            }
-
-        def sample(code: int, frame: int, count: int, callback_count: int, rtp_translation=0):
-            row = metadata(frame, count)
-            return {
-                "temporalCode": code,
-                "metadata": row,
-                "videoFrame": {
-                    "callbackCount": callback_count,
-                    "rtpTimestamp": None,
-                },
-                "videoRtp": {
-                    "rtpTimestamp": (row["rtpTimestamp"] + rtp_translation) & 0xFFFFFFFF,
-                    "source": "receiver-synchronization-source",
-                },
-            }
-
-        # The publisher was already 40 seconds (800 frames) into the fixture
-        # when App16 joined, and WebRTC applied an arbitrary RTP translation.
-        # Both stable offsets are legitimate; translation drift is not.
-        rtp_translation = 1_100_000_000
-        forward = [
-            sample(0, 800, 10, 10, rtp_translation),
-            sample(20, 820, 30, 30, rtp_translation),
-            sample(40, 840, 50, 50, rtp_translation),
-        ]
-        forward_result = gate.analyze_temporal_samples(
-            forward, [0.0, 1.0, 2.0], temporal
-        )
-        assert forward_result["media_origin_offset_stable"]
-        assert forward_result["media_origin_offsets_frames"] == [800, 800, 800]
-        assert forward_result["video_metadata_rtp_translation_baseline"] == rtp_translation
-        assert forward_result[
-            "video_metadata_rtp_translation_observed_deviations"
-        ] == [0, 0, 0]
-        assert forward_result[
-            "video_metadata_rtp_translation_observed_range_ticks"
-        ] == 0
-        assert forward_result["video_metadata_rtp_translation_is_diagnostic_only"]
-        assert forward_result["passed"]
-
-        backward = [
-            forward[0],
-            forward[1],
-            sample(10, 840, 50, 50, rtp_translation),
-        ]
-        assert not gate.analyze_temporal_samples(backward, [0.0, 1.0, 2.0], temporal)[
-            "passed"
-        ]
-
-        stale = [
-            forward[0],
-            forward[1],
-            sample(40, 820, 30, 50, rtp_translation + 20 * 4500),
-        ]
-        assert not gate.analyze_temporal_samples(stale, [0.0, 1.0, 2.0], temporal)["passed"]
-
-        rtp_translation_jump = [
-            forward[0],
-            forward[1],
-            sample(40, 840, 50, 50, rtp_translation + 100 * 4500),
-        ]
-        mismatch_result = gate.analyze_temporal_samples(
-            rtp_translation_jump, [0.0, 1.0, 2.0], temporal
-        )
-        assert mismatch_result["media_origin_offset_stable"]
-        assert mismatch_result[
-            "video_metadata_rtp_translation_observed_range_ticks"
-        ] == 100 * 4500
-        # This cross-clock observation is retained for diagnosis, but cannot
-        # fail a visual gate: legacy Insight rewrites video RTP from arrival
-        # time and forwards metadata in the source clock domain.
-        assert mismatch_result["video_metadata_rtp_translation_is_diagnostic_only"]
-        assert mismatch_result["passed"]
-
-        # Browser video and metadata are sampled independently.  Here the
-        # latest metadata message becomes two more frames behind at every
-        # sample, while both paths remain forward and retain one stable RTP
-        # translation for the corresponding source frames.  That delivery
-        # skew is not timestamp drift and must not fail the synchronization
-        # check.
-        delayed_metadata = [
-            sample(0, 800, 10, 10, rtp_translation),
-            sample(20, 818, 28, 30, rtp_translation + 2 * 4500),
-            sample(40, 836, 46, 50, rtp_translation + 4 * 4500),
-        ]
-        delayed_result = gate.analyze_temporal_samples(
-            delayed_metadata, [0.0, 1.0, 2.0], temporal
-        )
-        assert delayed_result["media_origin_offsets_frames"] == [800, 798, 796]
-        assert delayed_result[
-            "video_metadata_rtp_translation_observed_deviations"
-        ] == [
-            0,
-            2 * 4500,
-            4 * 4500,
-        ]
-        assert delayed_result["media_origin_offset_stable"]
-        assert delayed_result["passed"]
-
-    def test_visual_gate_hooks_local_and_remote_data_channels(self, monkeypatch):
-        gate = load_script_module("app16_insight_visual_gate")
-        assert "createDataChannel" in gate.CANVAS_HOOK_JS
-        assert "addEventListener('datachannel'" in gate.CANVAS_HOOK_JS
-        assert "setRemoteDescription" in gate.CANVAS_HOOK_JS
-        assert "requestVideoFrameCallback" in gate.CANVAS_HOOK_JS
-        assert "window.__app16Peers.push(this)" in gate.CANVAS_HOOK_JS
-        assert "payload?._insight?.rtp_timestamp" in gate.CANVAS_HOOK_JS
-
-        temporal = {
-            "x": 8,
-            "y": 70,
-            "bit_width": 8,
-            "bit_height": 20,
-            "bit_stride": 12,
-            "bits": 12,
-            "period_frames": 2400,
-            "fps": 20,
-            "luma_threshold": 128,
-            "sync_tolerance_frames": 6,
-        }
-        sample_script = gate.sample_js([0], None, temporal)
-        assert sample_script.count("bitCtx.drawImage(") == 1
-        assert "getReceivers()" in sample_script
-        assert "getSynchronizationSources()" in sample_script
-        assert "presented-video-frame" in sample_script
-        assert "receiverRtp" in sample_script
-
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "app16_insight_visual_gate.py",
-                "--viewer-url",
-                "https://viewer",
-                "--keep-target-on-success",
-            ],
-        )
-        assert gate.parse_args().keep_target_on_success
-
-    def test_identity_fixture_plan_is_unique_and_forces_no_b_frames(self):
-        fixture = load_script_module("app16_make_identity_fixtures")
-        colors = fixture.channel_colors(list(range(48)))
-        args = SimpleNamespace(
-            ffmpeg="ffmpeg",
-            overwrite=True,
-            input=Path("moving.mp4"),
-            duration_seconds=120.0,
-            fps=20,
-            width=1280,
-            height=720,
-            font_file=Path("font.ttf"),
-        )
-        command = fixture.ffmpeg_command(
-            args, 7, colors[7], Path("channel-07-1280x720p20-no-b.mp4")
-        )
-
-        assert len({tuple(rgb) for rgb in colors.values()}) == 48
-        assert command[command.index("-bf") + 1] == "0"
-        assert "bframes=0" in command[command.index("-x264-params") + 1]
-        assert "text=CH07" in command[command.index("-vf") + 1]
-        assert "floor(t*20)" in command[command.index("-vf") + 1]
-        assert "enable=" in command[command.index("-vf") + 1]
-
-    def test_identity_fixture_calibrates_decoded_marker_rgb(self, monkeypatch):
-        fixture = load_script_module("app16_make_identity_fixtures")
-        args = SimpleNamespace(ffmpeg="ffmpeg")
-        marker = {"x": 8, "y": 8, "width": 2, "height": 1}
-        captured = []
-
-        def fake_check_output(command):
-            captured.append(command)
-            return bytes([10, 20, 30, 30, 40, 50])
-
-        monkeypatch.setattr(fixture.subprocess, "check_output", fake_check_output)
-        assert fixture.measure_decoded_marker_rgb(
-            args, Path("encoded.mp4"), marker, sample_frames=1
-        ) == [20, 30, 40]
-        assert "crop=2:1:8:8" in captured[0]
-
-        unique = {
-            str(channel): {"rgb": rgb}
-            for channel, rgb in fixture.channel_colors(list(range(48))).items()
-        }
-        fixture.require_unique_marker_colors(unique)
-        unique["47"]["rgb"] = unique["0"]["rgb"]
-        with pytest.raises(RuntimeError, match="not unique"):
-            fixture.require_unique_marker_colors(unique)
-
-
 class FakeMetadataSender:
     def __init__(self):
         self.calls = []
@@ -1417,3 +884,25 @@ class TestMetadata:
                 }
             ]
         }
+
+    def test_send_metadata_preserves_missing_sample_identity(self):
+        from main import SourceRuntime, StreamProfile, send_metadata
+
+        sender = FakeMetadataSender()
+        runtime = SourceRuntime(
+            index=0,
+            url="rtsp://127.0.0.1:8554/src1",
+            metadata_sender=sender,
+            labels=["person"],
+            source_options=None,
+            profile=StreamProfile(False, 0),
+            frame_w=100,
+            frame_h=100,
+            source_fps=30,
+        )
+
+        send_metadata(runtime, SimpleNamespace(pts_ns=-1, frame_id=-1), [])
+
+        _, _, timestamp_ms, frame_id = sender.calls[0]
+        assert timestamp_ms == -1
+        assert frame_id == ""

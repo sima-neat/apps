@@ -588,26 +588,17 @@ def build_metadata_boxes(
     return metadata_boxes
 
 
-def fallback_timestamp_ms() -> int:
-    return int(time.time() * 1000)
-
-
 def send_metadata(source: SourceRuntime, frame, boxes: list[dict]) -> None:
     if source.metadata_sender is None:
         return
     metadata_boxes = build_metadata_boxes(boxes, source.labels, source.frame_w, source.frame_h)
-    pts_ns = getattr(frame, "pts_ns", -1)
-    if pts_ns is not None and pts_ns >= 0:
-        timestamp_ms = int(pts_ns // 1_000_000)
-    else:
-        timestamp_ms = fallback_timestamp_ms()
-    frame_id = getattr(frame, "frame_id", -1)
-    frame_id = int(frame_id) if frame_id is not None and frame_id >= 0 else 0
+    timestamp_ms = int(frame.pts_ns // 1_000_000) if frame.pts_ns >= 0 else -1
+    frame_id = str(frame.frame_id) if frame.frame_id >= 0 else ""
     source.metadata_sender.send_metadata(
         "object-detection",
         json.dumps({"objects": metadata_boxes}, separators=(",", ":")),
         timestamp_ms,
-        str(frame_id),
+        frame_id,
     )
 
 

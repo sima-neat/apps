@@ -214,7 +214,6 @@ PY
       \( -path '*/src/python/*' \
          -o -name 'README.md' \
          -o -path '*/src/common/*' \
-         -o -path '*/stress/*' \
          -o -path '*/run.sh' \
          -o -path '*/setup.sh' \
       \) 2>/dev/null | sort

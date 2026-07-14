@@ -1,5 +1,5 @@
 foreach(example IN ITEMS
-    16-stream-object-detector
+    high-density-multi-stream-object-detector
     detr-object-detector
     single-stream-object-detector
     yolo26-object-detector

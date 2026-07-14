@@ -1,7 +1,7 @@
-# Original 16-stream profile recovered from Apps commit 9ab92cd (16 x 720p @ 25 FPS).
+# Default profile: 16 x 720p @ 25 FPS.
 # Model and label paths are resolved relative to this file.
 model:
-  path: yolo26n_raw_supported_einsum_mpk.tar.gz
+  path: yolo26n-det-bf16-mla_tess-b1.tar.gz
   labels: coco_label.txt
   decode_type: yolo26
 

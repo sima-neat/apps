@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import struct
 from pathlib import Path
 
 
@@ -50,39 +49,6 @@ def test_generate_catalog_uses_repo_level_portal_assets_for_example():
         "assets/portal/tracking/"
         "multi-stream-people-tracker/image.png"
     )
-
-
-def test_app16_catalog_has_plain_metadata_summary_and_portal_asset():
-    module = _load_module(
-        "generate_catalog_for_app16_test",
-        APPS_ROOT / "scripts" / "generate_catalog.py",
-    )
-    readme = (
-        APPS_ROOT
-        / "examples"
-        / "object-detection"
-        / "16-stream-object-detector"
-        / "README.md"
-    )
-
-    parsed = module.parse_example(readme)
-
-    assert parsed is not None
-    assert parsed["summary"].startswith("This example runs one shared YOLO26 detector")
-    assert not parsed["summary"].startswith("#")
-    assert parsed["binary_name"] == "16-stream-object-detector"
-    assert parsed["model"] == "yolo26n_raw_supported_einsum"
-    assert "`" not in parsed["metadata"]["Binary Name"]
-    assert "`" not in parsed["metadata"]["Model"]
-    assert parsed["image_path"] == (
-        "assets/portal/object-detection/16-stream-object-detector/image.png"
-    )
-
-    asset = APPS_ROOT / parsed["image_path"]
-    header = asset.read_bytes()[:24]
-    assert header[:8] == b"\x89PNG\r\n\x1a\n"
-    assert struct.unpack(">II", header[16:24]) == (1600, 907)
-    assert asset.stat().st_size < 1024 * 1024
 
 
 def test_generate_catalog_rewrites_readme_preview_images_to_portal_assets(tmp_path):

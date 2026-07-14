@@ -540,10 +540,10 @@ int stream_index_from_sample(const simaai::neat::Sample& sample, int stream_coun
   return index;
 }
 
-simaai::neat::RealtimeGraphLinkOptions realtime_link(int stream_index, int queue_depth,
-                                                     int max_inflight_per_stream = -1,
-                                                     int max_inflight_total = -1) {
-  simaai::neat::RealtimeGraphLinkOptions link;
+simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth,
+                                             int max_inflight_per_stream = -1,
+                                             int max_inflight_total = -1) {
+  simaai::neat::GraphLinkOptions link;
   link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   link.queue_depth = queue_depth;
   link.max_inflight_per_stream = max_inflight_per_stream;

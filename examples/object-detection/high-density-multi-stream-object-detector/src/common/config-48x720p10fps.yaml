@@ -1,7 +1,7 @@
-# Validated B4 profile: 48 x 720p @ 10 FPS (q1/i2/m1).
+# Profile: 48 x 720p @ 10 FPS (q1/i2/m1).
 # Model and label paths are resolved relative to this file.
 model:
-  path: yolo26n_raw_supported_einsum_mpk.tar.gz
+  path: yolo26n-det-bf16-mla_tess-b1.tar.gz
   labels: coco_label.txt
   decode_type: yolo26
 

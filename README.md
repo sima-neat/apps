@@ -124,6 +124,9 @@ sima-cli install gh:sima-ai/tool-mediasources
 If a board or DevKit consumes host-streamed RTSP sources, use the host IP in the
 RTSP URL instead of `127.0.0.1`.
 
+For fixed 16-, 24-, and 48-stream RTSP-to-Insight profiles, see the
+[high-density multi-stream object detector](examples/object-detection/high-density-multi-stream-object-detector/README.md).
+
 ## Neat Library Dependency
 
 `deps/manifest.json` declares the Neat Library dependency and platform version.
