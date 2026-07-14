@@ -1,0 +1,17 @@
+models:
+  ssd_mobilenet_v2_heads:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/ssd_mobilenet_v2_heads_mpk.tar.gz
+    file: ssd_mobilenet_v2_heads_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - ssd_mobilenet_v2_heads
+  cpp:
+    enabled: true
+    models:
+    - ssd_mobilenet_v2_heads
