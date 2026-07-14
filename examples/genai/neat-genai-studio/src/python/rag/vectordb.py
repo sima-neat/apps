@@ -134,6 +134,37 @@ class VectorDB:
         ]
         return filtered
 
+    def list_documents(self, limit: int = 16384) -> List[Dict[str, Any]]:
+        """Enumerate every chunk in the collection using the already-open store
+        (the service owns the DB file, so we never open a second handle). Returns
+        ``[{id, text, metadata}]``."""
+        try:
+            from rag.inspect_db import rows_to_docs
+        except ImportError:                      # loaded as a top-level module by the worker
+            from inspect_db import rows_to_docs
+        store = self.vector_store
+        client = getattr(store, "client", None)
+        if client is not None:                   # langchain-milvus MilvusClient path
+            pk = getattr(store, "_primary_field", None) or "pk"
+            try:
+                rows = client.query(collection_name=self.collection_name,
+                                    filter=f"{pk} >= 0", output_fields=["*"], limit=limit)
+            except Exception:                    # noqa: BLE001 - try a match-all filter
+                rows = client.query(collection_name=self.collection_name,
+                                    filter="", output_fields=["*"], limit=limit)
+            return rows_to_docs(rows, pk)
+        col = getattr(store, "col", None)
+        if col is not None:                      # older pymilvus Collection path
+            try:
+                col.load()
+            except Exception:                    # noqa: BLE001
+                pass
+            pk = next((f.name for f in col.schema.fields
+                       if getattr(f, "is_primary", False)), "pk")
+            rows = col.query(expr=f"{pk} >= 0", output_fields=["*"], limit=limit)
+            return rows_to_docs(rows, pk)
+        raise RuntimeError("Vector store does not expose a queryable client")
+
 
 
 class RagDbClient:
@@ -163,6 +194,13 @@ class RagDbClient:
         except ValueError as json_err:
             log.error(f"Invalid JSON response: {json_err}")
             raise
+
+    def list_documents(self, limit: int = 16384) -> Dict[str, Any]:
+        """Fetch every ingested chunk from the running VectorDB service."""
+        url = f"{self.base_url}/documents"
+        resp = requests.get(url, params={"limit": limit}, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
 
     def is_server_up(self) -> bool:
         """Check if the RAG server is responsive by making a test search."""
@@ -212,6 +250,20 @@ def search_endpoint():
         return jsonify({"results": results})
     except Exception as e:
         log.error(f"Search error: {e}")
+        abort(500, description=str(e))
+
+@app.route("/documents", methods=["GET"])
+def documents_endpoint():
+    """List every ingested chunk (for RAG-database inspection)."""
+    if not ragdb:
+        abort(500, description="DB not initialized.")
+    limit = int(request.args.get("limit", 16384))
+    try:
+        docs = ragdb.list_documents(limit=limit)
+        return jsonify({"documents": docs, "count": len(docs),
+                        "collection": ragdb.collection_name})
+    except Exception as e:
+        log.error(f"Documents error: {e}")
         abort(500, description=str(e))
 
 def main():

@@ -283,6 +283,7 @@ body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
 
 /* Messages */
 .message {
+  position: relative;
   max-width: min(760px, 88%);
   padding: 12px 15px; border-radius: 16px;
   border: 1px solid var(--border);
@@ -537,6 +538,41 @@ body.bench-open { overflow: hidden; }
 .showcase-close { font-weight: 700; }
 body.showcase-open { overflow: hidden; }
 @media (max-width: 640px) { .showcase-fab { top: 10px; right: 10px; opacity: .6; } .showcase-fab-btn { width: 28px; height: 28px; } }
+
+/* RAG database inspector modal */
+.rag-modal {
+  position: fixed; inset: 0; z-index: 3100; display: flex;
+  align-items: center; justify-content: center; padding: 24px;
+  background: color-mix(in srgb, #05070b 62%, transparent);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
+.rag-modal-panel {
+  display: flex; flex-direction: column; width: min(860px, 100%); max-height: 86vh;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.rag-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.rag-modal-title { font-weight: 700; font-size: 15px; }
+.rag-modal-close { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer; font-size: 14px; }
+.rag-modal-close:hover { color: var(--text); border-color: var(--border-2, var(--border)); background: var(--surface-2, transparent); }
+.rag-modal-summary { display: flex; flex-wrap: wrap; gap: 6px 22px; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.rag-sum-row { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; }
+.rag-sum-k { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
+.rag-sum-v { color: var(--text); font-variant-numeric: tabular-nums; word-break: break-all; }
+.rag-sum-error { flex-basis: 100%; color: var(--err); font-size: 12px; }
+.rag-modal-toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.rag-modal-filter { flex: 1 1 auto; }
+.rag-modal-count { font-family: var(--mono, monospace); font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.rag-modal-body { overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.rag-chunk { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2, var(--bg)); overflow: hidden; }
+.rag-chunk-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.rag-chunk-idx { flex: none; min-width: 20px; text-align: right; font-family: var(--mono, monospace); font-size: 11px; color: var(--text-3); }
+.rag-chunk-crumb { font-size: 12px; font-weight: 600; color: var(--accent-strong, var(--accent)); word-break: break-word; }
+.rag-chunk-text { padding: 10px 12px; font-size: 12.5px; line-height: 1.55; color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
+.rag-empty { padding: 24px; text-align: center; color: var(--text-3); font-size: 13px; }
+body.rag-inspect-open { overflow: hidden; }
+@media (max-width: 640px) { .rag-modal { padding: 0; } .rag-modal-panel { max-height: 100vh; height: 100%; border-radius: 0; border: none; } }
 
 /* ---- Solutions — SiMaSentry harness suites (Med/Safe/Sec), full-screen ----
    A Studio-styled launcher grid; picking a card swaps to a fullscreen iframe
@@ -1060,6 +1096,20 @@ body.solutions-open { overflow: hidden; }
 .code-copy-btn { position: absolute; top: 6px; right: 6px; font-family: var(--code-font); font-size: 10.5px; color: #c9d1d9; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); border-radius: 6px; padding: 2px 8px; cursor: pointer; opacity: 0; transition: opacity .18s ease; }
 .message-text pre:hover .code-copy-btn { opacity: 1; }
 .code-copy-btn:hover { background: rgba(255,255,255,.2); }
+.code-copy-btn.copied { color: #7ee7b0; border-color: rgba(126,231,176,.5); }
+
+/* Copy-the-whole-response button (assistant messages) */
+.msg-copy-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-3); cursor: pointer;
+  opacity: 0; transition: opacity .15s ease, color .15s ease, border-color .15s ease;
+}
+.message.assistant:hover .msg-copy-btn, .msg-copy-btn:focus-visible { opacity: 1; }
+.msg-copy-btn:hover { color: var(--text); border-color: var(--accent); }
+.msg-copy-btn.copied { opacity: 1; color: #2fb37f; border-color: #2fb37f; }
+@media (pointer: coarse) { .msg-copy-btn { opacity: .65; } }
 .message-text table { border-collapse: collapse; width: 100%; margin: .6em 0; font-size: .92em; display: block; overflow-x: auto; }
 .message-text th, .message-text td { border: 1px solid var(--border-strong); padding: 5px 9px; text-align: left; }
 .message.assistant .message-text th { background: var(--surface-2); }

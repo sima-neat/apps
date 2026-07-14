@@ -527,6 +527,7 @@ HELP = f"""{MUTED}Commands:
   /tokens <n>        set the max response tokens
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
+  /rag [filter]      inspect the RAG database — list ingested chunks (aliases /docs)
   /help              show this help
   /quit              exit (aliases: /exit, /bye, /q, or Ctrl+D)
 Anything else is sent to the model as a chat message.{RESET}"""
@@ -1300,6 +1301,78 @@ def _startup_benchmark(ctrl, oai, active, sel=None):
     return loaded[0]["name"] if loaded else active
 
 
+def do_rag_inspect(arg=""):
+    """Inspect the RAG database: a summary (source, chunk count, embedding model)
+    plus the ingested chunks. Prefers the running VectorDB service (which owns the
+    DB file); only when it is unreachable does it read the DB file directly, so we
+    never open a second handle to milvus-lite. Optional ``arg`` filters chunks by
+    a case-insensitive substring."""
+    filt = arg.strip().lower()
+    try:
+        from rag.inspect_db import inspect_rag, read_rag_meta, default_db_path
+    except Exception as exc:  # noqa: BLE001
+        print(f"{ERR}  RAG inspect unavailable: {exc}{RESET}")
+        return
+    db_path = default_db_path()
+    meta = read_rag_meta(db_path)
+    docs, err = [], None
+
+    # 1) Try the running VectorDB service. If it answers (even with an error) it
+    #    owns the file — do NOT then read the file directly.
+    service_reachable = False
+    try:
+        import urllib.error
+        with urllib.request.urlopen(
+                "http://127.0.0.1:9100/documents?limit=16384", timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        docs = data.get("documents", []) or []
+        service_reachable = True
+    except urllib.error.HTTPError as exc:
+        service_reachable = True
+        err = f"RAG service error: HTTP {exc.code}"
+    except Exception:  # noqa: BLE001 - service down; fall back to a direct read
+        service_reachable = False
+    if not service_reachable:
+        res = inspect_rag(db_path)
+        docs, err, meta = res.get("documents", []) or [], res.get("error"), (res.get("meta") or meta)
+
+    # ---- summary ----
+    print(f"\n{ACCENT}{BOLD}RAG database{RESET}")
+    if meta.get("input"):
+        print(f"{MUTED}  source:{RESET} {meta['input']}")
+    if meta.get("embedding_model"):
+        print(f"{MUTED}  embedding:{RESET} {os.path.basename(str(meta['embedding_model']).rstrip('/'))}")
+    print(f"{MUTED}  file:{RESET} {db_path}")
+    if not os.path.isfile(db_path):
+        print(f"{ERR}  no RAG database file found — upload a Markdown file to build one.{RESET}\n")
+        return
+    if err and not docs:
+        print(f"{ERR}  {err}{RESET}")
+        if meta.get("chunks"):
+            print(f"{MUTED}  (the sidecar reports {meta['chunks']} chunks){RESET}")
+        print()
+        return
+
+    # ---- chunk list (optionally filtered) ----
+    def _hay(d):
+        md = d.get("metadata") or {}
+        return (str(d.get("text", "")) + " " + " ".join(str(v) for v in md.values())).lower()
+    shown = [d for d in docs if filt in _hay(d)] if filt else docs
+    tail = f" ({len(shown)} match '{arg.strip()}')" if filt else ""
+    print(f"{MUTED}  chunks:{RESET} {len(docs)}{tail}\n")
+    for i, d in enumerate(shown, 1):
+        md = d.get("metadata") or {}
+        headers = [str(md[k]) for k in sorted(md)
+                   if str(k).lower().startswith("header") and md.get(k)]
+        crumb = " › ".join(headers) if headers else "(no header)"
+        text = str(d.get("text", "")).strip()
+        preview = text if len(text) <= 400 else text[:400].rstrip() + "…"
+        print(f"{ACCENT}{i}.{RESET} {DIM}{crumb}{RESET}")
+        for line in preview.split("\n"):
+            print(f"   {line}")
+        print()
+
+
 def startup_menu(ctrl, oai, config_path, active):
     """Ask the user what they want to do on start. Returns the active model name
     (possibly changed by loading/downloading), then the REPL begins."""
@@ -1637,6 +1710,8 @@ def main():
                 new_active = loaded[0]["name"] if loaded else active
                 if new_active != active:
                     active, messages, pending_image = new_active, [], None
+            elif cmd in ("rag", "docs"):
+                do_rag_inspect(arg)
             else:
                 print(f"{MUTED}  unknown command /{cmd} — /help for the list.{RESET}")
             continue

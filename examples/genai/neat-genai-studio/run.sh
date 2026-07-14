@@ -223,11 +223,15 @@ Usage:
   ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
+  ./run.sh update     Update to the latest version (preserves models, config,
+                      venvs, RAG db), then refresh dependencies.
   ./run.sh --clean    Remove app-generated data (venvs, config, RAG db, TTS
                       voices, caches, logs). Add -y to skip the prompt.
 
 Environment:
   AUTO_SETUP=0        Do not auto-run ./setup.sh on first launch (error instead).
+  NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
+  UPDATE_DEPS=0       Skip the setup.sh dependency refresh during `update`.
 USAGE
 }
 
@@ -342,10 +346,85 @@ do_clean() {
   ok "Clean complete. Re-run ./setup.sh to reinstall."
 }
 
+# Update the example's source to the latest published version. User data — venvs,
+# config.local.yaml, RAG db, and downloaded models (which live outside this dir) —
+# is preserved. In a git checkout this is `git pull`; standalone (fetched via
+# get-example.sh) it re-fetches the release archive and overlays the source. Set
+# NEAT_APPS_BRANCH to choose a branch (default main); UPDATE_DEPS=0 skips setup.sh.
+do_update() {
+  local branch="${NEAT_APPS_BRANCH:-main}"
+  if do_status >/dev/null 2>&1; then
+    warn "The studio is running — restart it (./run.sh stop, then start) after updating."
+  fi
+  section "Update"
+
+  if command -v git >/dev/null 2>&1 \
+       && git -C "${EXAMPLE_DIR}" ls-files --error-unmatch run.sh >/dev/null 2>&1; then
+    # Part of an apps git checkout — pull is the cleanest update.
+    step "Pulling the latest changes (git)…"
+    if git -C "${EXAMPLE_DIR}" pull --ff-only; then
+      ok "Source updated."
+    else
+      errln "git pull failed (local changes or a diverged branch). Resolve it manually."
+      return 1
+    fi
+  else
+    # Standalone (fetched via get-example.sh): re-download the archive and overlay.
+    command -v tar >/dev/null 2>&1 || { errln "tar is required to update."; return 1; }
+    local repo repo_url archive_url tmp root ex_path
+    repo_url="${NEAT_APPS_REPO_URL:-https://github.com/sima-neat/apps.git}"
+    repo="${repo_url%.git}"; repo="${repo#https://github.com/}"; repo="${repo#git@github.com:}"
+    archive_url="${NEAT_APPS_ARCHIVE_URL:-https://github.com/${repo}/archive/refs/heads/${branch}.tar.gz}"
+    tmp="$(mktemp -d)" || { errln "mktemp failed."; return 1; }
+    step "Fetching the latest source (${branch})…"
+    if [[ -f "${archive_url}" ]]; then
+      cp "${archive_url}" "${tmp}/src.tar.gz" \
+        || { errln "Cannot read archive: ${archive_url}"; rm -rf "${tmp}"; return 1; }
+    elif command -v curl >/dev/null 2>&1; then
+      curl -fsSL "${archive_url}" -o "${tmp}/src.tar.gz" \
+        || { errln "Download failed: ${archive_url}"; rm -rf "${tmp}"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "${tmp}/src.tar.gz" "${archive_url}" \
+        || { errln "Download failed: ${archive_url}"; rm -rf "${tmp}"; return 1; }
+    else
+      errln "curl or wget is required to update."; rm -rf "${tmp}"; return 1
+    fi
+    root="$(tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | head -1 | cut -d/ -f1)"
+    ex_path="${root}/examples/genai/neat-genai-studio"
+    if ! tar -tzf "${tmp}/src.tar.gz" 2>/dev/null | grep -qxF "${ex_path}/"; then
+      errln "neat-genai-studio not found in the archive (branch ${branch})."
+      rm -rf "${tmp}"; return 1
+    fi
+    tar -xzf "${tmp}/src.tar.gz" -C "${tmp}" "${ex_path}" \
+      || { errln "Extract failed."; rm -rf "${tmp}"; return 1; }
+    step "Applying update (keeping your models, venvs, config and RAG db)…"
+    # The archive holds only tracked source, so this overlays new code without
+    # touching venvs / config.local.yaml / milvus.db (none are in the archive).
+    cp -a "${tmp}/${ex_path}/." "${EXAMPLE_DIR}/" \
+      || { errln "Copy failed — the update may be incomplete."; rm -rf "${tmp}"; return 1; }
+    rm -rf "${tmp}"
+    chmod +x "${EXAMPLE_DIR}/run.sh" "${EXAMPLE_DIR}/setup.sh" 2>/dev/null || true
+    ok "Source updated from ${branch}."
+  fi
+
+  # Refresh dependencies (setup.sh is idempotent) unless opted out.
+  if [[ "${UPDATE_DEPS:-1}" == "0" ]]; then
+    ok "Update complete. Run ${C_BOLD}./setup.sh${C_RESET} if dependencies changed."
+  else
+    step "Refreshing dependencies (./setup.sh)…"
+    if "${EXAMPLE_DIR}/setup.sh"; then
+      ok "Update complete."
+    else
+      warn "Dependency refresh reported an error — re-run ./setup.sh manually."
+    fi
+  fi
+}
+
 case "${1:-run}" in
   stop) do_stop; exit 0 ;;
   status) if do_status; then exit 0; else exit 1; fi ;;
   --clean|clean) do_clean "${2:-}"; exit 0 ;;
+  update|--update|upgrade) do_update; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
   --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
   # CLI shortcuts: launch the terminal chat straight into a mode. An optional

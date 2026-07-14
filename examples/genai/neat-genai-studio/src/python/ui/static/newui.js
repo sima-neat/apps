@@ -756,6 +756,7 @@ window.onload = function () {
   initShowcase();
   initSolutions();
   initShutdownButton();
+  initRagInspect();
   hideRagControlsIfDisabled();
   if (isRagEnabled()) {
     initializeRagHealth();
@@ -2098,6 +2099,7 @@ socket.on('end', (data) => {
       // any queued audio finishes speaking.
       if (_ttsHi.container === textContainer) applyTtsHighlight();
     }
+    addResponseCopyButton(currentAssistantMessage);   // copy the whole reply
 
     // Show how many tokens this reply generated.
     setMessageTokens(currentAssistantMessage, currentGenTokens);
@@ -2412,6 +2414,137 @@ function setRagControls(dbReady) {
   const uploadButton = document.getElementById("uploadToRagButton");
   if (importButton) importButton.disabled = !dbReady;
   if (uploadButton) uploadButton.disabled = false;
+}
+
+// ---- RAG database inspector -------------------------------------------------
+// Shows the build summary + every ingested chunk (source, headers, text) so users
+// can see exactly what's in the RAG DB they uploaded. All rendering uses
+// textContent, so chunk text can never inject markup.
+let _ragInspectDocs = [];
+
+function initRagInspect() {
+  const btn = document.getElementById('inspectRagButton');
+  const modal = document.getElementById('ragInspectModal');
+  if (!btn || !modal) return;
+  const close = document.getElementById('ragInspectClose');
+  const filter = document.getElementById('ragInspectFilter');
+  btn.addEventListener('click', openRagInspect);
+  if (close) close.addEventListener('click', closeRagInspect);
+  if (filter) filter.addEventListener('input', renderRagChunks);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeRagInspect(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display !== 'none') closeRagInspect();
+  });
+}
+
+function closeRagInspect() {
+  const modal = document.getElementById('ragInspectModal');
+  if (modal) modal.style.display = 'none';
+  document.body.classList.remove('rag-inspect-open');
+}
+
+function openRagInspect() {
+  const modal = document.getElementById('ragInspectModal');
+  const summary = document.getElementById('ragInspectSummary');
+  const body = document.getElementById('ragInspectBody');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  document.body.classList.add('rag-inspect-open');
+  _ragInspectDocs = [];
+  if (summary) summary.textContent = 'Loading…';
+  if (body) body.textContent = '';
+  const count = document.getElementById('ragInspectCount');
+  if (count) count.textContent = '';
+  fetch('/rag/inspect')
+    .then((r) => r.json())
+    .then((data) => {
+      renderRagSummary(data);
+      _ragInspectDocs = Array.isArray(data.documents) ? data.documents : [];
+      renderRagChunks();
+    })
+    .catch((err) => {
+      if (summary) summary.textContent = 'Could not load the RAG database: ' + err;
+    });
+}
+
+function renderRagSummary(data) {
+  const summary = document.getElementById('ragInspectSummary');
+  if (!summary) return;
+  summary.textContent = '';
+  if (data && data.enabled === false) {
+    summary.textContent = 'RAG is disabled.';
+    return;
+  }
+  const meta = (data && data.meta) || {};
+  const rows = [];
+  if (meta.input) rows.push(['Source', String(meta.input)]);
+  if (meta.embedding_model) {
+    rows.push(['Embedding', String(meta.embedding_model).replace(/\/+$/, '').split('/').pop()]);
+  }
+  rows.push(['Chunks', String(data && data.count != null ? data.count : (meta.chunks || 0))]);
+  if (data && data.path) rows.push(['File', String(data.path)]);
+  rows.forEach(([k, v]) => {
+    const row = document.createElement('div');
+    row.className = 'rag-sum-row';
+    const kk = document.createElement('span'); kk.className = 'rag-sum-k'; kk.textContent = k;
+    const vv = document.createElement('span'); vv.className = 'rag-sum-v'; vv.textContent = v;
+    row.appendChild(kk); row.appendChild(vv);
+    summary.appendChild(row);
+  });
+  if (data && data.error) {
+    const e = document.createElement('div');
+    e.className = 'rag-sum-error';
+    e.textContent = data.error;
+    summary.appendChild(e);
+  }
+}
+
+function renderRagChunks() {
+  const body = document.getElementById('ragInspectBody');
+  const countEl = document.getElementById('ragInspectCount');
+  const filterEl = document.getElementById('ragInspectFilter');
+  if (!body) return;
+  body.textContent = '';
+  const filter = (filterEl ? filterEl.value : '').trim().toLowerCase();
+  const docs = _ragInspectDocs.filter((d) => {
+    if (!filter) return true;
+    const md = (d && d.metadata) || {};
+    const hay = (String((d && d.text) || '') + ' ' + Object.values(md).join(' ')).toLowerCase();
+    return hay.indexOf(filter) !== -1;
+  });
+  if (countEl) {
+    countEl.textContent = docs.length + (filter ? ' / ' + _ragInspectDocs.length : '') + ' chunks';
+  }
+  if (!docs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'rag-empty';
+    empty.textContent = _ragInspectDocs.length ? 'No chunks match the filter.' : 'No chunks in the RAG database.';
+    body.appendChild(empty);
+    return;
+  }
+  docs.forEach((d, i) => {
+    const md = (d && d.metadata) || {};
+    const headers = Object.keys(md)
+      .filter((k) => k.toLowerCase().indexOf('header') === 0 && md[k])
+      .sort()
+      .map((k) => md[k]);
+    const card = document.createElement('div');
+    card.className = 'rag-chunk';
+    const head = document.createElement('div');
+    head.className = 'rag-chunk-head';
+    const idx = document.createElement('span');
+    idx.className = 'rag-chunk-idx';
+    idx.textContent = i + 1;
+    const crumb = document.createElement('span');
+    crumb.className = 'rag-chunk-crumb';
+    crumb.textContent = headers.length ? headers.join(' › ') : '(no header)';
+    head.appendChild(idx); head.appendChild(crumb);
+    const text = document.createElement('div');
+    text.className = 'rag-chunk-text';
+    text.textContent = String((d && d.text) || '');   // plain text → safe from injection
+    card.appendChild(head); card.appendChild(text);
+    body.appendChild(card);
+  });
 }
 
 // Initialize RAG health check
@@ -3105,16 +3238,75 @@ function enhanceCodeBlocks(el) {
       btn.className = 'code-copy-btn';
       btn.type = 'button';
       btn.textContent = 'Copy';
-      btn.addEventListener('click', () => {
-        const text = code.innerText;
-        const done = () => { btn.textContent = 'Copied'; setTimeout(() => (btn.textContent = 'Copy'), 1200); };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(done).catch(() => {});
-        }
-      });
+      btn.addEventListener('click', () => copyTextToClipboard(code.innerText, btn));
       pre.appendChild(btn);
     }
   });
+}
+
+// Copy text to the clipboard, falling back to a hidden textarea when the async
+// Clipboard API is unavailable (older browsers / insecure contexts); flashes the
+// button on success.
+function copyTextToClipboard(text, btn) {
+  const done = () => flashCopyButton(btn);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => copyFallback(text, done));
+  } else {
+    copyFallback(text, done);
+  }
+}
+
+function copyFallback(text, done) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (done) done();
+  } catch (e) { /* ignore */ }
+}
+
+function flashCopyButton(btn) {
+  if (!btn) return;
+  btn.classList.add('copied');
+  const iconOnly = btn.dataset.icon === 'true';
+  const prev = iconOnly ? null : btn.textContent;
+  if (!iconOnly) btn.textContent = 'Copied';
+  clearTimeout(btn._copyTimer);
+  btn._copyTimer = setTimeout(() => {
+    btn.classList.remove('copied');
+    if (!iconOnly) btn.textContent = prev;
+  }, 1200);
+}
+
+// Add a hover "copy response" button to an assistant message (idempotent). It
+// copies the raw reply text (Markdown source when available, else the rendered
+// text), so users can copy the whole answer, not just individual code blocks.
+function addResponseCopyButton(messageDiv) {
+  if (!messageDiv || messageDiv.querySelector('.msg-copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'msg-copy-btn';
+  btn.type = 'button';
+  btn.dataset.icon = 'true';
+  btn.title = 'Copy response';
+  btn.setAttribute('aria-label', 'Copy response');
+  btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" '
+    + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg>';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const textEl = messageDiv.querySelector('.message-text') || messageDiv;
+    const text = (textEl && textEl._raw) ? textEl._raw
+      : (textEl ? textEl.innerText : messageDiv.innerText);
+    copyTextToClipboard(text, btn);
+  });
+  messageDiv.appendChild(btn);
 }
 
 // ---- Live model management --------------------------------------------

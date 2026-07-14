@@ -502,6 +502,7 @@
                 <div class="setting-row button-row rag-button-row">
                   <button id="uploadToRagButton" class="setting-button">Upload to RAG</button>
                   <button id="importRagDatabaseButton" class="setting-button">Import RAG DB</button>
+                  <button id="inspectRagButton" class="setting-button">Inspect RAG DB</button>
                 </div>
                 <div id="settingsMessage" class="settings-message"></div>
                 <div id="ragStatus" class="rag-status"></div>
@@ -539,6 +540,23 @@
 
   <!-- Full-screen Benchmark (web MoLE `perf`): TTFT / TPS on the loaded model -->
   <!-- Full-screen Showcase: the Modalix + LLiMa story, embedded in-app (present mode) -->
+  <!-- RAG database inspector: the build summary + every ingested chunk -->
+  <div id="ragInspectModal" class="rag-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="RAG database">
+    <div class="rag-modal-panel">
+      <div class="rag-modal-head">
+        <span class="rag-modal-title">📚 RAG database</span>
+        <button id="ragInspectClose" class="rag-modal-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
+      </div>
+      <div id="ragInspectSummary" class="rag-modal-summary"></div>
+      <div class="rag-modal-toolbar">
+        <input type="search" id="ragInspectFilter" class="setting-input rag-modal-filter"
+          placeholder="Filter chunks…" autocomplete="off">
+        <span id="ragInspectCount" class="rag-modal-count"></span>
+      </div>
+      <div id="ragInspectBody" class="rag-modal-body" aria-live="polite"></div>
+    </div>
+  </div>
+
   <div id="showcaseModal" class="showcase-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Neat GenAI Studio showcase">
     <iframe id="showcaseFrame" class="showcase-frame" title="Neat GenAI Studio showcase"
       allow="autoplay; fullscreen" referrerpolicy="same-origin"></iframe>

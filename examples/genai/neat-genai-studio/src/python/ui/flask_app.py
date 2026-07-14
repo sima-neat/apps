@@ -1628,6 +1628,42 @@ class AppContext:
                     "message": "RAG DB is not available"
                 }, 503
 
+        @self.app.route('/rag/inspect', methods=['GET'])
+        def rag_inspect():
+            """Inspect the RAG database: the build-metadata sidecar plus every
+            ingested chunk (source, headers, text). The sidecar is read directly;
+            chunks come through the running VectorDB service (which owns the DB
+            file). Degrades gracefully — the summary shows even if enumeration
+            fails."""
+            if not self.rag_enabled:
+                return jsonify({"enabled": False, "error": "RAG is disabled"}), 200
+            from rag.inspect_db import read_rag_meta, default_db_path
+            try:
+                limit = max(1, min(50000, int(request.args.get("limit", 16384))))
+            except (TypeError, ValueError):
+                limit = 16384
+            db_path = default_db_path()
+            result = {
+                "enabled": True,
+                "path": db_path,
+                "exists": os.path.isfile(db_path),
+                "meta": read_rag_meta(db_path),
+                "documents": [],
+                "count": 0,
+                "collection": None,
+                "error": None,
+            }
+            try:
+                client = ensure_rag_modules_loaded()
+                data = client.list_documents(limit=limit)
+                result["documents"] = data.get("documents", []) or []
+                result["count"] = data.get("count", len(result["documents"]))
+                result["collection"] = data.get("collection")
+            except Exception as e:  # noqa: BLE001
+                logging.error(f"RAG inspect error: {e}")
+                result["error"] = f"Could not read the RAG database: {e}"
+            return jsonify(result), 200
+
         @self.app.route('/v1/audio/speech', methods=['POST'])
         @self.app.route('/audio/speech', methods=['POST'])
         def openai_tts():

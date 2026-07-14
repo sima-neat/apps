@@ -269,6 +269,20 @@ Press `Ctrl+C` in the terminal running `run.sh`, or from another shell:
 ./run.sh status    # report whether it is running
 ```
 
+### Update
+Pull the latest version of the studio, then refresh dependencies. Your models,
+`config.local.yaml`, both venvs, and the RAG database are **preserved**:
+
+```bash
+./run.sh update              # git pull in a checkout, else re-fetch the example
+NEAT_APPS_BRANCH=develop ./run.sh update   # update from a specific branch
+UPDATE_DEPS=0 ./run.sh update              # source only, skip the setup.sh refresh
+```
+
+In a full `apps` git checkout this runs `git pull`; if you fetched just this
+example with `get-example.sh`, it re-downloads the release archive and overlays
+the source (user data isn't in the archive, so it's left untouched).
+
 ### Clean up
 Remove everything the app generated (both venvs, `config.local.yaml`, the RAG
 database, downloaded TTS voices, `__pycache__`, the pid file, and any `*.log`)
@@ -406,9 +420,11 @@ vendored into the Studio and open from the **shield icon** in the header.
   which the Studio already serves).
 
 ### Markdown & fonts
-Assistant replies render Markdown live. Under **Appearance**, pick a font family
-and size or type any locally installed family; the choice is saved in the
-browser. The dark/light theme toggle is in the Settings header.
+Assistant replies render Markdown live. Hover a reply to **copy the whole
+response** (top-right button), and hover any code block to **copy the code**.
+Under **Appearance**, pick a font family and size or type any locally installed
+family; the choice is saved in the browser. The dark/light theme toggle is in the
+Settings header.
 
 ### Text-to-speech (voices & languages)
 Spoken replies use a **multi-engine router** that picks the best offline TTS
@@ -502,6 +518,19 @@ models directory, and creates:
 src/python/ui/milvus.db
 src/python/ui/milvus.meta.json
 ```
+
+### Inspect the RAG database
+See exactly what has been ingested — the source, chunk count, embedding model,
+and every chunk (header breadcrumb + text):
+
+- **Web UI**: **Settings → Knowledge (RAG) → Inspect RAG DB** opens a browser with
+  a filter box.
+- **CLI**: `/rag` lists the chunks, `/rag <filter>` narrows by a substring
+  (alias `/docs`).
+
+The UI reads through the running VectorDB service (which owns the DB file); the
+CLI reads the service if it's up, otherwise the `milvus.db` file directly — so the
+single-writer database is never opened twice.
 
 To point RAG at a different local embedding model or disable it, edit
 `config.local.yaml`:
