@@ -664,18 +664,13 @@ def connect_stream_graph(
 
 def send_metadata(stream: StreamRuntime, sample, boxes: list[dict]) -> None:
     metadata_boxes = build_metadata_boxes(boxes, stream.labels, stream.frame_w, stream.frame_h)
-    pts_ns = getattr(sample, "pts_ns", -1)
-    if pts_ns is not None and pts_ns >= 0:
-        timestamp_ms = int(pts_ns // 1_000_000)
-    else:
-        timestamp_ms = int(time.time() * 1000)
-    frame_id = getattr(sample, "frame_id", -1)
-    frame_id = int(frame_id) if frame_id is not None and frame_id >= 0 else 0
+    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     stream.metadata_sender.send_metadata(
         "object-detection",
         json.dumps({"objects": metadata_boxes}, separators=(",", ":")),
         timestamp_ms,
-        str(frame_id),
+        frame_id,
     )
 
 

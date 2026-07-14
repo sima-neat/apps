@@ -873,23 +873,28 @@ def metadata_boxes(detections: list[dict], labels: list[str], frame_w: int, fram
 
 
 def send_metadata(runtime: PipelineRuntime, sample, detections: list[dict]) -> None:
-    frame_id = getattr(sample, "frame_id", -1)
-    if frame_id is None or frame_id < 0:
-        frame_id = 0
+    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     runtime.metadata_sender.send_metadata(
         "instance-segmentation",
         json.dumps(
             {"objects": metadata_boxes(detections, runtime.labels, runtime.frame_w, runtime.frame_h)},
             separators=(",", ":"),
         ),
-        int(time.time() * 1000),
-        str(frame_id),
+        timestamp_ms,
+        frame_id,
     )
 
 
-def push_annotated_video(runtime: PipelineRuntime, annotated_bgr) -> None:
+def push_annotated_video(runtime: PipelineRuntime, sample, annotated_bgr) -> None:
     rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
-    if not runtime.video_run.push([tensor_from_rgb_frame(rgb)]):
+    video_sample = pyneat.make_tensor_sample("", tensor_from_rgb_frame(rgb))
+    video_sample.pts_ns = sample.pts_ns
+    video_sample.dts_ns = sample.dts_ns
+    video_sample.duration_ns = sample.duration_ns
+    video_sample.frame_id = sample.frame_id
+    video_sample.stream_id = sample.stream_id
+    if not runtime.video_run.push([video_sample]):
         raise RuntimeError("Insight video push failed")
 
 
@@ -929,7 +934,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         overlay_end = time_ms()
 
         video_start = time_ms()
-        push_annotated_video(runtime, annotated)
+        push_annotated_video(runtime, sample, annotated)
         video_end = time_ms()
 
         metadata_start = time_ms()

@@ -27,7 +27,6 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
 #include <csignal>
 #include <cstdint>
@@ -365,11 +364,6 @@ build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, 
   return metadata_boxes;
 }
 
-int64_t fallback_timestamp_ms() {
-  const auto now = std::chrono::system_clock::now().time_since_epoch();
-  return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-}
-
 simaai::neat::nodes::groups::RtspDecodedInputOptions
 build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, int& width_out,
                      int& height_out) {
@@ -672,12 +666,10 @@ void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
                    const std::vector<TrackedDetection>& tracks) {
   const auto metadata_tracks = build_metadata_tracks(tracks, stream.frame_w, stream.frame_h);
   const std::string data_json = sima_examples::metadata_boxes_data_json("tracks", metadata_tracks);
-  const int64_t timestamp_ms =
-      sample.pts_ns >= 0 ? sample.pts_ns / 1000000 : fallback_timestamp_ms();
-  const int64_t frame_id = sample.frame_id >= 0 ? sample.frame_id : 0;
+  const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
+  const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
-  if (!stream.metadata_sender->send_metadata("tracking", data_json, timestamp_ms,
-                                             std::to_string(frame_id), &err)) {
+  if (!stream.metadata_sender->send_metadata("tracking", data_json, timestamp_ms, frame_id, &err)) {
     std::cerr << "[warn] stream " << stream.index << " metadata send failed: " << err << "\n";
   }
 }
