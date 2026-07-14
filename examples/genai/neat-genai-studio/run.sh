@@ -218,9 +218,9 @@ Usage:
   ./run.sh            Start the model server and web UI (Ctrl+C to stop).
                       Runs ./setup.sh automatically on the first launch.
   ./run.sh --cli      Start the model server and a terminal chat (no web UI).
-  ./run.sh --chat     Terminal chat, straight into a chat (skips the menu).
-  ./run.sh --download Terminal chat, prompt for a model to download first.
-  ./run.sh --benchmark  Terminal chat, run a benchmark first (alias --bench).
+  ./run.sh --chat [MODEL]      Terminal chat; load MODEL and chat (skips the menu).
+  ./run.sh --download [REPO]   Terminal chat; download REPO (or prompt) first.
+  ./run.sh --benchmark [MODEL] Terminal chat; benchmark MODEL (or prompt). --bench.
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh --clean    Remove app-generated data (venvs, config, RAG db, TTS
@@ -348,10 +348,17 @@ case "${1:-run}" in
   --clean|clean) do_clean "${2:-}"; exit 0 ;;
   -h|--help|help) usage; exit 0 ;;
   --cli|cli) CLI_MODE=1 ;;   # fall through to launch, then run the terminal chat
-  # CLI shortcuts: launch the terminal chat straight into a mode.
-  --chat|chat)             CLI_MODE=1; CLI_EXTRA_ARGS+=(--chat) ;;
-  --download|download|dl)  CLI_MODE=1; CLI_EXTRA_ARGS+=(--download) ;;
-  --benchmark|--bench|benchmark|bench) CLI_MODE=1; CLI_EXTRA_ARGS+=(--benchmark) ;;
+  # CLI shortcuts: launch the terminal chat straight into a mode. An optional
+  # second argument (a model name, or HF repo for download) is forwarded too.
+  --chat|chat)
+    CLI_MODE=1; CLI_EXTRA_ARGS+=(--chat)
+    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
+  --download|download|dl)
+    CLI_MODE=1; CLI_EXTRA_ARGS+=(--download)
+    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
+  --benchmark|--bench|benchmark|bench)
+    CLI_MODE=1; CLI_EXTRA_ARGS+=(--benchmark)
+    if [[ -n "${2:-}" ]]; then CLI_EXTRA_ARGS+=("$2"); fi ;;
   run|start) ;;  # fall through to launch
   *) errln "unknown command: $1"; usage; exit 2 ;;
 esac

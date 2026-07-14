@@ -218,9 +218,9 @@ On an interactive start it first asks what you want to do — **Chat with a mode
 prompt**. Skip the menu by jumping straight to a mode:
 
 ```bash
-./run.sh --chat       # straight into chat
-./run.sh --download   # prompt for a model to download first
-./run.sh --benchmark  # run a benchmark first (alias --bench)
+./run.sh --chat [MODEL]        # chat now (load MODEL first if given)
+./run.sh --download [REPO]      # download REPO (or prompt), then chat
+./run.sh --benchmark [MODEL]    # benchmark MODEL (or prompt), then chat (alias --bench)
 ```
 
 It then talks straight to the model server (the control API to list/load models

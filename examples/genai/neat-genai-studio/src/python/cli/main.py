@@ -973,6 +973,33 @@ def _download_one(catalog_dir, hub, repo_id):
     return name
 
 
+def download_specific(ctrl, config_path, repo_id, oai=None):
+    """Download one specific Hugging Face repo (no browsing), rescan, and load it.
+    Returns the loaded model name, or None."""
+    try:
+        from server.hub import hub_search  # noqa: F401 - probe availability early
+    except Exception as exc:  # noqa: BLE001
+        print(f"{ERR}  Hugging Face support unavailable: {exc}{RESET}")
+        return None
+    if not hub_available(config_path):
+        print(f"{MUTED}  Hugging Face is offline or disabled.{RESET}")
+        return None
+    catalog_dir, hub = _hub_config(config_path)
+    try:
+        name = _download_one(catalog_dir, hub, repo_id)
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        print(f"{MUTED}  (download cancelled){RESET}")
+        return None
+    if not name:
+        return None
+    try:
+        ctrl_post(ctrl, "/control/rescan", {})   # make the server aware of it
+    except Exception:
+        pass
+    return name if load_model(ctrl, name, oai=oai) else None
+
+
 def browse_and_download(ctrl, config_path, oai=None):
     """Browse Hugging Face (same models the UI lists), download one, several, or
     all with a live progress bar, then load one. Returns the loaded model name (the
@@ -1248,14 +1275,25 @@ def _startup_chat(ctrl, config_path, active, oai=None):
     return choose_and_load_model(ctrl, config_path, oai=oai)
 
 
-def _startup_benchmark(ctrl, oai, active):
-    """Prompt for which models to benchmark, run it, and return the (possibly
-    changed) active model so the REPL can continue."""
-    try:
-        sel = input(f"{MUTED}  which models? (blank = active · 'all' · comma-list) ▸ {RESET}").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return active
+def _load_named_model(ctrl, config_path, name, active, oai=None):
+    """Load a specific catalog model by name and return it. Falls back to the
+    picker if the name isn't in the catalog, or to the prior active on load error."""
+    if name not in [m.get("name") for m in catalog(ctrl)]:
+        print(f"{ERR}  no model named '{name}' in the catalog — pick one:{RESET}")
+        return choose_and_load_model(ctrl, config_path, oai=oai)
+    return name if load_model(ctrl, name, oai=oai) else active
+
+
+def _startup_benchmark(ctrl, oai, active, sel=None):
+    """Run a benchmark and return the (possibly changed) active model so the REPL
+    can continue. ``sel`` (blank / 'all' / comma-list / a model name) is prompted
+    for when None."""
+    if sel is None:
+        try:
+            sel = input(f"{MUTED}  which models? (blank = active · 'all' · comma-list) ▸ {RESET}").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return active
     do_benchmark(ctrl, oai, active, sel)
     loaded = [m for m in catalog(ctrl)
               if m.get("loaded") and m.get("type", "chat") != "asr"]
@@ -1291,13 +1329,17 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--model", default="", help="model to make active on start")
     ap.add_argument("--max-tokens", type=int, default=0)
-    # Jump straight to an action, skipping the interactive startup menu.
+    # Jump straight to an action, skipping the interactive startup menu. Each
+    # takes an optional model: `--chat MODEL` loads it and chats, `--download REPO`
+    # downloads it, `--benchmark MODEL` benchmarks it (bare flag prompts/menus).
     mode = ap.add_mutually_exclusive_group()
-    mode.add_argument("--chat", action="store_true", help="go straight into chat")
-    mode.add_argument("--download", action="store_true",
-                      help="prompt for a model to download, then chat")
-    mode.add_argument("--benchmark", "--bench", action="store_true", dest="benchmark",
-                      help="benchmark model(s), then chat")
+    mode.add_argument("--chat", nargs="?", const="", default=None, metavar="MODEL",
+                      help="go straight into chat, optionally loading MODEL first")
+    mode.add_argument("--download", nargs="?", const="", default=None, metavar="REPO",
+                      help="download a model (REPO, else prompt), then chat")
+    mode.add_argument("--benchmark", "--bench", nargs="?", const="", default=None,
+                      dest="benchmark", metavar="MODEL",
+                      help="benchmark MODEL (else prompt for which), then chat")
     args = ap.parse_args()
 
     ctrl, oai, cfg_max = load_config(args.config)
@@ -1325,12 +1367,16 @@ def main():
     # A --chat/--download/--benchmark flag jumps straight to that action; then the
     # REPL begins. Otherwise, on an interactive start (no explicit --model), ask
     # what the user wants to do; else fall back to the load prompt when idle.
-    if args.download:
-        active = browse_and_download(ctrl, args.config, oai=oai) or active
-    elif args.benchmark:
-        active = _startup_benchmark(ctrl, oai, active)
-    elif args.chat:
-        active = _startup_chat(ctrl, args.config, active, oai=oai)
+    if args.download is not None:
+        repo = args.download.strip()
+        active = ((download_specific(ctrl, args.config, repo, oai=oai) if repo
+                   else browse_and_download(ctrl, args.config, oai=oai)) or active)
+    elif args.benchmark is not None:
+        active = _startup_benchmark(ctrl, oai, active, sel=(args.benchmark.strip() or None))
+    elif args.chat is not None:
+        model = args.chat.strip()
+        active = (_load_named_model(ctrl, args.config, model, active, oai=oai) if model
+                  else _startup_chat(ctrl, args.config, active, oai=oai))
     elif not args.model.strip() and sys.stdin.isatty():
         active = startup_menu(ctrl, oai, args.config, active)
     elif not active:
