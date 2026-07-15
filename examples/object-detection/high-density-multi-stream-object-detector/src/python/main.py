@@ -1015,8 +1015,8 @@ def connect_source_graph(
         )
 
         app.graph.connect(h264, h264_branch)
-        app.graph.connect(h264_branch, decoder, graph_realtime_link(3, stream_id_for(source.index)))
-        app.graph.connect(decoder, branch, graph_realtime_link(1, stream_id_for(source.index)))
+        app.graph.connect(h264_branch, decoder)
+        app.graph.connect(decoder, branch)
 
         video_options = make_video_options(cfg, source)
         source.video_port = video_options.video_port
@@ -1025,7 +1025,7 @@ def connect_source_graph(
             pyneat.nodes.input("video_h264", make_encoded_h264_input_options(False)),
             pyneat.groups.video_sender(video_options),
         )
-        app.graph.connect(h264_branch, video_graph, graph_realtime_link(3, stream_id_for(source.index)))
+        app.graph.connect(h264_branch, video_graph)
     else:
         rtsp = make_rtsp_decoded_input(
             source.source_options,

@@ -795,6 +795,62 @@ class TestRuntimeOptions:
         every_frame = main.graph_realtime_link(3, "stream7", 4, "every_frame")
         assert every_frame.policy == "every-frame-by-stream"
 
+    def test_source_graph_uses_realtime_policy_only_for_detector_fan_in(self, monkeypatch):
+        import main
+        from unittest.mock import Mock
+
+        parent_graph = Mock()
+        video_graph = Mock()
+        realtime_link = object()
+        fake_realtime_link = Mock(return_value=realtime_link)
+
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(
+                Graph=Mock(return_value=video_graph),
+                graphs=SimpleNamespace(branch=lambda name, _outputs: name),
+                nodes=SimpleNamespace(input=Mock(return_value="video_input")),
+                groups=SimpleNamespace(video_sender=Mock(return_value="video_sender")),
+            ),
+        )
+        monkeypatch.setattr(main, "graph_realtime_link", fake_realtime_link)
+        monkeypatch.setattr(main, "make_rtsp_h264_input", Mock(return_value="rtsp"))
+        monkeypatch.setattr(main, "make_rtsp_decoded_input", Mock(return_value="decoder"))
+        monkeypatch.setattr(
+            main,
+            "make_video_options",
+            Mock(return_value=SimpleNamespace(video_port=9000)),
+        )
+        monkeypatch.setattr(
+            main, "make_encoded_h264_input_options", Mock(return_value=object())
+        )
+
+        cfg = main.AppConfig(
+            model_path=MODEL_PATH,
+            labels_path=Path("labels.txt"),
+            rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
+        )
+        source = SimpleNamespace(
+            index=0,
+            source_options=object(),
+            video_port=0,
+            url=cfg.rtsp_urls[0],
+            frame_w=1280,
+            frame_h=720,
+            source_fps=10,
+            metadata_sender=None,
+        )
+
+        main.connect_source_graph(
+            SimpleNamespace(graph=parent_graph), cfg, source, "detector"
+        )
+
+        connections = [call.args for call in parent_graph.connect.call_args_list]
+        assert fake_realtime_link.call_count == 1
+        assert all(len(connection) == 2 for connection in connections[:-1])
+        assert connections[-1] == ("source", "detector", realtime_link)
+
     def test_stream_index_from_detection_validates_route_metadata(self):
         import main
 
