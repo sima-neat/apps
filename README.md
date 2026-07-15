@@ -1,7 +1,6 @@
 # SiMa Neat Apps
 
 ![Vulcan CI](https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg)
-![Apps Nightly E2E](https://github.com/sima-neat/apps/actions/workflows/nightly-e2e.yml/badge.svg)
 ![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.2-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
