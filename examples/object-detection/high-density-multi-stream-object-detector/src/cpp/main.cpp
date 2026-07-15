@@ -1470,7 +1470,7 @@ void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& 
     simaai::neat::Graph encoded_output;
     encoded_output.add(simaai::neat::nodes::Output(
         encoded_output_name_for(source.index),
-        simaai::neat::OutputOptions::EveryFrame(std::max(1, cfg.queue_depth))));
+        simaai::neat::OutputOptions::EveryFrame(static_cast<int>(source.delivery.max_frames()))));
     app.graph.connect(rtsp, encoded_output);
     app.graph.connect(decoder, branch);
   } else {
