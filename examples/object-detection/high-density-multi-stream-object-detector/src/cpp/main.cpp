@@ -22,7 +22,6 @@
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
-#include <pipeline/LatestByStreamFrameTap.h>
 
 #include <nlohmann/json.hpp>
 
@@ -1113,6 +1112,10 @@ std::string stream_id_for(int stream_index) {
   return "stream" + std::to_string(stream_index);
 }
 
+std::string encoded_output_name_for(int stream_index) {
+  return "encoded" + std::to_string(stream_index);
+}
+
 int effective_insight_visible_streams(const AppConfig& cfg) {
   if (cfg.insight_visible_streams < 0) {
     return static_cast<int>(cfg.rtsp_urls.size());
@@ -1266,14 +1269,13 @@ simaai::neat::InputOptions make_raw_nv12_input_options(const AppConfig& cfg, boo
   return input_options;
 }
 
-simaai::neat::Graph
-make_rtsp_decoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
-                        int decoder_buffers) {
+void add_h264_decoder(simaai::neat::Graph& graph,
+                      const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
+                      int decoder_buffers) {
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
   const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
   const int dec_fps = (opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps;
 
-  simaai::neat::Graph graph = make_rtsp_h264_input(opt);
   simaai::neat::SimaDecodeOptions decode;
   decode.type = simaai::neat::SimaDecodeType::H264;
   decode.sima_allocator_type = opt.sima_allocator_type;
@@ -1293,6 +1295,21 @@ make_rtsp_decoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptio
     graph.add(simaai::neat::nodes::CapsRaw("NV12", opt.output_caps.width, opt.output_caps.height,
                                            opt.output_caps.fps, opt.output_caps.memory));
   }
+}
+
+simaai::neat::Graph
+make_h264_decoder(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
+                  int decoder_buffers) {
+  simaai::neat::Graph graph;
+  add_h264_decoder(graph, opt, decoder_buffers);
+  return graph;
+}
+
+simaai::neat::Graph
+make_rtsp_decoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
+                        int decoder_buffers) {
+  auto graph = make_rtsp_h264_input(opt);
+  add_h264_decoder(graph, opt, decoder_buffers);
   return graph;
 }
 
@@ -1440,15 +1457,27 @@ void complete_passthrough_sample(SourceRuntime& source, const AppConfig& cfg,
 void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& source,
                           const simaai::neat::Graph& detector_graph) {
   auto branch = simaai::neat::graphs::Branch("source", {"detector_frame"});
-  simaai::neat::RealtimeGraphLinkOptions detector_link;
+  simaai::neat::GraphLinkOptions detector_link;
   detector_link.policy = graph_link_policy(cfg.fan_in_policy);
   detector_link.queue_depth = cfg.queue_depth;
   detector_link.stream_id = stream_id_for(source.index);
   detector_link.max_inflight_per_stream = cfg.max_inflight_per_stream;
 
-  auto rtsp = make_rtsp_decoded_input(source.source_options, cfg.decoder_buffers);
-  app.graph.connect(rtsp, branch);
-  app.graph.connect_realtime(branch, detector_graph, detector_link);
+  if (cfg.video_enabled && is_insight_visible_stream(cfg, source.index)) {
+    auto rtsp = make_rtsp_h264_input(source.source_options);
+    auto decoder = make_h264_decoder(source.source_options, cfg.decoder_buffers);
+    app.graph.connect(rtsp, decoder);
+    simaai::neat::Graph encoded_output;
+    encoded_output.add(simaai::neat::nodes::Output(
+        encoded_output_name_for(source.index),
+        simaai::neat::OutputOptions::EveryFrame(std::max(1, cfg.queue_depth))));
+    app.graph.connect(rtsp, encoded_output);
+    app.graph.connect(decoder, branch);
+  } else {
+    auto decoded = make_rtsp_decoded_input(source.source_options, cfg.decoder_buffers);
+    app.graph.connect(decoded, branch);
+  }
+  app.graph.connect(branch, detector_graph, detector_link);
 
   if (cfg.video_enabled && is_insight_visible_stream(cfg, source.index)) {
     source.video_port = make_video_options(cfg, source).video_port();
@@ -1543,87 +1572,73 @@ void request_encoded_video_stop(AppRuntime& app, std::exception_ptr error = {}) 
   g_runtime_stop_requested.store(true, std::memory_order_relaxed);
 }
 
-void install_encoded_video_frame_tap(AppRuntime& app, const AppConfig& cfg) {
-  const std::size_t visible_video_runs = static_cast<std::size_t>(
-      std::count_if(app.sources.begin(), app.sources.end(), [](const SourceRuntime& source) {
-        return static_cast<bool>(source.video_run);
-      }));
-  if (!cfg.video_enabled || visible_video_runs == 0) {
-    simaai::neat::clear_latest_by_stream_encoded_frame_callback();
+void cache_encoded_frame(AppRuntime& app, SourceRuntime& source, simaai::neat::Sample frame,
+                         int sync_delay_ms) {
+  const std::size_t frame_bytes = encoded_sample_bytes(frame);
+  const std::int64_t frame_pts_ns = frame.pts_ns;
+  const auto now = std::chrono::steady_clock::now();
+  bool rejected = false;
+  bool count_full = false;
+  bool bytes_full = false;
+  std::size_t queued_frames = 0;
+  std::size_t queued_metadata = 0;
+  std::size_t queued_bytes = 0;
+  std::size_t max_frames = 0;
+  std::size_t max_bytes = 0;
+  std::int64_t oldest_due_in_ms = 0;
+  {
+    std::lock_guard<std::mutex> lock(*source.video_mu);
+    ++source.video_cached;
+    rejected = !source.delivery.enqueue_frame(std::move(frame),
+                                              now + std::chrono::milliseconds(sync_delay_ms),
+                                              frame_bytes, frame_pts_ns);
+    if (rejected) {
+      ++source.video_queue_reject;
+      queued_frames = source.delivery.frame_count();
+      queued_metadata = source.delivery.metadata_count();
+      queued_bytes = source.delivery.frame_bytes();
+      max_frames = source.delivery.max_frames();
+      max_bytes = source.delivery.max_frame_bytes();
+      count_full = queued_frames >= max_frames;
+      bytes_full = max_bytes > 0 && frame_bytes > max_bytes - std::min(queued_bytes, max_bytes);
+      oldest_due_in_ms = source.delivery.oldest_frame_due_in_ms(now);
+    }
+  }
+  if (!rejected) {
     return;
   }
-  if (visible_video_runs < app.sources.size()) {
-    std::cerr << "[warn] encoded AU tap is graph-global: Core copies encoded CPU AUs for "
-              << app.sources.size() << " source branches before the application discards the "
-              << (app.sources.size() - visible_video_runs)
-              << " non-published channels; use all-visible output for the validated profile\n";
+
+  request_encoded_video_stop(app);
+  const char* limit = count_full ? (bytes_full ? "count+bytes" : "count") : "bytes";
+  std::cerr << "[encoded_video] stream=" << source.index
+            << " delayed queue limit reached (limit=" << limit
+            << ", queued_frames=" << queued_frames << ", queued_metadata=" << queued_metadata
+            << ", queued_bytes=" << queued_bytes << ", attempted_au_bytes=" << frame_bytes
+            << ", max_frames=" << max_frames << ", max_bytes=" << max_bytes
+            << ", oldest_due_in_ms=" << oldest_due_in_ms
+            << "); stopping instead of corrupting H.264\n";
+}
+
+bool pull_encoded_frame(AppRuntime& app, SourceRuntime& source, int sync_delay_ms) {
+  if (!source.video_run) {
+    return false;
   }
-  const int sync_delay_ms = cfg.insight_video_sync_delay_ms;
-  simaai::neat::set_latest_by_stream_encoded_frame_callback([&app, sync_delay_ms](
-                                                                simaai::neat::Sample frame) {
-    try {
-      if (g_runtime_stop_requested.load(std::memory_order_relaxed)) {
-        return;
-      }
-      const int stream_index =
-          stream_index_from_detection(frame, static_cast<int>(app.sources.size()));
-      auto& source = app.sources[static_cast<std::size_t>(stream_index)];
-      if (!source.video_run) {
-        return;
-      }
-      const std::size_t frame_bytes = encoded_sample_bytes(frame);
-      const std::int64_t frame_pts_ns = frame.pts_ns;
-      const auto now = std::chrono::steady_clock::now();
-      bool rejected = false;
-      bool count_full = false;
-      bool bytes_full = false;
-      std::size_t queued_frames = 0;
-      std::size_t queued_metadata = 0;
-      std::size_t queued_bytes = 0;
-      std::size_t max_frames = 0;
-      std::size_t max_bytes = 0;
-      std::int64_t oldest_due_in_ms = 0;
-      {
-        // The Core callback owns the AU bytes already. This short section
-        // only moves that Sample into the per-stream deque and snapshots
-        // overflow diagnostics; it never sends UDP, logs, or waits on a
-        // VideoSender while holding the callback-path mutex.
-        std::lock_guard<std::mutex> lock(*source.video_mu);
-        ++source.video_cached;
-        rejected = !source.delivery.enqueue_frame(std::move(frame),
-                                                  now + std::chrono::milliseconds(sync_delay_ms),
-                                                  frame_bytes, frame_pts_ns);
-        if (rejected) {
-          ++source.video_queue_reject;
-          queued_frames = source.delivery.frame_count();
-          queued_metadata = source.delivery.metadata_count();
-          queued_bytes = source.delivery.frame_bytes();
-          max_frames = source.delivery.max_frames();
-          max_bytes = source.delivery.max_frame_bytes();
-          count_full = queued_frames >= max_frames;
-          bytes_full = max_bytes > 0 && frame_bytes > max_bytes - std::min(queued_bytes, max_bytes);
-          oldest_due_in_ms = source.delivery.oldest_frame_due_in_ms(now);
-        }
-      }
-      if (rejected) {
-        request_encoded_video_stop(app);
-        const char* limit = count_full ? (bytes_full ? "count+bytes" : "count") : "bytes";
-        std::cerr << "[encoded_video] stream=" << source.index
-                  << " delayed queue limit reached (limit=" << limit
-                  << ", queued_frames=" << queued_frames << ", queued_metadata=" << queued_metadata
-                  << ", queued_bytes=" << queued_bytes << ", attempted_au_bytes=" << frame_bytes
-                  << ", max_frames=" << max_frames << ", max_bytes=" << max_bytes
-                  << ", oldest_due_in_ms=" << oldest_due_in_ms
-                  << "); stopping instead of corrupting H.264\n";
-      }
-    } catch (...) {
-      // Core deliberately catches subscriber exceptions so an observability
-      // tap cannot tear down a GStreamer streaming thread. Convert every
-      // application callback failure into an explicit app stop here; otherwise
-      // one silently lost H.264 AU could corrupt only the Insight branch.
-      request_encoded_video_stop(app, std::current_exception());
-    }
-  });
+  simaai::neat::Sample frame;
+  simaai::neat::PullError error;
+  const auto status =
+      app.run.pull(encoded_output_name_for(source.index), /*timeout_ms=*/0, frame, &error);
+  if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
+    return false;
+  }
+  if (status == simaai::neat::PullStatus::Error) {
+    throw std::runtime_error("failed to pull encoded video for stream " +
+                             std::to_string(source.index) + ": " + error.message);
+  }
+  if (status != simaai::neat::PullStatus::Ok) {
+    return false;
+  }
+  cache_encoded_frame(app, source, std::move(frame), sync_delay_ms);
+  return true;
 }
 
 void log_encoded_dispatch_stall(const char* operation, int stream_index,
@@ -1665,7 +1680,7 @@ void send_metadata_nonblocking(SourceRuntime& source, const std::string& payload
   }
 }
 
-void encoded_video_dispatch_loop(AppRuntime& app) {
+void encoded_video_dispatch_loop(AppRuntime& app, int sync_delay_ms) {
   try {
     auto previous_round_end = std::chrono::steady_clock::now();
     while (!app.stop_encoded_video_dispatch.load(std::memory_order_relaxed) &&
@@ -1674,6 +1689,7 @@ void encoded_video_dispatch_loop(AppRuntime& app) {
       const auto now = std::chrono::steady_clock::now();
       log_encoded_dispatch_stall("round_gap", -1, now - previous_round_end);
       for (auto& source : app.sources) {
+        did_work = pull_encoded_frame(app, source, sync_delay_ms) || did_work;
         simaai::neat::Sample frame;
         std::uint64_t frame_epoch = 0;
         bool have_frame = false;
@@ -1774,7 +1790,7 @@ void encoded_video_dispatch_loop(AppRuntime& app) {
   }
 }
 
-void start_encoded_video_dispatch(AppRuntime& app) {
+void start_encoded_video_dispatch(AppRuntime& app, const AppConfig& cfg) {
   const bool have_video =
       std::any_of(app.sources.begin(), app.sources.end(),
                   [](const SourceRuntime& source) { return static_cast<bool>(source.video_run); });
@@ -1782,7 +1798,8 @@ void start_encoded_video_dispatch(AppRuntime& app) {
     return;
   }
   app.stop_encoded_video_dispatch.store(false, std::memory_order_relaxed);
-  app.encoded_video_dispatch_thread = std::thread(encoded_video_dispatch_loop, std::ref(app));
+  app.encoded_video_dispatch_thread =
+      std::thread(encoded_video_dispatch_loop, std::ref(app), cfg.insight_video_sync_delay_ms);
 }
 
 void stop_encoded_video_dispatch(AppRuntime& app) {
@@ -2017,17 +2034,15 @@ void run_app(const AppConfig& cfg) {
 
     // The sender pipelines only packetize already-encoded CPU buffers, so they
     // allocate no EV encoder surfaces. Build them in channel order and install
-    // the tap before starting RTSP; every channel then sees its source from the
-    // first AU while the decoder paths stay in the fused C++ mux pipeline.
+    // the graph before starting RTSP; every visible channel then pulls encoded
+    // AUs while the decoder paths stay in the fused C++ mux pipeline.
     start_encoded_video_senders(app, cfg);
-    install_encoded_video_frame_tap(app, cfg);
-    start_encoded_video_dispatch(app);
-    app.run = app.graph.build_fused_realtime_sources(realtime_options(
+    app.run = app.graph.build(realtime_options(
         cfg.queue_depth, simaai::neat::OverflowPolicy::KeepLatest, cfg.copy_input));
+    start_encoded_video_dispatch(app, cfg);
 
     pull_detections(app, cfg, aggregate_profile);
   } catch (...) {
-    simaai::neat::clear_latest_by_stream_encoded_frame_callback();
     stop_encoded_video_dispatch(app);
     stop_encoded_video_senders(app);
     app.run.close();
@@ -2036,7 +2051,6 @@ void run_app(const AppConfig& cfg) {
     throw;
   }
 
-  simaai::neat::clear_latest_by_stream_encoded_frame_callback();
   stop_encoded_video_dispatch(app);
   stop_encoded_video_senders(app);
   app.run.close();
