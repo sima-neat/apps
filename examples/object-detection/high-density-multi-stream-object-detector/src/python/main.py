@@ -1130,15 +1130,7 @@ def run_app(cfg: AppConfig) -> None:
             print(f"Application backend:\n{app.graph.describe_backend()}")
 
         run_options = realtime_options(cfg.queue_depth)
-        if cfg.fan_in_policy == "every_frame":
-            if not hasattr(app.graph, "build_fused_realtime_source"):
-                raise RuntimeError(
-                    "installed pyneat does not expose build_fused_realtime_source; "
-                    "install the matching Neat package before using every_frame fan-in"
-                )
-            app.run = app.graph.build_fused_realtime_source(run_options)
-        else:
-            app.run = app.graph.build(run_options)
+        app.run = app.graph.build(run_options)
         pull_detections(app, cfg, aggregate_profile)
     finally:
         if app.run is not None:
