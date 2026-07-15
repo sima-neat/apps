@@ -16,6 +16,7 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
+#include "detection_egress.h"
 #include "detection_watchdog.h"
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
@@ -23,8 +24,6 @@
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
-
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -39,8 +38,10 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -238,6 +239,7 @@ struct SourceRuntime {
   std::vector<std::string> labels;
   simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
   StreamProfile profile;
+  std::vector<objdet::Box> parsed_boxes;
   int frame_w = 0;
   int frame_h = 0;
   int source_fps = 0;
@@ -533,56 +535,83 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
   return labels;
 }
 
-bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::uint8_t>& payload,
-                          std::string& err) {
+const simaai::neat::Tensor* find_bbox_tensor(const simaai::neat::Sample& sample, std::string& err) {
   if (sample.kind == simaai::neat::SampleKind::Bundle) {
     for (const auto& field : sample.fields) {
-      if (extract_bbox_payload(field, payload, err)) {
-        return true;
-      }
+      if (const auto* tensor = find_bbox_tensor(field, err))
+        return tensor;
     }
     err = "bundle missing BBOX field";
-    return false;
+    return nullptr;
   }
-  if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
-    simaai::neat::Sample tensor_sample = sample;
-    tensor_sample.kind = simaai::neat::SampleKind::Tensor;
-    tensor_sample.tensor = sample.tensors.front();
-    tensor_sample.tensors.clear();
-    return objdet::extract_bbox_payload(tensor_sample, payload, err);
+
+  const simaai::neat::Tensor* tensor = nullptr;
+  if (sample.kind == simaai::neat::SampleKind::Tensor && sample.tensor.has_value()) {
+    tensor = &*sample.tensor;
+  } else if (sample.kind == simaai::neat::SampleKind::TensorSet && !sample.tensors.empty()) {
+    tensor = &sample.tensors.front();
+  } else {
+    err = sample.kind == simaai::neat::SampleKind::Tensor ? "capture_missing_tensor"
+                                                          : "capture_expected_tensor";
+    return nullptr;
   }
-  return objdet::extract_bbox_payload(sample, payload, err);
+
+  std::string format = sample.payload_tag;
+  if (format.empty() && !sample.format.empty())
+    format = sample.format;
+  if (format.empty() && tensor->semantic.tess.has_value())
+    format = tensor->semantic.tess->format;
+  const std::string format_upper = objdet::upper_ascii_copy(format);
+  if (!format_upper.empty() && format_upper != "BBOX") {
+    err = "capture_expected_bbox format=" + format_upper;
+    return nullptr;
+  }
+  return tensor;
 }
 
-std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<objdet::Box>& boxes,
-                                                             const std::vector<std::string>& labels,
-                                                             int frame_w, int frame_h) {
-  std::vector<sima_examples::MetadataBox> metadata_boxes;
-  metadata_boxes.reserve(boxes.size());
-  int object_index = 1;
-  for (const auto& box : boxes) {
-    int x1 = std::max(0, static_cast<int>(box.x1));
-    int y1 = std::max(0, static_cast<int>(box.y1));
-    int w = std::max(0, static_cast<int>(box.x2 - box.x1));
-    int h = std::max(0, static_cast<int>(box.y2 - box.y1));
-    if (x1 + w > frame_w)
-      w = frame_w - x1;
-    if (y1 + h > frame_h)
-      h = frame_h - y1;
+struct BboxPayloadView {
+  simaai::neat::Mapping mapping;
+  std::vector<std::uint8_t> owned;
+  const std::uint8_t* data = nullptr;
+  std::size_t size = 0;
 
-    sima_examples::MetadataBox obj;
-    obj.id = "obj_" + std::to_string(object_index++);
-    obj.label = (box.class_id >= 0 && box.class_id < static_cast<int>(labels.size()))
-                    ? labels[box.class_id]
-                    : "unknown";
-    obj.confidence = box.score;
-    obj.x = static_cast<float>(x1);
-    obj.y = static_cast<float>(y1);
-    obj.w = static_cast<float>(std::max(0, w));
-    obj.h = static_cast<float>(std::max(0, h));
-    metadata_boxes.push_back(obj);
+  [[nodiscard]] std::span<const std::uint8_t> bytes() const {
+    return {data, size};
   }
-  return metadata_boxes;
+};
+
+bool map_bbox_payload(const simaai::neat::Sample& sample, BboxPayloadView& payload,
+                      std::string& err) {
+  const auto* tensor = find_bbox_tensor(sample, err);
+  if (!tensor)
+    return false;
+
+  try {
+    const std::size_t tight_bytes = tensor->dense_bytes_tight();
+    if (tight_bytes > 0 && tensor->is_contiguous()) {
+      payload.mapping = tensor->map_read();
+      if (payload.mapping.data && payload.mapping.size_bytes >= tight_bytes) {
+        payload.data = static_cast<const std::uint8_t*>(payload.mapping.data);
+        payload.size = tight_bytes;
+      }
+    }
+    if (!payload.data) {
+      payload.mapping = {};
+      payload.owned = tensor->copy_payload_bytes();
+      payload.data = payload.owned.data();
+      payload.size = payload.owned.size();
+    }
+  } catch (const std::exception& ex) {
+    err = "capture_payload_failed err=";
+    err += ex.what();
+    return false;
+  }
+
+  if (payload.size == 0) {
+    err = "capture_empty_payload";
+    return false;
+  }
+  return true;
 }
 
 bool env_bool(const char* key, bool fallback = false) {
@@ -869,6 +898,7 @@ SourceRuntime make_source_runtime(const AppConfig& cfg, int stream_index,
   source.labels = labels;
   source.profile.enabled = cfg.profile;
   source.profile.stream_index = stream_index;
+  source.parsed_boxes.reserve(static_cast<std::size_t>(cfg.max_detections));
 
   if (should_send_metadata(cfg, stream_index)) {
     simaai::neat::MetadataSenderOptions metadata_options;
@@ -1012,49 +1042,48 @@ void send_metadata(SourceRuntime& source, const simaai::neat::Sample& frame,
   if (!source.metadata_sender) {
     return;
   }
-  const auto metadata_boxes =
-      build_metadata_boxes(boxes, source.labels, source.frame_w, source.frame_h);
-  const std::string data_json = sima_examples::metadata_boxes_data_json("objects", metadata_boxes);
-  const int64_t timestamp_ms = frame.pts_ns >= 0 ? frame.pts_ns / 1'000'000 : -1;
-  const std::string frame_id = frame.frame_id >= 0 ? std::to_string(frame.frame_id) : "";
+  high_density::detection_egress::FrameMetadata metadata;
+  metadata.stream_index = source.index;
+  const std::string fallback_stream_id =
+      frame.stream_id.empty() ? stream_id_for(source.index) : std::string{};
+  metadata.stream_id = frame.stream_id.empty() ? std::string_view(fallback_stream_id)
+                                               : std::string_view(frame.stream_id);
+  metadata.frame_id = frame.frame_id;
+  metadata.pts_ns = frame.pts_ns;
+  metadata.dts_ns = frame.dts_ns;
+  metadata.duration_ns = frame.duration_ns;
+  metadata.input_seq = frame.input_seq;
+  metadata.orig_input_seq = frame.orig_input_seq;
+  if (frame.pts_ns >= 0)
+    metadata.rtp_timestamp = rtp_timestamp_from_pts_ns(frame.pts_ns);
 
-  nlohmann::json payload;
+  std::string payload;
   try {
-    payload["type"] = "object-detection";
-    payload["data"] = nlohmann::json::parse(data_json);
-    payload["timestamp"] = timestamp_ms;
-    payload["frame_id"] = frame_id;
-    payload["stream_id"] = frame.stream_id.empty() ? stream_id_for(source.index) : frame.stream_id;
-    payload["stream_index"] = source.index;
-    payload["pts_ns"] = frame.pts_ns;
-    payload["dts_ns"] = frame.dts_ns;
-    payload["duration_ns"] = frame.duration_ns;
-    payload["input_seq"] = frame.input_seq;
-    payload["orig_input_seq"] = frame.orig_input_seq;
-    if (frame.pts_ns >= 0) {
-      payload["rtp_timestamp"] = rtp_timestamp_from_pts_ns(frame.pts_ns);
-    }
+    payload = high_density::detection_egress::serialize(boxes, source.labels, source.frame_w,
+                                                        source.frame_h, metadata);
   } catch (const std::exception& ex) {
     std::cerr << "[warn] stream " << source.index << " metadata JSON build failed: " << ex.what()
               << "\n";
     return;
   }
 
-  send_metadata_nonblocking(source, payload.dump());
+  send_metadata_nonblocking(source, payload);
 }
 
 void complete_detection(SourceRuntime& source, const AppConfig& cfg,
                         AggregateProfile& aggregate_profile,
                         const simaai::neat::Sample& detections) {
   const double parse_start = sima_examples::time_ms();
-  std::vector<std::uint8_t> payload;
-  std::string err;
-  if (!extract_bbox_payload(detections, payload, err)) {
-    throw std::runtime_error("stream " + std::to_string(source.index) +
-                             " bbox extract failed: " + err);
+  {
+    BboxPayloadView payload;
+    std::string err;
+    if (!map_bbox_payload(detections, payload, err)) {
+      throw std::runtime_error("stream " + std::to_string(source.index) +
+                               " bbox extract failed: " + err);
+    }
+    objdet::parse_boxes_strict_into(payload.bytes(), source.frame_w, source.frame_h,
+                                    cfg.max_detections, false, source.parsed_boxes);
   }
-  const auto boxes = objdet::parse_boxes_strict(payload, source.frame_w, source.frame_h,
-                                                cfg.max_detections, false);
   const double parse_end = sima_examples::time_ms();
 
   ++source.processed;
@@ -1062,10 +1091,10 @@ void complete_detection(SourceRuntime& source, const AppConfig& cfg,
 
   if (!warming_up) {
     const double metadata_start = sima_examples::time_ms();
-    send_metadata(source, detections, boxes);
+    send_metadata(source, detections, source.parsed_boxes);
     const double metadata_end = sima_examples::time_ms();
     source.profile.add(parse_end - parse_start, metadata_end - metadata_start,
-                       static_cast<int>(boxes.size()));
+                       static_cast<int>(source.parsed_boxes.size()));
     aggregate_profile.add();
   }
 }
