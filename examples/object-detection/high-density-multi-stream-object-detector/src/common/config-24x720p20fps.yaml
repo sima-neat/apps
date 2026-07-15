@@ -1,6 +1,6 @@
 # Profile: 24 x 720p @ 20 FPS (q4/i2/m4).
 model:                       # Detector model selection.
-  path: yolo26n-det-bf16-mla_tess-b1.tar.gz # Resolved relative to this config file.
+  path: yolo26n-det-int8-b1.tar.gz # Resolved relative to this config file.
   labels: coco_label.txt      # Resolved relative to this config file.
   decode_type: yolo26
 

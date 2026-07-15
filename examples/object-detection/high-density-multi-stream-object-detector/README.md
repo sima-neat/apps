@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | high-density-multi-stream-object-detector |
-| Model | yolo26n-det-bf16-mla_tess-b1 |
+| Model | yolo26n-det-int8-b1 |
 
 ## Concept
 
@@ -72,7 +72,7 @@ The 48-stream profile running in Insight:
 - 16, 24, or 48 H.264 RTSP sources matching the selected profile.
 - Constant source frame rate, 1280×720 resolution, no H.264 B-frames, and a
   short, regular IDR interval. The validated sources use one IDR per second.
-- The `yolo26n-det-bf16-mla_tess-b1.tar.gz` model pack.
+- The `yolo26n-det-int8-b1.tar.gz` model pack.
 
 The application starts all source graphs together. Start every RTSP publisher
 before starting the application.
@@ -97,9 +97,7 @@ From the Apps repository root, replace `<platform-version>` with the version in
 `deps/manifest.json`:
 
 ```bash
-sima-cli download \
-  -d examples/object-detection/high-density-multi-stream-object-detector/src/common \
-  "https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz"
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
 ```
 
 The checked-in configs resolve the model relative to their own directory, so no

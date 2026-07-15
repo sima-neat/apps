@@ -17,7 +17,7 @@ import yaml
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
-MODEL_PATH = "assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz"
+MODEL_PATH = "assets/models/yolo26n-det-int8-b1.tar.gz"
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 STRESS_DIR = EXAMPLE_DIR / "stress"
 
