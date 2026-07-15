@@ -36,6 +36,8 @@ starts it with ordinary `Graph::build()`. Core fuses the eligible topology
 internally. `VideoSender` consumes the read-only H.264 access unit before the
 decoder, so the application does not open a second RTSP session, copy a decoded
 EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc.
+The UDP sender uses `async=false` so its sink cannot hold the shared live
+pipeline in `PAUSED` while waiting for preroll from every stream.
 The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can
 drop stale encoded work without blocking that stream's decoder branch.
 
@@ -138,7 +140,8 @@ Choose one config under `src/common/` and edit:
 
 `inference.max_inflight_per_stream` and `inference.max_inflight_total`
 bound raw decoder-backed frames admitted to the shared detector. The 16- and
-48-stream profiles use a total limit of eight; the 24-stream profile uses 16.
+48-stream profiles use a total limit of eight; the 24-stream profile uses 24
+so one aggregate frame interval can be admitted without an unbounded queue.
 The realtime mux retains only the latest pending frame for each stream.
 
 Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()`

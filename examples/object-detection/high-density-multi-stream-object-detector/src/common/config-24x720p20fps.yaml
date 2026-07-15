@@ -52,7 +52,7 @@ inference:                   # Detection controls.
   queue_depth: 4             # Terminal detection output and Run queue depth.
   internal_queue_depth: 2    # Two global model-stage handoffs; not per-camera decoded queues.
   max_inflight_per_stream: 4 # Proven per-stream mux credit for approximately 20 detections/s.
-  max_inflight_total: 16     # Proven total raw-frame credit across the shared detector.
+  max_inflight_total: 24     # One bounded raw-frame credit per stream across the shared detector.
   min_score: 0.30            # Detection score threshold used by the validated Insight run.
   nms_iou: 0.60              # NMS IOU threshold.
   max_detections: 50         # Max detections to keep per frame after NMS.

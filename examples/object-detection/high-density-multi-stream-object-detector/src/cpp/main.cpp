@@ -881,7 +881,10 @@ simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConf
   video_options.host = cfg.insight_host;
   video_options.channel = source.index;
   video_options.video_port_base = cfg.video_port_base;
-  video_options.async = true;
+  // This sender is fused into the same live pipeline as the decoder fan-in.
+  // It must not take part in preroll, otherwise every asynchronous UDP sink
+  // can hold the shared pipeline in PAUSED before all decoder branches start.
+  video_options.async = false;
   return video_options;
 }
 

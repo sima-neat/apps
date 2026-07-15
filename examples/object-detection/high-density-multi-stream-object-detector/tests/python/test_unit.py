@@ -131,7 +131,7 @@ class TestConfigLoading:
                 4,
                 2,
                 4,
-                16,
+                24,
             ),
             (
                 "config-48x720p10fps.yaml",
@@ -679,6 +679,34 @@ class TestRuntimeOptions:
         assert options.queue_depth == 7
         assert options.overflow_policy == "KeepLatest"
         assert options.output_memory == "ZeroCopy"
+
+    def test_video_sender_does_not_participate_in_shared_preroll(self, monkeypatch):
+        import main
+
+        class FakeVideoSenderOptions:
+            @staticmethod
+            def h264_rtp_udp_from_encoded():
+                return SimpleNamespace(async_=True)
+
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(VideoSenderOptions=FakeVideoSenderOptions),
+        )
+        cfg = main.AppConfig(
+            model_path=MODEL_PATH,
+            labels_path=Path("labels.txt"),
+            rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
+            insight_host="192.0.2.10",
+            video_port_base=9200,
+        )
+
+        options = main.make_video_options(cfg, SimpleNamespace(index=3))
+
+        assert options.async_ is False
+        assert options.host == "192.0.2.10"
+        assert options.channel == 3
+        assert options.video_port_base == 9200
 
     def test_graph_options_apply_internal_queue_depth_and_async_mla(self, monkeypatch):
         import main

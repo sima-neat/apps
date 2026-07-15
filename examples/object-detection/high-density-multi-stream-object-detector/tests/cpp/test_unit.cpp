@@ -242,7 +242,7 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
 
   constexpr std::array<ProfileExpectation, 3> profiles{{
       {"config.yaml", 16, 25, 16, 1, 1, 8},
-      {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 16},
+      {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 24},
       {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, 8},
   }};
   const fs::path common_dir =

@@ -990,7 +990,9 @@ def make_video_options(cfg: AppConfig, source: SourceRuntime):
     video_options.host = cfg.insight_host
     video_options.channel = source.index
     video_options.video_port_base = cfg.video_port_base
-    video_options.async_ = True
+    # This sender is fused into the same live pipeline as the decoder fan-in.
+    # Do not let every UDP sink participate in the shared preroll barrier.
+    video_options.async_ = False
     return video_options
 
 
