@@ -20,14 +20,14 @@ DETECTOR_RESULT_TIMEOUT_MS = 5_000
 DEFAULT_QUEUE_DEPTH = 4
 DEFAULT_INTERNAL_QUEUE_DEPTH = 1
 DEFAULT_MAX_INFLIGHT_PER_STREAM = 4
+DEFAULT_MAX_INFLIGHT_TOTAL = 8
 # Complete MLA work asynchronously so a busy model stage cannot hold the
-# fused fan-in callback and starve a subset of decoder streams.
+# shared graph and starve a subset of decoder streams.
 INFERENCE_ASYNC = True
-DEFAULT_FAN_IN_POLICY = "latest"
 DEFAULT_DECODER_BUFFERS = 16
 DEFAULT_DECODER_INPUT_BUFFERS = 2
 ALL_INSIGHT_STREAMS = -1
-MAX_ENCODED_AU_BYTES = 16 * 1024 * 1024
+MAX_DETECTION_PULLS_PER_ROUND = 64
 
 cv2 = None
 pyneat = None
@@ -44,7 +44,7 @@ class AppConfig:
     queue_depth: int = DEFAULT_QUEUE_DEPTH
     internal_queue_depth: int = DEFAULT_INTERNAL_QUEUE_DEPTH
     max_inflight_per_stream: int = DEFAULT_MAX_INFLIGHT_PER_STREAM
-    fan_in_policy: str = DEFAULT_FAN_IN_POLICY
+    max_inflight_total: int = DEFAULT_MAX_INFLIGHT_TOTAL
     decoder_buffers: int = DEFAULT_DECODER_BUFFERS
     decoder_input_buffers: int = DEFAULT_DECODER_INPUT_BUFFERS
     decoder_tuning: str = "auto"
@@ -163,6 +163,8 @@ class SourceRuntime:
     source_fps: int
     video_port: int = 0
     processed: int = 0
+    metadata_send_ok: int = 0
+    metadata_send_fail: int = 0
 
 
 @dataclass
@@ -171,6 +173,45 @@ class AppRuntime:
     graph: object
     run: object
     sources: list[SourceRuntime]
+
+
+class DetectionWatchdog:
+    """Fail when any configured stream never starts or later goes silent."""
+
+    def __init__(
+        self,
+        stream_count: int,
+        startup_timeout_s: float,
+        cadence_timeout_s: float,
+        start: float | None = None,
+    ) -> None:
+        if stream_count <= 0:
+            raise ValueError("detection watchdog requires at least one stream")
+        if startup_timeout_s <= 0 or cadence_timeout_s <= 0:
+            raise ValueError("detection watchdog timeouts must be positive")
+        start = time.monotonic() if start is None else start
+        self._last_seen: list[float | None] = [None] * stream_count
+        self._startup_deadline = start + startup_timeout_s
+        self._cadence_timeout_s = cadence_timeout_s
+
+    def observe(self, stream_index: int, now: float | None = None) -> None:
+        if stream_index < 0 or stream_index >= len(self._last_seen):
+            raise IndexError("detection watchdog stream index is out of range")
+        self._last_seen[stream_index] = time.monotonic() if now is None else now
+
+    def startup_complete(self) -> bool:
+        return all(seen is not None for seen in self._last_seen)
+
+    def expired_streams(self, now: float | None = None) -> list[int]:
+        now = time.monotonic() if now is None else now
+        started = self.startup_complete()
+        if not started and now < self._startup_deadline:
+            return []
+        return [
+            index
+            for index, seen in enumerate(self._last_seen)
+            if seen is None or (started and now - seen >= self._cadence_timeout_s)
+        ]
 
 
 def load_runtime_dependencies() -> None:
@@ -204,7 +245,9 @@ def time_ms() -> float:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Graph-native multi-stream RTSP YOLO Insight example")
+    parser = argparse.ArgumentParser(
+        description="Graph-native multi-stream RTSP YOLO Insight example"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -295,12 +338,6 @@ def normalize_decoder_tuning(token: str) -> str:
     )
 
 
-def normalize_fan_in_policy(token: str) -> str:
-    if token in ("latest", "every_frame"):
-        return token
-    raise ValueError("inference.fan_in_policy must be one of: latest, every_frame")
-
-
 def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path:
         raise ValueError("model.path must be set")
@@ -327,7 +364,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.max_inflight_per_stream must be > 0")
     if cfg.max_inflight_per_stream > 32:
         raise ValueError("inference.max_inflight_per_stream must be <= 32")
-    normalize_fan_in_policy(cfg.fan_in_policy)
+    if cfg.max_inflight_total <= 0:
+        raise ValueError("inference.max_inflight_total must be > 0")
     if cfg.decoder_buffers <= 0:
         raise ValueError("input.decoder_buffers must be > 0")
     if cfg.decoder_buffers > 64:
@@ -405,6 +443,11 @@ def load_app_config(config_path: Path) -> AppConfig:
         raise ValueError("config root must be a mapping")
 
     inference = section(raw, "inference")
+    if "fan_in_policy" in inference:
+        raise ValueError(
+            "inference.fan_in_policy was removed; remove it because ordinary "
+            "connect()/build() now selects realtime fan-in automatically"
+        )
     if "fps" in inference:
         raise ValueError("inference.fps is not supported; set stream FPS at the RTSP source")
     if "target_fps" in inference:
@@ -456,9 +499,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         max_inflight_per_stream=int_or(
             inference, "max_inflight_per_stream", DEFAULT_MAX_INFLIGHT_PER_STREAM
         ),
-        fan_in_policy=normalize_fan_in_policy(
-            string_or(inference, "fan_in_policy", DEFAULT_FAN_IN_POLICY)
-        ),
+        max_inflight_total=int_or(inference, "max_inflight_total", DEFAULT_MAX_INFLIGHT_TOTAL),
         decoder_buffers=int_or(input_cfg, "decoder_buffers", DEFAULT_DECODER_BUFFERS),
         decoder_input_buffers=int_or(
             input_cfg, "decoder_input_buffers", DEFAULT_DECODER_INPUT_BUFFERS
@@ -586,18 +627,69 @@ def build_metadata_boxes(
     return metadata_boxes
 
 
+def rtp_timestamp_from_pts_ns(pts_ns: int) -> int:
+    if pts_ns < 0:
+        return 0
+    return ((pts_ns * 90_000) // 1_000_000_000) & 0xFFFFFFFF
+
+
+def build_metadata_payload(source: SourceRuntime, frame, boxes: list[dict]) -> str:
+    pts_ns = int(getattr(frame, "pts_ns", -1))
+    frame_id = int(getattr(frame, "frame_id", -1))
+    stream_id = str(getattr(frame, "stream_id", "")) or stream_id_for(source.index)
+    payload = {
+        "type": "object-detection",
+        "data": {
+            "objects": build_metadata_boxes(
+                boxes, source.labels, source.frame_w, source.frame_h
+            )
+        },
+        "timestamp": pts_ns // 1_000_000 if pts_ns >= 0 else -1,
+        "frame_id": str(frame_id) if frame_id >= 0 else "",
+        "stream_id": stream_id,
+        "stream_index": source.index,
+        "pts_ns": pts_ns,
+        "dts_ns": int(getattr(frame, "dts_ns", -1)),
+        "duration_ns": int(getattr(frame, "duration_ns", -1)),
+        "input_seq": int(getattr(frame, "input_seq", -1)),
+        "orig_input_seq": int(getattr(frame, "orig_input_seq", -1)),
+    }
+    if pts_ns >= 0:
+        payload["rtp_timestamp"] = rtp_timestamp_from_pts_ns(pts_ns)
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def should_log_failure_count(count: int) -> bool:
+    return count > 0 and count & (count - 1) == 0
+
+
+def send_metadata_nonblocking(source: SourceRuntime, payload: str) -> None:
+    if source.metadata_sender is None:
+        return
+    error = ""
+    try:
+        sent = source.metadata_sender.send_raw_json(payload)
+    except Exception as exc:  # Nonblocking UDP failures are observable drops, not pipeline errors.
+        sent = False
+        error = str(exc)
+    if sent:
+        source.metadata_send_ok += 1
+        return
+    source.metadata_send_fail += 1
+    failures = source.metadata_send_fail
+    if should_log_failure_count(failures):
+        print(
+            f"[warn] stream {source.index} nonblocking metadata send failed "
+            f"(count={failures})" + (f": {error}" if error else ""),
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def send_metadata(source: SourceRuntime, frame, boxes: list[dict]) -> None:
     if source.metadata_sender is None:
         return
-    metadata_boxes = build_metadata_boxes(boxes, source.labels, source.frame_w, source.frame_h)
-    timestamp_ms = int(frame.pts_ns // 1_000_000) if frame.pts_ns >= 0 else -1
-    frame_id = str(frame.frame_id) if frame.frame_id >= 0 else ""
-    source.metadata_sender.send_metadata(
-        "object-detection",
-        json.dumps({"objects": metadata_boxes}, separators=(",", ":")),
-        timestamp_ms,
-        frame_id,
-    )
+    send_metadata_nonblocking(source, build_metadata_payload(source, frame, boxes))
 
 
 def env_bool(key: str, fallback: bool = False) -> bool:
@@ -706,7 +798,7 @@ def graph_realtime_link(
     queue_depth: int,
     stream_id: str,
     max_inflight_per_stream: int = DEFAULT_MAX_INFLIGHT_PER_STREAM,
-    fan_in_policy: str = DEFAULT_FAN_IN_POLICY,
+    max_inflight_total: int = DEFAULT_MAX_INFLIGHT_TOTAL,
 ):
     if not hasattr(pyneat, "GraphLinkOptions") or not hasattr(pyneat, "GraphLinkPolicy"):
         raise RuntimeError(
@@ -714,19 +806,11 @@ def graph_realtime_link(
             "install the matching Neat package before running this graph-native app"
         )
     link = pyneat.GraphLinkOptions()
-    fan_in_policy = normalize_fan_in_policy(fan_in_policy)
-    if fan_in_policy == "every_frame":
-        if not hasattr(pyneat.GraphLinkPolicy, "RealtimeEveryFrameByStream"):
-            raise RuntimeError(
-                "installed pyneat does not expose RealtimeEveryFrameByStream; "
-                "install the matching Neat package before using every_frame fan-in"
-            )
-        link.policy = pyneat.GraphLinkPolicy.RealtimeEveryFrameByStream
-    else:
-        link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     link.queue_depth = queue_depth
     link.stream_id = stream_id
     link.max_inflight_per_stream = max_inflight_per_stream
+    link.max_inflight_total = max_inflight_total
     return link
 
 
@@ -809,23 +893,6 @@ def make_source_options(
 
 
 
-def use_system_memory_for_encoded_input(options) -> None:
-    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(options, "memory_policy"):
-        options.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    elif hasattr(options, "use_simaai_pool"):
-        options.use_simaai_pool = False
-
-
-def make_encoded_h264_input_options(block: bool):
-    input_options = pyneat.InputOptions()
-    input_options.payload_type = pyneat.PayloadType.Encoded
-    input_options.format = pyneat.Format.H264
-    input_options.block = block
-    input_options.max_bytes = MAX_ENCODED_AU_BYTES
-    use_system_memory_for_encoded_input(input_options)
-    return input_options
-
-
 def make_rtsp_h264_input(opt):
     encoded = pyneat.RtspEncodedInputOptions()
     encoded.url = opt.url
@@ -848,22 +915,16 @@ def make_rtsp_h264_input(opt):
     return pyneat.groups.rtsp_encoded_input(encoded)
 
 
-def make_rtsp_decoded_input(
+def append_h264_decoder(
+    graph,
     opt,
     decoder_buffers: int,
-    input_name: str = "",
-    decoder_input_buffers: int = DEFAULT_DECODER_INPUT_BUFFERS,
-    decoder_tuning: str = "auto",
-):
+    decoder_input_buffers: int,
+    decoder_tuning: str,
+) -> None:
     dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
     dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
     dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
-
-    if input_name:
-        graph = pyneat.Graph()
-        graph.add(pyneat.nodes.input(input_name, make_encoded_h264_input_options(True)))
-    else:
-        graph = make_rtsp_h264_input(opt)
 
     decode = pyneat.SimaDecodeOptions()
     decode.type = pyneat.SimaDecodeType.H264
@@ -878,6 +939,7 @@ def make_rtsp_decoded_input(
     decode.num_buffers = decoder_buffers
     decode.input_buffers = decoder_input_buffers
     decode.decoder_tuning = decoder_tuning
+    decode.memory_opt = decoder_tuning in ("low-memory", "throughput-low-latency")
     graph.add(pyneat.nodes.sima_decode(decode))
 
     if opt.output_caps.enable:
@@ -890,6 +952,19 @@ def make_rtsp_decoded_input(
                 opt.output_caps.memory,
             )
         )
+
+
+def make_h264_decoder(
+    opt,
+    decoder_buffers: int,
+    decoder_input_buffers: int = DEFAULT_DECODER_INPUT_BUFFERS,
+    decoder_tuning: str = "auto",
+):
+    graph = pyneat.Graph("h264_decoder")
+    append_h264_decoder(
+        graph, opt, decoder_buffers, decoder_input_buffers, decoder_tuning
+    )
+    graph.add(pyneat.nodes.output("detector_frame"))
     return graph
 
 
@@ -933,7 +1008,9 @@ def make_source_runtime(cfg: AppConfig, stream_index: int, labels: list[str]) ->
         metadata_options.host = cfg.insight_host
         metadata_options.channel = stream_index
         metadata_options.metadata_port_base = cfg.metadata_port_base
-        metadata_sender = pyneat.MetadataSender(metadata_options)
+        send_options = pyneat.MetadataSenderSendOptions()
+        send_options.nonblocking = True
+        metadata_sender = pyneat.MetadataSender(metadata_options, send_options)
 
     return SourceRuntime(
         index=stream_index,
@@ -995,47 +1072,34 @@ def connect_source_graph(
     source: SourceRuntime,
     detector_graph,
 ) -> None:
-    branch = pyneat.graphs.branch("source", ["detector_frame"])
     detector_link = graph_realtime_link(
         cfg.queue_depth,
         stream_id_for(source.index),
         cfg.max_inflight_per_stream,
-        cfg.fan_in_policy,
+        cfg.max_inflight_total,
     )
 
+    # Keep the encoded producer explicit. Core internally fuses this ordinary
+    # fan-out so VideoSender consumes each read-only H.264 AU before decoding,
+    # without retaining decoded EV buffers in the application.
+    rtsp = make_rtsp_h264_input(source.source_options)
+    decoder = make_h264_decoder(
+        source.source_options,
+        cfg.decoder_buffers,
+        cfg.decoder_input_buffers,
+        cfg.decoder_tuning,
+    )
+    app.graph.connect(rtsp, decoder)
+    app.graph.connect(decoder, detector_graph, detector_link)
+
     if cfg.video_enabled and is_insight_visible_stream(cfg, source.index):
-        h264 = make_rtsp_h264_input(source.source_options)
-        h264_branch = pyneat.graphs.branch("h264_source", ["detector_h264", "video_h264"])
-        decoder = make_rtsp_decoded_input(
-            source.source_options,
-            cfg.decoder_buffers,
-            input_name="detector_h264",
-            decoder_input_buffers=cfg.decoder_input_buffers,
-            decoder_tuning=cfg.decoder_tuning,
-        )
-
-        app.graph.connect(h264, h264_branch)
-        app.graph.connect(h264_branch, decoder, graph_realtime_link(3, stream_id_for(source.index)))
-        app.graph.connect(decoder, branch, graph_realtime_link(1, stream_id_for(source.index)))
-
         video_options = make_video_options(cfg, source)
         source.video_port = video_options.video_port
-        video_graph = pyneat.Graph("video_h264")
-        video_graph.connect(
-            pyneat.nodes.input("video_h264", make_encoded_h264_input_options(False)),
-            pyneat.groups.video_sender(video_options),
-        )
-        app.graph.connect(h264_branch, video_graph, graph_realtime_link(3, stream_id_for(source.index)))
-    else:
-        rtsp = make_rtsp_decoded_input(
-            source.source_options,
-            cfg.decoder_buffers,
-            decoder_input_buffers=cfg.decoder_input_buffers,
-            decoder_tuning=cfg.decoder_tuning,
-        )
-        app.graph.connect(rtsp, branch)
-
-    app.graph.connect(branch, detector_graph, detector_link)
+        video_sender = pyneat.groups.video_sender(video_options)
+        video_sender.set_name(f"encoded_insight_video_sender_{source.index}")
+        video_link = pyneat.GraphLinkOptions()
+        video_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+        app.graph.connect(rtsp, video_sender, video_link)
 
     print(
         f"[stream {source.index}] rtsp={source.url} "
@@ -1078,24 +1142,39 @@ def complete_detection(
 
 
 def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: AggregateProfile) -> None:
-    saw_detection = False
+    watchdog = DetectionWatchdog(
+        len(app.sources),
+        cfg.initial_detection_timeout_ms / 1000.0,
+        DETECTOR_RESULT_TIMEOUT_MS / 1000.0,
+    )
     while not _STOP_REQUESTED:
-        timeout_ms = DETECTOR_RESULT_TIMEOUT_MS if saw_detection else cfg.initial_detection_timeout_ms
-        detections = app.run.pull("detections", timeout_ms)
-        if detections is None:
-            if hasattr(app.run, "can_pull") and not app.run.can_pull():
+        did_work = False
+        for _ in range(MAX_DETECTION_PULLS_PER_ROUND):
+            detections = app.run.pull("detections", 0)
+            if detections is None:
+                raw_error = app.run.last_error() if hasattr(app.run, "last_error") else ""
+                error = str(raw_error or "")
+                running = bool(app.run.running()) if hasattr(app.run, "running") else True
+                if error:
+                    raise RuntimeError(f"failed to pull detections: {error}")
+                if not running:
+                    raise RuntimeError("detections output closed unexpectedly")
                 break
-            raise RuntimeError(
-                "timed out waiting for detections"
-                if saw_detection
-                else "timed out waiting for initial detection"
-            )
 
-        saw_detection = True
-        stream_index = stream_index_from_detection(detections, len(app.sources))
-        complete_detection(app.sources[stream_index], cfg, aggregate_profile, detections)
-        if target_reached(app.sources):
-            break
+            did_work = True
+            stream_index = stream_index_from_detection(detections, len(app.sources))
+            watchdog.observe(stream_index)
+            complete_detection(app.sources[stream_index], cfg, aggregate_profile, detections)
+            if target_reached(app.sources):
+                return
+
+        expired = watchdog.expired_streams()
+        if expired:
+            phase = "detections" if watchdog.startup_complete() else "initial detections"
+            stream_list = ",".join(str(index) for index in expired)
+            raise RuntimeError(f"timed out waiting for {phase} from streams: {stream_list}")
+        if not did_work:
+            time.sleep(0.001)
 
 
 def _request_stop(_signum, _frame) -> None:
@@ -1130,15 +1209,7 @@ def run_app(cfg: AppConfig) -> None:
             print(f"Application backend:\n{app.graph.describe_backend()}")
 
         run_options = realtime_options(cfg.queue_depth)
-        if cfg.fan_in_policy == "every_frame":
-            if not hasattr(app.graph, "build_fused_realtime_source"):
-                raise RuntimeError(
-                    "installed pyneat does not expose build_fused_realtime_source; "
-                    "install the matching Neat package before using every_frame fan-in"
-                )
-            app.run = app.graph.build_fused_realtime_source(run_options)
-        else:
-            app.run = app.graph.build(run_options)
+        app.run = app.graph.build(run_options)
         pull_detections(app, cfg, aggregate_profile)
     finally:
         if app.run is not None:
@@ -1146,7 +1217,21 @@ def run_app(cfg: AppConfig) -> None:
         aggregate_profile.flush()
         for source in app.sources:
             source.profile.flush()
-            print(f"[stream {source.index}] processed={source.processed}")
+            sender_stats = (
+                source.metadata_sender.stats()
+                if source.metadata_sender is not None
+                and hasattr(source.metadata_sender, "stats")
+                else None
+            )
+            print(
+                f"[stream {source.index}] processed={source.processed} "
+                f"metadata_send_ok={source.metadata_send_ok} "
+                f"metadata_send_fail={source.metadata_send_fail} "
+                f"metadata_would_block={getattr(sender_stats, 'would_block', 0)} "
+                f"metadata_no_buffer_space={getattr(sender_stats, 'no_buffer_space', 0)} "
+                f"metadata_send_max_ns={getattr(sender_stats, 'max_send_duration_ns', 0)}",
+                flush=True,
+            )
         signal.signal(signal.SIGINT, previous_sigint)
 
 
@@ -1165,7 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"internal_queue_depth={cfg.internal_queue_depth}, "
                 f"inference_async={str(INFERENCE_ASYNC).lower()}, "
                 f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
-                f"fan_in_policy={cfg.fan_in_policy}, "
+                f"max_inflight_total={cfg.max_inflight_total}, "
                 f"insight_visible_streams={effective_insight_visible_streams(cfg)}, "
                 "decoder_admission=core)"
             )

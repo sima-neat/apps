@@ -42,10 +42,10 @@ runtime:
 
 inference:
   workers: 1
-  fan_in_policy: latest
   queue_depth: 16
   internal_queue_depth: 1
   max_inflight_per_stream: 1
+  max_inflight_total: 8
   min_score: 0.30
   nms_iou: 0.60
   max_detections: 50
@@ -56,5 +56,4 @@ output:
     video_port_base: 9000
     metadata_port_base: 9100
     max_visible_streams: 16
-    sync_delay_ms: 400
   video_enabled: true

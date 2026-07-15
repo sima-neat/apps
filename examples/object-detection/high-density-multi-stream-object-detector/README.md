@@ -22,14 +22,28 @@ It complements `multi-stream-object-detector`. That example demonstrates the
 general multi-stream API; this example demonstrates the tuned high-density
 pipeline.
 
-Each RTSP source is depacketized once. Encoded H.264 is delayed in bounded CPU
-memory for Insight while decoded frames enter the shared detector:
+Each RTSP source is depacketized once, then Core fuses two branches into the
+same source pipeline:
 
 ```text
 RTSP H.264
-  ├─ encoded AU ─> bounded synchronization delay ─> Insight video channel N
-  └─ decode ─> shared YOLO26 detector ─> PTS-matched metadata ─> channel N
+  ├─ latest encoded edge ─> VideoSender ─> Insight video channel N
+  └─ decode ─> shared YOLO26 detector ─> timestamped metadata ─> channel N
 ```
+
+The application expresses this fan-out with ordinary `Graph::connect()` and
+starts it with ordinary `Graph::build()`. Core fuses the eligible topology
+internally. `VideoSender` consumes the read-only H.264 access unit before the
+decoder, so the application does not open a second RTSP session, copy a decoded
+EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc.
+The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can
+drop stale encoded work without blocking that stream's decoder branch.
+
+Detection metadata includes the source `rtp_timestamp` and is sent with
+nonblocking UDP. A compatible Insight receiver holds complete encoded RTP
+frames for 400 ms and matches metadata to that source timestamp before WebRTC
+forwarding. Keep one active viewer while validating metadata, as described
+below.
 
 The three checked-in profiles use the same application and model:
 
@@ -54,7 +68,8 @@ The 48-stream profile running in Insight:
 - A Modalix DevKit with the decoder service running.
 - Insight reachable from the DevKit.
 - 16, 24, or 48 H.264 RTSP sources matching the selected profile.
-- Constant source frame rate, 1280×720 resolution, and no H.264 B-frames.
+- Constant source frame rate, 1280×720 resolution, no H.264 B-frames, and a
+  short, regular IDR interval. The validated sources use one IDR per second.
 - The `yolo26n-det-bf16-mla_tess-b1.tar.gz` model pack.
 
 The application starts all source graphs together. Start every RTSP publisher
@@ -110,7 +125,9 @@ ffprobe -v error \
 
 The result must report H.264, `1280x720`, the selected profile FPS, and no
 B-frames. Using a different source FPS changes the output rate and is not the
-documented profile.
+documented profile. The encoded Insight edge retains the latest complete access
+unit under congestion, so a one-second-or-shorter IDR interval bounds receiver
+recovery if an older access unit is replaced.
 
 ## Configure
 
@@ -118,6 +135,16 @@ Choose one config under `src/common/` and edit:
 
 - every entry under `streams`
 - `output.insight.host`
+
+`inference.max_inflight_per_stream` and `inference.max_inflight_total`
+bound raw decoder-backed frames admitted to the shared detector. The 16- and
+48-stream profiles use a total limit of eight; the 24-stream profile uses 16.
+The realtime mux retains only the latest pending frame for each stream.
+
+Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()`
+and `build()` select the eligible realtime fan-in lowering automatically.
+Video/metadata synchronization is performed by Insight from each payload's
+source RTP timestamp; there is no application-side video-delay setting.
 
 Do not change `input.width`, `input.height`, or `input.fps` unless the RTSP
 sources also change. `input.skip_rtsp_probe` is enabled, so those values are the
@@ -169,15 +196,21 @@ python3 "$APP_DIR/src/python/main.py" --config "$CONFIG"
 
 Stop the application with `Ctrl-C`.
 
+Use one active Insight viewer while validating metadata. Insight currently has
+a single-viewer metadata rendering limitation; multiple simultaneous viewers
+can make box delivery appear intermittent even when the application is
+advancing normally.
+
 ## Expected Result
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
 - Video and metadata advance at 25 FPS for 16 streams, 20 FPS for 24 streams,
   or 10 FPS for 48 streams.
-- Application liveness output shows every stream advancing.
-- No detection timeout, encoded queue overflow, or unresolved metadata epoch is
-  reported.
+- Final per-stream counters show every stream advancing; the application fails
+  with the missing channel IDs if a stream never starts or later stops.
+- No detection timeout or stalled channel is reported. Metadata sender counters
+  expose any nonblocking UDP drops without stalling inference.
 
 If channels do not start, confirm that every publisher was already reachable
 and that the configured source caps match the selected profile. Restart the
@@ -194,6 +227,56 @@ Run the configured unit coverage through the Apps test entrypoint:
 The 16-, 24-, and 48-stream runtime profiles require Modalix, live RTSP
 publishers, and Insight. Host unit tests do not prove their runtime FPS.
 
+### Insight visual and temporal gate
+
+`stress/insight_visual_gate.py` opens its own Chromium DevTools Protocol
+target and verifies that every requested tile has moving video, the expected
+decoded and metadata rates, visible/redrawing boxes, and forward video/metadata
+timing. Give it the identity manifest produced with the test media to also prove
+channel identity and presented-frame/metadata alignment.
+
+Generate marked, moving, no-B-frame fixtures before the gate. Select either the
+24×20 or 48×10 values:
+
+```bash
+APP_DIR=examples/object-detection/high-density-multi-stream-object-detector
+COUNT=24 FPS=20 PROFILE_TAG=24x20
+# For 48×10 instead: COUNT=48 FPS=10 PROFILE_TAG=48x10
+IDS=$(seq -s, 0 $((COUNT - 1)))
+
+python3 "$APP_DIR/stress/make_identity_fixtures.py" \
+  --input /path/to/real-moving-source.mp4 \
+  --output-dir "/path/to/identity-${PROFILE_TAG}" \
+  --channel-ids "$IDS" --width 1280 --height 720 --fps "$FPS" \
+  --duration-seconds 120 --overwrite
+```
+
+The generator writes one calibrated H.264 file per channel plus
+`identity-manifest.json`. It verifies the requested dimensions and rate, zero
+B-frames, unique channel markers, and an embedded forward frame counter.
+
+The gate must be the only active Insight viewer because Insight currently
+delivers a channel's metadata to one viewer. Start Chromium with remote
+debugging enabled (or forward its DevTools port), install `websocket-client`,
+then run, for example, the 24-stream gate:
+
+```bash
+python3 -m pip install websocket-client
+IDS=$(seq -s, 0 23)
+python3 "$APP_DIR/stress/insight_visual_gate.py" \
+  --cdp-host 127.0.0.1 --cdp-port 9222 \
+  --viewer-url "https://<insight-host>:8081/static/viewer.html?mode=light&src=$IDS" \
+  --channel-ids "$IDS" --layout 24 --width 1280 --height 720 \
+  --expected-fps 20 --minimum-fps-ratio 0.90 \
+  --wait-seconds 20 --sample-seconds 30 --temporal-samples 7 \
+  --identity-manifest /path/to/identity-manifest.json \
+  --output-prefix insight-24x20
+```
+
+The command exits nonzero on a failed check and writes a JSON report and a
+viewer screenshot at the selected output prefix. It closes its dedicated tab
+unless `--keep-target-on-success` is set.
+
 ## Source Files
 
 - C++ implementation: `src/cpp/main.cpp`
@@ -202,4 +285,6 @@ publishers, and Insight. Host unit tests do not prove their runtime FPS.
 - 24-stream profile: `src/common/config-24x720p20fps.yaml`
 - 48-stream profile: `src/common/config-48x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
+- Insight visual/temporal gate: `stress/insight_visual_gate.py`
+- Identity fixture generator: `stress/make_identity_fixtures.py`
 - Test scope: `tests/test-scope.yaml`

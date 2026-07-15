@@ -1,10 +1,13 @@
+#include "../../src/cpp/detection_watchdog.h"
 #include "support/testing/test_process.h"
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -105,8 +108,8 @@ bool test_validate_config_only_accepts_twenty_four_streams(const std::string& bi
                       "validate output reports nonblocking MLA inference") &&
       expect_contains(result.stdout_text, "max_inflight_per_stream=4",
                       "validate output reports the proven public per-stream credit default") &&
-      expect_contains(result.stdout_text, "fan_in_policy=latest",
-                      "validate output reports the portable default fan-in policy") &&
+      expect_contains(result.stdout_text, "max_inflight_total=8",
+                      "validate output reports the proven total credit default") &&
       expect_contains(result.stdout_text,
                       (config_path.parent_path() / kModelPath).lexically_normal().string(),
                       "relative model path resolves from the config directory") &&
@@ -125,13 +128,13 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
     int queue_depth;
     int internal_queue_depth;
     int max_inflight_per_stream;
-    const char* fan_in_policy;
+    int max_inflight_total;
   };
 
   constexpr std::array<ProfileExpectation, 3> profiles{{
-      {"config.yaml", 16, 25, 16, 1, 1, "latest"},
-      {"config-24x720p20fps.yaml", 24, 20, 4, 1, 4, "every_frame"},
-      {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, "latest"},
+      {"config.yaml", 16, 25, 16, 1, 1, 8},
+      {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 16},
+      {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, 8},
   }};
   const fs::path common_dir =
       "examples/object-detection/high-density-multi-stream-object-detector/src/common";
@@ -156,8 +159,9 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
                           "max_inflight_per_stream=" +
                               std::to_string(profile.max_inflight_per_stream),
                           label + " reports its per-stream credit");
-    ok &= expect_contains(result.stdout_text, std::string("fan_in_policy=") + profile.fan_in_policy,
-                          label + " reports its fan-in policy");
+    ok &= expect_contains(result.stdout_text,
+                          "max_inflight_total=" + std::to_string(profile.max_inflight_total),
+                          label + " reports its total credit");
     ok &= expect_contains(result.stdout_text,
                           "insight_visible_streams=" + std::to_string(profile.streams),
                           label + " publishes every configured stream");
@@ -362,40 +366,6 @@ bool test_validate_config_only_rejects_invalid_worker_count(const std::string& b
   return ok;
 }
 
-bool test_validate_config_only_checks_fan_in_policy(const std::string& binary) {
-  const fs::path every_frame_path =
-      write_config("test_validate_config_only_accepts_every_frame_fan_in",
-                   model_header() + "streams:\n" + stream_entries(4) +
-                       "inference:\n"
-                       "  workers: 1\n"
-                       "  fan_in_policy: every_frame\n"
-                       "output:\n"
-                       "  insight:\n"
-                       "    host: 127.0.0.1\n");
-  const auto every_frame = spawn_and_wait(
-      binary, {"--config", every_frame_path.string(), "--validate-config-only"}, 20000);
-  bool ok = expect_true(every_frame.exit_code == 0, "every-frame fan-in policy validates") &&
-            expect_contains(every_frame.stdout_text, "fan_in_policy=every_frame",
-                            "validate output reports every-frame fan-in");
-  remove_dir(every_frame_path.parent_path().string());
-
-  const fs::path invalid_path = write_config("test_validate_config_only_rejects_invalid_fan_in",
-                                             model_header() + "streams:\n" + stream_entries(4) +
-                                                 "inference:\n"
-                                                 "  workers: 1\n"
-                                                 "  fan_in_policy: lossy_magic\n"
-                                                 "output:\n"
-                                                 "  insight:\n"
-                                                 "    host: 127.0.0.1\n");
-  const auto invalid =
-      spawn_and_wait(binary, {"--config", invalid_path.string(), "--validate-config-only"}, 20000);
-  ok &= expect_true(invalid.exit_code == 1, "invalid fan-in policy is rejected") &&
-        expect_contains(invalid.stderr_text, "fan_in_policy must be one of: latest, every_frame",
-                        "invalid fan-in error lists the supported portable policies");
-  remove_dir(invalid_path.parent_path().string());
-  return ok;
-}
-
 bool test_validate_config_only_checks_internal_queue_depth(const std::string& binary) {
   const fs::path disabled_path =
       write_config("test_validate_config_only_accepts_disabled_internal_queue",
@@ -435,12 +405,13 @@ bool test_validate_config_only_checks_internal_queue_depth(const std::string& bi
   return ok;
 }
 
-bool test_validate_config_only_checks_max_inflight_per_stream(const std::string& binary) {
+bool test_validate_config_only_checks_max_inflight_limits(const std::string& binary) {
   const fs::path tuned_path = write_config("test_validate_config_only_accepts_tuned_max_inflight",
                                            model_header() + "streams:\n" + stream_entries(4) +
                                                "inference:\n"
                                                "  workers: 1\n"
                                                "  max_inflight_per_stream: 4\n"
+                                               "  max_inflight_total: 12\n"
                                                "output:\n"
                                                "  insight:\n"
                                                "    host: 127.0.0.1\n");
@@ -448,7 +419,9 @@ bool test_validate_config_only_checks_max_inflight_per_stream(const std::string&
       spawn_and_wait(binary, {"--config", tuned_path.string(), "--validate-config-only"}, 20000);
   bool ok = expect_true(tuned.exit_code == 0, "public per-stream credit can be tuned") &&
             expect_contains(tuned.stdout_text, "max_inflight_per_stream=4",
-                            "validate output reports tuned per-stream credit");
+                            "validate output reports tuned per-stream credit") &&
+            expect_contains(tuned.stdout_text, "max_inflight_total=12",
+                            "validate output reports tuned total credit");
   remove_dir(tuned_path.parent_path().string());
 
   const fs::path invalid_path =
@@ -466,6 +439,22 @@ bool test_validate_config_only_checks_max_inflight_per_stream(const std::string&
         expect_contains(invalid.stderr_text, "max_inflight_per_stream must be > 0",
                         "per-stream credit validation identifies the bad setting");
   remove_dir(invalid_path.parent_path().string());
+
+  const fs::path invalid_total_path =
+      write_config("test_validate_config_only_rejects_invalid_max_inflight_total",
+                   model_header() + "streams:\n" + stream_entries(4) +
+                       "inference:\n"
+                       "  workers: 1\n"
+                       "  max_inflight_total: 0\n"
+                       "output:\n"
+                       "  insight:\n"
+                       "    host: 127.0.0.1\n");
+  const auto invalid_total = spawn_and_wait(
+      binary, {"--config", invalid_total_path.string(), "--validate-config-only"}, 20000);
+  ok &= expect_true(invalid_total.exit_code == 1, "zero total credit is rejected") &&
+        expect_contains(invalid_total.stderr_text, "max_inflight_total must be > 0",
+                        "total credit validation identifies the bad setting");
+  remove_dir(invalid_total_path.parent_path().string());
   return ok;
 }
 
@@ -506,6 +495,28 @@ bool test_validate_config_only_rejects_fps_scheduler_knob(const std::string& bin
   return ok;
 }
 
+bool test_validate_config_only_rejects_legacy_fan_in_policy(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_rejects_legacy_fan_in_policy",
+                   model_header() + "streams:\n" + stream_entries(4) +
+                       "inference:\n"
+                       "  workers: 1\n"
+                       "  fan_in_policy: realtime-latest-by-stream\n"
+                       "output:\n"
+                       "  insight:\n"
+                       "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 1, "legacy fan-in policy is rejected") &&
+                  expect_contains(result.stderr_text, "inference.fan_in_policy was removed",
+                                  "fan-in error identifies the removed setting") &&
+                  expect_contains(result.stderr_text, "ordinary connect()/build()",
+                                  "fan-in error explains automatic lowering");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 bool test_validate_config_only_rejects_invalid_decoder_tuning(const std::string& binary) {
   const fs::path config_path =
       write_config("test_validate_config_only_rejects_invalid_decoder_tuning",
@@ -525,6 +536,32 @@ bool test_validate_config_only_rejects_invalid_decoder_tuning(const std::string&
                   expect_contains(result.stderr_text, "input.decoder_tuning",
                                   "invalid decoder tuning error mentions setting");
   remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_detection_watchdog_is_per_stream() {
+  using Watchdog = high_density::DetectionWatchdog;
+  const auto start = Watchdog::TimePoint{};
+  Watchdog watchdog(/*stream_count=*/3, std::chrono::milliseconds(100),
+                    std::chrono::milliseconds(20), start);
+
+  bool ok = true;
+  watchdog.observe(0, start + std::chrono::milliseconds(5));
+  watchdog.observe(2, start + std::chrono::milliseconds(10));
+  ok &= expect_true(watchdog.expired_streams(start + std::chrono::milliseconds(99)).empty(),
+                    "startup watchdog waits for the configured all-stream deadline");
+  ok &= expect_true(watchdog.expired_streams(start + std::chrono::milliseconds(100)) ==
+                        std::vector<std::size_t>{1},
+                    "startup watchdog reports the specific stream that never produced a detection");
+
+  watchdog.observe(1, start + std::chrono::milliseconds(101));
+  watchdog.observe(0, start + std::chrono::milliseconds(105));
+  watchdog.observe(2, start + std::chrono::milliseconds(105));
+  ok &= expect_true(watchdog.startup_complete(),
+                    "watchdog enters cadence mode only after every stream has started");
+  ok &= expect_true(watchdog.expired_streams(start + std::chrono::milliseconds(122)) ==
+                        std::vector<std::size_t>{1},
+                    "a healthy aggregate cannot hide one stream whose detections stopped");
   return ok;
 }
 
@@ -552,11 +589,12 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_insight_visible_limit_above_stream_count(binary);
   ok &= test_validate_config_only_rejects_invalid_worker_count(binary);
-  ok &= test_validate_config_only_checks_fan_in_policy(binary);
   ok &= test_validate_config_only_checks_internal_queue_depth(binary);
-  ok &= test_validate_config_only_checks_max_inflight_per_stream(binary);
+  ok &= test_validate_config_only_checks_max_inflight_limits(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_fps_scheduler_knob(binary);
+  ok &= test_validate_config_only_rejects_legacy_fan_in_policy(binary);
   ok &= test_validate_config_only_rejects_invalid_decoder_tuning(binary);
+  ok &= test_detection_watchdog_is_per_stream();
   return ok ? 0 : 1;
 }

@@ -1,4 +1,4 @@
-# Profile: 24 x 720p @ 20 FPS (q4/i1/m4).
+# Profile: 24 x 720p @ 20 FPS (q4/i2/m4).
 model:                       # Detector model selection.
   path: yolo26n-det-bf16-mla_tess-b1.tar.gz # Resolved relative to this config file.
   labels: coco_label.txt      # Resolved relative to this config file.
@@ -49,10 +49,10 @@ runtime:                     # Runtime and profiling settings.
 
 inference:                   # Detection controls.
   workers: 1                 # One shared detector graph avoids dispatcher/resource contention.
-  fan_in_policy: every_frame # One pending frame/stream with bounded producer backpressure.
   queue_depth: 4             # Terminal detection output and Run queue depth.
-  internal_queue_depth: 1    # One global model-stage handoff; not a per-camera decoded queue.
+  internal_queue_depth: 2    # Two global model-stage handoffs; not per-camera decoded queues.
   max_inflight_per_stream: 4 # Proven per-stream mux credit for approximately 20 detections/s.
+  max_inflight_total: 16     # Proven total raw-frame credit across the shared detector.
   min_score: 0.30            # Detection score threshold used by the validated Insight run.
   nms_iou: 0.60              # NMS IOU threshold.
   max_detections: 50         # Max detections to keep per frame after NMS.
@@ -63,5 +63,4 @@ output:                      # Insight video and metadata output.
     video_port_base: 9000    # Base UDP port for video channels.
     metadata_port_base: 9100 # Base UDP port for metadata channels.
     max_visible_streams: 24  # Publish all 24 video and metadata channels to Insight.
-    sync_delay_ms: 400       # CPU-side H.264 delay; no additional EV74 frame queue is allocated.
   video_enabled: true        # Disable to publish metadata only.
