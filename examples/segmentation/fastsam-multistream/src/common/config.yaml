@@ -13,7 +13,6 @@ clip:                        # MobileCLIP2-S0 text-prompt matching.
   min_score: 0.3             # Drop the match unless the best CLIP score clears this (0 = keep any).
   max_box_frac: 0.8          # Drop background-like masks spanning more of the frame w/h than this.
   max_crops: 16              # Score only the K highest-objectness masks (0 = all). Bounds CLIP cost.
-  crop_workers: 14           # Parallel crop-prep threads (shared pool). 0 = built-in default.
   interval: 4                # Run CLIP every N frames; IoU-track in between. 1 = every frame.
   track_iou: 0.3             # Min IoU to keep following a mask between CLIP runs.
 

@@ -16,7 +16,6 @@ struct AppConfig {
   double clip_max_box_frac = 0.8;
   int clip_max_crops = 0;
   double clip_min_score = 0.65;
-  int clip_crop_workers = 0;
   int clip_interval = 1;
   double track_iou = 0.3;
   std::vector<std::string> rtsp_urls;

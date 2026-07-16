@@ -97,7 +97,6 @@ AppConfig load_config(const std::string& path) {
   cfg.clip_max_crops = raw.int_or("clip.max_crops", 0);
   cfg.clip_max_box_frac = raw.double_or("clip.max_box_frac", 0.8);
   cfg.clip_min_score = raw.double_or("clip.min_score", 0.65);
-  cfg.clip_crop_workers = raw.int_or("clip.crop_workers", 0);
   cfg.clip_interval = raw.int_or("clip.interval", 1);
   cfg.track_iou = raw.double_or("clip.track_iou", 0.3);
   cfg.rtsp_urls = parse_rtsp_urls(path);
