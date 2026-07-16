@@ -7,7 +7,7 @@ clip:                        # MobileCLIP2-S0 text-prompt matching.
   image_encoder_path: /workspace/projects/fastsam-modalix/model_preparation/mobileclip/image_encoder/models/sima/compiled_MobileCLIP2-S0_image_encoder_reparam/MobileCLIP2-S0_image_encoder_reparam_mpk.tar.gz
   text_encoder_path:  /workspace/projects/fastsam-modalix/model_preparation/mobileclip/text_encoder/models/sima/compiled_MobileCLIP2-S0_text/MobileCLIP2-S0_text_mpk.tar.gz
   text_host_consts:   /workspace/projects/fastsam-modalix/model_preparation/mobileclip/text_encoder/models/onnx/MobileCLIP2-S0_text_host_consts.npz
-  # C++ app only: precomputed [M,512] text features (write with tools/precompute_text_features.py).
+  # C++ app only: precomputed [M,512] text features (write with src/tools/precompute_text_features.py).
   # The Python app encodes the prompt itself and ignores this key.
   text_features_path: /workspace/projects/apps/examples/segmentation/fastsam-multistream/src/common/text_features.npy
   min_score: 0.3             # Drop the match unless the best CLIP score clears this (0 = keep any).

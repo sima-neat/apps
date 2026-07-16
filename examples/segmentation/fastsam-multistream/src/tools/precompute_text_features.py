@@ -1,6 +1,6 @@
 """Precompute MobileCLIP text features for the C++ app.
 
-    python3 tools/precompute_text_features.py [config.yaml] [--out features.npy]
+    python3 src/tools/precompute_text_features.py [config.yaml] [--out features.npy]
 """
 import argparse
 import sys
@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-SRC_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = Path(__file__).resolve().parents[1]
 SRC_PYTHON = SRC_ROOT / "python"
 sys.path.insert(0, str(SRC_PYTHON))
 import config

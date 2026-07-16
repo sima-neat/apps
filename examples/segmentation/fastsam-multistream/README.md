@@ -153,7 +153,7 @@ The C++ app reads precomputed `[M,512]` text features instead of running the tex
 them whenever you change `prompt.text` (runs on the board, where pyneat + the MLA are available):
 
 ```bash
-python3 examples/segmentation/fastsam-multistream/src/cpp/tools/precompute_text_features.py \
+python3 examples/segmentation/fastsam-multistream/src/tools/precompute_text_features.py \
   examples/segmentation/fastsam-multistream/src/common/config.yaml
 # writes clip.text_features_path (default src/common/text_features.npy)
 ```
@@ -177,9 +177,9 @@ and drops the rest (watch `drops=` in the profile line).
 ## Source Files
 - C++ source: `src/cpp/main.cpp`
 - C++ pipeline/model helpers: `src/cpp/pipeline.cpp`, `src/cpp/fastsam.cpp`, `src/cpp/config.cpp`
-- C++ CLIP retrieval: `src/cpp/clip/image_encoder.cpp`, `src/cpp/clip/crop_pool.cpp`
+- C++ CLIP retrieval: `src/cpp/clip/image_encoder.cpp`
 - C++ tensor helpers: `src/cpp/utils/tensors.cpp`
-- C++ text-feature tool: `src/cpp/tools/precompute_text_features.py`
+- Text-feature tool (for the C++ app): `src/tools/precompute_text_features.py`
 - Python source: `src/python/main.py`
 - Python pipeline/model helpers: `src/python/pipeline.py`, `src/python/fastsam.py`, `src/python/config.py`, `src/python/profiling.py`
 - Python CLIP retrieval + text encode: `src/python/clip/` (`image_encoder.py`, `crop_pool.py`, `text_encoder.py`, `tokenizer.py`)
