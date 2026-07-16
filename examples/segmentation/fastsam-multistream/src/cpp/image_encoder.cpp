@@ -1,6 +1,6 @@
-#include "clip/image_encoder.h"
+#include "image_encoder.h"
 
-#include "utils/tensors.h"
+#include "support/runtime/example_utils.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -132,7 +132,7 @@ std::vector<std::vector<float>> ImageEncoder::encode(const std::vector<Fastsam::
     if (out.empty()) {
       throw std::runtime_error("image encoder returned no output");
     }
-    const auto vals = app::tensor_to_floats(out.front());
+    const auto vals = sima_examples::tensor_to_floats(out.front());
     const int dim = static_cast<int>(vals.size() / static_cast<std::size_t>(kClipBatch));
     for (int i = 0; i < n; ++i) {
       feats.emplace_back(vals.begin() + static_cast<std::size_t>(i) * dim,

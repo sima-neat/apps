@@ -38,8 +38,7 @@ add_library(fastsam_multistream_lib STATIC
   "${CMAKE_CURRENT_LIST_DIR}/config.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/fastsam.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/pipeline.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/clip/image_encoder.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/utils/tensors.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/image_encoder.cpp"
 )
 
 target_link_libraries(fastsam_multistream_lib

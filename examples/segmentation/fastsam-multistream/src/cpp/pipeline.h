@@ -1,15 +1,15 @@
 #pragma once
 
-#include "clip/image_encoder.h"
 #include "config.h"
 #include "fastsam.h"
+#include "image_encoder.h"
 #include "neat.h"
 #include "profiling.h"
-#include "utils/types.h"
 
 #include <nodes/io/MetadataSender.h>
 #include <opencv2/core.hpp>
 
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -18,6 +18,23 @@
 #include <vector>
 
 namespace app {
+
+struct StreamInfo {
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+};
+
+struct Frame {
+  cv::Mat rgb;
+  std::int64_t pts_ns = -1;
+  std::int64_t frame_id = -1;
+};
+
+struct Segment {
+  float confidence = 0.0f;
+  std::vector<cv::Point> polygon;  // frame pixels
+};
 
 simaai::neat::RunOptions make_run_options(int queue_depth, int build_timeout_ms = 30000);
 

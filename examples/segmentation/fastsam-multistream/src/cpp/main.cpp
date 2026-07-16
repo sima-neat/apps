@@ -1,9 +1,9 @@
 // FastSAM (+ MobileCLIP text prompt) across multiple RTSP cameras on one Modalix MLA.
-#include "clip/image_encoder.h"
-#include "clip/text_features.h"
 #include "config.h"
 #include "fastsam.h"
+#include "image_encoder.h"
 #include "pipeline.h"
+#include "text_features.h"
 #include "support/runtime/config_utils.h"
 
 #include <opencv2/core.hpp>

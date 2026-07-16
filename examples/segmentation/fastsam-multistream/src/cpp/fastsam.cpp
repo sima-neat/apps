@@ -1,7 +1,5 @@
 #include "fastsam.h"
 
-#include "utils/tensors.h"
-
 #include <pipeline/DetectionTypes.h>
 
 #include <opencv2/imgproc.hpp>
@@ -9,8 +7,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace neat = simaai::neat;
 
@@ -19,6 +19,25 @@ namespace {
 
 constexpr double kMaskStride = 4.0;  // proto grid is stride-4, so one mask cell = 4 model px
 constexpr int kProtoMaskSide = 160;  // proto-mask grid side (infer_size / kMaskStride)
+
+std::vector<float> tensor_to_floats(const neat::Tensor& tensor) {
+  if (tensor.dtype != neat::TensorDType::Float32) {
+    throw std::runtime_error("tensor_to_floats: expected Float32 tensor");
+  }
+  const auto bytes = tensor.copy_dense_bytes_tight();
+  std::vector<float> values(bytes.size() / sizeof(float));
+  if (!values.empty()) {
+    std::memcpy(values.data(), bytes.data(), bytes.size());
+  }
+  return values;
+}
+
+std::vector<std::uint8_t> tensor_to_u8(const neat::Tensor& tensor) {
+  if (tensor.dtype != neat::TensorDType::UInt8) {
+    throw std::runtime_error("tensor_to_u8: expected UInt8 tensor");
+  }
+  return tensor.copy_dense_bytes_tight();
+}
 
 neat::Tensor ev74_input_tensor(const cv::Mat& rgb) {
   return neat::Tensor::from_cv_mat(rgb, neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74);
