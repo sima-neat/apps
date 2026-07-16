@@ -19,12 +19,9 @@ PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
 MODEL_PATH = "assets/models/yolo26n-det-int8-b1.tar.gz"
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
-STRESS_DIR = EXAMPLE_DIR / "stress"
 
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
-if str(STRESS_DIR) not in sys.path:
-    sys.path.insert(0, str(STRESS_DIR))
 
 pytestmark = pytest.mark.unit
 
@@ -963,116 +960,6 @@ class TestRuntimeDelivery:
         assert video_link.max_inflight_per_stream == -1
         assert video_link.max_inflight_total == -1
         assert source.video_port == 9000
-
-
-class TestInsightVisualGate:
-    @staticmethod
-    def metadata_sample(
-        count,
-        *,
-        unique_count=None,
-        duplicate_count=0,
-        unidentified_count=0,
-    ):
-        unique_count = count if unique_count is None else unique_count
-        return {
-            "metadata": {
-                "count": count,
-                "uniqueCount": unique_count,
-                "duplicateCount": duplicate_count,
-                "unidentifiedCount": unidentified_count,
-                "uniquePtsCount": unique_count,
-                "uniqueFrameIdCount": unique_count,
-                "uniqueRtpTimestampCount": unique_count,
-            }
-        }
-
-    @pytest.mark.parametrize(("expected_fps", "step"), [(20.0, 100), (10.0, 50)])
-    def test_metadata_cadence_accepts_profile_rate(self, expected_fps, step):
-        from insight_visual_gate import metadata_cadence
-
-        samples = [
-            self.metadata_sample(count)
-            for count in range(100, 100 + 7 * step, step)
-        ]
-
-        result = metadata_cadence(samples, 30.0, expected_fps, 0.9)
-
-        assert result["count_delta"] == 6 * step
-        assert result["fps"] == expected_fps
-        assert result["minimum_messages"] == expected_fps * 30.0 * 0.9
-        assert result["passed"] is True
-
-    def test_metadata_cadence_rejects_duplicate_transport_messages(self):
-        from insight_visual_gate import metadata_cadence
-
-        samples = [
-            self.metadata_sample(100, unique_count=100, duplicate_count=0),
-            self.metadata_sample(700, unique_count=400, duplicate_count=300),
-        ]
-
-        result = metadata_cadence(samples, 30.0, 20.0, 0.9)
-
-        assert result["transport_count_delta"] == 600
-        assert result["transport_fps"] == 20.0
-        assert result["unique_count_delta"] == 300
-        assert result["unique_fps"] == 10.0
-        assert result["duplicate_count_delta"] == 300
-        assert result["duplicate_fps"] == 10.0
-        assert result["counters_consistent"] is True
-        assert result["passed"] is False
-
-    def test_metadata_cadence_rejects_sparse_or_missing_updates(self):
-        from insight_visual_gate import metadata_cadence
-
-        sparse = [
-            self.metadata_sample(count)
-            for count in (100, 101, 102, 103, 104, 105, 106)
-        ]
-
-        sparse_result = metadata_cadence(sparse, 30.0, 20.0, 0.9)
-        missing_result = metadata_cadence([{}, {}], 30.0, 20.0, 0.9)
-
-        assert sparse_result["count_delta"] == 6
-        assert sparse_result["fps"] == 0.2
-        assert sparse_result["passed"] is False
-        assert missing_result["count_delta"] is None
-        assert missing_result["fps"] is None
-        assert missing_result["passed"] is False
-
-    @pytest.mark.parametrize(
-        (
-            "alpha_samples",
-            "present",
-            "visibility_count",
-            "visibility_ratio",
-            "stable_at_samples",
-        ),
-        [
-            ([4, 2, 0], True, 2, 2 / 3, False),
-            ([0, 0, 0], False, 0, 0.0, False),
-            ([1, 8, 3], True, 3, 1.0, True),
-        ],
-    )
-    def test_overlay_visibility_uses_every_temporal_sample(
-        self,
-        alpha_samples,
-        present,
-        visibility_count,
-        visibility_ratio,
-        stable_at_samples,
-    ):
-        from insight_visual_gate import overlay_visibility
-
-        result = overlay_visibility(
-            [{"overlayAlphaSamples": value} for value in alpha_samples]
-        )
-
-        assert result["present"] is present
-        assert result["visible_at_samples"] == [value > 0 for value in alpha_samples]
-        assert result["visibility_count"] == visibility_count
-        assert result["visibility_ratio"] == pytest.approx(visibility_ratio)
-        assert result["stable_at_samples"] is stable_at_samples
 
 
 class FakeMetadataSender:

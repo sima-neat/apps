@@ -228,56 +228,6 @@ Run the configured unit coverage through the Apps test entrypoint:
 The 16-, 24-, and 48-stream runtime profiles require Modalix, live RTSP
 publishers, and Insight. Host unit tests do not prove their runtime FPS.
 
-### Insight visual and temporal gate
-
-`stress/insight_visual_gate.py` opens its own Chromium DevTools Protocol
-target and verifies that every requested tile has moving video, the expected
-decoded and metadata rates, visible/redrawing boxes, and forward video/metadata
-timing. Give it the identity manifest produced with the test media to also prove
-channel identity and presented-frame/metadata alignment.
-
-Generate marked, moving, no-B-frame fixtures before the gate. Select either the
-24×20 or 48×10 values:
-
-```bash
-APP_DIR=examples/object-detection/high-density-multi-stream-object-detector
-COUNT=24 FPS=20 PROFILE_TAG=24x20
-# For 48×10 instead: COUNT=48 FPS=10 PROFILE_TAG=48x10
-IDS=$(seq -s, 0 $((COUNT - 1)))
-
-python3 "$APP_DIR/stress/make_identity_fixtures.py" \
-  --input /path/to/real-moving-source.mp4 \
-  --output-dir "/path/to/identity-${PROFILE_TAG}" \
-  --channel-ids "$IDS" --width 1280 --height 720 --fps "$FPS" \
-  --duration-seconds 120 --overwrite
-```
-
-The generator writes one calibrated H.264 file per channel plus
-`identity-manifest.json`. It verifies the requested dimensions and rate, zero
-B-frames, unique channel markers, and an embedded forward frame counter.
-
-The gate must be the only active Insight viewer because Insight currently
-delivers a channel's metadata to one viewer. Start Chromium with remote
-debugging enabled (or forward its DevTools port), install `websocket-client`,
-then run, for example, the 24-stream gate:
-
-```bash
-python3 -m pip install websocket-client
-IDS=$(seq -s, 0 23)
-python3 "$APP_DIR/stress/insight_visual_gate.py" \
-  --cdp-host 127.0.0.1 --cdp-port 9222 \
-  --viewer-url "https://<insight-host>:8081/static/viewer.html?mode=light&src=$IDS" \
-  --channel-ids "$IDS" --layout 24 --width 1280 --height 720 \
-  --expected-fps 20 --minimum-fps-ratio 0.90 \
-  --wait-seconds 20 --sample-seconds 30 --temporal-samples 7 \
-  --identity-manifest /path/to/identity-manifest.json \
-  --output-prefix insight-24x20
-```
-
-The command exits nonzero on a failed check and writes a JSON report and a
-viewer screenshot at the selected output prefix. It closes its dedicated tab
-unless `--keep-target-on-success` is set.
-
 ## Source Files
 
 - C++ implementation: `src/cpp/main.cpp`
@@ -286,6 +236,4 @@ unless `--keep-target-on-success` is set.
 - 24-stream profile: `src/common/config-24x720p20fps.yaml`
 - 48-stream profile: `src/common/config-48x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
-- Insight visual/temporal gate: `stress/insight_visual_gate.py`
-- Identity fixture generator: `stress/make_identity_fixtures.py`
 - Test scope: `tests/test-scope.yaml`
