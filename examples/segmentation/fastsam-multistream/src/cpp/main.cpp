@@ -15,7 +15,6 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -23,47 +22,10 @@ namespace {
 volatile std::sig_atomic_t g_stop = 0;
 void on_sigint(int) { g_stop = 1; }
 
-void run_source(app::Stream& stream, const volatile std::sig_atomic_t* stop) {
-  try {
-    while (*stop == 0) {
-      if (stream.pull_frame() == app::Stream::Pull::Closed) {
-        break;
-      }
-    }
-  } catch (const std::exception& ex) {
-    std::cerr << "stream " << stream.index() << ": " << ex.what() << "\n";
-    g_stop = 1;
-  }
-  stream.close_source();
-}
-
-// Round-robin the detector loop over every stream
-void run_detector(std::vector<std::unique_ptr<app::Stream>>& streams, const app::AppConfig& cfg,
-                  const std::string& label, app::Fastsam& fastsam,
-                  app::clip::ImageEncoder& image_encoder,
-                  const std::vector<std::vector<float>>& text_features,
-                  const volatile std::sig_atomic_t* stop) {
-  while (*stop == 0) {
-    bool did_work = false;
-    bool all_done = true;
-    for (auto& sp : streams) {
-      app::Stream& stream = *sp;
-      if (stream.frame_limit_reached(cfg) || stream.done()) {
-        continue;
-      }
-      all_done = false;
-      did_work |= stream.process(cfg, fastsam, image_encoder, text_features, label);
-    }
-    if (all_done) { break; }
-    if (!did_work) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
-  }
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
   std::signal(SIGINT, on_sigint);
-  cv::setNumThreads(1);
 
   try {
     // Load the config.
@@ -100,9 +62,8 @@ int main(int argc, char** argv) {
     std::cout << "[build] FastSAM runner (" << max_w << "x" << max_h << ")" << std::endl;
 
     // Build the CLIP image encoder.
-    auto image_encoder = std::make_unique<app::clip::ImageEncoder>(cfg.clip_image_path, run_opt,
-                                                                   cfg.clip_crop_workers);
-    std::cout << "[build] CLIP image encoder (crop workers=" << image_encoder->crop_workers() << ")"
+    auto image_encoder = std::make_unique<app::clip::ImageEncoder>(cfg.clip_image_path, run_opt);
+    std::cout << "[build] CLIP image encoder (OpenCV threads=" << cv::getNumThreads() << ")"
               << std::endl;
 
     // Create and start every stream.
@@ -116,15 +77,40 @@ int main(int argc, char** argv) {
       s->start(cfg);
     }
 
-    // Spawn one frame-reader thread per stream.
+    // Spawn one frame-reader thread per stream: pull frames until it closes or we stop.
     std::vector<std::thread> source_threads;
     source_threads.reserve(streams.size());
     for (auto& s : streams) {
-      source_threads.emplace_back(run_source, std::ref(*s), &g_stop);
+      source_threads.emplace_back([&stream = *s] {
+        try {
+          while (g_stop == 0) {
+            if (stream.pull_frame() == app::Stream::Pull::Closed) {
+              break;
+            }
+          }
+        } catch (const std::exception& ex) {
+          std::cerr << "stream " << stream.index() << ": " << ex.what() << "\n";
+          g_stop = 1;
+        }
+        stream.close_source();
+      });
     }
 
-    // Run the detector until every stream is finished.
-    run_detector(streams, cfg, label, *fastsam, *image_encoder, text_features, &g_stop);
+    // Run the detector round-robin over every stream until all are finished.
+    while (g_stop == 0) {
+      bool did_work = false;
+      bool all_done = true;
+      for (auto& sp : streams) {
+        app::Stream& stream = *sp;
+        if (stream.frame_limit_reached(cfg) || stream.done()) {
+          continue;
+        }
+        all_done = false;
+        did_work |= stream.process(cfg, *fastsam, *image_encoder, text_features, label);
+      }
+      if (all_done) { break; }
+      if (!did_work) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+    }
 
     // Stop and join the frame-reader threads.
     g_stop = 1;
