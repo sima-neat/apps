@@ -361,8 +361,8 @@ cv::Mat Segmenter::clip_select(const AppConfig& cfg, clip::ImageEncoder& image_e
       candidates.emplace_back(i, std::move(*crop));
     }
   }
-  auto [keep, ranked] = image_encoder.best_match(candidates, text_features, cfg.clip_min_score,
-                                                 cfg.timeout_ms);
+  const auto keep = image_encoder.best_match(candidates, text_features, cfg.clip_min_score,
+                                             cfg.timeout_ms);
   if (keep.empty()) {
     return cv::Mat();
   }

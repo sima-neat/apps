@@ -2,6 +2,8 @@
 
 #include "utils/tensors.h"
 
+#include <opencv2/imgproc.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -18,6 +20,29 @@ neat::Tensor make_input_tensor(const std::vector<float>& stack) {
                                    neat::TensorMemory::EV74);
 }
 
+// Resize + centre-crop window_rgb to px*px, mask the background out to bg, write float32 into dst.
+void crop_into(cv::Mat& dst, const cv::Mat& window_rgb, const cv::Mat& submask,
+               int px = kClipImagePx, float bg = 1.0f) {
+  const int h = window_rgb.rows;
+  const int w = window_rgb.cols;
+  const double scale = static_cast<double>(px) / std::min(h, w);
+  const int nw = std::max(px, static_cast<int>(std::lround(w * scale)));
+  const int nh = std::max(px, static_cast<int>(std::lround(h * scale)));
+  const int interp = (scale < 1.0) ? cv::INTER_AREA : cv::INTER_LINEAR;
+
+  cv::Mat resized;
+  cv::resize(window_rgb, resized, cv::Size(nw, nh), 0, 0, interp);
+  cv::Mat keep_full;
+  cv::resize(submask, keep_full, cv::Size(nw, nh), 0, 0, cv::INTER_NEAREST);
+
+  const int y0 = (nh - px) / 2;
+  const int x0 = (nw - px) / 2;
+  const cv::Rect roi(x0, y0, px, px);
+
+  resized(roi).convertTo(dst, CV_32FC3, 1.0 / 255.0);
+  dst.setTo(cv::Scalar(bg, bg, bg), keep_full(roi) == 0);
+}
+
 // Softmax over 100 * cosine(image, text[0]) -- the single-query CLIP retrieval score.
 std::vector<double> retrieve_scores(const std::vector<std::vector<float>>& image_features,
                                     const std::vector<std::vector<float>>& text_features) {
@@ -27,33 +52,29 @@ std::vector<double> retrieve_scores(const std::vector<std::vector<float>>& image
     return probs;
   }
 
-  // Normalize the (single) query -- column 0 of the text features, matching retrieval.py.
   const auto& query = text_features.front();
   double qnorm = 0.0;
   for (const float v : query) {
     qnorm += static_cast<double>(v) * v;
   }
   qnorm = std::sqrt(qnorm);
-  std::vector<double> q(query.size(), 0.0);
-  for (std::size_t k = 0; k < query.size(); ++k) {
-    q[k] = qnorm > 0.0 ? query[k] / qnorm : 0.0;
+  if (qnorm == 0.0) {
+    return probs;
   }
 
   std::vector<double> logits(n, 0.0);
   double max_logit = -std::numeric_limits<double>::infinity();
   for (std::size_t i = 0; i < n; ++i) {
     const auto& im = image_features[i];
+    const std::size_t dim = std::min(im.size(), query.size());
+    double dot = 0.0;
     double inorm = 0.0;
-    for (const float v : im) {
-      inorm += static_cast<double>(v) * v;
+    for (std::size_t k = 0; k < dim; ++k) {
+      dot += static_cast<double>(im[k]) * query[k];
+      inorm += static_cast<double>(im[k]) * im[k];
     }
     inorm = std::sqrt(inorm);
-    double dot = 0.0;
-    const std::size_t dim = std::min(im.size(), q.size());
-    for (std::size_t k = 0; k < dim; ++k) {
-      dot += (inorm > 0.0 ? im[k] / inorm : 0.0) * q[k];
-    }
-    logits[i] = 100.0 * dot;
+    logits[i] = inorm > 0.0 ? 100.0 * dot / (inorm * qnorm) : 0.0;
     max_logit = std::max(max_logit, logits[i]);
   }
 
@@ -72,13 +93,11 @@ std::vector<double> retrieve_scores(const std::vector<std::vector<float>>& image
 
 }  // namespace
 
-ImageEncoder::ImageEncoder(const std::string& model_path, const neat::RunOptions& run_opt,
-                           int crop_workers)
+ImageEncoder::ImageEncoder(const std::string& model_path, const neat::RunOptions& run_opt)
     : stack_(static_cast<std::size_t>(kClipBatch) * kClipImagePx * kClipImagePx * 3, 0.0f),
       model_(std::make_unique<neat::Model>(model_path)),
       runner_(model_->build(neat::TensorList{make_input_tensor(stack_)},
-                            neat::Model::RouteOptions{}, run_opt)),
-      crop_pool_(crop_workers) {
+                            neat::Model::RouteOptions{}, run_opt)) {
   const std::size_t img = static_cast<std::size_t>(kClipImagePx) * kClipImagePx * 3;
   rows_.reserve(kClipBatch);
   for (int i = 0; i < kClipBatch; ++i) {
@@ -100,10 +119,12 @@ std::vector<std::vector<float>> ImageEncoder::encode(const std::vector<Fastsam::
     if (n < kClipBatch) {
       std::fill(stack_.begin() + static_cast<std::size_t>(n) * img, stack_.end(), 0.0f);
     }
-    // Crops within a batch are prepped in parallel across the shared pool.
-    crop_pool_.parallel_for(n, [&](int i) {
-      const Fastsam::Crop& crop = crops[start + static_cast<std::size_t>(i)];
-      crop_into(rows_[i], crop.window, crop.submask);
+    // Crops within a batch are prepped in parallel over OpenCV's thread pool.
+    cv::parallel_for_(cv::Range(0, n), [&](const cv::Range& range) {
+      for (int i = range.start; i < range.end; ++i) {
+        const Fastsam::Crop& crop = crops[start + static_cast<std::size_t>(i)];
+        crop_into(rows_[i], crop.window, crop.submask);
+      }
     });
 
     const neat::Tensor inp = make_input_tensor(stack_);
@@ -126,12 +147,12 @@ void ImageEncoder::close() {
   runner_.close();
 }
 
-std::pair<std::vector<int>, std::vector<Ranked>>
+std::vector<int>
 ImageEncoder::best_match(const std::vector<std::pair<int, Fastsam::Crop>>& candidates,
                          const std::vector<std::vector<float>>& text_features, double min_score,
                          int timeout_ms) {
   if (candidates.empty()) {
-    return {{}, {}};
+    return {};
   }
   std::vector<int> idxs;
   std::vector<Fastsam::Crop> crops;
@@ -145,19 +166,20 @@ ImageEncoder::best_match(const std::vector<std::pair<int, Fastsam::Crop>>& candi
   const auto image_features = encode(crops, timeout_ms);
   const auto scores = retrieve_scores(image_features, text_features);
 
-  std::vector<Ranked> ranked;
-  ranked.reserve(idxs.size());
+  int best_idx = -1;
+  double best_score = 0.0;
   for (std::size_t i = 0; i < idxs.size(); ++i) {
-    ranked.push_back({idxs[i], i < scores.size() ? scores[i] : 0.0});
+    const double score = i < scores.size() ? scores[i] : 0.0;
+    if (best_idx < 0 || score > best_score) {
+      best_idx = idxs[i];
+      best_score = score;
+    }
   }
-  std::sort(ranked.begin(), ranked.end(),
-            [](const Ranked& a, const Ranked& b) { return a.score > b.score; });
 
-  std::vector<int> keep;
-  if (!ranked.empty() && ranked.front().score >= min_score) {
-    keep.push_back(ranked.front().index);
+  if (best_idx >= 0 && best_score >= min_score) {
+    return {best_idx};
   }
-  return {keep, ranked};
+  return {};
 }
 
 }  // namespace app::clip
