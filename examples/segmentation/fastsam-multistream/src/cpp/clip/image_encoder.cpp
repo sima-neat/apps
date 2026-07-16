@@ -1,0 +1,163 @@
+#include "clip/image_encoder.h"
+
+#include "utils/tensors.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
+namespace neat = simaai::neat;
+
+namespace app::clip {
+namespace {
+
+neat::Tensor make_input_tensor(const std::vector<float>& stack) {
+  return neat::Tensor::from_vector(stack, {kClipBatch, kClipImagePx, kClipImagePx, 3},
+                                   neat::TensorMemory::EV74);
+}
+
+// Softmax over 100 * cosine(image, text[0]) -- the single-query CLIP retrieval score.
+std::vector<double> retrieve_scores(const std::vector<std::vector<float>>& image_features,
+                                    const std::vector<std::vector<float>>& text_features) {
+  const std::size_t n = image_features.size();
+  std::vector<double> probs(n, 0.0);
+  if (n == 0 || text_features.empty()) {
+    return probs;
+  }
+
+  // Normalize the (single) query -- column 0 of the text features, matching retrieval.py.
+  const auto& query = text_features.front();
+  double qnorm = 0.0;
+  for (const float v : query) {
+    qnorm += static_cast<double>(v) * v;
+  }
+  qnorm = std::sqrt(qnorm);
+  std::vector<double> q(query.size(), 0.0);
+  for (std::size_t k = 0; k < query.size(); ++k) {
+    q[k] = qnorm > 0.0 ? query[k] / qnorm : 0.0;
+  }
+
+  std::vector<double> logits(n, 0.0);
+  double max_logit = -std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto& im = image_features[i];
+    double inorm = 0.0;
+    for (const float v : im) {
+      inorm += static_cast<double>(v) * v;
+    }
+    inorm = std::sqrt(inorm);
+    double dot = 0.0;
+    const std::size_t dim = std::min(im.size(), q.size());
+    for (std::size_t k = 0; k < dim; ++k) {
+      dot += (inorm > 0.0 ? im[k] / inorm : 0.0) * q[k];
+    }
+    logits[i] = 100.0 * dot;
+    max_logit = std::max(max_logit, logits[i]);
+  }
+
+  double sum = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    probs[i] = std::exp(logits[i] - max_logit);
+    sum += probs[i];
+  }
+  if (sum > 0.0) {
+    for (std::size_t i = 0; i < n; ++i) {
+      probs[i] /= sum;
+    }
+  }
+  return probs;
+}
+
+}  // namespace
+
+ImageEncoder::ImageEncoder(const std::string& model_path, const neat::RunOptions& run_opt,
+                           int crop_workers)
+    : stack_(static_cast<std::size_t>(kClipBatch) * kClipImagePx * kClipImagePx * 3, 0.0f),
+      model_(std::make_unique<neat::Model>(model_path)),
+      runner_(model_->build(neat::TensorList{make_input_tensor(stack_)},
+                            neat::Model::RouteOptions{}, run_opt)),
+      crop_pool_(crop_workers) {
+  const std::size_t img = static_cast<std::size_t>(kClipImagePx) * kClipImagePx * 3;
+  rows_.reserve(kClipBatch);
+  for (int i = 0; i < kClipBatch; ++i) {
+    rows_.emplace_back(kClipImagePx, kClipImagePx, CV_32FC3, stack_.data() + i * img);
+  }
+}
+
+std::vector<std::vector<float>> ImageEncoder::encode(const std::vector<Fastsam::Crop>& crops,
+                                                     int timeout_ms) {
+  // Serialize the whole call: every stream shares this one input buffer and model runner.
+  std::lock_guard<std::mutex> lock(mu_);
+  std::vector<std::vector<float>> feats;
+  feats.reserve(crops.size());
+  const std::size_t img = static_cast<std::size_t>(kClipImagePx) * kClipImagePx * 3;
+
+  for (std::size_t start = 0; start < crops.size(); start += kClipBatch) {
+    const std::size_t end = std::min(crops.size(), start + static_cast<std::size_t>(kClipBatch));
+    const int n = static_cast<int>(end - start);
+    if (n < kClipBatch) {
+      std::fill(stack_.begin() + static_cast<std::size_t>(n) * img, stack_.end(), 0.0f);
+    }
+    // Crops within a batch are prepped in parallel across the shared pool.
+    crop_pool_.parallel_for(n, [&](int i) {
+      const Fastsam::Crop& crop = crops[start + static_cast<std::size_t>(i)];
+      crop_into(rows_[i], crop.window, crop.submask);
+    });
+
+    const neat::Tensor inp = make_input_tensor(stack_);
+    const auto out = runner_.run(neat::TensorList{inp}, timeout_ms);
+    if (out.empty()) {
+      throw std::runtime_error("image encoder returned no output");
+    }
+    const auto vals = app::tensor_to_floats(out.front());
+    const int dim = static_cast<int>(vals.size() / static_cast<std::size_t>(kClipBatch));
+    for (int i = 0; i < n; ++i) {
+      feats.emplace_back(vals.begin() + static_cast<std::size_t>(i) * dim,
+                         vals.begin() + static_cast<std::size_t>(i + 1) * dim);
+    }
+  }
+  return feats;
+}
+
+void ImageEncoder::close() {
+  std::lock_guard<std::mutex> lock(mu_);
+  runner_.close();
+}
+
+std::pair<std::vector<int>, std::vector<Ranked>>
+ImageEncoder::best_match(const std::vector<std::pair<int, Fastsam::Crop>>& candidates,
+                         const std::vector<std::vector<float>>& text_features, double min_score,
+                         int timeout_ms) {
+  if (candidates.empty()) {
+    return {{}, {}};
+  }
+  std::vector<int> idxs;
+  std::vector<Fastsam::Crop> crops;
+  idxs.reserve(candidates.size());
+  crops.reserve(candidates.size());
+  for (const auto& c : candidates) {
+    idxs.push_back(c.first);
+    crops.push_back(c.second);
+  }
+
+  const auto image_features = encode(crops, timeout_ms);
+  const auto scores = retrieve_scores(image_features, text_features);
+
+  std::vector<Ranked> ranked;
+  ranked.reserve(idxs.size());
+  for (std::size_t i = 0; i < idxs.size(); ++i) {
+    ranked.push_back({idxs[i], i < scores.size() ? scores[i] : 0.0});
+  }
+  std::sort(ranked.begin(), ranked.end(),
+            [](const Ranked& a, const Ranked& b) { return a.score > b.score; });
+
+  std::vector<int> keep;
+  if (!ranked.empty() && ranked.front().score >= min_score) {
+    keep.push_back(ranked.front().index);
+  }
+  return {keep, ranked};
+}
+
+}  // namespace app::clip

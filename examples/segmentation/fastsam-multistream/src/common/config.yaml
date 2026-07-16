@@ -1,0 +1,51 @@
+model:                       # FastSAM segmentation model selection.
+  # FastSAM-x compiled for Modalix. Custom port (not a modelzoo package) — see README "Supported Models".
+  path: /workspace/projects/fastsam-modalix/model_preparation/fastsam/models/sima/compiled_FastSAM-x/FastSAM-x_quant_mpk.tar.gz
+
+clip:                        # MobileCLIP2-S0 text-prompt matching.
+  # Image/text towers compiled for Modalix. Custom ports — see README "Supported Models".
+  image_encoder_path: /workspace/projects/fastsam-modalix/model_preparation/mobileclip/image_encoder/models/sima/compiled_MobileCLIP2-S0_image_encoder_reparam/MobileCLIP2-S0_image_encoder_reparam_mpk.tar.gz
+  text_encoder_path:  /workspace/projects/fastsam-modalix/model_preparation/mobileclip/text_encoder/models/sima/compiled_MobileCLIP2-S0_text/MobileCLIP2-S0_text_mpk.tar.gz
+  text_host_consts:   /workspace/projects/fastsam-modalix/model_preparation/mobileclip/text_encoder/models/onnx/MobileCLIP2-S0_text_host_consts.npz
+  # C++ app only: precomputed [M,512] text features (write with tools/precompute_text_features.py).
+  # The Python app encodes the prompt itself and ignores this key.
+  text_features_path: /workspace/projects/apps/examples/segmentation/fastsam-multistream/src/common/text_features.npy
+  min_score: 0.3             # Drop the match unless the best CLIP score clears this (0 = keep any).
+  max_box_frac: 0.8          # Drop background-like masks spanning more of the frame w/h than this.
+  max_crops: 16              # Score only the K highest-objectness masks (0 = all). Bounds CLIP cost.
+  crop_workers: 14           # Parallel crop-prep threads (shared pool). 0 = built-in default.
+  interval: 4                # Run CLIP every N frames; IoU-track in between. 1 = every frame.
+  track_iou: 0.3             # Min IoU to keep following a mask between CLIP runs.
+
+source:                      # RTSP inputs, one entry per camera.
+  rtsp_urls:                 # Up to 4 streams; each owns a decode graph, all share one detector.
+    - rtsp://10.42.0.1:8554/src1   # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+    - rtsp://10.42.0.1:8554/src2
+    - rtsp://10.42.0.1:8554/src3
+    - rtsp://10.42.0.1:8554/src4
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 200            # RTSP receive latency in milliseconds.
+
+runtime:                     # Runtime and profiling settings.
+  infer_size: 640            # Square model input size (match the compiled package).
+  queue_depth: 8             # Host runner queue depth (per stream decode graph).
+  frames: 0                  # Per-stream frame limit. 0 = run until Ctrl+C.
+  max_fps: 30                # Cap each stream's rate (0 = source rate). Also sizes the profile window.
+  warmup_frames: 30          # Drain this many frames before metadata/profile output.
+  profile: true              # Print per-stream timing summaries.
+
+decode:                      # YOLO26-seg decode controls.
+  score_threshold: 0.01       # Min objectness to keep a mask.
+  nms_iou: 0.6               # Class-agnostic NMS IoU threshold.
+  max_detections: 300        # Max instances to keep per frame after NMS.
+
+prompt:                      # Natural-language query settings.
+  text: "the black labrador" # The query matched and tracked across every stream.
+
+output:                      # Insight video and metadata output.
+  video_enabled: true        # Disable to publish metadata only.
+  insight:                   # Live video and metadata destination.
+    host: 10.42.0.1          # Host running the Insight receiver/viewer.
+    video_port_base: 9000    # Base UDP port for video channels (stream N = base + N).
+    metadata_port_base: 9100 # Base UDP port for metadata channels (stream N = base + N).
+    bitrate_kbps: 1000       # H.264 encoder bitrate (kbps).
