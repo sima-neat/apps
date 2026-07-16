@@ -1,7 +1,6 @@
 # SiMa Neat Apps
 
 ![Vulcan CI](https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg)
-![Apps Nightly E2E](https://github.com/sima-neat/apps/actions/workflows/nightly-e2e.yml/badge.svg)
 ![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.2-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
@@ -123,6 +122,9 @@ sima-cli install gh:sima-ai/tool-mediasources
 
 If a board or DevKit consumes host-streamed RTSP sources, use the host IP in the
 RTSP URL instead of `127.0.0.1`.
+
+For fixed 16-, 24-, and 48-stream RTSP-to-Insight profiles, see the
+[high-density multi-stream object detector](examples/object-detection/high-density-multi-stream-object-detector/README.md).
 
 ## Neat Library Dependency
 

@@ -24,6 +24,7 @@
 #include <nodes/io/MetadataSender.h>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
 #include <algorithm>
@@ -120,6 +121,8 @@ struct PipelineRuntime {
   std::unique_ptr<simaai::neat::Model> model;
   simaai::neat::Graph graph;
   simaai::neat::Run run;
+  simaai::neat::Graph video_graph;
+  simaai::neat::Run video_run;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
   int frame_w = 0;
@@ -276,6 +279,44 @@ bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::u
     return objdet::extract_bbox_payload(tensor_sample, payload, err);
   }
   return objdet::extract_bbox_payload(sample, payload, err);
+}
+
+const simaai::neat::Sample* find_field(const simaai::neat::Sample& sample,
+                                       const std::string& label) {
+  if (sample.stream_label == label) {
+    return &sample;
+  }
+  for (const auto& field : sample.fields) {
+    if (const auto* found = find_field(field, label)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+const simaai::neat::Sample& joined_field(const simaai::neat::Sample& sample,
+                                         const std::string& label, size_t bundle_index) {
+  if (const auto* field = find_field(sample, label)) {
+    return *field;
+  }
+  if (sample.kind == simaai::neat::SampleKind::Bundle && sample.fields.size() > bundle_index) {
+    return sample.fields[bundle_index];
+  }
+  throw std::runtime_error("joined output missing " + label + " field");
+}
+
+simaai::neat::Tensor frame_tensor_from_sample(const simaai::neat::Sample& sample) {
+  const auto tensors = simaai::neat::tensors_from_sample(joined_field(sample, "frame", 0U), true);
+  return tensors.front();
+}
+
+cv::Mat tensor_bgr_from_decoded(const simaai::neat::Tensor& tensor) {
+  cv::Mat bgr;
+  std::string err;
+  if (sima_examples::nv12_to_bgr(tensor, bgr, err)) {
+    return bgr;
+  }
+  return tensor.to_cv_mat_copy(simaai::neat::ImageSpec::PixelFormat::BGR);
 }
 
 std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<objdet::Box>& boxes,
@@ -594,23 +635,10 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.labels = load_labels(cfg.labels_path);
 
   auto source = make_source_graph(cfg, geometry);
-  const bool save_debug_frames = !cfg.save_dir.empty() && cfg.save_every > 0;
-  std::vector<std::string> source_outputs = {"video", "model"};
-  if (save_debug_frames) {
-    source_outputs.push_back("debug_frame");
-  }
-  auto branch = simaai::neat::graphs::Branch("source", source_outputs);
+  auto branch = simaai::neat::graphs::Branch("source", {"frame", "model"});
 
-  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-      runtime.frame_w, runtime.frame_h, runtime.output_fps);
-  video_options.host = cfg.insight_host;
-  video_options.channel = 0;
-  video_options.video_port_base = cfg.video_port;
-  video_options.encoder.bitrate_kbps = 1000;
-  runtime.video_port = video_options.video_port();
-  simaai::neat::Graph video_graph("video");
-  video_graph.connect(simaai::neat::nodes::Input("video"),
-                      simaai::neat::nodes::groups::VideoSender(video_options));
+  simaai::neat::Graph frame_graph("frame");
+  frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
 
   simaai::neat::Graph model_graph("model");
   model_graph.connect(simaai::neat::nodes::Input("model"), *runtime.model);
@@ -618,26 +646,15 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   detections_graph.add(
       simaai::neat::nodes::Output("detections", simaai::neat::OutputOptions::EveryFrame(4)));
 
-  simaai::neat::GraphLinkOptions live_link_options;
-  live_link_options.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
+  auto joined = simaai::neat::graphs::Combine({"frame", "detections"}, "detector_output",
+                                              simaai::neat::CombinePolicy::ByFrame);
+
   runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, video_graph, live_link_options);
-  if (save_debug_frames) {
-    runtime.graph.connect(branch, model_graph);
-  } else {
-    runtime.graph.connect(branch, model_graph, live_link_options);
-  }
+  runtime.graph.connect(branch, frame_graph);
+  runtime.graph.connect(branch, model_graph);
   runtime.graph.connect(model_graph, detections_graph);
-  if (save_debug_frames) {
-    simaai::neat::Graph frames("debug_frame");
-    frames.add(
-        simaai::neat::nodes::Output("debug_frame", simaai::neat::OutputOptions::EveryFrame(4)));
-    auto debug_join = simaai::neat::graphs::Combine({"debug_frame", "detections"}, "debug_output",
-                                                    simaai::neat::CombinePolicy::ByPts);
-    runtime.graph.connect(branch, frames);
-    runtime.graph.connect(frames, debug_join);
-    runtime.graph.connect(detections_graph, debug_join);
-  }
+  runtime.graph.connect(frame_graph, joined);
+  runtime.graph.connect(detections_graph, joined);
   if (cfg.profile) {
     std::cout << "Backend:\n" << runtime.graph.describe_backend() << "\n";
   }
@@ -649,6 +666,29 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   runtime.run = runtime.graph.build(run_options);
+
+  simaai::neat::InputOptions video_input;
+  video_input.payload_type = simaai::neat::PayloadType::Image;
+  video_input.format = "RGB";
+  video_input.width = runtime.frame_w;
+  video_input.height = runtime.frame_h;
+  video_input.depth = 3;
+  video_input.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
+
+  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
+      runtime.frame_w, runtime.frame_h, runtime.output_fps);
+  video_options.host = cfg.insight_host;
+  video_options.channel = 0;
+  video_options.video_port_base = cfg.video_port;
+  video_options.encoder.bitrate_kbps = 1000;
+  runtime.video_port = video_options.video_port();
+
+  runtime.video_graph.add(simaai::neat::nodes::Input(video_input));
+  runtime.video_graph.add(simaai::neat::nodes::groups::VideoSender(video_options));
+  cv::Mat seed(runtime.frame_h, runtime.frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
+  const auto seed_tensor = simaai::neat::Tensor::from_cv_mat(
+      seed, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+  runtime.video_run = runtime.video_graph.build(simaai::neat::TensorList{seed_tensor});
 
   simaai::neat::MetadataSenderOptions metadata_options;
   metadata_options.host = cfg.insight_host;
@@ -681,23 +721,30 @@ void send_metadata(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
   }
 }
 
-void maybe_save_debug_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample& sample,
+void push_video(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
+                const cv::Mat& frame_bgr) {
+  cv::Mat rgb;
+  cv::cvtColor(frame_bgr, rgb, cv::COLOR_BGR2RGB);
+  const auto tensor = simaai::neat::Tensor::from_cv_mat(
+      rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
+  auto video_sample = simaai::neat::make_tensor_sample("", tensor);
+  video_sample.pts_ns = sample.pts_ns;
+  video_sample.dts_ns = sample.dts_ns;
+  video_sample.duration_ns = sample.duration_ns;
+  video_sample.frame_id = sample.frame_id;
+  video_sample.stream_id = sample.stream_id;
+  if (!runtime.video_run.push(video_sample)) {
+    throw std::runtime_error("Insight video push failed");
+  }
+}
+
+void maybe_save_debug_frame(const AppConfig& cfg, int processed, const cv::Mat& frame,
                             const std::vector<objdet::Box>& boxes) {
   if (cfg.save_dir.empty() || cfg.save_every <= 0 || processed % cfg.save_every != 0) {
     return;
   }
 
-  const auto tensors = simaai::neat::tensors_from_sample(sample, false);
-  if (tensors.empty()) {
-    return;
-  }
-
-  cv::Mat bgr;
-  std::string err;
-  if (!sima_examples::nv12_to_bgr(tensors.front(), bgr, err)) {
-    std::cerr << "[warn] failed to prepare output frame: " << err << "\n";
-    return;
-  }
+  cv::Mat bgr = frame.clone();
   objdet::draw_boxes(bgr, boxes, cfg.min_score, cv::Scalar(0, 255, 0), "");
   const auto out_path = cfg.save_dir / ("frame_" + std::to_string(processed) + ".jpg");
   if (!cv::imwrite(out_path.string(), bgr)) {
@@ -710,14 +757,12 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
   profile.enabled = cfg.profile;
   profile.interval = cfg.profile_interval;
 
-  const std::string output_name =
-      (!cfg.save_dir.empty() && cfg.save_every > 0) ? "debug_output" : "detections";
   int processed = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     simaai::neat::Sample detection_sample;
     simaai::neat::PullError pull_error;
     const double pull_start = sima_examples::time_ms();
-    const auto status = runtime.run.pull(output_name, 20000, detection_sample, &pull_error);
+    const auto status = runtime.run.pull("detector_output", 20000, detection_sample, &pull_error);
     const double pull_end = sima_examples::time_ms();
     if (status == simaai::neat::PullStatus::Timeout) {
       std::cerr << "[warn] timed out waiting for detections\n";
@@ -738,12 +783,15 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     const auto boxes = objdet::parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h,
                                                   cfg.max_detections, false);
 
+    const cv::Mat frame = tensor_bgr_from_decoded(frame_tensor_from_sample(detection_sample));
+    push_video(runtime, detection_sample, frame);
+
     const double metadata_start = sima_examples::time_ms();
     send_metadata(runtime, detection_sample, boxes);
     const double metadata_end = sima_examples::time_ms();
 
     ++processed;
-    maybe_save_debug_frame(cfg, processed, detection_sample, boxes);
+    maybe_save_debug_frame(cfg, processed, frame, boxes);
     profile.add(pull_end - pull_start, metadata_end - metadata_start,
                 static_cast<int>(boxes.size()));
   }
@@ -774,6 +822,7 @@ int main(int argc, char** argv) {
     }
     PipelineRuntime runtime = build_pipeline(cfg);
     run_pipeline(runtime, cfg);
+    runtime.video_run.close();
     runtime.run.close();
     return 0;
   } catch (const std::exception& e) {

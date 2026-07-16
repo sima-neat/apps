@@ -9,6 +9,7 @@
 #include <cctype>
 #include <exception>
 #include <filesystem>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -65,6 +66,8 @@ MatchResult match_expected_boxes(const std::vector<Box>& boxes,
 std::vector<Box> parse_boxes_strict(const std::vector<uint8_t>& bytes, int img_w, int img_h,
                                     int expected_topk, bool debug);
 void parse_boxes_strict_into(const std::vector<uint8_t>& bytes, int img_w, int img_h,
+                             int expected_topk, bool debug, std::vector<Box>& out);
+void parse_boxes_strict_into(std::span<const uint8_t> bytes, int img_w, int img_h,
                              int expected_topk, bool debug, std::vector<Box>& out);
 
 std::vector<Box> parse_boxes_lenient(const std::vector<uint8_t>& bytes, int img_w, int img_h,

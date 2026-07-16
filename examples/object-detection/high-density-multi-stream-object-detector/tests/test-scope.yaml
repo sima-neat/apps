@@ -1,0 +1,15 @@
+models:
+  yolo26n-det-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+    file: yolo26n-det-int8-b1.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: Requires 16, 24, or 48 live RTSP sources and Insight.
+  cpp:
+    enabled: false
+    reason: Requires 16, 24, or 48 live RTSP sources and Insight.
