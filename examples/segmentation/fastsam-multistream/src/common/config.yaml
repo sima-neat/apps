@@ -1,15 +1,15 @@
 model:                       # FastSAM segmentation model selection.
   # FastSAM-x compiled for Modalix. Custom port (not a modelzoo package) — see README "Supported Models".
-  path: /workspace/projects/fastsam-modalix/model_preparation/fastsam/models/sima/compiled_FastSAM-x/FastSAM-x_quant_mpk.tar.gz
+  path: <fastsam-model-path>
 
 clip:                        # MobileCLIP2-S0 text-prompt matching.
   # Image/text towers compiled for Modalix. Custom ports — see README "Supported Models".
-  image_encoder_path: /workspace/projects/fastsam-modalix/model_preparation/mobileclip/image_encoder/models/sima/compiled_MobileCLIP2-S0_image_encoder_reparam/MobileCLIP2-S0_image_encoder_reparam_mpk.tar.gz
-  text_encoder_path:  /workspace/projects/fastsam-modalix/model_preparation/mobileclip/text_encoder/models/sima/compiled_MobileCLIP2-S0_text/MobileCLIP2-S0_text_mpk.tar.gz
-  text_host_consts:   /workspace/projects/fastsam-modalix/model_preparation/mobileclip/text_encoder/models/onnx/MobileCLIP2-S0_text_host_consts.npz
+  image_encoder_path: <clip-image-encoder-path>
+  text_encoder_path:  <clip-text-encoder-path>
+  text_host_consts:   <clip-text-host-consts>
   # C++ app only: precomputed [M,512] text features (write with src/tools/precompute_text_features.py).
   # The Python app encodes the prompt itself and ignores this key.
-  text_features_path: /workspace/projects/apps/examples/segmentation/fastsam-multistream/src/common/text_features.npy
+  text_features_path: examples/segmentation/fastsam-multistream/src/common/text_features.npy
   min_score: 0.3             # Drop the match unless the best CLIP score clears this (0 = keep any).
   max_box_frac: 0.8          # Drop background-like masks spanning more of the frame w/h than this.
   max_crops: 16              # Score only the K highest-objectness masks (0 = all). Bounds CLIP cost.
@@ -18,10 +18,10 @@ clip:                        # MobileCLIP2-S0 text-prompt matching.
 
 source:                      # RTSP inputs, one entry per camera.
   rtsp_urls:                 # Up to 4 streams; each owns a decode graph, all share one detector.
-    - rtsp://10.42.0.1:8554/src1   # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
-    - rtsp://10.42.0.1:8554/src2
-    - rtsp://10.42.0.1:8554/src3
-    - rtsp://10.42.0.1:8554/src4
+    - <rtsp-url-1>                 # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+    # - <rtsp-url-2>
+    # - <rtsp-url-3>
+    # - <rtsp-url-4>
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 200            # RTSP receive latency in milliseconds.
 
@@ -44,7 +44,7 @@ prompt:                      # Natural-language query settings.
 output:                      # Insight video and metadata output.
   video_enabled: true        # Disable to publish metadata only.
   insight:                   # Live video and metadata destination.
-    host: 10.42.0.1          # Host running the Insight receiver/viewer.
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
     video_port_base: 9000    # Base UDP port for video channels (stream N = base + N).
     metadata_port_base: 9100 # Base UDP port for metadata channels (stream N = base + N).
     bitrate_kbps: 1000       # H.264 encoder bitrate (kbps).
