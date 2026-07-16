@@ -19,6 +19,11 @@ from pathlib import Path
 
 DEFAULT_COLLECTION = "demo_collection"
 
+# milvus-lite's bounds check rejects limit=16384 ("limit should be in range
+# [1, 16384]" is exclusive at the top despite the message), so the largest
+# usable query limit is 16383.
+MAX_QUERY_LIMIT = 16383
+
 # Fields that are never part of a user-visible chunk (the vector, the text
 # itself, and internal keys) are dropped from the per-chunk metadata.
 _SKIP_META = {"vector", "embedding", "sparse", "text", "page_content"}
@@ -41,37 +46,73 @@ def read_rag_meta(db_path=None):
     return {}
 
 
-def rows_to_docs(rows, pk="pk"):
-    """Shape raw Milvus query rows into ``[{id, text, metadata}]``."""
+def rows_to_docs(rows, pk="pk", text_field=None):
+    """Shape raw Milvus query rows into ``[{id, text, metadata}]``.
+
+    The chunk text is taken from ``text_field`` when known, else a commonly-named
+    field, else the longest string value in the row — so the content shows up
+    regardless of how the collection named its fields."""
+    candidates = ([text_field] if text_field else []) + \
+        ["text", "page_content", "content", "chunk", "document"]
     docs = []
     for r in rows or []:
         if not isinstance(r, dict):
             continue
-        text = r.get("text") or r.get("page_content") or ""
-        meta = {k: v for k, v in r.items()
-                if k != pk and k not in _SKIP_META and not str(k).startswith("$")}
-        docs.append({"id": r.get(pk), "text": text, "metadata": meta})
+        text = ""
+        for k in candidates:
+            if k and r.get(k):
+                text = r.get(k)
+                break
+        # Metadata = everything that isn't the pk, the text, a vector, or internal.
+        meta, longest_key, longest_len = {}, None, -1
+        for k, v in r.items():
+            if k == pk or k == text_field or k in _SKIP_META or str(k).startswith("$"):
+                continue
+            if isinstance(v, (list, tuple)):   # a vector / embedding
+                continue
+            if isinstance(v, str) and len(v) > longest_len:
+                longest_key, longest_len = k, len(v)
+            meta[k] = v
+        if not text and longest_key is not None:   # fallback: longest string is the chunk
+            text = meta.pop(longest_key)
+        docs.append({"id": r.get(pk), "text": str(text or ""), "metadata": meta})
     return docs
 
 
-def _primary_key(client, collection):
+def schema_fields(client, collection):
+    """Return ``(pk, text_field, output_fields)`` for a collection. output_fields
+    are all NON-vector fields — milvus-lite does not reliably expand
+    ``output_fields=["*"]`` to scalar fields, so the chunk text and metadata are
+    only returned when we name the fields explicitly."""
+    pk, text_field, out = "pk", None, []
     try:
-        desc = client.describe_collection(collection)
-        for f in desc.get("fields", []):
-            if f.get("is_primary"):
-                return f.get("name", "pk")
+        fields = client.describe_collection(collection).get("fields", [])
     except Exception:  # noqa: BLE001
-        pass
-    return "pk"
+        return pk, text_field, ["*"]
+    for f in fields:
+        name = f.get("name")
+        if not name:
+            continue
+        if f.get("is_primary"):
+            pk = name
+        is_vector = ("dim" in (f.get("params") or {})
+                     or "VECTOR" in str(f.get("type", "")).upper())
+        if is_vector:
+            continue
+        out.append(name)
+        if text_field is None and name in ("text", "page_content", "content"):
+            text_field = name
+    return pk, text_field, (out or ["*"])
 
 
-def read_rag_documents(db_path=None, collection=DEFAULT_COLLECTION, limit=16384):
+def read_rag_documents(db_path=None, collection=DEFAULT_COLLECTION, limit=MAX_QUERY_LIMIT):
     """Open the DB file directly and return every chunk as ``[{id, text, metadata}]``.
 
     Raises FileNotFoundError / ValueError / ImportError on a missing DB, missing
     collection, or absent pymilvus. Only call when no other process holds the DB.
     """
     db_path = db_path or default_db_path()
+    limit = max(1, min(int(limit), MAX_QUERY_LIMIT))
     if not os.path.isfile(db_path):
         raise FileNotFoundError(f"No RAG database at {db_path}")
     from pymilvus import MilvusClient
@@ -85,10 +126,10 @@ def read_rag_documents(db_path=None, collection=DEFAULT_COLLECTION, limit=16384)
             client.load_collection(collection)
         except Exception:  # noqa: BLE001 - milvus-lite may not require/allow this
             pass
-        pk = _primary_key(client, collection)
+        pk, text_field, out_fields = schema_fields(client, collection)
         rows = client.query(collection_name=collection, filter=f"{pk} >= 0",
-                            output_fields=["*"], limit=limit)
-        return rows_to_docs(rows, pk)
+                            output_fields=out_fields, limit=limit)
+        return rows_to_docs(rows, pk, text_field)
     finally:
         try:
             client.close()
@@ -96,7 +137,7 @@ def read_rag_documents(db_path=None, collection=DEFAULT_COLLECTION, limit=16384)
             pass
 
 
-def inspect_rag(db_path=None, collection=DEFAULT_COLLECTION, limit=16384):
+def inspect_rag(db_path=None, collection=DEFAULT_COLLECTION, limit=MAX_QUERY_LIMIT):
     """Assemble a full inspection result: sidecar meta + enumerated chunks.
 
     Never raises — enumeration failures are reported in ``error`` while the

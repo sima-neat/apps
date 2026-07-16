@@ -134,25 +134,26 @@ class VectorDB:
         ]
         return filtered
 
-    def list_documents(self, limit: int = 16384) -> List[Dict[str, Any]]:
+    def list_documents(self, limit: int = 16383) -> List[Dict[str, Any]]:
         """Enumerate every chunk in the collection using the already-open store
         (the service owns the DB file, so we never open a second handle). Returns
         ``[{id, text, metadata}]``."""
         try:
-            from rag.inspect_db import rows_to_docs
+            from rag.inspect_db import rows_to_docs, schema_fields, MAX_QUERY_LIMIT
         except ImportError:                      # loaded as a top-level module by the worker
-            from inspect_db import rows_to_docs
+            from inspect_db import rows_to_docs, schema_fields, MAX_QUERY_LIMIT
+        limit = max(1, min(int(limit), MAX_QUERY_LIMIT))
         store = self.vector_store
         client = getattr(store, "client", None)
         if client is not None:                   # langchain-milvus MilvusClient path
-            pk = getattr(store, "_primary_field", None) or "pk"
-            try:
-                rows = client.query(collection_name=self.collection_name,
-                                    filter=f"{pk} >= 0", output_fields=["*"], limit=limit)
-            except Exception:                    # noqa: BLE001 - try a match-all filter
-                rows = client.query(collection_name=self.collection_name,
-                                    filter="", output_fields=["*"], limit=limit)
-            return rows_to_docs(rows, pk)
+            # Name the fields explicitly — milvus-lite may not expand ["*"] to the
+            # scalar text/metadata fields, which would show chunks with no content.
+            pk, text_field, out_fields = schema_fields(client, self.collection_name)
+            if text_field is None:
+                text_field = getattr(store, "_text_field", None)
+            rows = client.query(collection_name=self.collection_name,
+                                filter=f"{pk} >= 0", output_fields=out_fields, limit=limit)
+            return rows_to_docs(rows, pk, text_field)
         col = getattr(store, "col", None)
         if col is not None:                      # older pymilvus Collection path
             try:
@@ -161,8 +162,10 @@ class VectorDB:
                 pass
             pk = next((f.name for f in col.schema.fields
                        if getattr(f, "is_primary", False)), "pk")
-            rows = col.query(expr=f"{pk} >= 0", output_fields=["*"], limit=limit)
-            return rows_to_docs(rows, pk)
+            vector = getattr(store, "_vector_field", None) or "vector"
+            out_fields = [f.name for f in col.schema.fields if f.name != vector] or ["*"]
+            rows = col.query(expr=f"{pk} >= 0", output_fields=out_fields, limit=limit)
+            return rows_to_docs(rows, pk, getattr(store, "_text_field", None))
         raise RuntimeError("Vector store does not expose a queryable client")
 
 
@@ -195,7 +198,7 @@ class RagDbClient:
             log.error(f"Invalid JSON response: {json_err}")
             raise
 
-    def list_documents(self, limit: int = 16384) -> Dict[str, Any]:
+    def list_documents(self, limit: int = 16383) -> Dict[str, Any]:
         """Fetch every ingested chunk from the running VectorDB service."""
         url = f"{self.base_url}/documents"
         resp = requests.get(url, params={"limit": limit}, timeout=self.timeout)
@@ -257,7 +260,7 @@ def documents_endpoint():
     """List every ingested chunk (for RAG-database inspection)."""
     if not ragdb:
         abort(500, description="DB not initialized.")
-    limit = int(request.args.get("limit", 16384))
+    limit = int(request.args.get("limit", 16383))
     try:
         docs = ragdb.list_documents(limit=limit)
         return jsonify({"documents": docs, "count": len(docs),

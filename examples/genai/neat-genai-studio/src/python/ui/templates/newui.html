@@ -211,6 +211,8 @@
     <div class="settings-modal-card">
       <div class="settings-modal-head">
         <span class="settings-modal-title">Settings</span>
+        <button id="aboutVersionBtn" class="header-icon-btn" type="button" title="About / version"
+          aria-label="About and version">ⓘ</button>
         <button id="settingsModalClose" class="header-icon-btn" type="button" title="Close"
           aria-label="Close settings">✕</button>
       </div>
@@ -430,10 +432,17 @@
                   <span id="maxTokensValue">512</span>
                 </div>
               </div>
+              <div class="setting-row">
+                <label class="setting-label">
+                  <input type="checkbox" id="toggleThinking" checked>
+                  Thinking (reasoning models)
+                </label>
+              </div>
               <div class="gen-note">This runtime decodes greedily, so there is no
                 temperature control, and each model's context window is fixed when it
-                is compiled. System prompt and max response tokens apply to the active
-                model.</div>
+                is compiled. <b>Thinking</b> shows a reasoning model's chain-of-thought
+                in a collapsible block above the answer; turn it off to skip it. System
+                prompt and max response tokens apply to the active model.</div>
           </section>
           <section class="settings-tab-panel" data-tab="devices" role="tabpanel">
               <div class="setting-row">
@@ -503,6 +512,8 @@
                   <button id="uploadToRagButton" class="setting-button">Upload to RAG</button>
                   <button id="importRagDatabaseButton" class="setting-button">Import RAG DB</button>
                   <button id="inspectRagButton" class="setting-button">Inspect RAG DB</button>
+                  <button id="resetRagButton" class="setting-button">Reset to Default</button>
+                  <button id="clearRagButton" class="setting-button">Clear RAG DB</button>
                 </div>
                 <div id="settingsMessage" class="settings-message"></div>
                 <div id="ragStatus" class="rag-status"></div>
@@ -517,6 +528,19 @@
   <canvas id="audioVisualizer" width="320" height="320" style="display: none;"></canvas>
 
   <!-- Model card + metadata modal -->
+  <!-- Version / About modal (opened from Settings) -->
+  <div id="versionModal" class="settings-modal" style="display: none;">
+    <div class="settings-modal-card version-modal-card">
+      <div class="settings-modal-head">
+        <span class="settings-modal-title">About Neat GenAI Studio</span>
+        <button id="versionModalClose" class="header-icon-btn" type="button" title="Close" aria-label="Close">✕</button>
+      </div>
+      <div class="settings-modal-body">
+        <div id="versionGrid" class="version-grid"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="modelCardModal" class="settings-modal" style="display: none;">
     <div class="settings-modal-card">
       <div class="settings-modal-head">
@@ -753,6 +777,8 @@
         <button id="visionSourceImage" class="vision-src-btn" type="button" role="tab">Image</button>
       </div>
       <div class="vision-top-actions">
+        <button id="visionLoopBtn" class="vision-top-btn" type="button" aria-pressed="false"
+          title="Loop — continuously ask the VLM about the live camera">↻ Loop</button>
         <button id="visionUploadBtn" class="vision-top-btn" type="button" title="Upload an image">Upload Image</button>
         <button id="visionCloseBtn" class="vision-top-btn vision-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
       </div>

@@ -449,6 +449,8 @@ body.vision-open { overflow: hidden; }
 .vision-top-actions { margin-left: auto; display: flex; gap: 8px; }
 .vision-top-btn { border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); color: #eef4f3; font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 10px; cursor: pointer; transition: .2s ease; }
 .vision-top-btn:hover { background: rgba(255,255,255,.14); }
+.vision-top-btn.is-looping { background: #ef5b62; border-color: transparent; color: #fff; animation: vision-loop-pulse 1.4s ease-in-out infinite; }
+@keyframes vision-loop-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,91,98,.5); } 50% { box-shadow: 0 0 0 5px rgba(239,91,98,0); } }
 .vision-close { width: 36px; padding: 7px 0; }
 .vision-stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 #visionVideo, #visionImage { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
@@ -1076,6 +1078,18 @@ body.solutions-open { overflow: hidden; }
 /* ---- Rendered Markdown ---- */
 .message-text { display: block; }
 .message-meta { margin-top: 6px; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+
+/* Reasoning (<think>) block — collapsible, above the answer */
+.think-block { margin: 0 0 9px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--text-3) 8%, transparent); overflow: hidden; }
+.think-summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 7px 11px; font-size: 12px; color: var(--text-3); user-select: none; }
+.think-summary::-webkit-details-marker { display: none; }
+.think-summary::before { content: '▸'; color: var(--text-3); transition: transform .15s ease; }
+.think-block[open] .think-summary::before { transform: rotate(90deg); }
+.think-label { font-weight: 600; letter-spacing: .02em; }
+.think-label::before { content: '💭 '; }
+.think-tokens { margin-left: auto; font-family: var(--code-font, ui-monospace, monospace); font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.think-text { padding: 2px 12px 11px; font-size: 12.5px; line-height: 1.55; color: var(--text-2); border-top: 1px solid var(--border); }
+.think-text > *:first-child { margin-top: 9px; }
 .message-text > *:first-child { margin-top: 0; }
 .message-text > *:last-child { margin-bottom: 0; }
 .message-text p { margin: 0 0 .6em; }
@@ -1330,6 +1344,11 @@ body.solutions-open { overflow: hidden; }
   background: rgba(6, 10, 14, .62); backdrop-filter: blur(4px);
   padding: 20px; animation: fade-in .18s ease both;
 }
+/* About / version modal */
+.version-modal-card { width: min(440px, 94vw) !important; height: auto !important; }
+.version-grid { display: grid; grid-template-columns: auto 1fr; gap: 11px 20px; align-items: baseline; padding: 4px 2px; }
+.version-k { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
+.version-v { font-family: var(--code-font, ui-monospace, "JetBrains Mono", monospace); font-size: 13px; color: var(--text); word-break: break-all; }
 .settings-modal-card {
   width: min(700px, 94vw); max-height: 88vh;
   display: flex; flex-direction: column;

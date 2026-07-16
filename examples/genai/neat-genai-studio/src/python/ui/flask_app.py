@@ -41,6 +41,37 @@ from tts_text import sanitize_for_tts   # Markdown/LaTeX → speakable text (std
 
 APP_DIR = Path(__file__).resolve().parent
 
+_VERSION_CACHE = None
+
+
+def _studio_version():
+    """Best-effort version info for the About/version modal: git commit, branch and
+    date of the example checkout, or 'unknown' when run from a standalone (non-git)
+    fetch. Cached after the first call."""
+    global _VERSION_CACHE
+    if _VERSION_CACHE is not None:
+        return _VERSION_CACHE
+    info = {"name": "Neat GenAI Studio", "commit": "unknown", "branch": "unknown",
+            "date": "", "dirty": False}
+    example_dir = str(Path(__file__).resolve().parents[3])
+
+    def _git(*args):
+        try:
+            r = subprocess.run(["git", "-C", example_dir, *args],
+                               capture_output=True, text=True, timeout=3)
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    commit = _git("rev-parse", "--short", "HEAD")
+    if commit:
+        info["commit"] = commit
+        info["branch"] = _git("rev-parse", "--abbrev-ref", "HEAD") or "?"
+        info["date"] = _git("show", "-s", "--format=%cs", "HEAD")
+        info["dirty"] = bool(_git("status", "--porcelain"))
+    _VERSION_CACHE = info
+    return info
+
 
 def _supervisor_pid():
     """PID of the run.sh supervisor so the GUI can trigger a graceful shutdown.
@@ -775,10 +806,14 @@ class AppContext:
         if not self.current_response:
             return False
 
+        # Store only the answer in history — the model's <think> reasoning should
+        # not be fed back on later turns (it bloats context and, for reasoning
+        # models like Qwen3, degrades quality).
+        stored = _answer_part(self.current_response).strip() or self.current_response
         if self.llm_only:
-            assistant_content = self.current_response
+            assistant_content = stored
         else:
-            assistant_content = [{"type": "text", "text": self.current_response}]
+            assistant_content = [{"type": "text", "text": stored}]
         self.conversation_history.append({"role": "assistant", "content": assistant_content})
         self.current_response = ""
         logging.info(f"Added assistant response to history. Total messages: {len(self.conversation_history)}")
@@ -1005,6 +1040,7 @@ class AppContext:
                 f"window.SIMA_CONFIG.defaultFontFamily={json.dumps(self.ui_font_family)};"
                 f"window.SIMA_CONFIG.defaultFontSize={json.dumps(self.ui_font_size)};"
                 f"window.SIMA_CONFIG.defaultMaxTokens={json.dumps(self.max_tokens)};"
+                f"window.SIMA_CONFIG.version={json.dumps(_studio_version())};"
             )
             return self.app.response_class(js, mimetype='application/javascript')
 
@@ -1639,9 +1675,9 @@ class AppContext:
                 return jsonify({"enabled": False, "error": "RAG is disabled"}), 200
             from rag.inspect_db import read_rag_meta, default_db_path
             try:
-                limit = max(1, min(50000, int(request.args.get("limit", 16384))))
+                limit = max(1, min(16383, int(request.args.get("limit", 16383))))
             except (TypeError, ValueError):
-                limit = 16384
+                limit = 16383
             db_path = default_db_path()
             result = {
                 "enabled": True,
@@ -1848,6 +1884,66 @@ class AppContext:
 
             return Response(stream_with_context(_stream()), mimetype="text/plain")
 
+        @self.app.route("/reset-rag", methods=["POST"])
+        def reset_rag():
+            """Rebuild the RAG database from the bundled default Markdown."""
+            if not self.rag_enabled:
+                return "RAG is disabled", 403
+            default_md = Path(__file__).resolve().parents[2] / "common" / "rag" / "neat.md"
+
+            def _stream():
+                global vectodb_proc
+                yield "⏳ Resetting to the default RAG database...\n"
+                try:
+                    ensure_rag_modules_loaded()
+                    if not default_md.is_file():
+                        yield f"❌ Default RAG source not found: {default_md}\n"
+                        return
+                    yield "🛑 Stopping existing vectordb service...\n"
+                    stop_service()
+                    yield "📚 Rebuilding from the bundled document...\n"
+                    create_markdown_vectordb(
+                        input_path=str(default_md),
+                        output_db=RAG_DB_PATH,
+                        embedding_model=self.rag_embedding_model_dir,
+                    )
+                    yield "🚀 Starting vectordb service with the default database...\n"
+                    vectodb_proc = start_service()
+                    yield "✅ RAG database reset to default.\n"
+                except Exception as e:  # noqa: BLE001
+                    yield f"❌ {str(e)}\n"
+
+            return Response(stream_with_context(_stream()), mimetype="text/plain")
+
+        @self.app.route("/clear-rag", methods=["POST"])
+        def clear_rag():
+            """Clear the RAG database — stop the service and remove the DB files."""
+            if not self.rag_enabled:
+                return "RAG is disabled", 403
+
+            def _stream():
+                global vectodb_proc
+                yield "⏳ Clearing the RAG database...\n"
+                try:
+                    ensure_rag_modules_loaded()
+                    yield "🛑 Stopping the vectordb service...\n"
+                    stop_service()
+                    vectodb_proc = None
+                    meta_path = os.path.splitext(RAG_DB_PATH)[0] + ".meta.json"
+                    removed = 0
+                    for p in (RAG_DB_PATH, meta_path):
+                        try:
+                            os.remove(p)
+                            removed += 1
+                        except FileNotFoundError:
+                            pass
+                    yield (f"✅ RAG database cleared ({removed} file(s) removed). "
+                           "Upload a document or reset to default to use RAG again.\n")
+                except Exception as e:  # noqa: BLE001
+                    yield f"❌ {str(e)}\n"
+
+            return Response(stream_with_context(_stream()), mimetype="text/plain")
+
 
 
 
@@ -1896,7 +1992,54 @@ def _read_gen_params(form):
             params['max_tokens'] = value
     except (TypeError, ValueError):
         pass
+    if str(form.get('noThink', '')).lower() in ('true', '1', 'yes'):
+        params['no_think'] = True
     return params
+
+
+def _apply_no_think(messages):
+    """Return a copy of ``messages`` with ``/no_think`` appended to the last user
+    turn (Qwen3's soft switch to disable reasoning). The shared history is not
+    mutated, so it only affects this request."""
+    if not messages:
+        return messages
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        m = out[i]
+        if not (isinstance(m, dict) and m.get('role') == 'user'):
+            continue
+        m = dict(m)
+        content = m.get('content')
+        if isinstance(content, str):
+            m['content'] = (content + ' /no_think').strip()
+        elif isinstance(content, list):
+            new = list(content)
+            for j in range(len(new) - 1, -1, -1):
+                part = new[j]
+                if isinstance(part, dict) and part.get('type') == 'text':
+                    part = dict(part)
+                    part['text'] = (part.get('text', '') + ' /no_think').strip()
+                    new[j] = part
+                    break
+            else:
+                new.append({'type': 'text', 'text': '/no_think'})
+            m['content'] = new
+        out[i] = m
+        break
+    return out
+
+
+def _answer_part(raw):
+    """The portion of a streamed reply outside <think>…</think> — i.e. what should
+    be spoken (reasoning is never sent to TTS)."""
+    open_i = raw.find('<think>')
+    if open_i == -1:
+        close_i = raw.find('</think>')          # template pre-filled <think>
+        return raw[close_i + 8:] if close_i != -1 else raw
+    pre = raw[:open_i]
+    after = raw[open_i + 7:]
+    close_i = after.find('</think>')
+    return pre if close_i == -1 else pre + after[close_i + 8:]
 
 
 def _normalize_openai_image_parts(payload):
@@ -1923,16 +2066,22 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
     """
     gen_params = gen_params or {}
     url = f"http://{config['SIMAAI_IP_ADDR']}/v1/chat/completions"
+    no_think = bool(gen_params.get('no_think'))
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": _apply_no_think(messages) if no_think else messages,
         "stream": True
     }
+    if no_think:
+        # Also pass the chat-template switch, for runtimes that honor it.
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     # Per-request max response tokens overrides the config default.
     max_tokens = gen_params.get('max_tokens') or config.get('MAX_TOKENS')
     if max_tokens:
         payload["max_tokens"] = int(max_tokens)
-    
+    _full_reply = ""   # accumulated content, to keep reasoning out of TTS
+    _tts_spoken = 0    # length of the answer already sent to TTS
+
     try:
         if not genai_app.start_assistant_response(generation_id):
             return None
@@ -1970,11 +2119,21 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
                                 if content:
                                     if not genai_app.add_to_current_response(generation_id, content):
                                         break
-                                    # Update UI
+                                    # Update UI (the client splits <think> itself)
                                     genai_app.emit(socketio_event, {"results": content})
 
-                                    # Trigger TTS
-                                    send_talk_text(content, generation_id)
+                                    # Trigger TTS on the ANSWER only — never speak
+                                    # the model's <think> reasoning aloud.
+                                    _full_reply += content
+                                    answer_so_far = _answer_part(_full_reply)
+                                    # A </think> can retroactively move earlier text
+                                    # into reasoning, shrinking the answer — reset so
+                                    # the real answer still gets spoken.
+                                    if len(answer_so_far) < _tts_spoken:
+                                        _tts_spoken = 0
+                                    if len(answer_so_far) > _tts_spoken:
+                                        send_talk_text(answer_so_far[_tts_spoken:], generation_id)
+                                        _tts_spoken = len(answer_so_far)
                                 
                         except Exception: 
                             pass

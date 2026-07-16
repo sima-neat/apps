@@ -528,6 +528,7 @@ HELP = f"""{MUTED}Commands:
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
   /rag [filter]      inspect the RAG database — list ingested chunks (aliases /docs)
+  /rag reset|clear   rebuild from the default document, or clear all RAG documents
   /help              show this help
   /quit              exit (aliases: /exit, /bye, /q, or Ctrl+D)
 Anything else is sent to the model as a chat message.{RESET}"""
@@ -1301,6 +1302,98 @@ def _startup_benchmark(ctrl, oai, active, sel=None):
     return loaded[0]["name"] if loaded else active
 
 
+def _rag_service_up():
+    """True if the RAG VectorDB service (owns the DB file) is reachable."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9100/", timeout=1):
+            return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _rag_embedding_dir(config_path):
+    """Read app.rag.embedding_model_dir from the config, or ''."""
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+        return (((cfg.get("app") or {}).get("rag") or {}).get("embedding_model_dir")) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _default_rag_source():
+    """Path to the bundled default RAG Markdown (src/common/rag/neat.md)."""
+    src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(src, "common", "rag", "neat.md")
+
+
+def do_rag_clear():
+    """Clear the RAG database (delete its files). Only when the RAG service isn't
+    running — it owns the milvus-lite file."""
+    from rag.inspect_db import default_db_path
+    if _rag_service_up():
+        print(f"{MUTED}  the RAG service is running — use the web UI's 'Clear RAG DB' "
+              f"(or stop the studio first).{RESET}")
+        return
+    db_path = default_db_path()
+    try:
+        ans = input(f"{ERR}  clear the RAG database (delete all ingested documents)? "
+                    f"[y/N] ▸ {RESET}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if ans not in ("y", "yes"):
+        print(f"{MUTED}  cancelled — nothing removed.{RESET}")
+        return
+    removed = 0
+    for p in (db_path, os.path.splitext(db_path)[0] + ".meta.json"):
+        try:
+            os.remove(p)
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"{ERR}  {exc}{RESET}")
+    print(f"{OK}✔ RAG database cleared ({removed} file(s) removed).{RESET}")
+
+
+def do_rag_reset(config_path):
+    """Rebuild the RAG database from the bundled default document. Only when the
+    RAG service isn't running (it owns the file)."""
+    from rag.inspect_db import default_db_path
+    if _rag_service_up():
+        print(f"{MUTED}  the RAG service is running — use the web UI's 'Reset to Default' "
+              f"(or stop the studio first).{RESET}")
+        return
+    default_md = _default_rag_source()
+    if not os.path.isfile(default_md):
+        print(f"{ERR}  default RAG source not found: {default_md}{RESET}")
+        return
+    emb = _rag_embedding_dir(config_path)
+    if not emb:
+        print(f"{ERR}  no RAG embedding model configured (app.rag.embedding_model_dir).{RESET}")
+        return
+    try:
+        ans = input(f"{MUTED}  reset the RAG database to the default document? "
+                    f"[y/N] ▸ {RESET}").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if ans not in ("y", "yes"):
+        print(f"{MUTED}  cancelled.{RESET}")
+        return
+    print(f"{MUTED}  rebuilding from the default document (loads the embedding model — "
+          f"this can take a moment)…{RESET}")
+    try:
+        from rag.create_db import create_markdown_vectordb
+        create_markdown_vectordb(input_path=default_md, output_db=default_db_path(),
+                                 embedding_model=emb)
+        print(f"{OK}✔ RAG database reset to default.{RESET}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"{ERR}  reset failed: {exc}{RESET}")
+
+
 def do_rag_inspect(arg=""):
     """Inspect the RAG database: a summary (source, chunk count, embedding model)
     plus the ingested chunks. Prefers the running VectorDB service (which owns the
@@ -1323,7 +1416,7 @@ def do_rag_inspect(arg=""):
     try:
         import urllib.error
         with urllib.request.urlopen(
-                "http://127.0.0.1:9100/documents?limit=16384", timeout=2) as resp:
+                "http://127.0.0.1:9100/documents?limit=16383", timeout=2) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         docs = data.get("documents", []) or []
         service_reachable = True
@@ -1711,7 +1804,13 @@ def main():
                 if new_active != active:
                     active, messages, pending_image = new_active, [], None
             elif cmd in ("rag", "docs"):
-                do_rag_inspect(arg)
+                sub = arg.strip().lower()
+                if sub == "clear":
+                    do_rag_clear()
+                elif sub == "reset":
+                    do_rag_reset(args.config)
+                else:
+                    do_rag_inspect(arg)
             else:
                 print(f"{MUTED}  unknown command /{cmd} — /help for the list.{RESET}")
             continue

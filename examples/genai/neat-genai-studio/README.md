@@ -532,6 +532,15 @@ The UI reads through the running VectorDB service (which owns the DB file); the
 CLI reads the service if it's up, otherwise the `milvus.db` file directly — so the
 single-writer database is never opened twice.
 
+### Reset or clear the RAG database
+- **Reset to Default** rebuilds RAG from the bundled `src/common/rag/neat.md`.
+- **Clear** removes all ingested documents.
+
+In the **Web UI**: **Settings → Knowledge (RAG)** → *Reset to Default* / *Clear RAG
+DB* (both confirm first). In the **CLI**: `/rag reset` and `/rag clear`. The CLI
+operations run only when the RAG service isn't holding the database file open
+(otherwise it points you to the UI buttons).
+
 To point RAG at a different local embedding model or disable it, edit
 `config.local.yaml`:
 

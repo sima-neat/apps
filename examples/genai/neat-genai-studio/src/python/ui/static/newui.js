@@ -757,6 +757,7 @@ window.onload = function () {
   initSolutions();
   initShutdownButton();
   initRagInspect();
+  initVersionModal();
   hideRagControlsIfDisabled();
   if (isRagEnabled()) {
     initializeRagHealth();
@@ -1581,6 +1582,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
   formData.append('utteranceSpeed', getUtteranceSpeed().toFixed(2));
   formData.append('enableTts', isTtsEnabled());
   formData.append('maxTokens', getMaxTokens());
+  formData.append('noThink', !getThinkingEnabled());   // disable reasoning when the toggle is off
 
   const sendRequest = async () => {
     activeGeneration = true;
@@ -1913,6 +1915,23 @@ function selectImage() {
         imageOverlay.src = e.target.result;
         imageOverlay.style.display = 'block';
 
+        // Reveal the camera dock so the preview is actually visible — it's
+        // collapsed/logo-mode by default in the chat-first layout, which would
+        // otherwise hide the uploaded image. On mobile, open the rail drawer.
+        const camSection = document.getElementById('cameraSection');
+        if (camSection) {
+          camSection.classList.remove('collapsed', 'logo-mode');
+          const cb = document.getElementById('cameraCollapseBtn');
+          if (cb) { cb.title = 'Collapse camera'; cb.setAttribute('aria-label', cb.title); }
+        }
+        const ws = document.querySelector('.workspace');
+        const railToggle = document.getElementById('railToggle');
+        const mobile = railToggle && getComputedStyle(railToggle).display !== 'none';
+        if (ws && mobile) {
+          ws.classList.add('rail-open');
+          railToggle.textContent = '✕';
+        }
+
         // Resize container to fit image dimensions
         resizeContainerForImage(imageOverlay);
 
@@ -2026,14 +2045,49 @@ function handleTextUpdate(data) {
       currentAssistantMessage.classList.add('speaking');
     }
 
-    // Append text to the text container, not the message directly.
-    // Accumulate the raw Markdown and re-render (throttled) so the assistant
-    // reply shows live formatting instead of literal Markdown source.
-    const textContainer = currentAssistantMessage.querySelector('.message-text') || currentAssistantMessage;
-    appendMarkdownChunk(textContainer, cleanText);
+    // Split the reply into reasoning (<think>…</think>) and the answer. Reasoning
+    // streams into a collapsible block above the answer, and the two are counted
+    // separately (thinking tokens vs output tokens).
+    const msg = currentAssistantMessage;
+    const answerEl = msg.querySelector('.message-text') || msg;
+    msg._fullRaw = (msg._fullRaw || '') + cleanText;
+    const parts = splitThinking(msg._fullRaw);
 
-    // Live token counter — updates as the reply (incl. VLM) streams in.
-    setMessageTokens(currentAssistantMessage, currentGenTokens);
+    // The template-injected case (a </think> with no opening <think>) can only be
+    // recognized once </think> arrives — deltas before it were tentatively counted
+    // as output. On that transition, reclassify them as thinking so the counts and
+    // the block's token badge are right (safe: a plain answer never emits </think>).
+    if (parts.present && !msg._wasPresent) {
+      msg._wasPresent = true;
+      if (msg._fullRaw.indexOf('<think>') === -1) {
+        msg._thinkTokens = (msg._thinkTokens || 0) + (msg._outTokens || 0);
+        msg._outTokens = 0;
+      }
+    }
+
+    if (parts.present) {
+      const block = ensureThinkBlock(msg);
+      setMarkdownThrottled(block._thinkText, parts.thinking);
+      if (!parts.closed) {
+        msg._thinkTokens = (msg._thinkTokens || 0) + 1;
+      } else {
+        msg._outTokens = (msg._outTokens || 0) + 1;
+        if (!msg._thinkCollapsed && parts.answer.trim()) {
+          block.open = false;   // auto-collapse once the answer begins
+          msg._thinkCollapsed = true;
+        }
+      }
+      if (block._thinkTokensEl) {
+        const n = msg._thinkTokens || 0;
+        block._thinkTokensEl.textContent = n + ' token' + (n === 1 ? '' : 's');
+      }
+    } else {
+      msg._outTokens = (msg._outTokens || 0) + 1;
+    }
+    setMarkdownThrottled(answerEl, parts.answer);
+
+    // Live output-token counter (thinking is counted in the block above).
+    setMessageTokens(msg, msg._outTokens || 0);
 
     // Scroll chat to bottom
     scrollChatToBottom();
@@ -2091,18 +2145,29 @@ socket.on('end', (data) => {
     currentAssistantMessage.classList.remove('speaking');
 
     // Final Markdown render + syntax highlighting + copy buttons on the reply.
+    // Cancel any pending throttle render first, else it fires next frame and
+    // re-renders without the highlighting/copy-button enhancement.
     const textContainer = currentAssistantMessage.querySelector('.message-text');
     if (textContainer) {
+      cancelPendingRender(textContainer);
       renderMarkdownStreaming(textContainer, textContainer._raw || textContainer.textContent);
       enhanceCodeBlocks(textContainer);
       // Final render recreated the nodes — keep the TTS highlight aligned while
       // any queued audio finishes speaking.
       if (_ttsHi.container === textContainer) applyTtsHighlight();
     }
+    // Finalize the reasoning block, if the model produced one.
+    const tb = currentAssistantMessage._thinkBlock;
+    if (tb && tb._thinkText) {
+      cancelPendingRender(tb._thinkText);
+      renderMarkdownStreaming(tb._thinkText, tb._thinkText._raw || tb._thinkText.textContent);
+      enhanceCodeBlocks(tb._thinkText);
+    }
     addResponseCopyButton(currentAssistantMessage);   // copy the whole reply
 
-    // Show how many tokens this reply generated.
-    setMessageTokens(currentAssistantMessage, currentGenTokens);
+    // Show how many output tokens this reply generated (thinking counted separately).
+    setMessageTokens(currentAssistantMessage,
+      currentAssistantMessage._outTokens != null ? currentAssistantMessage._outTokens : currentGenTokens);
 
     // Don't remove audio-playing class here - let actual audio end handle it
     // The 'end' event is for text streaming, not audio playback
@@ -2421,6 +2486,41 @@ function setRagControls(dbReady) {
 // can see exactly what's in the RAG DB they uploaded. All rendering uses
 // textContent, so chunk text can never inject markup.
 let _ragInspectDocs = [];
+
+// About / version modal — shows the git commit, branch and date (from
+// window.SIMA_CONFIG.version, injected by /config.js).
+function initVersionModal() {
+  const btn = document.getElementById('aboutVersionBtn');
+  const modal = document.getElementById('versionModal');
+  if (!btn || !modal) return;
+  const close = document.getElementById('versionModalClose');
+  const grid = document.getElementById('versionGrid');
+  const hide = () => { modal.style.display = 'none'; };
+  const open = () => {
+    if (grid) {
+      grid.textContent = '';
+      const v = (window.SIMA_CONFIG && window.SIMA_CONFIG.version) || {};
+      const rows = [
+        ['Studio', v.name || 'Neat GenAI Studio'],
+        ['Commit', (v.commit || 'unknown') + (v.dirty ? ' · modified' : '')],
+        ['Branch', v.branch || 'unknown'],
+      ];
+      if (v.date) rows.push(['Date', v.date]);
+      rows.forEach(([k, val]) => {
+        const kk = document.createElement('div'); kk.className = 'version-k'; kk.textContent = k;
+        const vv = document.createElement('div'); vv.className = 'version-v'; vv.textContent = val;
+        grid.appendChild(kk); grid.appendChild(vv);
+      });
+    }
+    modal.style.display = 'flex';
+  };
+  btn.addEventListener('click', open);
+  if (close) close.addEventListener('click', hide);
+  modal.addEventListener('click', (e) => { if (e.target === modal) hide(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display !== 'none') hide();
+  });
+}
 
 function initRagInspect() {
   const btn = document.getElementById('inspectRagButton');
@@ -2854,6 +2954,56 @@ function clearMessageLater() {
   }, 5000);
 }
 
+// Shared: POST to a RAG endpoint and stream its text/plain progress into the
+// settings message box. Used by "Reset to Default" and "Clear RAG DB".
+async function streamRagAction(url, opts) {
+  opts = opts || {};
+  if (!isRagEnabled()) return;
+  if (opts.confirm && !window.confirm(opts.confirm)) return;
+  const messageBox = document.getElementById("settingsMessage");
+  if (messageBox) messageBox.textContent = "⏳ Working...";
+  try {
+    const response = await fetch(url, { method: "POST" });
+    if (!response.ok) {
+      if (messageBox) messageBox.textContent = `❌ Server error: ${response.statusText}`;
+      clearMessageLater();
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (line.trim() && messageBox) messageBox.textContent = line.trim();
+        }
+      }
+    }
+  } catch (err) {
+    if (messageBox) messageBox.textContent = `❌ Error: ${err.message}`;
+  }
+  // The RAG service was restarted (reset) or stopped (clear) — refresh health.
+  if (typeof initializeRagHealth === "function") setTimeout(() => initializeRagHealth(), 1500);
+  clearMessageLater();
+}
+
+const _resetRagBtn = document.getElementById("resetRagButton");
+if (_resetRagBtn) _resetRagBtn.addEventListener("click", () =>
+  streamRagAction("/reset-rag", {
+    confirm: "Reset the RAG database to the bundled default document? This replaces the current RAG contents."
+  }));
+
+const _clearRagBtn = document.getElementById("clearRagButton");
+if (_clearRagBtn) _clearRagBtn.addEventListener("click", () =>
+  streamRagAction("/clear-rag", {
+    confirm: "Clear the RAG database? This removes all ingested documents — you can reset to default or upload again later."
+  }));
+
 document.getElementById("importRagDatabaseButton").addEventListener("click", async () => {
   if (!isRagEnabled()) return;
 
@@ -3215,13 +3365,85 @@ function appendMarkdownChunk(container, chunk) {
   container._raw = (container._raw || '') + chunk;
   if (container._renderScheduled) return;
   container._renderScheduled = true;
-  requestAnimationFrame(() => {
+  container._renderRaf = requestAnimationFrame(() => {
     container._renderScheduled = false;
     renderMarkdownStreaming(container, container._raw);
     // The re-render recreated text nodes — reattach the TTS highlight if active.
     if (_ttsHi.container === container) applyTtsHighlight();
     scrollChatToBottom();
   });
+}
+
+// Cancel a scheduled throttle render so it can't fire after the final render
+// (which would drop syntax highlighting + code-copy buttons).
+function cancelPendingRender(container) {
+  if (container && container._renderScheduled) {
+    try { cancelAnimationFrame(container._renderRaf); } catch (e) { /* ignore */ }
+    container._renderScheduled = false;
+  }
+}
+
+// Like appendMarkdownChunk but SETS the full raw text (used when the text is
+// re-derived each delta, e.g. the answer with the <think> block stripped out).
+function setMarkdownThrottled(container, fullText) {
+  if (!container) return;
+  container._raw = fullText || '';
+  if (container._renderScheduled) return;
+  container._renderScheduled = true;
+  container._renderRaf = requestAnimationFrame(() => {
+    container._renderScheduled = false;
+    renderMarkdownStreaming(container, container._raw || '');
+    if (_ttsHi.container === container) applyTtsHighlight();
+    scrollChatToBottom();
+  });
+}
+
+// ---- Thinking (reasoning) rendering ------------------------------------------
+// Reasoning models stream their chain-of-thought inline as <think>…</think>
+// before the answer. Split it out so the thinking shows in a collapsible block
+// above the answer, and the two are counted separately.
+function splitThinking(raw) {
+  raw = raw || '';
+  const openIdx = raw.indexOf('<think>');
+  if (openIdx !== -1) {                       // explicit <think>…</think>
+    const pre = raw.slice(0, openIdx);
+    const afterOpen = raw.slice(openIdx + 7);
+    const c = afterOpen.indexOf('</think>');
+    if (c === -1) return { thinking: afterOpen, answer: pre, present: true, closed: false };
+    return { thinking: afterOpen.slice(0, c), answer: pre + afterOpen.slice(c + 8), present: true, closed: true };
+  }
+  const closeIdx = raw.indexOf('</think>');   // template pre-filled <think>; only the close is emitted
+  if (closeIdx !== -1) {
+    return { thinking: raw.slice(0, closeIdx), answer: raw.slice(closeIdx + 8), present: true, closed: true };
+  }
+  return { thinking: '', answer: raw, present: false, closed: true };
+}
+
+function ensureThinkBlock(messageEl) {
+  if (messageEl._thinkBlock) return messageEl._thinkBlock;
+  const block = document.createElement('details');
+  block.className = 'think-block';
+  block.open = true;
+  const summary = document.createElement('summary');
+  summary.className = 'think-summary';
+  const label = document.createElement('span');
+  label.className = 'think-label';
+  label.textContent = 'Thinking';
+  const toks = document.createElement('span');
+  toks.className = 'think-tokens';
+  summary.appendChild(label);
+  summary.appendChild(toks);
+  const body = document.createElement('div');
+  body.className = 'think-text';   // NOT .message-text, so the answer lookup stays unambiguous
+  block.appendChild(summary);
+  block.appendChild(body);
+  const answerEl = messageEl.querySelector('.message-text');
+  if (answerEl) messageEl.insertBefore(block, answerEl);
+  else messageEl.insertBefore(block, messageEl.firstChild);
+  messageEl._thinkBlock = block;
+  block._thinkText = body;
+  block._thinkTokensEl = toks;
+  return block;
 }
 
 function enhanceCodeBlocks(el) {
@@ -4710,9 +4932,26 @@ function getMaxTokens() {
   return el ? parseInt(el.value, 10) : 512;
 }
 
+// Whether reasoning models should think. On by default; when off we ask the
+// server to disable thinking (/no_think). No effect on non-reasoning models.
+function getThinkingEnabled() {
+  const el = document.getElementById('toggleThinking');
+  if (el) return el.checked;
+  try { return localStorage.getItem('studioThinking') !== '0'; } catch (e) { return true; }
+}
+
 function initGenerationControls() {
   const range = document.getElementById('maxTokensRange');
   const value = document.getElementById('maxTokensValue');
+  const think = document.getElementById('toggleThinking');
+  if (think) {
+    let on = true;
+    try { on = localStorage.getItem('studioThinking') !== '0'; } catch (e) { /* ignore */ }
+    think.checked = on;
+    think.addEventListener('change', () => {
+      try { localStorage.setItem('studioThinking', think.checked ? '1' : '0'); } catch (e) { /* ignore */ }
+    });
+  }
   if (!range) return;
   const cfgDefault = parseInt(window.SIMA_CONFIG?.defaultMaxTokens, 10);
   const saved = parseInt(localStorage.getItem('studioMaxTokens'), 10);
@@ -4812,6 +5051,8 @@ function initVision() {
   if (imgBtn) imgBtn.addEventListener('click', () => setVisionSource('image'));
   if (uploadBtn) uploadBtn.addEventListener('click', pickVisionImage);
   if (micBtn) micBtn.addEventListener('click', toggleVisionMic);
+  const loopBtn = document.getElementById('visionLoopBtn');
+  if (loopBtn) loopBtn.addEventListener('click', toggleVisionLoop);
   if (askBtn) askBtn.addEventListener('click', () => askVision(input ? input.value : ''));
   if (input) input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); askVision(input.value); }
@@ -4851,6 +5092,7 @@ function openVision() {
 function closeVision() {
   const modal = document.getElementById('visionModal');
   if (!modal) return;
+  stopVisionLoop();          // end any continuous camera loop
   modal.style.display = 'none';
   document.body.classList.remove('vision-open');
   cancelVisionRecording();   // stop any in-progress voice capture + release the mic
@@ -4884,7 +5126,7 @@ function setVisionSource(source) {
   } else {
     if (video) video.style.display = 'none';
     if (image) image.style.display = image.src ? '' : 'none';
-    setVisionHint(image && image.src ? '' : 'No image loaded — press “Upload image”.');
+    setVisionHint(image && image.src ? '' : 'No image loaded — press “Upload Image”.');
   }
   refreshVisionModelState();
 }
@@ -4987,6 +5229,76 @@ function askVision(query) {
   addChatMessage(query, true, true);
   startProcessing('', query, false);
   if (input) input.value = '';
+}
+
+// ---- Continuous camera loop: repeatedly ask the VLM about the live camera ----
+let _visionLoop = { on: false, prompt: '', delayMs: 800 };
+
+function waitForGenerationEnd(timeoutMs) {
+  timeoutMs = timeoutMs || 90000;
+  const start = performance.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (!activeGeneration || (performance.now() - start) > timeoutMs || !_visionLoop.on) {
+        return resolve();
+      }
+      setTimeout(tick, 150);
+    };
+    tick();
+  });
+}
+
+function setVisionLoopUI(on) {
+  const btn = document.getElementById('visionLoopBtn');
+  if (!btn) return;
+  btn.classList.toggle('is-looping', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.textContent = on ? '■ Stop' : '↻ Loop';
+}
+
+async function visionLoopRun() {
+  while (_visionLoop.on) {
+    // The loop only makes sense on the live camera with a vision model.
+    if (!isVisionOpen() || _visionSource !== 'camera' || !selectedChatModelSupportsVision()) {
+      stopVisionLoop();
+      break;
+    }
+    if (!activeGeneration) {
+      const input = document.getElementById('visionInput');
+      const p = (input && input.value.trim()) || _visionLoop.prompt || 'Describe what you see in the picture.';
+      _visionLoop.prompt = p;
+      askVision(p);                      // captures a fresh frame + asks (clears input)
+      if (input) input.value = p;        // keep the prompt visible + editable for next iter
+    }
+    // Let the request register as active, then wait for it to complete.
+    await new Promise((r) => setTimeout(r, 500));
+    await waitForGenerationEnd();
+    if (!_visionLoop.on) break;
+    await new Promise((r) => setTimeout(r, _visionLoop.delayMs));
+  }
+}
+
+function startVisionLoop() {
+  if (_visionLoop.on) return;
+  if (_visionSource !== 'camera') setVisionSource('camera');
+  if (!selectedChatModelSupportsVision()) { refreshVisionModelState(); return; }
+  const input = document.getElementById('visionInput');
+  _visionLoop.prompt = (input && input.value.trim()) || 'Describe what you see in the picture.';
+  _visionLoop.on = true;
+  setVisionLoopUI(true);
+  setVisionAskHint('Looping — asking about the live camera continuously. Tap Stop to end.');
+  visionLoopRun();
+}
+
+function stopVisionLoop() {
+  _visionLoop.on = false;
+  setVisionLoopUI(false);
+  if (isVisionOpen()) setVisionAskHint('');
+}
+
+function toggleVisionLoop() {
+  if (_visionLoop.on) stopVisionLoop();
+  else startVisionLoop();
 }
 
 // ---- Vision voice input (primary): speak a question about the current frame --
