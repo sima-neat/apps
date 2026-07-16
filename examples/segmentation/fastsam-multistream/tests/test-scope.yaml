@@ -1,0 +1,13 @@
+models: {}
+unit:
+  python: false
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: Multi-stream RTSP example has no automated test coverage yet.
+    models: []
+  cpp:
+    enabled: false
+    reason: Multi-stream RTSP example has no automated test coverage yet.
+    models: []
