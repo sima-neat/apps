@@ -41,20 +41,10 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
-if not isinstance(data, dict):
-    raise SystemExit(1)
+neat_core = data.get("neat-core", {})
+branch = str(neat_core.get("branch", "")).strip()
+version = str(neat_core.get("version", "")).strip()
 
-neat_core = data.get("neat-core")
-if not isinstance(neat_core, dict):
-    raise SystemExit(1)
-
-branch = neat_core.get("branch")
-version = neat_core.get("version")
-if not isinstance(branch, str) or not isinstance(version, str):
-    raise SystemExit(1)
-
-branch = branch.strip()
-version = version.strip()
 if not branch or not version or version.lower() == "latest":
     raise SystemExit(1)
 
