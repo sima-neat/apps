@@ -26,6 +26,7 @@ class Config:
     timeout_ms: int = 20000
     queue_depth: int = 8
     frames: int = 0
+    video_enabled: bool = True
     video_port_base: int = 9000
     metadata_port_base: int = 9100
     bitrate_kbps: int = 1000
@@ -64,6 +65,7 @@ def load_config(path):
         tcp=bool(_get(raw, "source.tcp", True)),
         queue_depth=int(_get(raw, "runtime.queue_depth", 8)),
         frames=int(_get(raw, "runtime.frames", 0)),
+        video_enabled=bool(_get(raw, "output.video_enabled", True)),
         video_port_base=int(_get(raw, "output.insight.video_port_base", 9000)),
         metadata_port_base=int(_get(raw, "output.insight.metadata_port_base", 9100)),
         bitrate_kbps=int(_get(raw, "output.insight.bitrate_kbps", 1000)),

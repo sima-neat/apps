@@ -1,5 +1,6 @@
 """FastSAM + MobileCLIP text-prompt segmentation across RTSP cameras on the SiMa MLA, via pyneat."""
 import json
+import os
 import signal
 import sys
 import time
@@ -212,7 +213,9 @@ def main():
         streams = []
         for index, (url, width, height, fps) in enumerate(probes):
             source_run = _build_source_run(cfg, url, width, height, fps)
-            video_run = _build_video_run(cfg, index, width, height, fps)
+            video_run = (
+                _build_video_run(cfg, index, width, height, fps) if cfg.video_enabled else None
+            )
             geom = fastsam.letterbox_geometry(width, height, cfg.infer_size)
             sender = _metadata_sender(cfg, index)
             streams.append((source_run, video_run, geom, sender, width, height))
@@ -223,45 +226,42 @@ def main():
         closed = [False] * len(streams)
         held = [None] * len(streams)
         miss = [0] * len(streams)
-        try:
-            while not _stop and not all(closed):
-                worked = False
-                for index, (source_run, video_run, geom, sender, width, height) in enumerate(streams):
-                    if closed[index]:
-                        continue
-                    sample = source_run.pull(timeout_ms=PULL_TIMEOUT_MS)
-                    if sample is None:
-                        if not source_run.can_pull():
-                            closed[index] = True
-                        continue
-                    if not sample.tensors:
-                        continue
-                    worked = True
-                    processed[index] += 1
-                    rgb = _frame_rgb(sample.tensors[0], width, height)
-                    match = _detect(cfg, rgb, geom, fastsam_model, image_encoder, text_query)
-                    if match is not None:
-                        held[index], miss[index] = match, 0
-                    elif held[index] is not None and miss[index] < HOLD_FRAMES:
-                        miss[index] += 1
-                        match = held[index]
-                    else:
-                        held[index] = None
-                    _push_video(video_run, rgb, sample)
-                    ts_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
-                    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
-                    _send_metadata(sender, _segments_json(match, cfg.text), frame_id, ts_ms)
-                    if cfg.frames > 0 and processed[index] >= cfg.frames:
+        while not _stop and not all(closed):
+            worked = False
+            for index, (source_run, video_run, geom, sender, width, height) in enumerate(streams):
+                if closed[index]:
+                    continue
+                sample = source_run.pull(timeout_ms=PULL_TIMEOUT_MS)
+                if sample is None:
+                    if not source_run.can_pull():
                         closed[index] = True
-                if not worked and not all(closed):
-                    time.sleep(0.001)
-        finally:
-            for source_run, video_run, _geom, _sender, _w, _h in streams:
-                source_run.close()
-                video_run.close()
-            fastsam_model.close()
-            image_encoder.close()
-        return 0
+                    continue
+                if not sample.tensors:
+                    continue
+                worked = True
+                processed[index] += 1
+                rgb = _frame_rgb(sample.tensors[0], width, height)
+                match = _detect(cfg, rgb, geom, fastsam_model, image_encoder, text_query)
+                if match is not None:
+                    held[index], miss[index] = match, 0
+                elif held[index] is not None and miss[index] < HOLD_FRAMES:
+                    miss[index] += 1
+                    match = held[index]
+                else:
+                    held[index] = None
+                if video_run is not None:
+                    _push_video(video_run, rgb, sample)
+                ts_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
+                frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
+                _send_metadata(sender, _segments_json(match, cfg.text), frame_id, ts_ms)
+                if cfg.frames > 0 and processed[index] >= cfg.frames:
+                    closed[index] = True
+            if not worked and not all(closed):
+                time.sleep(0.001)
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
     except Exception as ex:
         print(f"Error: {ex}", file=sys.stderr)
         return 2
