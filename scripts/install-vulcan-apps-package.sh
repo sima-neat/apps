@@ -41,11 +41,21 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
-neat_core = data.get("neat-core", {})
-branch = str(neat_core.get("branch", "")).strip()
-version = str(neat_core.get("version", "")).strip()
+if not isinstance(data, dict):
+    raise SystemExit(1)
 
-if not branch or not version:
+neat_core = data.get("neat-core")
+if not isinstance(neat_core, dict):
+    raise SystemExit(1)
+
+branch = neat_core.get("branch")
+version = neat_core.get("version")
+if not isinstance(branch, str) or not isinstance(version, str):
+    raise SystemExit(1)
+
+branch = branch.strip()
+version = version.strip()
+if not branch or not version or version.lower() == "latest":
     raise SystemExit(1)
 
 print(branch)
@@ -110,11 +120,7 @@ if [[ ! -d "${RUNTIME_SRC}" ]]; then
   fi
 fi
 
-rm -rf "${DEST_DIR}"
-mkdir -p "${DEST_DIR}"
-mv "${RUNTIME_SRC}" "${RUNTIME_DST}"
-
-NEAT_CORE_JSON_PATH="${RUNTIME_DST}/neat-core.json"
+NEAT_CORE_JSON_PATH="${RUNTIME_SRC}/neat-core.json"
 if [[ ! -f "${NEAT_CORE_JSON_PATH}" ]]; then
   echo "ERROR: extracted apps package is missing neat-core.json." >&2
   exit 1
@@ -137,6 +143,10 @@ SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
 
 NEAT_CORE_BRANCH="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '1p')"
 NEAT_CORE_VERSION="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '2p')"
+
+rm -rf "${DEST_DIR}"
+mkdir -p "${DEST_DIR}"
+mv "${RUNTIME_SRC}" "${RUNTIME_DST}"
 
 echo
 echo "Installing matching NEAT core from Vulcan:"
