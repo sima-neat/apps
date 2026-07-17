@@ -37,12 +37,6 @@ Environment:
   NEAT_APPS_INSTALL_DIR   Destination directory for extracted files
                           default: ./neat-apps
   NEAT_APPS_ARCHIVE       Use an already downloaded local apps archive
-  NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL
-                          Download test-scope models after install when set to 1
-                          default: 0
-  NEAT_APPS_SKIP_MODEL_DOWNLOAD
-                          Skip model downloads when set to 1
-                          default: 0
 USAGE
 }
 
@@ -77,30 +71,6 @@ download_file() {
 
 branch_key_for_url() {
   printf '%s' "$1" | tr '/ ' '--'
-}
-
-resolve_sima_cli_bin() {
-  if [[ -n "${SIMA_CLI_BIN:-}" && -x "${SIMA_CLI_BIN}" ]]; then
-    printf '%s\n' "${SIMA_CLI_BIN}"
-    return 0
-  fi
-  if command -v sima-cli >/dev/null 2>&1; then
-    command -v sima-cli
-    return 0
-  fi
-  local candidate
-  for candidate in \
-    /data/sima-cli/.venv/bin/sima-cli \
-    "${HOME}/.local/bin/sima-cli" \
-    "${HOME}/sima-cli/.venv/bin/sima-cli" \
-    /opt/sima-cli/.venv/bin/sima-cli \
-    /opt/bin/sima-cli; do
-    if [[ -x "${candidate}" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-  return 1
 }
 
 extract_neat_core_target() {
@@ -264,31 +234,6 @@ if ! "${TMP_INSTALLER}" --minimum "${NEAT_CORE_BRANCH}" "${NEAT_CORE_VERSION}"; 
     "${TMP_INSTALLER}" --minimum "${NEAT_CORE_BRANCH}" latest
   else
     exit 1
-  fi
-fi
-
-DOWNLOAD_MODELS_SCRIPT="${RUNTIME_DIR}/scripts/download_models.sh"
-if [[ "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}" == "1" ]]; then
-  echo
-  echo "Skipping model downloads because NEAT_APPS_SKIP_MODEL_DOWNLOAD=1."
-elif [[ "${NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL:-0}" != "1" ]]; then
-  echo
-  echo "Skipping model downloads during install. Run neat-apps-runtime/scripts/download_models.sh or tests/test.sh when needed."
-elif [[ -x "${DOWNLOAD_MODELS_SCRIPT}" || -f "${DOWNLOAD_MODELS_SCRIPT}" ]]; then
-  if SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)"; then
-    echo
-    echo "Downloading models required by packaged test scope ..."
-    (
-      cd "${RUNTIME_DIR}"
-      chmod +x scripts/download_models.sh
-      SIMA_CLI_BIN="${SIMA_CLI_RESOLVED}" bash scripts/download_models.sh \
-        --kind e2e \
-        --language python \
-        --language cpp
-    )
-  else
-    echo
-    echo "WARNING: sima-cli was not found after NEAT core installation; skipping model downloads."
   fi
 fi
 

@@ -130,8 +130,9 @@ artifact_version() {
 
 package_distribution() {
   local build_path="${ROOT_DIR}/${BUILD_DIR}"
-  local stage_dir="${ROOT_DIR}/neat-apps-runtime"
+  local stage_root stage_dir test_stage_dir
   local branch_key version archive_name archive_path
+  local test_archive_path="${ROOT_DIR}/neat-apps-tests.tar.gz"
   local neat_core_branch neat_core_version
 
   if [[ ! -d "${build_path}" ]]; then
@@ -143,9 +144,14 @@ package_distribution() {
   version="$(artifact_version)"
   archive_name="neat-apps-${branch_key}-${version}.tar.gz"
   archive_path="${ROOT_DIR}/${archive_name}"
+  stage_root="$(mktemp -d /tmp/neat-apps-package.XXXXXX)"
+  stage_dir="${stage_root}/neat-apps-runtime"
+  test_stage_dir="${stage_root}/neat-apps-tests"
 
-  rm -rf "${stage_dir}"
-  mkdir -p "${stage_dir}/examples" "${stage_dir}/assets"
+  mkdir -p \
+    "${stage_dir}/examples" \
+    "${stage_dir}/assets" \
+    "${test_stage_dir}/examples"
 
   load_neat_core_target
   neat_core_branch="${NEAT_CORE_TARGET_BRANCH}"
@@ -169,14 +175,15 @@ with open(sys.argv[1], "w", encoding="utf-8") as fh:
     fh.write("\n")
 PY
 
-  # Copy only built executables from the build tree, preserving the example
-  # directory layout so the bundle remains easy to browse and run.
+  # Keep production and test executables in separate artifacts while
+  # preserving the example layout expected by the test runner.
   while IFS= read -r exe; do
     local rel target_dir
     rel="${exe#${build_path}/}"
-    target_dir="${stage_dir}/$(dirname "${rel}")"
     if [[ "${exe}" == *_unit_test || "${exe}" == *_e2e_test ]]; then
-      target_dir="${target_dir}/tests/cpp"
+      target_dir="${test_stage_dir}/$(dirname "${rel}")/tests/cpp"
+    else
+      target_dir="${stage_dir}/$(dirname "${rel}")"
     fi
     mkdir -p "${target_dir}"
     cp "${exe}" "${target_dir}/"
@@ -187,8 +194,8 @@ PY
       2>/dev/null | sort
   )
 
-  # Include the Python entrypoints and test-side support files required to run
-  # unit/e2e validation in another environment without the full source tree.
+  # Runtime source is customer-facing. Test scopes and test source are staged
+  # separately and overlaid only in CI.
   while IFS= read -r src_file; do
     local rel target_dir
     rel="${src_file#${ROOT_DIR}/examples/}"
@@ -205,39 +212,62 @@ PY
       ! -name '*.lock' \
       ! -name '*.log' \
       \( -path '*/src/python/*' \
-         -o -path '*/tests/test-scope.yaml' \
          -o -name 'README.md' \
-         -o -path '*/tests/python/test_*.py' \
          -o -path '*/src/common/*' \
          -o -path '*/run.sh' \
          -o -path '*/setup.sh' \
       \) 2>/dev/null | sort
   )
 
-  cp -a "${ROOT_DIR}/tests" "${stage_dir}/tests"
-  rm -f "${stage_dir}/tests/.env.local"
-  mkdir -p "${stage_dir}/deps"
-  cp "${APPS_MANIFEST}" "${stage_dir}/deps/manifest.json"
-  mkdir -p "${stage_dir}/scripts"
-  cp "${ROOT_DIR}/scripts/download_models.sh" "${stage_dir}/scripts/download_models.sh"
-  cp "${ROOT_DIR}/tests/conftest.py" "${stage_dir}/examples/conftest.py"
-  while IFS= read -r rel; do
+  while IFS= read -r tests_dir; do
+    local rel target_dir
+    rel="${tests_dir#${ROOT_DIR}/examples/}"
+    target_dir="${test_stage_dir}/examples/${rel}"
+    mkdir -p "${target_dir}"
+    cp -a "${tests_dir}/." "${target_dir}/"
+  done < <(find "${ROOT_DIR}/examples" -type d -name tests -prune | sort)
+
+  mkdir -p "${test_stage_dir}/tests"
+  cp -a "${ROOT_DIR}/tests/." "${test_stage_dir}/tests/"
+  mkdir -p "${test_stage_dir}/deps" "${test_stage_dir}/scripts"
+  cp "${APPS_MANIFEST}" "${test_stage_dir}/deps/manifest.json"
+  cp "${ROOT_DIR}/scripts/download_models.sh" "${test_stage_dir}/scripts/download_models.sh"
+  cp "${ROOT_DIR}/tests/conftest.py" "${test_stage_dir}/examples/conftest.py"
+  local asset_files=()
+  if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    mapfile -t asset_files < <(git -C "${ROOT_DIR}" ls-files assets)
+  fi
+  if [[ "${#asset_files[@]}" -eq 0 ]]; then
+    mapfile -t asset_files < <(
+      find "${ROOT_DIR}/assets" -type f \
+        ! -path "${ROOT_DIR}/assets/models/*" \
+        ! -name '.DS_Store' \
+        | sed "s#^${ROOT_DIR}/##" \
+        | sort
+    )
+  fi
+  for rel in "${asset_files[@]}"; do
     local src_file target_dir
     src_file="${ROOT_DIR}/${rel}"
     [[ -f "${src_file}" ]] || continue
     target_dir="${stage_dir}/$(dirname "${rel}")"
     mkdir -p "${target_dir}"
     cp "${src_file}" "${target_dir}/"
-  done < <(git -C "${ROOT_DIR}" ls-files assets)
+  done
 
   find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
   find "${stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
-  tar -czf "${archive_path}" -C "${ROOT_DIR}" "$(basename "${stage_dir}")"
+  tar -czf "${archive_path}" -C "${stage_root}" "$(basename "${stage_dir}")"
+  tar -czf "${test_archive_path}" -C "${stage_root}" "$(basename "${test_stage_dir}")"
+  "${ROOT_DIR}/scripts/ci/validate_apps_runtime_archive.sh" "${archive_path}"
+  tar -tzf "${test_archive_path}" neat-apps-tests/tests/test.sh >/dev/null
+  rm -rf "${stage_root}"
 
   echo ""
-  echo "Distribution package created:"
+  echo "Distribution packages created:"
   echo "  ${archive_path}"
+  echo "  ${test_archive_path}"
 }
 
 build_portal() {

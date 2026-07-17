@@ -42,8 +42,8 @@ jobs:
       checkout_submodules: recursive
       ensure_sdk_container: true
       sdk_setup_args: "-y -n --minimal --workspace /mnt/vulcan/workspace --no-model-sdk --no-insight"
-      artifact_name: neat-apps-dist
-      artifact_path: dist/*
+      artifact_name: neat-apps-build
+      artifact_path: neat-apps-*.tar.gz
       artifact_retention_days: 3
       build_command: |
         set -euo pipefail
@@ -131,69 +131,26 @@ jobs:
       post_build_command: |
         set -euo pipefail
 
-        rm -rf dist
-        mkdir -p dist
-        mapfile -t archives < <(find . -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' | sort)
-        if [[ "${#archives[@]}" -ne 1 ]]; then
-          echo "Expected exactly one neat-apps archive, found ${#archives[@]}" >&2
-          printf '  %s\n' "${archives[@]}" >&2 || true
+        mapfile -t runtime_archives < <(
+          find . -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
+            ! -name 'neat-apps-tests.tar.gz' | sort
+        )
+        if [[ "${#runtime_archives[@]}" -ne 1 ]]; then
+          echo "Expected exactly one runtime archive, found ${#runtime_archives[@]}" >&2
+          printf '  %s\n' "${runtime_archives[@]}" >&2 || true
           exit 1
         fi
-
-        cp "${archives[0]}" dist/
-        install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
-        test -f neat-apps-runtime/neat-core.json
-        cp neat-apps-runtime/neat-core.json dist/neat-core.json
-
-        sdk_container="$(docker ps --filter 'ancestor=ghcr.io/sima-neat/sdk:latest' --format '{{.Names}}' | head -n 1)"
-        if [[ -z "${sdk_container}" ]]; then
-          sdk_container="$(docker ps --filter 'name=sdk' --format '{{.Names}}' | head -n 1)"
-        fi
-        if [[ -z "${sdk_container}" ]]; then
-          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-          echo "Could not find running SDK container." >&2
-          exit 1
-        fi
-
-        docker exec \
-          -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
-          -e GITHUB_REF_NAME="${GITHUB_REF_NAME}" \
-          -e GITHUB_REF_TYPE="${GITHUB_REF_TYPE}" \
-          -e GITHUB_SHA="${GITHUB_SHA}" \
-          "${sdk_container}" \
-          bash -lc '
-            set -euo pipefail
-            export SIMA_CLI_CHECK_FOR_UPDATE=0
-            export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
-            if ! command -v sima-cli >/dev/null 2>&1 || ! sima-cli packages build --help >/dev/null 2>&1; then
-              curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
-              python3 sima-cli-install.py main latest --noninteractive
-              rm -f sima-cli-install.py
-              export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
-            fi
-            cd /workspace
-            if [[ "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
-              version="${GITHUB_REF_NAME}"
-              version="${version#v}"
-            else
-              version="$(printf "%.12s" "${GITHUB_SHA}")"
-            fi
-            sima-cli packages build dist \
-              --name gh:sima-neat/apps \
-              --version "${version}" \
-              --description "SiMa.ai Neat example applications and portal runtime" \
-              --install-script install_vulcan_apps_package.sh
-          '
-
-        python3 -m json.tool dist/metadata.json >/dev/null
-        tar -tzf "${archives[0]}" neat-apps-runtime/neat-core.json >/dev/null
-        ls -lh dist
+        test -f neat-apps-tests.tar.gz
+        scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
+        tar -tzf "${runtime_archives[0]}" neat-apps-runtime/neat-core.json >/dev/null
+        tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
+        ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 
   publish-vulcan-artifacts:
     name: Publish to Vulcan
     needs:
       - resolve-vulcan-config
-      - build
+      - test-runtime
     uses: sima-neat/.github/.github/workflows/vulcan-publish-artifacts.yml@main
     with:
       aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}
@@ -222,16 +179,14 @@ jobs:
   test-runtime:
     name: Test Apps Runtime
     needs:
+      - build
       - resolve-vulcan-config
       - resolve-test-runner
-      - publish-vulcan-artifacts
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
       labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
     env:
       VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
-      SIMA_CLI_CHECK_FOR_UPDATE: "0"
-      NEAT_APPS_SKIP_MODEL_DOWNLOAD: "1"
 
     steps:
       - name: Checkout code
@@ -245,40 +200,45 @@ jobs:
           rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
           rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh neat-core.json
 
+      - name: Download Apps build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: neat-apps-build
+          path: _vulcan-test/artifacts
+
       - name: Fix devkit runtime
         run: |
           if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
-            /usr/bin/fix_devkit_runtime.sh
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
 
-      - name: Install apps runtime from Vulcan artifact
+      - name: Install runtime candidate and overlay tests
         run: |
-          if ! command -v sima-cli >/dev/null 2>&1; then
-            echo "sima-cli not found on test runner." >&2
+          mapfile -t runtime_archives < <(
+            find _vulcan-test/artifacts -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
+              ! -name 'neat-apps-tests.tar.gz' | sort
+          )
+          if [[ "${#runtime_archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one runtime candidate, found ${#runtime_archives[@]}" >&2
             exit 1
           fi
+          test_archive="_vulcan-test/artifacts/neat-apps-tests.tar.gz"
+          test -f "${test_archive}"
 
-          REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          SHORT_SHA="$(printf "%.12s" "${GITHUB_SHA}")"
-          PACKAGE_SPEC="apps@${REF_NAME}:${SHORT_SHA}"
-
-          mkdir -p _vulcan-test/install
-          echo "Installing ${PACKAGE_SPEC} from Vulcan env ${VULCAN_ENV}"
-          sima-cli neat install --env "${VULCAN_ENV}" -d _vulcan-test/install "${PACKAGE_SPEC}" -f
-
-      - name: Locate installed apps runtime
-        run: |
-          mapfile -t runtime_dirs < <(find _vulcan-test/install -type d -path '*/neat-apps/neat-apps-runtime' | sort)
-          if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
-            echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
-            printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
-            find _vulcan-test/install -maxdepth 4 -mindepth 1 -type d -printf '  %p\n' | sort >&2 || true
-            exit 1
-          fi
-          printf '%s\n' "${runtime_dirs[0]}" > _vulcan-test/apps_runtime_dir.txt
-          echo "Using apps runtime: ${runtime_dirs[0]}"
+          mkdir -p _vulcan-test/package
+          tar -xzf "${runtime_archives[0]}" -C _vulcan-test/package
+          (
+            cd _vulcan-test/package
+            NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/neat-apps" \
+              NEAT_VULCAN_ENV="${VULCAN_ENV}" \
+              bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
+          )
+          runtime_dir="${GITHUB_WORKSPACE}/_vulcan-test/install/neat-apps/neat-apps-runtime"
+          scripts/ci/overlay_apps_tests.sh "${test_archive}" "${runtime_dir}"
+          printf '%s\n' "${runtime_dir}" > _vulcan-test/apps_runtime_dir.txt
+          echo "Using apps runtime: ${runtime_dir}"
 
       - name: Locate pyneat
         run: |
@@ -300,15 +260,59 @@ jobs:
           "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
-      - name: Run apps unit tests on devkit
+      - name: Run all activated Apps tests
         env:
-          SIMANEAT_APPS_TEST_RTSP_URL: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URL }}
-          SIMANEAT_APPS_TEST_RTSP_URLS: ${{ vars.SIMANEAT_APPS_TEST_RTSP_URLS }}
+          NEAT_APPS_SKIP_MODEL_DOWNLOAD: "0"
+          SIMANEAT_TEST_RTSP_H264_URL: ${{ vars.SIMANEAT_TEST_RTSP_H264_URL }}
+          SIMANEAT_TEST_RTSP_H264_URLS: ${{ vars.SIMANEAT_TEST_RTSP_H264_URLS }}
+          SIMANEAT_TEST_RTSP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URL }}
+          SIMANEAT_TEST_RTSP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_RTSP_MJPEG_URLS }}
+          SIMANEAT_TEST_HTTP_MJPEG_URL: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URL }}
+          SIMANEAT_TEST_HTTP_MJPEG_URLS: ${{ vars.SIMANEAT_TEST_HTTP_MJPEG_URLS }}
         run: |
           RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
           cd "${RUNTIME_DIR}"
           source "${PYNEAT_ACTIVATE}"
-          ./tests/test.sh --unit
+          ./tests/test.sh --all --strict
+
+      - name: Package tested runtime for release
+        run: |
+          rm -rf dist
+          mkdir -p dist
+
+          mapfile -t runtime_archives < <(
+            find _vulcan-test/artifacts -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
+              ! -name 'neat-apps-tests.tar.gz' | sort
+          )
+          runtime_archive="${runtime_archives[0]}"
+          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+
+          cp "${runtime_archive}" dist/
+          install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
+          cp "${RUNTIME_DIR}/neat-core.json" dist/neat-core.json
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(printf "%.12s" "${GITHUB_SHA}")"
+          fi
+          sima-cli packages build dist \
+            --name gh:sima-neat/apps \
+            --version "${version}" \
+            --description "SiMa.ai Neat example applications runtime" \
+            --install-script install_vulcan_apps_package.sh
+
+          python3 -m json.tool dist/metadata.json >/dev/null
+          scripts/ci/validate_apps_runtime_archive.sh "dist/$(basename "${runtime_archive}")"
+          ls -lh dist
+
+      - name: Upload tested Apps release
+        uses: actions/upload-artifact@v7
+        with:
+          name: neat-apps-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Cleanup test workspace tmp artifacts
         if: ${{ always() }}
@@ -317,10 +321,10 @@ jobs:
 
   promote-latest-tag:
     name: Promote Vulcan latest tag
-    if: ${{ always() && (github.ref_type == 'branch' || github.ref_type == 'tag') && needs.test-runtime.result == 'success' }}
+    if: ${{ always() && (github.ref_type == 'branch' || github.ref_type == 'tag') && needs.publish-vulcan-artifacts.result == 'success' }}
     needs:
       - resolve-vulcan-config
-      - test-runtime
+      - publish-vulcan-artifacts
     uses: sima-neat/.github/.github/workflows/vulcan-update-latest-artifacts.yml@main
     with:
       aws_region: ${{ needs.resolve-vulcan-config.outputs.aws_region }}

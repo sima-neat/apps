@@ -90,6 +90,8 @@ streams:
 
 inference:
   frames: 0                                            # Frame limit per stream. 0 runs continuously.
+  max_inflight_per_stream: 4                           # Raw frames admitted per stream to the detector.
+  max_inflight_total: 16                               # Raw frames admitted across detector streams.
   min_score: 0.30                                      # Minimum object confidence.
 
 output:
@@ -126,6 +128,7 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-str
 ## Debugging Notes
 - The checked-in `src/common/config.yaml` includes four placeholder stream slots. Replace the RTSP URLs and Insight host before running.
 - This phase supports up to four active streams.
+- `max_inflight_per_stream` and `max_inflight_total` tune raw decoder-backed frame admission at the shared detector fan-in. Set either to `-1` to use Core defaults.
 - On Modalix DevKit, start with `bash /usr/bin/fix_devkit_runtime.sh`. If the runtime still behaves inconsistently, a full board reboot has been a more reliable reset than service restarts alone.
 - `output.debug_dir` and `output.save_every` let you save periodic aligned debug frames locally without changing the Insight output contract.
 - Profiling prints per-stream pull, metadata, output FPS, and detection-count summaries.

@@ -44,8 +44,12 @@ cp tests/configs/.env.example tests/configs/.env.local
 Edit `tests/configs/.env.local`:
 
 ```bash
-SIMANEAT_APPS_TEST_RTSP_URL=rtsp://<host>:<port>/<stream>
-SIMANEAT_APPS_TEST_RTSP_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_RTSP_H264_URL=rtsp://<host>:<port>/<stream>
+SIMANEAT_TEST_RTSP_H264_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_RTSP_MJPEG_URL=rtsp://<host>:<port>/<stream>
+SIMANEAT_TEST_RTSP_MJPEG_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_HTTP_MJPEG_URL=http://<host>:<port>/<stream>.mjpg
+SIMANEAT_TEST_HTTP_MJPEG_URLS=http://<host>:<port>/<stream0>.mjpg,http://<host>:<port>/<stream1>.mjpg
 ```
 
 `tests/configs/.env.local` is ignored by git and is auto-loaded by `tests/test.sh`.
@@ -69,9 +73,10 @@ enabled in the scope file but the matching Python or C++ test file is missing,
 `tests/test.sh` fails before running tests. If a test is disabled, it is skipped
 even if a test file exists.
 
-Package installation does not download models by default. Use
-`NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL=1` only when an install step should also
-preload the scoped e2e models.
+Package installation does not include the test harness or download test models.
+Vulcan overlays an ephemeral internal test bundle and lets `tests/test.sh`
+download the models selected by the test scope. Only the customer runtime is
+published after the activated tests pass.
 
 ## Test Layout
 
@@ -214,8 +219,12 @@ python3 -m pytest \
 - `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `1`)
 - `SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS` (`1` writes summary logs, default: `1`)
 - `SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS` (`1` writes per-example command/stdout/stderr logs, default: `1`)
-- `SIMANEAT_APPS_TEST_RTSP_URL` (single RTSP stream URL)
-- `SIMANEAT_APPS_TEST_RTSP_URLS` (comma-separated RTSP URLs for multistream tests)
+- `SIMANEAT_TEST_RTSP_H264_URL` (single RTSP H.264 stream URL)
+- `SIMANEAT_TEST_RTSP_H264_URLS` (comma-separated RTSP H.264 URLs)
+- `SIMANEAT_TEST_RTSP_MJPEG_URL` (single RTSP MJPEG stream URL)
+- `SIMANEAT_TEST_RTSP_MJPEG_URLS` (comma-separated RTSP MJPEG URLs)
+- `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)
+- `SIMANEAT_TEST_HTTP_MJPEG_URLS` (comma-separated HTTP MJPEG URLs)
 - `SIMANEAT_APPS_TEST_TIMEOUT_MS` (default: `180000`)
 - `SIMANEAT_APPS_TEST_REQUIRE_E2E` (backward-compatible strict e2e env flag; prefer `--strict`)
 - `SIMANEAT_APPS_TEST_LABELS_FILE` (optional labels file override)
@@ -235,9 +244,10 @@ RTSP e2e tests require live reachable RTSP streams at test time:
 Any RTSP source works. If streams are host-served, use the host IP in the RTSP
 URLs instead of `127.0.0.1`.
 
-## Two-Stage CI
+## Two-Stage Vulcan CI
 
-- Stage 1 (eLxr runner): `./build.sh --all --clean` builds and packages apps.
-- Stage 2 (Modalix runner): installs the packaged runtime and runs `tests/test.sh`.
-- Regular CI runs unit tests with `./tests/test.sh --unit`.
-- Nightly/manual e2e runs `./tests/test.sh --e2e --strict`.
+- Stage 1 (eLxr runner): `./build.sh --all --clean` validates the Apps and portal
+  builds, then creates a runtime candidate and an ephemeral test bundle.
+- Stage 2 (Modalix runner): overlays the test bundle, runs
+  `./tests/test.sh --all --strict`, and publishes only the runtime candidate after
+  every activated test passes.

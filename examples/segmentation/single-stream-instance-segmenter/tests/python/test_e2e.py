@@ -21,10 +21,10 @@ def _env_str_or_default(name: str, default: str) -> str:
 
 @pytest.mark.e2e
 class TestE2E:
-    def test_full_pipeline(
+    def test_full_pipeline_rtsp_h264(
         self,
         e2e_model_path,
-        rtsp_url,
+        rtsp_h264_url,
         tmp_output_dir,
         test_timeout_ms,
         e2e_config_section,
@@ -34,7 +34,7 @@ class TestE2E:
         output_cfg = e2e_config_section("single-stream-instance-segmenter", "testing.e2e.output")
         config_path = e2e_config_writer(
             {
-                "source": {"rtsp_url": rtsp_url},
+                "source": {"type": "rtsp", "codec": "h264", "url": rtsp_h264_url},
                 "output": {
                     "save_dir": str(tmp_output_dir),
                     "insight": {
