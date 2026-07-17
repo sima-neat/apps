@@ -18,8 +18,6 @@ if (NOT TARGET SimaNeatApps::support_runtime)
   _sima_neat_apps_ensure_support_runtime("${APPS_ROOT}")
 endif()
 
-# FastSAM + MobileCLIP drive GStreamer/OpenCV and nlohmann_json directly, so the module
-# links them explicitly rather than relying on the SimaNeat package to re-export them.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GST REQUIRED IMPORTED_TARGET
   gstreamer-1.0
@@ -32,8 +30,6 @@ pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
 find_package(nlohmann_json REQUIRED)
 find_package(Threads REQUIRED)
 
-# The pipeline, FastSAM runner, and CLIP tower live beside main.cpp; compile them into a
-# static library so both the example binary and any future tests can link them.
 add_library(fastsam_multistream_lib STATIC
   "${CMAKE_CURRENT_LIST_DIR}/config.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/fastsam.cpp"
@@ -64,11 +60,10 @@ target_compile_definitions(fastsam_multistream_lib
     FASTSAM_CPP_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}"
 )
 
-# Register the example binary through the shared framework helper (target name, output
-# name, install layout). main.cpp is the only translation unit built here; the rest comes
-# from fastsam_multistream_lib.
 sima_neat_apps_module(
   "fastsam-multistream"
+  UNIT_TEST
+  E2E_TEST
   OUTPUT_TARGET_VAR FASTSAM_MULTISTREAM_TARGET
   SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/main.cpp"
