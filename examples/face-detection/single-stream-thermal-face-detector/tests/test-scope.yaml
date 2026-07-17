@@ -1,0 +1,17 @@
+models:
+  yolov5s_face_raw_split:
+    source: modelzoo
+    name: yolov5s_face_raw_split
+    file: yolov5s_face_raw_split_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolov5s_face_raw_split
+  cpp:
+    enabled: true
+    models:
+    - yolov5s_face_raw_split
