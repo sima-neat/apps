@@ -82,7 +82,7 @@ def models_dir() -> Path:
     raw = os.environ.get("SIMANEAT_APPS_TEST_MODELS_DIR", "").strip()
     if raw:
         return Path(raw)
-    return APPS_ROOT / "assets" / "models"
+    return APPS_ROOT / "models"
 
 
 def _csv_env(key: str, description: str) -> list[str]:
@@ -316,7 +316,7 @@ def run_until_output_files(request):
 def test_images_dir() -> Path:
     """Return the path to bundled test images."""
     raw = os.environ.get("SIMANEAT_APPS_TEST_INPUT_DIR", "").strip()
-    return Path(raw) if raw else APPS_ROOT / "assets" / "test_images"
+    return Path(raw) if raw else APPS_ROOT / "assets/datasets-test/coco"
 
 
 @pytest.fixture

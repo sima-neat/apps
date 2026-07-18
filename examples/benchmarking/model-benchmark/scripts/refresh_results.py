@@ -160,7 +160,7 @@ def resolve_model_path(row: ModelRow) -> Path:
     preferred = APPS_ROOT / row.preferred_path
     if preferred.exists():
         return preferred
-    matches = sorted((APPS_ROOT / "assets" / "models").rglob(row.package))
+    matches = sorted((APPS_ROOT / "models").rglob(row.package))
     if not matches:
         raise FileNotFoundError(f"model package not found: {row.package}")
     return matches[0]

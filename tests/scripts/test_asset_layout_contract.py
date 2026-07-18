@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
+
+from tests.utils import pytest_fixtures
 
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +59,54 @@ def test_runtime_and_test_coco_datasets_have_expected_images():
 def test_classification_image_is_test_only():
     assert (APPS_ROOT / "assets/datasets-test/imagenet/goldfish.jpeg").is_file()
     assert not (APPS_ROOT / "assets/datasets/imagenet/goldfish.jpeg").exists()
+
+
+def test_direct_pytest_defaults_to_test_assets(monkeypatch):
+    monkeypatch.delenv("SIMANEAT_APPS_TEST_MODELS_DIR", raising=False)
+    monkeypatch.delenv("SIMANEAT_APPS_TEST_INPUT_DIR", raising=False)
+
+    assert pytest_fixtures.models_dir.__wrapped__() == APPS_ROOT / "models"
+    assert pytest_fixtures.test_images_dir.__wrapped__() == (
+        APPS_ROOT / "assets/datasets-test/coco"
+    )
+
+
+def test_direct_classification_pytest_uses_test_fixture():
+    e2e_path = (
+        APPS_ROOT / "examples/classification/image-classifier/tests/python/test_e2e.py"
+    )
+    source = e2e_path.read_text(encoding="utf-8")
+
+    assert '"datasets-test"' in source
+    assert '"imagenet"' in source
+    assert "test_images_classification" not in source
+
+
+def test_benchmark_refresh_finds_top_level_model(tmp_path, monkeypatch):
+    package = "example-package.tar.gz"
+    model_path = tmp_path / "models" / package
+    model_path.parent.mkdir()
+    model_path.write_bytes(b"model")
+
+    refresh_path = (
+        APPS_ROOT / "examples/benchmarking/model-benchmark/scripts/refresh_results.py"
+    )
+    module_name = "model_benchmark_refresh_contract"
+    spec = importlib.util.spec_from_file_location(module_name, refresh_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "APPS_ROOT", tmp_path)
+
+    row = module.ModelRow(
+        "example",
+        package,
+        "example-app",
+        f"models/nested/{package}",
+    )
+
+    assert module.resolve_model_path(row) == model_path
 
 
 def test_obsolete_asset_directories_are_absent():
