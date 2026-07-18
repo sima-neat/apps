@@ -13,6 +13,7 @@ import pytest
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
+VULCAN_INSTALLER = APPS_ROOT / "scripts/install-vulcan-apps-package.sh"
 
 
 def _write_manifest(path: Path, neat_core: object = "", platform_version: str = "2.0.0") -> None:
@@ -554,3 +555,32 @@ def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core already installed (scratch-core-for-test/scratchsha1)" in proc.stdout
+
+
+def test_vulcan_installer_rejects_latest_core_before_replacing_runtime(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = package_dir / "neat-apps-runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "neat-core.json").write_text(
+        json.dumps({"neat-core": {"branch": "develop", "version": "latest"}}),
+        encoding="utf-8",
+    )
+    install_dir = tmp_path / "installed"
+    install_dir.mkdir()
+    sentinel = install_dir / "existing-runtime"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["NEAT_APPS_INSTALL_DIR"] = str(install_dir)
+
+    proc = subprocess.run(
+        ["bash", str(VULCAN_INSTALLER)],
+        cwd=package_dir,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode != 0
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert runtime_dir.is_dir()
