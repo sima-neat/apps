@@ -97,11 +97,15 @@ From the Apps repository root, replace `<platform-version>` with the version in
 `deps/manifest.json`:
 
 ```bash
+mkdir -p models
+cd models
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+cd ..
 ```
 
-The checked-in configs resolve the model relative to their own directory, so no
-absolute model path is required.
+The command stores the model under `models/`. Set `model.path` in the selected
+config to the downloaded package. Relative paths resolve from the config file;
+absolute paths are also supported.
 
 ## Prepare The RTSP Sources
 
@@ -133,6 +137,7 @@ recovery if an older access unit is replaced.
 
 Choose one config under `src/common/` and edit:
 
+- `model.path`
 - every entry under `streams`
 - `output.insight.host`
 

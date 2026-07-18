@@ -275,8 +275,11 @@ PY
     cp "${src_file}" "${target_dir}/"
   done
 
-  find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
-  find "${stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+  find "${test_stage_dir}" -type f -name '.env.local' -delete
+  find "${stage_dir}" "${test_stage_dir}" -type d \
+    \( -name '__pycache__' -o -name '.pytest_cache' \) -prune -exec rm -rf {} +
+  find "${stage_dir}" "${test_stage_dir}" -type f \
+    \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
   tar -czf "${archive_path}" -C "${stage_root}" "$(basename "${stage_dir}")"
   tar -czf "${test_archive_path}" -C "${stage_root}" "$(basename "${test_stage_dir}")"

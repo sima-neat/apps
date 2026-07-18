@@ -1,7 +1,7 @@
 # Default profile: 16 x 720p @ 25 FPS.
-# Model and label paths are resolved relative to this file.
+# Relative model and label paths are resolved from this file.
 model:
-  path: yolo26n-det-int8-b1.tar.gz
+  path: <model-path>
   labels: coco_label.txt
   decode_type: yolo26
 
