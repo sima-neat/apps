@@ -135,12 +135,58 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
             printf '%s\\n' "$PWD" > "${NEAT_APPS_TEST_SIMA_CLI_CWD}"
             printf '%s\\n' "$*" > "${NEAT_APPS_TEST_SIMA_CLI_ARGS}"
             touch sima-cli-ran.txt
+            exit "${NEAT_APPS_TEST_SIMA_CLI_STATUS:-0}"
             """
         ),
         encoding="utf-8",
     )
     sima_cli_path.chmod(0o755)
     return bin_dir
+
+
+def _write_vulcan_runtime(package_dir: Path, neat_core: object | None = None) -> Path:
+    runtime_dir = package_dir / "neat-apps-runtime"
+    runtime_dir.mkdir(parents=True)
+    if neat_core is None:
+        neat_core = {"branch": "develop", "version": "core-sha"}
+    (runtime_dir / "neat-core.json").write_text(
+        json.dumps({"neat-core": neat_core}),
+        encoding="utf-8",
+    )
+    return runtime_dir
+
+
+def _run_vulcan_installer(
+    tmp_path: Path,
+    package_dir: Path,
+    *,
+    install_dir: Path | None = None,
+    sima_cli_status: int = 0,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    bin_dir = _write_fake_sima_cli(tmp_path)
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_STATUS": str(sima_cli_status),
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "SIMA_CLI_BIN": str(bin_dir / "sima-cli"),
+        }
+    )
+    if install_dir is not None:
+        env["NEAT_APPS_INSTALL_DIR"] = str(install_dir)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", str(VULCAN_INSTALLER)],
+        cwd=package_dir,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _run_build(
@@ -584,3 +630,148 @@ def test_vulcan_installer_rejects_latest_core_before_replacing_runtime(tmp_path)
     assert proc.returncode != 0
     assert sentinel.read_text(encoding="utf-8") == "keep\n"
     assert runtime_dir.is_dir()
+
+
+@pytest.mark.parametrize(
+    "neat_core",
+    [
+        {"branch": None, "version": "core-sha"},
+        {"branch": "develop", "version": []},
+    ],
+)
+def test_vulcan_installer_rejects_non_string_core_target_before_promotion(
+    tmp_path, neat_core
+):
+    package_dir = tmp_path / "package"
+    _write_vulcan_runtime(package_dir, neat_core)
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    sentinel = install_dir / "runtime-marker"
+    sentinel.write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
+
+    assert proc.returncode != 0
+    assert sentinel.read_text(encoding="utf-8") == "old\n"
+    assert not (tmp_path / "sima-cli-args.txt").exists()
+
+
+def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    install_dir = package_dir / "prebuilt-apps"
+
+    proc = _run_vulcan_installer(tmp_path, package_dir)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
+    assert not (install_dir / "neat-apps-runtime").exists()
+    assert f"  {install_dir}" in proc.stdout
+
+
+def test_vulcan_installer_keeps_existing_runtime_when_core_install_fails(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        install_dir=install_dir,
+        sima_cli_status=1,
+    )
+
+    assert proc.returncode != 0
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+
+
+def test_vulcan_installer_preserves_models_during_reinstall(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    models_dir = install_dir / "models"
+    models_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+    (models_dir / "user-model.mpk").write_text("model\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
+    assert (models_dir / "user-model.mpk").read_text(encoding="utf-8") == "model\n"
+
+
+def test_vulcan_installer_migrates_legacy_runtime_and_models(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    install_root = tmp_path / "installed"
+    install_dir = install_root / "prebuilt-apps"
+    legacy_dir = install_root / "neat-apps" / "neat-apps-runtime"
+    models_dir = legacy_dir / "models"
+    models_dir.mkdir(parents=True)
+    (legacy_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+    (models_dir / "user-model.mpk").write_text("model\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
+    assert (install_dir / "models" / "user-model.mpk").read_text(
+        encoding="utf-8"
+    ) == "model\n"
+    assert not legacy_dir.exists()
+
+
+def test_vulcan_installer_restores_runtime_when_promotion_fails(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    install_root = tmp_path / "installed"
+    install_dir = install_root / "prebuilt-apps"
+    legacy_dir = install_root / "neat-apps" / "neat-apps-runtime"
+    models_dir = legacy_dir / "models"
+    models_dir.mkdir(parents=True)
+    (legacy_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+    (models_dir / "user-model.mpk").write_text("model\n", encoding="utf-8")
+    failed_file = tmp_path / "mv-failed"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    mv_path = bin_dir / "mv"
+    mv_path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            destination="${!#}"
+            if [[ "${destination}" == "${NEAT_APPS_TEST_MV_FAIL_DEST}" && \
+                  ! -e "${NEAT_APPS_TEST_MV_FAILED_FILE}" ]]; then
+              touch "${NEAT_APPS_TEST_MV_FAILED_FILE}"
+              exit 1
+            fi
+            exec /bin/mv "$@"
+            """
+        ),
+        encoding="utf-8",
+    )
+    mv_path.chmod(0o755)
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        install_dir=install_dir,
+        extra_env={
+            "NEAT_APPS_TEST_MV_FAIL_DEST": str(install_dir),
+            "NEAT_APPS_TEST_MV_FAILED_FILE": str(failed_file),
+        },
+    )
+
+    assert proc.returncode != 0
+    assert failed_file.exists()
+    assert not install_dir.exists()
+    assert (legacy_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert (models_dir / "user-model.mpk").read_text(encoding="utf-8") == "model\n"
