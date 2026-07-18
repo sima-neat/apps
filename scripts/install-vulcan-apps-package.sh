@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
+DEST_DIR="${NEAT_APPS_INSTALL_DIR:-prebuilt-apps}"
 RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-neat-apps-runtime}"
-RUNTIME_DST="${DEST_DIR}/neat-apps-runtime"
+LEGACY_RUNTIME_DIR="$(dirname "${DEST_DIR}")/neat-apps/neat-apps-runtime"
 VULCAN_ENV="${NEAT_VULCAN_ENV:-${VULCAN_ENV:-production}}"
 NEAT_CORE_INSTALL_DIR=""
 NEAT_CORE_INSTALL_DIR_OWNED=0
@@ -41,9 +41,20 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
-neat_core = data.get("neat-core", {})
-branch = str(neat_core.get("branch", "")).strip()
-version = str(neat_core.get("version", "")).strip()
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+neat_core = data.get("neat-core")
+if not isinstance(neat_core, dict):
+    raise SystemExit(1)
+
+branch = neat_core.get("branch")
+version = neat_core.get("version")
+if not isinstance(branch, str) or not isinstance(version, str):
+    raise SystemExit(1)
+
+branch = branch.strip()
+version = version.strip()
 
 if not branch or not version or version.lower() == "latest":
     raise SystemExit(1)
@@ -95,6 +106,91 @@ run_sima_cli_core_install() {
   rm -f "${log_path}"
 }
 
+promote_apps_runtime() {
+  local source_dir="$1"
+  local dest_dir="$2"
+  local legacy_dir="$3"
+  local dest_parent stage_root staged_runtime backup_dir="" previous_dir=""
+  local models_preserved=0
+
+  dest_parent="$(dirname "${dest_dir}")"
+  if ! mkdir -p "${dest_parent}"; then
+    echo "ERROR: failed to create Apps install parent: ${dest_parent}" >&2
+    return 1
+  fi
+  if ! stage_root="$(mktemp -d "${dest_parent}/.prebuilt-apps-stage.XXXXXX")"; then
+    echo "ERROR: failed to create Apps staging directory under ${dest_parent}." >&2
+    return 1
+  fi
+  staged_runtime="${stage_root}/prebuilt-apps"
+  if ! mv "${source_dir}" "${staged_runtime}"; then
+    echo "ERROR: failed to stage the Apps runtime under ${dest_parent}." >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+
+  if [[ -e "${dest_dir}" || -L "${dest_dir}" ]]; then
+    previous_dir="${dest_dir}"
+  elif [[ -e "${legacy_dir}" || -L "${legacy_dir}" ]]; then
+    previous_dir="${legacy_dir}"
+  fi
+
+  if [[ -n "${previous_dir}" ]]; then
+    if ! backup_dir="$(mktemp -d "${dest_parent}/.prebuilt-apps-backup.XXXXXX")"; then
+      echo "ERROR: failed to create an Apps rollback path under ${dest_parent}." >&2
+      rm -rf "${stage_root}"
+      return 1
+    fi
+    if ! rmdir "${backup_dir}"; then
+      echo "ERROR: failed to prepare the Apps rollback path: ${backup_dir}" >&2
+      rm -rf "${stage_root}" "${backup_dir}"
+      return 1
+    fi
+    if ! mv "${previous_dir}" "${backup_dir}"; then
+      echo "ERROR: failed to stage the existing Apps runtime for rollback." >&2
+      rm -rf "${stage_root}"
+      return 1
+    fi
+
+    if [[ -e "${backup_dir}/models" || -L "${backup_dir}/models" ]]; then
+      rm -rf "${staged_runtime}/models"
+      if ! mv "${backup_dir}/models" "${staged_runtime}/models"; then
+        echo "ERROR: failed to preserve the existing Apps models directory." >&2
+        if ! mv "${backup_dir}" "${previous_dir}"; then
+          echo "ERROR: previous Apps runtime remains at ${backup_dir}." >&2
+        fi
+        rm -rf "${stage_root}"
+        return 1
+      fi
+      models_preserved=1
+    fi
+  fi
+
+  if ! mv "${staged_runtime}" "${dest_dir}"; then
+    echo "ERROR: failed to promote the candidate Apps runtime." >&2
+    if [[ "${models_preserved}" == "1" ]]; then
+      if ! mv "${staged_runtime}/models" "${backup_dir}/models"; then
+        echo "ERROR: preserved models remain at ${staged_runtime}/models." >&2
+        return 1
+      fi
+    fi
+    if [[ -n "${backup_dir}" ]] && ! mv "${backup_dir}" "${previous_dir}"; then
+      echo "ERROR: previous Apps runtime remains at ${backup_dir}." >&2
+      return 1
+    fi
+    rm -rf "${stage_root}"
+    return 1
+  fi
+
+  rm -rf "${stage_root}"
+  if [[ -n "${backup_dir}" ]]; then
+    rm -rf "${backup_dir}"
+  fi
+  if [[ -n "${previous_dir}" && "${previous_dir}" != "${dest_dir}" ]]; then
+    rmdir "$(dirname "${previous_dir}")" 2>/dev/null || true
+  fi
+}
+
 if [[ ! -d "${RUNTIME_SRC}" ]]; then
   runtime_candidates=()
   while IFS= read -r candidate; do
@@ -134,10 +230,6 @@ SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
 NEAT_CORE_BRANCH="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '1p')"
 NEAT_CORE_VERSION="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '2p')"
 
-rm -rf "${DEST_DIR}"
-mkdir -p "${DEST_DIR}"
-mv "${RUNTIME_SRC}" "${RUNTIME_DST}"
-
 echo
 echo "Installing matching NEAT core from Vulcan:"
 echo "  Environment: ${VULCAN_ENV}"
@@ -159,6 +251,11 @@ if [[ "${INSTALL_STATUS}" -ne 0 ]]; then
   exit "${INSTALL_STATUS}"
 fi
 
+if ! promote_apps_runtime "${RUNTIME_SRC}" "${DEST_DIR}" "${LEGACY_RUNTIME_DIR}"; then
+  exit 1
+fi
+INSTALLED_DIR="$(cd "$(dirname "${DEST_DIR}")" && pwd -P)/$(basename "${DEST_DIR}")"
+
 echo
 echo "Installed apps runtime under:"
-echo "  ${DEST_DIR}"
+echo "  ${INSTALLED_DIR}"

@@ -22,6 +22,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  SIMA_CLI_AUTO_ACCEPT_UPDATE: "1"
 
 jobs:
   resolve-vulcan-config:
@@ -231,11 +232,11 @@ jobs:
           tar -xzf "${runtime_archives[0]}" -C _vulcan-test/package
           (
             cd _vulcan-test/package
-            NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/neat-apps" \
+            NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps" \
               NEAT_VULCAN_ENV="${VULCAN_ENV}" \
               bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
           )
-          runtime_dir="${GITHUB_WORKSPACE}/_vulcan-test/install/neat-apps/neat-apps-runtime"
+          runtime_dir="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps"
           scripts/ci/overlay_apps_tests.sh "${test_archive}" "${runtime_dir}"
           printf '%s\n' "${runtime_dir}" > _vulcan-test/apps_runtime_dir.txt
           echo "Using apps runtime: ${runtime_dir}"
