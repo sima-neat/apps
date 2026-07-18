@@ -217,7 +217,7 @@ TODO: describe what this example demonstrates.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into \`assets/models/\`.
+- Model artifacts are user-managed and should be downloaded into \`models/\`.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.

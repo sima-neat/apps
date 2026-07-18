@@ -17,7 +17,7 @@ Minimal Model API usage with a compiled ResNet50 model package. The example load
 ## Preview
 The pipeline is trying to classify this goldfish image.
 
-![Image classifier goldfish input](../../../assets/portal/classification/image-classifier/image.jpeg)
+![Image classifier goldfish input](../../../portal/assets/examples/classification/image-classifier/image.jpeg)
 
 ## Supported Models
 Use the SDK platform version wherever `<platform-version>` appears.
@@ -27,17 +27,17 @@ Primary model: `resnet_50`
 Download the model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 sima-cli modelzoo -v <platform-version> get resnet_50
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.

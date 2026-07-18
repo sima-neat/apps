@@ -78,7 +78,7 @@ def e2e_config_section():
 
 @pytest.fixture
 def models_dir() -> Path:
-    """Resolve SIMANEAT_APPS_TEST_MODELS_DIR (default: assets/models)."""
+    """Resolve SIMANEAT_APPS_TEST_MODELS_DIR (default: models)."""
     raw = os.environ.get("SIMANEAT_APPS_TEST_MODELS_DIR", "").strip()
     if raw:
         return Path(raw)

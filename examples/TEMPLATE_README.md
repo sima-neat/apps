@@ -18,7 +18,7 @@
 Optional. If you have a demo screenshot for the portal detail page, place it here immediately after `Concept`.
 
 ```md
-![Demo screenshot](../../../assets/portal/<category>/<example>/image.png)
+![Demo screenshot](../../../portal/assets/examples/<category>/<example>/image.png)
 ```
 
 ## Supported Models
@@ -29,20 +29,20 @@ Default model: `<default-model>`.
 Download the default model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 
 sima-cli modelzoo -v <platform-version> get <default-model>
 
-cd ../..
+cd ..
 ```
 
 For another supported model, replace `<default-model>` in the download command and config path.
-The command stores models under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores models under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 - If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 
 ## Get The Apps Repo
@@ -66,7 +66,7 @@ model:
   path: <model-path>             # Path to the model package.
 
 io:
-  input_dir: assets/test_images           # Folder containing input images.
+  input_dir: assets/datasets/coco           # Folder containing input images.
   output_dir: sandbox/<name>              # Folder for generated outputs.
 ```
 

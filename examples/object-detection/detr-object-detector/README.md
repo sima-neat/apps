@@ -19,7 +19,7 @@ The model emits two raw tensors: classification logits and normalized bounding b
 ## Preview
 Snippet from a pipeline run:
 
-![DETR object detector preview](../../../assets/portal/object-detection/detr-object-detector/image.png)
+![DETR object detector preview](../../../portal/assets/examples/object-detection/detr-object-detector/image.png)
 
 ## Supported Models
 Use the SDK platform version wherever `<platform-version>` appears.
@@ -29,17 +29,17 @@ Validated with: `detr_resnet50_modified_class_embed_bbox_embed`
 Download the validated model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
@@ -62,7 +62,7 @@ model:
   path: <model-path>                                  # Path to the model package.
 
 io:
-  input_dir: assets/test_images                                                # Folder containing input images.
+  input_dir: assets/datasets/coco                                                # Folder containing input images.
   output_dir: sandbox/detr-object-detector                                     # Folder for annotated images.
 
 decode:
@@ -101,8 +101,8 @@ ctest --test-dir build/examples/object-detection/detr-object-detector \
 
 E2E test:
 ```bash
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/datasets-test/coco" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=180000 \
 ctest --test-dir build/examples/object-detection/detr-object-detector \
@@ -126,8 +126,8 @@ source ~/pyneat/bin/activate
 pip install -r examples/object-detection/detr-object-detector/src/python/requirements.txt
 pip install pytest
 export PYTHONPATH="$PWD"
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/datasets-test/coco" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp/detr-python-e2e \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=180000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \

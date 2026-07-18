@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tarfile
 import textwrap
 from pathlib import Path
 
@@ -14,6 +15,56 @@ import pytest
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
 VULCAN_INSTALLER = APPS_ROOT / "scripts/install-vulcan-apps-package.sh"
+RUNTIME_ARCHIVE_VALIDATOR = APPS_ROOT / "scripts/ci/validate_apps_runtime_archive.sh"
+
+
+def _write_runtime_archive(tmp_path: Path, *members: str) -> Path:
+    archive_root = tmp_path / "archive-root" / "neat-apps-runtime"
+    archive_root.mkdir(parents=True)
+    (archive_root / "neat-core.json").write_text("{}\n", encoding="utf-8")
+    for member in members:
+        path = archive_root / member
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture\n", encoding="utf-8")
+
+    archive = tmp_path / "runtime.tar.gz"
+    with tarfile.open(archive, "w:gz") as output:
+        output.add(archive_root, arcname="neat-apps-runtime")
+    return archive
+
+
+def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
+    archive = _write_runtime_archive(tmp_path, "assets/datasets/coco/example.jpg")
+
+    proc = subprocess.run(
+        ["bash", str(RUNTIME_ARCHIVE_VALIDATOR), str(archive)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "assets/datasets-test/coco/example.jpg",
+        "models/example.tar.gz",
+        "portal/assets/examples/example.png",
+    ],
+)
+def test_runtime_archive_validator_rejects_non_runtime_assets(tmp_path, member):
+    archive = _write_runtime_archive(tmp_path, member)
+
+    proc = subprocess.run(
+        ["bash", str(RUNTIME_ARCHIVE_VALIDATOR), str(archive)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode != 0
 
 
 def _write_manifest(path: Path, neat_core: object = "", platform_version: str = "2.0.0") -> None:

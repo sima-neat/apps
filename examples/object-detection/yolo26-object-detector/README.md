@@ -17,7 +17,7 @@ Minimal image-folder object detection pipeline using a YOLO26 detection model. E
 ## Preview
 Snippet from a pipeline run:
 
-![YOLO26 object detector preview](../../../assets/portal/object-detection/yolo26-object-detector/image.png)
+![YOLO26 object detector preview](../../../portal/assets/examples/object-detection/yolo26-object-detector/image.png)
 
 ## Supported Models
 Use the SDK platform version wherever `<platform-version>` appears.
@@ -27,19 +27,19 @@ Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
 Download the default model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 - Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
 
 ## Get The Apps Repo
@@ -64,7 +64,7 @@ model:
   labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
 io:
-  input_dir: assets/test_images                           # Folder containing input images.
+  input_dir: assets/datasets/coco                           # Folder containing input images.
   output_dir: sandbox/yolo26-object-detector              # Folder for annotated images.
 
 decode:
@@ -103,8 +103,8 @@ Unit test:
 
 E2E test:
 ```bash
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/datasets-test/coco" \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 ./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector_e2e_test \
   ./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector
@@ -122,8 +122,8 @@ E2E test:
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/datasets-test/coco" \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
 pytest examples/object-detection/yolo26-object-detector/tests/python/test_e2e.py -v

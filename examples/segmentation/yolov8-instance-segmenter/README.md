@@ -17,7 +17,7 @@ Offline YOLOv8 instance segmentation over image folders using YOLOv8 segmentatio
 ## Preview
 Snippet from a pipeline run:
 
-![Instance segmenter preview](../../../assets/portal/segmentation/yolov8-instance-segmenter/image.jpg)
+![Instance segmenter preview](../../../portal/assets/examples/segmentation/yolov8-instance-segmenter/image.jpg)
 
 ## Supported Models
 Use the SDK platform version wherever `<platform-version>` appears.
@@ -27,19 +27,19 @@ Default model: `yolo_v8n_seg`.
 Download the default model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 
 sima-cli modelzoo -v <platform-version> get yolo_v8n_seg
 
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
@@ -62,7 +62,7 @@ model:
   path: <model-path>                   # Path to the model package.
 
 io:
-  input_dir: assets/test_images                 # Folder containing input images.
+  input_dir: assets/datasets/coco                 # Folder containing input images.
   output_dir: sandbox/yolov8-instance-segmenter # Folder for annotated images.
 
 decode:

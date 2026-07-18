@@ -49,10 +49,10 @@ struct Config {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model_path = raw.string_or("model.path", "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz");
+  cfg.model_path = raw.string_or("model.path", "models/yolo26m-det-bf16-mla_tess-b1.tar.gz");
   cfg.labels_path = raw.string_or(
       "model.labels", "examples/object-detection/yolo26-object-detector/src/common/coco_label.txt");
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/yolo26-object-detector");
   cfg.min_score = static_cast<float>(raw.double_or("decode.score_threshold", kDefaultMinScore));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", kDefaultNmsIou));

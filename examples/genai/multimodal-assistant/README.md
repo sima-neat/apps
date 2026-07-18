@@ -37,7 +37,7 @@ Runtime ownership is split deliberately:
 ## Preview
 Multimodal assistant UI:
 
-![Multimodal Assistant preview](../../../assets/portal/genai/multimodal-assistant/image.png)
+![Multimodal Assistant preview](../../../portal/assets/examples/genai/multimodal-assistant/image.png)
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
@@ -114,12 +114,12 @@ sudo install -d \
 ```
 
 On a system without NVMe, set `LLIMA_MODELS_PATH` to another writable
-location. For a full Apps checkout, `assets/models/` is the repo-local model
+location. For a full Apps checkout, `models/` is the repo-local model
 convention:
 
 ```bash
 export APPS_ROOT=/path/to/apps
-LLIMA_MODELS_PATH="${APPS_ROOT}/assets/models/genai" ./setup.sh
+LLIMA_MODELS_PATH="${APPS_ROOT}/models/genai" ./setup.sh
 ```
 
 The same three model directories are created under the selected path. For a

@@ -1,9 +1,9 @@
 model:                       # Detector model selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
   labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
 io:                          # Input and output paths.
-  input_dir: assets/test_images                 # Folder containing input images.
+  input_dir: assets/datasets/coco                 # Folder containing input images.
   output_dir: sandbox/yolo26-object-detector    # Folder for annotated images.
 
 decode:                      # YOLO decode settings.

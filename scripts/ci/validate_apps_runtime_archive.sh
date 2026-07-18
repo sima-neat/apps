@@ -14,9 +14,20 @@ if ! grep -qx 'neat-apps-runtime/neat-core.json' <<<"${members}"; then
   exit 1
 fi
 
-forbidden='(^|/)(tests|test-scope\.yaml|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(pyc|pyo|log|db|lock)$'
+forbidden='(^|/)(models|portal|tests|test-scope\.yaml|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(pyc|pyo|log|db|lock)$'
 if grep -E "${forbidden}" <<<"${members}"; then
   echo "Runtime archive contains test or generated files." >&2
+  exit 1
+fi
+
+invalid_assets="$(
+  grep '^neat-apps-runtime/assets/' <<<"${members}" \
+    | grep -Ev '^neat-apps-runtime/assets/$|^neat-apps-runtime/assets/datasets(/|$)' \
+    || true
+)"
+if [[ -n "${invalid_assets}" ]]; then
+  printf '%s\n' "${invalid_assets}" >&2
+  echo "Runtime archive contains non-runtime assets." >&2
   exit 1
 fi
 

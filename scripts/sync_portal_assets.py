@@ -85,8 +85,8 @@ def rewrite_section_assets(example: dict) -> None:
 
 
 def portal_asset_destination(rel: Path) -> Path:
-    if rel.parts[:2] == ("assets", "portal"):
-        return ASSET_ROOT / Path(*rel.parts[2:])
+    if rel.parts[:3] == ("portal", "assets", "examples"):
+        return ASSET_ROOT / Path(*rel.parts[3:])
     if rel.parts and rel.parts[0] == "examples":
         return ASSET_ROOT / rel.parent.relative_to("examples") / rel.name
     raise ValueError(f"Unsupported portal asset path: {rel}")

@@ -91,9 +91,9 @@ The README validator enforces:
   `Source Files`
 
 For portal-facing examples, add a `## Preview` section after `## Concept` and
-store the image at `assets/portal/<category>/<example>/image.*`.
+store the image at `portal/assets/examples/<category>/<example>/image.*`.
 
-Use `assets/models/` for model artifact examples. When documenting model
+Use `models/` for model artifact examples. When documenting model
 downloads, use the platform version placeholder and tell users to use the
 platform version.
 
@@ -146,6 +146,6 @@ Before asking for review:
 - Enabled tests have real test files.
 - Disabled e2e paths have a reason.
 - Model names, paths, and download commands are current.
-- Portal examples have `## Preview` and `assets/portal/.../image.*`.
+- Portal examples have `## Preview` and `portal/assets/examples/.../image.*`.
 - `./build.sh --clean` succeeds when source changes require a build.
 - README validation and catalog generation pass for documentation changes.

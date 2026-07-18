@@ -22,7 +22,7 @@ using sima_examples::testing::spawn_and_wait;
 
 namespace {
 
-constexpr const char* kModelPath = "assets/models/yolo26n-det-int8-b1.tar.gz";
+constexpr const char* kModelPath = "models/yolo26n-det-int8-b1.tar.gz";
 
 bool expect_true(bool condition, const std::string& message) {
   if (!condition) {

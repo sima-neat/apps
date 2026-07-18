@@ -62,7 +62,7 @@ startup and model warmup.
 
 The 48-stream profile running in Insight:
 
-![High-density multi-stream object detector in Insight](../../../assets/portal/object-detection/high-density-multi-stream-object-detector/image.png)
+![High-density multi-stream object detector in Insight](../../../portal/assets/examples/object-detection/high-density-multi-stream-object-detector/image.png)
 
 ## Prerequisites
 
