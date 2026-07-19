@@ -24,7 +24,7 @@ The example is intentionally narrow in scope. It is not a generic output-mode de
 ## Preview
 Snippet from a pipeline run:
 
-![Single-stream object detector preview](../../../assets/portal/object-detection/single-stream-object-detector/image.png)
+![Single-stream object detector preview](../../../portal/assets/examples/object-detection/single-stream-object-detector/image.png)
 
 ## Insight Setup
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
@@ -49,7 +49,7 @@ Use the same `neat` output to set `output.insight.host`, `video_port`, and `meta
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
 - RTSP H.264, RTSP MJPEG, or HTTP MJPEG source created in Insight or provided by your camera.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
@@ -72,15 +72,15 @@ Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
 Download the default model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Configure
 Edit `examples/object-detection/single-stream-object-detector/src/common/config.yaml`.

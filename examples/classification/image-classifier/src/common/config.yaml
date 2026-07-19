@@ -1,5 +1,5 @@
 model:                       # Classifier model selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
 
 io:                          # Input image settings.
   image: null                # Optional local image path. null uses fallback_image_url.

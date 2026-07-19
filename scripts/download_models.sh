@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-MODELS_DIR="${MODELS_DIR:-$ROOT/assets/models}"
+MODELS_DIR="${MODELS_DIR:-$ROOT/models}"
 SIMA_CLI_BIN="${SIMA_CLI_BIN:-}"
 SCOPE_FILE="${ROOT}/examples"
 KIND="e2e"

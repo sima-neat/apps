@@ -17,7 +17,7 @@ This example decodes an RTSP stream, runs YOLO26 detection with internal box dec
 ## Preview
 Detection metadata visualized in Insight:
 
-![Detection-to-VLM assistant preview](../../../assets/portal/genai/detection-to-vlm-assistant/image.png)
+![Detection-to-VLM assistant preview](../../../portal/assets/examples/genai/detection-to-vlm-assistant/image.png)
 
 ## Insight Setup
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
@@ -41,7 +41,7 @@ Use the same `neat` output to set `insight.host`, `video_port`, and `metadata_po
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 detector model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default YOLO26 detector model, or set `model.path` to another readable model package.
 - Choose a vision-language model from the [SiMa.ai VLM collection](https://huggingface.co/collections/simaai/vision-language-models), download it locally, and set `genai_server.model.path` to that model directory.
 - Set `genai_server.model.name` to the served model name used by the detector app.
 - RTSP source created in Insight or provided by your camera.
@@ -69,15 +69,15 @@ Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
 Download the default detector model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Configure
 Edit `examples/genai/detection-to-vlm-assistant/src/common/config.yaml`.

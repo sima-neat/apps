@@ -2,7 +2,7 @@ source:                      # RTSP input source.
   rtsp_url: <rtsp-url-1>     # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
 
 model:                       # Detector model selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
   labels: examples/genai/detection-to-vlm-assistant/src/common/coco_label.txt
 
 inference:                   # Detection controls.

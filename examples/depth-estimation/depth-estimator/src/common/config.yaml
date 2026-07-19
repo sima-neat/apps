@@ -1,8 +1,8 @@
 model:                       # Depth model selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
 
 io:                          # Input and output paths.
-  input_dir: assets/test_images       # Folder containing input images.
+  input_dir: assets/datasets/coco       # Folder containing input images.
   output_dir: sandbox/depth-estimator # Folder for depth visualizations.
 
 runtime:                     # Runtime settings.

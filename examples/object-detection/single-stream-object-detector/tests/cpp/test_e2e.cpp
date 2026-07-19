@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
   const std::string model_path = configured_model_path(kExampleName, models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("configured single-stream detector model not found under "

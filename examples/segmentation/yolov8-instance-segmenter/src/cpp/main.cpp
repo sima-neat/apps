@@ -45,8 +45,8 @@ struct Config {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model_path = raw.string_or("model.path", "assets/models/yolo_v8n_seg_mpk.tar.gz");
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.model_path = raw.string_or("model.path", "models/yolo_v8n_seg_mpk.tar.gz");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/yolov8-instance-segmenter");
   cfg.infer_size = raw.int_or("runtime.infer_size", 640);
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);

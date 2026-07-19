@@ -17,7 +17,7 @@ Depth-map generation for image folders. The example runs inference per image and
 ## Preview
 Snippet from a pipeline run:
 
-![Depth estimator preview](../../../assets/portal/depth-estimation/depth-estimator/image.png)
+![Depth estimator preview](../../../portal/assets/examples/depth-estimation/depth-estimator/image.png)
 
 ## Supported Models
 Use the SDK platform version wherever `<platform-version>` appears.
@@ -27,17 +27,17 @@ Primary model: `depth_anything_v2_vits`
 Download the model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
@@ -60,7 +60,7 @@ model:
   path: <model-path>                         # Path to the model package.
 
 io:
-  input_dir: assets/test_images                         # Folder containing input images.
+  input_dir: assets/datasets/coco                         # Folder containing input images.
   output_dir: sandbox/depth-estimator                   # Folder for depth visualizations.
 ```
 

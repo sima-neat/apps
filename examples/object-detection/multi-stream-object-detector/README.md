@@ -17,7 +17,7 @@ This example runs a config-driven multistream RTSP detection pipeline for YOLO26
 ## Preview
 Snippet from a pipeline run:
 
-![Multi-stream object detector preview](../../../assets/portal/object-detection/multi-stream-object-detector/image.png)
+![Multi-stream object detector preview](../../../portal/assets/examples/object-detection/multi-stream-object-detector/image.png)
 
 ## Insight Setup
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host RTSP streams, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
@@ -42,7 +42,7 @@ Use the same `neat` output to set `output.insight.host`, `video_port_base`, and 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
 - RTSP sources created in Insight or provided by your cameras.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default YOLO26 model, or set `model.path` to another readable model package.
 - Edit `src/common/config.yaml` before running with real streams.
 - On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
@@ -67,15 +67,15 @@ The default model is `yolo26m-det-int8-b1.tar.gz`.
 Download the default model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
 
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Configure
 Edit `examples/object-detection/multi-stream-object-detector/src/common/config.yaml`.

@@ -235,12 +235,11 @@ PY
   cp "${ROOT_DIR}/tests/conftest.py" "${test_stage_dir}/examples/conftest.py"
   local asset_files=()
   if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    mapfile -t asset_files < <(git -C "${ROOT_DIR}" ls-files assets)
+    mapfile -t asset_files < <(git -C "${ROOT_DIR}" ls-files assets/datasets)
   fi
   if [[ "${#asset_files[@]}" -eq 0 ]]; then
     mapfile -t asset_files < <(
-      find "${ROOT_DIR}/assets" -type f \
-        ! -path "${ROOT_DIR}/assets/models/*" \
+      find "${ROOT_DIR}/assets/datasets" -type f \
         ! -name '.DS_Store' \
         | sed "s#^${ROOT_DIR}/##" \
         | sort
@@ -255,13 +254,49 @@ PY
     cp "${src_file}" "${target_dir}/"
   done
 
-  find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
-  find "${stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+  local test_asset_files=()
+  if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    mapfile -t test_asset_files < <(git -C "${ROOT_DIR}" ls-files assets/datasets-test)
+  fi
+  if [[ "${#test_asset_files[@]}" -eq 0 ]]; then
+    mapfile -t test_asset_files < <(
+      find "${ROOT_DIR}/assets/datasets-test" -type f \
+        ! -name '.DS_Store' \
+        | sed "s#^${ROOT_DIR}/##" \
+        | sort
+    )
+  fi
+  for rel in "${test_asset_files[@]}"; do
+    local src_file target_dir
+    src_file="${ROOT_DIR}/${rel}"
+    [[ -f "${src_file}" ]] || continue
+    target_dir="${test_stage_dir}/$(dirname "${rel}")"
+    mkdir -p "${target_dir}"
+    cp "${src_file}" "${target_dir}/"
+  done
+
+  find "${test_stage_dir}" -type f -name '.env.local' -delete
+  find "${stage_dir}" "${test_stage_dir}" -type d \
+    \( -name '__pycache__' -o -name '.pytest_cache' \) -prune -exec rm -rf {} +
+  find "${stage_dir}" "${test_stage_dir}" -type f \
+    \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
   tar -czf "${archive_path}" -C "${stage_root}" "$(basename "${stage_dir}")"
   tar -czf "${test_archive_path}" -C "${stage_root}" "$(basename "${test_stage_dir}")"
   "${ROOT_DIR}/scripts/ci/validate_apps_runtime_archive.sh" "${archive_path}"
   tar -tzf "${test_archive_path}" neat-apps-tests/tests/test.sh >/dev/null
+  tar -tzf "${test_archive_path}" \
+    neat-apps-tests/assets/datasets-test/imagenet/goldfish.jpeg >/dev/null
+  local test_coco_count
+  test_coco_count="$(
+    tar -tzf "${test_archive_path}" \
+      | grep -Ec '^neat-apps-tests/assets/datasets-test/coco/[^/]+\.jpg$' \
+      || true
+  )"
+  if [[ "${test_coco_count}" -ne 10 ]]; then
+    echo "ERROR: expected 10 COCO test images, found ${test_coco_count}." >&2
+    return 1
+  fi
   rm -rf "${stage_root}"
 
   echo ""

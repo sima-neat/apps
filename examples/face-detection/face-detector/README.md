@@ -26,7 +26,7 @@ In this app, the compiled `retinaface_mobilenet25` package is run on images from
 ## Preview
 Snippet from a pipeline run:
 
-![Face detector preview](../../../assets/portal/face-detection/face-detector/image.png)
+![Face detector preview](../../../portal/assets/examples/face-detection/face-detector/image.png)
 
 ## Supported Models
 Use the SDK platform version wherever `<platform-version>` appears.
@@ -36,17 +36,17 @@ Validated with: `retinaface_mobilenet25`
 Download the validated model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
@@ -69,7 +69,7 @@ model:
   path: <model-path>                                  # Path to the model package.
 
 io:
-  input_dir: assets/test_images                               # Folder containing input images.
+  input_dir: assets/datasets/coco                               # Folder containing input images.
   output_dir: sandbox/face-detector                           # Folder for annotated images.
 
 decode:
@@ -108,8 +108,8 @@ ctest --test-dir build/examples/face-detection/face-detector_cpp \
 
 E2E test:
 ```bash
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/datasets-test/coco" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 ctest --test-dir build/examples/face-detection/face-detector_cpp \
@@ -133,8 +133,8 @@ source ~/pyneat/bin/activate
 pip install -r examples/face-detection/face-detector/src/python/requirements.txt
 pip install pytest
 export PYTHONPATH="$PWD"
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
+SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/models" \
+SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/datasets-test/coco" \
 SIMANEAT_APPS_TEST_OUTPUT_DIR=/tmp/retinaface-python-e2e \
 SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
 SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
@@ -145,7 +145,7 @@ pytest -c tests/pytest.ini --rootdir="$PWD" -m e2e \
 Notes:
 - Use an absolute path for `SIMANEAT_APPS_TEST_MODELS_DIR` in Python e2e. The test runs `main.py` with `cwd` set to the example directory.
 - `SIMANEAT_APPS_TEST_INPUT_DIR` is supported by both C++ and Python e2e tests.
-- If `SIMANEAT_APPS_TEST_INPUT_DIR` is not set, both e2e tests fall back to `assets/test_images`.
+- If `SIMANEAT_APPS_TEST_INPUT_DIR` is not set, both e2e tests fall back to `assets/datasets-test/coco`.
 
 ## Debugging Notes
 - If the model fails to load, verify `model.path` points to a readable model package.

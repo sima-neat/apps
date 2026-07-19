@@ -19,7 +19,7 @@ This is a model-only synthetic benchmark. It does not measure RTSP input, camera
 ## Preview
 The benchmark writes a report that can be compared across model packages:
 
-![Model benchmark preview](../../../assets/portal/benchmarking/model-benchmark/image.png)
+![Model benchmark preview](../../../portal/assets/examples/benchmarking/model-benchmark/image.png)
 
 ## Supported Models
 This example accepts any compiled model package supported by `pyneat.Model`.
@@ -29,7 +29,7 @@ This example accepts any compiled model package supported by `pyneat.Model`.
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
 - Activated `pyneat` environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Model artifacts are user-managed and should be downloaded into `models/`.
 
 ## Get The Apps Repo
 Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
@@ -66,7 +66,7 @@ source ~/pyneat/bin/activate
 pip install -r examples/benchmarking/model-benchmark/src/python/requirements.txt
 
 python3 examples/benchmarking/model-benchmark/src/python/main.py \
-  --model assets/models/my_model.tar.gz \
+  --model models/my_model.tar.gz \
   --frames 1000 \
   --output-json sandbox/model-benchmark/my_model.json
 ```

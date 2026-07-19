@@ -26,7 +26,7 @@ the segmentation behavior can be debugged independently from transport issues.
 ## Preview
 Snippet from a pipeline run:
 
-![Single stream instance segmenter preview](../../../assets/portal/segmentation/single-stream-instance-segmenter/image.png)
+![Single stream instance segmenter preview](../../../portal/assets/examples/segmentation/single-stream-instance-segmenter/image.png)
 
 ## Insight Setup
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive segmentation metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
@@ -56,20 +56,20 @@ Default model: `yolo26m-seg-bf16-b1.tar.gz`.
 Download the default model:
 
 ```bash
-mkdir -p assets/models/YOLO26-SEGMENTATION
-cd assets/models/YOLO26-SEGMENTATION
+mkdir -p models/YOLO26-SEGMENTATION
+cd models/YOLO26-SEGMENTATION
 
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-segmentation/yolo26m-seg-bf16-b1.tar.gz
 
-cd ../../..
+cd ../..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
 - RTSP H.264, RTSP MJPEG, or HTTP MJPEG source created in Insight or provided by your camera.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 segmentation model, or set `model.path` to another readable model package.
+- Model artifacts are user-managed and should be downloaded into `models/`. Download the default YOLO26 segmentation model, or set `model.path` to another readable model package.
 - `model.path`, `model.labels`, `source.url`, and `output.insight.host` set in `src/common/config.yaml`.
 
 ## Get The Apps Repo

@@ -29,7 +29,7 @@ def _log(msg: str) -> None:
         print(f"[retinaface-debug] {msg}", flush=True)
 
 
-DEFAULT_MODEL_PATH = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz"
+DEFAULT_MODEL_PATH = "models/retinaface_mobilenet25_mod_0_mpk.tar.gz"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 # RetinaFaceSpy postprocessing assumes 640x640 input space (80/40/20 feature maps).
 INFER_WIDTH = 640
@@ -478,7 +478,7 @@ def main() -> int:
     runtime_cfg = raw.get("runtime", {})
 
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/face-detector"))
     confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.4))
     nms_threshold = float(decode_cfg.get("nms_iou", 0.9))

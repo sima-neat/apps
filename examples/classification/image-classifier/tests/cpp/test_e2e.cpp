@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
 
   // Resolve model directory
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
 
   const std::string model_path = configured_model_path("image-classifier", models_dir);
 
@@ -31,12 +31,12 @@ int main(int argc, char** argv) {
   if (const char* image_env = env_or_null("SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE")) {
     image_path = image_env;
   } else {
-    image_path = "assets/test_images_classification/goldfish.jpeg";
+    image_path = "assets/datasets-test/imagenet/goldfish.jpeg";
   }
   if (!fs::exists(image_path)) {
     env_or_skip("SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
                 "path to goldfish image for classification e2e (e.g. "
-                "assets/test_images_classification/goldfish.jpeg)");
+                "assets/datasets-test/imagenet/goldfish.jpeg)");
   }
 
   int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 30000);

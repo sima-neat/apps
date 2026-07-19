@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
 
   const std::string model_path = configured_model_path("yolo26-object-detector", models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
@@ -51,10 +51,10 @@ int main(int argc, char** argv) {
   }
 
   const char* images_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
-  const std::string input_dir = images_raw ? images_raw : "assets/test_images";
+  const std::string input_dir = images_raw ? images_raw : "assets/datasets-test/coco";
   if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-                "directory with test images (assets/test_images is empty or missing)");
+                "directory with test images (assets/datasets-test/coco is empty or missing)");
   }
 
   auto out_dir = create_test_output_dir("yolo26-object-detector", "test_full_pipeline");
