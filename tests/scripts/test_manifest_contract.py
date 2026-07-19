@@ -52,9 +52,13 @@ def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
         "assets/datasets-test/coco/example.jpg",
         "models/example.tar.gz",
         "portal/assets/examples/example.png",
+        "examples/classification/demo/src/cpp/CMakeLists.txt",
+        "examples/classification/demo/src/cpp/pre-built/CTestTestfile.cmake",
+        "examples/classification/demo/demo",
+        "examples/face-detection/face-detector_cpp/face-detector",
     ],
 )
-def test_runtime_archive_validator_rejects_non_runtime_assets(tmp_path, member):
+def test_runtime_archive_validator_rejects_forbidden_content(tmp_path, member):
     archive = _write_runtime_archive(tmp_path, member)
 
     proc = subprocess.run(
@@ -65,6 +69,23 @@ def test_runtime_archive_validator_rejects_non_runtime_assets(tmp_path, member):
     )
 
     assert proc.returncode != 0
+
+
+def test_runtime_archive_validator_accepts_cpp_reference_and_prebuilt_binary(tmp_path):
+    archive = _write_runtime_archive(
+        tmp_path,
+        "examples/classification/demo/src/cpp/main.cpp",
+        "examples/classification/demo/src/cpp/pre-built/demo",
+    )
+
+    proc = subprocess.run(
+        ["bash", str(RUNTIME_ARCHIVE_VALIDATOR), str(archive)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
 
 
 def _write_manifest(path: Path, neat_core: object = "", platform_version: str = "2.0.0") -> None:

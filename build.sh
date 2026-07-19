@@ -175,6 +175,19 @@ with open(sys.argv[1], "w", encoding="utf-8") as fh:
     fh.write("\n")
 PY
 
+  while IFS= read -r cpp_dir; do
+    local rel target_dir
+    rel="${cpp_dir#"${ROOT_DIR}"/examples/}"
+    target_dir="${stage_dir}/examples/$(dirname "${rel}")"
+    mkdir -p "${target_dir}"
+    cp -a "${cpp_dir}" "${target_dir}/"
+    rm -f "${target_dir}/cpp/CMakeLists.txt"
+    rm -rf "${target_dir}/cpp/pre-built"
+  done < <(
+    find "${ROOT_DIR}/examples" -mindepth 4 -maxdepth 4 \
+      -type d -path '*/src/cpp' | sort
+  )
+
   # Keep production and test executables in separate artifacts while
   # preserving the example layout expected by the test runner.
   while IFS= read -r exe; do
@@ -183,7 +196,12 @@ PY
     if [[ "${exe}" == *_unit_test || "${exe}" == *_e2e_test ]]; then
       target_dir="${test_stage_dir}/$(dirname "${rel}")/tests/cpp"
     else
-      target_dir="${stage_dir}/$(dirname "${rel}")"
+      local example_rel
+      example_rel="$(dirname "${rel}")"
+      example_rel="${example_rel%_cpp}"
+      [[ "$(basename "${exe}")" == "$(basename "${example_rel}")" ]] || continue
+      [[ -d "${ROOT_DIR}/${example_rel}/src/cpp" ]] || continue
+      target_dir="${stage_dir}/${example_rel}/src/cpp/pre-built"
     fi
     mkdir -p "${target_dir}"
     cp "${exe}" "${target_dir}/"
