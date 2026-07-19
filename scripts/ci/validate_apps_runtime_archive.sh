@@ -9,10 +9,12 @@ fi
 
 members="$(tar -tzf "${archive}")"
 
-if ! grep -qx 'neat-apps-runtime/neat-core.json' <<<"${members}"; then
-  echo "Runtime archive is missing neat-apps-runtime/neat-core.json." >&2
-  exit 1
-fi
+for required_file in neat-core.json manifest.json; do
+  if ! grep -qx "neat-apps-runtime/${required_file}" <<<"${members}"; then
+    echo "Runtime archive is missing neat-apps-runtime/${required_file}." >&2
+    exit 1
+  fi
+done
 
 forbidden='(^|/)(models|portal|tests|test-scope\.yaml|CMakeLists\.txt|CTestTestfile\.cmake|cmake_install\.cmake|Makefile|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(a|pyc|pyo|log|db|lock)$'
 if grep -E "${forbidden}" <<<"${members}"; then

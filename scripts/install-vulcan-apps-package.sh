@@ -69,6 +69,37 @@ print(version)
 PY
 }
 
+extract_insight_target() {
+  local json_path="$1"
+  python3 - <<'PY' "${json_path}"
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+insight = data.get("insight")
+if not isinstance(insight, dict):
+    raise SystemExit(1)
+
+ref = insight.get("branch", insight.get("ref"))
+version = insight.get("version")
+if not isinstance(ref, str) or not isinstance(version, str):
+    raise SystemExit(1)
+
+ref = ref.strip()
+version = version.strip()
+if not ref or not version:
+    raise SystemExit(1)
+
+print(ref)
+print(version)
+PY
+}
+
 dependency_workspace_is_owned() {
   [[ -d "${DEPS_DIR}" && ! -L "${DEPS_DIR}" \
     && -f "${DEPS_MARKER}" && ! -L "${DEPS_MARKER}" ]] \
@@ -231,6 +262,11 @@ if [[ ! -f "${NEAT_CORE_JSON_PATH}" ]]; then
   echo "ERROR: extracted apps package is missing neat-core.json." >&2
   exit 1
 fi
+APPS_MANIFEST_PATH="${RUNTIME_SRC}/manifest.json"
+if [[ ! -f "${APPS_MANIFEST_PATH}" ]]; then
+  echo "ERROR: extracted apps package is missing manifest.json." >&2
+  exit 1
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ERROR: python3 is required to parse ${NEAT_CORE_JSON_PATH}." >&2
@@ -244,6 +280,12 @@ fi
 
 NEAT_CORE_BRANCH="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '1p')"
 NEAT_CORE_VERSION="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '2p')"
+if ! INSIGHT_TARGET_OUTPUT="$(extract_insight_target "${APPS_MANIFEST_PATH}")"; then
+  echo "ERROR: failed to parse Insight install target from ${APPS_MANIFEST_PATH}." >&2
+  exit 1
+fi
+INSIGHT_REF="$(printf '%s\n' "${INSIGHT_TARGET_OUTPUT}" | sed -n '1p')"
+INSIGHT_VERSION="$(printf '%s\n' "${INSIGHT_TARGET_OUTPUT}" | sed -n '2p')"
 
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo
@@ -269,13 +311,15 @@ else
     "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
 
   echo
-  echo "Installing latest Insight from Vulcan:"
+  echo "Installing Insight from Vulcan:"
   echo "  Environment: ${VULCAN_ENV}"
+  echo "  Ref        : ${INSIGHT_REF}"
+  echo "  Version    : ${INSIGHT_VERSION}"
   echo "  Scratch dir: ${INSIGHT_INSTALL_DIR}"
   run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
     --env "${VULCAN_ENV}" \
     -d . \
-    insight@latest
+    "insight@${INSIGHT_REF}:${INSIGHT_VERSION}"
 
   cleanup_dependency_workspace
   trap - EXIT

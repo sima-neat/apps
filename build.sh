@@ -159,6 +159,7 @@ package_distribution() {
   if [[ "${neat_core_version}" == "latest" ]]; then
     neat_core_version="$(resolve_latest_version "${neat_core_branch}")"
   fi
+  cp "${APPS_MANIFEST}" "${stage_dir}/manifest.json"
   python3 - <<'PY' "${stage_dir}/neat-core.json" "${neat_core_branch}" "${neat_core_version}"
 import json
 import sys
