@@ -3,10 +3,14 @@ set -euo pipefail
 
 DEST_DIR="${NEAT_APPS_INSTALL_DIR:-prebuilt-apps}"
 RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-neat-apps-runtime}"
-LEGACY_RUNTIME_DIR="$(dirname "${DEST_DIR}")/neat-apps/neat-apps-runtime"
+INSTALL_ROOT="$(dirname "${DEST_DIR}")"
+LEGACY_RUNTIME_DIR="${INSTALL_ROOT}/neat-apps/neat-apps-runtime"
 VULCAN_ENV="${NEAT_VULCAN_ENV:-${VULCAN_ENV:-production}}"
-NEAT_CORE_INSTALL_DIR=""
-NEAT_CORE_INSTALL_DIR_OWNED=0
+DEPS_DIR="${INSTALL_ROOT}/deps"
+DEPS_MARKER="${DEPS_DIR}/.neat-apps-installer-owned"
+DEPS_MARKER_VALUE="sima-neat/apps"
+CORE_INSTALL_DIR="${DEPS_DIR}/core"
+DEPS_WORKSPACE_ACTIVE=0
 
 resolve_sima_cli_bin() {
   if [[ -n "${SIMA_CLI_BIN:-}" && -x "${SIMA_CLI_BIN}" ]]; then
@@ -64,36 +68,47 @@ print(version)
 PY
 }
 
-prepare_vulcan_core_install_dir() {
-  NEAT_CORE_INSTALL_DIR_OWNED=0
-  if [[ -z "${NEAT_APPS_CORE_INSTALL_DIR:-}" ]]; then
-    NEAT_CORE_INSTALL_DIR="$(mktemp -d /tmp/neat-apps-core-install.XXXXXX)"
-    NEAT_CORE_INSTALL_DIR_OWNED=1
-    return 0
-  fi
-
-  NEAT_CORE_INSTALL_DIR="${NEAT_APPS_CORE_INSTALL_DIR}"
-  if [[ -z "${NEAT_CORE_INSTALL_DIR}" || "${NEAT_CORE_INSTALL_DIR}" == "/" ]]; then
-    echo "ERROR: unsafe NEAT_APPS_CORE_INSTALL_DIR: ${NEAT_CORE_INSTALL_DIR}" >&2
-    exit 1
-  fi
-  rm -rf "${NEAT_CORE_INSTALL_DIR}"
-  mkdir -p "${NEAT_CORE_INSTALL_DIR}"
+dependency_workspace_is_owned() {
+  [[ -d "${DEPS_DIR}" && ! -L "${DEPS_DIR}" \
+    && -f "${DEPS_MARKER}" && ! -L "${DEPS_MARKER}" ]] \
+    && grep -Fqx "${DEPS_MARKER_VALUE}" "${DEPS_MARKER}"
 }
 
-cleanup_vulcan_core_install_dir() {
-  if [[ "${NEAT_CORE_INSTALL_DIR_OWNED}" == "1" && -n "${NEAT_CORE_INSTALL_DIR}" ]]; then
-    rm -rf "${NEAT_CORE_INSTALL_DIR}"
+cleanup_dependency_workspace() {
+  if [[ "${DEPS_WORKSPACE_ACTIVE}" != "1" ]]; then
+    return 0
   fi
-  NEAT_CORE_INSTALL_DIR=""
-  NEAT_CORE_INSTALL_DIR_OWNED=0
+  if ! dependency_workspace_is_owned; then
+    echo "ERROR: refusing to remove dependency workspace without its ownership marker: ${DEPS_DIR}" >&2
+    return 1
+  fi
+  rm -rf "${DEPS_DIR}"
+  DEPS_WORKSPACE_ACTIVE=0
+}
+
+prepare_dependency_workspace() {
+  if [[ -e "${DEPS_DIR}" || -L "${DEPS_DIR}" ]]; then
+    if ! dependency_workspace_is_owned; then
+      echo "ERROR: refusing to replace unowned dependency workspace: ${DEPS_DIR}" >&2
+      return 1
+    fi
+    rm -rf "${DEPS_DIR}"
+  fi
+
+  mkdir -p "${DEPS_DIR}"
+  if ! printf '%s\n' "${DEPS_MARKER_VALUE}" >"${DEPS_MARKER}"; then
+    rmdir "${DEPS_DIR}" 2>/dev/null || true
+    return 1
+  fi
+  DEPS_WORKSPACE_ACTIVE=1
+  mkdir -p "${CORE_INSTALL_DIR}"
 }
 
 run_sima_cli_core_install() {
   local sima_cli_bin="$1"
   shift
   local log_path
-  log_path="$(mktemp /tmp/neat-apps-sima-cli-install.XXXXXX.log)"
+  log_path="$(mktemp ./sima-cli-install.XXXXXX.log)"
   if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
     rm -f "${log_path}"
     return 1
@@ -222,33 +237,40 @@ if ! NEAT_CORE_TARGET_OUTPUT="$(extract_neat_core_target "${NEAT_CORE_JSON_PATH}
   exit 1
 fi
 
-SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
-  echo "ERROR: sima-cli is required to install matching NEAT core." >&2
-  exit 1
-}
-
 NEAT_CORE_BRANCH="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '1p')"
 NEAT_CORE_VERSION="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '2p')"
 
-echo
-echo "Installing matching NEAT core from Vulcan:"
-echo "  Environment: ${VULCAN_ENV}"
-echo "  Branch     : ${NEAT_CORE_BRANCH}"
-echo "  Version    : ${NEAT_CORE_VERSION}"
-prepare_vulcan_core_install_dir
-echo "  Scratch dir: ${NEAT_CORE_INSTALL_DIR}"
-INSTALL_STATUS=0
-(
-  cd "${NEAT_CORE_INSTALL_DIR}"
-  run_sima_cli_core_install "${SIMA_CLI_RESOLVED}" \
-    --env "${VULCAN_ENV}" \
-    -d . \
-    -t minimal \
-    "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
-) || INSTALL_STATUS=$?
-cleanup_vulcan_core_install_dir
-if [[ "${INSTALL_STATUS}" -ne 0 ]]; then
-  exit "${INSTALL_STATUS}"
+if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
+  echo
+  echo "WARNING: Skipping Core and Insight dependency installation."
+else
+  SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
+    echo "ERROR: sima-cli is required to install matching NEAT core." >&2
+    exit 1
+  }
+
+  echo
+  echo "Installing matching NEAT core from Vulcan:"
+  echo "  Environment: ${VULCAN_ENV}"
+  echo "  Branch     : ${NEAT_CORE_BRANCH}"
+  echo "  Version    : ${NEAT_CORE_VERSION}"
+  trap cleanup_dependency_workspace EXIT
+  prepare_dependency_workspace
+  echo "  Scratch dir: ${CORE_INSTALL_DIR}"
+  INSTALL_STATUS=0
+  (
+    cd "${CORE_INSTALL_DIR}"
+    run_sima_cli_core_install "${SIMA_CLI_RESOLVED}" \
+      --env "${VULCAN_ENV}" \
+      -d . \
+      -t minimal \
+      "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
+  ) || INSTALL_STATUS=$?
+  if [[ "${INSTALL_STATUS}" -ne 0 ]]; then
+    exit "${INSTALL_STATUS}"
+  fi
+  cleanup_dependency_workspace
+  trap - EXIT
 fi
 
 if ! promote_apps_runtime "${RUNTIME_SRC}" "${DEST_DIR}" "${LEGACY_RUNTIME_DIR}"; then

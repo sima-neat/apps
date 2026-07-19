@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tarfile
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -206,6 +208,13 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
             set -euo pipefail
             printf '%s\\n' "$PWD" > "${NEAT_APPS_TEST_SIMA_CLI_CWD}"
             printf '%s\\n' "$*" > "${NEAT_APPS_TEST_SIMA_CLI_ARGS}"
+            if [[ -n "${NEAT_APPS_TEST_FORBIDDEN_PATH:-}" ]]; then
+                [[ ! -e "${NEAT_APPS_TEST_FORBIDDEN_PATH}" ]]
+            fi
+            if [[ -n "${NEAT_APPS_TEST_SIMA_CLI_READY:-}" ]]; then
+                touch "${NEAT_APPS_TEST_SIMA_CLI_READY}"
+                while true; do sleep 1; done
+            fi
             touch sima-cli-ran.txt
             exit "${NEAT_APPS_TEST_SIMA_CLI_STATUS:-0}"
             """
@@ -739,7 +748,34 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert not (install_dir / "neat-apps-runtime").exists()
+    assert (tmp_path / "sima-cli-cwd.txt").read_text(encoding="utf-8").strip() == str(
+        package_dir / "deps" / "core"
+    )
+    assert (tmp_path / "sima-cli-args.txt").read_text(encoding="utf-8").strip() == (
+        "neat install --env production -d . -t minimal core@develop:core-sha"
+    )
+    assert not (package_dir / "deps").exists()
     assert f"  {install_dir}" in proc.stdout
+
+
+def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    install_dir = package_dir / "prebuilt-apps"
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        sima_cli_status=1,
+        extra_env={"NEAT_APPS_SKIP_DEPENDENCIES": "1"},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
+    assert not (tmp_path / "sima-cli-args.txt").exists()
+    assert not (package_dir / "deps").exists()
+    assert "Skipping Core and Insight dependency installation" in proc.stdout
 
 
 def test_vulcan_installer_keeps_existing_runtime_when_core_install_fails(tmp_path):
@@ -758,6 +794,96 @@ def test_vulcan_installer_keeps_existing_runtime_when_core_install_fails(tmp_pat
     )
 
     assert proc.returncode != 0
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert not (install_dir.parent / "deps").exists()
+
+
+def test_vulcan_installer_refuses_unowned_dependency_workspace(tmp_path):
+    package_dir = tmp_path / "package"
+    _write_vulcan_runtime(package_dir)
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+    unowned_file = install_dir.parent / "deps" / "user-file"
+    unowned_file.parent.mkdir()
+    unowned_file.write_text("keep\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
+
+    assert proc.returncode != 0
+    assert unowned_file.read_text(encoding="utf-8") == "keep\n"
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert not (tmp_path / "sima-cli-args.txt").exists()
+    assert "refusing to replace unowned dependency workspace" in proc.stderr
+
+
+def test_vulcan_installer_recreates_owned_dependency_workspace(tmp_path):
+    package_dir = tmp_path / "package"
+    _write_vulcan_runtime(package_dir)
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    deps_dir = install_dir.parent / "deps"
+    stale_file = deps_dir / "core" / "stale-resource"
+    stale_file.parent.mkdir(parents=True)
+    stale_file.write_text("stale\n", encoding="utf-8")
+    (deps_dir / ".neat-apps-installer-owned").write_text(
+        "sima-neat/apps\n", encoding="utf-8"
+    )
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        install_dir=install_dir,
+        extra_env={"NEAT_APPS_TEST_FORBIDDEN_PATH": str(stale_file)},
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert install_dir.is_dir()
+    assert not deps_dir.exists()
+
+
+def test_vulcan_installer_cleans_dependency_workspace_on_termination(tmp_path):
+    package_dir = tmp_path / "package"
+    _write_vulcan_runtime(package_dir)
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+    ready_file = tmp_path / "sima-cli-ready"
+    bin_dir = _write_fake_sima_cli(tmp_path)
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEAT_APPS_INSTALL_DIR": str(install_dir),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_READY": str(ready_file),
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "SIMA_CLI_BIN": str(bin_dir / "sima-cli"),
+        }
+    )
+    proc = subprocess.Popen(
+        ["bash", str(VULCAN_INSTALLER)],
+        cwd=package_dir,
+        env=env,
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    for _ in range(100):
+        if ready_file.exists():
+            break
+        time.sleep(0.02)
+    else:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.communicate(timeout=5)
+        pytest.fail("sima-cli did not start")
+
+    os.killpg(proc.pid, signal.SIGTERM)
+    proc.communicate(timeout=5)
+
+    assert proc.returncode != 0
+    assert not (install_dir.parent / "deps").exists()
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
 
 
