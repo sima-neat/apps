@@ -10,6 +10,7 @@ DEPS_DIR="${INSTALL_ROOT}/deps"
 DEPS_MARKER="${DEPS_DIR}/.neat-apps-installer-owned"
 DEPS_MARKER_VALUE="sima-neat/apps"
 CORE_INSTALL_DIR="${DEPS_DIR}/core"
+INSIGHT_INSTALL_DIR="${DEPS_DIR}/insight"
 DEPS_WORKSPACE_ACTIVE=0
 
 resolve_sima_cli_bin() {
@@ -101,24 +102,28 @@ prepare_dependency_workspace() {
     return 1
   fi
   DEPS_WORKSPACE_ACTIVE=1
-  mkdir -p "${CORE_INSTALL_DIR}"
 }
 
-run_sima_cli_core_install() {
-  local sima_cli_bin="$1"
-  shift
-  local log_path
-  log_path="$(mktemp ./sima-cli-install.XXXXXX.log)"
-  if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
+run_sima_cli_install() {
+  local install_dir="$1"
+  local sima_cli_bin="$2"
+  shift 2
+  mkdir -p "${install_dir}"
+  (
+    cd "${install_dir}"
+    local log_path
+    log_path="$(mktemp ./sima-cli-install.XXXXXX.log)"
+    if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
+      rm -f "${log_path}"
+      return 1
+    fi
+    if grep -Fq "Installation script exited" "${log_path}"; then
+      echo "ERROR: sima-cli reported a NEAT installer failure." >&2
+      rm -f "${log_path}"
+      return 1
+    fi
     rm -f "${log_path}"
-    return 1
-  fi
-  if grep -Fq "Installation script exited" "${log_path}"; then
-    echo "ERROR: sima-cli reported a NEAT core installer failure." >&2
-    rm -f "${log_path}"
-    return 1
-  fi
-  rm -f "${log_path}"
+  )
 }
 
 promote_apps_runtime() {
@@ -257,18 +262,21 @@ else
   trap cleanup_dependency_workspace EXIT
   prepare_dependency_workspace
   echo "  Scratch dir: ${CORE_INSTALL_DIR}"
-  INSTALL_STATUS=0
-  (
-    cd "${CORE_INSTALL_DIR}"
-    run_sima_cli_core_install "${SIMA_CLI_RESOLVED}" \
-      --env "${VULCAN_ENV}" \
-      -d . \
-      -t minimal \
-      "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
-  ) || INSTALL_STATUS=$?
-  if [[ "${INSTALL_STATUS}" -ne 0 ]]; then
-    exit "${INSTALL_STATUS}"
-  fi
+  run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
+    --env "${VULCAN_ENV}" \
+    -d . \
+    -t minimal \
+    "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
+
+  echo
+  echo "Installing latest Insight from Vulcan:"
+  echo "  Environment: ${VULCAN_ENV}"
+  echo "  Scratch dir: ${INSIGHT_INSTALL_DIR}"
+  run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
+    --env "${VULCAN_ENV}" \
+    -d . \
+    insight@latest
+
   cleanup_dependency_workspace
   trap - EXIT
 fi
