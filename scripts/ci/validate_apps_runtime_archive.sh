@@ -14,9 +14,18 @@ if ! grep -qx 'neat-apps-runtime/neat-core.json' <<<"${members}"; then
   exit 1
 fi
 
-forbidden='(^|/)(models|portal|tests|test-scope\.yaml|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(pyc|pyo|log|db|lock)$'
+forbidden='(^|/)(models|portal|tests|test-scope\.yaml|CMakeLists\.txt|CTestTestfile\.cmake|cmake_install\.cmake|Makefile|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(a|pyc|pyo|log|db|lock)$'
 if grep -E "${forbidden}" <<<"${members}"; then
-  echo "Runtime archive contains test or generated files." >&2
+  echo "Runtime archive contains non-runtime or generated files." >&2
+  exit 1
+fi
+
+root_example_binaries="$(
+  awk -F/ 'NF == 5 && $2 == "examples" && ($4 == $5 || $4 == $5 "_cpp")' <<<"${members}"
+)"
+if [[ -n "${root_example_binaries}" ]]; then
+  printf '%s\n' "${root_example_binaries}" >&2
+  echo "Runtime archive contains a root-level example binary." >&2
   exit 1
 fi
 

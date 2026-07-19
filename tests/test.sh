@@ -692,14 +692,11 @@ run_packaged_cpp_tests() {
 
   local test_bin
   for test_bin in "${cpp_test_bins[@]}"; do
-    local example_name test_dir example_bin rc
+    local example_name example_dir example_bin rc
     example_name="$(basename "${test_bin}")"
     example_name="${example_name%${suffix}}"
-    test_dir="$(dirname "${test_bin}")"
-    # Packaged layout:
-    # examples/<category>/<example>[/_cpp]/tests/cpp/<example>_{unit,e2e}_test
-    # examples/<category>/<example>[/_cpp]/<example>
-    example_bin="${test_dir}/../../${example_name}"
+    example_dir="${test_bin%/tests/cpp/*}"
+    example_bin="${example_dir%_cpp}/src/cpp/pre-built/${example_name}"
 
     echo "  [RUN] ${test_bin#${ROOT_DIR}/}"
     echo "[RUN] ${test_bin#${ROOT_DIR}/}" >>"${summary_file}"
