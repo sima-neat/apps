@@ -236,6 +236,10 @@ jobs:
               NEAT_VULCAN_ENV="${VULCAN_ENV}" \
               bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
           )
+          if [[ -e "${GITHUB_WORKSPACE}/_vulcan-test/install/deps" ]]; then
+            echo "Apps dependency workspace was not cleaned." >&2
+            exit 1
+          fi
           runtime_dir="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps"
           scripts/ci/overlay_apps_tests.sh "${test_archive}" "${runtime_dir}"
           printf '%s\n' "${runtime_dir}" > _vulcan-test/apps_runtime_dir.txt
