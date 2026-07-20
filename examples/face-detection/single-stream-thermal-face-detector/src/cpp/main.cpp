@@ -306,7 +306,8 @@ float iou(const Detection& a, const Detection& b) {
 // anchors + grid, score = sigmoid(obj) * sigmoid(cls), NMS. Output order is not
 // assumed; heads are grouped by spatial size and channel count.
 std::vector<Detection> decode_yolov5face_split(const simaai::neat::TensorList& tensors,
-                                               float min_score, float nms_iou_t) {
+                                               float min_score, float nms_iou_t,
+                                               int max_detections) {
   if (tensors.size() != 6) {
     throw std::runtime_error("expected 6 split tensors, got " + std::to_string(tensors.size()));
   }
@@ -406,7 +407,14 @@ std::vector<Detection> decode_yolov5face_split(const simaai::neat::TensorList& t
         break;
       }
     }
-    if (!suppressed) keep.push_back(cand);
+    if (!suppressed) {
+      keep.push_back(cand);
+      // Candidates are score-sorted; stop once the configured cap is reached to
+      // bound both the published count and NMS cost on crowded inputs.
+      if (max_detections > 0 && static_cast<int>(keep.size()) >= max_detections) {
+        break;
+      }
+    }
   }
   return keep;
 }
@@ -610,7 +618,7 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
 
     const auto tensors = simaai::neat::tensors_from_sample(sample, false);
     auto dets = decode_yolov5face_split(tensors, static_cast<float>(cfg.min_score),
-                                        static_cast<float>(cfg.nms_iou));
+                                        static_cast<float>(cfg.nms_iou), cfg.max_detections);
     unletterbox(dets, runtime.scale, runtime.pad_l, runtime.pad_t, runtime.frame_w,
                 runtime.frame_h);
     const double decode_end = sima_examples::time_ms();

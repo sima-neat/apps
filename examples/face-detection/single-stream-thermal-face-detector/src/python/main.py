@@ -292,7 +292,7 @@ def _sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def _nms_xyxy(boxes_xyxy, scores, iou_threshold: float):
+def _nms_xyxy(boxes_xyxy, scores, iou_threshold: float, max_detections: int):
     x1, y1 = boxes_xyxy[:, 0], boxes_xyxy[:, 1]
     x2, y2 = boxes_xyxy[:, 2], boxes_xyxy[:, 3]
     areas = (x2 - x1) * (y2 - y1)
@@ -301,6 +301,11 @@ def _nms_xyxy(boxes_xyxy, scores, iou_threshold: float):
     while order.size > 0:
         i = order[0]
         keep.append(i)
+        # Candidates are score-sorted, so the first max_detections survivors are
+        # the top-scoring ones. Stopping here caps the published count and bounds
+        # NMS cost on crowded / low-threshold inputs.
+        if max_detections > 0 and len(keep) >= max_detections:
+            break
         xx1 = np.maximum(x1[i], x1[order[1:]])
         yy1 = np.maximum(y1[i], y1[order[1:]])
         xx2 = np.minimum(x2[i], x2[order[1:]])
@@ -350,7 +355,8 @@ def _decode_level(box_nhwc, lm_nhwc, stride: int, anchors, conf_threshold: float
     return boxes_xyxy, scores_all[yy, xx, aa].astype(np.float32, copy=False), lms
 
 
-def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float):
+def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float,
+                            max_detections: int):
     pairs = {}
     for o in outputs:
         a = np.asarray(o)
@@ -395,7 +401,7 @@ def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float
     boxes = np.concatenate(out_boxes, axis=0)
     scores = np.concatenate(out_scores, axis=0)
     lms = np.concatenate(out_lms, axis=0)
-    keep = _nms_xyxy(boxes, scores, iou_threshold)
+    keep = _nms_xyxy(boxes, scores, iou_threshold, max_detections)
     return boxes[keep], scores[keep], lms[keep]
 
 
@@ -585,7 +591,8 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
             continue
 
         outputs = sample_to_outputs(sample)
-        boxes_xyxy, scores, landmarks = decode_yolov5face_split(outputs, cfg.min_score, cfg.nms_iou)
+        boxes_xyxy, scores, landmarks = decode_yolov5face_split(
+            outputs, cfg.min_score, cfg.nms_iou, cfg.max_detections)
         boxes_xyxy, landmarks = unletterbox(
             boxes_xyxy, landmarks, runtime.scale, runtime.pad_l, runtime.pad_t,
             runtime.frame_w, runtime.frame_h)
