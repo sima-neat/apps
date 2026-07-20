@@ -66,8 +66,8 @@ The 48-stream profile running in Insight:
 
 ## Prerequisites
 
-- Neat Apps, Core, and Internals from the same manifest.
-- A Modalix DevKit with the decoder service running.
+- A Modalix DevKit compatible with the selected Apps release, with the decoder
+  service running.
 - Insight reachable from the DevKit.
 - 16, 24, or 48 H.264 RTSP sources matching the selected profile.
 - Constant source frame rate, 1280×720 resolution, no H.264 B-frames, and a
@@ -77,24 +77,25 @@ The 48-stream profile running in Insight:
 The application starts all source graphs together. Start every RTSP publisher
 before starting the application.
 
-## Get The Apps Repo
+## Install Apps
 
-Install the Neat Library by following the official Neat installation guide.
-Then clone and build Apps:
+1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
+2. Install that version and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps@<release-version>
+cd prebuilt-apps
 ```
 
-Compile C++ examples in the Neat Development Environment. Run the application
-on Modalix.
+Run the remaining commands from `prebuilt-apps/`.
 
-## Download The Model
+## Prepare the Model
 
-From the Apps repository root, replace `<platform-version>` with the version in
-`deps/manifest.json`:
+| Model file | Role | Source |
+| --- | --- | --- |
+| `yolo26n-det-int8-b1.tar.gz` | Default | Direct artifact |
+
+The required platform version is recorded in `manifest.json`.
 
 ```bash
 mkdir -p models
@@ -103,9 +104,8 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ..
 ```
 
-The command stores the model under `models/`. Set `model.path` in the selected
-config to the downloaded package. Relative paths resolve from the config file;
-absolute paths are also supported.
+Set `model.path` in the selected config to the downloaded package. Relative
+paths resolve from the config file; absolute paths are also supported.
 
 ## Prepare The RTSP Sources
 
@@ -166,11 +166,11 @@ metadata port: 9100 + channel index
 
 ## Run
 
-Set the example and selected profile from the Apps repository root:
+Set the example and selected profile from the `prebuilt-apps/` root:
 
 ```bash
 APP_DIR=examples/object-detection/high-density-multi-stream-object-detector
-APP=./build/examples/object-detection/high-density-multi-stream-object-detector/high-density-multi-stream-object-detector
+APP=./examples/object-detection/high-density-multi-stream-object-detector/src/cpp/pre-built/high-density-multi-stream-object-detector
 CONFIG="$APP_DIR/src/common/config.yaml"
 ```
 
@@ -222,23 +222,21 @@ If channels do not start, confirm that every publisher was already reachable
 and that the configured source caps match the selected profile. Restart the
 application after restarting the publishers.
 
-## Tests
-
-Run the configured unit coverage through the Apps test entrypoint:
-
-```bash
-./tests/test.sh --unit
-```
-
-The 16-, 24-, and 48-stream runtime profiles require Modalix, live RTSP
-publishers, and Insight. Host unit tests do not prove their runtime FPS.
-
 ## Source Files
 
-- C++ implementation: `src/cpp/main.cpp`
+- C++ reference source: `src/cpp/main.cpp`
 - Python implementation: `src/python/main.py`
 - Default 16-stream profile: `src/common/config.yaml`
 - 24-stream profile: `src/common/config-24x720p20fps.yaml`
 - 48-stream profile: `src/common/config-48x720p10fps.yaml`
 - COCO labels: `src/common/coco_label.txt`
-- Test scope: `tests/test-scope.yaml`
+
+The packaged C++ source is an implementation reference. Run the executable
+under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the
+[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+The 16-, 24-, and 48-stream profiles still require Modalix, live RTSP
+publishers, and Insight for runtime validation.

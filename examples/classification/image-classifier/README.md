@@ -1,6 +1,7 @@
 # Image Classifier
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | classification |
@@ -12,19 +13,39 @@
 | Model | resnet_50 |
 
 ## Concept
-Minimal Model API usage with a compiled ResNet50 model package. The example loads the package, runs single-image inference, and prints top-1/top-5 classification output.
+
+Minimal Model API usage with a compiled ResNet50 package. The example runs
+single-image inference and prints top-1 and top-5 classification results.
 
 ## Preview
-The pipeline is trying to classify this goldfish image.
+
+The pipeline classifies this goldfish image:
 
 ![Image classifier goldfish input](../../../portal/assets/examples/classification/image-classifier/image.jpeg)
 
-## Supported Models
-Use the SDK platform version wherever `<platform-version>` appears.
+## Prerequisites
 
-Primary model: `resnet_50`
+- `sima-cli` on a supported Modalix or DevKit target.
 
-Download the model:
+## Install Apps
+
+1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
+2. Install that version and enter the installed bundle:
+
+```bash
+sima-cli neat install apps@<release-version>
+cd prebuilt-apps
+```
+
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+| Model package | Role | Model Zoo name |
+| --- | --- | --- |
+| `resnet_50_mpk.tar.gz` | Default | `resnet_50` |
+
+The required platform version is recorded in `manifest.json`.
 
 ```bash
 mkdir -p models
@@ -33,47 +54,35 @@ sima-cli modelzoo -v <platform-version> get resnet_50
 cd ..
 ```
 
-The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
-
-## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
-
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
-
-Clone and build the apps repo inside the Neat Development Environment:
-
-```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
-```
-
-After building, run the example commands below on the Modalix/DevKit board.
+Set `model.path` in the config to the downloaded package.
 
 ## Configure
-Edit `examples/classification/image-classifier/src/common/config.yaml` if you want to use a different image or threshold.
+
+Edit `examples/classification/image-classifier/src/common/config.yaml` to use a
+different image or threshold.
 
 ```yaml
 model:
-  path: <model-path>                        # Path to the model package.
+  path: <model-path>
 
 io:
-  image: null                               # Input image. null uses the sample image.
+  image: null                 # null uses the packaged sample image.
 
 validation:
-  min_probability: 0.50                     # Minimum expected-class probability.
+  min_probability: 0.50
 ```
 
 ## Run
+
 ### C++
+
 ```bash
-./build/examples/classification/image-classifier/image-classifier \
+./examples/classification/image-classifier/src/cpp/pre-built/image-classifier \
   --config examples/classification/image-classifier/src/common/config.yaml
 ```
 
 ### Python
+
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/classification/image-classifier/src/python/requirements.txt
@@ -81,12 +90,22 @@ python3 examples/classification/image-classifier/src/python/main.py \
   --config examples/classification/image-classifier/src/common/config.yaml
 ```
 
-## Debugging Notes
-- If you see a model load error, verify `model.path` points to a readable model package.
-- If image decode fails, set `io.image` in the config.
-- If top-1 validation fails, try lowering `validation.min_probability` for debug runs.
+## Troubleshooting
+
+- Verify `model.path` if model loading fails.
+- Set `io.image` if image decoding fails.
+- Lower `validation.min_probability` when investigating validation failures.
 
 ## Source Files
-- C++ source: `src/cpp/main.cpp`
+
+- C++ reference source: `src/cpp/main.cpp`
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
+
+The packaged C++ source is an implementation reference. Run the executable
+under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the
+[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

@@ -1,6 +1,7 @@
 # Depth Estimator
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | depth-estimation |
@@ -12,19 +13,37 @@
 | Model | depth_anything_v2_vits |
 
 ## Concept
-Depth-map generation for image folders. The example runs inference per image and writes visual depth outputs.
+
+Depth-map generation for image folders. The example runs inference for each
+image and writes a visual depth map.
 
 ## Preview
-Snippet from a pipeline run:
 
 ![Depth estimator preview](../../../portal/assets/examples/depth-estimation/depth-estimator/image.png)
 
-## Supported Models
-Use the SDK platform version wherever `<platform-version>` appears.
+## Prerequisites
 
-Primary model: `depth_anything_v2_vits`
+- `sima-cli` on a supported Modalix or DevKit target.
 
-Download the model:
+## Install Apps
+
+1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
+2. Install that version and enter the installed bundle:
+
+```bash
+sima-cli neat install apps@<release-version>
+cd prebuilt-apps
+```
+
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+| Model package | Role | Model Zoo name |
+| --- | --- | --- |
+| `depth_anything_v2_vits_mpk.tar.gz` | Default | `depth_anything_v2_vits` |
+
+The required platform version is recorded in `manifest.json`.
 
 ```bash
 mkdir -p models
@@ -33,45 +52,32 @@ sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits
 cd ..
 ```
 
-The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
-
-## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `models/`. Download the default model, or set `model.path` to another readable model package.
-
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
-
-Clone and build the apps repo inside the Neat Development Environment:
-
-```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
-```
-
-After building, run the example commands below on the Modalix/DevKit board.
+Set `model.path` in the config to the downloaded package.
 
 ## Configure
+
 Edit `examples/depth-estimation/depth-estimator/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: <model-path>                         # Path to the model package.
+  path: <model-path>
 
 io:
-  input_dir: assets/datasets/coco                         # Folder containing input images.
-  output_dir: sandbox/depth-estimator                   # Folder for depth visualizations.
+  input_dir: assets/datasets/coco
+  output_dir: sandbox/depth-estimator
 ```
 
 ## Run
+
 ### C++
+
 ```bash
-./build/examples/depth-estimation/depth-estimator/depth-estimator \
+./examples/depth-estimation/depth-estimator/src/cpp/pre-built/depth-estimator \
   --config examples/depth-estimation/depth-estimator/src/common/config.yaml
 ```
 
 ### Python
+
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/depth-estimation/depth-estimator/src/python/requirements.txt
@@ -79,12 +85,22 @@ python3 examples/depth-estimation/depth-estimator/src/python/main.py \
   --config examples/depth-estimation/depth-estimator/src/common/config.yaml
 ```
 
-## Debugging Notes
-- Check model path first if startup fails.
-- If no outputs are produced, verify `input_dir` has valid images.
-- Check write permissions on `output_dir`.
+## Troubleshooting
+
+- Verify `model.path` if startup fails.
+- Confirm `io.input_dir` contains supported images.
+- Confirm `io.output_dir` is writable.
 
 ## Source Files
-- C++ source: `src/cpp/main.cpp`
+
+- C++ reference source: `src/cpp/main.cpp`
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
+
+The packaged C++ source is an implementation reference. Run the executable
+under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the
+[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

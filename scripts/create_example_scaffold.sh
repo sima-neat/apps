@@ -202,6 +202,7 @@ render_readme() {
 # ${example_name}
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | ${category} |
@@ -213,46 +214,48 @@ render_readme() {
 | Model | TODO or TODO [https://host/path/model_mpk.tar.gz] |
 
 ## Concept
+
 TODO: describe what this example demonstrates.
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into \`models/\`.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- \`sima-cli\` on a supported Modalix or DevKit target.
+- TODO: add example-specific input, service, or hardware requirements.
 
-Then clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
+2. Install that version and enter the installed bundle:
 
 \`\`\`bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps@<release-version>
+cd prebuilt-apps
 \`\`\`
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from \`prebuilt-apps/\`.
 
-## Build
-### Build From The Apps Repo
-\`\`\`bash
-cd <apps-repo-root>
-./build.sh
-\`\`\`
+## Prepare the Model
 
-### Build This Example Directly With CMake
-\`\`\`bash
-cd <apps-repo-root>
-cmake -S examples/${category}/${example_name}/src/cpp -B build/${example_name}
-cmake --build build/${example_name} -j
-\`\`\`
+The default model is \`TODO\`.
+
+| Model | Role | Source |
+| --- | --- | --- |
+| \`TODO\` | Default | TODO: Model Zoo or direct artifact |
+
+The platform version required by model downloads is recorded in \`manifest.json\`.
+Download the model with \`sima-cli\`, store it under \`models/\`, and set
+\`model.path\` in the example config to the downloaded package.
 
 ## Run
+
 ### C++
+
 \`\`\`bash
-./build/examples/${category}/${example_name}/${example_name}
+./examples/${category}/${example_name}/src/cpp/pre-built/${example_name}
 \`\`\`
 
 ### Python
+
 \`\`\`bash
 source ~/pyneat/bin/activate
 pip install -r examples/${category}/${example_name}/src/python/requirements.txt
@@ -260,12 +263,18 @@ python3 examples/${category}/${example_name}/src/python/main.py
 \`\`\`
 
 ## Source Files
-- Test scope: \`tests/test-scope.yaml\`
-- C++: \`src/cpp/main.cpp\`
-- C++ tests: \`tests/cpp/test_unit.cpp\`, \`tests/cpp/test_e2e.cpp\`
-- Python: \`src/python/main.py\`
-- Python tests: \`tests/python/test_unit.py\`, \`tests/python/test_e2e.py\`
-- Shared assets: \`src/common/\`
+
+- C++ reference source: \`src/cpp/main.cpp\`
+- Python source: \`src/python/main.py\`
+- Shared runtime files: \`src/common/\`
+
+The packaged C++ source is an implementation reference. Run the executable
+under \`src/cpp/pre-built/\`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the
+[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
 EOF_MD
 }
 

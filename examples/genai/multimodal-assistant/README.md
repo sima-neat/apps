@@ -40,7 +40,8 @@ Multimodal assistant UI:
 ![Multimodal Assistant preview](../../../portal/assets/examples/genai/multimodal-assistant/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
+
+- `sima-cli` on a supported Modalix or DevKit target.
 - The model server uses the Python environment where `pyneat` is available. The default scripts assume:
 
 ```text
@@ -50,32 +51,34 @@ Multimodal assistant UI:
 Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat Library environment is
 somewhere else.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+## Install Apps
 
-Clone and build the apps repo inside the Neat Development Environment:
-
-```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
-```
-
-After building, run the example commands below on the Modalix/DevKit board.
-
-## Install
-Fetch only this example:
+1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
+2. Install that version and enter the installed bundle:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
+sima-cli neat install apps@<release-version>
+cd prebuilt-apps
 ```
+
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+The setup script installs these model directories:
+
+| Model | Role | Source |
+| --- | --- | --- |
+| `Qwen3-VL-4B-Instruct-GPTQ-a16w4` | Default chat/VLM | Hugging Face |
+| `whisper-small-a16w8` | Required ASR | Hugging Face |
+| `gte-small` | Default RAG embedding | Hugging Face |
 
 Install the UI virtual environment, default chat/VLM model, Whisper ASR model,
 GTE-small embedding model, Piper TTS voices, default RAG database, and generated
 local config:
 
 ```bash
-cd multimodal-assistant
+cd examples/genai/multimodal-assistant
 
 ./setup.sh
 ```
@@ -87,7 +90,8 @@ By default, `setup.sh` downloads:
 - `thenlper/gte-small`
 
 `whisper-small-a16w8` is the supported ASR model and is always downloaded.
-Override the default chat/VLM download with an environment variable when needed:
+To use another compatible SiMa.ai chat/VLM repository, override the default
+download:
 
 ```bash
 CHAT_MODEL_REPO=simaai/<chat-model-repo> ./setup.sh
@@ -114,11 +118,10 @@ sudo install -d \
 ```
 
 On a system without NVMe, set `LLIMA_MODELS_PATH` to another writable
-location. For a full Apps checkout, `models/` is the repo-local model
-convention:
+location. To use the user-managed Apps model directory:
 
 ```bash
-export APPS_ROOT=/path/to/apps
+APPS_ROOT="$(cd ../../.. && pwd)"
 LLIMA_MODELS_PATH="${APPS_ROOT}/models/genai" ./setup.sh
 ```
 
@@ -334,4 +337,8 @@ Then test the browser UI:
 - UI assets: `src/python/ui/templates/`, `src/python/ui/static/`, `src/python/ui/assets/`, `src/python/ui/certs/`
 - Manual API scripts: `src/python/ui/apitest/`
 - Shared config: `src/common/config.yaml`
-- Test scope: `tests/test-scope.yaml`
+
+## Development From Source
+
+To modify or test this example, use the
+[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
