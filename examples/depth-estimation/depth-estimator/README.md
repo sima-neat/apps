@@ -42,12 +42,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `depth_anything_v2_vits_mpk.tar.gz` | Default | `depth_anything_v2_vits` |
 
-The required platform version is recorded in `manifest.json`.
+Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`.
 
 ```bash
+export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
-sima-cli modelzoo -v <platform-version> get depth_anything_v2_vits
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get depth_anything_v2_vits
 cd ..
 ```
 

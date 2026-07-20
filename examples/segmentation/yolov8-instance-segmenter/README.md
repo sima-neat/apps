@@ -45,12 +45,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo_v8m_seg_mpk.tar.gz` | Supported | `yolo_v8m_seg` |
 | `yolo_v8l_seg_mpk.tar.gz` | Supported | `yolo_v8l_seg` |
 
-The required platform version is recorded in `manifest.json`. Replace `<model-name>` with a model from the table.
+Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Replace `<model-name>` with a model from the table.
 
 ```bash
+export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
-sima-cli modelzoo -v <platform-version> get <model-name>
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get <model-name>
 cd ..
 ```
 

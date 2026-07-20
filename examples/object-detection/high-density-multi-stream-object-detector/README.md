@@ -74,12 +74,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `yolo26n-det-int8-b1.tar.gz` | Default | Direct artifact |
 
-The required platform version is recorded in `manifest.json`.
+Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`.
 
 ```bash
+export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
 cd ..
 ```
 

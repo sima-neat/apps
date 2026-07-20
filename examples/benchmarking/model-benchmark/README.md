@@ -43,12 +43,13 @@ Run the remaining commands from `prebuilt-apps/`.
 
 This example accepts any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
-The required platform version is recorded in `manifest.json`. Download a Model Zoo package:
+Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Download a Model Zoo package:
 
 ```bash
+export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
-sima-cli modelzoo -v <platform-version> get <model-name>
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get <model-name>
 cd ..
 ```
 

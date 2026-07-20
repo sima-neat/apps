@@ -50,12 +50,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` | Supported |
 | `yolo26m-seg-int8-b1.tar.gz` | Supported |
 
-The required platform version is recorded in `manifest.json`. Replace `<model-file>` with a file from the table.
+Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Replace `<model-file>` with a file from the table.
 
 ```bash
+export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-segmentation/<model-file>
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-segmentation/<model-file>"
 cd ..
 ```
 

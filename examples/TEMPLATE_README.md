@@ -50,14 +50,15 @@ The default model is `<default-model>`.
 | `<default-model>` | Default | <Model Zoo / direct artifact> |
 | `<supported-model>` | Supported | <Model Zoo / direct artifact> |
 
-The platform version required by model downloads is recorded in `manifest.json`. Use the command that matches the model source and delete the other command.
+Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Use the command that matches the model source and delete the other command.
 
 Model Zoo:
 
 ```bash
+export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
-sima-cli modelzoo -v <platform-version> get <model-name>
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get <model-name>
 cd ..
 ```
 

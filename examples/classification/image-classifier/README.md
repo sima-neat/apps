@@ -44,12 +44,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `resnet_50_mpk.tar.gz` | Default | `resnet_50` |
 
-The required platform version is recorded in `manifest.json`.
+Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`.
 
 ```bash
+export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
-sima-cli modelzoo -v <platform-version> get resnet_50
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get resnet_50
 cd ..
 ```
 
