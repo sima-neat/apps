@@ -55,7 +55,7 @@ Browse the [Neat Apps Portal](https://developer.sima.ai/examples) or the
 Models are user-managed and are not included in the Apps package. Store them
 under `models/`, or set `model.path` to another readable package. Each
 example README lists its default and additional supported models with the
-corresponding `sima-cli` download command.
+corresponding `sima-cli` or example-specific installation command.
 
 The platform version required by model downloads is recorded in the installed
 `manifest.json`. Runtime sample data is included under `assets/datasets/`.

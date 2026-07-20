@@ -211,7 +211,7 @@ render_readme() {
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | ${example_name} |
-| Model | TODO or TODO [https://host/path/model_mpk.tar.gz] |
+| Model | <default-model> |
 
 ## Concept
 
@@ -236,13 +236,34 @@ Run the remaining commands from \`prebuilt-apps/\`.
 
 ## Prepare the Model
 
-The default model is \`TODO\`.
+The default model is \`<default-model>\`.
 
 | Model | Role | Source |
 | --- | --- | --- |
-| \`TODO\` | Default | TODO: Model Zoo or direct artifact |
+| \`<default-model>\` | Default | <Model Zoo / direct artifact> |
+| \`<supported-model>\` | Supported | <Model Zoo / direct artifact> |
 
-The platform version required by model downloads is recorded in \`manifest.json\`. Download the model with \`sima-cli\`, store it under \`models/\`, and set \`model.path\` in the example config to the downloaded package.
+The platform version required by model downloads is recorded in \`manifest.json\`. Use the command that matches the model source and delete the other command.
+
+Model Zoo:
+
+\`\`\`bash
+mkdir -p models
+cd models
+sima-cli modelzoo -v <platform-version> get <model-name>
+cd ..
+\`\`\`
+
+Direct artifact:
+
+\`\`\`bash
+mkdir -p models
+cd models
+sima-cli download <model-url>
+cd ..
+\`\`\`
+
+Set \`model.path\` in the example config to the downloaded package.
 
 ## Run
 

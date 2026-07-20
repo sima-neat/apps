@@ -78,6 +78,17 @@ By default, `setup.sh` downloads:
 - `simaai/whisper-small-a16w8`
 - `thenlper/gte-small`
 
+Use the [LLiMa CLI](https://developer.sima.ai/software/genai-llima/runtime) to browse or independently install the default precompiled server models:
+
+```bash
+llima search
+llima search qwen
+llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
+llima pull whisper-small-a16w8
+```
+
+Models installed with `llima pull` use `/media/nvme/llima/models/<model-name>` by default. Add an independently installed model's name and path to `config.local.yaml`; set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory. The setup script remains the complete example installer because it also prepares the UI environment, RAG embedding model, TTS voices, local configuration, and RAG database.
+
 `whisper-small-a16w8` is the supported ASR model and is always downloaded. To use another compatible SiMa.ai chat/VLM repository, override the default download:
 
 ```bash

@@ -24,7 +24,7 @@ This example decodes an RTSP stream, runs YOLO26 detection, and sends video plus
 
 - `sima-cli` on a supported Modalix or DevKit target.
 - An RTSP source and Insight receiver reachable from the target.
-- A local model from the [SiMa.ai VLM collection](https://huggingface.co/collections/simaai/vision-language-models) when GenAI is enabled.
+- The [LLiMa model manager](https://developer.sima.ai/software/genai-llima/runtime) available on the target when GenAI is enabled.
 
 ## Install Apps
 
@@ -61,7 +61,17 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ..
 ```
 
-Set `model.path` to the downloaded detector package. VLM directories are not installed by this `sima-cli` command. Download the selected VLM from the linked collection and set `genai_server.model.path` to its local directory.
+Set `model.path` to the downloaded detector package.
+
+The default VLM is `Qwen3-VL-4B-Instruct-GPTQ-a16w4`. Browse the available precompiled models and install the default with LLiMa:
+
+```bash
+llima search
+llima search qwen
+llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
+```
+
+LLiMa stores models under `/media/nvme/llima/models/` by default. Set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory, then update `genai_server.model.path` accordingly.
 
 ## Prepare Insight
 
@@ -93,8 +103,8 @@ genai_server:
   host: 0.0.0.0
   port: 9998
   model:
-    name: <served-vlm-model-name>
-    path: <path-to-vlm-model-dir>
+    name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
+    path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
 
 genai:
   enabled: false
@@ -118,6 +128,7 @@ pip install -r examples/genai/detection-to-vlm-assistant/src/python/requirements
 When GenAI is enabled, start the server in one terminal:
 
 ```bash
+source ~/pyneat/bin/activate
 python3 examples/genai/detection-to-vlm-assistant/src/python/genai_server.py \
   --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
 ```
@@ -125,6 +136,7 @@ python3 examples/genai/detection-to-vlm-assistant/src/python/genai_server.py \
 Start the detection pipeline in another terminal:
 
 ```bash
+source ~/pyneat/bin/activate
 python3 examples/genai/detection-to-vlm-assistant/src/python/detector_app.py \
   --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
 ```

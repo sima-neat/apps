@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | <experimental / stable> |
 | Binary Name | <binary> |
-| Model | <default-model> [https://example.com/path/to/<default-model>.tar.gz] |
+| Model | <default-model> |
 
 ## Concept
 

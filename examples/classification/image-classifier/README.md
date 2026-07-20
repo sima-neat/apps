@@ -64,11 +64,14 @@ model:
   path: <model-path>
 
 io:
-  image: null                 # null uses the packaged sample image.
+  image: null
+  fallback_image_url: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n01443537_goldfish.JPEG
 
 validation:
   min_probability: 0.50
 ```
+
+With `io.image: null`, the example downloads `fallback_image_url` and therefore requires network access. For offline use, set `io.image` to a readable local image path; the fallback URL is not used when a local path is configured.
 
 ## Run
 
@@ -91,7 +94,7 @@ python3 examples/classification/image-classifier/src/python/main.py \
 ## Troubleshooting
 
 - Verify `model.path` if model loading fails.
-- Set `io.image` if image decoding fails.
+- Set `io.image` to a readable local image if downloading or decoding the fallback image fails.
 - Lower `validation.min_probability` when investigating validation failures.
 
 ## Source Files
