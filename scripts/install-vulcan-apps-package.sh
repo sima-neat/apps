@@ -10,6 +10,7 @@ DEPS_DIR="${INSTALL_ROOT}/deps"
 DEPS_MARKER="${DEPS_DIR}/.neat-apps-installer-owned"
 DEPS_MARKER_VALUE="sima-neat/apps"
 CORE_INSTALL_DIR="${DEPS_DIR}/core"
+INSIGHT_INSTALL_DIR="${DEPS_DIR}/insight"
 DEPS_WORKSPACE_ACTIVE=0
 
 resolve_sima_cli_bin() {
@@ -68,6 +69,37 @@ print(version)
 PY
 }
 
+extract_insight_target() {
+  local json_path="$1"
+  python3 - <<'PY' "${json_path}"
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+insight = data.get("insight")
+if not isinstance(insight, dict):
+    raise SystemExit(1)
+
+ref = insight.get("branch", insight.get("ref"))
+version = insight.get("version")
+if not isinstance(ref, str) or not isinstance(version, str):
+    raise SystemExit(1)
+
+ref = ref.strip()
+version = version.strip()
+if not ref or not version:
+    raise SystemExit(1)
+
+print(ref)
+print(version)
+PY
+}
+
 dependency_workspace_is_owned() {
   [[ -d "${DEPS_DIR}" && ! -L "${DEPS_DIR}" \
     && -f "${DEPS_MARKER}" && ! -L "${DEPS_MARKER}" ]] \
@@ -101,24 +133,28 @@ prepare_dependency_workspace() {
     return 1
   fi
   DEPS_WORKSPACE_ACTIVE=1
-  mkdir -p "${CORE_INSTALL_DIR}"
 }
 
-run_sima_cli_core_install() {
-  local sima_cli_bin="$1"
-  shift
-  local log_path
-  log_path="$(mktemp ./sima-cli-install.XXXXXX.log)"
-  if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
+run_sima_cli_install() {
+  local install_dir="$1"
+  local sima_cli_bin="$2"
+  shift 2
+  mkdir -p "${install_dir}"
+  (
+    cd "${install_dir}"
+    local log_path
+    log_path="$(mktemp ./sima-cli-install.XXXXXX.log)"
+    if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
+      rm -f "${log_path}"
+      return 1
+    fi
+    if grep -Fq "Installation script exited" "${log_path}"; then
+      echo "ERROR: sima-cli reported a NEAT installer failure." >&2
+      rm -f "${log_path}"
+      return 1
+    fi
     rm -f "${log_path}"
-    return 1
-  fi
-  if grep -Fq "Installation script exited" "${log_path}"; then
-    echo "ERROR: sima-cli reported a NEAT core installer failure." >&2
-    rm -f "${log_path}"
-    return 1
-  fi
-  rm -f "${log_path}"
+  )
 }
 
 promote_apps_runtime() {
@@ -226,6 +262,11 @@ if [[ ! -f "${NEAT_CORE_JSON_PATH}" ]]; then
   echo "ERROR: extracted apps package is missing neat-core.json." >&2
   exit 1
 fi
+APPS_MANIFEST_PATH="${RUNTIME_SRC}/manifest.json"
+if [[ ! -f "${APPS_MANIFEST_PATH}" ]]; then
+  echo "ERROR: extracted apps package is missing manifest.json." >&2
+  exit 1
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ERROR: python3 is required to parse ${NEAT_CORE_JSON_PATH}." >&2
@@ -239,6 +280,12 @@ fi
 
 NEAT_CORE_BRANCH="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '1p')"
 NEAT_CORE_VERSION="$(printf '%s\n' "${NEAT_CORE_TARGET_OUTPUT}" | sed -n '2p')"
+if ! INSIGHT_TARGET_OUTPUT="$(extract_insight_target "${APPS_MANIFEST_PATH}")"; then
+  echo "ERROR: failed to parse Insight install target from ${APPS_MANIFEST_PATH}." >&2
+  exit 1
+fi
+INSIGHT_REF="$(printf '%s\n' "${INSIGHT_TARGET_OUTPUT}" | sed -n '1p')"
+INSIGHT_VERSION="$(printf '%s\n' "${INSIGHT_TARGET_OUTPUT}" | sed -n '2p')"
 
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo
@@ -257,18 +304,23 @@ else
   trap cleanup_dependency_workspace EXIT
   prepare_dependency_workspace
   echo "  Scratch dir: ${CORE_INSTALL_DIR}"
-  INSTALL_STATUS=0
-  (
-    cd "${CORE_INSTALL_DIR}"
-    run_sima_cli_core_install "${SIMA_CLI_RESOLVED}" \
-      --env "${VULCAN_ENV}" \
-      -d . \
-      -t minimal \
-      "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
-  ) || INSTALL_STATUS=$?
-  if [[ "${INSTALL_STATUS}" -ne 0 ]]; then
-    exit "${INSTALL_STATUS}"
-  fi
+  run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
+    --env "${VULCAN_ENV}" \
+    -d . \
+    -t minimal \
+    "core@${NEAT_CORE_BRANCH}:${NEAT_CORE_VERSION}"
+
+  echo
+  echo "Installing Insight from Vulcan:"
+  echo "  Environment: ${VULCAN_ENV}"
+  echo "  Ref        : ${INSIGHT_REF}"
+  echo "  Version    : ${INSIGHT_VERSION}"
+  echo "  Scratch dir: ${INSIGHT_INSTALL_DIR}"
+  run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
+    --env "${VULCAN_ENV}" \
+    -d . \
+    "insight@${INSIGHT_REF}:${INSIGHT_VERSION}"
+
   cleanup_dependency_workspace
   trap - EXIT
 fi

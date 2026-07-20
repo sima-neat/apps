@@ -24,6 +24,7 @@ def _write_runtime_archive(tmp_path: Path, *members: str) -> Path:
     archive_root = tmp_path / "archive-root" / "neat-apps-runtime"
     archive_root.mkdir(parents=True)
     (archive_root / "neat-core.json").write_text("{}\n", encoding="utf-8")
+    (archive_root / "manifest.json").write_text("{}\n", encoding="utf-8")
     for member in members:
         path = archive_root / member
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,12 +91,20 @@ def test_runtime_archive_validator_accepts_cpp_reference_and_prebuilt_binary(tmp
     assert proc.returncode == 0, proc.stderr + proc.stdout
 
 
-def _write_manifest(path: Path, neat_core: object = "", platform_version: str = "2.0.0") -> None:
+def _write_manifest(
+    path: Path,
+    neat_core: object = "",
+    platform_version: str = "2.0.0",
+    insight: object | None = None,
+) -> None:
+    if insight is None:
+        insight = {"ref": "main", "version": "latest"}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "neat-core": neat_core,
+                "insight": insight,
                 "platform-version": platform_version,
             },
             indent=2,
@@ -206,8 +215,8 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
             """\
             #!/usr/bin/env bash
             set -euo pipefail
-            printf '%s\\n' "$PWD" > "${NEAT_APPS_TEST_SIMA_CLI_CWD}"
-            printf '%s\\n' "$*" > "${NEAT_APPS_TEST_SIMA_CLI_ARGS}"
+            printf '%s\\n' "$PWD" >> "${NEAT_APPS_TEST_SIMA_CLI_CWD}"
+            printf '%s\\n' "$*" >> "${NEAT_APPS_TEST_SIMA_CLI_ARGS}"
             if [[ -n "${NEAT_APPS_TEST_FORBIDDEN_PATH:-}" ]]; then
                 [[ ! -e "${NEAT_APPS_TEST_FORBIDDEN_PATH}" ]]
             fi
@@ -216,6 +225,10 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
                 while true; do sleep 1; done
             fi
             touch sima-cli-ran.txt
+            if [[ -n "${NEAT_APPS_TEST_SIMA_CLI_FAIL_TARGET:-}" \
+                && "$*" == *"${NEAT_APPS_TEST_SIMA_CLI_FAIL_TARGET}"* ]]; then
+                exit 1
+            fi
             exit "${NEAT_APPS_TEST_SIMA_CLI_STATUS:-0}"
             """
         ),
@@ -225,13 +238,23 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _write_vulcan_runtime(package_dir: Path, neat_core: object | None = None) -> Path:
+def _write_vulcan_runtime(
+    package_dir: Path,
+    neat_core: object | None = None,
+    insight: object | None = None,
+) -> Path:
     runtime_dir = package_dir / "neat-apps-runtime"
     runtime_dir.mkdir(parents=True)
     if neat_core is None:
         neat_core = {"branch": "develop", "version": "core-sha"}
+    if insight is None:
+        insight = {"ref": "main", "version": "latest"}
     (runtime_dir / "neat-core.json").write_text(
         json.dumps({"neat-core": neat_core}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "manifest.json").write_text(
+        json.dumps({"insight": insight}),
         encoding="utf-8",
     )
     return runtime_dir
@@ -748,14 +771,38 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert not (install_dir / "neat-apps-runtime").exists()
-    assert (tmp_path / "sima-cli-cwd.txt").read_text(encoding="utf-8").strip() == str(
-        package_dir / "deps" / "core"
-    )
-    assert (tmp_path / "sima-cli-args.txt").read_text(encoding="utf-8").strip() == (
-        "neat install --env production -d . -t minimal core@develop:core-sha"
-    )
+    assert (tmp_path / "sima-cli-cwd.txt").read_text(
+        encoding="utf-8"
+    ).splitlines() == [
+        str(package_dir / "deps" / "core"),
+        str(package_dir / "deps" / "insight"),
+    ]
+    assert (tmp_path / "sima-cli-args.txt").read_text(
+        encoding="utf-8"
+    ).splitlines() == [
+        "neat install --env production -d . -t minimal core@develop:core-sha",
+        "neat install --env production -d . insight@main:latest",
+    ]
     assert not (package_dir / "deps").exists()
     assert f"  {install_dir}" in proc.stdout
+
+
+@pytest.mark.parametrize("ref_key", ["branch", "ref"])
+def test_vulcan_installer_uses_insight_manifest_target(tmp_path, ref_key):
+    package_dir = tmp_path / "package"
+    _write_vulcan_runtime(
+        package_dir,
+        insight={ref_key: "v0.0.6", "version": "insight-sha"},
+    )
+
+    proc = _run_vulcan_installer(tmp_path, package_dir)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (tmp_path / "sima-cli-args.txt").read_text(
+        encoding="utf-8"
+    ).splitlines()[-1] == (
+        "neat install --env production -d . insight@v0.0.6:insight-sha"
+    )
 
 
 def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
@@ -795,6 +842,33 @@ def test_vulcan_installer_keeps_existing_runtime_when_core_install_fails(tmp_pat
 
     assert proc.returncode != 0
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert not (install_dir.parent / "deps").exists()
+
+
+def test_vulcan_installer_keeps_existing_runtime_when_insight_install_fails(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        install_dir=install_dir,
+        extra_env={"NEAT_APPS_TEST_SIMA_CLI_FAIL_TARGET": "insight@main:latest"},
+    )
+
+    assert proc.returncode != 0
+    assert (tmp_path / "sima-cli-args.txt").read_text(
+        encoding="utf-8"
+    ).splitlines() == [
+        "neat install --env production -d . -t minimal core@develop:core-sha",
+        "neat install --env production -d . insight@main:latest",
+    ]
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert (runtime_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert not (install_dir.parent / "deps").exists()
 
 
