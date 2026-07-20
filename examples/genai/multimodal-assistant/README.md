@@ -82,7 +82,6 @@ Use the [LLiMa CLI](https://developer.sima.ai/software/genai-llima/runtime) to b
 
 ```bash
 llima search
-llima search qwen
 llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
 llima pull whisper-small-a16w8
 ```

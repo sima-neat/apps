@@ -67,7 +67,6 @@ The default VLM is `Qwen3-VL-4B-Instruct-GPTQ-a16w4`. Browse the available preco
 
 ```bash
 llima search
-llima search qwen
 llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
 ```
 
