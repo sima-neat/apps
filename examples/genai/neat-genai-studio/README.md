@@ -243,6 +243,12 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 /export [file]   save this chat to a .log file (default neat-chat-<time>.log)
 /reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
+/rag [filter]    inspect the RAG database — list chunks (/docs; filter narrows)
+/rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
+/rag search <q>  semantic search — show top matches without asking the model
+/rag db [path]   show, or switch to, which milvus.db is served ('default' reverts)
+/rag status      show the RAG toggle, active database and service state
+/rag reset|clear rebuild from the default document, or clear all RAG documents
 /help  /quit     help / exit (aliases: /exit, /bye, /q, Ctrl+D)
 ```
 
@@ -531,6 +537,31 @@ and every chunk (header breadcrumb + text):
 The UI reads through the running VectorDB service (which owns the DB file); the
 CLI reads the service if it's up, otherwise the `milvus.db` file directly — so the
 single-writer database is never opened twice.
+
+### RAG-augmented chat (CLI)
+The web UI has a **Search RAG Database** toggle; the CLI has the same, plus a way
+to switch which database it searches:
+
+- `/rag on` / `/rag off` — when on, each prompt is first used to retrieve the top
+  passages from the database, which are prepended to that turn as context (your
+  chat history keeps the clean prompt, so context isn't re-fed every turn).
+- `/rag search <query>` — a one-off semantic search that prints the top matches
+  without asking the model.
+- `/rag db <path>` — point the CLI at a different `milvus.db` (`/rag db default`
+  reverts). Inspection, search and augmentation then all use that file.
+- `/rag status` — show the toggle, the active database and the service state.
+
+RAG needs the VectorDB service (semantic search). In CLI mode the studio's web
+service usually isn't running, so the CLI **starts its own** worker on first use
+(loading the embedding model takes a moment) and stops it on exit. If the studio
+*is* running, the CLI shares its service instead of starting a second one — and
+`/rag status` shows which database that shared service actually serves (a pending
+`/rag db` override only takes effect once the running service stops).
+
+Retrieved context is size-capped before it's added to a prompt so it can't
+overflow the on-board model's small context window. Because the single-writer
+`milvus.db` is guarded by port reachability, avoid **cold-starting the CLI's RAG
+and the web UI at the same instant** against the same database.
 
 ### Reset or clear the RAG database
 - **Reset to Default** rebuilds RAG from the bundled `src/common/rag/neat.md`.

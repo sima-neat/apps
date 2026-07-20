@@ -227,6 +227,7 @@ def index_endpoint():
         "service": "rag-vectordb",
         "message": "This is the RAG VectorDB API, not the Multimodal Assistant UI.",
         "search": "/search?query=<text>&k=3&min_score=-1",
+        "db_path": ragdb.db_path if ragdb else None,
     })
 
 

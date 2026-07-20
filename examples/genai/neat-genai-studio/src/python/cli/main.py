@@ -528,6 +528,10 @@ HELP = f"""{MUTED}Commands:
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
   /rag [filter]      inspect the RAG database — list ingested chunks (aliases /docs)
+  /rag on|off        toggle RAG-augmented chat (retrieved passages added to prompts)
+  /rag search <q>    semantic search — show top matches without asking the model
+  /rag db [path]     show, or switch to, which milvus.db is served ('default' reverts)
+  /rag status        show the RAG toggle, active database and service state
   /rag reset|clear   rebuild from the default document, or clear all RAG documents
   /help              show this help
   /quit              exit (aliases: /exit, /bye, /q, or Ctrl+D)
@@ -1328,15 +1332,289 @@ def _default_rag_source():
     return os.path.join(src, "common", "rag", "neat.md")
 
 
+# ---------------------------------------------------------------------------
+# RAG-augmented chat (CLI). The web UI owns a VectorDB service (127.0.0.1:9100)
+# for semantic search; in CLI mode we start that same worker ourselves so the
+# user can toggle retrieval on/off and switch which milvus.db it serves.
+# ---------------------------------------------------------------------------
+_RAG = {"on": False, "proc": None, "db": None, "k": 3}
+_RAG_ATEXIT = False
+# The compiled on-board model has a small fixed context window, so bound how much
+# retrieved text we inject: each passage and the whole block are capped.
+_RAG_PASSAGE_CHARS = 1200
+_RAG_CONTEXT_CHARS = 3000
+
+
+def _rag_active_db():
+    """The milvus.db the CLI is currently pointed at (a /rag db override, else the
+    app default)."""
+    if _RAG["db"]:
+        return _RAG["db"]
+    from rag.inspect_db import default_db_path
+    return default_db_path()
+
+
+def _rag_worker_path():
+    """Path to rag/vectordb_worker.py (spawned as the CLI's RAG service)."""
+    py = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # src/python
+    return os.path.join(py, "rag", "vectordb_worker.py")
+
+
+def _rag_service_db():
+    """The milvus.db the running service reports serving (None if unreachable or
+    unknown). Lets us tell whether a *reused* service actually serves our DB."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9100/", timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        served = data.get("db_path")
+        return os.path.abspath(served) if served else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _rag_display_db():
+    """The DB actually in use: a reused (external) service's served DB wins over our
+    override, since that's what queries hit. Falls back to the active/default DB."""
+    if _rag_service_up() and _RAG["proc"] is None:
+        served = _rag_service_db()
+        if served:
+            return served
+    return os.path.abspath(_rag_active_db())
+
+
+def _rag_context_block(hits):
+    """Turn search hits into a size-bounded context block (per-passage and total
+    caps) so retrieval can't overflow the small on-board context window. Returns
+    (block_text, passages_used)."""
+    parts, total = [], 0
+    for h in hits:
+        text = str(h.get("content", "")).strip()
+        if not text:
+            continue
+        if len(text) > _RAG_PASSAGE_CHARS:
+            text = text[:_RAG_PASSAGE_CHARS].rstrip() + "…"
+        if total + len(text) > _RAG_CONTEXT_CHARS:
+            room = _RAG_CONTEXT_CHARS - total
+            if room > 200:                # only append a worthwhile remainder
+                parts.append(text[:room].rstrip() + "…")
+            break
+        parts.append(text)
+        total += len(text)
+    return "\n\n---\n\n".join(parts), len(parts)
+
+
+def _rag_config(config_path):
+    """Return (enabled, embedding_model_dir) from the app config."""
+    enabled, emb = True, ""
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+        rag = ((cfg.get("app") or {}).get("rag") or {})
+        enabled = bool(rag.get("enabled", True))
+        emb = rag.get("embedding_model_dir") or ""
+    except Exception:  # noqa: BLE001
+        pass
+    return enabled, emb
+
+
+def _wait_rag_ready(timeout=120, proc=None):
+    """Poll until the RAG service answers (it only binds the port after the
+    embedding model + DB have loaded). Bails early if ``proc`` exits first."""
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False                  # worker died during startup
+        if _rag_service_up():
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _start_rag_service(config_path):
+    """Ensure a RAG service is available. Reuses one that's already up (e.g. the
+    web UI's); otherwise spawns our own worker pointed at the active DB. Returns
+    True when a service is reachable."""
+    if _rag_service_up():                 # someone already serves 9100 — use it
+        served, want = _rag_service_db(), os.path.abspath(_rag_active_db())
+        if served and served != want:
+            print(f"{MUTED}  note: the running RAG service serves {served} (not the "
+                  f"selected {want}) — using it until the studio stops.{RESET}")
+        return True
+    enabled, emb = _rag_config(config_path)
+    if not emb:
+        print(f"{ERR}  no RAG embedding model configured (app.rag.embedding_model_dir).{RESET}")
+        return False
+    worker = _rag_worker_path()
+    if not os.path.isfile(worker):
+        print(f"{ERR}  RAG worker not found: {worker}{RESET}")
+        return False
+    db = _rag_active_db()
+    if not os.path.isfile(db):
+        print(f"{ERR}  no RAG database at {db} — build one (upload in the UI) or "
+              f"'/rag db <path>' to point at an existing milvus.db.{RESET}")
+        return False
+    import subprocess
+    env = os.environ.copy()
+    env["VDB_EMBED_MODEL_DIR"] = emb
+    env["VECTOR_DB_PATH"] = db
+    print(f"{MUTED}  starting the RAG service (loads the embedding model — a moment)…{RESET}")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-u", worker], env=env, start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:  # noqa: BLE001
+        print(f"{ERR}  could not start the RAG service: {exc}{RESET}")
+        return False
+    _RAG["proc"] = proc
+    global _RAG_ATEXIT
+    if not _RAG_ATEXIT:                    # stop our worker when the CLI exits
+        import atexit
+        atexit.register(_stop_rag_service)
+        _RAG_ATEXIT = True
+    try:
+        ready = _wait_rag_ready(proc=proc)
+    except KeyboardInterrupt:              # Ctrl+C while it loads — cancel cleanly
+        print(f"\n{MUTED}  (cancelled — stopping the RAG service){RESET}")
+        _stop_rag_service()
+        return False
+    if not ready:
+        print(f"{ERR}  the RAG service did not become ready — check the embedding model.{RESET}")
+        _stop_rag_service()
+        return False
+    return True
+
+
+def _stop_rag_service():
+    """Stop the RAG service *we* started (leaves an external/UI one alone)."""
+    proc = _RAG.get("proc")
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:  # noqa: BLE001
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+    _RAG["proc"] = None
+
+
+def _rag_search(query, k=3, min_score=-1.0):
+    """Semantic search via the running VectorDB service. Returns a list of
+    ``{content, metadata, score}`` on success ([] is a genuine zero-hit result),
+    or ``None`` if the service could not be reached — so callers can tell a broken
+    retrieval apart from an empty one."""
+    try:
+        import urllib.parse
+        qs = urllib.parse.urlencode({"query": query, "k": k, "min_score": min_score})
+        with urllib.request.urlopen(f"http://127.0.0.1:9100/search?{qs}", timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("results", []) or []
+    except Exception:  # noqa: BLE001 - service down/unreachable/error
+        return None
+
+
+def do_rag_on(config_path):
+    """Turn on RAG augmentation: retrieved passages get prepended to each prompt."""
+    enabled, _emb = _rag_config(config_path)
+    if not enabled:
+        print(f"{MUTED}  RAG is disabled in config (app.rag.enabled = false).{RESET}")
+        return
+    if _start_rag_service(config_path):
+        _RAG["on"] = True
+        who = "" if _RAG["proc"] else " (shared with the running studio)"
+        print(f"{OK}✔ RAG search ON{who} — messages are augmented with the top "
+              f"{_RAG['k']} passages.{RESET}")
+
+
+def do_rag_off():
+    """Turn off RAG augmentation (leaves any service running)."""
+    _RAG["on"] = False
+    print(f"{OK}✔ RAG search OFF.{RESET}")
+
+
+def do_rag_search_cmd(query, config_path):
+    """One-off semantic search — print the top matches without sending to the model."""
+    if not query:
+        print(f"{MUTED}  usage: /rag search <query>{RESET}")
+        return
+    if not _start_rag_service(config_path):
+        return
+    try:
+        hits = _rag_search(query, k=_RAG["k"])
+    except KeyboardInterrupt:
+        print(f"\n{MUTED}  (search cancelled){RESET}")
+        return
+    if hits is None:
+        print(f"{ERR}  RAG service unreachable — try /rag on.{RESET}")
+        return
+    if not hits:
+        print(f"{MUTED}  no matches.{RESET}")
+        return
+    print(f"\n{ACCENT}{BOLD}RAG search{RESET} {DIM}“{query}”{RESET}\n")
+    for i, h in enumerate(hits, 1):
+        score = h.get("score")
+        tag = f" {DIM}score {score:.3f}{RESET}" if isinstance(score, (int, float)) else ""
+        text = str(h.get("content", "")).strip()
+        preview = text if len(text) <= 400 else text[:400].rstrip() + "…"
+        print(f"{ACCENT}{i}.{RESET}{tag}")
+        for line in preview.split("\n"):
+            print(f"   {line}")
+        print()
+
+
+def do_rag_db(path, config_path):
+    """Show or switch the milvus.db the CLI serves. Switching restarts our service
+    (if any) against the new file; won't touch a service owned by the web UI."""
+    if not path:
+        print(f"{MUTED}  current RAG database:{RESET} {_rag_active_db()}")
+        print(f"{MUTED}  usage: /rag db <path-to-milvus.db>   (or 'default' to revert){RESET}")
+        return
+    if path.strip().lower() in ("default", "reset", "-"):
+        target = None
+    else:
+        target = os.path.abspath(os.path.expanduser(path.strip()))
+        if not os.path.isfile(target):
+            print(f"{ERR}  no such file: {target}{RESET}")
+            return
+    if _rag_service_up() and _RAG["proc"] is None:
+        print(f"{MUTED}  the RAG service is running elsewhere (web UI) — stop the studio "
+              f"first, or switch the database there.{RESET}")
+        return
+    restart = _RAG["on"] or _RAG["proc"] is not None
+    _stop_rag_service()
+    _RAG["db"] = target
+    print(f"{OK}✔ RAG database → {_rag_active_db()}{RESET}")
+    if restart:
+        _start_rag_service(config_path)
+
+
+def do_rag_status():
+    """Show the RAG toggle, active database, service state and chunk count."""
+    up = _rag_service_up()
+    served = _rag_display_db()            # what queries actually hit
+    want = os.path.abspath(_rag_active_db())
+    print(f"\n{ACCENT}{BOLD}RAG status{RESET}")
+    print(f"{MUTED}  augmentation:{RESET} {'ON' if _RAG['on'] else 'off'}")
+    print(f"{MUTED}  database:{RESET} {served}")
+    if served != want:                    # a reused service serves a different DB
+        print(f"{MUTED}  selected:{RESET} {want} {DIM}(applies once the running service stops){RESET}")
+    owner = " (started by this CLI)" if _RAG["proc"] else (" (external / web UI)" if up else "")
+    print(f"{MUTED}  service:{RESET} {'up' if up else 'down'}{owner}")
+    print(f"{MUTED}  top-k:{RESET} {_RAG['k']}\n")
+
+
 def do_rag_clear():
     """Clear the RAG database (delete its files). Only when the RAG service isn't
     running — it owns the milvus-lite file."""
-    from rag.inspect_db import default_db_path
-    if _rag_service_up():
+    if _rag_service_up() and _RAG["proc"] is None:
         print(f"{MUTED}  the RAG service is running — use the web UI's 'Clear RAG DB' "
               f"(or stop the studio first).{RESET}")
         return
-    db_path = default_db_path()
+    db_path = _rag_active_db()
     try:
         ans = input(f"{ERR}  clear the RAG database (delete all ingested documents)? "
                     f"[y/N] ▸ {RESET}").strip().lower()
@@ -1346,6 +1624,7 @@ def do_rag_clear():
     if ans not in ("y", "yes"):
         print(f"{MUTED}  cancelled — nothing removed.{RESET}")
         return
+    _stop_rag_service()                   # release our handle only after confirming
     removed = 0
     for p in (db_path, os.path.splitext(db_path)[0] + ".meta.json"):
         try:
@@ -1361,8 +1640,7 @@ def do_rag_clear():
 def do_rag_reset(config_path):
     """Rebuild the RAG database from the bundled default document. Only when the
     RAG service isn't running (it owns the file)."""
-    from rag.inspect_db import default_db_path
-    if _rag_service_up():
+    if _rag_service_up() and _RAG["proc"] is None:
         print(f"{MUTED}  the RAG service is running — use the web UI's 'Reset to Default' "
               f"(or stop the studio first).{RESET}")
         return
@@ -1383,11 +1661,12 @@ def do_rag_reset(config_path):
     if ans not in ("y", "yes"):
         print(f"{MUTED}  cancelled.{RESET}")
         return
+    _stop_rag_service()                   # release the file if the CLI owns the service
     print(f"{MUTED}  rebuilding from the default document (loads the embedding model — "
           f"this can take a moment)…{RESET}")
     try:
         from rag.create_db import create_markdown_vectordb
-        create_markdown_vectordb(input_path=default_md, output_db=default_db_path(),
+        create_markdown_vectordb(input_path=default_md, output_db=_rag_active_db(),
                                  embedding_model=emb)
         print(f"{OK}✔ RAG database reset to default.{RESET}")
     except Exception as exc:  # noqa: BLE001
@@ -1402,13 +1681,12 @@ def do_rag_inspect(arg=""):
     a case-insensitive substring."""
     filt = arg.strip().lower()
     try:
-        from rag.inspect_db import inspect_rag, read_rag_meta, default_db_path
+        from rag.inspect_db import inspect_rag, read_rag_meta
     except Exception as exc:  # noqa: BLE001
         print(f"{ERR}  RAG inspect unavailable: {exc}{RESET}")
         return
-    db_path = default_db_path()
-    meta = read_rag_meta(db_path)
-    docs, err = [], None
+    db_path = _rag_active_db()
+    meta, docs, err = None, [], None
 
     # 1) Try the running VectorDB service. If it answers (even with an error) it
     #    owns the file — do NOT then read the file directly.
@@ -1425,9 +1703,16 @@ def do_rag_inspect(arg=""):
         err = f"RAG service error: HTTP {exc.code}"
     except Exception:  # noqa: BLE001 - service down; fall back to a direct read
         service_reachable = False
-    if not service_reachable:
+    if service_reachable:
+        served = _rag_service_db()        # the chunks came from whatever it serves
+        if served:
+            db_path = served              # keep the header honest about the source
+        meta = read_rag_meta(db_path)
+    else:
         res = inspect_rag(db_path)
-        docs, err, meta = res.get("documents", []) or [], res.get("error"), (res.get("meta") or meta)
+        docs, err = res.get("documents", []) or [], res.get("error")
+        meta = res.get("meta") or read_rag_meta(db_path)
+    meta = meta or {}
 
     # ---- summary ----
     print(f"\n{ACCENT}{BOLD}RAG database{RESET}")
@@ -1804,11 +2089,23 @@ def main():
                 if new_active != active:
                     active, messages, pending_image = new_active, [], None
             elif cmd in ("rag", "docs"):
-                sub = arg.strip().lower()
+                parts = arg.split(None, 1)
+                sub = parts[0].lower() if parts else ""
+                rest = parts[1].strip() if len(parts) > 1 else ""
                 if sub == "clear":
                     do_rag_clear()
                 elif sub == "reset":
                     do_rag_reset(args.config)
+                elif sub == "on":
+                    do_rag_on(args.config)
+                elif sub == "off":
+                    do_rag_off()
+                elif sub in ("search", "query", "q"):
+                    do_rag_search_cmd(rest, args.config)
+                elif sub == "db":
+                    do_rag_db(rest, args.config)
+                elif sub == "status":
+                    do_rag_status()
                 else:
                     do_rag_inspect(arg)
             else:
@@ -1842,11 +2139,31 @@ def main():
                 # honest by saying why the frame isn't going out this turn.
                 print(f"{MUTED}  📷 camera armed, but the active model isn't a VLM — "
                       f"sending text only.{RESET}")
+        # RAG augmentation: retrieve context and prepend it to *this* turn's text.
+        # History (below) keeps the clean prompt so context isn't re-fed each turn.
+        sent_text = line
+        if _RAG["on"]:
+            try:
+                hits = _rag_search(line, k=_RAG["k"])
+            except KeyboardInterrupt:
+                print(f"\n{MUTED}  (RAG retrieval cancelled){RESET}")
+                continue
+            if hits is None:
+                print(f"{ERR}  📚 RAG retrieval failed — the service is unreachable "
+                      f"(/rag status; /rag on to restart). Asking without context.{RESET}")
+            else:
+                block, used = _rag_context_block(hits)
+                if used:
+                    sent_text = (f"{line}\n\nUse the following retrieved context to answer "
+                                 f"if it is relevant:\n\n{block}")
+                    print(f"{MUTED}  📚 added {used} RAG passage(s) as context.{RESET}")
+                else:
+                    print(f"{MUTED}  📚 RAG on, but no passages matched — asking without context.{RESET}")
         if turn_image is not None:
-            user_content = [{"type": "text", "text": line},
+            user_content = [{"type": "text", "text": sent_text},
                             {"type": "image", "image": turn_image}]
         else:
-            user_content = line
+            user_content = sent_text
         msgs = ([{"role": "system", "content": system}] if system else []) \
             + messages + [{"role": "user", "content": user_content}]
         render = sys.stdout.isatty()
@@ -1883,6 +2200,7 @@ def main():
         print()
 
     print(f"{MUTED}bye.{RESET}")
+    _stop_rag_service()                   # stop the RAG worker the CLI may have started
     if _HAS_READLINE:
         try:
             _readline.write_history_file(_HISTORY_FILE)

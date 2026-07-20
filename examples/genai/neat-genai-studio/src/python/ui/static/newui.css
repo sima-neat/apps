@@ -1461,3 +1461,26 @@ body.resizing video { pointer-events: none; }
 /* User-resizable settings / model-card modal cards (desktop) */
 .settings-modal-card { resize: both; }
 @media (max-width: 760px) { .settings-modal-card { resize: none; } }
+
+/* ---- Drag-and-drop image overlay ---- */
+/* pointer-events: none keeps drag events flowing to the document listeners
+   (the overlay never becomes its own dragenter/leave target). Sits above the
+   full-screen Vision modal (z-index 3200) so drops work there too. */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 4000; display: flex;
+  align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+.drop-overlay-box {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 36px 52px; border-radius: var(--radius-lg); text-align: center;
+  border: 2px dashed var(--accent); background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.drop-overlay.is-blocked .drop-overlay-box { border-color: var(--err); }
+.drop-overlay-icon { color: var(--accent); }
+.drop-overlay.is-blocked .drop-overlay-icon { color: var(--err); }
+.drop-overlay-title { font-size: 17px; font-weight: 700; color: var(--text); }
+.drop-overlay-sub { font-size: 13px; color: var(--text-3); max-width: 360px; }

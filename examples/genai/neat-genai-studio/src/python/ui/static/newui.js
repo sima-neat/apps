@@ -1881,6 +1881,73 @@ function displayResult(text, audioSrc, ttt = 0) {
 }
 
 
+// Shared by the Upload button and drag-and-drop: read an image file and show
+// it in the camera dock as the pending image for the next vision prompt.
+function loadChatImageFile(file) {
+  // Do nothing in LLM-only mode
+  if (isLlmOnlyMode()) return;
+
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    let imageOverlay = document.getElementById('imageOverlay');
+
+    // Create the image overlay element if it doesn't exist
+    if (!imageOverlay) {
+      imageOverlay = document.createElement('img');
+      imageOverlay.id = 'imageOverlay';
+      imageOverlay.style.position = 'absolute';
+      imageOverlay.style.top = '0';
+      imageOverlay.style.left = '0';
+      imageOverlay.style.width = '100%';
+      imageOverlay.style.height = '100%';
+      imageOverlay.style.objectFit = 'contain';
+      imageOverlay.style.zIndex = '1';
+      cameraPreview.parentElement.appendChild(imageOverlay);
+    }
+
+    // Hide the video feed and display the image
+    cameraPreview.style.display = 'none';
+    imageOverlay.src = e.target.result;
+    imageOverlay.style.display = 'block';
+
+    // Reveal the camera dock so the preview is actually visible — it's
+    // collapsed/logo-mode by default in the chat-first layout, which would
+    // otherwise hide the uploaded image. On mobile, open the rail drawer.
+    const camSection = document.getElementById('cameraSection');
+    if (camSection) {
+      camSection.classList.remove('collapsed', 'logo-mode');
+      const cb = document.getElementById('cameraCollapseBtn');
+      if (cb) { cb.title = 'Collapse camera'; cb.setAttribute('aria-label', cb.title); }
+    }
+    const ws = document.querySelector('.workspace');
+    const railToggle = document.getElementById('railToggle');
+    const mobile = railToggle && getComputedStyle(railToggle).display !== 'none';
+    if (ws && mobile) {
+      ws.classList.add('rail-open');
+      railToggle.textContent = '✕';
+    }
+
+    // Resize container to fit image dimensions
+    resizeContainerForImage(imageOverlay);
+
+    // Create close button if it doesn't exist
+    let imageCloseButton = document.getElementById('imageCloseButton');
+    if (!imageCloseButton) {
+      imageCloseButton = document.createElement('button');
+      imageCloseButton.id = 'imageCloseButton';
+      imageCloseButton.innerHTML = '×';
+      imageCloseButton.className = 'image-close-button';
+      imageCloseButton.onclick = clearUploadedImage;
+      cameraPreview.parentElement.appendChild(imageCloseButton);
+    }
+  };
+  reader.onerror = () => {
+    console.error('Failed to read the image file.');
+  };
+  reader.readAsDataURL(file);
+}
+
 function selectImage() {
   // Do nothing in LLM-only mode
   if (isLlmOnlyMode()) return;
@@ -1888,73 +1955,92 @@ function selectImage() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*';
-
-  input.onchange = (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        let imageOverlay = document.getElementById('imageOverlay');
-
-        // Create the image overlay element if it doesn't exist
-        if (!imageOverlay) {
-          imageOverlay = document.createElement('img');
-          imageOverlay.id = 'imageOverlay';
-          imageOverlay.style.position = 'absolute';
-          imageOverlay.style.top = '0';
-          imageOverlay.style.left = '0';
-          imageOverlay.style.width = '100%';
-          imageOverlay.style.height = '100%';
-          imageOverlay.style.objectFit = 'contain';
-          imageOverlay.style.zIndex = '1';
-          cameraPreview.parentElement.appendChild(imageOverlay);
-        }
-
-        // Hide the video feed and display the image
-        cameraPreview.style.display = 'none';
-        imageOverlay.src = e.target.result;
-        imageOverlay.style.display = 'block';
-
-        // Reveal the camera dock so the preview is actually visible — it's
-        // collapsed/logo-mode by default in the chat-first layout, which would
-        // otherwise hide the uploaded image. On mobile, open the rail drawer.
-        const camSection = document.getElementById('cameraSection');
-        if (camSection) {
-          camSection.classList.remove('collapsed', 'logo-mode');
-          const cb = document.getElementById('cameraCollapseBtn');
-          if (cb) { cb.title = 'Collapse camera'; cb.setAttribute('aria-label', cb.title); }
-        }
-        const ws = document.querySelector('.workspace');
-        const railToggle = document.getElementById('railToggle');
-        const mobile = railToggle && getComputedStyle(railToggle).display !== 'none';
-        if (ws && mobile) {
-          ws.classList.add('rail-open');
-          railToggle.textContent = '✕';
-        }
-
-        // Resize container to fit image dimensions
-        resizeContainerForImage(imageOverlay);
-
-        // Create close button if it doesn't exist
-        let imageCloseButton = document.getElementById('imageCloseButton');
-        if (!imageCloseButton) {
-          imageCloseButton = document.createElement('button');
-          imageCloseButton.id = 'imageCloseButton';
-          imageCloseButton.innerHTML = '×';
-          imageCloseButton.className = 'image-close-button';
-          imageCloseButton.onclick = clearUploadedImage;
-          cameraPreview.parentElement.appendChild(imageCloseButton);
-        }
-      };
-      reader.onerror = () => {
-        console.error('Failed to read the image file.');
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
+  input.onchange = (event) => loadChatImageFile(event.target.files[0]);
   input.click();
 }
+
+// ---- Drag-and-drop image upload -------------------------------------------
+// Dropping an image anywhere on the page attaches it: onto the full-screen
+// Vision stage when that view is open, otherwise into the camera dock (the
+// same path as the Upload button). A full-page overlay gives feedback while
+// dragging; non-image drops and drops while uploads are disabled are ignored.
+
+const dropOverlay = document.getElementById('dropOverlay');
+let dragDepth = 0;   // dragenter/dragleave fire per child element — track depth
+
+function dragHasFiles(event) {
+  const types = event.dataTransfer && event.dataTransfer.types;
+  return !!types && Array.from(types).includes('Files');
+}
+
+function isVisionModalOpen() {
+  const modal = document.getElementById('visionModal');
+  return !!modal && modal.style.display !== 'none';
+}
+
+// Returns null when a dropped image would be accepted, otherwise the reason
+// shown in the overlay. Mirrors the Upload button's disabled state so drag &
+// drop can't sneak an image past the model/vision gating.
+function imageDropBlockedReason() {
+  if (isVisionModalOpen()) return null;   // the Vision view accepts images freely
+  if (isLlmOnlyMode()) return 'Vision features disabled - LLM-only mode';
+  if (uploadButton && uploadButton.disabled) {
+    return uploadButton.title || 'Image upload is currently disabled.';
+  }
+  return null;
+}
+
+function showDropOverlay() {
+  if (!dropOverlay) return;
+  const reason = imageDropBlockedReason();
+  const title = document.getElementById('dropOverlayTitle');
+  const sub = document.getElementById('dropOverlaySub');
+  dropOverlay.classList.toggle('is-blocked', !!reason);
+  if (title) {
+    title.textContent = reason ? 'Can’t use an image right now'
+      : (isVisionModalOpen() ? 'Drop image to view' : 'Drop image to attach');
+  }
+  if (sub) sub.textContent = reason || 'PNG, JPEG, WebP…';
+  dropOverlay.style.display = 'flex';
+}
+
+function hideDropOverlay() {
+  dragDepth = 0;
+  if (dropOverlay) dropOverlay.style.display = 'none';
+}
+
+document.addEventListener('dragenter', (event) => {
+  if (!dragHasFiles(event)) return;
+  event.preventDefault();
+  dragDepth++;
+  showDropOverlay();
+});
+
+document.addEventListener('dragover', (event) => {
+  if (!dragHasFiles(event)) return;
+  // preventDefault marks the page as a valid drop target — without it the
+  // browser navigates away to the dropped file.
+  event.preventDefault();
+  event.dataTransfer.dropEffect = imageDropBlockedReason() ? 'none' : 'copy';
+});
+
+document.addEventListener('dragleave', (event) => {
+  if (!dragHasFiles(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) hideDropOverlay();
+});
+
+document.addEventListener('drop', (event) => {
+  if (!dragHasFiles(event)) return;
+  event.preventDefault();
+  hideDropOverlay();
+  if (imageDropBlockedReason()) return;
+  const files = Array.from(event.dataTransfer.files || []);
+  const image = files.find((f) => f.type && f.type.startsWith('image/'));
+  if (!image) return;
+  if (isVisionModalOpen()) loadVisionImageFile(image);
+  else loadChatImageFile(image);
+});
 
 socket.on('audio_chunk', (data) => {
   // Drop audio when the user turned off spoken responses (also guards any
@@ -5151,21 +5237,24 @@ function refreshVisionModelState() {
   else if (!isVlm) setVisionHint('The active model is text-only — load a vision (VLM) model to ask about images.');
 }
 
+// Shared by the Upload button and drag-and-drop: show an image file on the
+// full-screen Vision stage and switch the source to it.
+function loadVisionImageFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const image = document.getElementById('visionImage');
+    if (image) image.src = e.target.result;
+    setVisionSource('image');
+  };
+  reader.readAsDataURL(file);
+}
+
 function pickVisionImage() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*';
-  input.addEventListener('change', () => {
-    const file = input.files && input.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const image = document.getElementById('visionImage');
-      if (image) image.src = e.target.result;
-      setVisionSource('image');
-    };
-    reader.readAsDataURL(file);
-  });
+  input.addEventListener('change', () => loadVisionImageFile(input.files && input.files[0]));
   input.click();
 }
 
