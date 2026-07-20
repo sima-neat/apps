@@ -22,7 +22,7 @@ This example runs a config-driven multi-stream RTSP detection pipeline and publi
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - RTSP sources reachable from the target.
 - On a reused Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the application if earlier video or ML workloads changed runtime state.
 

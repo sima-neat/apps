@@ -24,7 +24,7 @@ This synthetic model benchmark does not measure input decoding, Insight output, 
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - A compiled model package supported by `pyneat.Model`.
 
 ## Install Apps

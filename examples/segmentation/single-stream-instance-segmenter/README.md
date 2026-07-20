@@ -22,7 +22,7 @@ This example ingests one RTSP H.264/MJPEG or HTTP MJPEG stream, runs YOLO26 inst
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - An RTSP H.264, RTSP MJPEG, or HTTP MJPEG source.
 
 ## Install Apps

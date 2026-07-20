@@ -22,7 +22,7 @@ Depth-map generation for image folders. The example runs inference for each imag
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 
 ## Install Apps
 

@@ -219,7 +219,7 @@ TODO: describe what this example demonstrates.
 
 ## Prerequisites
 
-- \`sima-cli\` on a supported Modalix or DevKit target.
+- \`sima-cli\` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - TODO: add example-specific input, service, or hardware requirements.
 
 ## Install Apps

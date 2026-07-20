@@ -26,7 +26,7 @@ Optional. Place portal images under `portal/assets/examples/<category>/<example>
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - <Example-specific input, service, or hardware requirements.>
 
 ## Install Apps

@@ -24,7 +24,7 @@ The model emits classification logits and normalized boxes for a fixed set of qu
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 
 ## Install Apps
 

@@ -22,7 +22,7 @@ Track people across multiple RTSP inputs with mixed-resolution support. The pipe
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - RTSP sources and an Insight viewer reachable from the target.
 
 ## Install Apps

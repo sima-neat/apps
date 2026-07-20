@@ -33,7 +33,7 @@ Multimodal assistant UI:
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - The model server uses the Python environment where `pyneat` is available. The default scripts assume:
 
 ```text

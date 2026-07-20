@@ -22,7 +22,7 @@ Minimal image-folder detection with a YOLO26 model. Each image is inferred, anno
 
 ## Prerequisites
 
-- `sima-cli` on a supported Modalix or DevKit target.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 
 ## Install Apps
 
