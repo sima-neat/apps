@@ -78,10 +78,17 @@ By default, `setup.sh` downloads:
 - `simaai/whisper-small-a16w8`
 - `thenlper/gte-small`
 
-Use the [LLiMa CLI](https://developer.sima.ai/software/genai-llima/runtime) to browse or independently install the default precompiled server models:
+Use the [LLiMa CLI](https://developer.sima.ai/software/genai-llima/runtime) to manage precompiled server models.
+
+Search the supported models:
 
 ```bash
 llima search
+```
+
+Install the default models independently:
+
+```bash
 llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
 llima pull whisper-small-a16w8
 ```

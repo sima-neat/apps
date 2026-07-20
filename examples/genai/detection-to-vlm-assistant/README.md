@@ -63,10 +63,17 @@ cd ..
 
 Set `model.path` to the downloaded detector package.
 
-The default VLM is `Qwen3-VL-4B-Instruct-GPTQ-a16w4`. Browse the available precompiled models and install the default with LLiMa:
+The default VLM is `Qwen3-VL-4B-Instruct-GPTQ-a16w4`.
+
+Search the supported models:
 
 ```bash
 llima search
+```
+
+Install the default model:
+
+```bash
 llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
 ```
 
