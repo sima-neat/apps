@@ -63,11 +63,7 @@ Set `model.path` in the config to the downloaded package.
 
 ## Prepare Insight
 
-Insight can host the input stream and render segmentation metadata. Install its sample video assets when needed:
-
-```bash
-sima-cli install assets/multi-video-sources
-```
+Insight can host the input stream and render segmentation metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
 In the Insight Web UI, start a source and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings.
 

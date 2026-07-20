@@ -63,11 +63,7 @@ Set `model.path` in the config to the downloaded package.
 
 ## Prepare Insight
 
-Insight can host the input streams and render each output channel. Install its sample video assets when needed:
-
-```bash
-sima-cli install assets/multi-video-sources
-```
+Insight can host the input streams and render each output channel. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
 In the Insight Web UI, start each source and copy its RTSP URL into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
