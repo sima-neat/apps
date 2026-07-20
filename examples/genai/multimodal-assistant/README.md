@@ -90,7 +90,7 @@ Install the VLMs you want to serve and the required ASR model:
 
 ```bash
 llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
-llima pull Qwen3-VL-2B-Instruct-GPTQ-a16w4
+llima pull gemma-4-E2B-it-GPTQ-a16w4
 llima pull whisper-small-a16w8
 ```
 
@@ -140,8 +140,8 @@ server:
     chat:
       - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
         path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-      - name: Qwen3-VL-2B-Instruct-GPTQ-a16w4
-        path: /media/nvme/llima/models/Qwen3-VL-2B-Instruct-GPTQ-a16w4
+      - name: gemma-4-E2B-it-GPTQ-a16w4
+        path: /media/nvme/llima/models/gemma-4-E2B-it-GPTQ-a16w4
     asr:
       name: whisper-small-a16w8
       path: /path/to/llima/models/whisper-small-a16w8
