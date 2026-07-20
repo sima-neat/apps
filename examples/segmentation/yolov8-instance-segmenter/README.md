@@ -27,7 +27,7 @@ Offline YOLOv8 instance segmentation over image folders using YOLOv8 segmentatio
 ## Install Apps
 
 1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
-2. Install that version and enter the installed bundle:
+2. Install the selected version and enter the installed bundle. We recommend using the latest release:
 
 ```bash
 sima-cli neat install apps@<release-version>

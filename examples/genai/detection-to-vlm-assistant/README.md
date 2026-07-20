@@ -29,7 +29,7 @@ This example decodes an RTSP stream, runs YOLO26 detection, and sends video plus
 ## Install Apps
 
 1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
-2. Install that version and enter the installed bundle:
+2. Install the selected version and enter the installed bundle. We recommend using the latest release:
 
 ```bash
 sima-cli neat install apps@<release-version>
