@@ -86,14 +86,15 @@ Search the supported models:
 llima search
 ```
 
-Install the default models independently:
+Install the VLMs you want to serve and the required ASR model:
 
 ```bash
 llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
+llima pull Qwen3-VL-2B-Instruct-GPTQ-a16w4
 llima pull whisper-small-a16w8
 ```
 
-Models installed with `llima pull` use `/media/nvme/llima/models/<model-name>` by default. Add an independently installed model's name and path to `config.local.yaml`; set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory. The setup script remains the complete example installer because it also prepares the UI environment, RAG embedding model, TTS voices, local configuration, and RAG database.
+Models installed with `llima pull` use `/media/nvme/llima/models/<model-name>` by default. The setup script configures one default VLM; add every additional VLM's name and path under `server.models.chat` in `config.local.yaml` to serve multiple models at the same time. Set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory. The setup script remains the complete example installer because it also prepares the UI environment, RAG embedding model, TTS voices, local configuration, and RAG database.
 
 `whisper-small-a16w8` is the supported ASR model and is always downloaded. To use another compatible SiMa.ai chat/VLM repository, override the default download:
 
@@ -137,10 +138,10 @@ After install, edit `config.local.yaml` to change or add hosted chat/VLM models:
 server:
   models:
     chat:
+      - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
+        path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
       - name: Qwen3-VL-2B-Instruct-GPTQ-a16w4
-        path: /path/to/llima/models/Qwen3-VL-2B-Instruct-GPTQ-a16w4
-      - name: another-chat-or-vlm-model
-        path: /path/to/llima/models/another-chat-or-vlm-model
+        path: /media/nvme/llima/models/Qwen3-VL-2B-Instruct-GPTQ-a16w4
     asr:
       name: whisper-small-a16w8
       path: /path/to/llima/models/whisper-small-a16w8
