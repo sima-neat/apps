@@ -3,7 +3,7 @@
 Runs the single-stream RTSP pipeline and verifies the app publishes valid
 pose-estimation metadata JSON (the 5 facial landmarks) to the Insight metadata
 UDP port. A local UDP listener stands in for Insight, so no running viewer is
-required -- only an RTSP source (SIMANEAT_APPS_TEST_RTSP_URL) and the model.
+required -- only an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the model.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class TestE2E:
     def test_single_stream_metadata_pipeline(
         self,
         e2e_model_path,
-        rtsp_url,
+        rtsp_h264_url,
         test_timeout_ms,
         skip_unless_e2e_ready,
         e2e_config_writer,
@@ -51,7 +51,7 @@ class TestE2E:
 
         config_path = e2e_config_writer(
             {
-                "source": {"rtsp_url": rtsp_url},
+                "source": {"rtsp_url": rtsp_h264_url},
                 "inference": {"frames": 140},
                 "output": {
                     "insight": {

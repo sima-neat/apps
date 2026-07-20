@@ -570,7 +570,10 @@ def send_metadata(runtime: PipelineRuntime, sample, scores, landmarks) -> None:
     frame_id = getattr(sample, "frame_id", -1)
     if frame_id is None or frame_id < 0:
         frame_id = 0
-    ts_ms = int(time.time() * 1000)
+    # Stamp metadata with the detection sample's source PTS (not wall-clock) so
+    # Insight can align the landmarks with the matching video frame, which the
+    # branch carries through the video_sender on the same PTS timeline.
+    ts_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     runtime.metadata_sender.send_metadata(
         "pose-estimation",
         build_poses_json(landmarks, scores, label),

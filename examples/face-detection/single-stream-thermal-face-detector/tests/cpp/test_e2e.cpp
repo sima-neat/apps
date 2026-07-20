@@ -2,7 +2,7 @@
 // Runs the single-stream RTSP pipeline and verifies the app publishes valid
 // pose-estimation metadata JSON (the 5 facial landmarks) to the Insight metadata
 // UDP port. A local UDP listener stands in for Insight, so no running viewer is
-// required -- only an RTSP source (SIMANEAT_APPS_TEST_RTSP_URL) and the model.
+// required -- only an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the model.
 #include "support/testing/metadata_json_listener.h"
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
@@ -25,9 +25,10 @@ int main(int argc, char** argv) {
   }
   const std::string binary = argv[1];
 
-  const char* rtsp_url = env_or_null("SIMANEAT_APPS_TEST_RTSP_URL");
+  const char* rtsp_url = env_or_null("SIMANEAT_TEST_RTSP_H264_URL");
   if (!rtsp_url) {
-    return skip_or_fail("SIMANEAT_APPS_TEST_RTSP_URL is required for single-stream-thermal-face-detector e2e");
+    return skip_or_fail(
+        "SIMANEAT_TEST_RTSP_H264_URL is required for single-stream-thermal-face-detector e2e");
   }
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");

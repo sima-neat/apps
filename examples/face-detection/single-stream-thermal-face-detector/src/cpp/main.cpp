@@ -42,6 +42,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -259,14 +260,16 @@ void letterbox_params(int orig_w, int orig_h, int target_w, int target_h, float&
 
 inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
-// Owns the runtime's dense byte buffer and exposes it as a channels-last
-// (h, w, c) float32 view.
+// Owns the runtime's dense tensor bytes as a channels-last (h, w, c) float32
+// buffer. The bytes are copied into a std::vector<float> (naturally aligned)
+// rather than reinterpret_cast from the uint8_t buffer, which would be an
+// unaligned / aliasing-sensitive load on the target APU.
 struct HwcTensor {
   int h = 0;
   int w = 0;
   int c = 0;
-  std::vector<uint8_t> bytes;
-  const float* floats() const { return reinterpret_cast<const float*>(bytes.data()); }
+  std::vector<float> data;
+  const float* floats() const { return data.data(); }
 };
 
 HwcTensor tensor_to_hwc(const simaai::neat::Tensor& t) {
@@ -286,7 +289,9 @@ HwcTensor tensor_to_hwc(const simaai::neat::Tensor& t) {
   out.h = static_cast<int>(t.shape[1]);
   out.w = static_cast<int>(t.shape[2]);
   out.c = c;
-  out.bytes = t.copy_dense_bytes_tight();
+  const std::vector<uint8_t> bytes = t.copy_dense_bytes_tight();
+  out.data.resize(bytes.size() / sizeof(float));
+  std::memcpy(out.data.data(), bytes.data(), out.data.size() * sizeof(float));
   return out;
 }
 
@@ -579,8 +584,10 @@ std::string build_poses_json(const std::vector<Detection>& dets, const std::stri
 void send_metadata(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
                    const std::vector<Detection>& dets) {
   const std::string label = runtime.labels.empty() ? "face" : runtime.labels[0];
-  const auto now = std::chrono::system_clock::now().time_since_epoch();
-  const int64_t ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+  // Stamp metadata with the detection sample's source PTS (not wall-clock) so
+  // Insight can align the landmarks with the matching video frame, which the
+  // branch carries through the video_sender on the same PTS timeline.
+  const int64_t ts_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
   const int64_t frame_id = sample.frame_id >= 0 ? sample.frame_id : 0;
   const std::string frame_id_str = std::to_string(frame_id);
 
