@@ -196,6 +196,7 @@ Run the C++ application:
 Run the Python implementation with the same config:
 
 ```bash
+source ~/pyneat/bin/activate
 python3 -m pip install -r "$APP_DIR/src/python/requirements.txt"
 python3 "$APP_DIR/src/python/main.py" --config "$CONFIG"
 ```
