@@ -14,8 +14,7 @@
 
 ## Concept
 
-Depth-map generation for image folders. The example runs inference for each
-image and writes a visual depth map.
+Depth-map generation for image folders. The example runs inference for each image and writes a visual depth map.
 
 ## Preview
 
@@ -97,10 +96,8 @@ python3 examples/depth-estimation/depth-estimator/src/python/main.py \
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

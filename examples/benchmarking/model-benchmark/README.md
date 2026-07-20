@@ -14,12 +14,9 @@
 
 ## Concept
 
-Benchmark a compiled model before integrating it into a full pipeline. The
-example runs `pyneat.Model.benchmark()` and writes latency, FPS, power, and
-energy measurements to JSON.
+Benchmark a compiled model before integrating it into a full pipeline. The example runs `pyneat.Model.benchmark()` and writes latency, FPS, power, and energy measurements to JSON.
 
-This synthetic model benchmark does not measure input decoding, Insight output,
-overlays, or application postprocessing.
+This synthetic model benchmark does not measure input decoding, Insight output, overlays, or application postprocessing.
 
 ## Preview
 
@@ -44,11 +41,9 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-This example accepts any compatible compiled MPK. Apps CI exercises the
-benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
+This example accepts any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
-The required platform version is recorded in `manifest.json`. Download a Model
-Zoo package:
+The required platform version is recorded in `manifest.json`. Download a Model Zoo package:
 
 ```bash
 mkdir -p models
@@ -68,8 +63,7 @@ cd ..
 
 ## Configure
 
-Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or provide
-the same values on the command line.
+Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or provide the same values on the command line.
 
 ```yaml
 model:
@@ -93,21 +87,17 @@ python3 examples/benchmarking/model-benchmark/src/python/main.py \
   --output-json sandbox/model-benchmark/report.json
 ```
 
-The command prints headline metrics and writes the complete report to the
-selected JSON path.
+The command prints headline metrics and writes the complete report to the selected JSON path.
 
 ## Benchmark Results
 
-See the maintained
-[benchmark results](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/model-benchmark/BENCHMARK_RESULTS.md)
-for measurements from Apps-supported packages.
+See the maintained [benchmark results](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/model-benchmark/BENCHMARK_RESULTS.md) for measurements from Apps-supported packages.
 
 ## Troubleshooting
 
 - Activate `~/pyneat` if the `pyneat` module is unavailable.
 - Confirm the model path points to a compiled `.tar.gz` package.
-- A zero power result means board power telemetry was unavailable; the model
-  benchmark still completed.
+- A zero power result means board power telemetry was unavailable; the model benchmark still completed.
 
 ## Source Files
 
@@ -116,5 +106,4 @@ for measurements from Apps-supported packages.
 
 ## Development From Source
 
-To modify or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

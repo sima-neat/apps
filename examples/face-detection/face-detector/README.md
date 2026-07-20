@@ -14,11 +14,9 @@
 
 ## Concept
 
-This example runs RetinaFace over an image folder. RetinaFace predicts face
-boxes, confidence scores, and five landmarks for eyes, nose, and mouth.
+This example runs RetinaFace over an image folder. RetinaFace predicts face boxes, confidence scores, and five landmarks for eyes, nose, and mouth.
 
-The example decodes the compiled model outputs, filters low-confidence
-candidates, applies non-maximum suppression, and writes annotated images.
+The example decodes the compiled model outputs, filters low-confidence candidates, applies non-maximum suppression, and writes annotated images.
 
 ## Preview
 
@@ -105,10 +103,8 @@ python3 examples/face-detection/face-detector/src/python/main.py \
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

@@ -14,8 +14,7 @@
 
 ## Concept
 
-Offline YOLOv8 instance segmentation over image folders using YOLOv8
-segmentation outputs and DetessDequant postprocessing.
+Offline YOLOv8 instance segmentation over image folders using YOLOv8 segmentation outputs and DetessDequant postprocessing.
 
 ## Preview
 
@@ -46,8 +45,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo_v8m_seg_mpk.tar.gz` | Supported | `yolo_v8m_seg` |
 | `yolo_v8l_seg_mpk.tar.gz` | Supported | `yolo_v8l_seg` |
 
-The required platform version is recorded in `manifest.json`. Replace
-`<model-name>` with a model from the table.
+The required platform version is recorded in `manifest.json`. Replace `<model-name>` with a model from the table.
 
 ```bash
 mkdir -p models
@@ -104,10 +102,8 @@ python3 examples/segmentation/yolov8-instance-segmenter/src/python/main.py \
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

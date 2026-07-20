@@ -14,8 +14,7 @@
 
 ## Concept
 
-Minimal image-folder detection with a YOLO26 model. Each image is inferred,
-annotated with boxes and labels, and written to an output folder.
+Minimal image-folder detection with a YOLO26 model. Each image is inferred, annotated with boxes and labels, and written to an output folder.
 
 ## Preview
 
@@ -49,8 +48,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 | `yolo26m-det-int8-b1.tar.gz` | Supported |
 
-The required platform version is recorded in `manifest.json`. Replace
-`<model-file>` with a file from the table.
+The required platform version is recorded in `manifest.json`. Replace `<model-file>` with a file from the table.
 
 ```bash
 mkdir -p models
@@ -110,10 +108,8 @@ python3 examples/object-detection/yolo26-object-detector/src/python/main.py \
 - Python source: `src/python/main.py`
 - Shared config and labels: `src/common/`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

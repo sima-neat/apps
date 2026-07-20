@@ -14,10 +14,7 @@
 
 ## Concept
 
-This example decodes an RTSP stream, runs YOLO26 detection, and sends video
-plus detection metadata to Insight. When GenAI is enabled, a bounded background
-worker crops the highest-scoring person and sends it to a configured VLM server
-without blocking detection or Insight output.
+This example decodes an RTSP stream, runs YOLO26 detection, and sends video plus detection metadata to Insight. When GenAI is enabled, a bounded background worker crops the highest-scoring person and sends it to a configured VLM server without blocking detection or Insight output.
 
 ## Preview
 
@@ -27,8 +24,7 @@ without blocking detection or Insight output.
 
 - `sima-cli` on a supported Modalix or DevKit target.
 - An RTSP source and Insight receiver reachable from the target.
-- A local model from the [SiMa.ai VLM collection](https://huggingface.co/collections/simaai/vision-language-models)
-  when GenAI is enabled.
+- A local model from the [SiMa.ai VLM collection](https://huggingface.co/collections/simaai/vision-language-models) when GenAI is enabled.
 
 ## Install Apps
 
@@ -56,8 +52,7 @@ Supported detector packages:
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 | `yolo26m-det-int8-b1.tar.gz` | Supported |
 
-The required platform version is recorded in `manifest.json`. Replace
-`<model-file>` with a file from the table.
+The required platform version is recorded in `manifest.json`. Replace `<model-file>` with a file from the table.
 
 ```bash
 mkdir -p models
@@ -66,21 +61,17 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/model
 cd ..
 ```
 
-Set `model.path` to the downloaded detector package. VLM directories are not
-installed by this `sima-cli` command. Download the selected VLM from the linked
-collection and set `genai_server.model.path` to its local directory.
+Set `model.path` to the downloaded detector package. VLM directories are not installed by this `sima-cli` command. Download the selected VLM from the linked collection and set `genai_server.model.path` to its local directory.
 
 ## Prepare Insight
 
-Insight can host the input stream and render the video and detection metadata.
-Install its sample video assets when needed:
+Insight can host the input stream and render the video and detection metadata. Install its sample video assets when needed:
 
 ```bash
 sima-cli install assets/multi-video-sources
 ```
 
-In the Insight Web UI, start a source and copy its RTSP URL. Use the host and
-UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start a source and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure
 
@@ -138,9 +129,7 @@ python3 examples/genai/detection-to-vlm-assistant/src/python/detector_app.py \
   --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
 ```
 
-The GenAI path checks `/v1/models`, waits at least `genai.interval_seconds`
-between requests, and bounds queued and in-flight work with
-`genai.max_pending_requests`.
+The GenAI path checks `/v1/models`, waits at least `genai.interval_seconds` between requests, and bounds queued and in-flight work with `genai.max_pending_requests`.
 
 ## Troubleshooting
 
@@ -157,5 +146,4 @@ between requests, and bounds queued and in-flight work with
 
 ## Development From Source
 
-To modify or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

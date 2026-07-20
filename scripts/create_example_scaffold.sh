@@ -242,9 +242,7 @@ The default model is \`TODO\`.
 | --- | --- | --- |
 | \`TODO\` | Default | TODO: Model Zoo or direct artifact |
 
-The platform version required by model downloads is recorded in \`manifest.json\`.
-Download the model with \`sima-cli\`, store it under \`models/\`, and set
-\`model.path\` in the example config to the downloaded package.
+The platform version required by model downloads is recorded in \`manifest.json\`. Download the model with \`sima-cli\`, store it under \`models/\`, and set \`model.path\` in the example config to the downloaded package.
 
 ## Run
 
@@ -268,13 +266,11 @@ python3 examples/${category}/${example_name}/src/python/main.py
 - Python source: \`src/python/main.py\`
 - Shared runtime files: \`src/common/\`
 
-The packaged C++ source is an implementation reference. Run the executable
-under \`src/cpp/pre-built/\`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under \`src/cpp/pre-built/\`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
 EOF_MD
 }
 

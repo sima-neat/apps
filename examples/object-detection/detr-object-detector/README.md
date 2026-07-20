@@ -14,14 +14,9 @@
 
 ## Concept
 
-This example runs folder-based object detection with a compiled DETR model.
-Each image is resized with preserved aspect ratio, normalized, inferred, and
-decoded into object boxes and class scores.
+This example runs folder-based object detection with a compiled DETR model. Each image is resized with preserved aspect ratio, normalized, inferred, and decoded into object boxes and class scores.
 
-The model emits classification logits and normalized boxes for a fixed set of
-queries. The example applies softmax to the logits, sigmoid to the boxes,
-filters by confidence, optionally keeps only the COCO `person` class, maps
-detections to the original image, and writes annotated output.
+The model emits classification logits and normalized boxes for a fixed set of queries. The example applies softmax to the logits, sigmoid to the boxes, filters by confidence, optionally keeps only the COCO `person` class, maps detections to the original image, and writes annotated output.
 
 ## Preview
 
@@ -108,10 +103,8 @@ python3 examples/object-detection/detr-object-detector/src/python/main.py \
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

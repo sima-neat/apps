@@ -14,8 +14,7 @@
 
 ## Concept
 
-Minimal Model API usage with a compiled ResNet50 package. The example runs
-single-image inference and prints top-1 and top-5 classification results.
+Minimal Model API usage with a compiled ResNet50 package. The example runs single-image inference and prints top-1 and top-5 classification results.
 
 ## Preview
 
@@ -58,8 +57,7 @@ Set `model.path` in the config to the downloaded package.
 
 ## Configure
 
-Edit `examples/classification/image-classifier/src/common/config.yaml` to use a
-different image or threshold.
+Edit `examples/classification/image-classifier/src/common/config.yaml` to use a different image or threshold.
 
 ```yaml
 model:
@@ -102,10 +100,8 @@ python3 examples/classification/image-classifier/src/python/main.py \
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

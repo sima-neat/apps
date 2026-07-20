@@ -14,9 +14,7 @@
 
 ## Concept
 
-Track people across multiple RTSP inputs with mixed-resolution support. The
-pipeline filters detections to the configured person class, assigns stable IDs
-per stream, and publishes live video and metadata to Insight.
+Track people across multiple RTSP inputs with mixed-resolution support. The pipeline filters detections to the configured person class, assigns stable IDs per stream, and publishes live video and metadata to Insight.
 
 ## Preview
 
@@ -51,8 +49,7 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 
-The required platform version is recorded in `manifest.json`. Replace
-`<model-file>` with a file from the table.
+The required platform version is recorded in `manifest.json`. Replace `<model-file>` with a file from the table.
 
 ```bash
 mkdir -p models
@@ -65,15 +62,13 @@ Set `model.path` in the config to the downloaded package.
 
 ## Prepare Insight
 
-Insight can host the input streams and render tracking metadata. Install its
-sample video assets when needed:
+Insight can host the input streams and render tracking metadata. Install its sample video assets when needed:
 
 ```bash
 sima-cli install assets/multi-video-sources
 ```
 
-In the Insight Web UI, start each source and copy its RTSP URL into `streams`.
-Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start each source and copy its RTSP URL into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure
 
@@ -136,10 +131,8 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
 - Python tracker helpers: `src/python/utils/`
 - Shared runtime files: `src/common/`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

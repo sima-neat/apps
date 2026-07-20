@@ -50,8 +50,7 @@ The default model is `<default-model>`.
 | `<default-model>` | Default | <Model Zoo / direct artifact> |
 | `<supported-model>` | Supported | <Model Zoo / direct artifact> |
 
-The platform version required by model downloads is recorded in `manifest.json`.
-Use the command that matches the model source and delete the other command.
+The platform version required by model downloads is recorded in `manifest.json`. Use the command that matches the model source and delete the other command.
 
 Model Zoo:
 
@@ -115,10 +114,8 @@ python3 examples/<category>/<example>/src/python/main.py \
 - Python source: `src/python/main.py`
 - Shared runtime files: `src/common/`
 
-The packaged C++ source is an implementation reference. Run the executable
-under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
 
-To modify, compile, or test this example, use the
-[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
