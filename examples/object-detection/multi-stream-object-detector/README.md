@@ -109,7 +109,6 @@ Validate the config without opening streams:
 ### C++
 
 ```bash
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 \
 ./examples/object-detection/multi-stream-object-detector/src/cpp/pre-built/multi-stream-object-detector \
   --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml
 ```
@@ -119,7 +118,6 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 \
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/multi-stream-object-detector/src/python/requirements.txt
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 \
 python3 examples/object-detection/multi-stream-object-detector/src/python/main.py \
   --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml
 ```
