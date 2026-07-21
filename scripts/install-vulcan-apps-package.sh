@@ -11,6 +11,9 @@ DEPS_MARKER_VALUE="sima-neat/apps"
 CORE_INSTALL_DIR="${DEPS_DIR}/core"
 INSIGHT_INSTALL_DIR="${DEPS_DIR}/insight"
 DEPS_WORKSPACE_ACTIVE=0
+PACKAGE_DIR="$(pwd -P)"
+PACKAGE_EXTRACT_DIR=""
+PACKAGE_ARCHIVE=""
 
 resolve_sima_cli_bin() {
   if [[ -n "${SIMA_CLI_BIN:-}" && -x "${SIMA_CLI_BIN}" ]]; then
@@ -91,6 +94,39 @@ run_sima_cli_install() {
     fi
     rm -f "${log_path}"
   )
+}
+
+locate_package_staging() {
+  local runtime_parent runtime_parent_abs archive_candidate
+
+  runtime_parent="$(dirname "${RUNTIME_SRC}")"
+  if [[ "${runtime_parent}" == "." ]]; then
+    return 0
+  fi
+  runtime_parent_abs="$(cd "${runtime_parent}" && pwd -P)"
+  if [[ "$(dirname "${runtime_parent_abs}")" != "${PACKAGE_DIR}" \
+    || "$(basename "${runtime_parent_abs}")" != neat-apps-* ]]; then
+    return 0
+  fi
+
+  PACKAGE_EXTRACT_DIR="${runtime_parent_abs}"
+  archive_candidate="${PACKAGE_DIR}/$(basename "${runtime_parent_abs}").tar.gz"
+  if [[ -f "${archive_candidate}" && ! -L "${archive_candidate}" ]]; then
+    PACKAGE_ARCHIVE="${archive_candidate}"
+  fi
+}
+
+cleanup_package_staging() {
+  if [[ -n "${PACKAGE_EXTRACT_DIR}" && -d "${PACKAGE_EXTRACT_DIR}" \
+    && ! -L "${PACKAGE_EXTRACT_DIR}" ]]; then
+    rm -rf "${PACKAGE_EXTRACT_DIR}"
+  fi
+  if [[ -n "${PACKAGE_ARCHIVE}" ]]; then
+    rm -f "${PACKAGE_ARCHIVE}"
+  fi
+  rm -f \
+    "${PACKAGE_DIR}/install_vulcan_apps_package.sh" \
+    "${PACKAGE_DIR}/neat-core.json"
 }
 
 promote_apps_runtime() {
@@ -193,11 +229,7 @@ if [[ ! -d "${RUNTIME_SRC}" ]]; then
   fi
 fi
 
-APPS_MANIFEST_PATH="${RUNTIME_SRC}/manifest.json"
-if [[ ! -f "${APPS_MANIFEST_PATH}" ]]; then
-  echo "ERROR: extracted apps package is missing manifest.json." >&2
-  exit 1
-fi
+locate_package_staging
 
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo
@@ -232,6 +264,7 @@ fi
 if ! promote_apps_runtime "${RUNTIME_SRC}" "${DEST_DIR}" "${LEGACY_RUNTIME_DIR}"; then
   exit 1
 fi
+cleanup_package_staging
 INSTALLED_DIR="$(cd "$(dirname "${DEST_DIR}")" && pwd -P)/$(basename "${DEST_DIR}")"
 
 echo

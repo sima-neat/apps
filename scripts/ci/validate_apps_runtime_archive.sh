@@ -10,7 +10,6 @@ fi
 runtime_root="prebuilt-apps"
 
 python3 - "${archive}" "${runtime_root}" <<'PY'
-import json
 import sys
 import tarfile
 from pathlib import PurePosixPath
@@ -26,7 +25,6 @@ def fail(message: str) -> None:
 
 with tarfile.open(archive, "r:gz") as bundle:
     members = bundle.getmembers()
-    by_name = {member.name: member for member in members}
     text_suffixes = {
         ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
         ".json", ".md", ".py", ".sh", ".yaml", ".yml",
@@ -69,34 +67,11 @@ with tarfile.open(archive, "r:gz") as bundle:
             content = source.read() if source is not None else b""
             if any(reference in content for reference in obsolete_references):
                 fail(f"runtime archive contains an obsolete path reference: {member.name}")
-
-    manifest_name = f"{root}/manifest.json"
-    manifest_member = by_name.get(manifest_name)
-    if manifest_member is None or not manifest_member.isfile():
-        fail(f"runtime archive is missing {manifest_name}")
-    source = bundle.extractfile(manifest_member)
-    if source is None:
-        fail(f"unable to read {manifest_name}")
-    try:
-        manifest = json.load(source)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        fail(f"{manifest_name} is not valid JSON")
-    if not isinstance(manifest, dict):
-        fail(f"{manifest_name} must contain a JSON object")
-
-    core = manifest.get("neat-core")
-    if not isinstance(core, dict) or core.get("policy") != "snap":
-        fail("manifest.json must set neat-core policy to snap")
-    if "insight" in manifest:
-        fail("manifest.json must not define an Insight install target")
-    platform_version = manifest.get("platform-version")
-    if not isinstance(platform_version, str) or not platform_version.strip():
-        fail("manifest.json must define platform-version")
 PY
 
 members="$(tar -tzf "${archive}")"
 
-forbidden='(^|/)(models|portal|tests|test-scope\.yaml|CMakeLists\.txt|CTestTestfile\.cmake|cmake_install\.cmake|Makefile|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(a|pyc|pyo|log|db|lock)$'
+forbidden='(^|/)(manifest\.json|neat-core\.json|models|portal|tests|test-scope\.yaml|CMakeLists\.txt|CTestTestfile\.cmake|cmake_install\.cmake|Makefile|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(a|pyc|pyo|log|db|lock)$'
 if grep -E "${forbidden}" <<<"${members}"; then
   echo "Runtime archive contains non-runtime or generated files." >&2
   exit 1

@@ -73,7 +73,6 @@ Before downloading a model, set `PLATFORM_VERSION` to the displayed `DISTRO_VERS
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |
-| `manifest.json` | Apps build, Core policy, and platform metadata |
 
 The installed bundle does not contain CMake files or tests. Clone the repository
 to compile source or run the Apps test suite.

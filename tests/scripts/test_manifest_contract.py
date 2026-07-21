@@ -26,19 +26,12 @@ def _write_runtime_archive(
     tmp_path: Path,
     *members: str,
     root_name: str = "prebuilt-apps",
-    manifest: object | None = None,
     executable_members: tuple[str, ...] = (),
     extra_archive_members: tuple[str, ...] = (),
     member_contents: dict[str, str] | None = None,
 ) -> Path:
     archive_root = tmp_path / "archive-root" / root_name
     archive_root.mkdir(parents=True)
-    if manifest is None:
-        manifest = {
-            "neat-core": {"policy": "snap"},
-            "platform-version": "2.0.0",
-        }
-    (archive_root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     for member in members:
         path = archive_root / member
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,42 +86,10 @@ def test_runtime_archive_validator_rejects_members_outside_root(tmp_path, member
 
 
 @pytest.mark.parametrize(
-    "manifest",
-    [
-        {},
-        {"neat-core": {}, "platform-version": "2.0.0"},
-        {"neat-core": {"policy": "branch"}, "platform-version": "2.0.0"},
-    ],
-)
-def test_runtime_archive_validator_rejects_invalid_core_policy(tmp_path, manifest):
-    archive = _write_runtime_archive(tmp_path, manifest=manifest)
-    proc = _validate_runtime_archive(archive)
-
-    assert proc.returncode != 0
-
-
-@pytest.mark.parametrize(
-    "manifest",
-    [
-        {
-            "neat-core": {"policy": "snap"},
-            "insight": {"ref": "main", "version": "latest"},
-            "platform-version": "2.0.0",
-        },
-        {"neat-core": {"policy": "snap"}},
-        {"neat-core": {"policy": "snap"}, "platform-version": ""},
-    ],
-)
-def test_runtime_archive_validator_rejects_invalid_runtime_manifest(tmp_path, manifest):
-    archive = _write_runtime_archive(tmp_path, manifest=manifest)
-    proc = _validate_runtime_archive(archive)
-
-    assert proc.returncode != 0
-
-
-@pytest.mark.parametrize(
     "member",
     [
+        "manifest.json",
+        "neat-core.json",
         "assets/datasets-test/coco/example.jpg",
         "models/example.tar.gz",
         "examples/classification/demo/src/common/model.tar.gz",
@@ -398,15 +359,6 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
 def _write_vulcan_runtime(package_dir: Path) -> Path:
     runtime_dir = package_dir / "prebuilt-apps"
     runtime_dir.mkdir(parents=True)
-    (runtime_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "neat-core": {"policy": "snap"},
-                "platform-version": "2.0.0",
-            }
-        ),
-        encoding="utf-8",
-    )
     return runtime_dir
 
 
@@ -861,31 +813,6 @@ def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
     )
 
 
-def test_vulcan_installer_rejects_missing_manifest_before_replacing_runtime(tmp_path):
-    package_dir = tmp_path / "package"
-    runtime_dir = package_dir / "prebuilt-apps"
-    runtime_dir.mkdir(parents=True)
-    install_dir = tmp_path / "installed"
-    install_dir.mkdir()
-    sentinel = install_dir / "existing-runtime"
-    sentinel.write_text("keep\n", encoding="utf-8")
-    env = os.environ.copy()
-    env["NEAT_APPS_INSTALL_DIR"] = str(install_dir)
-
-    proc = subprocess.run(
-        ["bash", str(VULCAN_INSTALLER)],
-        cwd=package_dir,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert proc.returncode != 0
-    assert sentinel.read_text(encoding="utf-8") == "keep\n"
-    assert runtime_dir.is_dir()
-
-
 def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     package_dir = tmp_path / "package"
     runtime_dir = _write_vulcan_runtime(package_dir)
@@ -909,6 +836,34 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     ]
     assert not (package_dir / "deps").exists()
     assert f"  {install_dir}" in proc.stdout
+
+
+def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
+    package_dir = tmp_path / "package"
+    package_name = "neat-apps-integration-apps-runtime-bundle-deadbeef"
+    extracted_dir = package_dir / package_name
+    runtime_dir = _write_vulcan_runtime(extracted_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
+    archive = package_dir / f"{package_name}.tar.gz"
+    archive.write_text("archive\n", encoding="utf-8")
+    install_script = package_dir / "install_vulcan_apps_package.sh"
+    install_script.write_text("installer\n", encoding="utf-8")
+    legacy_metadata = package_dir / "neat-core.json"
+    legacy_metadata.write_text("{}\n", encoding="utf-8")
+    unrelated = package_dir / "keep.txt"
+    unrelated.write_text("keep\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(tmp_path, package_dir)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (package_dir / "prebuilt-apps" / "runtime-marker").read_text(
+        encoding="utf-8"
+    ) == "new\n"
+    assert not extracted_dir.exists()
+    assert not archive.exists()
+    assert not install_script.exists()
+    assert not legacy_metadata.exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep\n"
 
 
 def test_vulcan_installer_can_skip_dependency_installation(tmp_path):

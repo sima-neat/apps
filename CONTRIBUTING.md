@@ -83,8 +83,8 @@ Each example README must identify:
 - the corresponding `sima-cli` command when that source supports it
 - the downloaded package selected by `model.path`
 
-Use `models/` for user-managed packages. The platform version used by model
-downloads is recorded in the installed `manifest.json`.
+Use `models/` for user-managed packages. Before downloading a model, read the
+installed platform version from `DISTRO_VERSION` in `/etc/buildinfo`.
 
 Do not infer application support from every model declared in
 `tests/test-scope.yaml`. That file owns test acquisition. Confirm supported

@@ -188,12 +188,6 @@ echo "Extracting into ${DEST_DIR}/ ..."
 tar -xzf "${LOCAL_ARCHIVE}" -C "${DEST_DIR}"
 
 RUNTIME_DIR="${DEST_DIR}/prebuilt-apps"
-APPS_MANIFEST_PATH="${RUNTIME_DIR}/manifest.json"
-
-if [[ ! -f "${APPS_MANIFEST_PATH}" ]]; then
-  echo "ERROR: extracted apps package is missing manifest.json." >&2
-  exit 1
-fi
 
 SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
   echo "ERROR: sima-cli is required to install Core and Insight." >&2

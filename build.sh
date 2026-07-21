@@ -152,8 +152,6 @@ package_distribution() {
     "${stage_dir}/assets" \
     "${test_stage_dir}/examples"
 
-  cp "${APPS_MANIFEST}" "${stage_dir}/manifest.json"
-
   while IFS= read -r cpp_dir; do
     local rel target_dir
     rel="${cpp_dir#"${ROOT_DIR}"/examples/}"
