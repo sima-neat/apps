@@ -31,6 +31,8 @@ with tarfile.open(archive, "r:gz") as bundle:
         ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
         ".json", ".md", ".py", ".sh", ".yaml", ".yml",
     }
+    model_suffixes = (".tar.gz", ".mpk", ".onnx")
+    allowed_example_root_executables = {"run.sh", "setup.sh"}
     obsolete_references = (
         b"assets/models/",
         b"assets/test_images/",
@@ -45,6 +47,16 @@ with tarfile.open(archive, "r:gz") as bundle:
             fail(f"runtime archive contains an unsafe path: {member.name}")
         if member.name != root and not member.name.startswith(prefix):
             fail(f"runtime archive member is outside {root}/: {member.name}")
+        if member.isfile() and member.name.endswith(model_suffixes):
+            fail(f"runtime archive contains a packaged model: {member.name}")
+        if (
+            member.isfile()
+            and member.mode & 0o111
+            and len(path.parts) == 5
+            and path.parts[:2] == (root, "examples")
+            and path.name not in allowed_example_root_executables
+        ):
+            fail(f"executable is at an example root: {member.name}")
         if (
             member.isfile()
             and member.mode & 0o111
@@ -106,15 +118,6 @@ members="$(tar -tzf "${archive}")"
 forbidden='(^|/)(models|portal|tests|test-scope\.yaml|CMakeLists\.txt|CTestTestfile\.cmake|cmake_install\.cmake|Makefile|[^/]+_(unit|e2e)_test|sandbox[^/]*|__pycache__)(/|$)|\.(a|pyc|pyo|log|db|lock)$'
 if grep -E "${forbidden}" <<<"${members}"; then
   echo "Runtime archive contains non-runtime or generated files." >&2
-  exit 1
-fi
-
-root_example_binaries="$(
-  awk -F/ 'NF == 5 && $2 == "examples" && ($4 == $5 || $4 == $5 "_cpp")' <<<"${members}"
-)"
-if [[ -n "${root_example_binaries}" ]]; then
-  printf '%s\n' "${root_example_binaries}" >&2
-  echo "Runtime archive contains a root-level example binary." >&2
   exit 1
 fi
 

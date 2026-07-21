@@ -17,6 +17,7 @@ import pytest
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
+ARCHIVE_INSTALLER = APPS_ROOT / "scripts/install-neat-apps.sh"
 VULCAN_INSTALLER = APPS_ROOT / "scripts/install-vulcan-apps-package.sh"
 RUNTIME_ARCHIVE_VALIDATOR = APPS_ROOT / "scripts/ci/validate_apps_runtime_archive.sh"
 
@@ -131,11 +132,10 @@ def test_runtime_archive_validator_rejects_invalid_insight_target(tmp_path, insi
     [
         "assets/datasets-test/coco/example.jpg",
         "models/example.tar.gz",
+        "examples/classification/demo/src/common/model.tar.gz",
         "portal/assets/examples/example.png",
         "examples/classification/demo/src/cpp/CMakeLists.txt",
         "examples/classification/demo/src/cpp/pre-built/CTestTestfile.cmake",
-        "examples/classification/demo/demo",
-        "examples/face-detection/face-detector_cpp/face-detector",
     ],
 )
 def test_runtime_archive_validator_rejects_forbidden_content(tmp_path, member):
@@ -180,8 +180,18 @@ def test_runtime_archive_validator_accepts_cpp_reference_and_prebuilt_binary(tmp
     assert proc.returncode == 0, proc.stderr + proc.stdout
 
 
-def test_runtime_archive_validator_rejects_misplaced_cpp_executable(tmp_path):
-    misplaced_binary = "examples/classification/demo/src/cpp/demo"
+@pytest.mark.parametrize(
+    "misplaced_binary",
+    [
+        "examples/classification/demo/src/cpp/demo",
+        "examples/classification/demo/demo",
+        "examples/classification/demo/helper",
+        "examples/face-detection/face-detector_cpp/face-detector",
+    ],
+)
+def test_runtime_archive_validator_rejects_misplaced_cpp_executable(
+    tmp_path, misplaced_binary
+):
     archive = _write_runtime_archive(
         tmp_path,
         misplaced_binary,
@@ -190,6 +200,21 @@ def test_runtime_archive_validator_rejects_misplaced_cpp_executable(tmp_path):
     proc = _validate_runtime_archive(archive)
 
     assert proc.returncode != 0
+
+
+def test_runtime_archive_validator_accepts_example_root_scripts(tmp_path):
+    scripts = (
+        "examples/genai/multimodal-assistant/run.sh",
+        "examples/genai/multimodal-assistant/setup.sh",
+    )
+    archive = _write_runtime_archive(
+        tmp_path,
+        *scripts,
+        executable_members=scripts,
+    )
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
 
 
 def _write_manifest(
@@ -305,6 +330,41 @@ def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
     )
     curl_path.chmod(0o755)
     return bin_dir, log_path
+
+
+def test_archive_installer_extracts_flat_prebuilt_apps_by_default(tmp_path):
+    archive = _write_runtime_archive(tmp_path, "runtime-marker")
+    bin_dir, curl_log = _write_fake_curl(tmp_path)
+    installer_url = "https://installer.test/install-neat.sh"
+    installer_pwd = tmp_path / "installer-pwd.txt"
+    installer_args = tmp_path / "installer-args.txt"
+    env = os.environ.copy()
+    env.pop("NEAT_APPS_INSTALL_DIR", None)
+    env.update(
+        {
+            "NEAT_APPS_ARCHIVE": str(archive),
+            "NEAT_INSTALLER_URL": installer_url,
+            "NEAT_APPS_TEST_CURL_LOG": str(curl_log),
+            "NEAT_APPS_TEST_INSTALLER_URL": installer_url,
+            "NEAT_APPS_TEST_INSTALLER_PWD": str(installer_pwd),
+            "NEAT_APPS_TEST_INSTALLER_ARGS": str(installer_args),
+            "PATH": f"{bin_dir}:{env['PATH']}",
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(ARCHIVE_INSTALLER), "develop"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (tmp_path / "prebuilt-apps" / "runtime-marker").is_file()
+    assert not (tmp_path / "neat-apps").exists()
+    assert "  ./prebuilt-apps" in proc.stdout
 
 
 def _write_fake_sima_cli(tmp_path: Path) -> Path:
