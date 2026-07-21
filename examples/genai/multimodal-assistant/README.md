@@ -16,23 +16,15 @@ This example hosts SiMa-supported GenAI models through Neat's OpenAI-compatible 
 
 The example supports one or more configured chat models, one configured ASR model, image/text chat, audio transcription, Piper TTS, system prompt control, chat history, voice selection, and abort.
 
-The demo runs as two processes. `src/python/server/main.py` reads the `server`
-section of the selected config and starts the Neat OpenAI-compatible server.
-`src/python/ui/main.py` reads the `app` section of the selected config and
-starts the existing Flask UI. `src/common/config.yaml` is the tracked template;
-`./setup.sh` writes the runnable local config to `config.local.yaml`.
+The demo runs as two processes. `src/python/server/main.py` reads the `server` section of the selected config and starts the Neat OpenAI-compatible server. `src/python/ui/main.py` reads the `app` section of the selected config and starts the existing Flask UI. `src/common/config.yaml` is the tracked template; `./setup.sh` writes the runnable local config to `config.local.yaml`.
 
 Runtime ownership is split deliberately:
 
-- Neat hosts the OpenAI-compatible `/v1/chat/completions` endpoint for text and
-  image chat.
+- Neat hosts the OpenAI-compatible `/v1/chat/completions` endpoint for text and image chat.
 - Neat hosts the OpenAI-compatible `/v1/audio/transcriptions` endpoint for ASR.
-- The Flask app owns UI state, system prompt handling, chat history, abort
-  requests, uploaded images, microphone recordings, and Piper TTS playback.
-- Piper TTS is app-side. The default requirements install Piper; TTS produces
-  audio when the configured voice assets are present under `src/python/ui/assets/`.
-- RAG is app-side and optional. It uses the Flask UI, local VectorDB service,
-  and the same chat model hosted by the Neat OpenAI-compatible server.
+- The Flask app owns UI state, system prompt handling, chat history, abort requests, uploaded images, microphone recordings, and Piper TTS playback.
+- Piper TTS is app-side. The default requirements install Piper; TTS produces audio when the configured voice assets are present under `src/python/ui/assets/`.
+- RAG is app-side and optional. It uses the Flask UI, local VectorDB service, and the same chat model hosted by the Neat OpenAI-compatible server.
 
 ## Preview
 Multimodal assistant UI:
@@ -40,42 +32,42 @@ Multimodal assistant UI:
 ![Multimodal Assistant preview](../../../portal/assets/examples/genai/multimodal-assistant/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
+
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 - The model server uses the Python environment where `pyneat` is available. The default scripts assume:
 
 ```text
 ~/pyneat/bin/python
 ```
 
-Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat Library environment is
-somewhere else.
+Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat Library environment is somewhere else.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+## Install Apps
 
-Clone and build the apps repo inside the Neat Development Environment:
+1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
+2. Install the selected version and enter the installed bundle. We recommend using the latest release:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps@<release-version>
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
 
-## Install
-Fetch only this example:
+## Prepare the Model
+
+The setup script installs these model directories:
+
+| Model | Role | Source |
+| --- | --- | --- |
+| `Qwen3-VL-4B-Instruct-GPTQ-a16w4` | Default chat/VLM | Hugging Face |
+| `whisper-small-a16w8` | Required ASR | Hugging Face |
+| `gte-small` | Default RAG embedding | Hugging Face |
+
+Install the UI virtual environment, default chat/VLM model, Whisper ASR model, GTE-small embedding model, Piper TTS voices, default RAG database, and generated local config:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
-```
-
-Install the UI virtual environment, default chat/VLM model, Whisper ASR model,
-GTE-small embedding model, Piper TTS voices, default RAG database, and generated
-local config:
-
-```bash
-cd multimodal-assistant
+cd examples/genai/multimodal-assistant
 
 ./setup.sh
 ```
@@ -86,8 +78,25 @@ By default, `setup.sh` downloads:
 - `simaai/whisper-small-a16w8`
 - `thenlper/gte-small`
 
-`whisper-small-a16w8` is the supported ASR model and is always downloaded.
-Override the default chat/VLM download with an environment variable when needed:
+Use the [LLiMa CLI](https://developer.sima.ai/software/genai-llima/runtime) to manage precompiled server models.
+
+Search the supported models:
+
+```bash
+llima search
+```
+
+Install the VLMs you want to serve and the required ASR model:
+
+```bash
+llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
+llima pull gemma-4-E2B-it-GPTQ-a16w4
+llima pull whisper-small-a16w8
+```
+
+Models installed with `llima pull` use `/media/nvme/llima/models/<model-name>` by default. The setup script configures one default VLM; add every additional VLM's name and path under `server.models.chat` in `config.local.yaml` to serve multiple models at the same time. Set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory. The setup script remains the complete example installer because it also prepares the UI environment, RAG embedding model, TTS voices, local configuration, and RAG database.
+
+`whisper-small-a16w8` is the supported ASR model and is always downloaded. To use another compatible SiMa.ai chat/VLM repository, override the default download:
 
 ```bash
 CHAT_MODEL_REPO=simaai/<chat-model-repo> ./setup.sh
@@ -102,9 +111,7 @@ Downloaded models use this layout by default:
 └── gte-small/
 ```
 
-On a SoM board, mount NVMe before running setup. If NVMe is mounted but the
-model directory is not writable, create it with ownership for the current
-user:
+On a SoM board, mount NVMe before running setup. If NVMe is mounted but the model directory is not writable, create it with ownership for the current user:
 
 ```bash
 sudo install -d \
@@ -113,23 +120,16 @@ sudo install -d \
   /media/nvme/llima/models
 ```
 
-On a system without NVMe, set `LLIMA_MODELS_PATH` to another writable
-location. For a full Apps checkout, `models/` is the repo-local model
-convention:
+On a system without NVMe, set `LLIMA_MODELS_PATH` to another writable location. To use the user-managed Apps model directory:
 
 ```bash
-export APPS_ROOT=/path/to/apps
+APPS_ROOT="$(cd ../../.. && pwd)"
 LLIMA_MODELS_PATH="${APPS_ROOT}/models/genai" ./setup.sh
 ```
 
-The same three model directories are created under the selected path. For a
-standalone example, set `LLIMA_MODELS_PATH` to any writable absolute path.
+The same three model directories are created under the selected path. For a standalone example, set `LLIMA_MODELS_PATH` to any writable absolute path.
 
-The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set.
-The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is
-set.
-RAG is enabled by default and uses `src/python/ui/milvus.db`, created from
-`src/common/rag/neat.md`.
+The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set. The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is set. RAG is enabled by default and uses `src/python/ui/milvus.db`, created from `src/common/rag/neat.md`.
 
 ### Configure Chat/VLM Models
 After install, edit `config.local.yaml` to change or add hosted chat/VLM models:
@@ -138,18 +138,16 @@ After install, edit `config.local.yaml` to change or add hosted chat/VLM models:
 server:
   models:
     chat:
-      - name: Qwen3-VL-2B-Instruct-GPTQ-a16w4
-        path: /path/to/llima/models/Qwen3-VL-2B-Instruct-GPTQ-a16w4
-      - name: another-chat-or-vlm-model
-        path: /path/to/llima/models/another-chat-or-vlm-model
+      - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
+        path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
+      - name: gemma-4-E2B-it-GPTQ-a16w4
+        path: /media/nvme/llima/models/gemma-4-E2B-it-GPTQ-a16w4
     asr:
       name: whisper-small-a16w8
       path: /path/to/llima/models/whisper-small-a16w8
 ```
 
-The first chat/VLM entry is selected by default. Additional entries appear in
-the UI model selector. Model directories must contain `devkit/` and
-`elf_files/`.
+The first chat/VLM entry is selected by default. Additional entries appear in the UI model selector. Model directories must contain `devkit/` and `elf_files/`.
 
 ## Run
 Start both the Neat OpenAI-compatible server and the Flask UI:
@@ -176,8 +174,7 @@ Check that the configured models are hosted:
 curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
 ```
 
-Wait until this command lists the configured chat and ASR models before testing
-the browser UI.
+Wait until this command lists the configured chat and ASR models before testing the browser UI.
 
 ### Manual Process Start
 Use this only when you want two explicit terminals.
@@ -204,22 +201,19 @@ python "${EXAMPLE_DIR}/src/python/ui/main.py" \
   --config "${EXAMPLE_DIR}/config.local.yaml"
 ```
 
-The supported entrypoints are `src/python/server/main.py` for model hosting and
-`src/python/ui/main.py` for the UI.
+The supported entrypoints are `src/python/server/main.py` for model hosting and `src/python/ui/main.py` for the UI.
 
 ## RAG
 RAG is enabled by default after `./setup.sh`.
 
-The installer downloads `thenlper/gte-small`, stores it under the configured
-models directory, and creates:
+The installer downloads `thenlper/gte-small`, stores it under the configured models directory, and creates:
 
 ```text
 src/python/ui/milvus.db
 src/python/ui/milvus.meta.json
 ```
 
-To point RAG at a different local embedding model or disable it, edit
-`config.local.yaml`:
+To point RAG at a different local embedding model or disable it, edit `config.local.yaml`:
 
 ```yaml
 app:
@@ -263,8 +257,7 @@ In the UI, enable `Search RAG Database` and ask:
 What is the canonical RAG validation phrase?
 ```
 
-The RAG status area should report whether RAG was used and how many hits were
-retrieved.
+The RAG status area should report whether RAG was used and how many hits were retrieved.
 
 ## Verify
 Use these checks after the model server and Flask UI are running.
@@ -334,4 +327,7 @@ Then test the browser UI:
 - UI assets: `src/python/ui/templates/`, `src/python/ui/static/`, `src/python/ui/assets/`, `src/python/ui/certs/`
 - Manual API scripts: `src/python/ui/apitest/`
 - Shared config: `src/common/config.yaml`
-- Test scope: `tests/test-scope.yaml`
+
+## Development From Source
+
+To modify or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
