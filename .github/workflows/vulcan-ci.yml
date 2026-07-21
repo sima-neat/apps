@@ -212,6 +212,14 @@ jobs:
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
 
+      - name: Install snap Core for Apps tests
+        run: |
+          artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
+          NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
+            NEAT_CORE_INSTALL_MODE=vulcan \
+            NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
+            ./build.sh --only-install-neat-core
+
       - name: Install runtime candidate and overlay tests
         run: |
           mapfile -t runtime_archives < <(
@@ -229,7 +237,8 @@ jobs:
           tar -xzf "${runtime_archives[0]}" -C _vulcan-test/package
           (
             cd _vulcan-test/package
-            NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps" \
+            NEAT_APPS_SKIP_DEPENDENCIES=1 \
+              NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps" \
               bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
           )
           if [[ -e "${GITHUB_WORKSPACE}/_vulcan-test/install/deps" ]]; then

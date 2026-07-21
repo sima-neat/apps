@@ -19,6 +19,7 @@ APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
 ARCHIVE_INSTALLER = APPS_ROOT / "scripts/install-neat-apps.sh"
 VULCAN_INSTALLER = APPS_ROOT / "scripts/install-vulcan-apps-package.sh"
+VULCAN_WORKFLOW = APPS_ROOT / ".github/workflows/vulcan-ci.yml"
 RUNTIME_ARCHIVE_VALIDATOR = APPS_ROOT / "scripts/ci/validate_apps_runtime_archive.sh"
 
 
@@ -884,6 +885,14 @@ def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
     assert not (tmp_path / "sima-cli-args.txt").exists()
     assert not (package_dir / "deps").exists()
     assert "Skipping Core and Insight dependency installation" in proc.stdout
+
+
+def test_vulcan_runtime_gate_uses_snap_core_without_customer_dependencies():
+    workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "./build.sh --only-install-neat-core" in workflow
+    assert "NEAT_CORE_INSTALL_MODE=vulcan" in workflow
+    assert "NEAT_APPS_SKIP_DEPENDENCIES=1" in workflow
 
 
 def test_vulcan_installer_keeps_existing_runtime_when_core_install_fails(tmp_path):
