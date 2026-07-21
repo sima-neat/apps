@@ -66,6 +66,7 @@ on:
         default: false
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
@@ -86,3 +87,16 @@ jobs:
     secrets:
       NEAT_RELEASES_APP_ID: ${{ secrets.NEAT_RELEASES_APP_ID }}
       NEAT_RELEASES_APP_PRIVATE_KEY: ${{ secrets.NEAT_RELEASES_APP_PRIVATE_KEY }}
+
+  trigger-vulcan:
+    name: Trigger tagged Vulcan build
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch Vulcan for release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag_name }}
+        run: gh workflow run vulcan-ci.yml --ref "${RELEASE_TAG}"

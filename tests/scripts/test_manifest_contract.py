@@ -20,6 +20,7 @@ BUILD_SH = APPS_ROOT / "build.sh"
 ARCHIVE_INSTALLER = APPS_ROOT / "scripts/install-neat-apps.sh"
 VULCAN_INSTALLER = APPS_ROOT / "scripts/install-vulcan-apps-package.sh"
 VULCAN_WORKFLOW = APPS_ROOT / ".github/workflows/vulcan-ci.yml"
+RELEASE_WORKFLOW = APPS_ROOT / ".github/workflows/release.yml"
 RUNTIME_ARCHIVE_VALIDATOR = APPS_ROOT / "scripts/ci/validate_apps_runtime_archive.sh"
 
 
@@ -893,6 +894,33 @@ def test_vulcan_runtime_gate_uses_snap_core_without_customer_dependencies():
     assert "./build.sh --only-install-neat-core" in workflow
     assert "NEAT_CORE_INSTALL_MODE=vulcan" in workflow
     assert "NEAT_APPS_SKIP_DEPENDENCIES=1" in workflow
+
+
+def test_vulcan_uses_one_core_context_for_build_and_runtime_tests():
+    workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
+    dependency_output = "needs.resolve-core-context.outputs.dependency_branch"
+
+    assert "pull_request:\n    branches:\n      - main" in workflow
+    assert "github.ref_type == 'tag'" in workflow
+    assert "github.ref_name == 'main'" in workflow
+    assert "startsWith(github.ref_name, 'release-')" in workflow
+    assert "github.base_ref == 'main'" in workflow
+    assert "&& 'main' || github.ref_name" in workflow
+    assert workflow.count(dependency_output) == 2
+    assert (
+        'NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}"'
+        in workflow
+    )
+
+
+def test_release_dispatches_vulcan_for_the_created_tag():
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "actions: write" in workflow
+    assert "trigger-vulcan:" in workflow
+    assert "if: ${{ !inputs.dry_run }}" in workflow
+    assert "RELEASE_TAG: ${{ needs.release.outputs.tag_name }}" in workflow
+    assert 'gh workflow run vulcan-ci.yml --ref "${RELEASE_TAG}"' in workflow
 
 
 def test_vulcan_installer_keeps_existing_runtime_when_core_install_fails(tmp_path):
