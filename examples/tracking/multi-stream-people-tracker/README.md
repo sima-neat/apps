@@ -23,7 +23,7 @@ Track people across multiple RTSP inputs with mixed-resolution support. The pipe
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- RTSP sources and an Insight viewer reachable from the target.
+- RTSP sources and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -49,9 +49,10 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 
-Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Replace `<model-file>` with a file from the table.
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
 
 ```bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models

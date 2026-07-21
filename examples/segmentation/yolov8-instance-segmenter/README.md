@@ -45,9 +45,10 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo_v8m_seg_mpk.tar.gz` | Supported | `yolo_v8m_seg` |
 | `yolo_v8l_seg_mpk.tar.gz` | Supported | `yolo_v8l_seg` |
 
-Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Replace `<model-name>` with a model from the table.
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-name>` with a model from the table.
 
 ```bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models

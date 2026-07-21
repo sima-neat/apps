@@ -23,7 +23,7 @@ This focused example ingests one RTSP H.264/MJPEG or HTTP MJPEG stream, decodes 
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- An RTSP H.264, RTSP MJPEG, or HTTP MJPEG source.
+- An RTSP H.264, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -49,9 +49,10 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 | `yolo26m-det-int8-b1.tar.gz` | Supported |
 
-Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Replace `<model-file>` with a file from the table.
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
 
 ```bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models

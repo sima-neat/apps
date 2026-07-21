@@ -57,7 +57,13 @@ under `models/`, or set `model.path` to another readable package. Each
 example README lists its default and additional supported models with the
 corresponding `sima-cli` or example-specific installation command.
 
-Before downloading a model, set `PLATFORM_VERSION` to the `platform-version` value recorded in the installed `manifest.json`. Runtime sample data is included under `assets/datasets/`.
+Check the installed platform version:
+
+```bash
+cat /etc/buildinfo
+```
+
+Before downloading a model, set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Runtime sample data is included under `assets/datasets/`.
 
 ## Installed Layout
 

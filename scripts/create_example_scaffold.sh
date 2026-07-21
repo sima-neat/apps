@@ -243,11 +243,12 @@ The default model is \`<default-model>\`.
 | \`<default-model>\` | Default | <Model Zoo / direct artifact> |
 | \`<supported-model>\` | Supported | <Model Zoo / direct artifact> |
 
-Set \`PLATFORM_VERSION\` to the \`platform-version\` value recorded in \`manifest.json\`. Use the command that matches the model source and delete the other command.
+Check the installed platform version, then set \`PLATFORM_VERSION\` to the displayed \`DISTRO_VERSION\` value. Use the command that matches the model source and delete the other command.
 
 Model Zoo:
 
 \`\`\`bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models

@@ -44,9 +44,10 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `resnet_50_mpk.tar.gz` | Default | `resnet_50` |
 
-Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`.
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value.
 
 ```bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models

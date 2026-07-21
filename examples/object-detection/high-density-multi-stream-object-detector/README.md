@@ -49,7 +49,7 @@ The 48-stream profile running in Insight:
 ## Prerequisites
 
 - A Modalix DevKit compatible with the selected Apps release, with the decoder service running.
-- Insight reachable from the DevKit.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the DevKit.
 - 16, 24, or 48 H.264 RTSP sources matching the selected profile.
 - Constant source frame rate, 1280×720 resolution, no H.264 B-frames, and a short, regular IDR interval. The validated sources use one IDR per second.
 - The `yolo26n-det-int8-b1.tar.gz` model pack.
@@ -74,9 +74,10 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `yolo26n-det-int8-b1.tar.gz` | Default | Direct artifact |
 
-Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`.
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value.
 
 ```bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models

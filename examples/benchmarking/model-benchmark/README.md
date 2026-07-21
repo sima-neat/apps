@@ -43,9 +43,10 @@ Run the remaining commands from `prebuilt-apps/`.
 
 This example accepts any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
-Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`. Download a Model Zoo package:
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Download a Model Zoo package:
 
 ```bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models

@@ -42,9 +42,10 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `depth_anything_v2_vits_mpk.tar.gz` | Default | `depth_anything_v2_vits` |
 
-Set `PLATFORM_VERSION` to the `platform-version` value recorded in `manifest.json`.
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value.
 
 ```bash
+cat /etc/buildinfo
 export PLATFORM_VERSION="<platform-version>"
 mkdir -p models
 cd models
