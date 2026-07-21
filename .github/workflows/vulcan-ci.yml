@@ -143,7 +143,6 @@ jobs:
         fi
         test -f neat-apps-tests.tar.gz
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
-        tar -tzf "${runtime_archives[0]}" prebuilt-apps/neat-core.json >/dev/null
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 
@@ -163,7 +162,7 @@ jobs:
       artifact_folder: "."
       artifact_pattern: neat-apps-dist
       artifact_glob: "*"
-      min_artifact_count: 4
+      min_artifact_count: 3
 
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
@@ -186,8 +185,6 @@ jobs:
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
       labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
-    env:
-      VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
 
     steps:
       - name: Checkout code
@@ -199,7 +196,7 @@ jobs:
       - name: Clean test workspace
         run: |
           rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
-          rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh neat-core.json
+          rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh
 
       - name: Download Apps build artifacts
         uses: actions/download-artifact@v7
@@ -233,7 +230,6 @@ jobs:
           (
             cd _vulcan-test/package
             NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps" \
-              NEAT_VULCAN_ENV="${VULCAN_ENV}" \
               bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
           )
           if [[ -e "${GITHUB_WORKSPACE}/_vulcan-test/install/deps" ]]; then
@@ -290,11 +286,9 @@ jobs:
               ! -name 'neat-apps-tests.tar.gz' | sort
           )
           runtime_archive="${runtime_archives[0]}"
-          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
 
           cp "${runtime_archive}" dist/
           install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
-          cp "${RUNTIME_DIR}/neat-core.json" dist/neat-core.json
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"

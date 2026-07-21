@@ -31,11 +31,10 @@ Optional. Place portal images under `portal/assets/examples/<category>/<example>
 
 ## Install Apps
 
-1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
-2. Install the selected version and enter the installed bundle. We recommend using the latest release:
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-sima-cli neat install apps@<release-version>
+sima-cli neat install apps
 cd prebuilt-apps
 ```
 

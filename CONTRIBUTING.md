@@ -60,8 +60,7 @@ Optional sections such as `Preview`, `Configure`, `Expected Result`, and
 
 The installed workflow must:
 
-- link to the [Neat Apps releases](https://github.com/sima-neat/apps/releases)
-- install `apps@<release-version>`
+- install the latest Apps runtime with `sima-cli neat install apps`
 - run subsequent commands from `prebuilt-apps/`
 - use `src/cpp/pre-built/<binary>` for C++
 - use packaged `src/python/` entrypoints or supported wrappers for Python

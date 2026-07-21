@@ -66,8 +66,7 @@ REQUIRED_SECTION_ORDER = (
     "Development From Source",
 )
 
-RELEASES_URL = "https://github.com/sima-neat/apps/releases"
-INSTALL_COMMAND = "sima-cli neat install apps@<release-version>"
+INSTALL_COMMAND = "sima-cli neat install apps"
 CONTRIBUTING_URL = "https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md"
 SOURCE_ONLY_COMMANDS = (
     "git clone ",
@@ -130,9 +129,7 @@ def validate_installed_workflow(
     run = sections.get("Run", "")
     development = sections.get("Development From Source", "")
 
-    if RELEASES_URL not in install:
-        errors.append("Install Apps must link to the Neat Apps releases page")
-    if INSTALL_COMMAND not in install:
+    if INSTALL_COMMAND not in {line.strip() for line in install.splitlines()}:
         errors.append(f"Install Apps must use '{INSTALL_COMMAND}'")
     if "cd prebuilt-apps" not in install:
         errors.append("Install Apps must enter the prebuilt-apps directory")

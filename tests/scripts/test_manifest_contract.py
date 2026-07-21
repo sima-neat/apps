@@ -26,24 +26,19 @@ def _write_runtime_archive(
     tmp_path: Path,
     *members: str,
     root_name: str = "prebuilt-apps",
-    neat_core: object | None = None,
-    insight: object | None = None,
+    manifest: object | None = None,
     executable_members: tuple[str, ...] = (),
     extra_archive_members: tuple[str, ...] = (),
     member_contents: dict[str, str] | None = None,
 ) -> Path:
     archive_root = tmp_path / "archive-root" / root_name
     archive_root.mkdir(parents=True)
-    if neat_core is None:
-        neat_core = {"branch": "develop", "version": "core-sha"}
-    if insight is None:
-        insight = {"ref": "main", "version": "latest"}
-    (archive_root / "neat-core.json").write_text(
-        json.dumps({"neat-core": neat_core}), encoding="utf-8"
-    )
-    (archive_root / "manifest.json").write_text(
-        json.dumps({"insight": insight}), encoding="utf-8"
-    )
+    if manifest is None:
+        manifest = {
+            "neat-core": {"policy": "snap"},
+            "platform-version": "2.0.0",
+        }
+    (archive_root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     for member in members:
         path = archive_root / member
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,30 +93,34 @@ def test_runtime_archive_validator_rejects_members_outside_root(tmp_path, member
 
 
 @pytest.mark.parametrize(
-    "neat_core",
+    "manifest",
     [
         {},
-        {"branch": "", "version": "core-sha"},
-        {"branch": "develop", "version": "latest"},
+        {"neat-core": {}, "platform-version": "2.0.0"},
+        {"neat-core": {"policy": "branch"}, "platform-version": "2.0.0"},
     ],
 )
-def test_runtime_archive_validator_rejects_invalid_core_target(tmp_path, neat_core):
-    archive = _write_runtime_archive(tmp_path, neat_core=neat_core)
+def test_runtime_archive_validator_rejects_invalid_core_policy(tmp_path, manifest):
+    archive = _write_runtime_archive(tmp_path, manifest=manifest)
     proc = _validate_runtime_archive(archive)
 
     assert proc.returncode != 0
 
 
 @pytest.mark.parametrize(
-    "insight",
+    "manifest",
     [
-        {},
-        {"ref": "", "version": "latest"},
-        {"ref": "main", "version": ""},
+        {
+            "neat-core": {"policy": "snap"},
+            "insight": {"ref": "main", "version": "latest"},
+            "platform-version": "2.0.0",
+        },
+        {"neat-core": {"policy": "snap"}},
+        {"neat-core": {"policy": "snap"}, "platform-version": ""},
     ],
 )
-def test_runtime_archive_validator_rejects_invalid_insight_target(tmp_path, insight):
-    archive = _write_runtime_archive(tmp_path, insight=insight)
+def test_runtime_archive_validator_rejects_invalid_runtime_manifest(tmp_path, manifest):
+    archive = _write_runtime_archive(tmp_path, manifest=manifest)
     proc = _validate_runtime_archive(archive)
 
     assert proc.returncode != 0
@@ -221,16 +220,12 @@ def _write_manifest(
     path: Path,
     neat_core: object = "",
     platform_version: str = "2.0.0",
-    insight: object | None = None,
 ) -> None:
-    if insight is None:
-        insight = {"ref": "main", "version": "latest"}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "neat-core": neat_core,
-                "insight": insight,
                 "platform-version": platform_version,
             },
             indent=2,
@@ -334,21 +329,16 @@ def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
 
 def test_archive_installer_extracts_flat_prebuilt_apps_by_default(tmp_path):
     archive = _write_runtime_archive(tmp_path, "runtime-marker")
-    bin_dir, curl_log = _write_fake_curl(tmp_path)
-    installer_url = "https://installer.test/install-neat.sh"
-    installer_pwd = tmp_path / "installer-pwd.txt"
-    installer_args = tmp_path / "installer-args.txt"
+    bin_dir = _write_fake_sima_cli(tmp_path)
     env = os.environ.copy()
     env.pop("NEAT_APPS_INSTALL_DIR", None)
     env.update(
         {
             "NEAT_APPS_ARCHIVE": str(archive),
-            "NEAT_INSTALLER_URL": installer_url,
-            "NEAT_APPS_TEST_CURL_LOG": str(curl_log),
-            "NEAT_APPS_TEST_INSTALLER_URL": installer_url,
-            "NEAT_APPS_TEST_INSTALLER_PWD": str(installer_pwd),
-            "NEAT_APPS_TEST_INSTALLER_ARGS": str(installer_args),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
             "PATH": f"{bin_dir}:{env['PATH']}",
+            "SIMA_CLI_BIN": str(bin_dir / "sima-cli"),
         }
     )
 
@@ -364,6 +354,12 @@ def test_archive_installer_extracts_flat_prebuilt_apps_by_default(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (tmp_path / "prebuilt-apps" / "runtime-marker").is_file()
     assert not (tmp_path / "neat-apps").exists()
+    assert (tmp_path / "sima-cli-args.txt").read_text(
+        encoding="utf-8"
+    ).splitlines() == [
+        "neat install -d . -t minimal core",
+        "neat install -d . insight",
+    ]
     assert "  ./prebuilt-apps" in proc.stdout
 
 
@@ -399,23 +395,16 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _write_vulcan_runtime(
-    package_dir: Path,
-    neat_core: object | None = None,
-    insight: object | None = None,
-) -> Path:
+def _write_vulcan_runtime(package_dir: Path) -> Path:
     runtime_dir = package_dir / "prebuilt-apps"
     runtime_dir.mkdir(parents=True)
-    if neat_core is None:
-        neat_core = {"branch": "develop", "version": "core-sha"}
-    if insight is None:
-        insight = {"ref": "main", "version": "latest"}
-    (runtime_dir / "neat-core.json").write_text(
-        json.dumps({"neat-core": neat_core}),
-        encoding="utf-8",
-    )
     (runtime_dir / "manifest.json").write_text(
-        json.dumps({"insight": insight}),
+        json.dumps(
+            {
+                "neat-core": {"policy": "snap"},
+                "platform-version": "2.0.0",
+            }
+        ),
         encoding="utf-8",
     )
     return runtime_dir
@@ -706,7 +695,9 @@ def test_dependency_object_manifest_url_encodes_slash_branch_for_latest(tmp_path
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert _installer_args(tmp_path) == "--minimum feature/core-artifact featsha2"
-    assert "https://core.test/feature%252Fcore-artifact/latest.tag" in _curl_log(tmp_path)
+    assert "https://core.test/feature%252Fcore-artifact/latest.tag" in _curl_log(
+        tmp_path
+    )
 
 
 def test_explicit_manifest_fails_when_artifact_is_invalid(tmp_path):
@@ -865,17 +856,15 @@ def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
     )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert "NEAT core already installed (scratch-core-for-test/scratchsha1)" in proc.stdout
+    assert (
+        "NEAT core already installed (scratch-core-for-test/scratchsha1)" in proc.stdout
+    )
 
 
-def test_vulcan_installer_rejects_latest_core_before_replacing_runtime(tmp_path):
+def test_vulcan_installer_rejects_missing_manifest_before_replacing_runtime(tmp_path):
     package_dir = tmp_path / "package"
     runtime_dir = package_dir / "prebuilt-apps"
     runtime_dir.mkdir(parents=True)
-    (runtime_dir / "neat-core.json").write_text(
-        json.dumps({"neat-core": {"branch": "develop", "version": "latest"}}),
-        encoding="utf-8",
-    )
     install_dir = tmp_path / "installed"
     install_dir.mkdir()
     sentinel = install_dir / "existing-runtime"
@@ -897,30 +886,6 @@ def test_vulcan_installer_rejects_latest_core_before_replacing_runtime(tmp_path)
     assert runtime_dir.is_dir()
 
 
-@pytest.mark.parametrize(
-    "neat_core",
-    [
-        {"branch": None, "version": "core-sha"},
-        {"branch": "develop", "version": []},
-    ],
-)
-def test_vulcan_installer_rejects_non_string_core_target_before_promotion(
-    tmp_path, neat_core
-):
-    package_dir = tmp_path / "package"
-    _write_vulcan_runtime(package_dir, neat_core)
-    install_dir = tmp_path / "installed" / "prebuilt-apps"
-    install_dir.mkdir(parents=True)
-    sentinel = install_dir / "runtime-marker"
-    sentinel.write_text("old\n", encoding="utf-8")
-
-    proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
-
-    assert proc.returncode != 0
-    assert sentinel.read_text(encoding="utf-8") == "old\n"
-    assert not (tmp_path / "sima-cli-args.txt").exists()
-
-
 def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     package_dir = tmp_path / "package"
     runtime_dir = _write_vulcan_runtime(package_dir)
@@ -932,38 +897,18 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert not (install_dir / "neat-apps-runtime").exists()
-    assert (tmp_path / "sima-cli-cwd.txt").read_text(
-        encoding="utf-8"
-    ).splitlines() == [
+    assert (tmp_path / "sima-cli-cwd.txt").read_text(encoding="utf-8").splitlines() == [
         str(package_dir / "deps" / "core"),
         str(package_dir / "deps" / "insight"),
     ]
     assert (tmp_path / "sima-cli-args.txt").read_text(
         encoding="utf-8"
     ).splitlines() == [
-        "neat install --env production -d . -t minimal core@develop:core-sha",
-        "neat install --env production -d . insight@main:latest",
+        "neat install -d . -t minimal core",
+        "neat install -d . insight",
     ]
     assert not (package_dir / "deps").exists()
     assert f"  {install_dir}" in proc.stdout
-
-
-@pytest.mark.parametrize("ref_key", ["branch", "ref"])
-def test_vulcan_installer_uses_insight_manifest_target(tmp_path, ref_key):
-    package_dir = tmp_path / "package"
-    _write_vulcan_runtime(
-        package_dir,
-        insight={ref_key: "v0.0.6", "version": "insight-sha"},
-    )
-
-    proc = _run_vulcan_installer(tmp_path, package_dir)
-
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert (tmp_path / "sima-cli-args.txt").read_text(
-        encoding="utf-8"
-    ).splitlines()[-1] == (
-        "neat install --env production -d . insight@v0.0.6:insight-sha"
-    )
 
 
 def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
@@ -1018,15 +963,15 @@ def test_vulcan_installer_keeps_existing_runtime_when_insight_install_fails(tmp_
         tmp_path,
         package_dir,
         install_dir=install_dir,
-        extra_env={"NEAT_APPS_TEST_SIMA_CLI_FAIL_TARGET": "insight@main:latest"},
+        extra_env={"NEAT_APPS_TEST_SIMA_CLI_FAIL_TARGET": "insight"},
     )
 
     assert proc.returncode != 0
     assert (tmp_path / "sima-cli-args.txt").read_text(
         encoding="utf-8"
     ).splitlines() == [
-        "neat install --env production -d . -t minimal core@develop:core-sha",
-        "neat install --env production -d . insight@main:latest",
+        "neat install -d . -t minimal core",
+        "neat install -d . insight",
     ]
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
     assert (runtime_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"

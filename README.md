@@ -5,23 +5,20 @@
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
 SiMa Neat Apps provides runnable C++ and Python examples for detection,
-segmentation, streaming, tracking, benchmarking, and GenAI. Install a release
-to run the packaged examples. Clone this repository only when modifying or
+segmentation, streaming, tracking, benchmarking, and GenAI. Install Apps to
+run the packaged examples. Clone this repository only when modifying or
 building their source.
 
-## Install a Release
+## Install Apps
 
-1. Choose a version from the [Neat Apps releases](https://github.com/sima-neat/apps/releases).
-2. On a supported Modalix or DevKit target, install that version:
+On a supported Modalix or DevKit target, install the latest Apps runtime from main and enter the installed bundle:
 
 ```bash
-sima-cli neat install apps@<release-version>
+sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-The Apps package installs its configured Core and Insight dependencies. The
-installed bundle is placed under `prebuilt-apps/`. Run the remaining commands
-from that directory.
+The Apps installer installs the latest Core and Insight versions from main. The installed bundle is placed under `prebuilt-apps/`. Run the remaining commands from that directory.
 
 ## Run an Example
 
@@ -76,7 +73,7 @@ Before downloading a model, set `PLATFORM_VERSION` to the displayed `DISTRO_VERS
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |
-| `manifest.json` | Apps dependency and platform metadata |
+| `manifest.json` | Apps build, Core policy, and platform metadata |
 
 The installed bundle does not contain CMake files or tests. Clone the repository
 to compile source or run the Apps test suite.
@@ -128,11 +125,7 @@ curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-exa
 
 ## Dependency Selection
 
-`deps/manifest.json` declares the Core and Insight targets used when building
-an Apps package. Release branches can record exact dependency versions;
-development branches may follow their configured latest targets. It is
-packaged as `manifest.json`, while `neat-core.json` records the resolved Core
-target.
+`deps/manifest.json` keeps Core on the `snap` policy for source builds and records the SDK channel and platform version. It does not pin Insight. The Apps installer uses bare `core` and `insight` targets, which `sima-cli` resolves to the latest versions from main.
 
 ## Support
 

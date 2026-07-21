@@ -70,47 +70,28 @@ with tarfile.open(archive, "r:gz") as bundle:
             if any(reference in content for reference in obsolete_references):
                 fail(f"runtime archive contains an obsolete path reference: {member.name}")
 
-    def read_json(name: str) -> dict:
-        member = by_name.get(name)
-        if member is None or not member.isfile():
-            fail(f"runtime archive is missing {name}")
-        source = bundle.extractfile(member)
-        if source is None:
-            fail(f"unable to read {name}")
-        try:
-            payload = json.load(source)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            fail(f"{name} is not valid JSON")
-        if not isinstance(payload, dict):
-            fail(f"{name} must contain a JSON object")
-        return payload
+    manifest_name = f"{root}/manifest.json"
+    manifest_member = by_name.get(manifest_name)
+    if manifest_member is None or not manifest_member.isfile():
+        fail(f"runtime archive is missing {manifest_name}")
+    source = bundle.extractfile(manifest_member)
+    if source is None:
+        fail(f"unable to read {manifest_name}")
+    try:
+        manifest = json.load(source)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        fail(f"{manifest_name} is not valid JSON")
+    if not isinstance(manifest, dict):
+        fail(f"{manifest_name} must contain a JSON object")
 
-    core = read_json(f"{root}/neat-core.json").get("neat-core")
-    if not isinstance(core, dict):
-        fail("neat-core.json must define neat-core")
-    branch = core.get("branch")
-    version = core.get("version")
-    if (
-        not isinstance(branch, str)
-        or not branch.strip()
-        or not isinstance(version, str)
-        or not version.strip()
-        or version.strip().lower() == "latest"
-    ):
-        fail("neat-core.json must contain an exact branch and version")
-
-    insight = read_json(f"{root}/manifest.json").get("insight")
-    if not isinstance(insight, dict):
-        fail("manifest.json must define insight")
-    ref = insight.get("branch", insight.get("ref"))
-    version = insight.get("version")
-    if (
-        not isinstance(ref, str)
-        or not ref.strip()
-        or not isinstance(version, str)
-        or not version.strip()
-    ):
-        fail("manifest.json must contain an Insight branch or ref and version")
+    core = manifest.get("neat-core")
+    if not isinstance(core, dict) or core.get("policy") != "snap":
+        fail("manifest.json must set neat-core policy to snap")
+    if "insight" in manifest:
+        fail("manifest.json must not define an Insight install target")
+    platform_version = manifest.get("platform-version")
+    if not isinstance(platform_version, str) or not platform_version.strip():
+        fail("manifest.json must define platform-version")
 PY
 
 members="$(tar -tzf "${archive}")"

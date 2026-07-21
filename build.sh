@@ -133,7 +133,6 @@ package_distribution() {
   local stage_root stage_dir test_stage_dir
   local branch_key version archive_name archive_path
   local test_archive_path="${ROOT_DIR}/neat-apps-tests.tar.gz"
-  local neat_core_branch neat_core_version
 
   if [[ ! -d "${build_path}" ]]; then
     echo "Skipping distribution packaging: build directory not found: ${build_path}"
@@ -153,28 +152,7 @@ package_distribution() {
     "${stage_dir}/assets" \
     "${test_stage_dir}/examples"
 
-  load_neat_core_target
-  neat_core_branch="${NEAT_CORE_TARGET_BRANCH}"
-  neat_core_version="${NEAT_CORE_TARGET_VERSION}"
-  if [[ "${neat_core_version}" == "latest" ]]; then
-    neat_core_version="$(resolve_latest_version "${neat_core_branch}")"
-  fi
   cp "${APPS_MANIFEST}" "${stage_dir}/manifest.json"
-  python3 - <<'PY' "${stage_dir}/neat-core.json" "${neat_core_branch}" "${neat_core_version}"
-import json
-import sys
-
-payload = {
-    "neat-core": {
-        "branch": sys.argv[2],
-        "version": sys.argv[3],
-    }
-}
-
-with open(sys.argv[1], "w", encoding="utf-8") as fh:
-    json.dump(payload, fh, indent=2)
-    fh.write("\n")
-PY
 
   while IFS= read -r cpp_dir; do
     local rel target_dir

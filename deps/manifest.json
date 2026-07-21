@@ -2,10 +2,6 @@
   "neat-core": {
     "policy": "snap"
   },
-  "insight": {
-    "ref": "main",
-    "version": "latest"
-  },
   "sdk": {
     "channel": "develop"
   },

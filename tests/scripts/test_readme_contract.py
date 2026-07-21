@@ -56,10 +56,10 @@ See [CONTRIBUTING.md](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.m
     return readme
 
 
-VALID_INSTALL = """Choose a version from https://github.com/sima-neat/apps/releases.
+VALID_INSTALL = """Install the latest Neat Apps runtime.
 
 ```bash
-sima-cli neat install apps@<release-version>
+sima-cli neat install apps
 cd prebuilt-apps
 ```"""
 
@@ -75,14 +75,16 @@ def test_installed_readme_contract_accepts_packaged_commands(tmp_path: Path) -> 
     assert validate_readme(readme) == []
 
 
-def test_installed_readme_contract_requires_versioned_install(tmp_path: Path) -> None:
+def test_installed_readme_contract_requires_latest_install(tmp_path: Path) -> None:
     readme = write_readme(
         tmp_path,
-        install=VALID_INSTALL.replace("apps@<release-version>", "apps"),
+        install=VALID_INSTALL.replace("install apps", "install apps@v0.3.0"),
         run=VALID_RUN,
     )
 
-    assert any("apps@<release-version>" in error for error in validate_readme(readme))
+    assert any(
+        "sima-cli neat install apps" in error for error in validate_readme(readme)
+    )
 
 
 def test_installed_readme_contract_rejects_build_tree_binary(tmp_path: Path) -> None:
