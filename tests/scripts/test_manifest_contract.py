@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import signal
@@ -16,37 +17,114 @@ import pytest
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
+ARCHIVE_INSTALLER = APPS_ROOT / "scripts/install-neat-apps.sh"
 VULCAN_INSTALLER = APPS_ROOT / "scripts/install-vulcan-apps-package.sh"
 RUNTIME_ARCHIVE_VALIDATOR = APPS_ROOT / "scripts/ci/validate_apps_runtime_archive.sh"
 
 
-def _write_runtime_archive(tmp_path: Path, *members: str) -> Path:
-    archive_root = tmp_path / "archive-root" / "neat-apps-runtime"
+def _write_runtime_archive(
+    tmp_path: Path,
+    *members: str,
+    root_name: str = "prebuilt-apps",
+    neat_core: object | None = None,
+    insight: object | None = None,
+    executable_members: tuple[str, ...] = (),
+    extra_archive_members: tuple[str, ...] = (),
+    member_contents: dict[str, str] | None = None,
+) -> Path:
+    archive_root = tmp_path / "archive-root" / root_name
     archive_root.mkdir(parents=True)
-    (archive_root / "neat-core.json").write_text("{}\n", encoding="utf-8")
-    (archive_root / "manifest.json").write_text("{}\n", encoding="utf-8")
+    if neat_core is None:
+        neat_core = {"branch": "develop", "version": "core-sha"}
+    if insight is None:
+        insight = {"ref": "main", "version": "latest"}
+    (archive_root / "neat-core.json").write_text(
+        json.dumps({"neat-core": neat_core}), encoding="utf-8"
+    )
+    (archive_root / "manifest.json").write_text(
+        json.dumps({"insight": insight}), encoding="utf-8"
+    )
     for member in members:
         path = archive_root / member
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("fixture\n", encoding="utf-8")
+        content = (member_contents or {}).get(member, "fixture\n")
+        path.write_text(content, encoding="utf-8")
+        if member in executable_members:
+            path.chmod(0o755)
 
     archive = tmp_path / "runtime.tar.gz"
     with tarfile.open(archive, "w:gz") as output:
-        output.add(archive_root, arcname="neat-apps-runtime")
+        output.add(archive_root, arcname=root_name)
+        for member in extra_archive_members:
+            payload = b"fixture\n"
+            info = tarfile.TarInfo(member)
+            info.size = len(payload)
+            output.addfile(info, io.BytesIO(payload))
     return archive
 
 
-def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
-    archive = _write_runtime_archive(tmp_path, "assets/datasets/coco/example.jpg")
-
-    proc = subprocess.run(
+def _validate_runtime_archive(archive: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["bash", str(RUNTIME_ARCHIVE_VALIDATOR), str(archive)],
         check=False,
         capture_output=True,
         text=True,
     )
 
+
+def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
+    archive = _write_runtime_archive(tmp_path, "assets/datasets/coco/example.jpg")
+    proc = _validate_runtime_archive(archive)
+
     assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+def test_runtime_archive_validator_rejects_legacy_root(tmp_path):
+    archive = _write_runtime_archive(tmp_path, root_name="neat-apps-runtime")
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
+
+
+@pytest.mark.parametrize("member", ["unexpected.txt", "../escape.txt"])
+def test_runtime_archive_validator_rejects_members_outside_root(tmp_path, member):
+    archive = _write_runtime_archive(
+        tmp_path,
+        extra_archive_members=(member,),
+    )
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
+
+
+@pytest.mark.parametrize(
+    "neat_core",
+    [
+        {},
+        {"branch": "", "version": "core-sha"},
+        {"branch": "develop", "version": "latest"},
+    ],
+)
+def test_runtime_archive_validator_rejects_invalid_core_target(tmp_path, neat_core):
+    archive = _write_runtime_archive(tmp_path, neat_core=neat_core)
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
+
+
+@pytest.mark.parametrize(
+    "insight",
+    [
+        {},
+        {"ref": "", "version": "latest"},
+        {"ref": "main", "version": ""},
+    ],
+)
+def test_runtime_archive_validator_rejects_invalid_insight_target(tmp_path, insight):
+    archive = _write_runtime_archive(tmp_path, insight=insight)
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
 
 
 @pytest.mark.parametrize(
@@ -54,39 +132,87 @@ def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
     [
         "assets/datasets-test/coco/example.jpg",
         "models/example.tar.gz",
+        "examples/classification/demo/src/common/model.tar.gz",
         "portal/assets/examples/example.png",
         "examples/classification/demo/src/cpp/CMakeLists.txt",
         "examples/classification/demo/src/cpp/pre-built/CTestTestfile.cmake",
-        "examples/classification/demo/demo",
-        "examples/face-detection/face-detector_cpp/face-detector",
     ],
 )
 def test_runtime_archive_validator_rejects_forbidden_content(tmp_path, member):
     archive = _write_runtime_archive(tmp_path, member)
+    proc = _validate_runtime_archive(archive)
 
-    proc = subprocess.run(
-        ["bash", str(RUNTIME_ARCHIVE_VALIDATOR), str(archive)],
-        check=False,
-        capture_output=True,
-        text=True,
+    assert proc.returncode != 0
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "assets/models/",
+        "assets/test_images/",
+        "assets/test_images_classification/",
+        "neat-apps-runtime/",
+        "/usr/bin/fix_devkit_runtime.sh",
+    ],
+)
+def test_runtime_archive_validator_rejects_obsolete_references(tmp_path, reference):
+    readme = "examples/classification/demo/README.md"
+    archive = _write_runtime_archive(
+        tmp_path,
+        readme,
+        member_contents={readme: reference},
     )
+    proc = _validate_runtime_archive(archive)
 
     assert proc.returncode != 0
 
 
 def test_runtime_archive_validator_accepts_cpp_reference_and_prebuilt_binary(tmp_path):
+    prebuilt_binary = "examples/classification/demo/src/cpp/pre-built/demo"
     archive = _write_runtime_archive(
         tmp_path,
         "examples/classification/demo/src/cpp/main.cpp",
-        "examples/classification/demo/src/cpp/pre-built/demo",
+        prebuilt_binary,
+        executable_members=(prebuilt_binary,),
     )
+    proc = _validate_runtime_archive(archive)
 
-    proc = subprocess.run(
-        ["bash", str(RUNTIME_ARCHIVE_VALIDATOR), str(archive)],
-        check=False,
-        capture_output=True,
-        text=True,
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+@pytest.mark.parametrize(
+    "misplaced_binary",
+    [
+        "examples/classification/demo/src/cpp/demo",
+        "examples/classification/demo/demo",
+        "examples/classification/demo/helper",
+        "examples/face-detection/face-detector_cpp/face-detector",
+    ],
+)
+def test_runtime_archive_validator_rejects_misplaced_cpp_executable(
+    tmp_path, misplaced_binary
+):
+    archive = _write_runtime_archive(
+        tmp_path,
+        misplaced_binary,
+        executable_members=(misplaced_binary,),
     )
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
+
+
+def test_runtime_archive_validator_accepts_example_root_scripts(tmp_path):
+    scripts = (
+        "examples/genai/multimodal-assistant/run.sh",
+        "examples/genai/multimodal-assistant/setup.sh",
+    )
+    archive = _write_runtime_archive(
+        tmp_path,
+        *scripts,
+        executable_members=scripts,
+    )
+    proc = _validate_runtime_archive(archive)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
 
@@ -206,6 +332,41 @@ def _write_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
     return bin_dir, log_path
 
 
+def test_archive_installer_extracts_flat_prebuilt_apps_by_default(tmp_path):
+    archive = _write_runtime_archive(tmp_path, "runtime-marker")
+    bin_dir, curl_log = _write_fake_curl(tmp_path)
+    installer_url = "https://installer.test/install-neat.sh"
+    installer_pwd = tmp_path / "installer-pwd.txt"
+    installer_args = tmp_path / "installer-args.txt"
+    env = os.environ.copy()
+    env.pop("NEAT_APPS_INSTALL_DIR", None)
+    env.update(
+        {
+            "NEAT_APPS_ARCHIVE": str(archive),
+            "NEAT_INSTALLER_URL": installer_url,
+            "NEAT_APPS_TEST_CURL_LOG": str(curl_log),
+            "NEAT_APPS_TEST_INSTALLER_URL": installer_url,
+            "NEAT_APPS_TEST_INSTALLER_PWD": str(installer_pwd),
+            "NEAT_APPS_TEST_INSTALLER_ARGS": str(installer_args),
+            "PATH": f"{bin_dir}:{env['PATH']}",
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(ARCHIVE_INSTALLER), "develop"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (tmp_path / "prebuilt-apps" / "runtime-marker").is_file()
+    assert not (tmp_path / "neat-apps").exists()
+    assert "  ./prebuilt-apps" in proc.stdout
+
+
 def _write_fake_sima_cli(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -243,7 +404,7 @@ def _write_vulcan_runtime(
     neat_core: object | None = None,
     insight: object | None = None,
 ) -> Path:
-    runtime_dir = package_dir / "neat-apps-runtime"
+    runtime_dir = package_dir / "prebuilt-apps"
     runtime_dir.mkdir(parents=True)
     if neat_core is None:
         neat_core = {"branch": "develop", "version": "core-sha"}
@@ -709,7 +870,7 @@ def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
 
 def test_vulcan_installer_rejects_latest_core_before_replacing_runtime(tmp_path):
     package_dir = tmp_path / "package"
-    runtime_dir = package_dir / "neat-apps-runtime"
+    runtime_dir = package_dir / "prebuilt-apps"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "neat-core.json").write_text(
         json.dumps({"neat-core": {"branch": "develop", "version": "latest"}}),

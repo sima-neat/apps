@@ -145,7 +145,7 @@ package_distribution() {
   archive_name="neat-apps-${branch_key}-${version}.tar.gz"
   archive_path="${ROOT_DIR}/${archive_name}"
   stage_root="$(mktemp -d /tmp/neat-apps-package.XXXXXX)"
-  stage_dir="${stage_root}/neat-apps-runtime"
+  stage_dir="${stage_root}/prebuilt-apps"
   test_stage_dir="${stage_root}/neat-apps-tests"
 
   mkdir -p \

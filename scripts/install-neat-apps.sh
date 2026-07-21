@@ -14,13 +14,13 @@ set -euo pipefail
 # - If no tag is provided, or the tag is "latest", fetch branch/latest.tag.
 # - Download neat-apps-<branch-key>-<tag>.tar.gz from the apps download root.
 # - If arg 1 points to an existing .tar.gz file, use that local archive directly.
-# - Extract the archive into ./neat-apps.
+# - Extract the archive into the current directory as ./prebuilt-apps.
 
 BASE_URL="${NEAT_APPS_BASE_URL:-https://apps.sima-neat.com/download}"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
 BRANCH="${1:-}"
 TAG_INPUT="${2:-latest}"
-DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
+DEST_DIR="${NEAT_APPS_INSTALL_DIR:-.}"
 LOCAL_ARCHIVE="${NEAT_APPS_ARCHIVE:-}"
 
 usage() {
@@ -34,8 +34,8 @@ Environment:
                           default: https://apps.sima-neat.com/download
   NEAT_INSTALLER_URL      Hosted NEAT core installer URL
                           default: https://tools.sima-neat.com/install-neat.sh
-  NEAT_APPS_INSTALL_DIR   Destination directory for extracted files
-                          default: ./neat-apps
+  NEAT_APPS_INSTALL_DIR   Parent directory for the extracted prebuilt-apps
+                          default: current directory
   NEAT_APPS_ARCHIVE       Use an already downloaded local apps archive
 USAGE
 }
@@ -202,7 +202,7 @@ mkdir -p "${DEST_DIR}"
 echo "Extracting into ${DEST_DIR}/ ..."
 tar -xzf "${LOCAL_ARCHIVE}" -C "${DEST_DIR}"
 
-RUNTIME_DIR="${DEST_DIR}/neat-apps-runtime"
+RUNTIME_DIR="${DEST_DIR}/prebuilt-apps"
 NEAT_CORE_JSON_PATH="${RUNTIME_DIR}/neat-core.json"
 
 if [[ ! -f "${NEAT_CORE_JSON_PATH}" ]]; then
@@ -239,4 +239,4 @@ fi
 
 echo
 echo "Installed apps runtime under:"
-echo "  ${DEST_DIR}"
+echo "  ${RUNTIME_DIR}"
