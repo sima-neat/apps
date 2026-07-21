@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DEST_DIR="${NEAT_APPS_INSTALL_DIR:-prebuilt-apps}"
-RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-neat-apps-runtime}"
+RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-prebuilt-apps}"
 INSTALL_ROOT="$(dirname "${DEST_DIR}")"
 LEGACY_RUNTIME_DIR="${INSTALL_ROOT}/neat-apps/neat-apps-runtime"
 VULCAN_ENV="${NEAT_VULCAN_ENV:-${VULCAN_ENV:-production}}"

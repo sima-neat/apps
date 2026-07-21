@@ -202,7 +202,7 @@ mkdir -p "${DEST_DIR}"
 echo "Extracting into ${DEST_DIR}/ ..."
 tar -xzf "${LOCAL_ARCHIVE}" -C "${DEST_DIR}"
 
-RUNTIME_DIR="${DEST_DIR}/neat-apps-runtime"
+RUNTIME_DIR="${DEST_DIR}/prebuilt-apps"
 NEAT_CORE_JSON_PATH="${RUNTIME_DIR}/neat-core.json"
 
 if [[ ! -f "${NEAT_CORE_JSON_PATH}" ]]; then

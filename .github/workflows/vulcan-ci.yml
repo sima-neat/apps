@@ -143,7 +143,7 @@ jobs:
         fi
         test -f neat-apps-tests.tar.gz
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
-        tar -tzf "${runtime_archives[0]}" neat-apps-runtime/neat-core.json >/dev/null
+        tar -tzf "${runtime_archives[0]}" prebuilt-apps/neat-core.json >/dev/null
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 

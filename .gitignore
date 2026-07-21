@@ -23,5 +23,6 @@ portal/public/catalog.json
 portal/public/example-assets/
 install_neat_framework.sh
 neat-apps-runtime/
+prebuilt-apps/
 docs/*
 .vscode/*
