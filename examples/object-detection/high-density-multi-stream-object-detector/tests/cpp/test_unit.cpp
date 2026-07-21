@@ -221,10 +221,7 @@ bool test_validate_config_only_accepts_twenty_four_streams(const std::string& bi
                       "validate output reports the proven total credit default") &&
       expect_contains(result.stdout_text,
                       (config_path.parent_path() / kModelPath).lexically_normal().string(),
-                      "relative model path resolves from the config directory") &&
-      expect_contains(result.stdout_text,
-                      (config_path.parent_path() / "coco_label.txt").lexically_normal().string(),
-                      "relative labels path resolves from the config directory");
+                      "relative model path resolves from the config directory");
   remove_dir(config_path.parent_path().string());
   return ok;
 }

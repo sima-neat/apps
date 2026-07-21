@@ -239,6 +239,7 @@ function(sima_neat_apps_module example_name)
 
   get_filename_component(_module_dir "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
   get_filename_component(_apps_root "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
+  file(RELATIVE_PATH _module_relative_dir "${_apps_root}" "${_module_dir}")
 
   if (APP_SOURCES)
     set(_sources "${APP_SOURCES}")
@@ -267,7 +268,7 @@ function(sima_neat_apps_module example_name)
 
   target_compile_definitions(${example_name}
     PRIVATE
-      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_module_dir}"
+      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_module_relative_dir}"
   )
 
   if (APP_OUTPUT_TARGET_VAR)

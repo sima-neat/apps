@@ -96,6 +96,7 @@ source:
 
 model:
   path: <model-path>
+  labels: examples/genai/detection-to-vlm-assistant/src/common/coco_label.txt
 
 insight:
   host: <insight-host-ip>

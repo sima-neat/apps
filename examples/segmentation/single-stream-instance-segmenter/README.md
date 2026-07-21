@@ -75,6 +75,7 @@ Edit `examples/segmentation/single-stream-instance-segmenter/src/common/config.y
 ```yaml
 model:
   path: <model-path>
+  labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
 
 source:
   type: rtsp

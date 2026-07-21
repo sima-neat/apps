@@ -74,6 +74,7 @@ Edit `examples/object-detection/multi-stream-object-detector/src/common/config.y
 ```yaml
 model:
   path: <model-path>
+  labels: examples/object-detection/multi-stream-object-detector/src/common/coco_label.txt
 
 streams:
   - <first-rtsp-url>

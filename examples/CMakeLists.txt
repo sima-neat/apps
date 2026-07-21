@@ -12,6 +12,7 @@ function(sima_neat_apps_add_example example_name)
 
   string(MAKE_C_IDENTIFIER "${CMAKE_CURRENT_SOURCE_DIR}_${example_name}" target_suffix)
   set(target_name "app_${target_suffix}")
+  file(RELATIVE_PATH example_source_dir "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 
   add_executable("${target_name}" "${source_path}")
 
@@ -28,7 +29,7 @@ function(sima_neat_apps_add_example example_name)
 
   target_compile_definitions("${target_name}"
     PRIVATE
-      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${example_source_dir}"
   )
 
   set_target_properties("${target_name}" PROPERTIES OUTPUT_NAME "${example_name}")

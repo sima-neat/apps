@@ -1,5 +1,6 @@
 model:                       # Detector model selection.
   path: <model-path>         # Example: models/<model-pack>.tar.gz
+  labels: examples/object-detection/multi-stream-object-detector/src/common/coco_label.txt
 
 streams:                     # RTSP inputs, one entry per camera.
   - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>

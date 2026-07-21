@@ -1,8 +1,8 @@
 # Default profile: 16 x 720p @ 25 FPS.
-# Relative model and label paths are resolved from this file.
+# Relative model paths use this file; label paths use the Apps root.
 model:
   path: <model-path>
-  labels: coco_label.txt
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
   decode_type: yolo26
 
 streams:
