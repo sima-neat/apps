@@ -173,6 +173,7 @@
           <img id="snapAnimation" src="" alt="Snap Animation" style="display: none;">
           <span class="camera-badge">Live Camera</span>
           <div class="camera-tools">
+            <button id="cameraBoardBtn" class="camera-tool-btn" type="button" title="Snapshot from the devkit camera (/dev/video*)" aria-label="Snapshot from the devkit camera">⌾</button>
             <button id="cameraVisionBtn" class="camera-tool-btn" type="button" title="Open full-screen vision" aria-label="Open full-screen vision">⛶</button>
             <button id="cameraCollapseBtn" class="camera-tool-btn" type="button" title="Collapse camera" aria-label="Collapse camera">▾</button>
           </div>
@@ -780,6 +781,8 @@
         <button id="visionLoopBtn" class="vision-top-btn" type="button" aria-pressed="false"
           title="Loop — continuously ask the VLM about the live camera">↻ Loop</button>
         <button id="visionUploadBtn" class="vision-top-btn" type="button" title="Upload an image">Upload Image</button>
+        <button id="visionBoardBtn" class="vision-top-btn" type="button"
+          title="Snapshot from the camera plugged into the devkit board (/dev/video*)">Board Camera</button>
         <button id="visionCloseBtn" class="vision-top-btn vision-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
       </div>
     </div>

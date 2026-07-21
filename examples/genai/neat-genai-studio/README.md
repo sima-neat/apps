@@ -36,6 +36,18 @@ OpenAI-compatible server and drives them from a polished Flask UI that adds:
   in the selected language, now including **Japanese** (via the MIT-licensed
   piper-plus engine) alongside the existing piper-tts voices. See
   [Text-to-speech](#text-to-speech-voices--languages) below.
+- **Board camera input** — besides the browser webcam, the backend can grab
+  stills from a camera plugged into the devkit board itself (`/dev/video*`):
+  the **⌾** button on the camera dock and the **Board Camera** button in the
+  full-screen Vision view fetch a frame via `GET /board-camera/snapshot`
+  (`GET /board-camera/devices` lists the nodes; `?device=` or
+  `NEAT_CAMERA_DEVICE` picks one). API users can instead send
+  `useBoardCamera=true` (optionally `boardCameraDevice`) with a `/upload` chat
+  request to attach a fresh board frame server-side. Uses the same capture
+  fallbacks as the CLI's `/camera` mode (`ffmpeg`, `fswebcam`,
+  `libcamera`/`rpicam`, OpenCV).
+- **Drag & drop images** — drop an image anywhere on the page to attach it to
+  the chat (or onto the full-screen Vision view to ask about it).
 - Everything the multimodal assistant already offered: image/text chat, audio
   transcription (ASR), RAG, system-prompt control, chat history, voice
   selection, and abort.

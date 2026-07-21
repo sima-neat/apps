@@ -2042,6 +2042,42 @@ document.addEventListener('drop', (event) => {
   else loadChatImageFile(image);
 });
 
+// ---- Devkit board camera ---------------------------------------------------
+// The backend can grab a still from a camera plugged into the devkit board
+// itself (/dev/video*), unlike the live preview which is the *browser's*
+// webcam. Fetch one frame and feed it through the same paths as an uploaded
+// image (camera dock in the chat, stage in the Vision view).
+
+async function fetchBoardCameraFrame(device) {
+  const url = device
+    ? `/board-camera/snapshot?device=${encodeURIComponent(device)}`
+    : '/board-camera/snapshot';
+  const resp = await fetch(url, { cache: 'no-store' });
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try { msg = (await resp.json()).error || msg; } catch (e) { /* not JSON */ }
+    throw new Error(msg);
+  }
+  const blob = await resp.blob();
+  return new File([blob], 'board-camera.jpg', { type: blob.type || 'image/jpeg' });
+}
+
+const boardCamButton = document.getElementById('cameraBoardBtn');
+if (boardCamButton) {
+  boardCamButton.addEventListener('click', async () => {
+    if (isLlmOnlyMode()) return;
+    boardCamButton.disabled = true;
+    try {
+      loadChatImageFile(await fetchBoardCameraFrame());
+    } catch (err) {
+      console.error('Board camera snapshot failed:', err);
+      alert(`Board camera: ${err.message}`);
+    } finally {
+      boardCamButton.disabled = false;
+    }
+  });
+}
+
 socket.on('audio_chunk', (data) => {
   // Drop audio when the user turned off spoken responses (also guards any
   // late/in-flight chunk from a previous generation).
@@ -5136,6 +5172,8 @@ function initVision() {
   if (camBtn) camBtn.addEventListener('click', () => setVisionSource('camera'));
   if (imgBtn) imgBtn.addEventListener('click', () => setVisionSource('image'));
   if (uploadBtn) uploadBtn.addEventListener('click', pickVisionImage);
+  const boardBtn = document.getElementById('visionBoardBtn');
+  if (boardBtn) boardBtn.addEventListener('click', snapVisionBoardCamera);
   if (micBtn) micBtn.addEventListener('click', toggleVisionMic);
   const loopBtn = document.getElementById('visionLoopBtn');
   if (loopBtn) loopBtn.addEventListener('click', toggleVisionLoop);
@@ -5256,6 +5294,21 @@ function pickVisionImage() {
   input.accept = 'image/*';
   input.addEventListener('change', () => loadVisionImageFile(input.files && input.files[0]));
   input.click();
+}
+
+// Pull a still from the camera attached to the devkit board onto the stage.
+async function snapVisionBoardCamera() {
+  const btn = document.getElementById('visionBoardBtn');
+  if (btn) btn.disabled = true;
+  try {
+    loadVisionImageFile(await fetchBoardCameraFrame());
+  } catch (err) {
+    console.error('Board camera snapshot failed:', err);
+    setVisionSource('image');
+    setVisionHint(`Board camera: ${err.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // Capture the active vision source into a data URL, letterboxed to the model's

@@ -36,6 +36,12 @@ import signal
 import subprocess
 
 from shared.config import HubConfig
+from shared.board_camera import (
+    capture_camera_frame,
+    default_camera_device,
+    list_camera_devices,
+    normalize_camera_device,
+)
 from server import hub as hub_helpers
 from tts_text import sanitize_for_tts   # Markdown/LaTeX → speakable text (stdlib only)
 
@@ -1523,6 +1529,8 @@ class AppContext:
             search_rag = request.form.get('searchRag', 'false').lower() == 'true'
             include_chat_history = request.form.get('includeChatHistory', 'true').lower() == 'true'
             enable_tts = request.form.get('enableTts', 'true').lower() == 'true'
+            use_board_camera = request.form.get('useBoardCamera', 'false').lower() == 'true'
+            board_camera_device = request.form.get('boardCameraDevice', '').strip()
             gen_params = _read_gen_params(request.form)
             cfg = genai_app.get_config()
             try:
@@ -1554,6 +1562,19 @@ class AppContext:
                     image_path, image_base64 = save_image_upload_as_base64(image_file, cfg['UPLOAD_FOLDER'])
                 except ValueError:
                     return jsonify({'error': 'Invalid image file name'}), 400
+            elif use_board_camera and not self.llm_only:
+                # Grab a fresh frame from the camera attached to the devkit
+                # board itself (not the browser's webcam) for this prompt.
+                try:
+                    node = normalize_camera_device(board_camera_device) if board_camera_device else None
+                    jpeg, tool = capture_camera_frame(node)
+                except ValueError as exc:
+                    return jsonify({'error': str(exc)}), 400
+                except RuntimeError as exc:
+                    logging.error(f"Board camera capture failed: {exc}")
+                    return jsonify({'error': f'board camera: {exc}'}), 503
+                image_base64 = base64.b64encode(jpeg).decode('utf-8')
+                logging.info(f"Attached board-camera frame (via {tool})")
 
             # If textchat is present, use it directly
             if chat:
@@ -1596,7 +1617,7 @@ class AppContext:
                 full_query_str = f"{query_str}\n\nThe context is:\n\n{[entry['content'] for entry in rag]}"
 
             # Add user message to conversation history (detect if image is present)
-            has_image = image_file is not None
+            has_image = image_base64 is not None
             self.add_user_message(full_query_str, has_image=has_image, image_base64=image_base64)
             generation_id = self.begin_generation(selected_model)
 
@@ -1751,6 +1772,32 @@ class AppContext:
             except Exception:
                 logging.exception("TTS endpoint error")
                 return jsonify({'error': 'TTS request failed'}), 500
+
+        # Board camera: a /dev/video* device plugged into the devkit board
+        # itself, as opposed to the in-browser camera (the *client's* webcam).
+        # These are plain hardware reads, so they stay registered even in
+        # LLM-only mode; vision gating applies where a frame enters a chat.
+        @self.app.route('/board-camera/devices', methods=['GET'])
+        def board_camera_devices():
+            return jsonify({
+                'devices': list_camera_devices(),
+                'default': default_camera_device(),
+            })
+
+        @self.app.route('/board-camera/snapshot', methods=['GET'])
+        def board_camera_snapshot():
+            device = (request.args.get('device') or '').strip()
+            try:
+                node = normalize_camera_device(device) if device else None
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+            try:
+                jpeg, tool = capture_camera_frame(node)
+            except RuntimeError as exc:
+                logging.error(f"Board camera capture failed: {exc}")
+                return jsonify({'error': str(exc)}), 503
+            return Response(jpeg, mimetype='image/jpeg',
+                            headers={'Cache-Control': 'no-store', 'X-Capture-Tool': tool})
 
         # Only register image upload route if not in LLM-only mode
         if not self.llm_only:
