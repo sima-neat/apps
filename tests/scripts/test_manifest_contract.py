@@ -31,9 +31,17 @@ def _write_runtime_archive(
     executable_members: tuple[str, ...] = (),
     extra_archive_members: tuple[str, ...] = (),
     member_contents: dict[str, str] | None = None,
+    include_core_metadata: bool = True,
 ) -> Path:
     archive_root = tmp_path / "archive-root" / root_name
     archive_root.mkdir(parents=True)
+    if include_core_metadata:
+        core_metadata = archive_root / "deps/neat-core.json"
+        core_metadata.parent.mkdir(parents=True)
+        core_metadata.write_text(
+            json.dumps({"neat-core": {"ref": "develop", "spec": "core-sha"}}),
+            encoding="utf-8",
+        )
     for member in members:
         path = archive_root / member
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,6 +75,13 @@ def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
     proc = _validate_runtime_archive(archive)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+def test_runtime_archive_validator_rejects_missing_core_metadata(tmp_path):
+    archive = _write_runtime_archive(tmp_path, include_core_metadata=False)
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
 
 
 def test_runtime_archive_validator_rejects_legacy_root(tmp_path):
@@ -358,9 +373,20 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _write_vulcan_runtime(package_dir: Path) -> Path:
+def _write_vulcan_runtime(
+    package_dir: Path,
+    core: object | None = None,
+) -> Path:
     runtime_dir = package_dir / "prebuilt-apps"
     runtime_dir.mkdir(parents=True)
+    if core is None:
+        core = {"ref": "develop", "spec": "core-sha"}
+    deps_dir = runtime_dir / "deps"
+    deps_dir.mkdir(parents=True)
+    (deps_dir / "neat-core.json").write_text(
+        json.dumps({"neat-core": core}),
+        encoding="utf-8",
+    )
     return runtime_dir
 
 
@@ -537,6 +563,9 @@ def test_snap_manifest_resolves_from_dependency_branch(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert _installer_args(tmp_path) == "--minimum develop devsha1"
     assert _curl_log(tmp_path).count("https://core.test/develop/latest.tag") == 1
+    assert json.loads(
+        (tmp_path / "deps" / "neat-core.json").read_text(encoding="utf-8")
+    ) == {"neat-core": {"ref": "develop", "spec": "devsha1"}}
 
 
 def test_empty_manifest_custom_branch_uses_matching_core_artifact_once(tmp_path):
@@ -665,28 +694,35 @@ def test_explicit_manifest_fails_when_artifact_is_invalid(tmp_path):
     assert "unavailable NEAT core artifact" in proc.stderr
 
 
-def test_protected_branch_rejects_explicit_manifest_value(tmp_path):
+def test_explicit_manifest_is_used_for_pr_into_main(tmp_path):
     proc = _run_build(
         tmp_path,
-        neat_core="main-mainsha1",
+        neat_core={"ref": "main", "spec": "mainsha1"},
         args=["--only-install-neat-core"],
-        env={"GITHUB_REF_NAME": "main"},
+        env={**_installer_env(tmp_path), "GITHUB_BASE_REF": "main"},
     )
 
-    assert proc.returncode != 0
-    assert "must keep neat-core as policy=snap on main/develop" in proc.stderr
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == "--minimum main mainsha1"
+    assert json.loads(
+        (tmp_path / "deps" / "neat-core.json").read_text(encoding="utf-8")
+    ) == {"neat-core": {"ref": "main", "spec": "mainsha1"}}
 
 
-def test_protected_branch_rejects_explicit_dependency_object_manifest(tmp_path):
+def test_snap_manifest_uses_pr_source_branch(tmp_path):
     proc = _run_build(
         tmp_path,
-        neat_core={"branch": "main", "spec": "mainsha1"},
+        neat_core={"policy": "snap"},
         args=["--only-install-neat-core"],
-        env={"GITHUB_REF_NAME": "main"},
+        env={
+            **_installer_env(tmp_path),
+            "GITHUB_BASE_REF": "main",
+            "GITHUB_HEAD_REF": "zz-core-artifact-for-test",
+        },
     )
 
-    assert proc.returncode != 0
-    assert "must keep neat-core as policy=snap on main/develop" in proc.stderr
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert _installer_args(tmp_path) == ("--minimum zz-core-artifact-for-test featsha1")
 
 
 def test_unsupported_manifest_object_fails(tmp_path):
@@ -698,43 +734,6 @@ def test_unsupported_manifest_object_fails(tmp_path):
 
     assert proc.returncode != 0
     assert "unsupported neat-core.policy" in proc.stderr
-
-
-def test_snap_manifest_tag_build_uses_matching_core_tag(tmp_path):
-    proc = _run_build(
-        tmp_path,
-        args=["--only-install-neat-core"],
-        env={
-            **_installer_env(tmp_path),
-            "GITHUB_REF_TYPE": "tag",
-            "GITHUB_REF_NAME": "v2.1.0",
-            "NEAT_APPS_TEST_LATEST_TAGS": "\n".join(
-                [
-                    "develop=devsha1",
-                    "v2.1.0=tagsha1",
-                ]
-            ),
-        },
-    )
-
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert _installer_args(tmp_path) == "--minimum v2.1.0 tagsha1"
-    assert "https://core.test/v2.1.0/latest.tag" in _curl_log(tmp_path)
-
-
-def test_snap_manifest_tag_build_fails_without_matching_core_tag(tmp_path):
-    proc = _run_build(
-        tmp_path,
-        args=["--only-install-neat-core"],
-        env={
-            "GITHUB_REF_TYPE": "tag",
-            "GITHUB_REF_NAME": "v9.9.9",
-        },
-    )
-
-    assert proc.returncode != 0
-    assert "exact tag-snap NEAT core artifact" in proc.stderr
-    assert "using develop-latest" not in proc.stderr
 
 
 def test_core_installer_runs_from_deps_debs_scratch_dir(tmp_path):
@@ -826,6 +825,9 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert not (install_dir / "neat-apps-runtime").exists()
+    assert json.loads(
+        (install_dir / "deps/neat-core.json").read_text(encoding="utf-8")
+    ) == {"neat-core": {"ref": "develop", "spec": "core-sha"}}
     assert (tmp_path / "sima-cli-cwd.txt").read_text(encoding="utf-8").splitlines() == [
         str(package_dir / "deps" / "core"),
         str(package_dir / "deps" / "insight"),
@@ -833,11 +835,36 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     assert (tmp_path / "sima-cli-args.txt").read_text(
         encoding="utf-8"
     ).splitlines() == [
-        "neat install -d . -t minimal core",
+        "neat install -d . -t minimal core@develop:core-sha",
         "neat install -d . insight",
     ]
     assert not (package_dir / "deps").exists()
     assert f"  {install_dir}" in proc.stdout
+
+
+def test_vulcan_installer_rejects_missing_core_metadata_before_promotion(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "deps" / "neat-core.json").unlink()
+    install_dir = tmp_path / "installed" / "prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
+
+    assert proc.returncode != 0
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert not (tmp_path / "sima-cli-args.txt").exists()
+
+
+def test_vulcan_installer_rejects_mutable_core_metadata(tmp_path):
+    package_dir = tmp_path / "package"
+    _write_vulcan_runtime(package_dir, {"ref": "main", "spec": "latest"})
+
+    proc = _run_vulcan_installer(tmp_path, package_dir)
+
+    assert proc.returncode != 0
+    assert not (tmp_path / "sima-cli-args.txt").exists()
 
 
 def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
@@ -850,8 +877,6 @@ def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
     archive.write_text("archive\n", encoding="utf-8")
     install_script = package_dir / "install_vulcan_apps_package.sh"
     install_script.write_text("installer\n", encoding="utf-8")
-    legacy_metadata = package_dir / "neat-core.json"
-    legacy_metadata.write_text("{}\n", encoding="utf-8")
     unrelated = package_dir / "keep.txt"
     unrelated.write_text("keep\n", encoding="utf-8")
 
@@ -864,7 +889,8 @@ def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
     assert not extracted_dir.exists()
     assert not archive.exists()
     assert not install_script.exists()
-    assert not legacy_metadata.exists()
+    assert not (package_dir / "deps").exists()
+    assert (package_dir / "prebuilt-apps/deps/neat-core.json").is_file()
     assert unrelated.read_text(encoding="utf-8") == "keep\n"
 
 
@@ -883,22 +909,25 @@ def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
+    assert (install_dir / "deps/neat-core.json").is_file()
     assert not (tmp_path / "sima-cli-args.txt").exists()
     assert not (package_dir / "deps").exists()
     assert "Skipping Core and Insight dependency installation" in proc.stdout
 
 
-def test_vulcan_runtime_gate_uses_snap_core_without_customer_dependencies():
+def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "./build.sh --only-install-neat-core" in workflow
+    assert "artifact_path: neat-apps-*.tar.gz" in workflow
+    assert "tar -xOzf" in workflow
+    assert "prebuilt-apps/deps/neat-core.json" in workflow
+    assert "--neat-core-version" in workflow
     assert "NEAT_CORE_INSTALL_MODE=vulcan" in workflow
     assert "NEAT_APPS_SKIP_DEPENDENCIES=1" in workflow
 
 
-def test_vulcan_uses_one_core_context_for_build_and_runtime_tests():
+def test_vulcan_does_not_override_manifest_core_context():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
-    dependency_output = "needs.resolve-core-context.outputs.dependency_branch"
 
     assert "pull_request:\n    branches:\n      - main" in workflow
     assert (
@@ -906,12 +935,8 @@ def test_vulcan_uses_one_core_context_for_build_and_runtime_tests():
         "github.event.pull_request.head.repo.full_name == github.repository }}"
         in workflow
     )
-    assert "github.ref_type == 'tag'" in workflow
-    assert "github.ref_name == 'main'" in workflow
-    assert "startsWith(github.ref_name, 'release-')" in workflow
-    assert "github.base_ref == 'main'" in workflow
-    assert "&& 'main' || github.ref_name" in workflow
-    assert workflow.count(dependency_output) == 2
+    assert "resolve-core-context" not in workflow
+    assert "NEAT_APPS_DEPENDENCY_BRANCH" not in workflow
     assert (
         'NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}"'
         in workflow
@@ -967,7 +992,7 @@ def test_vulcan_installer_keeps_existing_runtime_when_insight_install_fails(tmp_
     assert (tmp_path / "sima-cli-args.txt").read_text(
         encoding="utf-8"
     ).splitlines() == [
-        "neat install -d . -t minimal core",
+        "neat install -d . -t minimal core@develop:core-sha",
         "neat install -d . insight",
     ]
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"

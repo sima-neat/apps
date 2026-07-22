@@ -12,6 +12,7 @@ CORE_INSTALL_DIR="${DEPS_DIR}/core"
 INSIGHT_INSTALL_DIR="${DEPS_DIR}/insight"
 DEPS_WORKSPACE_ACTIVE=0
 PACKAGE_DIR="$(pwd -P)"
+CORE_METADATA_PATH=""
 PACKAGE_EXTRACT_DIR=""
 PACKAGE_ARCHIVE=""
 
@@ -37,6 +38,32 @@ resolve_sima_cli_bin() {
     fi
   done
   return 1
+}
+
+extract_neat_core_target() {
+  python3 - "${CORE_METADATA_PATH}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    core = json.load(handle).get("neat-core")
+
+if not isinstance(core, dict):
+    raise SystemExit(1)
+
+ref = core.get("ref")
+spec = core.get("spec")
+if not isinstance(ref, str) or not isinstance(spec, str):
+    raise SystemExit(1)
+
+ref = ref.strip()
+spec = spec.strip()
+if not ref or not spec or spec == "latest":
+    raise SystemExit(1)
+
+print(ref)
+print(spec)
+PY
 }
 
 dependency_workspace_is_owned() {
@@ -124,9 +151,7 @@ cleanup_package_staging() {
   if [[ -n "${PACKAGE_ARCHIVE}" ]]; then
     rm -f "${PACKAGE_ARCHIVE}"
   fi
-  rm -f \
-    "${PACKAGE_DIR}/install_vulcan_apps_package.sh" \
-    "${PACKAGE_DIR}/neat-core.json"
+  rm -f "${PACKAGE_DIR}/install_vulcan_apps_package.sh"
 }
 
 promote_apps_runtime() {
@@ -231,6 +256,18 @@ fi
 
 locate_package_staging
 
+CORE_METADATA_PATH="${RUNTIME_SRC}/deps/neat-core.json"
+if [[ ! -f "${CORE_METADATA_PATH}" || -L "${CORE_METADATA_PATH}" ]]; then
+  echo "ERROR: Apps package is missing ${CORE_METADATA_PATH}." >&2
+  exit 1
+fi
+if ! CORE_TARGET="$(extract_neat_core_target)"; then
+  echo "ERROR: invalid Core dependency metadata: ${CORE_METADATA_PATH}." >&2
+  exit 1
+fi
+CORE_REF="$(printf '%s\n' "${CORE_TARGET}" | sed -n '1p')"
+CORE_SPEC="$(printf '%s\n' "${CORE_TARGET}" | sed -n '2p')"
+
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo
   echo "WARNING: Skipping Core and Insight dependency installation."
@@ -241,17 +278,19 @@ else
   }
 
   echo
-  echo "Installing the latest Core version from main:"
+  echo "Installing the Core selected by Apps:"
+  echo "  Ref        : ${CORE_REF}"
+  echo "  Spec       : ${CORE_SPEC}"
   trap cleanup_dependency_workspace EXIT
   prepare_dependency_workspace
   echo "  Scratch dir: ${CORE_INSTALL_DIR}"
   run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
     -d . \
     -t minimal \
-    core
+    "core@${CORE_REF}:${CORE_SPEC}"
 
   echo
-  echo "Installing the latest Insight version from main:"
+  echo "Installing Insight through sima-cli:"
   echo "  Scratch dir: ${INSIGHT_INSTALL_DIR}"
   run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
     -d . \

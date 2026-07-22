@@ -34,28 +34,10 @@ jobs:
     with:
       vulcan_env: ${{ vars.VULCAN_ENV || 'production' }}
 
-  resolve-core-context:
-    name: Resolve Core Context
-    runs-on: ubuntu-latest
-    outputs:
-      dependency_branch: ${{ steps.resolve.outputs.dependency_branch }}
-    steps:
-      - name: Select Core dependency branch
-        id: resolve
-        env:
-          DEPENDENCY_BRANCH: >-
-            ${{ (github.ref_type == 'tag' ||
-              github.ref_name == 'main' ||
-              startsWith(github.ref_name, 'release-') ||
-              github.base_ref == 'main') && 'main' || github.ref_name }}
-        run: echo "dependency_branch=${DEPENDENCY_BRANCH}" >> "${GITHUB_OUTPUT}"
-
   build:
     name: Build Apps on Vulcan
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    needs:
-      - resolve-core-context
-      - resolve-vulcan-config
+    needs: resolve-vulcan-config
     uses: sima-neat/.github/.github/workflows/vulcan-build.yml@main
     with:
       vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
@@ -93,7 +75,6 @@ jobs:
           -e GITHUB_REF_NAME="${{ github.ref_name }}" \
           -e GITHUB_REF_TYPE="${{ github.ref_type }}" \
           -e GITHUB_SHA="${{ github.sha }}" \
-          -e NEAT_APPS_DEPENDENCY_BRANCH="${{ needs.resolve-core-context.outputs.dependency_branch }}" \
           -e NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}" \
           -e NEAT_APPS_ARTIFACT_SHORT_SHA="${{ github.sha }}" \
           -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
@@ -203,7 +184,6 @@ jobs:
     name: Test Apps Runtime
     needs:
       - build
-      - resolve-core-context
       - resolve-vulcan-config
       - resolve-test-runner
     runs-on:
@@ -236,14 +216,26 @@ jobs:
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
 
-      - name: Install snap Core for Apps tests
+      - name: Install Apps Core for runtime tests
         run: |
+          set -euo pipefail
           artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
-          NEAT_APPS_DEPENDENCY_BRANCH="${{ needs.resolve-core-context.outputs.dependency_branch }}" \
-            NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
+          mapfile -t runtime_archives < <(
+            find _vulcan-test/artifacts -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
+              ! -name 'neat-apps-tests.tar.gz' | sort
+          )
+          if [[ "${#runtime_archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one runtime candidate, found ${#runtime_archives[@]}" >&2
+            exit 1
+          fi
+          core_target="$(
+            tar -xOzf "${runtime_archives[0]}" prebuilt-apps/deps/neat-core.json \
+              | python3 -c 'import json, sys; core = json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
+          )"
+          NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
             NEAT_CORE_INSTALL_MODE=vulcan \
             NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
-            ./build.sh --only-install-neat-core
+            ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
 
       - name: Install runtime candidate and overlay tests
         run: |

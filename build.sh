@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS_DIR="${NEAT_APPS_TEST_DEPS_DIR:-${ROOT_DIR}/deps}"
 APPS_MANIFEST="${DEPS_DIR}/manifest.json"
+NEAT_CORE_METADATA="${DEPS_DIR}/neat-core.json"
 NEAT_DEBS_DIR="${DEPS_DIR}/debs"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
 NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
@@ -150,7 +151,15 @@ package_distribution() {
   mkdir -p \
     "${stage_dir}/examples" \
     "${stage_dir}/assets" \
+    "${stage_dir}/deps" \
     "${test_stage_dir}/examples"
+
+  if [[ ! -f "${NEAT_CORE_METADATA}" ]]; then
+    echo "ERROR: missing resolved Core metadata: ${NEAT_CORE_METADATA}" >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+  cp "${NEAT_CORE_METADATA}" "${stage_dir}/deps/neat-core.json"
 
   while IFS= read -r cpp_dir; do
     local rel target_dir
@@ -395,11 +404,11 @@ current_dependency_branch() {
     printf '%s\n' "${NEAT_APPS_DEPENDENCY_BRANCH}"
     return 0
   fi
-  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
-    printf '%s\n' "${GITHUB_BASE_REF}"
+  if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+    printf '%s\n' "${GITHUB_HEAD_REF}"
     return 0
   fi
-  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+  if [[ "${GITHUB_REF_TYPE:-}" != "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
     printf '%s\n' "${GITHUB_REF_NAME}"
     return 0
   fi
@@ -420,28 +429,6 @@ current_dependency_tag() {
     return 0
   fi
   printf '\n'
-}
-
-protected_manifest_branch_context() {
-  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
-    printf '%s\n' "${GITHUB_BASE_REF}"
-    return 0
-  fi
-  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
-    printf '%s\n' "${GITHUB_REF_NAME}"
-    return 0
-  fi
-  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null
-    return 0
-  fi
-  echo ""
-}
-
-is_protected_manifest_context() {
-  local branch
-  branch="$(protected_manifest_branch_context)"
-  [[ "${branch}" == "main" || "${branch}" == "develop" ]]
 }
 
 core_branch_exists() {
@@ -704,15 +691,7 @@ validate_explicit_core_ref() {
 }
 
 resolve_empty_neat_core_branch() {
-  local branch tag
-  if [[ -z "${NEAT_APPS_DEPENDENCY_BRANCH:-}" ]]; then
-    tag="$(current_dependency_tag)"
-    if [[ -n "${tag}" ]]; then
-      printf '%s\n' "${tag}"
-      return 0
-    fi
-  fi
-
+  local branch
   branch="$(current_dependency_branch)"
 
   if [[ "${branch}" == "main" || "${branch}" == "develop" ]]; then
@@ -755,11 +734,6 @@ resolve_neat_core_target() {
   fi
 
   if [[ -n "${manifest_core}" ]]; then
-    if is_protected_manifest_context; then
-      echo "ERROR: ${APPS_MANIFEST} must keep neat-core as policy=snap on main/develop." >&2
-      return 1
-    fi
-
     if [[ "${manifest_core}" == *":"* ]]; then
       branch="${manifest_core%%:*}"
       version="${manifest_core#*:}"
@@ -775,6 +749,21 @@ resolve_neat_core_target() {
     printf '%s\n%s\n' "${branch}" "${version}"
     return 0
   fi
+}
+
+write_neat_core_metadata() {
+  local ref="$1"
+  local spec="$2"
+  mkdir -p "$(dirname "${NEAT_CORE_METADATA}")"
+  python3 - "${NEAT_CORE_METADATA}" "${ref}" "${spec}" <<'PY'
+import json
+import sys
+
+path, ref, spec = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"neat-core": {"ref": ref, "spec": spec}}, handle, indent=2)
+    handle.write("\n")
+PY
 }
 
 load_neat_core_target() {
@@ -832,7 +821,7 @@ run_sima_cli_core_install() {
 }
 
 ensure_neat_core() {
-  local branch exact_tag install_mode sima_cli_bin version vulcan_env
+  local branch install_mode sima_cli_bin version vulcan_env
   mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
   load_neat_core_target
   branch="${NEAT_CORE_TARGET_BRANCH}"
@@ -851,14 +840,10 @@ ensure_neat_core() {
 
   # Resolve "latest" to an exact tag before checking installed state.
   if [[ "${version}" == "latest" ]]; then
-    if ! version="$(resolve_latest_version "${branch}")"; then
-      exact_tag="$(current_dependency_tag)"
-      if [[ -n "${exact_tag}" && "${branch}" == "${exact_tag}" ]]; then
-        echo "ERROR: Failed to resolve exact tag-snap NEAT core artifact for tag '${branch}'." >&2
-      fi
-      exit 1
-    fi
+    version="$(resolve_latest_version "${branch}")" || exit 1
   fi
+  NEAT_CORE_TARGET_VERSION="${version}"
+  write_neat_core_metadata "${branch}" "${version}"
 
   local expected_tag="${branch}/${version}"
   if neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
@@ -954,13 +939,7 @@ if [[ "${INSTALL_CORE}" -eq 1 ]]; then
   NEAT_CORE_DISPLAY_BRANCH="${NEAT_CORE_TARGET_BRANCH}"
   NEAT_CORE_DISPLAY_VERSION="${NEAT_CORE_TARGET_VERSION}"
   if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
-    if ! NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"; then
-      exact_tag="$(current_dependency_tag)"
-      if [[ -n "${exact_tag}" && "${NEAT_CORE_DISPLAY_BRANCH}" == "${exact_tag}" ]]; then
-        echo "ERROR: Failed to resolve exact tag-snap NEAT core artifact for tag '${NEAT_CORE_DISPLAY_BRANCH}'." >&2
-      fi
-      exit 1
-    fi
+    NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")" || exit 1
   fi
 fi
 
