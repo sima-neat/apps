@@ -452,7 +452,13 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
 def encoded_decode_input_options(use_h265: bool):
     opt = pyneat.InputOptions()
     opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = pyneat.Format.H265 if use_h265 else pyneat.Format.H264
+    if use_h265:
+        opt.caps_override = (
+            "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
+            "alignment=(string)au"
+        )
+    else:
+        opt.format = pyneat.Format.H264
     if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
         opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
     return opt
@@ -461,7 +467,13 @@ def encoded_decode_input_options(use_h265: bool):
 def encoded_video_input_options(use_h265: bool):
     opt = pyneat.InputOptions()
     opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = pyneat.Format.H265 if use_h265 else pyneat.Format.H264
+    if use_h265:
+        opt.caps_override = (
+            "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
+            "alignment=(string)au"
+        )
+    else:
+        opt.format = pyneat.Format.H264
     if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
         opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
     elif hasattr(opt, "use_simaai_pool"):

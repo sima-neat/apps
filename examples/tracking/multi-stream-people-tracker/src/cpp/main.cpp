@@ -433,7 +433,12 @@ bool output_caps_enabled(
 simaai::neat::InputOptions encoded_decode_input_options(bool use_h265) {
   simaai::neat::InputOptions opt;
   opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = use_h265 ? simaai::neat::FormatTag::H265 : simaai::neat::FormatTag::H264;
+  if (use_h265) {
+    opt.caps_override = "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
+                        "alignment=(string)au";
+  } else {
+    opt.format = simaai::neat::FormatTag::H264;
+  }
   opt.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
   return opt;
 }
@@ -441,7 +446,12 @@ simaai::neat::InputOptions encoded_decode_input_options(bool use_h265) {
 simaai::neat::InputOptions encoded_video_input_options(bool use_h265) {
   simaai::neat::InputOptions opt;
   opt.payload_type = simaai::neat::PayloadType::Encoded;
-  opt.format = use_h265 ? simaai::neat::FormatTag::H265 : simaai::neat::FormatTag::H264;
+  if (use_h265) {
+    opt.caps_override = "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
+                        "alignment=(string)au";
+  } else {
+    opt.format = simaai::neat::FormatTag::H264;
+  }
   opt.memory_policy = simaai::neat::InputMemoryPolicy::SystemMemory;
   return opt;
 }

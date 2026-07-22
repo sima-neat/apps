@@ -206,6 +206,34 @@ class TestConfigLoading:
 
 
 class TestRuntimeOptions:
+    def test_h265_input_options_use_encoded_caps(self, monkeypatch):
+        import main
+
+        class FakeInputOptions:
+            caps_override = ""
+
+        fake_pyneat = SimpleNamespace(
+            InputOptions=FakeInputOptions,
+            PayloadType=SimpleNamespace(Encoded="encoded"),
+            Format=SimpleNamespace(H264="h264"),
+            InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
+        )
+        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+
+        decode = main.encoded_decode_input_options(True)
+        video = main.encoded_video_input_options(True)
+        h264_decode = main.encoded_decode_input_options(False)
+        h264_video = main.encoded_video_input_options(False)
+
+        expected = (
+            "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
+            "alignment=(string)au"
+        )
+        assert decode.caps_override == expected
+        assert video.caps_override == expected
+        assert h264_decode.format == "h264"
+        assert h264_video.format == "h264"
+
     def test_realtime_link_sets_inflight_limits(self, monkeypatch):
         import main
 
