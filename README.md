@@ -77,13 +77,14 @@ Before downloading a model, set `PLATFORM_VERSION` to the displayed `DISTRO_VERS
 The installed bundle does not contain CMake files or tests. Clone the repository
 to compile source or run the Apps test suite.
 
-## RTSP Streams
+## Streaming Sources
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host videos as
-RTSP sources. Install videos directly from the Insight catalog or through
-YouTube support, start the sources in the Insight Web UI, and copy their RTSP
-URLs into the example configuration. Ensure each URL is reachable from the
-target.
+streaming sources. Install videos directly from the Insight catalog or through
+YouTube support, start the required streams in the Insight Web UI, and copy
+their source URLs into the example configuration. Each example README identifies
+the required transport, including HTTP MJPEG where supported. Ensure each URL is
+reachable from the target.
 
 ## Development From Source
 

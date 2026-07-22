@@ -234,9 +234,9 @@ python3 -m pytest \
 - `NEAT_APPS_SKIP_MODEL_DOWNLOAD` (`1` skips model download before e2e, default: `0`)
 - `PYTHON_TEST_BIN` (optional Python interpreter override)
 
-## RTSP E2E Prerequisites
+## Streaming E2E Prerequisites
 
-RTSP e2e tests require live reachable RTSP streams at test time:
+Streaming e2e tests require live reachable sources at test time:
 
 - `single-stream-object-detector` (C++/Python)
 - `single-stream-instance-segmenter` (C++/Python)
@@ -245,7 +245,9 @@ RTSP e2e tests require live reachable RTSP streams at test time:
 
 Use [Insight](https://developer.sima.ai/software/tools/insight/) to install
 videos directly from its catalog or through YouTube support. Start the required
-sources and set their RTSP URLs in the corresponding test environment variables.
+streams and set their source URLs in the corresponding test environment
+variables. Strict single-stream coverage uses H.264 RTSP, MJPEG RTSP, and HTTP
+MJPEG URLs.
 
 ## Two-Stage Vulcan CI
 

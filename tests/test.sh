@@ -496,7 +496,7 @@ preflight_e2e_env() {
     echo "  [WARN] no codec stream env configured; stream e2e tests will skip."
     echo "  [WARN] stream e2e tests: single-stream-object-detector, single-stream-instance-segmenter,"
     echo "         multi-stream-object-detector, multi-stream-people-tracker."
-    echo "  [WARN] start the required RTSP sources in Insight before e2e:"
+    echo "  [WARN] start the required streams in Insight before e2e:"
     echo "         https://developer.sima.ai/software/tools/insight/"
     echo "         export SIMANEAT_TEST_RTSP_H264_URL=<rtsp-h264-url>"
     echo "         export SIMANEAT_TEST_RTSP_H264_URLS=<rtsp-h264-url-0>,<rtsp-h264-url-1>"
