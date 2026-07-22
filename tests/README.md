@@ -239,10 +239,13 @@ python3 -m pytest \
 RTSP e2e tests require live reachable RTSP streams at test time:
 
 - `single-stream-object-detector` (C++/Python)
+- `single-stream-instance-segmenter` (C++/Python)
 - `multi-stream-object-detector` (C++/Python)
+- `multi-stream-people-tracker` (C++/Python)
 
-Any RTSP source works. If streams are host-served, use the host IP in the RTSP
-URLs instead of `127.0.0.1`.
+Use [Insight](https://developer.sima.ai/software/tools/insight/) to install
+videos directly from its catalog or through YouTube support. Start the required
+sources and set their RTSP URLs in the corresponding test environment variables.
 
 ## Two-Stage Vulcan CI
 

@@ -86,16 +86,11 @@ cd ..
 
 Set `model.path` in the selected config to the downloaded package. Relative paths resolve from the config file; absolute paths are also supported.
 
-## Prepare The RTSP Sources
+## Prepare Insight
 
-For quick RTSP sources, install `tool-mediasources`:
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through YouTube support, start one source per configured stream, and copy each RTSP URL into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
-```bash
-sima-cli install gh:sima-ai/tool-mediasources
-./mediasrc.sh <video-dir>
-```
-
-Prepare one reachable URL per configured stream. Verify the files or publishers before starting the application:
+Verify each source before starting the application:
 
 ```bash
 ffprobe -v error \

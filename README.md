@@ -79,16 +79,11 @@ to compile source or run the Apps test suite.
 
 ## RTSP Streams
 
-For local RTSP sources, use
-[`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources):
-
-```bash
-sima-cli install gh:sima-ai/tool-mediasources
-./mediasrc.sh <video-dir>
-```
-
-If a board consumes host-streamed RTSP sources, use the host IP in the RTSP URL
-instead of `127.0.0.1`.
+[Insight](https://developer.sima.ai/software/tools/insight/) can host videos as
+RTSP sources. Install videos directly from the Insight catalog or through
+YouTube support, start the sources in the Insight Web UI, and copy their RTSP
+URLs into the example configuration. Ensure each URL is reachable from the
+target.
 
 ## Development From Source
 
