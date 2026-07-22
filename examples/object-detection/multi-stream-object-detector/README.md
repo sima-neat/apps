@@ -65,7 +65,7 @@ Set `model.path` in the config to the downloaded package.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start each source and copy its RTSP URL into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure
 

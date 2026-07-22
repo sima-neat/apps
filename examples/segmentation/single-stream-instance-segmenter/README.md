@@ -66,7 +66,7 @@ Set `model.path` in the config to the downloaded package.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render segmentation metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start a source and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.type`, `source.codec`, and `source.url` to match the selected transport. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure
 
