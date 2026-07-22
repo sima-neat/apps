@@ -113,11 +113,13 @@ The C++ binary takes the config path as a positional argument:
 ```
 
 ### Python
+The Python script takes the config path as a positional argument:
+
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/segmentation/fastsam-multistream/src/python/requirements.txt
 python3 examples/segmentation/fastsam-multistream/src/python/main.py \
-  --config examples/segmentation/fastsam-multistream/src/common/config.yaml
+  examples/segmentation/fastsam-multistream/src/common/config.yaml
 ```
 
 Stop with `Ctrl+C`, or set `runtime.frames` for a fixed-length run.
