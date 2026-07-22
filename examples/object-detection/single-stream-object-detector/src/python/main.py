@@ -52,6 +52,8 @@ class PipelineRuntime:
     model: object
     graph: object
     run: object
+    video_graph: object
+    video_run: object
     metadata_sender: object
     labels: list[str]
     frame_w: int
@@ -545,6 +547,36 @@ def make_model(cfg: AppConfig, frame_w: int, frame_h: int):
     return pyneat.Model(cfg.model_path, opt)
 
 
+def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
+    input_options = pyneat.InputOptions()
+    input_options.payload_type = pyneat.PayloadType.Image
+    input_options.format = pyneat.Format.RGB
+    input_options.width = width
+    input_options.height = height
+    input_options.depth = 3
+    input_options.fps_n = fps
+    input_options.fps_d = 1
+    input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
+
+    sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+    sender_options.host = cfg.insight_host
+    sender_options.channel = 0
+    sender_options.video_port_base = cfg.video_port
+    sender_options.encoder.bitrate_kbps = 1000
+
+    graph = pyneat.Graph("video")
+    graph.add(pyneat.nodes.input(input_options))
+    graph.add(pyneat.groups.video_sender(sender_options))
+
+    seed = pyneat.Tensor.from_numpy(
+        np.zeros((height, width, 3), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
+    return graph, graph.build([seed]), sender_options.video_port
+
+
 def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     frame_w, frame_h, fps = resolve_source_geometry(cfg)
     if fps <= 0:
@@ -556,20 +588,10 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     labels = load_labels(cfg.labels_path)
 
     source = make_source_graph(cfg, fps, frame_w, frame_h)
-    save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
-    outputs = ["video", "model"]
-    if save_debug_frames:
-        outputs.append("debug_frame")
-    branch = pyneat.graphs.branch("source", outputs)
+    branch = pyneat.graphs.branch("source", ["frame", "model"])
 
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
-    video_options.host = cfg.insight_host
-    video_options.channel = 0
-    video_options.video_port_base = cfg.video_port
-    video_options.encoder.bitrate_kbps = 1000
-
-    video_graph = pyneat.Graph("video")
-    video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
+    frame_graph = pyneat.Graph("frame")
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
@@ -577,25 +599,17 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     detections_graph = pyneat.Graph("detections")
     detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
 
+    joined = pyneat.graphs.combine(
+        ["frame", "detections"], "detector_output", pyneat.CombinePolicy.ByFrame
+    )
+
     graph = pyneat.Graph()
-    live_link_options = pyneat.GraphLinkOptions()
-    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)
-    graph.connect(branch, video_graph, live_link_options)
-    if save_debug_frames:
-        graph.connect(branch, model_graph)
-    else:
-        graph.connect(branch, model_graph, live_link_options)
+    graph.connect(branch, frame_graph)
+    graph.connect(branch, model_graph)
     graph.connect(model_graph, detections_graph)
-    if save_debug_frames:
-        frames = pyneat.Graph("debug_frame")
-        frames.add(pyneat.nodes.output("debug_frame", pyneat.OutputOptions.every_frame(4)))
-        debug_join = pyneat.graphs.combine(
-            ["debug_frame", "detections"], "debug_output", pyneat.CombinePolicy.ByPts
-        )
-        graph.connect(branch, frames)
-        graph.connect(frames, debug_join)
-        graph.connect(detections_graph, debug_join)
+    graph.connect(frame_graph, joined)
+    graph.connect(detections_graph, joined)
     if cfg.profile:
         print(f"Backend:\n{graph.describe_backend()}")
 
@@ -606,6 +620,8 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     run = graph.build(run_options)
 
+    video_graph, video_run, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
+
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
     metadata_options.channel = 0
@@ -615,18 +631,20 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     print(
         f"source={cfg.source_url} type={cfg.source_type} codec={cfg.source_codec} "
         f"stream={frame_w}x{frame_h}@{fps} "
-        f"insight={cfg.insight_host} video={video_options.video_port} "
+        f"insight={cfg.insight_host} video={video_port} "
         f"metadata={metadata_sender.metadata_port()} channel=0"
     )
     return PipelineRuntime(
         model=model,
         graph=graph,
         run=run,
+        video_graph=video_graph,
+        video_run=video_run,
         metadata_sender=metadata_sender,
         labels=labels,
         frame_w=frame_w,
         frame_h=frame_h,
-        video_port=video_options.video_port,
+        video_port=video_port,
     )
 
 
@@ -692,6 +710,33 @@ def tensor_bgr_from_decoded(tensor):
     return np.ascontiguousarray(frame)
 
 
+def find_field(sample, label: str):
+    if getattr(sample, "stream_label", "") == label:
+        return sample
+    for field in getattr(sample, "fields", []):
+        found = find_field(field, label)
+        if found is not None:
+            return found
+    return None
+
+
+def joined_field(sample, label: str, bundle_index: int):
+    field = find_field(sample, label)
+    fields = list(getattr(sample, "fields", []))
+    if field is not None:
+        return field
+    if getattr(sample, "kind", None) == pyneat.SampleKind.Bundle and len(fields) > bundle_index:
+        return fields[bundle_index]
+    raise RuntimeError(f"joined output missing {label} field")
+
+
+def frame_tensor_from_sample(sample):
+    tensor = first_tensor_from_sample(joined_field(sample, "frame", 0))
+    if tensor is None:
+        raise RuntimeError("joined frame field has no tensor")
+    return tensor
+
+
 def draw_boxes(frame, boxes: list[dict], min_score: float) -> None:
     for box in boxes:
         score = float(box["score"])
@@ -716,28 +761,41 @@ def draw_boxes(frame, boxes: list[dict], min_score: float) -> None:
         )
 
 
-def maybe_save_debug_frame(cfg: AppConfig, processed: int, sample, boxes: list[dict]) -> None:
+def push_video(runtime: PipelineRuntime, sample, frame_bgr) -> None:
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    tensor = pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(rgb),
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
+    video_sample = pyneat.make_tensor_sample("", tensor)
+    video_sample.pts_ns = sample.pts_ns
+    video_sample.dts_ns = sample.dts_ns
+    video_sample.duration_ns = sample.duration_ns
+    video_sample.frame_id = sample.frame_id
+    video_sample.stream_id = sample.stream_id
+    if not runtime.video_run.push([video_sample]):
+        raise RuntimeError("Insight video push failed")
+
+
+def maybe_save_debug_frame(cfg: AppConfig, processed: int, frame, boxes: list[dict]) -> None:
     if not cfg.save_dir or cfg.save_every <= 0 or processed % cfg.save_every != 0:
         return
 
-    frame_tensor = first_tensor_from_sample(sample)
-    if frame_tensor is None:
-        return
-
-    frame = tensor_bgr_from_decoded(frame_tensor)
-    draw_boxes(frame, boxes, cfg.min_score)
+    annotated = frame.copy()
+    draw_boxes(annotated, boxes, cfg.min_score)
     out_path = Path(cfg.save_dir) / f"frame_{processed}.jpg"
-    if not cv2.imwrite(str(out_path), frame):
+    if not cv2.imwrite(str(out_path), annotated):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
-    output_name = "debug_output" if cfg.save_dir and cfg.save_every > 0 else "detections"
     processed = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
-        detection_sample = runtime.run.pull(output_name, 20000)
+        detection_sample = runtime.run.pull("detector_output", 20000)
         pull_end = time_ms()
         if detection_sample is None:
             print("[warn] timed out waiting for detections", file=sys.stderr)
@@ -746,12 +804,15 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         payload = extract_bbox_payload(detection_sample)
         boxes = parse_boxes_strict(payload, runtime.frame_w, runtime.frame_h, cfg.max_detections)
 
+        frame = tensor_bgr_from_decoded(frame_tensor_from_sample(detection_sample))
+        push_video(runtime, detection_sample, frame)
+
         metadata_start = time_ms()
         send_metadata(runtime, detection_sample, boxes)
         metadata_end = time_ms()
 
         processed += 1
-        maybe_save_debug_frame(cfg, processed, detection_sample, boxes)
+        maybe_save_debug_frame(cfg, processed, frame, boxes)
         profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
 
     profile.flush()
@@ -779,6 +840,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             run_pipeline(runtime, cfg)
         finally:
+            runtime.video_run.close()
             runtime.run.close()
         return 0
     except KeyboardInterrupt:

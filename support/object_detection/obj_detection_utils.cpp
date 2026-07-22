@@ -146,6 +146,11 @@ std::vector<Box> parse_boxes_strict(const std::vector<uint8_t>& bytes, int img_w
 
 void parse_boxes_strict_into(const std::vector<uint8_t>& bytes, int img_w, int img_h,
                              int expected_topk, bool debug, std::vector<Box>& out) {
+  parse_boxes_strict_into(std::span<const uint8_t>(bytes), img_w, img_h, expected_topk, debug, out);
+}
+
+void parse_boxes_strict_into(std::span<const uint8_t> bytes, int img_w, int img_h,
+                             int expected_topk, bool debug, std::vector<Box>& out) {
   require(bytes.size() >= 4, "bbox buffer too small");
   uint32_t header = 0;
   std::memcpy(&header, bytes.data(), sizeof(header));
