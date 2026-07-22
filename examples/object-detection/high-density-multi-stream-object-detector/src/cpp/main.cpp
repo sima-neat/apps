@@ -75,6 +75,7 @@ struct AppConfig {
   std::string decode_type = "yolo26";
   fs::path labels_path;
   std::vector<std::string> rtsp_urls;
+  bool use_h265 = false;
   int workers = 1;
   int queue_depth = kDefaultQueueDepth;
   int internal_queue_depth = kDefaultInternalQueueDepth;
@@ -103,18 +104,38 @@ struct AppConfig {
   bool video_enabled = true;
 };
 
-void apply_h264_caps(simaai::neat::nodes::groups::RtspDecodedInputOptions& opt, int width,
-                     int height, int fps, int& width_out, int& height_out, int& fps_out) {
+bool parse_use_h265(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (value == "h264" || value == "avc" || value == "h.264")
+    return false;
+  if (value == "h265" || value == "hevc" || value == "h.265")
+    return true;
+  throw std::runtime_error("input.codec must be h264/avc or h265/hevc");
+}
+
+void apply_source_caps(simaai::neat::nodes::groups::RtspDecodedInputOptions& opt, bool use_h265,
+                       int width, int height, int fps, int& width_out, int& height_out,
+                       int& fps_out) {
   if (width > 0 && height > 0) {
-    opt.fallback_h264_width = width;
-    opt.fallback_h264_height = height;
+    if (use_h265) {
+      opt.dec_width = width;
+      opt.dec_height = height;
+    } else {
+      opt.fallback_h264_width = width;
+      opt.fallback_h264_height = height;
+    }
     opt.output_caps.width = width;
     opt.output_caps.height = height;
     width_out = width;
     height_out = height;
   }
   if (fps > 0) {
-    opt.fallback_h264_fps = fps;
+    if (use_h265) {
+      opt.source_fps = fps;
+    } else {
+      opt.fallback_h264_fps = fps;
+    }
     opt.output_caps.fps = fps;
     fps_out = fps;
   }
@@ -477,6 +498,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.decode_type = raw.string_or("model.decode_type", "yolo26");
   cfg.labels_path = raw.string_or("model.labels", "coco_label.txt");
   cfg.rtsp_urls = parse_streams(config_path);
+  cfg.use_h265 = parse_use_h265(raw.string_or("input.codec", "h264"));
   cfg.tcp = raw.bool_or("input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
   cfg.decoder_buffers = raw.int_or("input.decoder_buffers", kDefaultDecoderBuffers);
@@ -795,9 +817,12 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
       cfg.decoder_tuning == "low-memory" || cfg.decoder_tuning == "throughput-low-latency";
   opt.auto_caps_from_stream = !cfg.skip_rtsp_probe;
   opt.num_buffers = cfg.decoder_buffers;
-  apply_h264_caps(opt, probe.width, probe.height, probe.fps, width_out, height_out, fps_out);
-  apply_h264_caps(opt, cfg.input_width, cfg.input_height, cfg.input_fps, width_out, height_out,
-                  fps_out);
+  opt.codec = cfg.use_h265 ? simaai::neat::nodes::groups::RtspCodec::H265
+                           : simaai::neat::nodes::groups::RtspCodec::H264;
+  apply_source_caps(opt, cfg.use_h265, probe.width, probe.height, probe.fps, width_out, height_out,
+                    fps_out);
+  apply_source_caps(opt, cfg.use_h265, cfg.input_width, cfg.input_height, cfg.input_fps, width_out,
+                    height_out, fps_out);
   opt.output_caps.enable = true;
   opt.output_caps.format = simaai::neat::FormatTag::NV12;
   opt.output_caps.memory = simaai::neat::CapsMemory::Any;
@@ -808,35 +833,44 @@ simaai::neat::Graph
 make_rtsp_h264_input(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::nodes::groups::RtspEncodedInputOptions encoded;
   encoded.url = opt.url;
-  encoded.codec = simaai::neat::nodes::groups::RtspCodec::H264;
+  encoded.codec = opt.codec;
   encoded.latency_ms = opt.latency_ms;
   encoded.tcp = opt.tcp;
   encoded.drop_on_latency = opt.drop_on_latency;
   encoded.buffer_mode = opt.buffer_mode;
   encoded.insert_queue = opt.insert_queue;
   encoded.sync_mode = opt.sync_mode;
-  encoded.h264_payload_type = opt.payload_type;
-  encoded.h264_parse_config_interval = opt.h264_parse_config_interval;
-  encoded.h264_fps = opt.h264_fps;
-  encoded.h264_width = opt.h264_width;
-  encoded.h264_height = opt.h264_height;
   encoded.auto_caps_from_stream = opt.auto_caps_from_stream;
-  encoded.fallback_h264_fps = opt.fallback_h264_fps;
-  encoded.fallback_h264_width = opt.fallback_h264_width;
-  encoded.fallback_h264_height = opt.fallback_h264_height;
+  if (opt.codec == simaai::neat::nodes::groups::RtspCodec::H265) {
+    encoded.h265_payload_type = opt.payload_type;
+    encoded.source_fps = opt.source_fps;
+  } else {
+    encoded.h264_payload_type = opt.payload_type;
+    encoded.h264_parse_config_interval = opt.h264_parse_config_interval;
+    encoded.h264_fps = opt.h264_fps;
+    encoded.h264_width = opt.h264_width;
+    encoded.h264_height = opt.h264_height;
+    encoded.fallback_h264_fps = opt.fallback_h264_fps;
+    encoded.fallback_h264_width = opt.fallback_h264_width;
+    encoded.fallback_h264_height = opt.fallback_h264_height;
+  }
   return simaai::neat::nodes::groups::RtspEncodedInput(encoded);
 }
 
 simaai::neat::Graph
 make_h264_decoder(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
                   int decoder_buffers) {
-  const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
-  const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
-  const int dec_fps = (opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps;
+  const bool use_h265 = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265;
+  const int dec_w =
+      use_h265 ? opt.dec_width : ((opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width);
+  const int dec_h = use_h265 ? opt.dec_height
+                             : ((opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height);
+  const int dec_fps =
+      use_h265 ? opt.source_fps : ((opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps);
 
   simaai::neat::Graph graph("h264_decoder");
   simaai::neat::SimaDecodeOptions decode;
-  decode.type = simaai::neat::SimaDecodeType::H264;
+  decode.type = use_h265 ? simaai::neat::SimaDecodeType::H265 : simaai::neat::SimaDecodeType::H264;
   decode.sima_allocator_type = opt.sima_allocator_type;
   decode.out_format = simaai::neat::FormatTag::NV12;
   decode.decoder_name = opt.decoder_name;
@@ -876,7 +910,9 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg) {
 
 simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConfig& cfg,
                                                                    const SourceRuntime& source) {
-  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
+  auto video_options =
+      cfg.use_h265 ? simaai::neat::nodes::groups::VideoSenderOptions::H265RtpUdpFromEncoded()
+                   : simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
   video_options.host = cfg.insight_host;
   video_options.channel = source.index;
   video_options.video_port_base = cfg.video_port_base;
@@ -957,7 +993,7 @@ void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& 
 
   // Keep the encoded RTSP producer explicit in the public topology. Core
   // lowers this fan-out internally: the decoder branch remains fused with the
-  // shared detector, while VideoSender consumes the same read-only H.264 AU
+  // shared detector, while VideoSender consumes the same read-only encoded AU
   // before the decoder. This keeps video delivery off the application pull
   // path and avoids retaining decoded EV buffers.
   auto rtsp = make_rtsp_h264_input(source.source_options);

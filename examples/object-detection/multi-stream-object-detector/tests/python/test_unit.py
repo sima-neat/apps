@@ -25,11 +25,13 @@ pytestmark = pytest.mark.unit
 def write_config(
     tmp_path: Path,
     streams: list[str],
+    codec: str | None = None,
     max_inflight_per_stream: int | None = None,
     max_inflight_total: int | None = None,
 ) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
     inference = []
+    input_config = ["input:", f"  codec: {codec}"] if codec else []
     if max_inflight_per_stream is not None or max_inflight_total is not None:
         inference.append("inference:")
         if max_inflight_per_stream is not None:
@@ -44,6 +46,7 @@ def write_config(
                 "  path: models/yolo26m-det-int8-b1.tar.gz",
                 "streams:",
                 stream_lines,
+                *input_config,
                 *inference,
                 "output:",
                 "  insight:",
@@ -104,6 +107,14 @@ class TestConfigLoading:
         assert cfg.warmup_frames == 30
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
+
+    def test_load_app_config_accepts_hevc(self, tmp_path: Path):
+        from main import load_app_config
+
+        cfg = load_app_config(
+            write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], codec="hevc")
+        )
+        assert cfg.use_h265
 
     def test_load_app_config_accepts_custom_inflight_limits(self, tmp_path: Path):
         from main import load_app_config

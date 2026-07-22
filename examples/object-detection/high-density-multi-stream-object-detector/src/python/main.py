@@ -39,6 +39,7 @@ class AppConfig:
     model_path: str
     labels_path: Path
     rtsp_urls: list[str]
+    use_h265: bool = False
     decode_type: str = "yolo26"
     workers: int = 1
     queue_depth: int = DEFAULT_QUEUE_DEPTH
@@ -296,6 +297,15 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return value
 
 
+def parse_use_h265(value: str) -> bool:
+    lowered = value.lower()
+    if lowered in {"h264", "avc", "h.264"}:
+        return False
+    if lowered in {"h265", "hevc", "h.265"}:
+        return True
+    raise ValueError("input.codec must be h264/avc or h265/hevc")
+
+
 def parse_streams(raw: dict) -> list[str]:
     streams = raw.get("streams")
     if not isinstance(streams, list) or not streams:
@@ -490,6 +500,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         decode_type=normalize_box_decode_type(string_or(model, "decode_type", "yolo26")),
         labels_path=Path(labels_path_value).expanduser(),
         rtsp_urls=rtsp_urls,
+        use_h265=parse_use_h265(string_or(input_cfg, "codec", "h264")),
         workers=int_or(inference, "workers", 1),
         queue_depth=queue_depth,
         internal_queue_depth=int_or(
@@ -813,19 +824,28 @@ def graph_realtime_link(
     return link
 
 
-def apply_h264_caps(opt, width: int, height: int, fps: int) -> tuple[int, int, int]:
+def apply_source_caps(
+    opt, use_h265: bool, width: int, height: int, fps: int
+) -> tuple[int, int, int]:
     width_out = 0
     height_out = 0
     fps_out = 0
     if width > 0 and height > 0:
-        opt.fallback_h264_width = width
-        opt.fallback_h264_height = height
+        if use_h265:
+            opt.dec_width = width
+            opt.dec_height = height
+        else:
+            opt.fallback_h264_width = width
+            opt.fallback_h264_height = height
         opt.output_caps.width = width
         opt.output_caps.height = height
         width_out = width
         height_out = height
     if fps > 0:
-        opt.fallback_h264_fps = fps
+        if use_h265:
+            opt.source_fps = fps
+        else:
+            opt.fallback_h264_fps = fps
         opt.output_caps.fps = fps
         fps_out = fps
     return width_out, height_out, fps_out
@@ -871,6 +891,7 @@ def make_source_options(
     opt.decoder_next_element = "CVU"
     opt.auto_caps_from_stream = not cfg.skip_rtsp_probe
     opt.num_buffers = cfg.decoder_buffers
+    opt.codec = pyneat.RtspCodec.H265 if cfg.use_h265 else pyneat.RtspCodec.H264
 
     opt.output_caps.enable = True
     opt.output_caps.format = pyneat.Format.NV12
@@ -879,12 +900,16 @@ def make_source_options(
     if not cfg.skip_rtsp_probe:
         if width is None or height is None or fps is None:
             width, height, fps = probe_rtsp(url)
-        w, h, f = apply_h264_caps(opt, int(width or 0), int(height or 0), int(fps or 0))
+        w, h, f = apply_source_caps(
+            opt, cfg.use_h265, int(width or 0), int(height or 0), int(fps or 0)
+        )
         width_out = w or width_out
         height_out = h or height_out
         fps_out = f or fps_out
 
-    w, h, f = apply_h264_caps(opt, cfg.input_width, cfg.input_height, cfg.input_fps)
+    w, h, f = apply_source_caps(
+        opt, cfg.use_h265, cfg.input_width, cfg.input_height, cfg.input_fps
+    )
     width_out = w or width_out
     height_out = h or height_out
     fps_out = f or fps_out
@@ -895,22 +920,26 @@ def make_source_options(
 def make_rtsp_h264_input(opt):
     encoded = pyneat.RtspEncodedInputOptions()
     encoded.url = opt.url
-    encoded.codec = pyneat.RtspCodec.H264
+    encoded.codec = opt.codec
     encoded.latency_ms = opt.latency_ms
     encoded.tcp = opt.tcp
     encoded.drop_on_latency = opt.drop_on_latency
     encoded.buffer_mode = opt.buffer_mode
     encoded.insert_queue = opt.insert_queue
     encoded.sync_mode = opt.sync_mode
-    encoded.h264_payload_type = opt.payload_type
-    encoded.h264_parse_config_interval = opt.h264_parse_config_interval
-    encoded.h264_fps = opt.h264_fps
-    encoded.h264_width = opt.h264_width
-    encoded.h264_height = opt.h264_height
     encoded.auto_caps_from_stream = opt.auto_caps_from_stream
-    encoded.fallback_h264_fps = opt.fallback_h264_fps
-    encoded.fallback_h264_width = opt.fallback_h264_width
-    encoded.fallback_h264_height = opt.fallback_h264_height
+    if opt.codec == pyneat.RtspCodec.H265:
+        encoded.h265_payload_type = opt.payload_type
+        encoded.source_fps = opt.source_fps
+    else:
+        encoded.h264_payload_type = opt.payload_type
+        encoded.h264_parse_config_interval = opt.h264_parse_config_interval
+        encoded.h264_fps = opt.h264_fps
+        encoded.h264_width = opt.h264_width
+        encoded.h264_height = opt.h264_height
+        encoded.fallback_h264_fps = opt.fallback_h264_fps
+        encoded.fallback_h264_width = opt.fallback_h264_width
+        encoded.fallback_h264_height = opt.fallback_h264_height
     return pyneat.groups.rtsp_encoded_input(encoded)
 
 
@@ -921,12 +950,19 @@ def append_h264_decoder(
     decoder_input_buffers: int,
     decoder_tuning: str,
 ) -> None:
-    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
-    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+    use_h265 = opt.codec == pyneat.RtspCodec.H265
+    dec_w = opt.dec_width if use_h265 else (
+        opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
+    )
+    dec_h = opt.dec_height if use_h265 else (
+        opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
+    )
+    dec_fps = opt.source_fps if use_h265 else (
+        opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+    )
 
     decode = pyneat.SimaDecodeOptions()
-    decode.type = pyneat.SimaDecodeType.H264
+    decode.type = pyneat.SimaDecodeType.H265 if use_h265 else pyneat.SimaDecodeType.H264
     decode.sima_allocator_type = opt.sima_allocator_type
     decode.out_format = pyneat.Format.NV12
     decode.decoder_name = opt.decoder_name
@@ -985,7 +1021,11 @@ def make_model(cfg: AppConfig):
 
 
 def make_video_options(cfg: AppConfig, source: SourceRuntime):
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+    video_options = (
+        pyneat.VideoSenderOptions.h265_rtp_udp_from_encoded()
+        if cfg.use_h265
+        else pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+    )
     video_options.host = cfg.insight_host
     video_options.channel = source.index
     video_options.video_port_base = cfg.video_port_base
@@ -1081,7 +1121,7 @@ def connect_source_graph(
     )
 
     # Keep the encoded producer explicit. Core internally fuses this ordinary
-    # fan-out so VideoSender consumes each read-only H.264 AU before decoding,
+    # fan-out so VideoSender consumes each read-only encoded AU before decoding,
     # without retaining decoded EV buffers in the application.
     rtsp = make_rtsp_h264_input(source.source_options)
     decoder = make_h264_decoder(

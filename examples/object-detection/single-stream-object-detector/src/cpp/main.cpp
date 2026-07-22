@@ -47,7 +47,7 @@ namespace fs = std::filesystem;
 namespace {
 
 enum class SourceType { Rtsp, Http };
-enum class SourceCodec { H264, Mjpeg };
+enum class SourceCodec { H264, H265, Mjpeg };
 
 struct AppConfig {
   std::string model_path;
@@ -150,13 +150,16 @@ SourceType parse_source_type(const std::string& value) {
 
 SourceCodec parse_source_codec(const std::string& value) {
   const std::string lowered = lower_copy(value);
-  if (lowered == "h264" || lowered == "h.264") {
+  if (lowered == "h264" || lowered == "avc" || lowered == "h.264") {
     return SourceCodec::H264;
+  }
+  if (lowered == "h265" || lowered == "hevc" || lowered == "h.265") {
+    return SourceCodec::H265;
   }
   if (lowered == "mjpeg" || lowered == "jpeg") {
     return SourceCodec::Mjpeg;
   }
-  throw std::runtime_error("source.codec must be h264 or mjpeg");
+  throw std::runtime_error("source.codec must be h264/avc, h265/hevc, or mjpeg");
 }
 
 const char* source_type_name(SourceType value) {
@@ -164,7 +167,9 @@ const char* source_type_name(SourceType value) {
 }
 
 const char* source_codec_name(SourceCodec value) {
-  return value == SourceCodec::H264 ? "h264" : "mjpeg";
+  if (value == SourceCodec::H264)
+    return "h264";
+  return value == SourceCodec::H265 ? "h265" : "mjpeg";
 }
 
 CliOptions parse_args(int argc, char** argv) {
@@ -459,11 +464,17 @@ make_rtsp_source_options(const AppConfig& cfg, const SourceGeometry& geometry) {
   opt.auto_caps_from_stream = true;
   opt.source_fps = geometry.fps;
   opt.codec = cfg.source_codec == SourceCodec::H264 ? simaai::neat::nodes::groups::RtspCodec::H264
-                                                    : simaai::neat::nodes::groups::RtspCodec::MJPEG;
+              : cfg.source_codec == SourceCodec::H265
+                  ? simaai::neat::nodes::groups::RtspCodec::H265
+                  : simaai::neat::nodes::groups::RtspCodec::MJPEG;
   if (cfg.source_codec == SourceCodec::H264) {
     opt.payload_type = 96;
     opt.fallback_h264_width = geometry.width;
     opt.fallback_h264_height = geometry.height;
+  } else if (cfg.source_codec == SourceCodec::H265) {
+    opt.payload_type = 96;
+    opt.dec_width = geometry.width;
+    opt.dec_height = geometry.height;
   } else {
     opt.mjpeg_payload_type = 26;
     opt.dec_width = geometry.width;

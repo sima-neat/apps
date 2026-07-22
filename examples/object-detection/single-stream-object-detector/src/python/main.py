@@ -184,11 +184,13 @@ def parse_source_type(value: str) -> str:
 
 def parse_source_codec(value: str) -> str:
     lowered = value.lower()
-    if lowered in {"h264", "h.264"}:
+    if lowered in {"h264", "avc", "h.264"}:
         return "h264"
+    if lowered in {"h265", "hevc", "h.265"}:
+        return "h265"
     if lowered in {"mjpeg", "jpeg"}:
         return "mjpeg"
-    raise ValueError("source.codec must be h264 or mjpeg")
+    raise ValueError("source.codec must be h264/avc, h265/hevc, or mjpeg")
 
 
 def validate_config(cfg: AppConfig) -> None:
@@ -436,12 +438,23 @@ def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
     opt.source_fps = fps
-    opt.codec = pyneat.RtspCodec.H264 if cfg.source_codec == "h264" else pyneat.RtspCodec.MJPEG
+    opt.codec = (
+        pyneat.RtspCodec.H264
+        if cfg.source_codec == "h264"
+        else pyneat.RtspCodec.H265
+        if cfg.source_codec == "h265"
+        else pyneat.RtspCodec.MJPEG
+    )
     if cfg.source_codec == "h264":
         opt.payload_type = 96
         opt.auto_caps_from_stream = True
         opt.fallback_h264_width = width
         opt.fallback_h264_height = height
+    elif cfg.source_codec == "h265":
+        opt.payload_type = 96
+        opt.auto_caps_from_stream = True
+        opt.dec_width = width
+        opt.dec_height = height
     else:
         opt.mjpeg_payload_type = 26
         opt.dec_width = width

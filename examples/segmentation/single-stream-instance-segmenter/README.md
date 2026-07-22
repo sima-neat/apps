@@ -14,7 +14,7 @@
 
 ## Concept
 
-This example ingests one RTSP H.264/MJPEG or HTTP MJPEG stream, runs YOLO26 instance segmentation, renders masks, and sends H.264 video plus segmentation metadata to Insight.
+This example ingests one RTSP H.264/H.265/MJPEG or HTTP MJPEG stream, runs YOLO26 instance segmentation, renders masks, and sends H.264 video plus segmentation metadata to Insight.
 
 ## Preview
 
@@ -23,7 +23,7 @@ This example ingests one RTSP H.264/MJPEG or HTTP MJPEG stream, runs YOLO26 inst
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- An RTSP H.264, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -66,7 +66,7 @@ Set `model.path` in the config to the downloaded package.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render segmentation metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.type`, `source.codec`, and `source.url` to match the selected transport. Use the host and UDP port ranges reported by `neat` for the output settings.
+In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output.
 
 ## Configure
 

@@ -399,6 +399,7 @@ bool test_validate_config_only_accepts_input_caps(const std::string& binary) {
   const fs::path config_path = write_config("test_validate_config_only_accepts_input_caps",
                                             model_header() + "streams:\n" + stream_entries(4) +
                                                 "input:\n"
+                                                "  codec: hevc\n"
                                                 "  tcp: true\n"
                                                 "  latency_ms: 100\n"
                                                 "  decoder_buffers: 8\n"

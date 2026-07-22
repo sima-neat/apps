@@ -21,12 +21,12 @@ It complements `multi-stream-object-detector`. That example demonstrates the gen
 Each RTSP source is depacketized once, then Core fuses two branches into the same source pipeline:
 
 ```text
-RTSP H.264
+RTSP H.264/H.265
   ├─ latest encoded edge ─> VideoSender ─> Insight video channel N
   └─ decode ─> shared YOLO26 detector ─> timestamped metadata ─> channel N
 ```
 
-The application expresses this fan-out with ordinary `Graph::connect()` and starts it with ordinary `Graph::build()`. Core fuses the eligible topology internally. `VideoSender` consumes the read-only H.264 access unit before the decoder, so the application does not open a second RTSP session, copy a decoded EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc. The UDP sender uses `async=false` so its sink cannot hold the shared live pipeline in `PAUSED` while waiting for preroll from every stream. The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can drop stale encoded work without blocking that stream's decoder branch.
+The application expresses this fan-out with ordinary `Graph::connect()` and starts it with ordinary `Graph::build()`. Core fuses the eligible topology internally. `VideoSender` consumes the read-only encoded access unit before the decoder, so the application does not open a second RTSP session, copy a decoded EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc. The UDP sender uses `async=false` so its sink cannot hold the shared live pipeline in `PAUSED` while waiting for preroll from every stream. The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can drop stale encoded work without blocking that stream's decoder branch.
 
 Detection metadata includes the source `rtp_timestamp` and is sent with nonblocking UDP. A compatible Insight receiver holds complete encoded RTP frames for 400 ms and matches metadata to that source timestamp before WebRTC forwarding. Keep one active viewer while validating metadata, as described below.
 
@@ -109,6 +109,8 @@ Choose one config under `src/common/` and edit:
 - `model.path`
 - every entry under `streams`
 - `output.insight.host`
+
+Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. The checked-in density profiles remain validated with H.264 sources.
 
 `inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 16- and 48-stream profiles use a total limit of eight; the 24-stream profile uses 24 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 

@@ -4,7 +4,7 @@ model:
 
 source:
   type: rtsp                 # rtsp or http.
-  codec: h264                # h264 or mjpeg.
+  codec: h264                # h264/avc, h265/hevc, or mjpeg.
   url: <rtsp-url-1>          # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
   rtsp_url: ""               # Legacy H.264 RTSP key. Used when source.url is empty.
   tcp: true                  # Use TCP for RTSP transport.
