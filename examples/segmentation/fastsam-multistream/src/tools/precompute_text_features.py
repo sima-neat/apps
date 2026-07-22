@@ -12,12 +12,20 @@ import yaml
 SRC_ROOT = Path(__file__).resolve().parents[1]
 SRC_PYTHON = SRC_ROOT / "python"
 sys.path.insert(0, str(SRC_PYTHON))
+import pyneat as neat
 import config
-import pipeline
 from clip import TextEncoder
 
 DEFAULT_CONFIG = SRC_ROOT / "common" / "config.yaml"
 
+def _build_run_options(queue_depth):
+    opt = neat.RunOptions()
+    opt.queue_depth = queue_depth
+    opt.overflow_policy = neat.OverflowPolicy.Block
+    opt.preset = neat.RunPreset.Balanced
+    opt.input_timeout_ms = 30000
+    opt.startup_preflight = True
+    return opt
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -36,7 +44,7 @@ def main():
     if not str(out).endswith(".npy"):
         out = str(out) + ".npy"
 
-    run_opt = pipeline.make_run_options(cfg.queue_depth)
+    run_opt = _build_run_options(cfg.queue_depth)
     print(f"[precompute] encoding prompt {cfg.text!r} via {cfg.clip_text_path}", flush=True)
     encoder = TextEncoder(cfg.clip_text_path, cfg.clip_consts_path, run_opt)
     try:
