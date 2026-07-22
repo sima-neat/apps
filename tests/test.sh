@@ -26,6 +26,8 @@ CONFIG_ENV_VARS=(
   SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS
   SIMANEAT_TEST_RTSP_H264_URL
   SIMANEAT_TEST_RTSP_H264_URLS
+  SIMANEAT_TEST_RTSP_H265_URL
+  SIMANEAT_TEST_RTSP_H265_URLS
   SIMANEAT_TEST_RTSP_MJPEG_URL
   SIMANEAT_TEST_RTSP_MJPEG_URLS
   SIMANEAT_TEST_HTTP_MJPEG_URL
@@ -103,6 +105,8 @@ Environment:
   SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS    Write command/stdout/stderr logs (1=yes, default: 1)
   SIMANEAT_TEST_RTSP_H264_URL       Single RTSP H.264 stream URL
   SIMANEAT_TEST_RTSP_H264_URLS      Comma-separated RTSP H.264 URLs
+  SIMANEAT_TEST_RTSP_H265_URL       Single RTSP H.265 stream URL
+  SIMANEAT_TEST_RTSP_H265_URLS      Comma-separated RTSP H.265 URLs
   SIMANEAT_TEST_RTSP_MJPEG_URL      Single RTSP MJPEG stream URL
   SIMANEAT_TEST_RTSP_MJPEG_URLS     Comma-separated RTSP MJPEG URLs
   SIMANEAT_TEST_HTTP_MJPEG_URL      Single HTTP MJPEG stream URL
@@ -213,6 +217,8 @@ resolve_test_runtime_env() {
   export SIMANEAT_APPS_TEST_TIMEOUT_MS="${SIMANEAT_APPS_TEST_TIMEOUT_MS:-180000}"
   export SIMANEAT_TEST_RTSP_H264_URL="${SIMANEAT_TEST_RTSP_H264_URL:-}"
   export SIMANEAT_TEST_RTSP_H264_URLS="${SIMANEAT_TEST_RTSP_H264_URLS:-}"
+  export SIMANEAT_TEST_RTSP_H265_URL="${SIMANEAT_TEST_RTSP_H265_URL:-}"
+  export SIMANEAT_TEST_RTSP_H265_URLS="${SIMANEAT_TEST_RTSP_H265_URLS:-}"
   export SIMANEAT_TEST_RTSP_MJPEG_URL="${SIMANEAT_TEST_RTSP_MJPEG_URL:-}"
   export SIMANEAT_TEST_RTSP_MJPEG_URLS="${SIMANEAT_TEST_RTSP_MJPEG_URLS:-}"
   export SIMANEAT_TEST_HTTP_MJPEG_URL="${SIMANEAT_TEST_HTTP_MJPEG_URL:-}"
@@ -379,6 +385,8 @@ preflight_e2e_env() {
   local skip_model_download_raw="${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}"
   local rtsp_h264_url="${SIMANEAT_TEST_RTSP_H264_URL:-}"
   local rtsp_h264_urls="${SIMANEAT_TEST_RTSP_H264_URLS:-}"
+  local rtsp_h265_url="${SIMANEAT_TEST_RTSP_H265_URL:-}"
+  local rtsp_h265_urls="${SIMANEAT_TEST_RTSP_H265_URLS:-}"
   local rtsp_mjpeg_url="${SIMANEAT_TEST_RTSP_MJPEG_URL:-}"
   local rtsp_mjpeg_urls="${SIMANEAT_TEST_RTSP_MJPEG_URLS:-}"
   local http_mjpeg_url="${SIMANEAT_TEST_HTTP_MJPEG_URL:-}"
@@ -412,6 +420,8 @@ preflight_e2e_env() {
   echo "  SIMANEAT_APPS_TEST_TIMEOUT_MS  : $(format_env_status "${SIMANEAT_APPS_TEST_TIMEOUT_MS:-}") -> ${timeout_raw}"
   echo "  SIMANEAT_TEST_RTSP_H264_URL    : $(format_env_status "${rtsp_h264_url}") -> $(format_env_value "${rtsp_h264_url}")"
   echo "  SIMANEAT_TEST_RTSP_H264_URLS   : $(format_env_status "${rtsp_h264_urls}") -> $(format_env_value "${rtsp_h264_urls}")"
+  echo "  SIMANEAT_TEST_RTSP_H265_URL    : $(format_env_status "${rtsp_h265_url}") -> $(format_env_value "${rtsp_h265_url}")"
+  echo "  SIMANEAT_TEST_RTSP_H265_URLS   : $(format_env_status "${rtsp_h265_urls}") -> $(format_env_value "${rtsp_h265_urls}")"
   echo "  SIMANEAT_TEST_RTSP_MJPEG_URL   : $(format_env_status "${rtsp_mjpeg_url}") -> $(format_env_value "${rtsp_mjpeg_url}")"
   echo "  SIMANEAT_TEST_RTSP_MJPEG_URLS  : $(format_env_status "${rtsp_mjpeg_urls}") -> $(format_env_value "${rtsp_mjpeg_urls}")"
   echo "  SIMANEAT_TEST_HTTP_MJPEG_URL   : $(format_env_status "${http_mjpeg_url}") -> $(format_env_value "${http_mjpeg_url}")"
@@ -491,7 +501,8 @@ preflight_e2e_env() {
       preflight_fail=1
     fi
   fi
-  if [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_mjpeg_url}" && \
+  if [[ -z "${rtsp_h264_url}" && -z "${rtsp_h264_urls}" && -z "${rtsp_h265_url}" && \
+        -z "${rtsp_h265_urls}" && -z "${rtsp_mjpeg_url}" && \
         -z "${rtsp_mjpeg_urls}" && -z "${http_mjpeg_url}" && -z "${http_mjpeg_urls}" ]]; then
     echo "  [WARN] no codec stream env configured; stream e2e tests will skip."
     echo "  [WARN] stream e2e tests: single-stream-object-detector, single-stream-instance-segmenter,"
@@ -500,13 +511,14 @@ preflight_e2e_env() {
     echo "         https://developer.sima.ai/software/tools/insight/"
     echo "         export SIMANEAT_TEST_RTSP_H264_URL=<rtsp-h264-url>"
     echo "         export SIMANEAT_TEST_RTSP_H264_URLS=<rtsp-h264-url-0>,<rtsp-h264-url-1>"
+    echo "         export SIMANEAT_TEST_RTSP_H265_URL=<rtsp-h265-url>"
+    echo "         export SIMANEAT_TEST_RTSP_H265_URLS=<rtsp-h265-url-0>,<rtsp-h265-url-1>"
     echo "         export SIMANEAT_TEST_RTSP_MJPEG_URL=<rtsp-mjpeg-url>"
     echo "         export SIMANEAT_TEST_HTTP_MJPEG_URL=<http-mjpeg-url>"
     if [[ "${strict}" == "1" ]]; then
       echo "  [FAIL] strict mode requires codec stream config."
       echo "         Local: cp tests/configs/.env.example tests/configs/.env.local and set stream URLs."
-      echo "         CI   : set SIMANEAT_TEST_RTSP_H264_URL, SIMANEAT_TEST_RTSP_H264_URLS,"
-      echo "                SIMANEAT_TEST_RTSP_MJPEG_URL, and SIMANEAT_TEST_HTTP_MJPEG_URL as needed."
+      echo "         CI   : set the H.264, H.265, and MJPEG stream variables required by the selected tests."
       preflight_fail=1
     fi
   else
@@ -515,6 +527,12 @@ preflight_e2e_env() {
     fi
     if [[ -z "${rtsp_h264_urls}" ]]; then
       echo "  [WARN] SIMANEAT_TEST_RTSP_H264_URLS is unset; multistream RTSP H.264 tests may skip."
+    fi
+    if [[ -z "${rtsp_h265_url}" ]]; then
+      echo "  [WARN] SIMANEAT_TEST_RTSP_H265_URL is unset; single-stream RTSP H.265 tests may skip."
+    fi
+    if [[ -z "${rtsp_h265_urls}" ]]; then
+      echo "  [WARN] SIMANEAT_TEST_RTSP_H265_URLS is unset; multistream RTSP H.265 tests may skip."
     fi
     if [[ -z "${rtsp_mjpeg_url}" ]]; then
       echo "  [WARN] SIMANEAT_TEST_RTSP_MJPEG_URL is unset; single-stream RTSP MJPEG tests may skip."

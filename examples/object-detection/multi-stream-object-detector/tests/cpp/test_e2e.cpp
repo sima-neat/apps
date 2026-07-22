@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
 
-  const std::vector<std::string> rtsp_urls = rtsp_h264_urls_from_env();
+  const std::vector<std::string> rtsp_urls = rtsp_h265_urls_from_env();
   if (rtsp_urls.size() < 2) {
     return skip_or_fail("need at least two RTSP URLs for multistream e2e");
   }
@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
   }
 
   const std::string output_dir = create_test_output_dir(
-      "multi-stream-object-detector", "test_multi_stream_insight_and_save_pipeline");
+      "multi-stream-object-detector", "test_multi_stream_h265_insight_and_save_pipeline");
   if (output_dir.empty()) {
     return 1;
   }
@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
   write_e2e_config("multi-stream-object-detector", config_path,
                    {{"model.path", model_path},
                     {"model.labels", labels_file.string()},
+                    {"input.codec", "h265"},
                     {"output.debug_dir", output_dir},
                     {"output.insight.host", kE2eInsightHost},
                     {"output.insight.video_port_base", std::to_string(video_port_base)},

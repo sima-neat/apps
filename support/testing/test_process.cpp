@@ -57,6 +57,16 @@ std::vector<std::string> rtsp_h264_urls_from_env() {
   return {};
 }
 
+std::vector<std::string> rtsp_h265_urls_from_env() {
+  if (const char* urls = env_or_null("SIMANEAT_TEST_RTSP_H265_URLS")) {
+    return split_csv(urls);
+  }
+  if (const char* url = env_or_null("SIMANEAT_TEST_RTSP_H265_URL")) {
+    return {url};
+  }
+  return {};
+}
+
 const char* env_or_skip(const char* key, const char* description) {
   const char* value = env_or_null(key);
   if (value)
