@@ -122,7 +122,7 @@ StreamRuntime build_stream(const AppConfig& cfg, int stream_index, const std::st
 }
 
 cv::Mat tensor_rgb_from_decoded(const neat::Tensor& tensor, int width, int height) {
-  const auto payload = tensor.copy_payload_bytes();
+  const auto payload = tensor.copy_nv12_contiguous();
   const std::size_t need = static_cast<std::size_t>(width) * height * 3 / 2;
   if (payload.size() < need) {
     throw std::runtime_error("decoded frame payload smaller than expected NV12 size");
