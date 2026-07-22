@@ -127,7 +127,7 @@ def _probe_rtsp(url):
 
 def _frame_rgb(tensor, width, height):
     need = width * height * 3 // 2
-    payload = tensor.copy_payload_bytes()
+    payload = tensor.contiguous().copy_payload_bytes()
     if len(payload) < need:
         raise RuntimeError("decoded frame payload smaller than expected NV12 size")
     nv12 = np.frombuffer(payload, np.uint8, count=need).reshape(height * 3 // 2, width)
