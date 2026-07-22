@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <csignal>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -96,7 +97,9 @@ int main(int argc, char** argv) {
       });
     }
 
-    // Run the detector round-robin over every stream until all are finished.
+    // Run the detector round-robin over every stream until all are finished. A processing
+    // error is stashed instead of thrown so the reader threads get joined before unwinding.
+    std::exception_ptr process_error;
     while (g_stop == 0) {
       bool did_work = false;
       bool all_done = true;
@@ -106,7 +109,13 @@ int main(int argc, char** argv) {
           continue;
         }
         all_done = false;
-        did_work |= stream.process(cfg, *fastsam, *image_encoder, text_features, label);
+        try {
+          did_work |= stream.process(cfg, *fastsam, *image_encoder, text_features, label);
+        } catch (...) {
+          process_error = std::current_exception();
+          g_stop = 1;
+          break;
+        }
       }
       if (all_done) { break; }
       if (!did_work) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
@@ -119,6 +128,7 @@ int main(int argc, char** argv) {
         source_thread.join();
       }
     }
+    if (process_error) { std::rethrow_exception(process_error); }
 
     // Flush profiling and close every stream.
     for (auto& s : streams) {
