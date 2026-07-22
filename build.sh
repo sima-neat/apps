@@ -151,7 +151,15 @@ package_distribution() {
   mkdir -p \
     "${stage_dir}/examples" \
     "${stage_dir}/assets" \
+    "${stage_dir}/deps" \
     "${test_stage_dir}/examples"
+
+  if [[ ! -f "${NEAT_CORE_METADATA}" ]]; then
+    echo "ERROR: missing resolved Core metadata: ${NEAT_CORE_METADATA}" >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+  cp "${NEAT_CORE_METADATA}" "${stage_dir}/deps/neat-core.json"
 
   while IFS= read -r cpp_dir; do
     local rel target_dir

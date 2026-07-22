@@ -48,9 +48,7 @@ jobs:
       ensure_sdk_container: true
       sdk_setup_args: "-y -n --minimal --workspace /mnt/vulcan/workspace --no-model-sdk --no-insight"
       artifact_name: neat-apps-build
-      artifact_path: |
-        neat-apps-*.tar.gz
-        deps/neat-core.json
+      artifact_path: neat-apps-*.tar.gz
       artifact_retention_days: 3
       build_command: |
         set -euo pipefail
@@ -148,11 +146,9 @@ jobs:
           exit 1
         fi
         test -f neat-apps-tests.tar.gz
-        test -f deps/neat-core.json
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
-        python3 -m json.tool deps/neat-core.json >/dev/null
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
-        ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz deps/neat-core.json
+        ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 
   publish-vulcan-artifacts:
     name: Publish to Vulcan
@@ -170,7 +166,7 @@ jobs:
       artifact_folder: "."
       artifact_pattern: neat-apps-dist
       artifact_glob: "*"
-      min_artifact_count: 4
+      min_artifact_count: 3
 
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
@@ -222,16 +218,19 @@ jobs:
 
       - name: Install Apps Core for runtime tests
         run: |
+          set -euo pipefail
           artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
+          mapfile -t runtime_archives < <(
+            find _vulcan-test/artifacts -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
+              ! -name 'neat-apps-tests.tar.gz' | sort
+          )
+          if [[ "${#runtime_archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one runtime candidate, found ${#runtime_archives[@]}" >&2
+            exit 1
+          fi
           core_target="$(
-            python3 - _vulcan-test/artifacts/deps/neat-core.json <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], encoding="utf-8") as handle:
-              core = json.load(handle)["neat-core"]
-          print(f'{core["ref"]}-{core["spec"]}')
-          PY
+            tar -xOzf "${runtime_archives[0]}" prebuilt-apps/deps/neat-core.json \
+              | python3 -c 'import json, sys; core = json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
           )"
           NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
             NEAT_CORE_INSTALL_MODE=vulcan \
@@ -253,8 +252,6 @@ jobs:
 
           mkdir -p _vulcan-test/package
           tar -xzf "${runtime_archives[0]}" -C _vulcan-test/package
-          mkdir -p _vulcan-test/package/deps
-          cp _vulcan-test/artifacts/deps/neat-core.json _vulcan-test/package/deps/
           (
             cd _vulcan-test/package
             NEAT_APPS_SKIP_DEPENDENCIES=1 \
@@ -318,8 +315,6 @@ jobs:
 
           cp "${runtime_archive}" dist/
           install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
-          mkdir -p dist/deps
-          cp _vulcan-test/artifacts/deps/neat-core.json dist/deps/
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"

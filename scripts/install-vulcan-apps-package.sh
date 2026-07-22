@@ -11,11 +11,8 @@ DEPS_MARKER_VALUE="sima-neat/apps"
 CORE_INSTALL_DIR="${DEPS_DIR}/core"
 INSIGHT_INSTALL_DIR="${DEPS_DIR}/insight"
 DEPS_WORKSPACE_ACTIVE=0
-PACKAGE_DEPS_OWNED=0
 PACKAGE_DIR="$(pwd -P)"
-PACKAGE_DEPS_DIR="${PACKAGE_DIR}/deps"
-CORE_METADATA_PATH="${PACKAGE_DEPS_DIR}/neat-core.json"
-FLAT_CORE_METADATA_PATH="${PACKAGE_DIR}/neat-core.json"
+CORE_METADATA_PATH=""
 PACKAGE_EXTRACT_DIR=""
 PACKAGE_ARCHIVE=""
 
@@ -83,25 +80,12 @@ cleanup_dependency_workspace() {
     echo "ERROR: refusing to remove dependency workspace without its ownership marker: ${DEPS_DIR}" >&2
     return 1
   fi
-  if [[ "${PACKAGE_DEPS_OWNED}" == "1" \
-    && "$(cd "${DEPS_DIR}" && pwd -P)" == "${PACKAGE_DEPS_DIR}" ]]; then
-    rm -rf "${CORE_INSTALL_DIR}" "${INSIGHT_INSTALL_DIR}"
-    rm -f "${DEPS_MARKER}"
-    DEPS_WORKSPACE_ACTIVE=0
-    return 0
-  fi
   rm -rf "${DEPS_DIR}"
   DEPS_WORKSPACE_ACTIVE=0
 }
 
 prepare_dependency_workspace() {
   if [[ -e "${DEPS_DIR}" || -L "${DEPS_DIR}" ]]; then
-    if [[ "${PACKAGE_DEPS_OWNED}" == "1" && -d "${DEPS_DIR}" && ! -L "${DEPS_DIR}" \
-      && "$(cd "${DEPS_DIR}" && pwd -P)" == "${PACKAGE_DEPS_DIR}" ]]; then
-      printf '%s\n' "${DEPS_MARKER_VALUE}" >"${DEPS_MARKER}"
-      DEPS_WORKSPACE_ACTIVE=1
-      return 0
-    fi
     if ! dependency_workspace_is_owned; then
       echo "ERROR: refusing to replace unowned dependency workspace: ${DEPS_DIR}" >&2
       return 1
@@ -166,10 +150,6 @@ cleanup_package_staging() {
   fi
   if [[ -n "${PACKAGE_ARCHIVE}" ]]; then
     rm -f "${PACKAGE_ARCHIVE}"
-  fi
-  if [[ "${PACKAGE_DEPS_OWNED}" == "1" ]]; then
-    rm -f "${CORE_METADATA_PATH}"
-    rmdir "${PACKAGE_DEPS_DIR}" 2>/dev/null || true
   fi
   rm -f "${PACKAGE_DIR}/install_vulcan_apps_package.sh"
 }
@@ -276,12 +256,7 @@ fi
 
 locate_package_staging
 
-if [[ ! -e "${CORE_METADATA_PATH}" && ! -L "${CORE_METADATA_PATH}" \
-  && -f "${FLAT_CORE_METADATA_PATH}" && ! -L "${FLAT_CORE_METADATA_PATH}" ]]; then
-  mkdir -p "${PACKAGE_DEPS_DIR}"
-  mv "${FLAT_CORE_METADATA_PATH}" "${CORE_METADATA_PATH}"
-fi
-
+CORE_METADATA_PATH="${RUNTIME_SRC}/deps/neat-core.json"
 if [[ ! -f "${CORE_METADATA_PATH}" || -L "${CORE_METADATA_PATH}" ]]; then
   echo "ERROR: Apps package is missing ${CORE_METADATA_PATH}." >&2
   exit 1
@@ -292,12 +267,6 @@ if ! CORE_TARGET="$(extract_neat_core_target)"; then
 fi
 CORE_REF="$(printf '%s\n' "${CORE_TARGET}" | sed -n '1p')"
 CORE_SPEC="$(printf '%s\n' "${CORE_TARGET}" | sed -n '2p')"
-if [[ -n "$(find "${PACKAGE_DEPS_DIR}" -mindepth 1 -maxdepth 1 \
-  ! -name neat-core.json -print -quit)" ]]; then
-  echo "ERROR: refusing unexpected entries in package dependency metadata: ${PACKAGE_DEPS_DIR}." >&2
-  exit 1
-fi
-PACKAGE_DEPS_OWNED=1
 
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo

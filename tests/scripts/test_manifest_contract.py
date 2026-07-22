@@ -31,9 +31,17 @@ def _write_runtime_archive(
     executable_members: tuple[str, ...] = (),
     extra_archive_members: tuple[str, ...] = (),
     member_contents: dict[str, str] | None = None,
+    include_core_metadata: bool = True,
 ) -> Path:
     archive_root = tmp_path / "archive-root" / root_name
     archive_root.mkdir(parents=True)
+    if include_core_metadata:
+        core_metadata = archive_root / "deps/neat-core.json"
+        core_metadata.parent.mkdir(parents=True)
+        core_metadata.write_text(
+            json.dumps({"neat-core": {"ref": "develop", "spec": "core-sha"}}),
+            encoding="utf-8",
+        )
     for member in members:
         path = archive_root / member
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,6 +75,13 @@ def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
     proc = _validate_runtime_archive(archive)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+def test_runtime_archive_validator_rejects_missing_core_metadata(tmp_path):
+    archive = _write_runtime_archive(tmp_path, include_core_metadata=False)
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
 
 
 def test_runtime_archive_validator_rejects_legacy_root(tmp_path):
@@ -361,13 +376,12 @@ def _write_fake_sima_cli(tmp_path: Path) -> Path:
 def _write_vulcan_runtime(
     package_dir: Path,
     core: object | None = None,
-    metadata_dir: Path | None = None,
 ) -> Path:
     runtime_dir = package_dir / "prebuilt-apps"
     runtime_dir.mkdir(parents=True)
     if core is None:
         core = {"ref": "develop", "spec": "core-sha"}
-    deps_dir = (metadata_dir or package_dir) / "deps"
+    deps_dir = runtime_dir / "deps"
     deps_dir.mkdir(parents=True)
     (deps_dir / "neat-core.json").write_text(
         json.dumps({"neat-core": core}),
@@ -811,6 +825,9 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert not (install_dir / "neat-apps-runtime").exists()
+    assert json.loads(
+        (install_dir / "deps/neat-core.json").read_text(encoding="utf-8")
+    ) == {"neat-core": {"ref": "develop", "spec": "core-sha"}}
     assert (tmp_path / "sima-cli-cwd.txt").read_text(encoding="utf-8").splitlines() == [
         str(package_dir / "deps" / "core"),
         str(package_dir / "deps" / "insight"),
@@ -827,8 +844,8 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
 
 def test_vulcan_installer_rejects_missing_core_metadata_before_promotion(tmp_path):
     package_dir = tmp_path / "package"
-    _write_vulcan_runtime(package_dir)
-    (package_dir / "deps" / "neat-core.json").unlink()
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "deps" / "neat-core.json").unlink()
     install_dir = tmp_path / "installed" / "prebuilt-apps"
     install_dir.mkdir(parents=True)
     (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
@@ -850,41 +867,11 @@ def test_vulcan_installer_rejects_mutable_core_metadata(tmp_path):
     assert not (tmp_path / "sima-cli-args.txt").exists()
 
 
-def test_vulcan_installer_refuses_unowned_package_deps(tmp_path):
-    package_dir = tmp_path / "package"
-    _write_vulcan_runtime(package_dir)
-    user_file = package_dir / "deps" / "user-file"
-    user_file.write_text("keep\n", encoding="utf-8")
-
-    proc = _run_vulcan_installer(tmp_path, package_dir)
-
-    assert proc.returncode != 0
-    assert user_file.read_text(encoding="utf-8") == "keep\n"
-    assert not (tmp_path / "sima-cli-args.txt").exists()
-
-
-def test_vulcan_installer_normalizes_flattened_core_metadata(tmp_path):
-    package_dir = tmp_path / "package"
-    runtime_dir = _write_vulcan_runtime(package_dir)
-    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
-    (package_dir / "deps" / "neat-core.json").rename(package_dir / "neat-core.json")
-    (package_dir / "deps").rmdir()
-
-    proc = _run_vulcan_installer(tmp_path, package_dir)
-
-    assert proc.returncode == 0, proc.stderr + proc.stdout
-    assert (package_dir / "prebuilt-apps" / "runtime-marker").read_text(
-        encoding="utf-8"
-    ) == "new\n"
-    assert not (package_dir / "neat-core.json").exists()
-    assert not (package_dir / "deps").exists()
-
-
 def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
     package_dir = tmp_path / "package"
     package_name = "neat-apps-integration-apps-runtime-bundle-deadbeef"
     extracted_dir = package_dir / package_name
-    runtime_dir = _write_vulcan_runtime(extracted_dir, metadata_dir=package_dir)
+    runtime_dir = _write_vulcan_runtime(extracted_dir)
     (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
     archive = package_dir / f"{package_name}.tar.gz"
     archive.write_text("archive\n", encoding="utf-8")
@@ -903,6 +890,7 @@ def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
     assert not archive.exists()
     assert not install_script.exists()
     assert not (package_dir / "deps").exists()
+    assert (package_dir / "prebuilt-apps/deps/neat-core.json").is_file()
     assert unrelated.read_text(encoding="utf-8") == "keep\n"
 
 
@@ -921,6 +909,7 @@ def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
+    assert (install_dir / "deps/neat-core.json").is_file()
     assert not (tmp_path / "sima-cli-args.txt").exists()
     assert not (package_dir / "deps").exists()
     assert "Skipping Core and Insight dependency installation" in proc.stdout
@@ -929,7 +918,9 @@ def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
 def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "deps/neat-core.json" in workflow
+    assert "artifact_path: neat-apps-*.tar.gz" in workflow
+    assert "tar -xOzf" in workflow
+    assert "prebuilt-apps/deps/neat-core.json" in workflow
     assert "--neat-core-version" in workflow
     assert "NEAT_CORE_INSTALL_MODE=vulcan" in workflow
     assert "NEAT_APPS_SKIP_DEPENDENCIES=1" in workflow
