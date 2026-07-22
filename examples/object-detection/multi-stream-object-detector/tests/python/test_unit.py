@@ -108,13 +108,14 @@ class TestConfigLoading:
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
 
-    def test_load_app_config_accepts_hevc(self, tmp_path: Path):
+    @pytest.mark.parametrize(("codec", "use_h265"), [("avc", False), ("hevc", True)])
+    def test_load_app_config_accepts_codec_alias(self, tmp_path: Path, codec: str, use_h265: bool):
         from main import load_app_config
 
         cfg = load_app_config(
-            write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], codec="hevc")
+            write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], codec=codec)
         )
-        assert cfg.use_h265
+        assert cfg.use_h265 is use_h265
 
     def test_load_app_config_accepts_custom_inflight_limits(self, tmp_path: Path):
         from main import load_app_config

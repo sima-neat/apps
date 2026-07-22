@@ -84,6 +84,25 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
   return ok;
 }
 
+bool test_validate_config_only_accepts_avc_alias(const std::string& binary) {
+  const fs::path config_path = write_config("test_validate_config_only_accepts_avc_alias",
+                                            "model:\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "streams:\n"
+                                            "  - rtsp://127.0.0.1:8554/src1\n"
+                                            "input:\n"
+                                            "  codec: avc\n"
+                                            "output:\n"
+                                            "  insight:\n"
+                                            "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 0, "AVC codec alias validates");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
   const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
                                             "model:\n"
@@ -160,6 +179,7 @@ int main(int argc, char** argv) {
   ok &= test_help_runs(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_accepts_four_streams(binary);
+  ok &= test_validate_config_only_accepts_avc_alias(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);

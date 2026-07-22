@@ -50,8 +50,8 @@ The 48-stream profile running in Insight:
 
 - A Modalix DevKit compatible with the selected Apps release, with the decoder service running.
 - An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the DevKit.
-- 16, 24, or 48 H.264 RTSP sources matching the selected profile.
-- Constant source frame rate, 1280×720 resolution, no H.264 B-frames, and a short, regular IDR interval. The validated sources use one IDR per second.
+- 16, 24, or 48 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
+- Constant source frame rate, 1280×720 resolution, no B-frames in the selected codec, and a short, regular IDR interval. The validated sources use one IDR per second.
 - The `yolo26n-det-int8-b1.tar.gz` model pack.
 
 The application starts all source graphs together. Start every RTSP publisher before starting the application.
@@ -100,7 +100,7 @@ ffprobe -v error \
   <rtsp-url>
 ```
 
-The result must report H.264, `1280x720`, the selected profile FPS, and no B-frames. Using a different source FPS changes the output rate and is not the documented profile. The encoded Insight edge retains the latest complete access unit under congestion, so a one-second-or-shorter IDR interval bounds receiver recovery if an older access unit is replaced.
+The result must report the codec selected by `input.codec`, `1280x720`, the selected profile FPS, and no B-frames. Using a different source FPS changes the output rate and is not the documented profile. The encoded Insight edge retains the latest complete access unit under congestion, so a one-second-or-shorter IDR interval bounds receiver recovery if an older access unit is replaced.
 
 ## Configure
 

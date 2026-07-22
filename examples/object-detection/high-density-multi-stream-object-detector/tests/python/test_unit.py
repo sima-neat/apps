@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -787,7 +788,7 @@ class TestRuntimeOptions:
             output_caps=SimpleNamespace(enable=False),
         )
 
-        graph = main.make_h264_decoder(
+        graph = main.make_decoder(
             source_options,
             decoder_buffers=16,
             decoder_input_buffers=2,
@@ -801,7 +802,7 @@ class TestRuntimeOptions:
         assert decode.memory_opt is True
         assert graph.nodes[1] == ("output", "detector_frame")
 
-        default_graph = main.make_h264_decoder(
+        default_graph = main.make_decoder(
             source_options,
             decoder_buffers=8,
             decoder_input_buffers=2,
@@ -930,13 +931,13 @@ class TestRuntimeDelivery:
         rtsp_graph = object()
         rtsp_calls = []
 
-        def make_rtsp_h264_input(options):
+        def make_rtsp_encoded_input(options):
             rtsp_calls.append(options)
             return rtsp_graph
 
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
-        monkeypatch.setattr(main, "make_rtsp_h264_input", make_rtsp_h264_input)
-        monkeypatch.setattr(main, "make_h264_decoder", lambda *_args: "decoder")
+        monkeypatch.setattr(main, "make_rtsp_encoded_input", make_rtsp_encoded_input)
+        monkeypatch.setattr(main, "make_decoder", lambda *_args: "decoder")
         monkeypatch.setattr(main, "graph_realtime_link", lambda *_args: "latest")
         monkeypatch.setattr(
             main, "make_video_options", lambda *_args: SimpleNamespace(video_port=9000)

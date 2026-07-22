@@ -917,7 +917,7 @@ def make_source_options(
 
 
 
-def make_rtsp_h264_input(opt):
+def make_rtsp_encoded_input(opt):
     encoded = pyneat.RtspEncodedInputOptions()
     encoded.url = opt.url
     encoded.codec = opt.codec
@@ -943,7 +943,7 @@ def make_rtsp_h264_input(opt):
     return pyneat.groups.rtsp_encoded_input(encoded)
 
 
-def append_h264_decoder(
+def append_decoder(
     graph,
     opt,
     decoder_buffers: int,
@@ -989,14 +989,14 @@ def append_h264_decoder(
         )
 
 
-def make_h264_decoder(
+def make_decoder(
     opt,
     decoder_buffers: int,
     decoder_input_buffers: int = DEFAULT_DECODER_INPUT_BUFFERS,
     decoder_tuning: str = "auto",
 ):
-    graph = pyneat.Graph("h264_decoder")
-    append_h264_decoder(
+    graph = pyneat.Graph("decoder")
+    append_decoder(
         graph, opt, decoder_buffers, decoder_input_buffers, decoder_tuning
     )
     graph.add(pyneat.nodes.output("detector_frame"))
@@ -1123,8 +1123,8 @@ def connect_source_graph(
     # Keep the encoded producer explicit. Core internally fuses this ordinary
     # fan-out so VideoSender consumes each read-only encoded AU before decoding,
     # without retaining decoded EV buffers in the application.
-    rtsp = make_rtsp_h264_input(source.source_options)
-    decoder = make_h264_decoder(
+    rtsp = make_rtsp_encoded_input(source.source_options)
+    decoder = make_decoder(
         source.source_options,
         cfg.decoder_buffers,
         cfg.decoder_input_buffers,

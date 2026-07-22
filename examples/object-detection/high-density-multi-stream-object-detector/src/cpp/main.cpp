@@ -830,7 +830,7 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
 }
 
 simaai::neat::Graph
-make_rtsp_h264_input(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+make_rtsp_encoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::nodes::groups::RtspEncodedInputOptions encoded;
   encoded.url = opt.url;
   encoded.codec = opt.codec;
@@ -857,9 +857,8 @@ make_rtsp_h264_input(const simaai::neat::nodes::groups::RtspDecodedInputOptions&
   return simaai::neat::nodes::groups::RtspEncodedInput(encoded);
 }
 
-simaai::neat::Graph
-make_h264_decoder(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
-                  int decoder_buffers) {
+simaai::neat::Graph make_decoder(const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
+                                 int decoder_buffers) {
   const bool use_h265 = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265;
   const int dec_w =
       use_h265 ? opt.dec_width : ((opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width);
@@ -868,7 +867,7 @@ make_h264_decoder(const simaai::neat::nodes::groups::RtspDecodedInputOptions& op
   const int dec_fps =
       use_h265 ? opt.source_fps : ((opt.h264_fps > 0) ? opt.h264_fps : opt.fallback_h264_fps);
 
-  simaai::neat::Graph graph("h264_decoder");
+  simaai::neat::Graph graph("decoder");
   simaai::neat::SimaDecodeOptions decode;
   decode.type = use_h265 ? simaai::neat::SimaDecodeType::H265 : simaai::neat::SimaDecodeType::H264;
   decode.sima_allocator_type = opt.sima_allocator_type;
@@ -996,8 +995,8 @@ void connect_source_graph(AppRuntime& app, const AppConfig& cfg, SourceRuntime& 
   // shared detector, while VideoSender consumes the same read-only encoded AU
   // before the decoder. This keeps video delivery off the application pull
   // path and avoids retaining decoded EV buffers.
-  auto rtsp = make_rtsp_h264_input(source.source_options);
-  auto decoder = make_h264_decoder(source.source_options, cfg.decoder_buffers);
+  auto rtsp = make_rtsp_encoded_input(source.source_options);
+  auto decoder = make_decoder(source.source_options, cfg.decoder_buffers);
   app.graph.connect(rtsp, decoder);
   app.graph.connect(decoder, detector_graph, detector_link);
 
