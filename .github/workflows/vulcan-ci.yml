@@ -34,28 +34,10 @@ jobs:
     with:
       vulcan_env: ${{ vars.VULCAN_ENV || 'production' }}
 
-  resolve-core-context:
-    name: Resolve Core Context
-    runs-on: ubuntu-latest
-    outputs:
-      dependency_branch: ${{ steps.resolve.outputs.dependency_branch }}
-    steps:
-      - name: Select Core dependency branch
-        id: resolve
-        env:
-          DEPENDENCY_BRANCH: >-
-            ${{ (github.ref_type == 'tag' ||
-              github.ref_name == 'main' ||
-              startsWith(github.ref_name, 'release-') ||
-              github.base_ref == 'main') && 'main' || github.ref_name }}
-        run: echo "dependency_branch=${DEPENDENCY_BRANCH}" >> "${GITHUB_OUTPUT}"
-
   build:
     name: Build Apps on Vulcan
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    needs:
-      - resolve-core-context
-      - resolve-vulcan-config
+    needs: resolve-vulcan-config
     uses: sima-neat/.github/.github/workflows/vulcan-build.yml@main
     with:
       vulcan_env: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
@@ -66,7 +48,9 @@ jobs:
       ensure_sdk_container: true
       sdk_setup_args: "-y -n --minimal --workspace /mnt/vulcan/workspace --no-model-sdk --no-insight"
       artifact_name: neat-apps-build
-      artifact_path: neat-apps-*.tar.gz
+      artifact_path: |
+        neat-apps-*.tar.gz
+        deps/neat-core.json
       artifact_retention_days: 3
       build_command: |
         set -euo pipefail
@@ -93,7 +77,6 @@ jobs:
           -e GITHUB_REF_NAME="${{ github.ref_name }}" \
           -e GITHUB_REF_TYPE="${{ github.ref_type }}" \
           -e GITHUB_SHA="${{ github.sha }}" \
-          -e NEAT_APPS_DEPENDENCY_BRANCH="${{ needs.resolve-core-context.outputs.dependency_branch }}" \
           -e NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}" \
           -e NEAT_APPS_ARTIFACT_SHORT_SHA="${{ github.sha }}" \
           -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
@@ -165,9 +148,11 @@ jobs:
           exit 1
         fi
         test -f neat-apps-tests.tar.gz
+        test -f deps/neat-core.json
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
+        python3 -m json.tool deps/neat-core.json >/dev/null
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
-        ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
+        ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz deps/neat-core.json
 
   publish-vulcan-artifacts:
     name: Publish to Vulcan
@@ -185,7 +170,7 @@ jobs:
       artifact_folder: "."
       artifact_pattern: neat-apps-dist
       artifact_glob: "*"
-      min_artifact_count: 3
+      min_artifact_count: 4
 
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
@@ -203,7 +188,6 @@ jobs:
     name: Test Apps Runtime
     needs:
       - build
-      - resolve-core-context
       - resolve-vulcan-config
       - resolve-test-runner
     runs-on:
@@ -236,14 +220,23 @@ jobs:
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
 
-      - name: Install snap Core for Apps tests
+      - name: Install Apps Core for runtime tests
         run: |
           artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
-          NEAT_APPS_DEPENDENCY_BRANCH="${{ needs.resolve-core-context.outputs.dependency_branch }}" \
-            NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
+          core_target="$(
+            python3 - _vulcan-test/artifacts/deps/neat-core.json <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              core = json.load(handle)["neat-core"]
+          print(f'{core["ref"]}-{core["spec"]}')
+          PY
+          )"
+          NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
             NEAT_CORE_INSTALL_MODE=vulcan \
             NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
-            ./build.sh --only-install-neat-core
+            ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
 
       - name: Install runtime candidate and overlay tests
         run: |
@@ -260,6 +253,8 @@ jobs:
 
           mkdir -p _vulcan-test/package
           tar -xzf "${runtime_archives[0]}" -C _vulcan-test/package
+          mkdir -p _vulcan-test/package/deps
+          cp _vulcan-test/artifacts/deps/neat-core.json _vulcan-test/package/deps/
           (
             cd _vulcan-test/package
             NEAT_APPS_SKIP_DEPENDENCIES=1 \
@@ -323,6 +318,8 @@ jobs:
 
           cp "${runtime_archive}" dist/
           install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
+          mkdir -p dist/deps
+          cp _vulcan-test/artifacts/deps/neat-core.json dist/deps/
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"

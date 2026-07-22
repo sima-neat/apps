@@ -11,7 +11,11 @@ DEPS_MARKER_VALUE="sima-neat/apps"
 CORE_INSTALL_DIR="${DEPS_DIR}/core"
 INSIGHT_INSTALL_DIR="${DEPS_DIR}/insight"
 DEPS_WORKSPACE_ACTIVE=0
+PACKAGE_DEPS_OWNED=0
 PACKAGE_DIR="$(pwd -P)"
+PACKAGE_DEPS_DIR="${PACKAGE_DIR}/deps"
+CORE_METADATA_PATH="${PACKAGE_DEPS_DIR}/neat-core.json"
+FLAT_CORE_METADATA_PATH="${PACKAGE_DIR}/neat-core.json"
 PACKAGE_EXTRACT_DIR=""
 PACKAGE_ARCHIVE=""
 
@@ -39,6 +43,32 @@ resolve_sima_cli_bin() {
   return 1
 }
 
+extract_neat_core_target() {
+  python3 - "${CORE_METADATA_PATH}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    core = json.load(handle).get("neat-core")
+
+if not isinstance(core, dict):
+    raise SystemExit(1)
+
+ref = core.get("ref")
+spec = core.get("spec")
+if not isinstance(ref, str) or not isinstance(spec, str):
+    raise SystemExit(1)
+
+ref = ref.strip()
+spec = spec.strip()
+if not ref or not spec or spec == "latest":
+    raise SystemExit(1)
+
+print(ref)
+print(spec)
+PY
+}
+
 dependency_workspace_is_owned() {
   [[ -d "${DEPS_DIR}" && ! -L "${DEPS_DIR}" \
     && -f "${DEPS_MARKER}" && ! -L "${DEPS_MARKER}" ]] \
@@ -53,12 +83,25 @@ cleanup_dependency_workspace() {
     echo "ERROR: refusing to remove dependency workspace without its ownership marker: ${DEPS_DIR}" >&2
     return 1
   fi
+  if [[ "${PACKAGE_DEPS_OWNED}" == "1" \
+    && "$(cd "${DEPS_DIR}" && pwd -P)" == "${PACKAGE_DEPS_DIR}" ]]; then
+    rm -rf "${CORE_INSTALL_DIR}" "${INSIGHT_INSTALL_DIR}"
+    rm -f "${DEPS_MARKER}"
+    DEPS_WORKSPACE_ACTIVE=0
+    return 0
+  fi
   rm -rf "${DEPS_DIR}"
   DEPS_WORKSPACE_ACTIVE=0
 }
 
 prepare_dependency_workspace() {
   if [[ -e "${DEPS_DIR}" || -L "${DEPS_DIR}" ]]; then
+    if [[ "${PACKAGE_DEPS_OWNED}" == "1" && -d "${DEPS_DIR}" && ! -L "${DEPS_DIR}" \
+      && "$(cd "${DEPS_DIR}" && pwd -P)" == "${PACKAGE_DEPS_DIR}" ]]; then
+      printf '%s\n' "${DEPS_MARKER_VALUE}" >"${DEPS_MARKER}"
+      DEPS_WORKSPACE_ACTIVE=1
+      return 0
+    fi
     if ! dependency_workspace_is_owned; then
       echo "ERROR: refusing to replace unowned dependency workspace: ${DEPS_DIR}" >&2
       return 1
@@ -124,9 +167,11 @@ cleanup_package_staging() {
   if [[ -n "${PACKAGE_ARCHIVE}" ]]; then
     rm -f "${PACKAGE_ARCHIVE}"
   fi
-  rm -f \
-    "${PACKAGE_DIR}/install_vulcan_apps_package.sh" \
-    "${PACKAGE_DIR}/neat-core.json"
+  if [[ "${PACKAGE_DEPS_OWNED}" == "1" ]]; then
+    rm -f "${CORE_METADATA_PATH}"
+    rmdir "${PACKAGE_DEPS_DIR}" 2>/dev/null || true
+  fi
+  rm -f "${PACKAGE_DIR}/install_vulcan_apps_package.sh"
 }
 
 promote_apps_runtime() {
@@ -231,6 +276,29 @@ fi
 
 locate_package_staging
 
+if [[ ! -e "${CORE_METADATA_PATH}" && ! -L "${CORE_METADATA_PATH}" \
+  && -f "${FLAT_CORE_METADATA_PATH}" && ! -L "${FLAT_CORE_METADATA_PATH}" ]]; then
+  mkdir -p "${PACKAGE_DEPS_DIR}"
+  mv "${FLAT_CORE_METADATA_PATH}" "${CORE_METADATA_PATH}"
+fi
+
+if [[ ! -f "${CORE_METADATA_PATH}" || -L "${CORE_METADATA_PATH}" ]]; then
+  echo "ERROR: Apps package is missing ${CORE_METADATA_PATH}." >&2
+  exit 1
+fi
+if ! CORE_TARGET="$(extract_neat_core_target)"; then
+  echo "ERROR: invalid Core dependency metadata: ${CORE_METADATA_PATH}." >&2
+  exit 1
+fi
+CORE_REF="$(printf '%s\n' "${CORE_TARGET}" | sed -n '1p')"
+CORE_SPEC="$(printf '%s\n' "${CORE_TARGET}" | sed -n '2p')"
+if [[ -n "$(find "${PACKAGE_DEPS_DIR}" -mindepth 1 -maxdepth 1 \
+  ! -name neat-core.json -print -quit)" ]]; then
+  echo "ERROR: refusing unexpected entries in package dependency metadata: ${PACKAGE_DEPS_DIR}." >&2
+  exit 1
+fi
+PACKAGE_DEPS_OWNED=1
+
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo
   echo "WARNING: Skipping Core and Insight dependency installation."
@@ -241,17 +309,19 @@ else
   }
 
   echo
-  echo "Installing the latest Core version from main:"
+  echo "Installing the Core selected by Apps:"
+  echo "  Ref        : ${CORE_REF}"
+  echo "  Spec       : ${CORE_SPEC}"
   trap cleanup_dependency_workspace EXIT
   prepare_dependency_workspace
   echo "  Scratch dir: ${CORE_INSTALL_DIR}"
   run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
     -d . \
     -t minimal \
-    core
+    "core@${CORE_REF}:${CORE_SPEC}"
 
   echo
-  echo "Installing the latest Insight version from main:"
+  echo "Installing Insight through sima-cli:"
   echo "  Scratch dir: ${INSIGHT_INSTALL_DIR}"
   run_sima_cli_install "${INSIGHT_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
     -d . \

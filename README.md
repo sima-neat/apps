@@ -18,7 +18,7 @@ sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-The Apps installer installs the latest Core and Insight versions from main. The installed bundle is placed under `prebuilt-apps/`. Run the remaining commands from that directory.
+The Apps installer installs the Core selected for the Apps package and installs Insight through `sima-cli`. The installed bundle is placed under `prebuilt-apps/`. Run the remaining commands from that directory.
 
 ## Run an Example
 
@@ -124,7 +124,7 @@ curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-exa
 
 ## Dependency Selection
 
-`deps/manifest.json` keeps Core on the `snap` policy for source builds and records the SDK channel and platform version. It does not pin Insight. The Apps installer uses bare `core` and `insight` targets, which `sima-cli` resolves to the latest versions from main.
+`deps/manifest.json` selects Core and records the SDK channel and platform version. Development uses the `snap` policy, while a release-preparation branch can select an exact Core artifact. Vulcan records the resolved Core target under package metadata and the Apps installer uses that same target. Insight is not pinned in the Apps manifest.
 
 ## Support
 

@@ -16,6 +16,7 @@ tests/.env.local
 tests/configs/.env.local
 .neat-core-installed
 deps/debs/
+deps/neat-core.json
 portal/node_modules/
 portal/.vite/
 portal/dist/
