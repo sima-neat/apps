@@ -901,6 +901,11 @@ def test_vulcan_uses_one_core_context_for_build_and_runtime_tests():
     dependency_output = "needs.resolve-core-context.outputs.dependency_branch"
 
     assert "pull_request:\n    branches:\n      - main" in workflow
+    assert (
+        "if: ${{ github.event_name != 'pull_request' || "
+        "github.event.pull_request.head.repo.full_name == github.repository }}"
+        in workflow
+    )
     assert "github.ref_type == 'tag'" in workflow
     assert "github.ref_name == 'main'" in workflow
     assert "startsWith(github.ref_name, 'release-')" in workflow
