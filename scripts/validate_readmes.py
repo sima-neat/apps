@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Validate that every example README.md conforms to the required template.
+"""Validate that every example README.md conforms to the required contract.
 
 Scans examples/*/*/README.md files and verifies:
 - Metadata table exists with all required fields
 - Field values match allowed enums (categories, difficulties, languages, statuses)
-- Required sections are present
+- Installed Apps commands and required sections are present
 
 Exit code 0 on success, 1 if any README is missing or malformed.
 """
@@ -40,16 +40,42 @@ REQUIRED_METADATA_FIELDS = {
     "Binary Name",
     "Model",
 }
-MODEL_REFERENCE_RE = re.compile(r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$")
+MODEL_REFERENCE_RE = re.compile(
+    r"^(?P<label>[^\[]+?)(?:\s*\[(?P<url>https?://[^\]]+)\])?$"
+)
 
 REQUIRED_SECTIONS = {
     "Metadata",
     "Concept",
     "Prerequisites",
-    "Get The Apps Repo",
+    "Install Apps",
+    "Prepare the Model",
     "Run",
     "Source Files",
+    "Development From Source",
 }
+
+REQUIRED_SECTION_ORDER = (
+    "Metadata",
+    "Concept",
+    "Prerequisites",
+    "Install Apps",
+    "Prepare the Model",
+    "Run",
+    "Source Files",
+    "Development From Source",
+)
+
+INSTALL_COMMAND = "sima-cli neat install apps"
+CONTRIBUTING_URL = "https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md"
+SOURCE_ONLY_COMMANDS = (
+    "git clone ",
+    "build.sh",
+    "cmake ",
+    "ctest ",
+    "./build/",
+    "tests/test.sh",
+)
 
 
 def parse_metadata_table(content: str) -> dict[str, str] | None:
@@ -73,14 +99,73 @@ def parse_metadata_table(content: str) -> dict[str, str] | None:
     return metadata if metadata else None
 
 
-def get_sections(content: str) -> set[str]:
-    """Return set of H2 section names found in the content."""
-    sections = set()
+def parse_sections(content: str) -> tuple[dict[str, str], list[str]]:
+    """Return H2 section bodies and their document order."""
+    sections: dict[str, list[str]] = {}
+    order: list[str] = []
+    current: str | None = None
     for line in content.splitlines():
         match = re.match(r"^##\s+(.+)$", line)
         if match:
-            sections.add(match.group(1).strip())
-    return sections
+            current = match.group(1).strip()
+            if current not in sections:
+                sections[current] = []
+                order.append(current)
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return {name: "\n".join(lines).strip() for name, lines in sections.items()}, order
+
+
+def validate_installed_workflow(
+    *,
+    sections: dict[str, str],
+    metadata: dict[str, str],
+    readme_path: Path,
+) -> list[str]:
+    """Validate commands that must work from the installed bundle root."""
+    errors: list[str] = []
+    install = sections.get("Install Apps", "")
+    run = sections.get("Run", "")
+    development = sections.get("Development From Source", "")
+
+    if INSTALL_COMMAND not in {line.strip() for line in install.splitlines()}:
+        errors.append(f"Install Apps must use '{INSTALL_COMMAND}'")
+    if "cd prebuilt-apps" not in install:
+        errors.append("Install Apps must enter the prebuilt-apps directory")
+
+    for command in SOURCE_ONLY_COMMANDS:
+        if command in install or command in run:
+            errors.append(
+                f"Source-only command '{command.strip()}' must not appear in "
+                "Install Apps or Run"
+            )
+
+    parts = readme_path.parts
+    try:
+        examples_idx = list(parts).index("examples")
+        category = parts[examples_idx + 1]
+        example = parts[examples_idx + 2]
+    except (ValueError, IndexError):
+        return errors
+
+    languages = {
+        item.strip()
+        for item in metadata.get("Languages", "").split(",")
+        if item.strip()
+    }
+    if "C++" in languages:
+        binary = metadata.get("Binary Name", "").strip()
+        expected = f"examples/{category}/{example}/src/cpp/pre-built/{binary}"
+        if binary and expected not in run:
+            errors.append(f"Run must reference packaged C++ binary '{expected}'")
+    if "Python" in languages and "src/python/" not in run:
+        errors.append("Run must reference a packaged src/python/ entrypoint")
+
+    if CONTRIBUTING_URL not in development:
+        errors.append("Development From Source must link to CONTRIBUTING.md")
+
+    return errors
 
 
 def validate_readme(readme_path: Path) -> list[str]:
@@ -89,10 +174,25 @@ def validate_readme(readme_path: Path) -> list[str]:
     content = readme_path.read_text()
 
     # Check required sections
-    sections = get_sections(content)
+    sections, section_order = parse_sections(content)
     for section in REQUIRED_SECTIONS:
         if section not in sections:
             errors.append(f"Missing required section: ## {section}")
+
+    present_required_sections = [
+        section for section in section_order if section in REQUIRED_SECTIONS
+    ]
+    expected_order = [
+        section for section in REQUIRED_SECTION_ORDER if section in sections
+    ]
+    if present_required_sections != expected_order:
+        errors.append(
+            "Required sections are out of order. Expected: "
+            + ", ".join(REQUIRED_SECTION_ORDER)
+        )
+
+    if "Get The Apps Repo" in sections:
+        errors.append("Obsolete section: ## Get The Apps Repo")
 
     # Parse and validate metadata
     metadata = parse_metadata_table(content)
@@ -123,7 +223,9 @@ def validate_readme(readme_path: Path) -> list[str]:
         for item in metadata.get("Languages", "").split(",")
         if item.strip()
     ]
-    invalid_languages = [language for language in languages if language not in VALID_LANGUAGES]
+    invalid_languages = [
+        language for language in languages if language not in VALID_LANGUAGES
+    ]
     if invalid_languages:
         errors.append(
             f"Invalid Languages '{metadata.get('Languages', '')}'. "
@@ -143,6 +245,14 @@ def validate_readme(readme_path: Path) -> list[str]:
             "Invalid Model metadata. Use either '<model_label>' or "
             "'<model_label> [https://host/path/model_mpk.tar.gz]'"
         )
+
+    errors.extend(
+        validate_installed_workflow(
+            sections=sections,
+            metadata=metadata,
+            readme_path=readme_path,
+        )
+    )
 
     # Verify the example directory matches its category
     parts = readme_path.parts
@@ -180,9 +290,7 @@ def main() -> int:
 
     # Find all example directories (examples/<category>/<name>/)
     example_dirs = sorted(
-        d
-        for d in examples_dir.glob("*/*")
-        if d.is_dir() and not d.name.startswith(".")
+        d for d in examples_dir.glob("*/*") if d.is_dir() and not d.name.startswith(".")
     )
 
     if not example_dirs:

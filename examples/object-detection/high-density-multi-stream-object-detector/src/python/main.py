@@ -468,7 +468,6 @@ def load_app_config(config_path: Path) -> AppConfig:
             "output.debug_dir/output.save_every were removed from the realtime application"
         )
     insight = section(output, "insight")
-    default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
     rtsp_urls = parse_streams(raw)
 
     queue_depth = int_or(inference, "queue_depth", DEFAULT_QUEUE_DEPTH)
@@ -480,7 +479,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         )
 
     model_path_value = string_or(model, "path")
-    labels_path_value = string_or(model, "labels", str(default_labels))
+    labels_path_value = string_or(model, "labels", "coco_label.txt")
 
     cfg = AppConfig(
         model_path=(
@@ -489,7 +488,7 @@ def load_app_config(config_path: Path) -> AppConfig:
             else ""
         ),
         decode_type=normalize_box_decode_type(string_or(model, "decode_type", "yolo26")),
-        labels_path=resolve_config_relative_path(config_path, labels_path_value),
+        labels_path=Path(labels_path_value).expanduser(),
         rtsp_urls=rtsp_urls,
         workers=int_or(inference, "workers", 1),
         queue_depth=queue_depth,

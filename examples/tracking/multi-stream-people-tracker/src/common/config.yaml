@@ -1,5 +1,5 @@
 model:                       # Detector model selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
 
 streams:                     # RTSP inputs, one entry per camera.
   - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>

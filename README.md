@@ -4,115 +4,82 @@
 ![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.2-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
-SiMa Neat Apps is a source-first collection of editable applications and reference
-examples for real Modalix workflows: detection, segmentation, streaming,
-tracking, benchmarking, and GenAI.
+SiMa Neat Apps provides runnable C++ and Python examples for detection,
+segmentation, streaming, tracking, benchmarking, and GenAI. Install Apps to
+run the packaged examples. Clone this repository only when modifying or
+building their source.
 
-Use this repo when you want runnable examples that keep the important Neat
-Library C++ and Python API calls visible in the source. Use the Neat Library
-docs for the runtime API contract, and use this repo for working application
-patterns.
+## Install Apps
 
-`core` owns the Neat Library runtime and tooling. `apps` owns customer-facing
-examples and sample application code.
-
-## Start
-
-Install the Neat Development Environment and Neat Library first:
-
-- [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/install-the-environment)
-- [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/install-or-update)
-- [sima-cli](https://developer.sima.ai/software/tools/sima-cli/)
-
-For Neat Development Environment 2.1.2:
+On a supported Modalix or DevKit target, install the latest Apps runtime from main and enter the installed bundle:
 
 ```bash
-sima-cli install ghcr:sima-neat/sdk:v2.1.2
-sima-cli sdk neat
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-Clone and build this repo from the SDK shell:
+The Apps installer installs the Core selected for the Apps package and installs Insight through `sima-cli`. The installed bundle is placed under `prebuilt-apps/`. Run the remaining commands from that directory.
+
+## Run an Example
+
+Each example README identifies its model, inputs, configuration, and exact run
+commands.
+
+C++ applications use the packaged executable:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+./examples/<category>/<example>/src/cpp/pre-built/<binary> \
+  --config examples/<category>/<example>/src/common/config.yaml
 ```
 
-Python examples use the PyNeat environment installed with the Neat Library:
+Python applications use their packaged entrypoint:
 
 ```bash
 source ~/pyneat/bin/activate
+pip install -r examples/<category>/<example>/src/python/requirements.txt
+python3 examples/<category>/<example>/src/python/main.py \
+  --config examples/<category>/<example>/src/common/config.yaml
 ```
 
-For the public examples index, use the
-[Neat Apps Portal](https://developer.sima.ai/examples). For broader application
-development docs, use [Develop Apps](https://developer.sima.ai/software/develop-apps/).
+Some Python applications provide `setup.sh` and `run.sh` wrappers instead.
+Follow the selected example README.
 
-## Fetch One Example
+Browse the [Neat Apps Portal](https://developer.sima.ai/examples) or the
+[examples directory](./examples) to choose an example.
 
-To fetch one example without cloning the full repo:
+## Models and Datasets
+
+Models are user-managed and are not included in the Apps package. Store them
+under `models/`, or set `model.path` to another readable package. Each
+example README lists its default and additional supported models with the
+corresponding `sima-cli` or example-specific installation command.
+
+Check the installed platform version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- <example>
+cat /etc/buildinfo
 ```
 
-Example:
+Before downloading a model, set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Runtime sample data is included under `assets/datasets/`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- multimodal-assistant
-cd multimodal-assistant
-./setup.sh
-./run.sh
-```
-
-## Repo Layout
+## Installed Layout
 
 | Path | Purpose |
 | --- | --- |
-| `examples/` | Application examples organized by category |
-| `assets/` | Runtime assets, including models and test media |
-| `tests/` | Test runner, fixtures, and test documentation |
-| `deps/manifest.json` | Neat Library and platform dependency declaration |
-| `portal/` | Source for the examples portal |
+| `examples/<category>/<example>/README.md` | Example setup and run instructions |
+| `examples/<category>/<example>/src/cpp/pre-built/` | Packaged C++ executables |
+| `examples/<category>/<example>/src/cpp/` | C++ implementation reference |
+| `examples/<category>/<example>/src/python/` | Python implementation and dependencies |
+| `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
+| `assets/datasets/` | Shipped runtime sample data |
+| `models/` | User-managed model packages |
 
-## Examples
-
-Examples live under `examples/<category>/<example>/`.
-
-The common shape is:
-
-| Path | Purpose |
-| --- | --- |
-| `README.md` | Example-specific setup and run instructions |
-| `src/common/` | Shared config, labels, and assets |
-| `src/cpp/main.cpp` | C++ entrypoint, when present |
-| `src/python/main.py` | Python entrypoint, when present |
-| `tests/` | Example-specific unit and e2e tests |
-
-Start with the example README. It is the source for model downloads, runtime
-inputs, config edits, and run commands for that example.
-
-Contributor details live in [CONTRIBUTING.md](./CONTRIBUTING.md). The README
-template lives at [examples/TEMPLATE_README.md](./examples/TEMPLATE_README.md).
-
-## Build
-
-`build.sh` builds the repo. It does not run tests.
-
-Common commands:
-
-```bash
-./build.sh          # configure and build
-./build.sh --clean  # clean build directory first
-```
-
-Compile C++ examples in the Neat Development Environment. Run Neat runtime and
-e2e checks on SiMa hardware such as Modalix or DevKit.
+The installed bundle does not contain CMake files or tests. Clone the repository
+to compile source or run the Apps test suite.
 
 ## RTSP Streams
 
-For quick RTSP sources, use
+For local RTSP sources, use
 [`tool-mediasources`](https://github.com/SiMa-ai/tool-mediasources):
 
 ```bash
@@ -120,33 +87,48 @@ sima-cli install gh:sima-ai/tool-mediasources
 ./mediasrc.sh <video-dir>
 ```
 
-If a board or DevKit consumes host-streamed RTSP sources, use the host IP in the
-RTSP URL instead of `127.0.0.1`.
+If a board consumes host-streamed RTSP sources, use the host IP in the RTSP URL
+instead of `127.0.0.1`.
 
-For fixed 16-, 24-, and 48-stream RTSP-to-Insight profiles, see the
-[high-density multi-stream object detector](examples/object-detection/high-density-multi-stream-object-detector/README.md).
+## Development From Source
 
-## Neat Library Dependency
+Clone and build Apps inside the Neat Development Environment:
 
-`deps/manifest.json` declares the Neat Library dependency and platform version.
-
-The normal branch value is:
-
-```json
-{
-  "neat-core": {
-    "policy": "snap"
-  }
-}
+```bash
+git clone https://github.com/sima-neat/apps.git
+cd apps
+./build.sh --clean
 ```
 
-`snap` resolves from the dependency branch: `main` uses `main-latest`, `develop`
-uses `develop-latest`, and custom branches use a matching core branch when one
-exists or fall back to `develop-latest`.
+`build.sh` builds the repository; it does not run tests. Contributor,
+scaffolding, build, and test instructions live in
+[CONTRIBUTING.md](./CONTRIBUTING.md).
+
+To fetch one standalone example without cloning the complete repository:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- <example>
+```
+
+## Repository Layout
+
+| Path | Purpose |
+| --- | --- |
+| `examples/` | Application examples organized by category |
+| `assets/datasets/` | Runtime datasets shipped with Apps |
+| `assets/datasets-test/` | Repository-only test fixtures |
+| `models/` | Ignored user-managed model packages |
+| `tests/` | Test runner and repository test support |
+| `deps/manifest.json` | Source dependency and platform declaration |
+| `portal/` | Examples portal source |
+
+## Dependency Selection
+
+`deps/manifest.json` selects Core and records the SDK channel and platform version. Development uses the `snap` policy, while a release-preparation branch can select an exact Core artifact. Vulcan records the resolved Core target under package metadata and the Apps installer uses that same target. Insight is not pinned in the Apps manifest.
 
 ## Support
 
-Use GitHub issues for bug reports and feature requests. Include the exact
-example, command, inputs, environment, and logs needed to reproduce the issue.
+Use GitHub issues for bug reports and feature requests. Include the example,
+command, inputs, environment, and logs required to reproduce the problem.
 
 For direct help, contact `support@sima.ai`.

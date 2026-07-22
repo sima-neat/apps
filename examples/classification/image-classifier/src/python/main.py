@@ -82,7 +82,7 @@ def main() -> int:
 
     with args.config.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
-    model_path = raw.get("model", {}).get("path", "assets/models/resnet_50_mpk.tar.gz")
+    model_path = raw.get("model", {}).get("path", "models/resnet_50_mpk.tar.gz")
     io_cfg = raw.get("io", {})
     runtime = raw.get("runtime", {})
     validation = raw.get("validation", {})

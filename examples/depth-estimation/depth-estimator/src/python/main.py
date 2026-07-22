@@ -68,10 +68,10 @@ def main() -> int:
 
     with args.config.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
-    model_path = raw.get("model", {}).get("path", "assets/models/depth_anything_v2_vits_mpk.tar.gz")
+    model_path = raw.get("model", {}).get("path", "models/depth_anything_v2_vits_mpk.tar.gz")
     io_cfg = raw.get("io", {})
     runtime = raw.get("runtime", {})
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/depth-estimator"))
     infer_size = int(runtime.get("infer_size", 518))
     timeout_ms = int(runtime.get("timeout_ms", 20000))

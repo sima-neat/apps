@@ -475,8 +475,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.model_path =
       resolve_config_relative_path(config_path, raw.string_or("model.path", "")).string();
   cfg.decode_type = raw.string_or("model.decode_type", "yolo26");
-  cfg.labels_path =
-      resolve_config_relative_path(config_path, raw.string_or("model.labels", "coco_label.txt"));
+  cfg.labels_path = raw.string_or("model.labels", "coco_label.txt");
   cfg.rtsp_urls = parse_streams(config_path);
   cfg.tcp = raw.bool_or("input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);

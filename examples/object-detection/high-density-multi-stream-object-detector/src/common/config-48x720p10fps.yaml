@@ -1,8 +1,8 @@
 # Profile: 48 x 720p @ 10 FPS (q1/i2/m1).
-# Model and label paths are resolved relative to this file.
+# Relative model paths use this file; label paths use the Apps root.
 model:
-  path: yolo26n-det-int8-b1.tar.gz
-  labels: coco_label.txt
+  path: <model-path>
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
   decode_type: yolo26
 
 streams:

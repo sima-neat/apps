@@ -1,6 +1,7 @@
 # Detection-to-VLM Assistant
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | genai |
@@ -12,137 +13,153 @@
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
-This example decodes an RTSP stream, runs YOLO26 detection with internal box decode, and sends video plus object-detection metadata to Insight. Insight video uses `VideoSender`, which owns raw-frame caps, conversion, H.264 encoding, RTP packetization, and UDP output. When GenAI is enabled, the highest-score detected person is cropped and sent to the configured GenAI server from a bounded background worker, so the detection and Insight loop keeps running.
+
+This example decodes an RTSP stream, runs YOLO26 detection, and sends video plus detection metadata to Insight. When GenAI is enabled, a bounded background worker crops the highest-scoring person and sends it to a configured VLM server without blocking detection or Insight output.
 
 ## Preview
-Detection metadata visualized in Insight:
 
-![Detection-to-VLM assistant preview](../../../assets/portal/genai/detection-to-vlm-assistant/image.png)
-
-## Insight Setup
-[Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
-
-In the Neat Development Environment, install the sample video assets:
-
-```bash
-sima-cli install assets/multi-video-sources
-```
-
-This provides 720p and 480p videos that Insight can stream as RTSP sources.
-
-To create a reproducible RTSP input:
-1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
-2. In Insight, open `RTSP Source`.
-3. Use a sample video or upload your own video.
-4. Start the stream and copy the RTSP URL.
-5. Put that RTSP URL into `source.rtsp_url`.
-
-Use the same `neat` output to set `insight.host`, `video_port`, and `metadata_port` from the reported `videoUDP` and `metadataUDP` ranges.
+![Detection-to-VLM assistant preview](../../../portal/assets/examples/genai/detection-to-vlm-assistant/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 detector model, or set `model.path` to another readable model package.
-- Choose a vision-language model from the [SiMa.ai VLM collection](https://huggingface.co/collections/simaai/vision-language-models), download it locally, and set `genai_server.model.path` to that model directory.
-- Set `genai_server.model.name` to the served model name used by the detector app.
-- RTSP source created in Insight or provided by your camera.
-- Insight receiver running at the configured host and ports.
-- GenAI server running when `genai.enabled` is true.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- An RTSP source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- The [LLiMa model manager](https://developer.sima.ai/software/genai-llima/runtime) available on the target when GenAI is enabled.
 
-Clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
 
-## Download Models
-Use the SDK platform version wherever `<platform-version>` appears.
+## Prepare the Model
 
-Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
+Supported detector packages:
 
-Download the default detector model:
+| Model file | Role |
+| --- | --- |
+| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Default |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-b1.tar.gz` | Supported |
+| `yolo26m-det-int8-b1.tar.gz` | Supported |
+
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
 
 ```bash
-mkdir -p assets/models
-cd assets/models
-
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
-
-cd ../..
+cat /etc/buildinfo
+export PLATFORM_VERSION="<platform-version>"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-detection/<model-file>"
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+Set `model.path` to the downloaded detector package.
+
+The default VLM is `Qwen3-VL-4B-Instruct-GPTQ-a16w4`.
+
+Search the supported models:
+
+```bash
+llima search
+```
+
+Install the default model:
+
+```bash
+llima pull Qwen3-VL-4B-Instruct-GPTQ-a16w4
+```
+
+LLiMa stores models under `/media/nvme/llima/models/` by default. Set `LLIMA_MODELS_PATH` before `llima pull` to use another model directory, then update `genai_server.model.path` accordingly.
+
+## Prepare Insight
+
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
+
+In the Insight Web UI, start a source and copy its RTSP URL. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure
+
 Edit `examples/genai/detection-to-vlm-assistant/src/common/config.yaml`.
 
 ```yaml
 source:
-  rtsp_url: <rtsp-url-copied-from-insight>              # RTSP stream URL.
+  rtsp_url: <rtsp-url>
 
 model:
-  path: <model-path>                                    # Path to the model package.
+  path: <model-path>
+  labels: examples/genai/detection-to-vlm-assistant/src/common/coco_label.txt
 
 insight:
-  host: <insight-host-ip>                                  # Host running Insight.
-  video_port: <videoUDP start port from neat>              # UDP video port.
-  metadata_port: <metadataUDP start port from neat>        # UDP metadata port.
+  host: <insight-host-ip>
+  video_port: <videoUDP-start-port>
+  metadata_port: <metadataUDP-start-port>
 
 genai_server:
-  host: 0.0.0.0                                            # GenAI server bind host.
-  port: 9998                                               # GenAI server port.
+  host: 0.0.0.0
+  port: 9998
   model:
-    name: <served-vlm-model-name>                          # Model name used by requests.
-    path: <path-to-vlm-model-dir>                          # Local VLM model directory.
+    name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
+    path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
 
 genai:
-  enabled: false                                           # Disable for detection plus Insight only.
-  host: 127.0.0.1                                          # GenAI server client host.
-  port: 9998                                               # GenAI server client port.
+  enabled: false
+  host: 127.0.0.1
+  port: 9998
   system_prompt: <system-prompt>
   user_prompt: <user-prompt>
 ```
 
-Change `genai.system_prompt` and `genai.user_prompt` to influence the GenAI output. The default asks what the detected person is doing in the crop.
+Set `genai.enabled: false` to run only detection and Insight output.
 
 ## Run
-From the `apps` repository root:
 
-In one terminal, start the local GenAI server:
+Install the Python dependencies:
 
 ```bash
+source ~/pyneat/bin/activate
+pip install -r examples/genai/detection-to-vlm-assistant/src/python/requirements.txt
+```
+
+When GenAI is enabled, start the server in one terminal:
+
+```bash
+source ~/pyneat/bin/activate
 python3 examples/genai/detection-to-vlm-assistant/src/python/genai_server.py \
   --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
 ```
 
-In a second terminal, start the detection-to-Insight pipeline:
+Start the detection pipeline in another terminal:
 
 ```bash
+source ~/pyneat/bin/activate
 python3 examples/genai/detection-to-vlm-assistant/src/python/detector_app.py \
   --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
 ```
 
-Set `genai.enabled: false` in the config to run only the detection and Insight path.
+The GenAI path checks `/v1/models`, waits at least `genai.interval_seconds` between requests, and bounds queued and in-flight work with `genai.max_pending_requests`.
 
-The GenAI path checks `/v1/models` before sending a crop, waits at least `genai.interval_seconds` between attempts, and keeps at most `genai.max_pending_requests` queued or in-flight requests.
+## Troubleshooting
 
-## Appendix: Additional Models
-Other supported batch-1 YOLO26 detector models:
-- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-b1.tar.gz`
-- `yolo26m-det-int8-b1.tar.gz`
-
-Replace the default filename in the download command and `model.path`.
+- Verify the RTSP URL and Insight ports before investigating inference.
+- Verify `model.path` points to the detector package.
+- Verify the VLM server lists `genai_server.model.name` under `/v1/models`.
+- Disable GenAI to isolate the detector and Insight path.
 
 ## Source Files
-- Python source: `src/python/detector_app.py`, `src/python/genai_server.py`
-- Shared assets: `src/common/`
+
+- Detector application: `src/python/detector_app.py`
+- GenAI server: `src/python/genai_server.py`
+- Shared runtime files: `src/common/`
+
+## Development From Source
+
+To modify or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

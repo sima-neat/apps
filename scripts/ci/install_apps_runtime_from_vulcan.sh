@@ -7,7 +7,7 @@ Usage:
   install_apps_runtime_from_vulcan.sh --target <apps-target> --install-dir <dir> [--env <env>] [--force]
 
 Installs an Apps artifact with sima-cli and prints the installed
-neat-apps-runtime directory path.
+prebuilt-apps directory path.
 EOF
 }
 
@@ -76,12 +76,11 @@ fi
 echo "Installing ${target} from Vulcan env ${artifact_env}" >&2
 "${cmd[@]}" >&2
 
-mapfile -t runtime_dirs < <(find "${install_dir}" -type d -path '*/neat-apps/neat-apps-runtime' | sort)
-if [[ "${#runtime_dirs[@]}" -ne 1 ]]; then
-  echo "Expected exactly one installed apps runtime, found ${#runtime_dirs[@]}." >&2
-  printf '  %s\n' "${runtime_dirs[@]}" >&2 || true
+runtime_dir="${install_dir}/prebuilt-apps"
+if [[ ! -d "${runtime_dir}" ]]; then
+  echo "Expected installed Apps runtime at ${runtime_dir}." >&2
   find "${install_dir}" -maxdepth 4 -mindepth 1 -type d -printf '  %p\n' | sort >&2 || true
   exit 1
 fi
 
-printf '%s\n' "${runtime_dirs[0]}"
+printf '%s\n' "${runtime_dir}"

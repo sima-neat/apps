@@ -1,7 +1,7 @@
 # Profile: 24 x 720p @ 20 FPS (q4/i2/m4).
 model:                       # Detector model selection.
-  path: yolo26n-det-int8-b1.tar.gz # Resolved relative to this config file.
-  labels: coco_label.txt      # Resolved relative to this config file.
+  path: <model-path>         # Absolute or relative to this config file.
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
   decode_type: yolo26
 
 streams:                     # RTSP inputs, one entry per camera.
