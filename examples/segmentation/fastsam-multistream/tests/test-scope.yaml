@@ -20,12 +20,9 @@ unit:
   cpp: true
 e2e:
   python:
-    enabled: true
-    models:
-      - fastsam_x
-      - mobileclip2_s0_image_encoder
-      - mobileclip2_s0_text_encoder
-      - mobileclip2_s0_text_host_consts
+    enabled: false
+    reason: Models not published for download yet.
+    models: []
   cpp:
     enabled: false
     reason: Models not published for download yet.
