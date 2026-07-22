@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -16,7 +17,6 @@ from config import load_config
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 PULL_TIMEOUT_MS = 100
-HOLD_FRAMES = 5
 
 _stop = False
 
@@ -185,6 +185,54 @@ def _send_metadata(sender, payload, frame_id, timestamp_ms):
         print(f"[warn] metadata send failed: {ex}", file=sys.stderr)
 
 
+class _Stream:
+    def __init__(self, index, source_run, video_run, geom, sender, width, height):
+        self.index = index
+        self.source_run = source_run
+        self.video_run = video_run
+        self.geom = geom
+        self.sender = sender
+        self.width = width
+        self.height = height
+        self.processed = 0
+        self.closed = False
+        self._lock = threading.Lock()
+        self._frame = None
+        self._match = None
+
+    def hand_off(self, rgb):
+        with self._lock:
+            self._frame = rgb
+
+    def take_frame(self):
+        with self._lock:
+            rgb, self._frame = self._frame, None
+            return rgb
+
+    def publish(self, match):
+        with self._lock:
+            self._match = match
+
+    def latest_match(self):
+        with self._lock:
+            return self._match
+
+
+def _detector_loop(streams, cfg, fastsam_model, image_encoder, text_query, stop_event):
+    while not _stop and not stop_event.is_set():
+        worked = False
+        for stream in streams:
+            if stream.closed:
+                continue
+            rgb = stream.take_frame()
+            if rgb is None:
+                continue
+            worked = True
+            stream.publish(_detect(cfg, rgb, stream.geom, fastsam_model, image_encoder, text_query))
+        if not worked:
+            time.sleep(0.001)
+
+
 def main():
     signal.signal(signal.SIGINT, _on_sigint)
     try:
@@ -218,47 +266,46 @@ def main():
             )
             geom = fastsam.letterbox_geometry(width, height, cfg.infer_size)
             sender = _metadata_sender(cfg, index)
-            streams.append((source_run, video_run, geom, sender, width, height))
+            streams.append(_Stream(index, source_run, video_run, geom, sender, width, height))
             print(f"[stream {index}] {url} {width}x{height}@{fps} "
                   f"metadata={sender.metadata_port()}")
 
-        processed = [0] * len(streams)
-        closed = [False] * len(streams)
-        held = [None] * len(streams)
-        miss = [0] * len(streams)
-        while not _stop and not all(closed):
+        stop_event = threading.Event()
+        detector = threading.Thread(
+            target=_detector_loop,
+            args=(streams, cfg, fastsam_model, image_encoder, text_query, stop_event),
+            daemon=True,
+        )
+        detector.start()
+
+        while not _stop and not all(s.closed for s in streams):
             worked = False
-            for index, (source_run, video_run, geom, sender, width, height) in enumerate(streams):
-                if closed[index]:
+            for s in streams:
+                if s.closed:
                     continue
-                sample = source_run.pull(timeout_ms=PULL_TIMEOUT_MS)
+                sample = s.source_run.pull(timeout_ms=PULL_TIMEOUT_MS)
                 if sample is None:
-                    if not source_run.can_pull():
-                        closed[index] = True
+                    if not s.source_run.can_pull():
+                        s.closed = True
                     continue
                 if not sample.tensors:
                     continue
                 worked = True
-                processed[index] += 1
-                rgb = _frame_rgb(sample.tensors[0], width, height)
-                match = _detect(cfg, rgb, geom, fastsam_model, image_encoder, text_query)
-                if match is not None:
-                    held[index], miss[index] = match, 0
-                elif held[index] is not None and miss[index] < HOLD_FRAMES:
-                    miss[index] += 1
-                    match = held[index]
-                else:
-                    held[index] = None
-                if video_run is not None:
-                    _push_video(video_run, rgb, sample)
+                s.processed += 1
+                rgb = _frame_rgb(sample.tensors[0], s.width, s.height)
+                s.hand_off(rgb)
+                if s.video_run is not None:
+                    _push_video(s.video_run, rgb, sample)
                 ts_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
                 frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
-                _send_metadata(sender, _segments_json(match, cfg.text), frame_id, ts_ms)
-                if cfg.frames > 0 and processed[index] >= cfg.frames:
-                    closed[index] = True
-            if not worked and not all(closed):
+                _send_metadata(s.sender, _segments_json(s.latest_match(), cfg.text), frame_id, ts_ms)
+                if cfg.frames > 0 and s.processed >= cfg.frames:
+                    s.closed = True
+            if not worked and not all(s.closed for s in streams):
                 time.sleep(0.001)
 
+        stop_event.set()
+        detector.join(timeout=2.0)
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(0)
