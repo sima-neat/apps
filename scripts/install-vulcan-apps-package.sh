@@ -239,6 +239,7 @@ promote_apps_runtime() {
 }
 
 locate_package_staging
+trap 'cleanup_dependency_workspace; cleanup_package_staging' EXIT
 
 APPS_METADATA_PATH="${RUNTIME_SRC}/deps/neat-apps.json"
 if [[ ! -f "${APPS_METADATA_PATH}" || -L "${APPS_METADATA_PATH}" ]]; then
@@ -272,7 +273,6 @@ else
   echo "Installing the Core selected by Apps:"
   echo "  Ref        : ${CORE_REF}"
   echo "  Spec       : ${CORE_SPEC}"
-  trap cleanup_dependency_workspace EXIT
   cleanup_dependency_workspace
   mkdir -p "${CORE_INSTALL_DIR}" "${INSIGHT_INSTALL_DIR}"
   echo "  Scratch dir: ${CORE_INSTALL_DIR}"
@@ -289,7 +289,6 @@ else
     insight
 
   cleanup_dependency_workspace
-  trap - EXIT
 fi
 
 if ! promote_apps_runtime "${RUNTIME_SRC}" "${DEST_DIR}" "${LEGACY_RUNTIME_DIR}"; then

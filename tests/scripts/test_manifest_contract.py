@@ -1025,6 +1025,38 @@ def test_vulcan_installer_declines_upgrade_before_installing_dependencies(tmp_pa
     assert not (tmp_path / "sima-cli-args.txt").exists()
 
 
+def test_vulcan_installer_cleans_package_staging_when_upgrade_is_declined(tmp_path):
+    package_dir = tmp_path / "package"
+    package_name = "neat-apps-fix-prebuilt-apps-upgrade-deadbeef"
+    extracted_dir = package_dir / package_name
+    candidate_runtime = _write_vulcan_runtime(extracted_dir)
+    (candidate_runtime / "runtime-marker").write_text("new\n", encoding="utf-8")
+    archive = package_dir / f"{package_name}.tar.gz"
+    archive.write_text("archive\n", encoding="utf-8")
+    install_script = package_dir / "install_vulcan_apps_package.sh"
+    install_script.write_text("installer\n", encoding="utf-8")
+
+    install_dir = tmp_path / "installed/prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        runtime_src=candidate_runtime,
+        install_dir=install_dir,
+        allow_overwrite=False,
+        input_text="n\n",
+    )
+
+    assert proc.returncode != 0
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert not extracted_dir.exists()
+    assert not archive.exists()
+    assert not install_script.exists()
+    assert not (tmp_path / "sima-cli-args.txt").exists()
+
+
 def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
     package_dir = tmp_path / "package"
     runtime_dir = _write_vulcan_runtime(package_dir)
