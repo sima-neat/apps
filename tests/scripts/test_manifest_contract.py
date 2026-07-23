@@ -1108,21 +1108,19 @@ def test_vulcan_package_shell_quotes_exact_runtime_candidate():
     )
 
 
-def test_vulcan_does_not_override_manifest_core_context():
+def test_vulcan_uses_push_context_without_manifest_override():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "pull_request:\n    branches:\n      - main" in workflow
-    assert (
-        "if: ${{ github.event_name != 'pull_request' || "
-        "github.event.pull_request.head.repo.full_name == github.repository }}"
-        in workflow
-    )
+    assert "pull_request:" not in workflow
+    assert "github.event.pull_request" not in workflow
+    assert "github.head_ref" not in workflow
+    assert "GITHUB_HEAD_REF" not in workflow
+    assert "NEAT_APPS_ARTIFACT_BRANCH_KEY" not in workflow
+    assert "NEAT_APPS_ARTIFACT_SHORT_SHA" not in workflow
+    assert '-e GITHUB_REF_NAME="${{ github.ref_name }}"' in workflow
+    assert '-e GITHUB_SHA="${{ github.sha }}"' in workflow
     assert "resolve-core-context" not in workflow
     assert "NEAT_APPS_DEPENDENCY_BRANCH" not in workflow
-    assert (
-        'NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}"'
-        in workflow
-    )
 
 
 def test_release_dispatches_vulcan_for_the_created_tag():
