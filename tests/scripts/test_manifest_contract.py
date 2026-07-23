@@ -1093,13 +1093,18 @@ def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
     )
 
 
-def test_vulcan_package_invokes_installer_with_exact_runtime_candidate():
+def test_vulcan_package_shell_quotes_exact_runtime_candidate():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'runtime_extract_dir="${runtime_archive_name%.tar.gz}"' in workflow
+    assert 'runtime_install_path="./${runtime_extract_dir}/prebuilt-apps"' in workflow
+    assert (
+        "printf -v quoted_runtime_install_path '%q' "
+        '"${runtime_install_path}"' in workflow
+    )
     assert (
         '--install-script "bash ./install_vulcan_apps_package.sh '
-        './${runtime_extract_dir}/prebuilt-apps"' in workflow
+        '${quoted_runtime_install_path}"' in workflow
     )
 
 

@@ -314,6 +314,8 @@ jobs:
           runtime_archive="${runtime_archives[0]}"
           runtime_archive_name="$(basename "${runtime_archive}")"
           runtime_extract_dir="${runtime_archive_name%.tar.gz}"
+          runtime_install_path="./${runtime_extract_dir}/prebuilt-apps"
+          printf -v quoted_runtime_install_path '%q' "${runtime_install_path}"
 
           cp "${runtime_archive}" dist/
           install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
@@ -327,7 +329,7 @@ jobs:
             --name gh:sima-neat/apps \
             --version "${version}" \
             --description "SiMa.ai Neat example applications runtime" \
-            --install-script "bash ./install_vulcan_apps_package.sh ./${runtime_extract_dir}/prebuilt-apps"
+            --install-script "bash ./install_vulcan_apps_package.sh ${quoted_runtime_install_path}"
 
           python3 -m json.tool dist/metadata.json >/dev/null
           scripts/ci/validate_apps_runtime_archive.sh "dist/$(basename "${runtime_archive}")"
