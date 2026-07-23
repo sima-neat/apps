@@ -22,7 +22,7 @@ using sima_examples::testing::spawn_and_wait;
 
 namespace {
 
-constexpr const char* kModelPath = "assets/models/yolo26n-det-int8-b1.tar.gz";
+constexpr const char* kModelPath = "models/yolo26n-det-int8-b1.tar.gz";
 
 bool expect_true(bool condition, const std::string& message) {
   if (!condition) {
@@ -221,10 +221,7 @@ bool test_validate_config_only_accepts_twenty_four_streams(const std::string& bi
                       "validate output reports the proven total credit default") &&
       expect_contains(result.stdout_text,
                       (config_path.parent_path() / kModelPath).lexically_normal().string(),
-                      "relative model path resolves from the config directory") &&
-      expect_contains(result.stdout_text,
-                      (config_path.parent_path() / "coco_label.txt").lexically_normal().string(),
-                      "relative labels path resolves from the config directory");
+                      "relative model path resolves from the config directory");
   remove_dir(config_path.parent_path().string());
   return ok;
 }

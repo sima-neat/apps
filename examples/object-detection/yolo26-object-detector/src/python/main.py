@@ -120,14 +120,14 @@ def main() -> int:
     runtime_cfg = raw.get("runtime", {})
     output_cfg = raw.get("output", {})
 
-    model_path = model_cfg.get("path", "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz")
+    model_path = model_cfg.get("path", "models/yolo26m-det-bf16-mla_tess-b1.tar.gz")
     labels_path = Path(
         model_cfg.get(
             "labels",
             "examples/object-detection/yolo26-object-detector/src/common/coco_label.txt",
         )
     )
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/yolo26-object-detector"))
     min_score = float(decode_cfg.get("score_threshold", MIN_SCORE))
     nms_iou = float(decode_cfg.get("nms_iou", NMS_IOU))

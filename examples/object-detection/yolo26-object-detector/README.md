@@ -1,6 +1,7 @@
 # YOLO26 Object Detector
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | object-detection |
@@ -12,74 +13,82 @@
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
-Minimal image-folder object detection pipeline using a YOLO26 detection model. Each image is inferred, annotated with bounding boxes and labels, and written to an output folder. The pipeline demonstrates the Neat Library API for model loading, inference, and result decoding.
+
+Minimal image-folder detection with a YOLO26 model. Each image is inferred, annotated with boxes and labels, and written to an output folder.
 
 ## Preview
-Snippet from a pipeline run:
 
-![YOLO26 object detector preview](../../../assets/portal/object-detection/yolo26-object-detector/image.png)
-
-## Supported Models
-Use the SDK platform version wherever `<platform-version>` appears.
-
-Default model: `yolo26m-det-bf16-mla_tess-b1.tar.gz`.
-
-Download the default model:
-
-```bash
-mkdir -p assets/models
-cd assets/models
-
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
-
-cd ../..
-```
-
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+![YOLO26 object detector preview](../../../portal/assets/examples/object-detection/yolo26-object-detector/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
-- Labels file: `examples/object-detection/yolo26-object-detector/src/common/coco_label.txt`
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 
-Clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+| Model file | Role |
+| --- | --- |
+| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Default |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-b1.tar.gz` | Supported |
+| `yolo26m-det-int8-b1.tar.gz` | Supported |
+
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
+
+```bash
+cat /etc/buildinfo
+export PLATFORM_VERSION="<platform-version>"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-detection/<model-file>"
+cd ..
+```
+
+Set `model.path` in the config to the downloaded package.
 
 ## Configure
+
 Edit `examples/object-detection/yolo26-object-detector/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: <model-path>                         # Path to the model package.
+  path: <model-path>
   labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
 
 io:
-  input_dir: assets/test_images                           # Folder containing input images.
-  output_dir: sandbox/yolo26-object-detector              # Folder for annotated images.
+  input_dir: assets/datasets/coco
+  output_dir: sandbox/yolo26-object-detector
 
 decode:
-  score_threshold: 0.40                                   # Minimum object confidence.
-  nms_iou: 0.60                                           # Overlap threshold for NMS.
+  score_threshold: 0.40
+  nms_iou: 0.60
 ```
 
 ## Run
+
 ### C++
+
 ```bash
-./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector \
+./examples/object-detection/yolo26-object-detector/src/cpp/pre-built/yolo26-object-detector \
   --config examples/object-detection/yolo26-object-detector/src/common/config.yaml
 ```
 
 ### Python
+
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
@@ -87,69 +96,21 @@ python3 examples/object-detection/yolo26-object-detector/src/python/main.py \
   --config examples/object-detection/yolo26-object-detector/src/common/config.yaml
 ```
 
-## Testing
-On the Modalix/DevKit board, run from the apps repository root:
+## Troubleshooting
 
-```bash
-cd <apps-repo-root>
-```
-
-### C++
-Unit test:
-```bash
-./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector_unit_test \
-  ./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector
-```
-
-E2E test:
-```bash
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
-SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
-./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector_e2e_test \
-  ./build/examples/object-detection/yolo26-object-detector/yolo26-object-detector
-```
-
-### Python
-Unit test:
-```bash
-source ~/pyneat/bin/activate
-pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
-pytest examples/object-detection/yolo26-object-detector/tests/python/test_unit.py -v
-```
-
-E2E test:
-```bash
-source ~/pyneat/bin/activate
-pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
-SIMANEAT_APPS_TEST_MODELS_DIR="$PWD/assets/models" \
-SIMANEAT_APPS_TEST_INPUT_DIR="$PWD/assets/test_images" \
-SIMANEAT_APPS_TEST_TIMEOUT_MS=60000 \
-SIMANEAT_APPS_TEST_REQUIRE_E2E=1 \
-pytest examples/object-detection/yolo26-object-detector/tests/python/test_e2e.py -v
-```
-
-## Debugging Notes
-- If detections are missing, validate label file ordering and score thresholds.
-- If model load fails, verify `model.path` points to a readable model package.
-- Ensure input folder contains supported image extensions (`.jpg`, `.jpeg`, `.png`, `.bmp`).
-- Use `--profile` to identify bottlenecks in the pipeline.
-- Use `decode.score_threshold` and `decode.nms_iou` to tune detection sensitivity.
-
-## Appendix: Additional Models
-Other supported batch-1 YOLO26 detection models:
-- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-b1.tar.gz`
-- `yolo26m-det-int8-b1.tar.gz`
-
-Replace the default filename in the download command and `model.path`.
+- Verify `model.path` and the labels file if detections are missing.
+- Confirm the input folder contains `.jpg`, `.jpeg`, `.png`, or `.bmp` files.
+- Adjust `decode.score_threshold` and `decode.nms_iou` when tuning detections.
+- Use `--profile` to inspect pipeline timing.
 
 ## Source Files
-- C++ source: `src/cpp/main.cpp`
-- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+
+- C++ reference source: `src/cpp/main.cpp`
 - Python source: `src/python/main.py`
-- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
-- Shared assets: `src/common/coco_label.txt`
+- Shared config and labels: `src/common/`
+
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

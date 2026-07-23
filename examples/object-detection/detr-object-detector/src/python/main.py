@@ -16,7 +16,7 @@ import yaml
 VERBOSE = False
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_PATH = "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"
+DEFAULT_MODEL_PATH = "models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 FRAME_WIDTH = 1333
 FRAME_HEIGHT = 800
@@ -433,7 +433,7 @@ def main() -> int:
     decode_cfg = raw.get("decode", {})
     runtime_cfg = raw.get("runtime", {})
 
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/detr-object-detector"))
     confidence_threshold = float(decode_cfg.get("confidence_threshold", 0.5))

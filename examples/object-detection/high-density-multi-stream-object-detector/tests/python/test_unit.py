@@ -17,7 +17,7 @@ import yaml
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
-MODEL_PATH = "assets/models/yolo26n-det-int8-b1.tar.gz"
+MODEL_PATH = "models/yolo26n-det-int8-b1.tar.gz"
 COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 
 if str(PYTHON_DIR) not in sys.path:
@@ -298,7 +298,7 @@ output:
         assert should_send_metadata(cfg, 15) is True
         assert should_send_metadata(cfg, 16) is False
 
-    def test_load_app_config_resolves_model_and_labels_from_config_directory(
+    def test_load_app_config_resolves_model_and_labels_by_their_owners(
         self, tmp_path: Path
     ):
         from main import load_app_config
@@ -322,7 +322,7 @@ output:
         cfg = load_app_config(config_path)
 
         assert cfg.model_path == str(config_dir / "models" / "detector.mpk")
-        assert cfg.labels_path == config_dir / "labels" / "coco.txt"
+        assert cfg.labels_path == Path("labels/coco.txt")
 
     def test_load_app_config_accepts_forty_streams(self, tmp_path: Path):
         from main import load_app_config

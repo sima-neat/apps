@@ -1,6 +1,7 @@
 # Image Classifier
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | classification |
@@ -12,68 +13,78 @@
 | Model | resnet_50 |
 
 ## Concept
-Minimal Model API usage with a compiled ResNet50 model package. The example loads the package, runs single-image inference, and prints top-1/top-5 classification output.
+
+Minimal Model API usage with a compiled ResNet50 package. The example runs single-image inference and prints top-1 and top-5 classification results.
 
 ## Preview
-The pipeline is trying to classify this goldfish image.
 
-![Image classifier goldfish input](../../../assets/portal/classification/image-classifier/image.jpeg)
+The pipeline classifies this goldfish image:
 
-## Supported Models
-Use the SDK platform version wherever `<platform-version>` appears.
-
-Primary model: `resnet_50`
-
-Download the model:
-
-```bash
-mkdir -p assets/models
-cd assets/models
-sima-cli modelzoo -v <platform-version> get resnet_50
-cd ../..
-```
-
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+![Image classifier goldfish input](../../../portal/assets/examples/classification/image-classifier/image.jpeg)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
 
-Clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+| Model package | Role | Model Zoo name |
+| --- | --- | --- |
+| `resnet_50_mpk.tar.gz` | Default | `resnet_50` |
+
+Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value.
+
+```bash
+cat /etc/buildinfo
+export PLATFORM_VERSION="<platform-version>"
+mkdir -p models
+cd models
+sima-cli modelzoo -v "${PLATFORM_VERSION}" get resnet_50
+cd ..
+```
+
+Set `model.path` in the config to the downloaded package.
 
 ## Configure
-Edit `examples/classification/image-classifier/src/common/config.yaml` if you want to use a different image or threshold.
+
+Edit `examples/classification/image-classifier/src/common/config.yaml` to use a different image or threshold.
 
 ```yaml
 model:
-  path: <model-path>                        # Path to the model package.
+  path: <model-path>
 
 io:
-  image: null                               # Input image. null uses the sample image.
+  image: null
+  fallback_image_url: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n01443537_goldfish.JPEG
 
 validation:
-  min_probability: 0.50                     # Minimum expected-class probability.
+  min_probability: 0.50
 ```
 
+With `io.image: null`, the example downloads `fallback_image_url` and therefore requires network access. For offline use, set `io.image` to a readable local image path; the fallback URL is not used when a local path is configured.
+
 ## Run
+
 ### C++
+
 ```bash
-./build/examples/classification/image-classifier/image-classifier \
+./examples/classification/image-classifier/src/cpp/pre-built/image-classifier \
   --config examples/classification/image-classifier/src/common/config.yaml
 ```
 
 ### Python
+
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/classification/image-classifier/src/python/requirements.txt
@@ -81,12 +92,20 @@ python3 examples/classification/image-classifier/src/python/main.py \
   --config examples/classification/image-classifier/src/common/config.yaml
 ```
 
-## Debugging Notes
-- If you see a model load error, verify `model.path` points to a readable model package.
-- If image decode fails, set `io.image` in the config.
-- If top-1 validation fails, try lowering `validation.min_probability` for debug runs.
+## Troubleshooting
+
+- Verify `model.path` if model loading fails.
+- Set `io.image` to a readable local image if downloading or decoding the fallback image fails.
+- Lower `validation.min_probability` when investigating validation failures.
 
 ## Source Files
-- C++ source: `src/cpp/main.cpp`
+
+- C++ reference source: `src/cpp/main.cpp`
 - Python source: `src/python/main.py`
 - Shared config: `src/common/config.yaml`
+
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

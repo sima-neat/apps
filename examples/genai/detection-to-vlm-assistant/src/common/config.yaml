@@ -2,7 +2,7 @@ source:                      # RTSP input source.
   rtsp_url: <rtsp-url-1>     # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
 
 model:                       # Detector model selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
   labels: examples/genai/detection-to-vlm-assistant/src/common/coco_label.txt
 
 inference:                   # Detection controls.
@@ -28,8 +28,8 @@ genai_server:                # Local GenAI server process.
   host: 0.0.0.0              # Host interface to bind.
   port: 9998                 # Server port.
   model:                     # Vision-language model served locally.
-    name: <served-vlm-model-name>
-    path: <path-to-vlm-model-dir>
+    name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
+    path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
 
 genai:                       # Optional crop-to-VLM requests.
   enabled: true              # Enable crop-to-VLM requests.

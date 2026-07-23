@@ -39,17 +39,17 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
         "General Models",
         (
             ModelRow("resnet_50", "resnet_50_mpk.tar.gz", "image-classifier",
-                     "assets/models/resnet_50_mpk.tar.gz"),
+                     "models/resnet_50_mpk.tar.gz"),
             ModelRow("depth_anything_v2_vits", "depth_anything_v2_vits_mpk.tar.gz",
-                     "depth-estimator", "assets/models/depth_anything_v2_vits_mpk.tar.gz"),
+                     "depth-estimator", "models/depth_anything_v2_vits_mpk.tar.gz"),
             ModelRow("retinaface_mobilenet25", "retinaface_mobilenet25_mod_0_mpk.tar.gz",
-                     "face-detector", "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz"),
+                     "face-detector", "models/retinaface_mobilenet25_mod_0_mpk.tar.gz"),
             ModelRow("detr_resnet50_modified_class_embed_bbox_embed",
                      "detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz",
                      "detr-object-detector",
-                     "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"),
+                     "models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"),
             ModelRow("yolo_v8n_seg", "yolo_v8n_seg_mpk.tar.gz",
-                     "yolov8-instance-segmenter", "assets/models/yolo_v8n_seg_mpk.tar.gz"),
+                     "yolov8-instance-segmenter", "models/yolo_v8n_seg_mpk.tar.gz"),
         ),
     ),
     (
@@ -59,36 +59,36 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
                      "yolo26n-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26n-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26n-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26s-det-bf16-mla_tess-b1",
                      "yolo26s-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26s-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26s-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-det-bf16-mla_tess-b1",
                      "yolo26m-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "yolo26-object-detector, detection-to-vlm-assistant, "
                      "multi-stream-people-tracker",
-                     "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/yolo26m-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26l-det-bf16-mla_tess-b1",
                      "yolo26l-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26l-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26l-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26x-det-bf16-mla_tess-b1",
                      "yolo26x-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26x-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26x-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-det-bf16-b1", "yolo26m-det-bf16-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "detection-to-vlm-assistant, multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26m-det-bf16-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26m-det-bf16-b1.tar.gz"),
             ModelRow("yolo26m-det-int8-b1", "yolo26m-det-int8-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "detection-to-vlm-assistant, multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz"),
         ),
     ),
     (
@@ -96,29 +96,29 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
         (
             ModelRow("yolo26n-seg-bf16-mla_tess", "yolo26n-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26n-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26n-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26s-seg-bf16-mla_tess", "yolo26s-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26s-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26s-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26m-seg-bf16-mla_tess", "yolo26m-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26l-seg-bf16-mla_tess", "yolo26l-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26l-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26l-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26x-seg-bf16-mla_tess", "yolo26x-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26x-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26x-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26m-seg-bf16-b1", "yolo26m-seg-bf16-b1.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/yolo26m-seg-bf16-b1.tar.gz"),
+                     "models/yolo26m-seg-bf16-b1.tar.gz"),
             ModelRow("yolo26m-seg-bf16-mla_tess-b1",
                      "yolo26m-seg-bf16-mla_tess-b1.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-seg-int8-b1", "yolo26m-seg-int8-b1.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26m-seg-int8-b1.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-int8-b1.tar.gz"),
         ),
     ),
 )
@@ -160,7 +160,7 @@ def resolve_model_path(row: ModelRow) -> Path:
     preferred = APPS_ROOT / row.preferred_path
     if preferred.exists():
         return preferred
-    matches = sorted((APPS_ROOT / "assets" / "models").rglob(row.package))
+    matches = sorted((APPS_ROOT / "models").rglob(row.package))
     if not matches:
         raise FileNotFoundError(f"model package not found: {row.package}")
     return matches[0]

@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
 
   // Resolve model directory (same env var used by Python tests).
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
 
   const std::string model_path = configured_model_path("face-detector", models_dir);
 
@@ -28,13 +28,13 @@ int main(int argc, char** argv) {
     return skip_or_fail("RetinaFace model (.tar.gz) not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  // Follow the shared e2e convention: default to assets/test_images.
+  // Follow the shared e2e convention: default to assets/datasets-test/coco.
   const char* input_dir_raw = env_or_null("SIMANEAT_APPS_TEST_INPUT_DIR");
-  const std::string input_dir = input_dir_raw ? input_dir_raw : "assets/test_images";
+  const std::string input_dir = input_dir_raw ? input_dir_raw : "assets/datasets-test/coco";
 
   if (!fs::exists(input_dir) || fs::is_empty(input_dir)) {
     env_or_skip("SIMANEAT_APPS_TEST_INPUT_DIR",
-                "directory containing test images (defaults to assets/test_images)");
+                "directory containing test images (defaults to assets/datasets-test/coco)");
     return kSkipCode;
   }
 

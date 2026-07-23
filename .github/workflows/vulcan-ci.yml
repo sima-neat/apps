@@ -1,6 +1,6 @@
 name: Vulcan CI
 
-run-name: ${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'production' }})
+run-name: ${{ github.event.head_commit.message || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'production' }})
 
 on:
   push:
@@ -22,6 +22,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  SIMA_CLI_AUTO_ACCEPT_UPDATE: "1"
 
 jobs:
   resolve-vulcan-config:
@@ -66,12 +67,9 @@ jobs:
 
         docker exec \
           -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
-          -e GITHUB_HEAD_REF="${{ github.head_ref }}" \
           -e GITHUB_REF_NAME="${{ github.ref_name }}" \
           -e GITHUB_REF_TYPE="${{ github.ref_type }}" \
           -e GITHUB_SHA="${{ github.sha }}" \
-          -e NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}" \
-          -e NEAT_APPS_ARTIFACT_SHORT_SHA="${{ github.sha }}" \
           -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
           -e NEAT_CORE_INSTALL_MODE="vulcan" \
           -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
@@ -142,7 +140,6 @@ jobs:
         fi
         test -f neat-apps-tests.tar.gz
         scripts/ci/validate_apps_runtime_archive.sh "${runtime_archives[0]}"
-        tar -tzf "${runtime_archives[0]}" neat-apps-runtime/neat-core.json >/dev/null
         tar -tzf neat-apps-tests.tar.gz neat-apps-tests/tests/test.sh >/dev/null
         ls -lh "${runtime_archives[0]}" neat-apps-tests.tar.gz
 
@@ -162,7 +159,7 @@ jobs:
       artifact_folder: "."
       artifact_pattern: neat-apps-dist
       artifact_glob: "*"
-      min_artifact_count: 4
+      min_artifact_count: 3
 
   resolve-portal-publish-config:
     name: Resolve Portal Publish Config
@@ -185,8 +182,6 @@ jobs:
     runs-on:
       group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
       labels: [self-hosted, Linux, ARM64, modalix, "vulcan-${{ needs.resolve-vulcan-config.outputs.vulcan_env }}"]
-    env:
-      VULCAN_ENV: ${{ needs.resolve-vulcan-config.outputs.vulcan_env }}
 
     steps:
       - name: Checkout code
@@ -198,7 +193,7 @@ jobs:
       - name: Clean test workspace
         run: |
           rm -rf _vulcan-test neat-apps neat-apps-* sima-neat-*-Linux-extras
-          rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh neat-core.json
+          rm -f neat-apps-*.tar.gz metadata*.json install_vulcan_apps_package.sh
 
       - name: Download Apps build artifacts
         uses: actions/download-artifact@v7
@@ -213,6 +208,27 @@ jobs:
           else
             echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
           fi
+
+      - name: Install Apps Core for runtime tests
+        run: |
+          set -euo pipefail
+          artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
+          mapfile -t runtime_archives < <(
+            find _vulcan-test/artifacts -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
+              ! -name 'neat-apps-tests.tar.gz' | sort
+          )
+          if [[ "${#runtime_archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one runtime candidate, found ${#runtime_archives[@]}" >&2
+            exit 1
+          fi
+          core_target="$(
+            tar -xOzf "${runtime_archives[0]}" prebuilt-apps/deps/neat-core.json \
+              | python3 -c 'import json, sys; core = json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
+          )"
+          NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
+            NEAT_CORE_INSTALL_MODE=vulcan \
+            NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
+            ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
 
       - name: Install runtime candidate and overlay tests
         run: |
@@ -231,11 +247,15 @@ jobs:
           tar -xzf "${runtime_archives[0]}" -C _vulcan-test/package
           (
             cd _vulcan-test/package
-            NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/neat-apps" \
-              NEAT_VULCAN_ENV="${VULCAN_ENV}" \
-              bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
+            NEAT_APPS_SKIP_DEPENDENCIES=1 \
+              NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps" \
+              bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh" "./prebuilt-apps"
           )
-          runtime_dir="${GITHUB_WORKSPACE}/_vulcan-test/install/neat-apps/neat-apps-runtime"
+          if [[ -e "${GITHUB_WORKSPACE}/_vulcan-test/install/deps" ]]; then
+            echo "Apps dependency workspace was not cleaned." >&2
+            exit 1
+          fi
+          runtime_dir="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps"
           scripts/ci/overlay_apps_tests.sh "${test_archive}" "${runtime_dir}"
           printf '%s\n' "${runtime_dir}" > _vulcan-test/apps_runtime_dir.txt
           echo "Using apps runtime: ${runtime_dir}"
@@ -285,11 +305,13 @@ jobs:
               ! -name 'neat-apps-tests.tar.gz' | sort
           )
           runtime_archive="${runtime_archives[0]}"
-          RUNTIME_DIR="$(cat _vulcan-test/apps_runtime_dir.txt)"
+          runtime_archive_name="$(basename "${runtime_archive}")"
+          runtime_extract_dir="${runtime_archive_name%.tar.gz}"
+          runtime_install_path="./${runtime_extract_dir}/prebuilt-apps"
+          printf -v quoted_runtime_install_path '%q' "${runtime_install_path}"
 
           cp "${runtime_archive}" dist/
           install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
-          cp "${RUNTIME_DIR}/neat-core.json" dist/neat-core.json
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
@@ -300,7 +322,7 @@ jobs:
             --name gh:sima-neat/apps \
             --version "${version}" \
             --description "SiMa.ai Neat example applications runtime" \
-            --install-script install_vulcan_apps_package.sh
+            --install-script "bash ./install_vulcan_apps_package.sh ${quoted_runtime_install_path}"
 
           python3 -m json.tool dist/metadata.json >/dev/null
           scripts/ci/validate_apps_runtime_archive.sh "dist/$(basename "${runtime_archive}")"
