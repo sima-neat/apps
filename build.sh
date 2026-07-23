@@ -132,7 +132,7 @@ artifact_version() {
 package_distribution() {
   local build_path="${ROOT_DIR}/${BUILD_DIR}"
   local stage_root stage_dir test_stage_dir
-  local branch_key version archive_name archive_path
+  local branch_key version archive_name archive_path apps_ref apps_spec
   local test_archive_path="${ROOT_DIR}/neat-apps-tests.tar.gz"
 
   if [[ ! -d "${build_path}" ]]; then
@@ -160,6 +160,33 @@ package_distribution() {
     return 1
   fi
   cp "${NEAT_CORE_METADATA}" "${stage_dir}/deps/neat-core.json"
+  apps_ref="${NEAT_APPS_ARTIFACT_BRANCH_KEY:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}}"
+  if [[ -z "${apps_ref}" ]] && command -v git >/dev/null 2>&1; then
+    apps_ref="$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "${apps_ref}" ]]; then
+    echo "ERROR: unable to determine the Apps source ref." >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+  apps_spec="${GITHUB_SHA:-}"
+  if [[ -z "${apps_spec}" ]] && command -v git >/dev/null 2>&1; then
+    apps_spec="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "${apps_spec}" ]]; then
+    echo "ERROR: unable to determine the Apps source commit." >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+  python3 - "${stage_dir}/deps/neat-apps.json" "${apps_ref}" "${apps_spec}" <<'PY'
+import json
+import sys
+
+path, ref, spec = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"neat-apps": {"ref": ref, "spec": spec}}, handle, indent=2)
+    handle.write("\n")
+PY
 
   while IFS= read -r cpp_dir; do
     local rel target_dir

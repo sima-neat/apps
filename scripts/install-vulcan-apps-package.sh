@@ -2,19 +2,23 @@
 set -euo pipefail
 
 DEST_DIR="${NEAT_APPS_INSTALL_DIR:-prebuilt-apps}"
-RUNTIME_SRC="${NEAT_APPS_RUNTIME_SRC:-prebuilt-apps}"
+RUNTIME_SRC="${1:-}"
 INSTALL_ROOT="$(dirname "${DEST_DIR}")"
 LEGACY_RUNTIME_DIR="${INSTALL_ROOT}/neat-apps/neat-apps-runtime"
-DEPS_DIR="${INSTALL_ROOT}/deps"
-DEPS_MARKER="${DEPS_DIR}/.neat-apps-installer-owned"
-DEPS_MARKER_VALUE="sima-neat/apps"
+DEPS_DIR="${RUNTIME_SRC}/deps"
 CORE_INSTALL_DIR="${DEPS_DIR}/core"
 INSIGHT_INSTALL_DIR="${DEPS_DIR}/insight"
-DEPS_WORKSPACE_ACTIVE=0
 PACKAGE_DIR="$(pwd -P)"
 CORE_METADATA_PATH=""
+APPS_METADATA_PATH=""
 PACKAGE_EXTRACT_DIR=""
 PACKAGE_ARCHIVE=""
+BACKUP_DIR="${INSTALL_ROOT}/.prebuilt-apps-backup"
+
+if [[ -z "${RUNTIME_SRC}" || ! -d "${RUNTIME_SRC}" || -L "${RUNTIME_SRC}" ]]; then
+  echo "Usage: install-vulcan-apps-package.sh <runtime-source>" >&2
+  exit 1
+fi
 
 resolve_sima_cli_bin() {
   if [[ -n "${SIMA_CLI_BIN:-}" && -x "${SIMA_CLI_BIN}" ]]; then
@@ -66,39 +70,8 @@ print(spec)
 PY
 }
 
-dependency_workspace_is_owned() {
-  [[ -d "${DEPS_DIR}" && ! -L "${DEPS_DIR}" \
-    && -f "${DEPS_MARKER}" && ! -L "${DEPS_MARKER}" ]] \
-    && grep -Fqx "${DEPS_MARKER_VALUE}" "${DEPS_MARKER}"
-}
-
 cleanup_dependency_workspace() {
-  if [[ "${DEPS_WORKSPACE_ACTIVE}" != "1" ]]; then
-    return 0
-  fi
-  if ! dependency_workspace_is_owned; then
-    echo "ERROR: refusing to remove dependency workspace without its ownership marker: ${DEPS_DIR}" >&2
-    return 1
-  fi
-  rm -rf "${DEPS_DIR}"
-  DEPS_WORKSPACE_ACTIVE=0
-}
-
-prepare_dependency_workspace() {
-  if [[ -e "${DEPS_DIR}" || -L "${DEPS_DIR}" ]]; then
-    if ! dependency_workspace_is_owned; then
-      echo "ERROR: refusing to replace unowned dependency workspace: ${DEPS_DIR}" >&2
-      return 1
-    fi
-    rm -rf "${DEPS_DIR}"
-  fi
-
-  mkdir -p "${DEPS_DIR}"
-  if ! printf '%s\n' "${DEPS_MARKER_VALUE}" >"${DEPS_MARKER}"; then
-    rmdir "${DEPS_DIR}" 2>/dev/null || true
-    return 1
-  fi
-  DEPS_WORKSPACE_ACTIVE=1
+  rm -rf "${CORE_INSTALL_DIR}" "${INSIGHT_INSTALL_DIR}"
 }
 
 run_sima_cli_install() {
@@ -121,6 +94,38 @@ run_sima_cli_install() {
     fi
     rm -f "${log_path}"
   )
+}
+
+confirm_runtime_replacement() {
+  local previous_dir=""
+  local response=""
+
+  if [[ -e "${DEST_DIR}" || -L "${DEST_DIR}" ]]; then
+    previous_dir="${DEST_DIR}"
+  elif [[ -e "${LEGACY_RUNTIME_DIR}" || -L "${LEGACY_RUNTIME_DIR}" ]]; then
+    previous_dir="${LEGACY_RUNTIME_DIR}"
+  fi
+  if [[ -z "${previous_dir}" ]]; then
+    return 0
+  fi
+
+  echo
+  echo "The existing prebuilt-apps installation will be replaced."
+  echo "  Preserved models: ${DEST_DIR}/models"
+  echo "  Previous files  : ${BACKUP_DIR}"
+  if [[ -e "${BACKUP_DIR}" || -L "${BACKUP_DIR}" ]]; then
+    echo "  Existing backup : will be replaced"
+  fi
+
+  if [[ "${NEAT_APPS_OVERWRITE:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  printf 'Continue? [y/N] '
+  if ! IFS= read -r response || [[ ! "${response}" =~ ^[Yy]$ ]]; then
+    echo "Apps installation cancelled."
+    return 1
+  fi
 }
 
 locate_package_staging() {
@@ -158,7 +163,7 @@ promote_apps_runtime() {
   local source_dir="$1"
   local dest_dir="$2"
   local legacy_dir="$3"
-  local dest_parent stage_root staged_runtime backup_dir="" previous_dir=""
+  local dest_parent stage_root staged_runtime previous_dir=""
   local models_preserved=0
 
   dest_parent="$(dirname "${dest_dir}")"
@@ -184,28 +189,25 @@ promote_apps_runtime() {
   fi
 
   if [[ -n "${previous_dir}" ]]; then
-    if ! backup_dir="$(mktemp -d "${dest_parent}/.prebuilt-apps-backup.XXXXXX")"; then
-      echo "ERROR: failed to create an Apps rollback path under ${dest_parent}." >&2
-      rm -rf "${stage_root}"
-      return 1
+    if [[ -e "${BACKUP_DIR}" || -L "${BACKUP_DIR}" ]]; then
+      if ! rm -rf "${BACKUP_DIR}"; then
+        echo "ERROR: failed to replace the previous Apps backup: ${BACKUP_DIR}" >&2
+        rm -rf "${stage_root}"
+        return 1
+      fi
     fi
-    if ! rmdir "${backup_dir}"; then
-      echo "ERROR: failed to prepare the Apps rollback path: ${backup_dir}" >&2
-      rm -rf "${stage_root}" "${backup_dir}"
-      return 1
-    fi
-    if ! mv "${previous_dir}" "${backup_dir}"; then
+    if ! mv "${previous_dir}" "${BACKUP_DIR}"; then
       echo "ERROR: failed to stage the existing Apps runtime for rollback." >&2
       rm -rf "${stage_root}"
       return 1
     fi
 
-    if [[ -e "${backup_dir}/models" || -L "${backup_dir}/models" ]]; then
+    if [[ -e "${BACKUP_DIR}/models" || -L "${BACKUP_DIR}/models" ]]; then
       rm -rf "${staged_runtime}/models"
-      if ! mv "${backup_dir}/models" "${staged_runtime}/models"; then
+      if ! mv "${BACKUP_DIR}/models" "${staged_runtime}/models"; then
         echo "ERROR: failed to preserve the existing Apps models directory." >&2
-        if ! mv "${backup_dir}" "${previous_dir}"; then
-          echo "ERROR: previous Apps runtime remains at ${backup_dir}." >&2
+        if ! mv "${BACKUP_DIR}" "${previous_dir}"; then
+          echo "ERROR: previous Apps runtime remains at ${BACKUP_DIR}." >&2
         fi
         rm -rf "${stage_root}"
         return 1
@@ -217,13 +219,13 @@ promote_apps_runtime() {
   if ! mv "${staged_runtime}" "${dest_dir}"; then
     echo "ERROR: failed to promote the candidate Apps runtime." >&2
     if [[ "${models_preserved}" == "1" ]]; then
-      if ! mv "${staged_runtime}/models" "${backup_dir}/models"; then
+      if ! mv "${staged_runtime}/models" "${BACKUP_DIR}/models"; then
         echo "ERROR: preserved models remain at ${staged_runtime}/models." >&2
         return 1
       fi
     fi
-    if [[ -n "${backup_dir}" ]] && ! mv "${backup_dir}" "${previous_dir}"; then
-      echo "ERROR: previous Apps runtime remains at ${backup_dir}." >&2
+    if [[ -n "${previous_dir}" ]] && ! mv "${BACKUP_DIR}" "${previous_dir}"; then
+      echo "ERROR: previous Apps runtime remains at ${BACKUP_DIR}." >&2
       return 1
     fi
     rm -rf "${stage_root}"
@@ -231,31 +233,18 @@ promote_apps_runtime() {
   fi
 
   rm -rf "${stage_root}"
-  if [[ -n "${backup_dir}" ]]; then
-    rm -rf "${backup_dir}"
-  fi
   if [[ -n "${previous_dir}" && "${previous_dir}" != "${dest_dir}" ]]; then
     rmdir "$(dirname "${previous_dir}")" 2>/dev/null || true
   fi
 }
 
-if [[ ! -d "${RUNTIME_SRC}" ]]; then
-  runtime_candidates=()
-  while IFS= read -r candidate; do
-    runtime_candidates+=("${candidate}")
-  done < <(find . -mindepth 1 -maxdepth 3 -type d -name "${RUNTIME_SRC}" | sort)
-  if [[ "${#runtime_candidates[@]}" -eq 1 ]]; then
-    RUNTIME_SRC="${runtime_candidates[0]}"
-  else
-    echo "ERROR: ${RUNTIME_SRC} was not extracted from the apps package." >&2
-    printf 'Found candidates:\n' >&2
-    printf '  %s\n' "${runtime_candidates[@]}" >&2
-    exit 1
-  fi
-fi
-
 locate_package_staging
 
+APPS_METADATA_PATH="${RUNTIME_SRC}/deps/neat-apps.json"
+if [[ ! -f "${APPS_METADATA_PATH}" || -L "${APPS_METADATA_PATH}" ]]; then
+  echo "ERROR: Apps package is missing ${APPS_METADATA_PATH}." >&2
+  exit 1
+fi
 CORE_METADATA_PATH="${RUNTIME_SRC}/deps/neat-core.json"
 if [[ ! -f "${CORE_METADATA_PATH}" || -L "${CORE_METADATA_PATH}" ]]; then
   echo "ERROR: Apps package is missing ${CORE_METADATA_PATH}." >&2
@@ -267,6 +256,8 @@ if ! CORE_TARGET="$(extract_neat_core_target)"; then
 fi
 CORE_REF="$(printf '%s\n' "${CORE_TARGET}" | sed -n '1p')"
 CORE_SPEC="$(printf '%s\n' "${CORE_TARGET}" | sed -n '2p')"
+
+confirm_runtime_replacement || exit 1
 
 if [[ "${NEAT_APPS_SKIP_DEPENDENCIES:-0}" == "1" ]]; then
   echo
@@ -282,7 +273,8 @@ else
   echo "  Ref        : ${CORE_REF}"
   echo "  Spec       : ${CORE_SPEC}"
   trap cleanup_dependency_workspace EXIT
-  prepare_dependency_workspace
+  cleanup_dependency_workspace
+  mkdir -p "${CORE_INSTALL_DIR}" "${INSIGHT_INSTALL_DIR}"
   echo "  Scratch dir: ${CORE_INSTALL_DIR}"
   run_sima_cli_install "${CORE_INSTALL_DIR}" "${SIMA_CLI_RESOLVED}" \
     -d . \
@@ -309,3 +301,7 @@ INSTALLED_DIR="$(cd "$(dirname "${DEST_DIR}")" && pwd -P)/$(basename "${DEST_DIR
 echo
 echo "Installed apps runtime under:"
 echo "  ${INSTALLED_DIR}"
+if [[ -d "${BACKUP_DIR}" && ! -L "${BACKUP_DIR}" ]]; then
+  echo "Previous apps runtime retained under:"
+  echo "  ${BACKUP_DIR}"
+fi

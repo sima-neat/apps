@@ -256,7 +256,7 @@ jobs:
             cd _vulcan-test/package
             NEAT_APPS_SKIP_DEPENDENCIES=1 \
               NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps" \
-              bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
+              bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh" "./prebuilt-apps"
           )
           if [[ -e "${GITHUB_WORKSPACE}/_vulcan-test/install/deps" ]]; then
             echo "Apps dependency workspace was not cleaned." >&2
@@ -312,6 +312,8 @@ jobs:
               ! -name 'neat-apps-tests.tar.gz' | sort
           )
           runtime_archive="${runtime_archives[0]}"
+          runtime_archive_name="$(basename "${runtime_archive}")"
+          runtime_extract_dir="${runtime_archive_name%.tar.gz}"
 
           cp "${runtime_archive}" dist/
           install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
@@ -325,7 +327,7 @@ jobs:
             --name gh:sima-neat/apps \
             --version "${version}" \
             --description "SiMa.ai Neat example applications runtime" \
-            --install-script install_vulcan_apps_package.sh
+            --install-script "bash ./install_vulcan_apps_package.sh ./${runtime_extract_dir}/prebuilt-apps"
 
           python3 -m json.tool dist/metadata.json >/dev/null
           scripts/ci/validate_apps_runtime_archive.sh "dist/$(basename "${runtime_archive}")"
