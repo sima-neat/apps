@@ -4590,7 +4590,8 @@ async function initHubControls() {
     const el = document.getElementById(id); if (el) el.addEventListener('change', applyHubFilters);
   });
 
-  // Probe availability (online + allowed); the Add Model TAB shows only then.
+  // Probe availability (online + allowed). The Add Model tab is always
+  // visible; when the hub is offline/disabled its panel shows a note instead.
   let enabled = false;
   let data = null;
   try {
@@ -4600,8 +4601,6 @@ async function initHubControls() {
   } catch (err) { enabled = false; }
   _hubEnabled = enabled;
   renderDiskInfo(data && data.disk);   // NVMe free space (from the same status call)
-  const hubTab = document.getElementById('tabHuggingface');
-  if (hubTab) hubTab.style.display = enabled ? '' : 'none';
   renderInstalledList();   // refresh the empty-state hint now that hub status is known
 }
 
@@ -4610,7 +4609,7 @@ let _hubAllModels = [];
 let _hubLoaded = false;
 
 function ensureHubLoaded() {
-  if (_hubLoaded || !_hubEnabled) return;
+  if (_hubLoaded) return;
   _hubLoaded = true;
   loadHubModels();
 }
