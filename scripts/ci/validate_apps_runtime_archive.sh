@@ -11,6 +11,7 @@ runtime_root="prebuilt-apps"
 
 python3 - "${archive}" "${runtime_root}" <<'PY'
 import json
+import re
 import sys
 import tarfile
 from pathlib import PurePosixPath
@@ -27,6 +28,7 @@ def fail(message: str) -> None:
 with tarfile.open(archive, "r:gz") as bundle:
     members = bundle.getmembers()
     core_metadata_name = f"{root}/deps/neat-core.json"
+    apps_metadata_name = f"{root}/deps/neat-apps.json"
     text_suffixes = {
         ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
         ".json", ".md", ".py", ".sh", ".yaml", ".yml",
@@ -49,6 +51,8 @@ with tarfile.open(archive, "r:gz") as bundle:
             fail(f"runtime archive member is outside {root}/: {member.name}")
         if path.name == "neat-core.json" and member.name != core_metadata_name:
             fail(f"Core metadata is outside {core_metadata_name}: {member.name}")
+        if path.name == "neat-apps.json" and member.name != apps_metadata_name:
+            fail(f"Apps metadata is outside {apps_metadata_name}: {member.name}")
         if member.isfile() and member.name.endswith(model_suffixes):
             fail(f"runtime archive contains a packaged model: {member.name}")
         if (
@@ -89,6 +93,24 @@ with tarfile.open(archive, "r:gz") as bundle:
         fail(f"invalid Core ref in {core_metadata_name}")
     if not isinstance(spec, str) or not spec.strip() or spec == "latest":
         fail(f"invalid Core spec in {core_metadata_name}")
+
+    try:
+        apps_metadata = bundle.getmember(apps_metadata_name)
+    except KeyError:
+        fail(f"runtime archive is missing {apps_metadata_name}")
+    if not apps_metadata.isfile():
+        fail(f"runtime archive is missing {apps_metadata_name}")
+    source = bundle.extractfile(apps_metadata)
+    data = json.load(source)
+    apps = data.get("neat-apps")
+    if not isinstance(apps, dict):
+        fail(f"invalid Apps metadata in {apps_metadata_name}")
+    ref = apps.get("ref")
+    spec = apps.get("spec")
+    if not isinstance(ref, str) or not ref.strip():
+        fail(f"invalid Apps ref in {apps_metadata_name}")
+    if not isinstance(spec, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", spec):
+        fail(f"invalid Apps spec in {apps_metadata_name}")
 PY
 
 members="$(tar -tzf "${archive}")"

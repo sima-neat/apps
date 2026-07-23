@@ -18,7 +18,9 @@ sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-The Apps installer installs the Core selected for the Apps package and installs Insight through `sima-cli`. The installed bundle is placed under `prebuilt-apps/`. Run the remaining commands from that directory.
+Use `-d <install-root>` to install `prebuilt-apps/` under another directory. The Apps installer installs the Core selected for the Apps package and installs Insight through `sima-cli`. Run the remaining commands from the installed `prebuilt-apps/` directory.
+
+Run the same command with the same installation root to upgrade Apps. Before replacing an existing installation, the installer asks for confirmation, carries `models/` into the new bundle, and retains the remaining previous files under `.prebuilt-apps-backup/`. If that backup already exists, the installer warns before replacing it.
 
 ## Run an Example
 
@@ -73,6 +75,8 @@ Before downloading a model, set `PLATFORM_VERSION` to the displayed `DISTRO_VERS
 | `examples/<category>/<example>/src/common/` | Shared runtime configuration and data |
 | `assets/datasets/` | Shipped runtime sample data |
 | `models/` | User-managed model packages |
+| `deps/neat-apps.json` | Installed Apps ref and exact commit |
+| `deps/neat-core.json` | Core artifact selected for this Apps build |
 
 The installed bundle does not contain CMake files or tests. Clone the repository
 to compile source or run the Apps test suite.

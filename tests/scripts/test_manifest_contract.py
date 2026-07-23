@@ -22,6 +22,12 @@ VULCAN_INSTALLER = APPS_ROOT / "scripts/install-vulcan-apps-package.sh"
 VULCAN_WORKFLOW = APPS_ROOT / ".github/workflows/vulcan-ci.yml"
 RELEASE_WORKFLOW = APPS_ROOT / ".github/workflows/release.yml"
 RUNTIME_ARCHIVE_VALIDATOR = APPS_ROOT / "scripts/ci/validate_apps_runtime_archive.sh"
+APPS_TEST_METADATA = {
+    "neat-apps": {
+        "ref": "develop",
+        "spec": "0123456789abcdef0123456789abcdef01234567",
+    }
+}
 
 
 def _write_runtime_archive(
@@ -32,6 +38,7 @@ def _write_runtime_archive(
     extra_archive_members: tuple[str, ...] = (),
     member_contents: dict[str, str] | None = None,
     include_core_metadata: bool = True,
+    include_apps_metadata: bool = True,
 ) -> Path:
     archive_root = tmp_path / "archive-root" / root_name
     archive_root.mkdir(parents=True)
@@ -40,6 +47,13 @@ def _write_runtime_archive(
         core_metadata.parent.mkdir(parents=True)
         core_metadata.write_text(
             json.dumps({"neat-core": {"ref": "develop", "spec": "core-sha"}}),
+            encoding="utf-8",
+        )
+    if include_apps_metadata:
+        apps_metadata = archive_root / "deps/neat-apps.json"
+        apps_metadata.parent.mkdir(parents=True, exist_ok=True)
+        apps_metadata.write_text(
+            json.dumps(APPS_TEST_METADATA),
             encoding="utf-8",
         )
     for member in members:
@@ -79,6 +93,29 @@ def test_runtime_archive_validator_accepts_shipped_datasets(tmp_path):
 
 def test_runtime_archive_validator_rejects_missing_core_metadata(tmp_path):
     archive = _write_runtime_archive(tmp_path, include_core_metadata=False)
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
+
+
+def test_runtime_archive_validator_rejects_missing_apps_metadata(tmp_path):
+    archive = _write_runtime_archive(tmp_path, include_apps_metadata=False)
+    proc = _validate_runtime_archive(archive)
+
+    assert proc.returncode != 0
+
+
+def test_runtime_archive_validator_rejects_non_exact_apps_commit(tmp_path):
+    metadata_path = "deps/neat-apps.json"
+    archive = _write_runtime_archive(
+        tmp_path,
+        metadata_path,
+        member_contents={
+            metadata_path: json.dumps(
+                {"neat-apps": {"ref": "develop", "spec": "short-sha"}}
+            )
+        },
+    )
     proc = _validate_runtime_archive(archive)
 
     assert proc.returncode != 0
@@ -387,6 +424,10 @@ def _write_vulcan_runtime(
         json.dumps({"neat-core": core}),
         encoding="utf-8",
     )
+    (deps_dir / "neat-apps.json").write_text(
+        json.dumps(APPS_TEST_METADATA),
+        encoding="utf-8",
+    )
     return runtime_dir
 
 
@@ -395,6 +436,9 @@ def _run_vulcan_installer(
     package_dir: Path,
     *,
     install_dir: Path | None = None,
+    runtime_src: Path | None = None,
+    allow_overwrite: bool = True,
+    input_text: str | None = None,
     sima_cli_status: int = 0,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -411,12 +455,19 @@ def _run_vulcan_installer(
     )
     if install_dir is not None:
         env["NEAT_APPS_INSTALL_DIR"] = str(install_dir)
+    if allow_overwrite:
+        env["NEAT_APPS_OVERWRITE"] = "1"
+    else:
+        env.pop("NEAT_APPS_OVERWRITE", None)
     if extra_env:
         env.update(extra_env)
+    if runtime_src is None:
+        runtime_src = package_dir / "prebuilt-apps"
     return subprocess.run(
-        ["bash", str(VULCAN_INSTALLER)],
+        ["bash", str(VULCAN_INSTALLER), str(runtime_src)],
         cwd=package_dir,
         env=env,
+        input=input_text,
         check=False,
         capture_output=True,
         text=True,
@@ -828,9 +879,13 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     assert json.loads(
         (install_dir / "deps/neat-core.json").read_text(encoding="utf-8")
     ) == {"neat-core": {"ref": "develop", "spec": "core-sha"}}
+    assert (
+        json.loads((install_dir / "deps/neat-apps.json").read_text(encoding="utf-8"))
+        == APPS_TEST_METADATA
+    )
     assert (tmp_path / "sima-cli-cwd.txt").read_text(encoding="utf-8").splitlines() == [
-        str(package_dir / "deps" / "core"),
-        str(package_dir / "deps" / "insight"),
+        str(runtime_dir / "deps" / "core"),
+        str(runtime_dir / "deps" / "insight"),
     ]
     assert (tmp_path / "sima-cli-args.txt").read_text(
         encoding="utf-8"
@@ -838,7 +893,8 @@ def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
         "neat install -d . -t minimal core@develop:core-sha",
         "neat install -d . insight",
     ]
-    assert not (package_dir / "deps").exists()
+    assert not (runtime_dir / "deps/core").exists()
+    assert not (runtime_dir / "deps/insight").exists()
     assert f"  {install_dir}" in proc.stdout
 
 
@@ -847,6 +903,21 @@ def test_vulcan_installer_rejects_missing_core_metadata_before_promotion(tmp_pat
     runtime_dir = _write_vulcan_runtime(package_dir)
     (runtime_dir / "deps" / "neat-core.json").unlink()
     install_dir = tmp_path / "installed" / "prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
+
+    assert proc.returncode != 0
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert not (tmp_path / "sima-cli-args.txt").exists()
+
+
+def test_vulcan_installer_rejects_missing_apps_metadata_before_promotion(tmp_path):
+    package_dir = tmp_path / "package"
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "deps/neat-apps.json").unlink()
+    install_dir = tmp_path / "installed/prebuilt-apps"
     install_dir.mkdir(parents=True)
     (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
 
@@ -880,7 +951,11 @@ def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
     unrelated = package_dir / "keep.txt"
     unrelated.write_text("keep\n", encoding="utf-8")
 
-    proc = _run_vulcan_installer(tmp_path, package_dir)
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        runtime_src=runtime_dir,
+    )
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (package_dir / "prebuilt-apps" / "runtime-marker").read_text(
@@ -892,6 +967,94 @@ def test_vulcan_installer_removes_downloaded_package_staging(tmp_path):
     assert not (package_dir / "deps").exists()
     assert (package_dir / "prebuilt-apps/deps/neat-core.json").is_file()
     assert unrelated.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_vulcan_installer_promotes_explicit_candidate_over_existing_installation(
+    tmp_path,
+):
+    package_dir = tmp_path / "package"
+    installed_runtime = _write_vulcan_runtime(package_dir)
+    (installed_runtime / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    package_name = "neat-apps-release-0.4.0-prep-deadbeef"
+    extracted_dir = package_dir / package_name
+    candidate_runtime = _write_vulcan_runtime(
+        extracted_dir,
+        {"ref": "v0.3.0", "spec": "release-core-sha"},
+    )
+    (candidate_runtime / "runtime-marker").write_text("new\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        runtime_src=candidate_runtime,
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (installed_runtime / "runtime-marker").read_text(encoding="utf-8") == (
+        "new\n"
+    )
+    assert json.loads(
+        (installed_runtime / "deps/neat-core.json").read_text(encoding="utf-8")
+    ) == {"neat-core": {"ref": "v0.3.0", "spec": "release-core-sha"}}
+
+
+def test_vulcan_installer_declines_upgrade_before_installing_dependencies(tmp_path):
+    package_dir = tmp_path / "package"
+    candidate_runtime = _write_vulcan_runtime(package_dir)
+    (candidate_runtime / "runtime-marker").write_text("new\n", encoding="utf-8")
+
+    install_dir = tmp_path / "installed/prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        install_dir=install_dir,
+        allow_overwrite=False,
+        input_text="n\n",
+    )
+
+    assert proc.returncode != 0
+    assert "The existing prebuilt-apps installation will be replaced" in proc.stdout
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert (candidate_runtime / "runtime-marker").read_text(encoding="utf-8") == (
+        "new\n"
+    )
+    assert not (tmp_path / "sima-cli-args.txt").exists()
+
+
+def test_vulcan_installer_cleans_package_staging_when_upgrade_is_declined(tmp_path):
+    package_dir = tmp_path / "package"
+    package_name = "neat-apps-fix-prebuilt-apps-upgrade-deadbeef"
+    extracted_dir = package_dir / package_name
+    candidate_runtime = _write_vulcan_runtime(extracted_dir)
+    (candidate_runtime / "runtime-marker").write_text("new\n", encoding="utf-8")
+    archive = package_dir / f"{package_name}.tar.gz"
+    archive.write_text("archive\n", encoding="utf-8")
+    install_script = package_dir / "install_vulcan_apps_package.sh"
+    install_script.write_text("installer\n", encoding="utf-8")
+
+    install_dir = tmp_path / "installed/prebuilt-apps"
+    install_dir.mkdir(parents=True)
+    (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+
+    proc = _run_vulcan_installer(
+        tmp_path,
+        package_dir,
+        runtime_src=candidate_runtime,
+        install_dir=install_dir,
+        allow_overwrite=False,
+        input_text="n\n",
+    )
+
+    assert proc.returncode != 0
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert not extracted_dir.exists()
+    assert not archive.exists()
+    assert not install_script.exists()
+    assert not (tmp_path / "sima-cli-args.txt").exists()
 
 
 def test_vulcan_installer_can_skip_dependency_installation(tmp_path):
@@ -924,6 +1087,25 @@ def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
     assert "--neat-core-version" in workflow
     assert "NEAT_CORE_INSTALL_MODE=vulcan" in workflow
     assert "NEAT_APPS_SKIP_DEPENDENCIES=1" in workflow
+    assert (
+        'bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh" '
+        '"./prebuilt-apps"' in workflow
+    )
+
+
+def test_vulcan_package_shell_quotes_exact_runtime_candidate():
+    workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'runtime_extract_dir="${runtime_archive_name%.tar.gz}"' in workflow
+    assert 'runtime_install_path="./${runtime_extract_dir}/prebuilt-apps"' in workflow
+    assert (
+        "printf -v quoted_runtime_install_path '%q' "
+        '"${runtime_install_path}"' in workflow
+    )
+    assert (
+        '--install-script "bash ./install_vulcan_apps_package.sh '
+        '${quoted_runtime_install_path}"' in workflow
+    )
 
 
 def test_vulcan_does_not_override_manifest_core_context():
@@ -1000,9 +1182,10 @@ def test_vulcan_installer_keeps_existing_runtime_when_insight_install_fails(tmp_
     assert not (install_dir.parent / "deps").exists()
 
 
-def test_vulcan_installer_refuses_unowned_dependency_workspace(tmp_path):
+def test_vulcan_installer_leaves_root_dependency_directory_untouched(tmp_path):
     package_dir = tmp_path / "package"
-    _write_vulcan_runtime(package_dir)
+    runtime_dir = _write_vulcan_runtime(package_dir)
+    (runtime_dir / "runtime-marker").write_text("new\n", encoding="utf-8")
     install_dir = tmp_path / "installed" / "prebuilt-apps"
     install_dir.mkdir(parents=True)
     (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
@@ -1012,24 +1195,18 @@ def test_vulcan_installer_refuses_unowned_dependency_workspace(tmp_path):
 
     proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
 
-    assert proc.returncode != 0
+    assert proc.returncode == 0, proc.stderr + proc.stdout
     assert unowned_file.read_text(encoding="utf-8") == "keep\n"
-    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
-    assert not (tmp_path / "sima-cli-args.txt").exists()
-    assert "refusing to replace unowned dependency workspace" in proc.stderr
+    assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
 
 
-def test_vulcan_installer_recreates_owned_dependency_workspace(tmp_path):
+def test_vulcan_installer_recreates_candidate_dependency_scratch(tmp_path):
     package_dir = tmp_path / "package"
-    _write_vulcan_runtime(package_dir)
+    runtime_dir = _write_vulcan_runtime(package_dir)
     install_dir = tmp_path / "installed" / "prebuilt-apps"
-    deps_dir = install_dir.parent / "deps"
-    stale_file = deps_dir / "core" / "stale-resource"
+    stale_file = runtime_dir / "deps/core/stale-resource"
     stale_file.parent.mkdir(parents=True)
     stale_file.write_text("stale\n", encoding="utf-8")
-    (deps_dir / ".neat-apps-installer-owned").write_text(
-        "sima-neat/apps\n", encoding="utf-8"
-    )
 
     proc = _run_vulcan_installer(
         tmp_path,
@@ -1040,12 +1217,13 @@ def test_vulcan_installer_recreates_owned_dependency_workspace(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert install_dir.is_dir()
-    assert not deps_dir.exists()
+    assert not (install_dir / "deps/core").exists()
+    assert not (install_dir / "deps/insight").exists()
 
 
 def test_vulcan_installer_cleans_dependency_workspace_on_termination(tmp_path):
     package_dir = tmp_path / "package"
-    _write_vulcan_runtime(package_dir)
+    runtime_dir = _write_vulcan_runtime(package_dir)
     install_dir = tmp_path / "installed" / "prebuilt-apps"
     install_dir.mkdir(parents=True)
     (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
@@ -1058,12 +1236,13 @@ def test_vulcan_installer_cleans_dependency_workspace_on_termination(tmp_path):
             "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(tmp_path / "sima-cli-args.txt"),
             "NEAT_APPS_TEST_SIMA_CLI_CWD": str(tmp_path / "sima-cli-cwd.txt"),
             "NEAT_APPS_TEST_SIMA_CLI_READY": str(ready_file),
+            "NEAT_APPS_OVERWRITE": "1",
             "PATH": f"{bin_dir}:{env['PATH']}",
             "SIMA_CLI_BIN": str(bin_dir / "sima-cli"),
         }
     )
     proc = subprocess.Popen(
-        ["bash", str(VULCAN_INSTALLER)],
+        ["bash", str(VULCAN_INSTALLER), str(runtime_dir)],
         cwd=package_dir,
         env=env,
         start_new_session=True,
@@ -1085,7 +1264,8 @@ def test_vulcan_installer_cleans_dependency_workspace_on_termination(tmp_path):
     proc.communicate(timeout=5)
 
     assert proc.returncode != 0
-    assert not (install_dir.parent / "deps").exists()
+    assert not (runtime_dir / "deps/core").exists()
+    assert not (runtime_dir / "deps/insight").exists()
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
 
 
@@ -1097,13 +1277,25 @@ def test_vulcan_installer_preserves_models_during_reinstall(tmp_path):
     models_dir = install_dir / "models"
     models_dir.mkdir(parents=True)
     (install_dir / "runtime-marker").write_text("old\n", encoding="utf-8")
+    (install_dir / "custom-config.yaml").write_text("custom\n", encoding="utf-8")
     (models_dir / "user-model.mpk").write_text("model\n", encoding="utf-8")
+    previous_backup = install_dir.parent / ".prebuilt-apps-backup"
+    previous_backup.mkdir()
+    (previous_backup / "obsolete-backup").write_text("obsolete\n", encoding="utf-8")
 
     proc = _run_vulcan_installer(tmp_path, package_dir, install_dir=install_dir)
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert (install_dir / "runtime-marker").read_text(encoding="utf-8") == "new\n"
     assert (models_dir / "user-model.mpk").read_text(encoding="utf-8") == "model\n"
+    backup_dir = install_dir.parent / ".prebuilt-apps-backup"
+    assert (backup_dir / "runtime-marker").read_text(encoding="utf-8") == "old\n"
+    assert (backup_dir / "custom-config.yaml").read_text(encoding="utf-8") == (
+        "custom\n"
+    )
+    assert not (backup_dir / "models").exists()
+    assert not (backup_dir / "obsolete-backup").exists()
+    assert "Existing backup : will be replaced" in proc.stdout
 
 
 def test_vulcan_installer_migrates_legacy_runtime_and_models(tmp_path):
