@@ -1,6 +1,6 @@
 name: Vulcan CI
 
-run-name: ${{ github.event.head_commit.message || github.event.pull_request.title || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'production' }})
+run-name: ${{ github.event.head_commit.message || github.ref_name || 'Vulcan CI' }} (${{ vars.VULCAN_ENV || 'production' }})
 
 on:
   push:
@@ -8,9 +8,6 @@ on:
       - "**"
     tags:
       - "*"
-  pull_request:
-    branches:
-      - main
   workflow_dispatch: {}
 
 permissions:
@@ -36,7 +33,6 @@ jobs:
 
   build:
     name: Build Apps on Vulcan
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     needs: resolve-vulcan-config
     uses: sima-neat/.github/.github/workflows/vulcan-build.yml@main
     with:
@@ -71,12 +67,9 @@ jobs:
 
         docker exec \
           -e SIMA_CLI_CHECK_FOR_UPDATE=0 \
-          -e GITHUB_HEAD_REF="${{ github.head_ref }}" \
           -e GITHUB_REF_NAME="${{ github.ref_name }}" \
           -e GITHUB_REF_TYPE="${{ github.ref_type }}" \
           -e GITHUB_SHA="${{ github.sha }}" \
-          -e NEAT_APPS_ARTIFACT_BRANCH_KEY="${{ github.head_ref || github.ref_name }}" \
-          -e NEAT_APPS_ARTIFACT_SHORT_SHA="${{ github.sha }}" \
           -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
           -e NEAT_CORE_INSTALL_MODE="vulcan" \
           -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
@@ -256,7 +249,7 @@ jobs:
             cd _vulcan-test/package
             NEAT_APPS_SKIP_DEPENDENCIES=1 \
               NEAT_APPS_INSTALL_DIR="${GITHUB_WORKSPACE}/_vulcan-test/install/prebuilt-apps" \
-              bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh"
+              bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh" "./prebuilt-apps"
           )
           if [[ -e "${GITHUB_WORKSPACE}/_vulcan-test/install/deps" ]]; then
             echo "Apps dependency workspace was not cleaned." >&2
@@ -314,6 +307,10 @@ jobs:
               ! -name 'neat-apps-tests.tar.gz' | sort
           )
           runtime_archive="${runtime_archives[0]}"
+          runtime_archive_name="$(basename "${runtime_archive}")"
+          runtime_extract_dir="${runtime_archive_name%.tar.gz}"
+          runtime_install_path="./${runtime_extract_dir}/prebuilt-apps"
+          printf -v quoted_runtime_install_path '%q' "${runtime_install_path}"
 
           cp "${runtime_archive}" dist/
           install -m 0755 scripts/install-vulcan-apps-package.sh dist/install_vulcan_apps_package.sh
@@ -327,7 +324,7 @@ jobs:
             --name gh:sima-neat/apps \
             --version "${version}" \
             --description "SiMa.ai Neat example applications runtime" \
-            --install-script install_vulcan_apps_package.sh
+            --install-script "bash ./install_vulcan_apps_package.sh ${quoted_runtime_install_path}"
 
           python3 -m json.tool dist/metadata.json >/dev/null
           scripts/ci/validate_apps_runtime_archive.sh "dist/$(basename "${runtime_archive}")"
