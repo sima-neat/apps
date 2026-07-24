@@ -7,7 +7,6 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -613,6 +612,7 @@ class TestRuntimeOptions:
         assert opt.codec == "H265"
         assert opt.dec_width == 640
         assert opt.dec_height == 480
+        assert opt.source_fps == 30
         assert opt.auto_caps_from_stream is True
         assert opt.num_buffers == main.DEFAULT_DECODER_BUFFERS
         assert opt.output_caps.enable is True
@@ -654,11 +654,21 @@ class TestRuntimeOptions:
             input_fps=20,
             decoder_tuning="throughput-low-latency",
         )
-
-        opt, fps, width, height = main.make_source_options(
-            cfg, cfg.rtsp_urls[0], fps=30, width=640, height=480
+        monkeypatch.setattr(
+            main,
+            "probe_rtsp",
+            lambda _url: pytest.fail("fully configured source must not be probed"),
         )
 
+        opt, fps, width, height = main.make_source_options(cfg, cfg.rtsp_urls[0])
+
+        assert opt.codec == "H264"
+        assert opt.dec_width == 1280
+        assert opt.dec_height == 720
+        assert opt.source_fps == 20
+        assert opt.fallback_h264_width == 1280
+        assert opt.fallback_h264_height == 720
+        assert getattr(opt, "fallback_h264_fps", -1) == -1
         assert opt.output_caps.width == 1280
         assert opt.output_caps.height == 720
         assert opt.output_caps.fps == 20
@@ -775,12 +785,9 @@ class TestRuntimeOptions:
 
         source_options = SimpleNamespace(
             codec="H264",
-            h264_width=1280,
-            h264_height=720,
-            h264_fps=20,
-            fallback_h264_width=-1,
-            fallback_h264_height=-1,
-            fallback_h264_fps=-1,
+            dec_width=1280,
+            dec_height=720,
+            source_fps=20,
             sima_allocator_type=2,
             decoder_name="decoder",
             decoder_raw_output=True,
@@ -796,6 +803,9 @@ class TestRuntimeOptions:
         )
 
         decode = graph.nodes[0]
+        assert decode.dec_width == 1280
+        assert decode.dec_height == 720
+        assert decode.dec_fps == 20
         assert decode.num_buffers == 16
         assert decode.input_buffers == 2
         assert decode.decoder_tuning == "throughput-low-latency"

@@ -397,10 +397,9 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
   opt.codec = cfg.use_h265 ? simaai::neat::nodes::groups::RtspCodec::H265
                            : simaai::neat::nodes::groups::RtspCodec::H264;
   if (probe.width > 0 && probe.height > 0) {
-    if (cfg.use_h265) {
-      opt.dec_width = probe.width;
-      opt.dec_height = probe.height;
-    } else {
+    opt.dec_width = probe.width;
+    opt.dec_height = probe.height;
+    if (!cfg.use_h265) {
       opt.fallback_h264_width = probe.width;
       opt.fallback_h264_height = probe.height;
     }
@@ -476,10 +475,6 @@ build_decode_graph(const std::string& input_name,
                    const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
   simaai::neat::Graph decode("decode");
   const bool use_h265 = opt.codec == simaai::neat::nodes::groups::RtspCodec::H265;
-  const int dec_w =
-      use_h265 ? opt.dec_width : ((opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width);
-  const int dec_h = use_h265 ? opt.dec_height
-                             : ((opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height);
 
   simaai::neat::SimaDecodeOptions dec;
   dec.type = use_h265 ? simaai::neat::SimaDecodeType::H265 : simaai::neat::SimaDecodeType::H264;
@@ -488,8 +483,8 @@ build_decode_graph(const std::string& input_name,
   dec.decoder_name = opt.decoder_name;
   dec.raw_output = opt.decoder_raw_output;
   dec.next_element = opt.decoder_next_element;
-  dec.dec_width = dec_w;
-  dec.dec_height = dec_h;
+  dec.dec_width = opt.dec_width;
+  dec.dec_height = opt.dec_height;
   dec.dec_fps = opt.source_fps;
   dec.num_buffers = opt.num_buffers;
   dec.input_buffers = opt.decoder_input_buffers;

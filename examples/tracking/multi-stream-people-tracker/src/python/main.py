@@ -413,10 +413,9 @@ def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height:
     opt.decoder_raw_output = True
     opt.auto_caps_from_stream = True
     opt.codec = pyneat.RtspCodec.H265 if cfg.use_h265 else pyneat.RtspCodec.H264
-    if cfg.use_h265:
-        opt.dec_width = width
-        opt.dec_height = height
-    else:
+    opt.dec_width = width
+    opt.dec_height = height
+    if not cfg.use_h265:
         opt.fallback_h264_width = width
         opt.fallback_h264_height = height
     opt.source_fps = fps
@@ -484,12 +483,6 @@ def encoded_video_input_options(use_h265: bool):
 def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
     decode = pyneat.Graph("decode")
     use_h265 = opt.codec == pyneat.RtspCodec.H265
-    dec_w = opt.dec_width if use_h265 else (
-        opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
-    )
-    dec_h = opt.dec_height if use_h265 else (
-        opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    )
 
     dec = pyneat.SimaDecodeOptions()
     dec.type = pyneat.SimaDecodeType.H265 if use_h265 else pyneat.SimaDecodeType.H264
@@ -498,8 +491,8 @@ def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
     dec.decoder_name = opt.decoder_name
     dec.raw_output = opt.decoder_raw_output
     dec.next_element = opt.decoder_next_element
-    dec.dec_width = dec_w
-    dec.dec_height = dec_h
+    dec.dec_width = opt.dec_width
+    dec.dec_height = opt.dec_height
     dec.dec_fps = opt.source_fps
     dec.num_buffers = opt.num_buffers
     decode.connect(
