@@ -1,0 +1,56 @@
+# face-recognizer configuration
+# All paths relative to the apps/ build root unless absolute.
+
+# ── Models ────────────────────────────────────────────────────────────────────
+scrfd:
+  model:            examples/face-recognition/face-recognizer/assets/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
+  conf_threshold:   0.65      # Minimum face confidence (sigmoid score)
+  nms_iou:          0.40      # IoU threshold for NMS
+  top_k:            5000      # Max candidates before NMS
+  keep_top_k:       100       # Max detections after NMS
+  cls_per_anchor:   1         # 1 for SCRFD (sigmoid), 2 for RetinaFace-style (softmax)
+  num_anchors:      2         # Anchors per spatial location (SCRFD 2.5G = 2)
+  scale_by_stride:  true      # Multiply distance preds by stride before decode
+
+arcface:
+  model:            examples/face-recognition/face-recognizer/assets/models/w600k_r50.surgery_mpk.tar.gz
+
+# ── Gallery ───────────────────────────────────────────────────────────────────
+gallery:
+  path:             examples/face-recognition/face-recognizer/gallery.bin
+
+# ── Input ─────────────────────────────────────────────────────────────────────
+input:
+  # Examples:
+  #   uri: rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME>
+  #   uri: /path/to/video.mp4
+  #   uri: ""  (webcam 0)
+  uri:              ""
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output:
+  # "display" → cv::imshow,  file path → video file,  "" → no output
+  sink:             display
+
+# ── Matching ──────────────────────────────────────────────────────────────────
+match:
+  threshold:        0.62      # Cosine similarity threshold; below → Unknown
+  margin:           0.12      # Min gap between best and 2nd-best score; below → Unknown
+                              # Raise margin when >1 person enrolled to prevent cross-ID false positives
+  unknown_label:    Unknown
+
+# ── Overlay ───────────────────────────────────────────────────────────────────
+overlay:
+  draw_landmarks:   true
+  draw_score:       true
+
+# ── Runtime ───────────────────────────────────────────────────────────────────
+runtime:
+  timeout_ms:       20000
+  queue_depth:      8         # SCRFD inference queue depth
+  recog_interval:   8         # Run ArcFace every N frames (5=default, 8=optimized for >30 FPS)
+                              # At 30 FPS: 8 → ~3.75 re-IDs/sec; identity is stable across seconds
+  supported_fps:    45        # Max input FPS the pipeline can sustain (measured ~45 on Modalix).
+                              # The source frame rate is auto-detected at startup; if it exceeds
+                              # this value a warning is printed (decoder will drop frames, and a
+                              # sustained overrun can destabilise long runs). No --rtsp-fps needed.

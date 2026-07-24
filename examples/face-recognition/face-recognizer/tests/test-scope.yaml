@@ -1,0 +1,23 @@
+models:
+  scrfd:
+    source: local
+    name: scrfd_2.5g_bnkps.mla
+    file: scrfd_2.5g_bnkps.mla_mpk.tar.gz
+  arcface:
+    source: local
+    name: w600k_r50.surgery
+    file: w600k_r50.surgery_mpk.tar.gz
+
+unit:
+  python: false
+  cpp: true
+
+e2e:
+  python:
+    enabled: false
+    reason: No Python implementation; C++ only.
+  cpp:
+    enabled: true
+    models:
+      - scrfd
+      - arcface
