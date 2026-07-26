@@ -51,6 +51,7 @@ The 48-stream profile running in Insight:
 - A Modalix DevKit compatible with the selected Apps release, with the decoder service running.
 - An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the DevKit.
 - 16, 24, or 48 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
+- For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 - Constant source frame rate, 1280×720 resolution, no B-frames in the selected codec, and a short, regular IDR interval. The validated sources use one IDR per second.
 - The `yolo26n-det-int8-b1.tar.gz` model pack.
 
@@ -110,7 +111,7 @@ Choose one config under `src/common/` and edit:
 - every entry under `streams`
 - `output.insight.host`
 
-Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. The checked-in density profiles remain validated with H.264 sources.
+Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
 
 `inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 16- and 48-stream profiles use a total limit of eight; the 24-stream profile uses 24 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 
