@@ -54,6 +54,9 @@ class TestArgParsing:
 
 @pytest.mark.unit
 class TestConfig:
+    def test_hevc_alias(self):
+        assert main.parse_source_codec("hevc") == "h265"
+
     def test_validate_config_only_accepts_common_config(self):
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--validate-config-only"],

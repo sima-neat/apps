@@ -56,6 +56,7 @@ streams:
   - <rtsp-url-48>
 
 input:
+  codec: h264                # h264/avc or h265/hevc.
   tcp: true
   latency_ms: 100
   drop_on_latency: true

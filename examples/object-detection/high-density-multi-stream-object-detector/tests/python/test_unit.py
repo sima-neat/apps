@@ -7,7 +7,6 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -377,6 +376,7 @@ output:
             workers=1,
             input_extra=textwrap.dedent(
                 """
+                  codec: hevc
                   decoder_buffers: 7
                   decoder_input_buffers: 2
                   decoder_tuning: throughput_low_latency
@@ -393,6 +393,7 @@ output:
         assert cfg.decoder_buffers == 7
         assert cfg.decoder_input_buffers == 2
         assert cfg.decoder_tuning == "throughput-low-latency"
+        assert cfg.use_h265
 
     @pytest.mark.parametrize("depth", [-1, 33])
     def test_load_app_config_rejects_invalid_internal_queue_depth(
@@ -588,6 +589,7 @@ class TestRuntimeOptions:
 
         fake_pyneat = SimpleNamespace(
             RtspDecodedInputOptions=FakeRtspDecodedInputOptions,
+            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
             Format=SimpleNamespace(NV12="NV12"),
             CapsMemory=SimpleNamespace(Any="Any"),
         )
@@ -597,6 +599,7 @@ class TestRuntimeOptions:
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
+            use_h265=True,
         )
 
         opt, fps, width, height = main.make_source_options(
@@ -606,6 +609,10 @@ class TestRuntimeOptions:
         assert opt.out_format == "NV12"
         assert opt.decoder_raw_output is True
         assert opt.decoder_next_element == "CVU"
+        assert opt.codec == "H265"
+        assert opt.dec_width == 640
+        assert opt.dec_height == 480
+        assert opt.source_fps == 30
         assert opt.auto_caps_from_stream is True
         assert opt.num_buffers == main.DEFAULT_DECODER_BUFFERS
         assert opt.output_caps.enable is True
@@ -632,6 +639,7 @@ class TestRuntimeOptions:
 
         fake_pyneat = SimpleNamespace(
             RtspDecodedInputOptions=FakeRtspDecodedInputOptions,
+            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
             Format=SimpleNamespace(NV12="NV12"),
             CapsMemory=SimpleNamespace(Any="Any"),
         )
@@ -646,11 +654,21 @@ class TestRuntimeOptions:
             input_fps=20,
             decoder_tuning="throughput-low-latency",
         )
-
-        opt, fps, width, height = main.make_source_options(
-            cfg, cfg.rtsp_urls[0], fps=30, width=640, height=480
+        monkeypatch.setattr(
+            main,
+            "probe_rtsp",
+            lambda _url: pytest.fail("fully configured source must not be probed"),
         )
 
+        opt, fps, width, height = main.make_source_options(cfg, cfg.rtsp_urls[0])
+
+        assert opt.codec == "H264"
+        assert opt.dec_width == 1280
+        assert opt.dec_height == 720
+        assert opt.source_fps == 20
+        assert opt.fallback_h264_width == 1280
+        assert opt.fallback_h264_height == 720
+        assert getattr(opt, "fallback_h264_fps", -1) == -1
         assert opt.output_caps.width == 1280
         assert opt.output_caps.height == 720
         assert opt.output_caps.fps == 20
@@ -683,7 +701,11 @@ class TestRuntimeOptions:
         class FakeVideoSenderOptions:
             @staticmethod
             def h264_rtp_udp_from_encoded():
-                return SimpleNamespace(async_=True)
+                return SimpleNamespace(codec="h264", async_=True)
+
+            @staticmethod
+            def h265_rtp_udp_from_encoded():
+                return SimpleNamespace(codec="h265", async_=True)
 
         monkeypatch.setattr(
             main,
@@ -694,6 +716,7 @@ class TestRuntimeOptions:
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
+            use_h265=True,
             insight_host="192.0.2.10",
             video_port_base=9200,
         )
@@ -701,6 +724,7 @@ class TestRuntimeOptions:
         options = main.make_video_options(cfg, SimpleNamespace(index=3))
 
         assert options.async_ is False
+        assert options.codec == "h265"
         assert options.host == "192.0.2.10"
         assert options.channel == 3
         assert options.video_port_base == 9200
@@ -750,7 +774,8 @@ class TestRuntimeOptions:
             Graph=FakeGraph,
             Format=SimpleNamespace(NV12="NV12"),
             SimaDecodeOptions=FakeDecodeOptions,
-            SimaDecodeType=SimpleNamespace(H264="H264"),
+            SimaDecodeType=SimpleNamespace(H264="H264", H265="H265"),
+            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
             nodes=SimpleNamespace(
                 sima_decode=lambda options: options,
                 output=lambda name: ("output", name),
@@ -759,12 +784,10 @@ class TestRuntimeOptions:
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
 
         source_options = SimpleNamespace(
-            h264_width=1280,
-            h264_height=720,
-            h264_fps=20,
-            fallback_h264_width=-1,
-            fallback_h264_height=-1,
-            fallback_h264_fps=-1,
+            codec="H264",
+            dec_width=1280,
+            dec_height=720,
+            source_fps=20,
             sima_allocator_type=2,
             decoder_name="decoder",
             decoder_raw_output=True,
@@ -772,7 +795,7 @@ class TestRuntimeOptions:
             output_caps=SimpleNamespace(enable=False),
         )
 
-        graph = main.make_h264_decoder(
+        graph = main.make_decoder(
             source_options,
             decoder_buffers=16,
             decoder_input_buffers=2,
@@ -780,13 +803,16 @@ class TestRuntimeOptions:
         )
 
         decode = graph.nodes[0]
+        assert decode.dec_width == 1280
+        assert decode.dec_height == 720
+        assert decode.dec_fps == 20
         assert decode.num_buffers == 16
         assert decode.input_buffers == 2
         assert decode.decoder_tuning == "throughput-low-latency"
         assert decode.memory_opt is True
         assert graph.nodes[1] == ("output", "detector_frame")
 
-        default_graph = main.make_h264_decoder(
+        default_graph = main.make_decoder(
             source_options,
             decoder_buffers=8,
             decoder_input_buffers=2,
@@ -915,13 +941,13 @@ class TestRuntimeDelivery:
         rtsp_graph = object()
         rtsp_calls = []
 
-        def make_rtsp_h264_input(options):
+        def make_rtsp_encoded_input(options):
             rtsp_calls.append(options)
             return rtsp_graph
 
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
-        monkeypatch.setattr(main, "make_rtsp_h264_input", make_rtsp_h264_input)
-        monkeypatch.setattr(main, "make_h264_decoder", lambda *_args: "decoder")
+        monkeypatch.setattr(main, "make_rtsp_encoded_input", make_rtsp_encoded_input)
+        monkeypatch.setattr(main, "make_decoder", lambda *_args: "decoder")
         monkeypatch.setattr(main, "graph_realtime_link", lambda *_args: "latest")
         monkeypatch.setattr(
             main, "make_video_options", lambda *_args: SimpleNamespace(video_port=9000)

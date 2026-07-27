@@ -46,6 +46,8 @@ Edit `tests/configs/.env.local`:
 ```bash
 SIMANEAT_TEST_RTSP_H264_URL=rtsp://<host>:<port>/<stream>
 SIMANEAT_TEST_RTSP_H264_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_RTSP_H265_URL=rtsp://<host>:<port>/<stream>
+SIMANEAT_TEST_RTSP_H265_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
 SIMANEAT_TEST_RTSP_MJPEG_URL=rtsp://<host>:<port>/<stream>
 SIMANEAT_TEST_RTSP_MJPEG_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
 SIMANEAT_TEST_HTTP_MJPEG_URL=http://<host>:<port>/<stream>.mjpg
@@ -221,6 +223,8 @@ python3 -m pytest \
 - `SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS` (`1` writes per-example command/stdout/stderr logs, default: `1`)
 - `SIMANEAT_TEST_RTSP_H264_URL` (single RTSP H.264 stream URL)
 - `SIMANEAT_TEST_RTSP_H264_URLS` (comma-separated RTSP H.264 URLs)
+- `SIMANEAT_TEST_RTSP_H265_URL` (single RTSP H.265 stream URL)
+- `SIMANEAT_TEST_RTSP_H265_URLS` (comma-separated RTSP H.265 URLs)
 - `SIMANEAT_TEST_RTSP_MJPEG_URL` (single RTSP MJPEG stream URL)
 - `SIMANEAT_TEST_RTSP_MJPEG_URLS` (comma-separated RTSP MJPEG URLs)
 - `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)

@@ -26,6 +26,7 @@ class AppConfig:
     model_path: str
     labels_path: Path
     rtsp_urls: list[str]
+    use_h265: bool = False
     latency_ms: int = 100
     tcp: bool = True
     frames: int = 0
@@ -185,6 +186,15 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return value
 
 
+def parse_use_h265(value: str) -> bool:
+    lowered = value.lower()
+    if lowered in {"h264", "avc", "h.264"}:
+        return False
+    if lowered in {"h265", "hevc", "h.265"}:
+        return True
+    raise ValueError("input.codec must be h264/avc or h265/hevc")
+
+
 def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path:
         raise ValueError("model.path must be set")
@@ -248,6 +258,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         model_path=string_or(model, "path"),
         labels_path=Path(string_or(model, "labels", str(default_labels))),
         rtsp_urls=rtsp_urls,
+        use_h265=parse_use_h265(string_or(input_cfg, "codec", "h264")),
         latency_ms=int_or(input_cfg, "latency_ms", 100),
         tcp=bool_or(input_cfg, "tcp", True),
         frames=int_or(inference, "frames", 0),
@@ -390,8 +401,12 @@ def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height:
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
     opt.auto_caps_from_stream = True
-    opt.fallback_h264_width = width
-    opt.fallback_h264_height = height
+    opt.codec = pyneat.RtspCodec.H265 if cfg.use_h265 else pyneat.RtspCodec.H264
+    opt.dec_width = width
+    opt.dec_height = height
+    if not cfg.use_h265:
+        opt.fallback_h264_width = width
+        opt.fallback_h264_height = height
     opt.source_fps = fps
     opt.output_caps.enable = True
     opt.output_caps.format = pyneat.Format.NV12
@@ -411,29 +426,42 @@ def build_encoded_source_graph(opt) -> pyneat.Graph:
 
     encoded_opt = pyneat.RtspEncodedInputOptions()
     encoded_opt.url = opt.url
-    encoded_opt.codec = pyneat.RtspCodec.H264
+    encoded_opt.codec = opt.codec
     encoded_opt.latency_ms = opt.latency_ms
     encoded_opt.tcp = opt.tcp
     encoded_opt.source_fps = opt.source_fps
-    encoded_opt.fallback_h264_width = opt.fallback_h264_width
-    encoded_opt.fallback_h264_height = opt.fallback_h264_height
+    if opt.codec == pyneat.RtspCodec.H264:
+        encoded_opt.fallback_h264_width = opt.fallback_h264_width
+        encoded_opt.fallback_h264_height = opt.fallback_h264_height
     source.add(pyneat.groups.rtsp_encoded_input(encoded_opt))
     return source
 
 
-def h264_decode_input_options():
+def encoded_decode_input_options(use_h265: bool):
     opt = pyneat.InputOptions()
     opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = pyneat.Format.H264
+    if use_h265:
+        opt.caps_override = (
+            "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
+            "alignment=(string)au"
+        )
+    else:
+        opt.format = pyneat.Format.H264
     if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
         opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
     return opt
 
 
-def h264_video_input_options():
+def encoded_video_input_options(use_h265: bool):
     opt = pyneat.InputOptions()
     opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = pyneat.Format.H264
+    if use_h265:
+        opt.caps_override = (
+            "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
+            "alignment=(string)au"
+        )
+    else:
+        opt.format = pyneat.Format.H264
     if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
         opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
     elif hasattr(opt, "use_simaai_pool"):
@@ -443,22 +471,21 @@ def h264_video_input_options():
 
 def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
     decode = pyneat.Graph("decode")
-    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
-    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
+    use_h265 = opt.codec == pyneat.RtspCodec.H265
 
     dec = pyneat.SimaDecodeOptions()
-    dec.type = pyneat.SimaDecodeType.H264
+    dec.type = pyneat.SimaDecodeType.H265 if use_h265 else pyneat.SimaDecodeType.H264
     dec.sima_allocator_type = opt.sima_allocator_type
     dec.out_format = pyneat.Format.NV12
     dec.decoder_name = opt.decoder_name
     dec.raw_output = opt.decoder_raw_output
     dec.next_element = opt.decoder_next_element
-    dec.dec_width = dec_w
-    dec.dec_height = dec_h
+    dec.dec_width = opt.dec_width
+    dec.dec_height = opt.dec_height
     dec.dec_fps = opt.source_fps
     dec.num_buffers = opt.num_buffers
     decode.connect(
-        pyneat.nodes.input(input_name, h264_decode_input_options()),
+        pyneat.nodes.input(input_name, encoded_decode_input_options(use_h265)),
         pyneat.nodes.sima_decode(dec),
     )
     if opt.use_videoconvert:
@@ -480,10 +507,10 @@ def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
     return decode
 
 
-def build_video_sender_graph(input_name: str, video_options) -> pyneat.Graph:
+def build_video_sender_graph(input_name: str, use_h265: bool, video_options) -> pyneat.Graph:
     video = pyneat.Graph("video_sender")
     video.connect(
-        pyneat.nodes.input(input_name, h264_video_input_options()),
+        pyneat.nodes.input(input_name, encoded_video_input_options(use_h265)),
         pyneat.groups.video_sender(video_options),
     )
     return video
@@ -585,7 +612,11 @@ def build_stream_runtime(
 
     video_port = 0
     if cfg.video_enabled:
-        video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+        video_options = (
+            pyneat.VideoSenderOptions.h265_rtp_udp_from_encoded()
+            if cfg.use_h265
+            else pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+        )
         video_options.host = cfg.insight_host
         video_options.channel = stream_index
         video_options.video_port_base = cfg.video_port_base
@@ -629,14 +660,18 @@ def connect_stream_graph(
         app.graph.connect(source, encoded_branch)
         app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3))
 
-        video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+        video_options = (
+            pyneat.VideoSenderOptions.h265_rtp_udp_from_encoded()
+            if cfg.use_h265
+            else pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+        )
         video_options.host = cfg.insight_host
         video_options.channel = stream.index
         video_options.video_port_base = cfg.video_port_base
         video_options.async_ = True
         app.graph.connect(
             encoded_branch,
-            build_video_sender_graph("video_h264", video_options),
+            build_video_sender_graph("video_h264", cfg.use_h265, video_options),
             realtime_link(stream.index, 3),
         )
     else:

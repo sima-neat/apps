@@ -80,6 +80,9 @@ streams:
   - <first-rtsp-url>
   - <second-rtsp-url>
 
+input:
+  codec: h264  # h264/avc or h265/hevc
+
 inference:
   frames: 0
   max_inflight_per_stream: 4
