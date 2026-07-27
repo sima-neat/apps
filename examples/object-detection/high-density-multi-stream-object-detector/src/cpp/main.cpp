@@ -75,7 +75,8 @@ struct AppConfig {
   std::string decode_type = "yolo26";
   fs::path labels_path;
   std::vector<std::string> rtsp_urls;
-  bool use_h265 = false;
+  /// Encoded RTSP path used for every stream in this application.
+  simaai::neat::nodes::groups::RtspCodec codec = simaai::neat::nodes::groups::RtspCodec::H264;
   int workers = 1;
   int queue_depth = kDefaultQueueDepth;
   int internal_queue_depth = kDefaultInternalQueueDepth;
@@ -104,13 +105,20 @@ struct AppConfig {
   bool video_enabled = true;
 };
 
-bool parse_use_h265(std::string value) {
+std::string lower_copy(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (value == "h264" || value == "avc" || value == "h.264")
-    return false;
-  if (value == "h265" || value == "hevc" || value == "h.265")
-    return true;
+  return value;
+}
+
+simaai::neat::nodes::groups::RtspCodec parse_input_codec(const std::string& value) {
+  const std::string lowered = lower_copy(value);
+  if (lowered == "h264" || lowered == "avc" || lowered == "h.264") {
+    return simaai::neat::nodes::groups::RtspCodec::H264;
+  }
+  if (lowered == "h265" || lowered == "hevc" || lowered == "h.265") {
+    return simaai::neat::nodes::groups::RtspCodec::H265;
+  }
   throw std::runtime_error("input.codec must be h264/avc or h265/hevc");
 }
 
@@ -471,7 +479,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.decode_type = raw.string_or("model.decode_type", "yolo26");
   cfg.labels_path = raw.string_or("model.labels", "coco_label.txt");
   cfg.rtsp_urls = parse_streams(config_path);
-  cfg.use_h265 = parse_use_h265(raw.string_or("input.codec", "h264"));
+  cfg.codec = parse_input_codec(raw.string_or("input.codec", "h264"));
   cfg.tcp = raw.bool_or("input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
   cfg.decoder_buffers = raw.int_or("input.decoder_buffers", kDefaultDecoderBuffers);
@@ -796,12 +804,11 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
       cfg.decoder_tuning == "low-memory" || cfg.decoder_tuning == "throughput-low-latency";
   opt.auto_caps_from_stream = !cfg.skip_rtsp_probe;
   opt.num_buffers = cfg.decoder_buffers;
-  opt.codec = cfg.use_h265 ? simaai::neat::nodes::groups::RtspCodec::H265
-                           : simaai::neat::nodes::groups::RtspCodec::H264;
+  opt.codec = cfg.codec;
   if (width_out > 0 && height_out > 0) {
     opt.dec_width = width_out;
     opt.dec_height = height_out;
-    if (!cfg.use_h265) {
+    if (cfg.codec == simaai::neat::nodes::groups::RtspCodec::H264) {
       opt.fallback_h264_width = width_out;
       opt.fallback_h264_height = height_out;
     }
@@ -831,10 +838,8 @@ make_rtsp_encoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptio
   encoded.sync_mode = opt.sync_mode;
   encoded.auto_caps_from_stream = opt.auto_caps_from_stream;
   encoded.source_fps = opt.source_fps;
-  if (opt.codec == simaai::neat::nodes::groups::RtspCodec::H265) {
-    encoded.h265_payload_type = opt.payload_type;
-  } else {
-    encoded.h264_payload_type = opt.payload_type;
+  encoded.payload_type = opt.payload_type;
+  if (opt.codec != simaai::neat::nodes::groups::RtspCodec::H265) {
     encoded.h264_parse_config_interval = opt.h264_parse_config_interval;
     encoded.fallback_h264_width = opt.fallback_h264_width;
     encoded.fallback_h264_height = opt.fallback_h264_height;
@@ -888,9 +893,7 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg) {
 
 simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConfig& cfg,
                                                                    const SourceRuntime& source) {
-  auto video_options =
-      cfg.use_h265 ? simaai::neat::nodes::groups::VideoSenderOptions::H265RtpUdpFromEncoded()
-                   : simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromEncoded();
+  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(cfg.codec);
   video_options.host = cfg.insight_host;
   video_options.channel = source.index;
   video_options.video_port_base = cfg.video_port_base;

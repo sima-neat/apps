@@ -393,7 +393,7 @@ output:
         assert cfg.decoder_buffers == 7
         assert cfg.decoder_input_buffers == 2
         assert cfg.decoder_tuning == "throughput-low-latency"
-        assert cfg.use_h265
+        assert cfg.codec == "h265"
 
     @pytest.mark.parametrize("depth", [-1, 33])
     def test_load_app_config_rejects_invalid_internal_queue_depth(
@@ -599,7 +599,7 @@ class TestRuntimeOptions:
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
-            use_h265=True,
+            codec="h265",
         )
 
         opt, fps, width, height = main.make_source_options(
@@ -700,23 +700,22 @@ class TestRuntimeOptions:
 
         class FakeVideoSenderOptions:
             @staticmethod
-            def h264_rtp_udp_from_encoded():
-                return SimpleNamespace(codec="h264", async_=True)
-
-            @staticmethod
-            def h265_rtp_udp_from_encoded():
-                return SimpleNamespace(codec="h265", async_=True)
+            def passthrough(codec):
+                return SimpleNamespace(codec=codec, async_=True)
 
         monkeypatch.setattr(
             main,
             "pyneat",
-            SimpleNamespace(VideoSenderOptions=FakeVideoSenderOptions),
+            SimpleNamespace(
+                VideoSenderOptions=FakeVideoSenderOptions,
+                RtspCodec=SimpleNamespace(H264="h264", H265="h265"),
+            ),
         )
         cfg = main.AppConfig(
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
-            use_h265=True,
+            codec="h265",
             insight_host="192.0.2.10",
             video_port_base=9200,
         )

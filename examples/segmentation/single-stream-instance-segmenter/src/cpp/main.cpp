@@ -485,17 +485,14 @@ make_rtsp_source_options(const AppConfig& cfg, const SourceGeometry& geometry) {
                   : simaai::neat::nodes::groups::RtspCodec::MJPEG;
   opt.source_fps = geometry.fps;
   if (cfg.source_codec == SourceCodec::H264) {
-    opt.payload_type = 96;
     opt.auto_caps_from_stream = true;
     opt.fallback_h264_width = geometry.width;
     opt.fallback_h264_height = geometry.height;
   } else if (cfg.source_codec == SourceCodec::H265) {
-    opt.payload_type = 96;
     opt.auto_caps_from_stream = true;
     opt.dec_width = geometry.width;
     opt.dec_height = geometry.height;
   } else {
-    opt.mjpeg_payload_type = 26;
     opt.dec_width = geometry.width;
     opt.dec_height = geometry.height;
   }
@@ -540,7 +537,6 @@ simaai::neat::Graph make_source_graph(const AppConfig& cfg, const SourceGeometry
 SourceGeometry probe_rtsp_h264_geometry(const AppConfig& cfg) {
   sima_examples::RtspStreamInfo probe;
   sima_examples::RtspProbeOptions probe_options;
-  probe_options.payload_type = 96;
   probe_options.latency_ms = cfg.latency_ms;
   probe_options.rtsp_tcp = cfg.tcp;
   probe_options.debug = cfg.profile;

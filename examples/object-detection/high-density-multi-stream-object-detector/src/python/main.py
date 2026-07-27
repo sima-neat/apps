@@ -39,7 +39,9 @@ class AppConfig:
     model_path: str
     labels_path: Path
     rtsp_urls: list[str]
-    use_h265: bool = False
+    # Encoded RTSP path used for every stream: "h264" or "h265". Kept as a
+    # string because load_app_config runs before the lazy pyneat import.
+    codec: str = "h264"
     decode_type: str = "yolo26"
     workers: int = 1
     queue_depth: int = DEFAULT_QUEUE_DEPTH
@@ -297,12 +299,12 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return value
 
 
-def parse_use_h265(value: str) -> bool:
+def parse_input_codec(value: str) -> str:
     lowered = value.lower()
     if lowered in {"h264", "avc", "h.264"}:
-        return False
+        return "h264"
     if lowered in {"h265", "hevc", "h.265"}:
-        return True
+        return "h265"
     raise ValueError("input.codec must be h264/avc or h265/hevc")
 
 
@@ -500,7 +502,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         decode_type=normalize_box_decode_type(string_or(model, "decode_type", "yolo26")),
         labels_path=Path(labels_path_value).expanduser(),
         rtsp_urls=rtsp_urls,
-        use_h265=parse_use_h265(string_or(input_cfg, "codec", "h264")),
+        codec=parse_input_codec(string_or(input_cfg, "codec", "h264")),
         workers=int_or(inference, "workers", 1),
         queue_depth=queue_depth,
         internal_queue_depth=int_or(
@@ -840,6 +842,11 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
+def rtsp_codec(codec: str):
+    """Map the parsed `input.codec` config token onto the Core RTSP codec selector."""
+    return pyneat.RtspCodec.H265 if codec == "h265" else pyneat.RtspCodec.H264
+
+
 def make_source_options(
     cfg: AppConfig,
     url: str,
@@ -870,7 +877,7 @@ def make_source_options(
     opt.decoder_next_element = "CVU"
     opt.auto_caps_from_stream = not cfg.skip_rtsp_probe
     opt.num_buffers = cfg.decoder_buffers
-    opt.codec = pyneat.RtspCodec.H265 if cfg.use_h265 else pyneat.RtspCodec.H264
+    opt.codec = rtsp_codec(cfg.codec)
 
     opt.output_caps.enable = True
     opt.output_caps.format = pyneat.Format.NV12
@@ -879,7 +886,7 @@ def make_source_options(
     if width_out > 0 and height_out > 0:
         opt.dec_width = width_out
         opt.dec_height = height_out
-        if not cfg.use_h265:
+        if cfg.codec == "h264":
             opt.fallback_h264_width = width_out
             opt.fallback_h264_height = height_out
         opt.output_caps.width = width_out
@@ -903,10 +910,8 @@ def make_rtsp_encoded_input(opt):
     encoded.sync_mode = opt.sync_mode
     encoded.auto_caps_from_stream = opt.auto_caps_from_stream
     encoded.source_fps = opt.source_fps
-    if opt.codec == pyneat.RtspCodec.H265:
-        encoded.h265_payload_type = opt.payload_type
-    else:
-        encoded.h264_payload_type = opt.payload_type
+    encoded.payload_type = opt.payload_type
+    if opt.codec != pyneat.RtspCodec.H265:
         encoded.h264_parse_config_interval = opt.h264_parse_config_interval
         encoded.fallback_h264_width = opt.fallback_h264_width
         encoded.fallback_h264_height = opt.fallback_h264_height
@@ -982,11 +987,7 @@ def make_model(cfg: AppConfig):
 
 
 def make_video_options(cfg: AppConfig, source: SourceRuntime):
-    video_options = (
-        pyneat.VideoSenderOptions.h265_rtp_udp_from_encoded()
-        if cfg.use_h265
-        else pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
-    )
+    video_options = pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg.codec))
     video_options.host = cfg.insight_host
     video_options.channel = source.index
     video_options.video_port_base = cfg.video_port_base
