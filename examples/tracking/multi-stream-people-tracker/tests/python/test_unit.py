@@ -115,7 +115,7 @@ class TestConfigLoading:
         cfg = load_app_config(
             write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], codec="hevc")
         )
-        assert cfg.use_h265
+        assert cfg.codec == "h265"
 
     def test_load_app_config_accepts_custom_inflight_limits(self, tmp_path: Path):
         from main import load_app_config
@@ -213,31 +213,28 @@ class TestConfigLoading:
 
 
 class TestRuntimeOptions:
-    def test_h265_input_options_use_encoded_caps(self, monkeypatch):
+    def test_encoded_input_options_carry_codec_format(self, monkeypatch):
         import main
 
         class FakeInputOptions:
-            caps_override = ""
+            format = ""
 
         fake_pyneat = SimpleNamespace(
             InputOptions=FakeInputOptions,
             PayloadType=SimpleNamespace(Encoded="encoded"),
-            Format=SimpleNamespace(H264="h264"),
+            Format=SimpleNamespace(H264="h264", H265="h265"),
+            RtspCodec=SimpleNamespace(H264="codec-h264", H265="codec-h265"),
             InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
         )
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
 
-        decode = main.encoded_decode_input_options(True)
-        video = main.encoded_video_input_options(True)
-        h264_decode = main.encoded_decode_input_options(False)
-        h264_video = main.encoded_video_input_options(False)
+        decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H265)
+        video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H265)
+        h264_decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H264)
+        h264_video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H264)
 
-        expected = (
-            "video/x-h265,parsed=(boolean)true,stream-format=(string)byte-stream,"
-            "alignment=(string)au"
-        )
-        assert decode.caps_override == expected
-        assert video.caps_override == expected
+        assert decode.format == "h265"
+        assert video.format == "h265"
         assert h264_decode.format == "h264"
         assert h264_video.format == "h264"
 

@@ -546,17 +546,14 @@ def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     )
     opt.source_fps = fps
     if cfg.source_codec == "h264":
-        opt.payload_type = 96
         opt.auto_caps_from_stream = True
         opt.fallback_h264_width = width
         opt.fallback_h264_height = height
     elif cfg.source_codec == "h265":
-        opt.payload_type = 96
         opt.auto_caps_from_stream = True
         opt.dec_width = width
         opt.dec_height = height
     else:
-        opt.mjpeg_payload_type = 26
         opt.dec_width = width
         opt.dec_height = height
     set_output_caps(opt.output_caps, fps, width, height)
