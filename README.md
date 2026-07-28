@@ -87,8 +87,10 @@ to compile source or run the Apps test suite.
 streaming sources. Install videos directly from the Insight catalog or through
 YouTube support, start the required streams in the Insight Web UI, and copy
 their source URLs into the example configuration. Each example README identifies
-the required transport, including HTTP MJPEG where supported. Ensure each URL is
-reachable from the target.
+the required transport and codec. RTSP examples decode H.264 or H.265, selected
+by the example's `codec` setting; the single-stream object detector and instance
+segmenter also accept MJPEG over RTSP or HTTP. Ensure each URL is reachable from
+the target.
 
 ## Development From Source
 

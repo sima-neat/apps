@@ -14,7 +14,7 @@
 
 ## Concept
 
-This example runs a config-driven multi-stream RTSP detection pipeline and publishes video plus detection metadata for each stream to Insight.
+This example runs a config-driven multi-stream RTSP H.264/H.265 detection pipeline and publishes video plus detection metadata for each stream to Insight.
 
 ## Preview
 
@@ -23,7 +23,8 @@ This example runs a config-driven multi-stream RTSP detection pipeline and publi
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- RTSP sources and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- H.264 or H.265 RTSP sources matching `input.codec`, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 
 ## Install Apps
 
