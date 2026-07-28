@@ -14,7 +14,7 @@
 
 ## Concept
 
-This example runs a config-driven multi-stream RTSP H.264/H.265 detection pipeline and publishes video plus detection metadata for each stream to Insight.
+This example runs a config-driven multi-stream RTSP detection pipeline and publishes video plus detection metadata for each stream to Insight.
 
 ## Preview
 

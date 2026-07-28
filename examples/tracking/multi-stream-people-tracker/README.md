@@ -14,7 +14,7 @@
 
 ## Concept
 
-Track people across multiple RTSP H.264/H.265 inputs with mixed-resolution support. The pipeline filters detections to the configured person class, assigns stable IDs per stream, and publishes live video and metadata to Insight.
+Track people across multiple RTSP inputs with mixed-resolution support. The pipeline filters detections to the configured person class, assigns stable IDs per stream, and publishes live video and metadata to Insight.
 
 ## Preview
 
