@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <functional>
+#include <numeric>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -361,6 +363,14 @@ AppConfig load_app_config(const fs::path& config_path) {
 }
 
 std::vector<float> tensor_floats(const simaai::neat::Tensor& tensor) {
+  // A frame with no person decodes to a zero-row tensor. Copying one throws, because a
+  // zero-byte payload has nothing to map, so treat "no rows" as an empty result.
+  const int64_t elements = std::accumulate(tensor.shape.begin(), tensor.shape.end(), int64_t{1},
+                                           std::multiplies<int64_t>());
+  if (tensor.shape.empty() || elements == 0) {
+    return {};
+  }
+
   const auto bytes = tensor.contiguous().copy_payload_bytes();
   std::vector<float> values(bytes.size() / sizeof(float));
   if (!values.empty()) {

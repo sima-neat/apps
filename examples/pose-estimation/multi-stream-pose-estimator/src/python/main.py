@@ -314,6 +314,11 @@ COCO_SKELETON = (
 
 
 def tensor_to_numpy(tensor) -> object:
+    # A frame with no person decodes to a zero-row tensor. Copying one throws, because a
+    # zero-byte payload has nothing to map, so treat "no rows" as an empty result.
+    shape = tuple(getattr(tensor, "shape", ()) or ())
+    if not shape or 0 in shape:
+        return np.empty(shape or (0,), dtype=np.float32)
     return np.asarray(tensor.to_numpy(copy=True))
 
 
