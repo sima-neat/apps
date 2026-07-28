@@ -52,6 +52,7 @@ The 48-stream profile running in Insight:
 - An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the DevKit.
 - 16, 24, or 48 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
 - For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
+- H.265 playback in Chrome on macOS renders, but is not stable. Chrome's WebRTC HEVC decoder can stop producing frames mid-stream and fall back to a null decoder that discards what follows, at which point the tile stalls until the viewer reconnects it.
 - Constant source frame rate, 1280×720 resolution, no B-frames in the selected codec, and a short, regular IDR interval. The validated sources use one IDR per second.
 - The `yolo26n-det-int8-b1.tar.gz` model pack.
 
