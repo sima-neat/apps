@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Golden SSD-MobileNetV2 detections for assets/datasets-test/coco, in original-frame pixels",
+    "(x1, y1, x2, y2). class_id follows the MS-COCO 90-index map this model emits (1 = person).",
+    "Produced by the bit-exact host SSD decode (== TensorFlow ssd_mobilenet_v2_coco_2018_03_29)",
+    "at score_threshold 0.30 / nms_iou 0.60; only detections scoring >= 0.95 are asserted so the",
+    "int8 on-device pipeline stays well inside the match tolerances below."
+  ],
+  "match": {
+    "min_score": 0.5,
+    "min_iou": 0.45
+  },
+  "images": {
+    "000000081061.jpg": [
+      { "class_id": 62, "label": "chair", "box": [91.2, 165.5, 233.5, 370.1] }
+    ],
+    "000000237864.jpg": [
+      { "class_id": 22, "label": "elephant", "box": [69.6, 236.1, 349.5, 415.7] }
+    ],
+    "000000331075.jpg": [
+      { "class_id": 18, "label": "dog", "box": [0.0, 134.7, 538.0, 634.7] }
+    ],
+    "000000437331.jpg": [
+      { "class_id": 1, "label": "person", "box": [244.3, 204.2, 358.5, 368.5] }
+    ],
+    "000000449579.jpg": [
+      { "class_id": 1, "label": "person", "box": [114.2, 155.5, 248.5, 433.8] }
+    ],
+    "000000516173.jpg": [
+      { "class_id": 1, "label": "person", "box": [175.0, 156.8, 348.8, 601.0] }
+    ],
+    "000000550349.jpg": [
+      { "class_id": 6, "label": "bus", "box": [179.4, 150.3, 560.6, 540.6] }
+    ],
+    "000000566758.jpg": [
+      { "class_id": 6, "label": "bus", "box": [43.7, 183.0, 534.9, 432.4] }
+    ]
+  }
+}
