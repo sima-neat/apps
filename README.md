@@ -5,9 +5,9 @@
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
 SiMa Neat Apps provides runnable C++ and Python examples for detection,
-segmentation, streaming, tracking, benchmarking, and GenAI. Install Apps to
-run the packaged examples. Clone this repository only when modifying or
-building their source.
+segmentation, pose estimation, streaming, tracking, benchmarking, and
+GenAI. Install Apps to run the packaged examples. Clone this repository
+only when modifying or building their source.
 
 ## Install Apps
 
