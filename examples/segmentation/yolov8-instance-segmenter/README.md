@@ -44,14 +44,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo_v8m_seg_mpk.tar.gz` | Supported | `yolo_v8m_seg` |
 | `yolo_v8l_seg_mpk.tar.gz` | Supported | `yolo_v8l_seg` |
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-name>` with a model from the table.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-name>` with a model from the table.
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.2"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${PLATFORM_VERSION}" get <model-name>
+sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
 cd ..
 ```
 

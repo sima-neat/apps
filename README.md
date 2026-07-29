@@ -1,7 +1,7 @@
 # SiMa Neat Apps
 
 ![Vulcan CI](https://github.com/sima-neat/apps/actions/workflows/vulcan-ci.yml/badge.svg)
-![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.2-green)
+![Neat Development Environment](https://img.shields.io/badge/Neat%20Development%20Environment-2.1.3-green)
 ![Language](https://img.shields.io/badge/C%2B%2B-20-informational)
 
 SiMa Neat Apps provides runnable C++ and Python examples for detection,
@@ -56,13 +56,21 @@ under `models/`, or set `model.path` to another readable package. Each
 example README lists its default and additional supported models with the
 corresponding `sima-cli` or example-specific installation command.
 
-Check the installed platform version:
+Check the installed platform version to confirm the target is supported:
 
 ```bash
 cat /etc/buildinfo
 ```
 
-Before downloading a model, set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Runtime sample data is included under `assets/datasets/`.
+Model packages are versioned separately from the platform. They come from the
+Model Zoo release, which can differ from the installed platform version.
+Before downloading a model, set the Model Zoo version:
+
+```bash
+export MODELZOO_VERSION="2.1.2"
+```
+
+Runtime sample data is included under `assets/datasets/`.
 
 ## Installed Layout
 
@@ -124,7 +132,7 @@ curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-exa
 
 ## Dependency Selection
 
-`deps/manifest.json` selects Core and records the SDK channel and platform version. Development uses the `snap` policy, while a release-preparation branch can select an exact Core artifact. Vulcan records the resolved Core target under package metadata and the Apps installer uses that same target. Insight is not pinned in the Apps manifest.
+`deps/manifest.json` selects Core and records the SDK channel, the platform version, and the Model Zoo version used for model downloads. Development uses the `snap` policy, while a release-preparation branch can select an exact Core artifact. Vulcan records the resolved Core target under package metadata and the Apps installer uses that same target. Insight is not pinned in the Apps manifest.
 
 ## Support
 
