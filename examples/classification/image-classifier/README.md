@@ -43,14 +43,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `resnet_50_mpk.tar.gz` | Default | `resnet_50` |
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.2"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${PLATFORM_VERSION}" get resnet_50
+sima-cli modelzoo -v "${MODELZOO_VERSION}" get resnet_50
 cd ..
 ```
 

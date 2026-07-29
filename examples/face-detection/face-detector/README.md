@@ -43,14 +43,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `retinaface_mobilenet25_mod_0_mpk.tar.gz` | Default | Direct artifact |
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.2"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz"
 cd ..
 ```
 
