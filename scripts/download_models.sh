@@ -25,7 +25,10 @@ SCOPE_PYTHON="${TEST_SCOPE_PYTHON_BIN:-${PYTHON_TEST_BIN:-python3}}"
 VERSION_PYTHON="${PYTHON_TEST_BIN:-python3}"
 export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
 
-detect_platform_version() {
+# Model assets follow the published Model Zoo release, which can lag the platform
+# release. modelzoo-version selects it; platform-version is the fallback for
+# manifests written before the two versions were separated.
+detect_modelzoo_version() {
     "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" <<'PY'
 import json
 import sys
@@ -36,24 +39,27 @@ try:
     manifest = json.loads(path.read_text(encoding="utf-8"))
 except FileNotFoundError:
     print(
-        f"ERROR: Missing manifest: {path}. Set NEAT_APPS_PLATFORM_VERSION to override.",
+        f"ERROR: Missing manifest: {path}. Set NEAT_APPS_MODELZOO_VERSION to override.",
         file=sys.stderr,
     )
     raise SystemExit(1)
 
-platform_version = manifest.get("platform-version")
-if not isinstance(platform_version, str) or not platform_version.strip():
-    print(f"ERROR: {path} must define platform-version as a non-empty string.", file=sys.stderr)
+version = manifest.get("modelzoo-version") or manifest.get("platform-version")
+if not isinstance(version, str) or not version.strip():
+    print(
+        f"ERROR: {path} must define modelzoo-version or platform-version as a non-empty string.",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
-print(platform_version.strip())
+print(version.strip())
 PY
 }
 
-PLATFORM_VERSION="${NEAT_APPS_PLATFORM_VERSION:-}"
+MODELZOO_VERSION="${NEAT_APPS_MODELZOO_VERSION:-}"
 
-ensure_platform_version() {
-    if [[ -z "$PLATFORM_VERSION" ]]; then
-        PLATFORM_VERSION="$(detect_platform_version)"
+ensure_modelzoo_version() {
+    if [[ -z "$MODELZOO_VERSION" ]]; then
+        MODELZOO_VERSION="$(detect_modelzoo_version)"
     fi
 }
 
@@ -67,7 +73,7 @@ Options:
   --scope-file <path>   Test scope source file or directory (default: examples)
   --kind <kind>         Scope kind to resolve (default: e2e)
   --language <lang>     Scope language to include; repeatable (python, cpp)
-  NEAT_APPS_PLATFORM_VERSION can override the platform version.
+  NEAT_APPS_MODELZOO_VERSION can override the Model Zoo version.
   -h, --help            Show help
 EOF
 }
@@ -196,12 +202,12 @@ download_modelzoo_model() {
         return 0
     fi
     ensure_sima_cli_bin
-    ensure_platform_version
+    ensure_modelzoo_version
 
     local before
     before=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
-    echo "[download] $model_id (modelzoo: $model_name, platform-version: $PLATFORM_VERSION)"
-    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$PLATFORM_VERSION" get "$model_name")
+    echo "[download] $model_id (modelzoo: $model_name, modelzoo-version: $MODELZOO_VERSION)"
+    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$MODELZOO_VERSION" get "$model_name")
 
     local after
     after=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
@@ -220,9 +226,16 @@ download_url_model() {
     local expected_file="$3"
     local tmpdir
     local downloaded_files=()
-    if [[ "$url" == *"{platform_version}"* ]]; then
-        ensure_platform_version
-        url="${url//\{platform_version\}/$PLATFORM_VERSION}"
+    if [[ "$url" == *"{modelzoo_version}"* ]]; then
+        ensure_modelzoo_version
+        url="${url//\{modelzoo_version\}/$MODELZOO_VERSION}"
+    fi
+
+    # An unsubstituted placeholder would otherwise reach sima-cli verbatim and
+    # fail as an opaque 404 rather than naming the scope file mistake.
+    if [[ "$url" == *"{"*"}"* ]]; then
+        echo "[error] $model_id has an unsupported URL placeholder: $url" >&2
+        return 1
     fi
 
     if model_exists "$model_id" "$expected_file"; then

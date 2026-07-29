@@ -83,8 +83,10 @@ Each example README must identify:
 - the corresponding `sima-cli` command when that source supports it
 - the downloaded package selected by `model.path`
 
-Use `models/` for user-managed packages. Before downloading a model, read the
-installed platform version from `DISTRO_VERSION` in `/etc/buildinfo`.
+Use `models/` for user-managed packages. Model downloads use the Model Zoo
+version, which can differ from the installed platform version. Take it from
+`modelzoo-version` in `deps/manifest.json`, and keep the literal documented in
+example READMEs in sync with that field.
 
 Do not infer application support from every model declared in
 `tests/test-scope.yaml`. That file owns test acquisition. Confirm supported
