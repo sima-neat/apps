@@ -1,31 +1,31 @@
 models:
   yolo26m-pose-int8-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-int8-b1.tar.gz
     file: yolo26m-pose-int8-b1.tar.gz
   yolo26n-pose-bf16-mla_tess-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-pose/yolo26n-pose-bf16-mla_tess-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26n-pose-bf16-mla_tess-b1.tar.gz
     file: yolo26n-pose-bf16-mla_tess-b1.tar.gz
   yolo26s-pose-bf16-mla_tess-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-pose/yolo26s-pose-bf16-mla_tess-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26s-pose-bf16-mla_tess-b1.tar.gz
     file: yolo26s-pose-bf16-mla_tess-b1.tar.gz
   yolo26m-pose-bf16-mla_tess-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-pose/yolo26m-pose-bf16-mla_tess-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-bf16-mla_tess-b1.tar.gz
     file: yolo26m-pose-bf16-mla_tess-b1.tar.gz
   yolo26l-pose-bf16-mla_tess-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-pose/yolo26l-pose-bf16-mla_tess-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26l-pose-bf16-mla_tess-b1.tar.gz
     file: yolo26l-pose-bf16-mla_tess-b1.tar.gz
   yolo26x-pose-bf16-mla_tess-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-pose/yolo26x-pose-bf16-mla_tess-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26x-pose-bf16-mla_tess-b1.tar.gz
     file: yolo26x-pose-bf16-mla_tess-b1.tar.gz
   yolo26m-pose-bf16-b1:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/yolo26-pose/yolo26m-pose-bf16-b1.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-pose/yolo26m-pose-bf16-b1.tar.gz
     file: yolo26m-pose-bf16-b1.tar.gz
 unit:
   python: true

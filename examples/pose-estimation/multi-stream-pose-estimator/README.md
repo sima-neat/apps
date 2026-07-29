@@ -51,20 +51,19 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26x-pose-bf16-mla_tess-b1.tar.gz` | Supported |
 | `yolo26m-pose-bf16-b1.tar.gz` | Supported |
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.2"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-pose/<model-file>"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-pose/<model-file>"
 cd ..
 ```
 
 Set `model.path` in the config to the downloaded package.
 
-These pose packages are published as direct artifacts and are not indexed in the Model Zoo, so `sima-cli modelzoo get` does not resolve them. Use the `sima-cli download` command above.
+These pose packages are published as direct download artifacts and are not indexed in the Model Zoo catalog, so they cannot be resolved by name. Use the download command above.
 
 ## Prepare Insight
 
