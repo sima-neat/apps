@@ -16,6 +16,8 @@
 
 This example decodes an RTSP stream, runs YOLO26 detection, and sends video plus detection metadata to Insight. When GenAI is enabled, a bounded background worker crops the highest-scoring person and sends it to a configured VLM server without blocking detection or Insight output.
 
+The decoded frame branches inside a single graph to the detector, to the H.264 sender, and back to the application for the GenAI crop. Video and metadata therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from.
+
 ## Preview
 
 ![Detection-to-VLM assistant preview](../../../portal/assets/examples/genai/detection-to-vlm-assistant/image.png)
