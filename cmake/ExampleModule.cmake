@@ -158,9 +158,11 @@ function(_sima_neat_apps_add_unit_test example_name module_dir example_target)
 
   set(_unit_target "${example_name}_unit_test")
   add_executable("${_unit_target}" "${_unit_source}")
+  # Unit tests may include example headers directly, so they need the libraries the example links.
   target_link_libraries("${_unit_target}"
     PRIVATE
       SimaNeatApps::support_testing
+      SimaNeatApps::support_runtime
   )
   target_include_directories("${_unit_target}"
     PRIVATE

@@ -16,6 +16,7 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
+#include "segmentation_metadata.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 #include <nodes/groups/VideoSender.h>
@@ -95,15 +96,13 @@ struct ProfileWindow {
   int interval = 100;
   int frames = 0;
   int boxes = 0;
+  int dropped_segments = 0;
   double start_ms = 0.0;
   double pull_ms = 0.0;
   double decode_ms = 0.0;
-  double overlay_ms = 0.0;
-  double video_push_ms = 0.0;
   double metadata_ms = 0.0;
 
-  void add(double pull, double decode, double overlay, double video_push, double metadata,
-           int box_count) {
+  void add(double pull, double decode, double metadata, int box_count, int dropped) {
     if (!enabled) {
       return;
     }
@@ -112,10 +111,9 @@ struct ProfileWindow {
     }
     frames += 1;
     boxes += box_count;
+    dropped_segments += dropped;
     pull_ms += pull;
     decode_ms += decode;
-    overlay_ms += overlay;
-    video_push_ms += video_push;
     metadata_ms += metadata;
     if (frames >= interval) {
       flush();
@@ -131,20 +129,19 @@ struct ProfileWindow {
     const double fps = static_cast<double>(frames) * 1000.0 / elapsed_ms;
     std::cout << "[profile] frames=" << frames << " output_fps=" << fps
               << " avg_pull_ms=" << pull_ms / n << " avg_decode_ms=" << decode_ms / n
-              << " avg_overlay_ms=" << overlay_ms / n << " avg_video_push_ms=" << video_push_ms / n
               << " avg_metadata_ms=" << metadata_ms / n
-              << " avg_instances=" << static_cast<double>(boxes) / n << "\n";
+              << " avg_instances=" << static_cast<double>(boxes) / n
+              << " dropped_segments=" << dropped_segments << "\n";
     reset();
   }
 
   void reset() {
     frames = 0;
     boxes = 0;
+    dropped_segments = 0;
     start_ms = 0.0;
     pull_ms = 0.0;
     decode_ms = 0.0;
-    overlay_ms = 0.0;
-    video_push_ms = 0.0;
     metadata_ms = 0.0;
   }
 };
@@ -153,10 +150,10 @@ struct PipelineRuntime {
   std::unique_ptr<simaai::neat::Model> model;
   simaai::neat::Graph graph;
   simaai::neat::Run run;
-  simaai::neat::Graph video_graph;
-  simaai::neat::Run video_run;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
+  /// Run output the loop pulls: the segments alone, or the frame-joined bundle when saving.
+  std::string output_name;
   int frame_w = 0;
   int frame_h = 0;
   int output_fps = 30;
@@ -685,7 +682,11 @@ simaai::neat::Tensor frame_tensor_from_sample(const simaai::neat::Sample& sample
 }
 
 simaai::neat::TensorList segment_tensors_from_sample(const simaai::neat::Sample& sample) {
-  return simaai::neat::tensors_from_sample(joined_field(sample, "segments", 1U), true);
+  // Without save_dir there is nothing to combine, so the pulled sample is the segments payload.
+  const simaai::neat::Sample& field = sample.kind == simaai::neat::SampleKind::Bundle
+                                          ? joined_field(sample, "segments", 1U)
+                                          : sample;
+  return simaai::neat::tensors_from_sample(field, true);
 }
 
 std::string class_name(const std::vector<std::string>& labels, int class_id) {
@@ -710,47 +711,6 @@ cv::Rect frame_rect_for_detection(const SegmentationDetection& det, const cv::Si
   return cv::Rect(x0, y0, x1 - x0, y1 - y0);
 }
 
-cv::Rect mask_rect_for_frame_rect(const cv::Rect& frame_rect, const cv::Size& frame_size,
-                                  const cv::Size& mask_size) {
-  const int model_w = mask_size.width * 4;
-  const int model_h = mask_size.height * 4;
-  const double scale =
-      std::min(static_cast<double>(model_w) / static_cast<double>(frame_size.width),
-               static_cast<double>(model_h) / static_cast<double>(frame_size.height));
-  const double pad_x =
-      (static_cast<double>(model_w) - static_cast<double>(frame_size.width) * scale) * 0.5;
-  const double pad_y =
-      (static_cast<double>(model_h) - static_cast<double>(frame_size.height) * scale) * 0.5;
-  const auto to_mask_x = [&](double frame_x) {
-    return (frame_x * scale + pad_x) * static_cast<double>(mask_size.width) /
-           static_cast<double>(model_w);
-  };
-  const auto to_mask_y = [&](double frame_y) {
-    return (frame_y * scale + pad_y) * static_cast<double>(mask_size.height) /
-           static_cast<double>(model_h);
-  };
-
-  const int x0 = std::clamp(static_cast<int>(std::floor(to_mask_x(frame_rect.x))), 0,
-                            std::max(0, mask_size.width - 1));
-  const int y0 = std::clamp(static_cast<int>(std::floor(to_mask_y(frame_rect.y))), 0,
-                            std::max(0, mask_size.height - 1));
-  const int x1 = std::clamp(static_cast<int>(std::ceil(to_mask_x(frame_rect.x + frame_rect.width))),
-                            x0 + 1, mask_size.width);
-  const int y1 =
-      std::clamp(static_cast<int>(std::ceil(to_mask_y(frame_rect.y + frame_rect.height))), y0 + 1,
-                 mask_size.height);
-  return cv::Rect(x0, y0, x1 - x0, y1 - y0);
-}
-
-cv::Mat project_letterbox_mask_roi(const cv::Mat& mask, const cv::Rect& frame_rect,
-                                   const cv::Size& frame_size) {
-  const cv::Rect mask_rect =
-      mask_rect_for_frame_rect(frame_rect, frame_size, cv::Size(mask.cols, mask.rows));
-  cv::Mat projected;
-  cv::resize(mask(mask_rect), projected, frame_rect.size(), 0, 0, cv::INTER_LINEAR);
-  return projected;
-}
-
 void draw_box(cv::Mat& frame, const SegmentationDetection& det,
               const std::vector<std::string>& labels) {
   const cv::Rect rect = frame_rect_for_detection(det, frame.size());
@@ -771,7 +731,8 @@ cv::Mat overlay_segmentation(const cv::Mat& frame,
       continue;
     }
     const cv::Rect frame_rect = frame_rect_for_detection(det, annotated.size());
-    cv::Mat resized_mask = project_letterbox_mask_roi(det.mask, frame_rect, annotated.size());
+    cv::Mat resized_mask =
+        instance_seg::project_letterbox_mask_roi(det.mask, frame_rect, annotated.size());
     cv::Mat binary_mask;
     cv::threshold(resized_mask, binary_mask, cfg.mask_threshold * 255.0, 255, cv::THRESH_BINARY);
     if (cv::countNonZero(binary_mask) > 0) {
@@ -793,25 +754,25 @@ cv::Mat overlay_segmentation(const cv::Mat& frame,
   return annotated;
 }
 
-std::vector<sima_examples::MetadataBox>
-build_metadata_boxes(const std::vector<SegmentationDetection>& detections,
-                     const std::vector<std::string>& labels, int frame_w, int frame_h) {
-  std::vector<sima_examples::MetadataBox> boxes;
-  boxes.reserve(detections.size());
-  int object_index = 1;
+std::vector<instance_seg::MetadataSegment>
+build_metadata_segments(const std::vector<SegmentationDetection>& detections,
+                        const std::vector<std::string>& labels, const cv::Size& frame_size,
+                        double mask_threshold) {
+  std::vector<instance_seg::MetadataSegment> segments;
+  segments.reserve(detections.size());
   for (const auto& det : detections) {
-    const cv::Rect rect = frame_rect_for_detection(det, cv::Size(frame_w, frame_h));
-    sima_examples::MetadataBox obj;
-    obj.id = "obj_" + std::to_string(object_index++);
-    obj.label = class_name(labels, det.class_id);
-    obj.confidence = det.score;
-    obj.x = static_cast<float>(rect.x);
-    obj.y = static_cast<float>(rect.y);
-    obj.w = static_cast<float>(rect.width);
-    obj.h = static_cast<float>(rect.height);
-    boxes.push_back(obj);
+    if (det.mask.empty()) {
+      continue;
+    }
+    const cv::Rect rect = frame_rect_for_detection(det, frame_size);
+    auto polygon = instance_seg::mask_polygon(det.mask, rect, frame_size, mask_threshold);
+    if (polygon.empty()) {
+      continue;
+    }
+    segments.push_back({"seg_" + std::to_string(segments.size() + 1),
+                        class_name(labels, det.class_id), det.score, rect, std::move(polygon)});
   }
-  return boxes;
+  return segments;
 }
 
 PipelineRuntime build_pipeline(const AppConfig& cfg) {
@@ -827,11 +788,24 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   runtime.model = make_model(cfg, geometry);
   runtime.labels = load_labels(cfg.labels_path);
 
-  auto source = make_source_graph(cfg, geometry);
-  auto branch = simaai::neat::graphs::Branch("source", {"frame", "model"});
+  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
+      runtime.frame_w, runtime.frame_h, runtime.output_fps);
+  video_options.host = cfg.insight_host;
+  video_options.channel = 0;
+  video_options.video_port_base = cfg.video_port;
+  video_options.encoder.bitrate_kbps = 1000;
+  runtime.video_port = video_options.video_port();
 
-  simaai::neat::Graph frame_graph("frame");
-  frame_graph.add(simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
+  // Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
+  // segments must stay in one Run and therefore on one GStreamer timeline.
+  const bool save_frames = !cfg.save_dir.empty();
+  auto source = make_source_graph(cfg, geometry);
+  auto branch = save_frames ? simaai::neat::graphs::Branch("source", {"video", "model", "frame"})
+                            : simaai::neat::graphs::Branch("source", {"video", "model"});
+
+  simaai::neat::Graph video_graph("video");
+  video_graph.connect(simaai::neat::nodes::Input("video"),
+                      simaai::neat::nodes::groups::VideoSender(video_options));
 
   simaai::neat::Graph model_graph("model");
   model_graph.connect(simaai::neat::nodes::Input("model"), *runtime.model);
@@ -840,15 +814,21 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   segments_graph.add(
       simaai::neat::nodes::Output("segments", simaai::neat::OutputOptions::EveryFrame(4)));
 
-  auto joined = simaai::neat::graphs::Combine({"frame", "segments"}, "segmentation_output",
-                                              simaai::neat::CombinePolicy::ByFrame);
-
   runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, frame_graph);
+  runtime.graph.connect(branch, video_graph);
   runtime.graph.connect(branch, model_graph);
   runtime.graph.connect(model_graph, segments_graph);
-  runtime.graph.connect(frame_graph, joined);
-  runtime.graph.connect(segments_graph, joined);
+  if (save_frames) {
+    simaai::neat::Graph frame_graph("frame");
+    frame_graph.add(
+        simaai::neat::nodes::Output("frame", simaai::neat::OutputOptions::EveryFrame(4)));
+    auto joined = simaai::neat::graphs::Combine({"frame", "segments"}, "segmentation_output",
+                                                simaai::neat::CombinePolicy::ByFrame);
+    runtime.graph.connect(branch, frame_graph);
+    runtime.graph.connect(frame_graph, joined);
+    runtime.graph.connect(segments_graph, joined);
+  }
+  runtime.output_name = save_frames ? "segmentation_output" : "segments";
   if (cfg.profile) {
     std::cout << "Backend:\n" << runtime.graph.describe_backend() << "\n";
   }
@@ -859,29 +839,6 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   runtime.run = runtime.graph.build(run_options);
-
-  simaai::neat::InputOptions video_input;
-  video_input.payload_type = simaai::neat::PayloadType::Image;
-  video_input.format = "RGB";
-  video_input.width = runtime.frame_w;
-  video_input.height = runtime.frame_h;
-  video_input.depth = 3;
-  video_input.memory_policy = simaai::neat::InputMemoryPolicy::Ev74;
-
-  auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-      runtime.frame_w, runtime.frame_h, runtime.output_fps);
-  video_options.host = cfg.insight_host;
-  video_options.channel = 0;
-  video_options.video_port_base = cfg.video_port;
-  video_options.encoder.bitrate_kbps = 1000;
-  runtime.video_port = video_options.video_port();
-
-  runtime.video_graph.add(simaai::neat::nodes::Input(video_input));
-  runtime.video_graph.add(simaai::neat::nodes::groups::VideoSender(video_options));
-  cv::Mat seed(runtime.frame_h, runtime.frame_w, CV_8UC3, cv::Scalar(0, 0, 0));
-  const auto seed_tensor = simaai::neat::Tensor::from_cv_mat(
-      seed, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
-  runtime.video_run = runtime.video_graph.build(simaai::neat::TensorList{seed_tensor});
 
   simaai::neat::MetadataSenderOptions metadata_options;
   metadata_options.host = cfg.insight_host;
@@ -900,43 +857,32 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
   return runtime;
 }
 
-void send_metadata(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
-                   const std::vector<SegmentationDetection>& detections) {
-  const auto boxes =
-      build_metadata_boxes(detections, runtime.labels, runtime.frame_w, runtime.frame_h);
+/// Sends one `segmentation` message and reports how many segments the byte budget dropped.
+int send_metadata(PipelineRuntime& runtime, const AppConfig& cfg,
+                  const simaai::neat::Sample& sample,
+                  const std::vector<SegmentationDetection>& detections) {
+  const auto encoded = instance_seg::encode_segments(build_metadata_segments(
+      detections, runtime.labels, cv::Size(runtime.frame_w, runtime.frame_h), cfg.mask_threshold));
   const int64_t ts_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
   const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
-  if (!runtime.metadata_sender->send_metadata(
-          "instance-segmentation", sima_examples::metadata_boxes_data_json("objects", boxes), ts_ms,
-          frame_id, &err)) {
+  if (!runtime.metadata_sender->send_metadata("segmentation", encoded.data_json, ts_ms, frame_id,
+                                              &err)) {
     std::cerr << "[warn] insight metadata send failed: " << err << "\n";
   }
+  return encoded.dropped;
 }
 
-void push_annotated_video(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
-                          const cv::Mat& annotated_bgr) {
-  cv::Mat rgb;
-  cv::cvtColor(annotated_bgr, rgb, cv::COLOR_BGR2RGB);
-  const auto tensor = simaai::neat::Tensor::from_cv_mat(
-      rgb, simaai::neat::ImageSpec::PixelFormat::RGB, simaai::neat::TensorMemory::EV74);
-  auto video_sample = simaai::neat::make_tensor_sample("", tensor);
-  video_sample.pts_ns = sample.pts_ns;
-  video_sample.dts_ns = sample.dts_ns;
-  video_sample.duration_ns = sample.duration_ns;
-  video_sample.frame_id = sample.frame_id;
-  video_sample.stream_id = sample.stream_id;
-  if (!runtime.video_run.push(video_sample)) {
-    throw std::runtime_error("Insight video push failed");
-  }
-}
-
-void maybe_save_frame(const AppConfig& cfg, int processed, const cv::Mat& annotated_bgr) {
+void maybe_save_frame(const AppConfig& cfg, int processed, const simaai::neat::Sample& sample,
+                      const std::vector<SegmentationDetection>& detections,
+                      const std::vector<std::string>& labels) {
   if (cfg.save_dir.empty() || cfg.save_every <= 0 || processed % cfg.save_every != 0) {
     return;
   }
+  const cv::Mat frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample));
+  const cv::Mat annotated = overlay_segmentation(frame, detections, labels, cfg);
   const auto out_path = cfg.save_dir / ("frame_" + std::to_string(processed) + ".jpg");
-  if (!cv::imwrite(out_path.string(), annotated_bgr)) {
+  if (!cv::imwrite(out_path.string(), annotated)) {
     std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
   }
 }
@@ -947,11 +893,12 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
   profile.interval = cfg.profile_interval;
 
   int processed = 0;
+  int dropped_total = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
     const double pull_start = time_ms();
-    const auto status = runtime.run.pull("segmentation_output", 20000, sample, &pull_error);
+    const auto status = runtime.run.pull(runtime.output_name, 20000, sample, &pull_error);
     const double pull_end = time_ms();
     if (status == simaai::neat::PullStatus::Timeout) {
       std::cerr << "[warn] timed out waiting for segmentation output\n";
@@ -965,33 +912,27 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
     }
 
     const double decode_start = time_ms();
-    const cv::Mat frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample));
     const auto detections = decode_segmentation_output(
         segment_tensors_from_sample(sample), runtime.frame_w, runtime.frame_h, cfg.max_detections);
     const double decode_end = time_ms();
 
-    const double overlay_start = time_ms();
-    const cv::Mat annotated = overlay_segmentation(frame, detections, runtime.labels, cfg);
-    const double overlay_end = time_ms();
-
-    const double video_start = time_ms();
-    push_annotated_video(runtime, sample, annotated);
-    const double video_end = time_ms();
-
     const double metadata_start = time_ms();
-    send_metadata(runtime, sample, detections);
+    const int dropped = send_metadata(runtime, cfg, sample, detections);
     const double metadata_end = time_ms();
+    if (dropped > 0 && dropped_total == 0) {
+      std::cerr << "[warn] metadata byte budget exceeded, dropped " << dropped << " segments\n";
+    }
+    dropped_total += dropped;
 
     ++processed;
-    maybe_save_frame(cfg, processed, annotated);
-    profile.add(pull_end - pull_start, decode_end - decode_start, overlay_end - overlay_start,
-                video_end - video_start, metadata_end - metadata_start,
-                static_cast<int>(detections.size()));
+    maybe_save_frame(cfg, processed, sample, detections, runtime.labels);
+    profile.add(pull_end - pull_start, decode_end - decode_start, metadata_end - metadata_start,
+                static_cast<int>(detections.size()), dropped);
   }
 
   profile.flush();
-  std::cout << "processed=" << processed << " video_sender=" << cfg.insight_host << ":"
-            << runtime.video_port << "\n";
+  std::cout << "processed=" << processed << " dropped_segments=" << dropped_total
+            << " video_sender=" << cfg.insight_host << ":" << runtime.video_port << "\n";
 }
 
 } // namespace
@@ -1018,7 +959,6 @@ int main(int argc, char** argv) {
 
     PipelineRuntime runtime = build_pipeline(cfg);
     run_pipeline(runtime, cfg);
-    runtime.video_run.close();
     runtime.run.close();
     return 0;
   } catch (const std::exception& ex) {
