@@ -23,7 +23,7 @@ runtime:
   profile_interval: 100      # Rolling profile window in published frames.
 
 output:
-  save_dir: ""               # Optional directory for annotated frames.
+  save_dir: ""               # Optional directory for annotated frames. Adds a decoded-frame branch.
   save_every: 0              # Save every Nth output frame. 0 disables saving.
   insight:
     host: <insight-host-ip>  # Host running the Insight receiver/viewer.
