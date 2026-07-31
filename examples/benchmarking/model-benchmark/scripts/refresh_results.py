@@ -86,6 +86,9 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "detection-to-vlm-assistant, multi-stream-people-tracker",
                      "models/YOLO26-DETECTION/yolo26m-det-bf16-b1.tar.gz"),
+            ModelRow("yolo26n-det-int8-b1", "yolo26n-det-int8-b1.tar.gz",
+                     "high-density-multi-stream-object-detector",
+                     "models/YOLO26-DETECTION/yolo26n-det-int8-b1.tar.gz"),
             ModelRow("yolo26m-det-int8-b1", "yolo26m-det-int8-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "detection-to-vlm-assistant, multi-stream-people-tracker",
