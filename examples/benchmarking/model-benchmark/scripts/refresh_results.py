@@ -26,6 +26,7 @@ class ModelRow:
     package: str
     used_by: str
     preferred_path: str
+    decode_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,11 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "detection-to-vlm-assistant, multi-stream-people-tracker",
                      "models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz"),
+            ModelRow("yolo26m-det-int8-b1-boxdecode", "yolo26m-det-int8-b1.tar.gz",
+                     "single-stream-object-detector, multi-stream-object-detector, "
+                     "detection-to-vlm-assistant, multi-stream-people-tracker",
+                     "models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz",
+                     decode_type="yolo26-det"),
         ),
     ),
     (
@@ -119,6 +125,10 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
             ModelRow("yolo26m-seg-int8-b1", "yolo26m-seg-int8-b1.tar.gz",
                      "single-stream-instance-segmenter",
                      "models/YOLO26-SEGMENTATION/yolo26m-seg-int8-b1.tar.gz"),
+            ModelRow("yolo26m-seg-int8-b1-boxdecode", "yolo26m-seg-int8-b1.tar.gz",
+                     "single-stream-instance-segmenter",
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-int8-b1.tar.gz",
+                     decode_type="yolo26-seg"),
         ),
     ),
 )
@@ -166,6 +176,14 @@ def resolve_model_path(row: ModelRow) -> Path:
     return matches[0]
 
 
+def benchmark_command(row: ModelRow, model_path: Path, frames: int, out_path: Path) -> list[str]:
+    command = [sys.executable, str(MAIN_PY), "--model", str(model_path),
+               "--frames", str(frames), "--output-json", str(out_path)]
+    if row.decode_type:
+        command += ["--decode-type", row.decode_type]
+    return command
+
+
 def run_benchmarks(frames: int, reports_dir: Path, rows: tuple[ModelRow, ...]) -> list[BenchmarkFailure]:
     reports_dir.mkdir(parents=True, exist_ok=True)
     failures: list[BenchmarkFailure] = []
@@ -178,16 +196,8 @@ def run_benchmarks(frames: int, reports_dir: Path, rows: tuple[ModelRow, ...]) -
             continue
         out_path = reports_dir / f"{row.model_id}.json"
         print(f"[benchmark] {row.model_id}: {model_path}", flush=True)
-        result = subprocess.run([
-            sys.executable,
-            str(MAIN_PY),
-            "--model",
-            str(model_path),
-            "--frames",
-            str(frames),
-            "--output-json",
-            str(out_path),
-        ], cwd=APPS_ROOT, check=False)
+        result = subprocess.run(benchmark_command(row, model_path, frames, out_path),
+                                cwd=APPS_ROOT, check=False)
         if result.returncode != 0:
             failures.append(BenchmarkFailure(row.model_id, f"exit {result.returncode}"))
             print(f"[failed] {row.model_id}: exit {result.returncode}", file=sys.stderr,
@@ -195,13 +205,11 @@ def run_benchmarks(frames: int, reports_dir: Path, rows: tuple[ModelRow, ...]) -
     return failures
 
 
-def report_metrics(reports_dir: Path, row: ModelRow) -> tuple[float, float]:
+def read_report(reports_dir: Path, row: ModelRow) -> dict:
     report_path = reports_dir / f"{row.model_id}.json"
     if not report_path.exists():
         raise FileNotFoundError(f"missing benchmark report: {report_path}")
-    data = json.loads(report_path.read_text())
-    metrics = data["metrics"]
-    return float(metrics["latency_ms"]), float(metrics["fps"])
+    return json.loads(report_path.read_text())
 
 
 def report_date(reports_dir: Path) -> str:
@@ -233,7 +241,7 @@ def render_markdown(frames: int, sdk: str, run_date: str, reports_dir: Path) -> 
         f"| SDK | {sdk} |",
         f"| Date | {run_date} |",
         f"| Frames | {frames} |",
-        "| Command | `python3 examples/benchmarking/model-benchmark/src/python/main.py --model <model-package>` |",
+        "| Command | `python3 examples/benchmarking/model-benchmark/src/python/main.py --model <model-package> [--decode-type <yolo26-det\\|yolo26-seg>]` |",
         "| Refresh Script | `python3 examples/benchmarking/model-benchmark/scripts/refresh_results.py --run` |",
         "| JSON Reports | `sandbox/model-benchmark/runs/<model-id>.json` |",
         "| Power Columns | Omitted |",
@@ -243,14 +251,16 @@ def render_markdown(frames: int, sdk: str, run_date: str, reports_dir: Path) -> 
         lines.extend([
             f"## {title}",
             "",
-            "| Model ID | Package | Used By | Latency / FPS |",
-            "| --- | --- | --- | ---: |",
+            "| Model ID | Package | Used By | Postprocess | Outputs | Latency / FPS |",
+            "| --- | --- | --- | --- | ---: | ---: |",
         ])
         for row in rows:
-            latency_ms, fps = report_metrics(reports_dir, row)
+            report = read_report(reports_dir, row)
+            model, metrics = report["model"], report["metrics"]
             lines.append(
                 f"| `{row.model_id}` | `{row.package}` | {row.used_by} | "
-                f"{latency_ms:.3f} / {fps:.2f} |"
+                f"`{model['resolved_postprocess']}` | {len(model['output_specs'])} | "
+                f"{float(metrics['latency_ms']):.3f} / {float(metrics['fps']):.2f} |"
             )
         lines.append("")
     return "\n".join(lines)
