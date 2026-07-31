@@ -248,6 +248,8 @@ def render_markdown(frames: int, sdk: str, run_date: str, reports_dir: Path) -> 
         "| Refresh Script | `python3 examples/benchmarking/model-benchmark/scripts/refresh_results.py --run` |",
         "| JSON Reports | `sandbox/model-benchmark/runs/<model-id>.json` |",
         "| Power Columns | Omitted |",
+        "| BoxDecode Options | `top_k=100`, `score_threshold=0` (keeps all candidates), "
+        "`nms_iou_threshold=0` (NMS disabled) |",
         "",
     ]
     for title, rows in GROUPS:
@@ -260,9 +262,11 @@ def render_markdown(frames: int, sdk: str, run_date: str, reports_dir: Path) -> 
         for row in rows:
             report = read_report(reports_dir, row)
             model, metrics = report["model"], report["metrics"]
+            specs = model["output_specs"]
+            outputs = "n/a" if specs[0].startswith("unavailable:") else len(specs)
             lines.append(
                 f"| `{row.model_id}` | `{row.package}` | {row.used_by} | "
-                f"`{model['resolved_postprocess']}` | {len(model['output_specs'])} | "
+                f"`{model['resolved_postprocess']}` | {outputs} | "
                 f"{float(metrics['latency_ms']):.3f} / {float(metrics['fps']):.2f} |"
             )
         lines.append("")

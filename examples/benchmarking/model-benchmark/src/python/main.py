@@ -34,8 +34,23 @@ def spec_strings(model, method_name: str) -> list[str]:
         return [f"unavailable: {exc}"]
 
 
+def route_fields(model) -> dict:
+    """Describe the resolved route, without discarding a completed benchmark if info() fails."""
+    try:
+        info = model.info()
+    except Exception as exc:
+        return {"resolved_postprocess": f"unavailable: {exc}", "output_topology": None}
+    return {
+        "resolved_postprocess": info.selection.selected_post_kind,
+        "output_topology": {
+            "physical": info.output_topology.physical_outputs,
+            "logical": info.output_topology.logical_outputs,
+            "packed": info.output_topology.packed_outputs,
+        },
+    }
+
+
 def write_report(path: Path, model_path: Path, frames: int, decode_type, model, report) -> None:
-    info = model.info()
     data = {
         "benchmark": {
             "type": "model.synthetic",
@@ -46,12 +61,8 @@ def write_report(path: Path, model_path: Path, frames: int, decode_type, model, 
             "path": str(model_path),
             "file": model_path.name,
             "requested_decode_type": decode_type,
-            "resolved_postprocess": info.selection.selected_post_kind,
-            "output_topology": {
-                "physical": info.output_topology.physical_outputs,
-                "logical": info.output_topology.logical_outputs,
-                "packed": info.output_topology.packed_outputs,
-            },
+            "boxdecode_top_k": None if decode_type is None else BOXDECODE_TOP_K,
+            **route_fields(model),
             "input_specs": spec_strings(model, "input_specs"),
             "output_specs": spec_strings(model, "output_specs"),
         },

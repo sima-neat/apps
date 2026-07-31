@@ -17,6 +17,7 @@ These results measure the compiled model package only. They do not include camer
 | Refresh Script | `python3 examples/benchmarking/model-benchmark/scripts/refresh_results.py --run` |
 | JSON Reports | `sandbox/model-benchmark/runs/<model-id>.json` |
 | Power Columns | Omitted |
+| BoxDecode Options | `top_k=100`, `score_threshold=0` (keeps all candidates), `nms_iou_threshold=0` (NMS disabled) |
 
 ## General Models
 
@@ -40,7 +41,7 @@ These results measure the compiled model package only. They do not include camer
 | `yolo26m-det-bf16-b1` | `yolo26m-det-bf16-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `unknown` | 6 | 18.143 / 78.15 |
 | `yolo26n-det-int8-b1` | `yolo26n-det-int8-b1.tar.gz` | high-density-multi-stream-object-detector | `dequantize` | 6 | 4.392 / 869.39 |
 | `yolo26m-det-int8-b1` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `detessdequant` | 6 | 7.076 / 300.09 |
-| `yolo26m-det-int8-b1-boxdecode` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `boxdecode` | 1 | 6.898 / 304.88 |
+| `yolo26m-det-int8-b1-boxdecode` | `yolo26m-det-int8-b1.tar.gz` | single-stream-object-detector, multi-stream-object-detector, detection-to-vlm-assistant, multi-stream-people-tracker | `boxdecode` | 1 | 6.841 / 305.82 |
 
 ## YOLO26 Segmentation
 
@@ -54,4 +55,4 @@ These results measure the compiled model package only. They do not include camer
 | `yolo26m-seg-bf16-b1` | `yolo26m-seg-bf16-b1.tar.gz` | single-stream-instance-segmenter | `unknown` | 10 | 27.146 / 50.90 |
 | `yolo26m-seg-bf16-mla_tess-b1` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` | single-stream-instance-segmenter | `cast` | 10 | 25.248 / 51.09 |
 | `yolo26m-seg-int8-b1` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter | `detessdequant` | 10 | 10.403 / 201.88 |
-| `yolo26m-seg-int8-b1-boxdecode` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter | `boxdecode` | 1 | 11.736 / 205.43 |
+| `yolo26m-seg-int8-b1-boxdecode` | `yolo26m-seg-int8-b1.tar.gz` | single-stream-instance-segmenter | `boxdecode` | 1 | 11.709 / 203.23 |

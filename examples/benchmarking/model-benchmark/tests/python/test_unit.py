@@ -13,8 +13,18 @@ import pytest
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
-sys.path.insert(0, str(EXAMPLE_DIR / "scripts"))
-import refresh_results  # noqa: E402
+SCRIPTS_DIR = EXAMPLE_DIR / "scripts"
+
+
+def load_refresh_results():
+    """Import the maintainer refresh script, which the installed Apps bundle omits."""
+    if not (SCRIPTS_DIR / "refresh_results.py").is_file():
+        pytest.skip("refresh_results.py is not part of the installed Apps bundle")
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+    import refresh_results
+
+    return refresh_results
 
 # The fake traces the options reaching pyneat.Model so a test can assert the exact Core
 # enum and top-K, and resolves the postprocess the way Core does.
@@ -194,6 +204,7 @@ def test_decode_type_selects_core_enum(tmp_path: Path, flag: str, enum_name: str
 def test_boxdecode_row_shares_package_with_its_default(
     tmp_path: Path, default_id: str, boxdecode_id: str, flag: str
 ) -> None:
+    refresh_results = load_refresh_results()
     rows = {row.model_id: row for row in refresh_results.all_rows()}
     default_row, boxdecode_row = rows[default_id], rows[boxdecode_id]
     assert default_row.package == boxdecode_row.package
@@ -216,6 +227,7 @@ def test_boxdecode_row_shares_package_with_its_default(
 
 @pytest.mark.unit
 def test_render_markdown_reports_each_route(tmp_path: Path) -> None:
+    refresh_results = load_refresh_results()
     for row in refresh_results.all_rows():
         boxdecode = row.decode_type is not None
         (tmp_path / f"{row.model_id}.json").write_text(
