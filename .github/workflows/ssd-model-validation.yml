@@ -1,0 +1,231 @@
+name: Temporary SSD Model Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Apps Vulcan artifact branch
+        required: true
+        default: feat/ssd-recipe-validation-and-coverage
+        type: string
+      release_tag:
+        description: Draft release containing the compiled model archives
+        required: true
+        default: ssd-model-validation-20260802
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-test-runner:
+    name: Resolve Test Runner
+    uses: sima-neat/.github/.github/workflows/vulcan-resolve-modalix-runner.yml@main
+
+  validate-models:
+    name: Validate SSD models on Modalix
+    needs: resolve-test-runner
+    runs-on:
+      group: ${{ needs.resolve-test-runner.outputs.modalix_runner_group }}
+      labels: [self-hosted, Linux, ARM64, modalix]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          clean: true
+
+      - name: Install Apps runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
+            --env production \
+            --target "apps@${{ inputs.branch }}" \
+            --install-dir _ssd-validation/install \
+            --force)"
+          echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+
+      - name: Locate Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          else
+            echo "pyneat virtual environment was not found" >&2
+            exit 1
+          fi
+
+      - name: Install validation dependencies
+        shell: bash
+        run: |
+          source "${PYNEAT_ACTIVATE}"
+          "${PYTHON_TEST_BIN}" -m pip install "numpy<2" "opencv-python-headless<4.12" PyYAML
+
+      - name: Download compiled model archives
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p _ssd-validation/models
+          gh release download "${{ inputs.release_tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir _ssd-validation/models \
+            --pattern 'ssd_mobilenet_v1_heads_mpk.tar.gz' \
+            --pattern 'ssd_mobilenet_v3_heads_mpk.tar.gz'
+
+      - name: Validate archive deployment contract
+        shell: bash
+        run: |
+          "${PYTHON_TEST_BIN}" - <<'PY'
+          import tarfile
+          from pathlib import Path
+
+          models = Path("_ssd-validation/models")
+          archives = sorted(models.glob("*.tar.gz"))
+          if len(archives) != 2:
+              raise SystemExit(f"expected two model archives, found {len(archives)}")
+          for archive in archives:
+              with tarfile.open(archive, "r:gz") as bundle:
+                  names = bundle.getnames()
+              elfs = [name for name in names if name.endswith(".elf")]
+              shared_objects = [name for name in names if name.endswith(".so")]
+              manifests = [name for name in names if name.endswith("_mpk.json")]
+              if len(elfs) != 1 or shared_objects or len(manifests) != 1:
+                  raise SystemExit(
+                      f"{archive.name}: expected one ELF, no SO, one MPK manifest; "
+                      f"got elfs={elfs}, so={shared_objects}, manifests={manifests}"
+                  )
+              print(f"{archive.name}: {elfs[0]}")
+          PY
+
+      - name: Run C++ and Python Apps E2E and performance gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${PYNEAT_ACTIVATE}"
+
+          cpp_binary="$(find "${APPS_RUNTIME_DIR}/examples" -type f \
+            -name ssd-mobilenet-object-detector -perm -111 -print -quit)"
+          python_main="$(find "${APPS_RUNTIME_DIR}/examples" -type f \
+            -path '*/ssd-mobilenet-object-detector/src/python/main.py' -print -quit)"
+          labels="$(find "${APPS_RUNTIME_DIR}/examples" -type f \
+            -path '*/ssd-mobilenet-object-detector/src/common/coco_labels.txt' -print -quit)"
+          mapfile -t source_images < <(
+            find "${APPS_RUNTIME_DIR}/assets/datasets-test/coco" -maxdepth 1 \
+              -type f -iname '*.jpg' -print | sort
+          )
+          source_image="${source_images[0]:-}"
+          test -x "${cpp_binary}"
+          test -f "${python_main}"
+          test -f "${labels}"
+          test -f "${source_image}"
+
+          input_dir="${GITHUB_WORKSPACE}/_ssd-validation/input"
+          mkdir -p "${input_dir}"
+          cp "${source_image}" "${input_dir}/"
+
+          run_model() {
+            local model_name="$1"
+            local frame="$2"
+            local archive="${GITHUB_WORKSPACE}/_ssd-validation/models/${model_name}_mpk.tar.gz"
+            local work="${GITHUB_WORKSPACE}/_ssd-validation/results/${model_name}"
+            mkdir -p "${work}"
+
+            MODEL_ARCHIVE="${archive}" MODEL_FRAME="${frame}" LABELS="${labels}" \
+              INPUT_DIR="${input_dir}" WORK_DIR="${work}" \
+              "${PYTHON_TEST_BIN}" - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          work = Path(os.environ["WORK_DIR"])
+          base = {
+              "model": {
+                  "path": os.environ["MODEL_ARCHIVE"],
+                  "frame": int(os.environ["MODEL_FRAME"]),
+                  "labels": os.environ["LABELS"],
+              },
+              "io": {
+                  "input_dir": os.environ["INPUT_DIR"],
+                  "output_dir": str(work / "output"),
+              },
+              "decode": {
+                  "score_threshold": 0.30,
+                  "nms_iou": 0.60,
+                  "max_detections": 100,
+              },
+              "runtime": {"timeout_ms": 60000, "num_runs": 1, "profile": False},
+              "output": {"overlay": False},
+          }
+          for language in ("cpp", "python"):
+              config = dict(base)
+              config["io"] = dict(base["io"])
+              config["io"]["detections_json"] = str(work / f"{language}-detections.json")
+              (work / f"{language}.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+          profile = dict(base)
+          profile["runtime"] = {"timeout_ms": 60000, "num_runs": 1000, "profile": True}
+          (work / "profile.yaml").write_text(yaml.safe_dump(profile), encoding="utf-8")
+          PY
+
+            (
+              cd "${APPS_RUNTIME_DIR}"
+              "${cpp_binary}" --config "${work}/cpp.yaml" | tee "${work}/cpp.log"
+              "${PYTHON_TEST_BIN}" "${python_main}" --config "${work}/python.yaml" \
+                | tee "${work}/python.log"
+            )
+
+            WORK_DIR="${work}" "${PYTHON_TEST_BIN}" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          work = Path(os.environ["WORK_DIR"])
+          for language in ("cpp", "python"):
+              report = json.loads((work / f"{language}-detections.json").read_text())
+              images = report.get("images") or []
+              if len(images) != 1 or not images[0].get("detections"):
+                  raise SystemExit(f"{language}: expected one image with non-empty detections")
+              print(f"{language}: {len(images[0]['detections'])} detections")
+          PY
+
+            (
+              cd "${APPS_RUNTIME_DIR}"
+              SIMA_BOXDECODE_PROFILE=1 SIMA_BOXDECODE_PROFILE_EVERY=1000 \
+                "${cpp_binary}" --config "${work}/profile.yaml" \
+                | tee "${work}/profile.log"
+            )
+
+            PROFILE_LOG="${work}/profile.log" "${PYTHON_TEST_BIN}" - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          text = Path(os.environ["PROFILE_LOG"]).read_text(encoding="utf-8")
+          totals = [float(value) for value in re.findall(r"avg_ms\{[^}]*total=([0-9.]+)", text)]
+          if not totals:
+              raise SystemExit("BoxDecode profile output was not emitted")
+          worst = max(totals)
+          print(f"BoxDecode measured average: {worst:.6f} ms")
+          if worst >= 1.0:
+              raise SystemExit(f"BoxDecode average must be <1 ms, got {worst:.6f} ms")
+          PY
+          }
+
+          run_model ssd_mobilenet_v1_heads 300
+          run_model ssd_mobilenet_v3_heads 320
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ssd-model-validation-${{ github.run_id }}
+          path: _ssd-validation/results/
+          if-no-files-found: warn
+          retention-days: 7
