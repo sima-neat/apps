@@ -39,6 +39,15 @@ jobs:
         with:
           clean: true
 
+      - name: Fix devkit runtime
+        shell: bash
+        run: |
+          if [[ -x /usr/bin/fix_devkit_runtime.sh ]]; then
+            /usr/bin/fix_devkit_runtime.sh || echo "/usr/bin/fix_devkit_runtime.sh failed; continuing with existing devkit runtime state."
+          else
+            echo "/usr/bin/fix_devkit_runtime.sh not found; continuing with existing devkit runtime state."
+          fi
+
       - name: Install exact Apps and Core runtime
         shell: bash
         env:
@@ -46,30 +55,40 @@ jobs:
         run: |
           set -euo pipefail
           branch="${{ inputs.branch || github.ref_name }}"
-          run_id=""
-          while IFS=$'\t' read -r candidate_id candidate_sha; do
-            if [[ "${candidate_sha}" == "${GITHUB_SHA}" ]]; then
-              run_id="${candidate_id}"
-              break
-            fi
-          done < <(
-            gh run list --repo "${GITHUB_REPOSITORY}" --workflow vulcan-ci.yml \
-              --branch "${branch}" --limit 20 --json databaseId,headSha \
-              --jq '.[] | [.databaseId, .headSha] | @tsv'
+          api_headers=(
+            -H "Authorization: Bearer ${GH_TOKEN}"
+            -H "Accept: application/vnd.github+json"
+            -H "X-GitHub-Api-Version: 2022-11-28"
           )
+          run_id="$(
+            curl -fsSL "${api_headers[@]}" --get \
+              --data-urlencode "branch=${branch}" --data 'per_page=50' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/vulcan-ci.yml/runs" \
+              | TARGET_SHA="${GITHUB_SHA}" python3 -c \
+                'import json, os, sys; runs=json.load(sys.stdin).get("workflow_runs", []); print(next((run["id"] for run in runs if run.get("head_sha") == os.environ["TARGET_SHA"]), ""))'
+          )"
           if [[ -z "${run_id}" ]]; then
             echo "Could not find the Vulcan CI run for ${GITHUB_SHA}" >&2
             exit 1
           fi
 
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 60); do
             rm -rf _ssd-validation/build-artifacts
             mkdir -p _ssd-validation/build-artifacts
-            if gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" \
-              --name neat-apps-build --dir _ssd-validation/build-artifacts; then
-              break
+            artifact_url="$(
+              curl -fsSL "${api_headers[@]}" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+                | python3 -c \
+                  'import json, sys; artifacts=json.load(sys.stdin).get("artifacts", []); print(next((item["archive_download_url"] for item in artifacts if item.get("name") == "neat-apps-build"), ""))'
+            )"
+            if [[ -n "${artifact_url}" ]]; then
+              artifact_zip="${RUNNER_TEMP}/neat-apps-build.zip"
+              if curl -fsSL -L "${api_headers[@]}" "${artifact_url}" -o "${artifact_zip}"; then
+                python3 -m zipfile -e "${artifact_zip}" _ssd-validation/build-artifacts
+                break
+              fi
             fi
-            if [[ "${attempt}" -eq 30 ]]; then
+            if [[ "${attempt}" -eq 60 ]]; then
               echo "Apps build artifact was unavailable after ${attempt} attempts" >&2
               exit 1
             fi
@@ -90,6 +109,11 @@ jobs:
             tar -xOzf "${runtime_archive}" prebuilt-apps/deps/neat-core.json \
               | python3 -c 'import json, sys; core=json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
           )"
+          core_target_spec="$(
+            tar -xOzf "${runtime_archive}" prebuilt-apps/deps/neat-core.json \
+              | python3 -c 'import json, sys; print(json.load(sys.stdin)["neat-core"]["spec"])'
+          )"
+          echo "CORE_TARGET_SPEC=${core_target_spec}" >> "${GITHUB_ENV}"
 
           cli_installer="${RUNNER_TEMP}/sima-cli-install.py"
           curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o "${cli_installer}"
@@ -130,7 +154,19 @@ jobs:
         shell: bash
         run: |
           source "${PYNEAT_ACTIVATE}"
+          wheel_cache=/opt/toolchain/aarch64/modalix/neat-install-packages
+          mapfile -t exact_pyneat_wheels < <(
+            find "${wheel_cache}" -maxdepth 1 -type f \
+              -name "pyneat-*${CORE_TARGET_SPEC}*.whl" -print | sort
+          )
+          if [[ "${#exact_pyneat_wheels[@]}" -ne 1 ]]; then
+            echo "Expected exactly one pyneat wheel for Core ${CORE_TARGET_SPEC}, found ${#exact_pyneat_wheels[@]}" >&2
+            exit 1
+          fi
+          "${PYTHON_TEST_BIN}" -m pip install --force-reinstall --no-deps \
+            "${exact_pyneat_wheels[0]}"
           "${PYTHON_TEST_BIN}" -m pip install "numpy<2" "opencv-python-headless<4.12" PyYAML
+          "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
       - name: Download compiled model archives
         shell: bash
@@ -140,11 +176,27 @@ jobs:
           set -euo pipefail
           mkdir -p _ssd-validation/models
           release_tag="${{ inputs.release_tag || 'ssd-model-validation-20260802' }}"
-          gh release download "${release_tag}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --dir _ssd-validation/models \
-            --pattern 'ssd_mobilenet_v1_heads_mpk.tar.gz' \
-            --pattern 'ssd_mobilenet_v3_heads_mpk.tar.gz'
+          api_headers=(
+            -H "Authorization: Bearer ${GH_TOKEN}"
+            -H "Accept: application/vnd.github+json"
+            -H "X-GitHub-Api-Version: 2022-11-28"
+          )
+          while IFS=$'\t' read -r asset_name asset_url; do
+            case "${asset_name}" in
+              ssd_mobilenet_v1_heads_mpk.tar.gz|ssd_mobilenet_v3_heads_mpk.tar.gz)
+                curl -fsSL -L \
+                  -H "Authorization: Bearer ${GH_TOKEN}" \
+                  -H "Accept: application/octet-stream" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  "${asset_url}" -o "_ssd-validation/models/${asset_name}"
+                ;;
+            esac
+          done < <(
+            curl -fsSL "${api_headers[@]}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              | RELEASE_TAG="${release_tag}" python3 -c \
+                'import json, os, sys; releases=json.load(sys.stdin); release=next((item for item in releases if item.get("tag_name") == os.environ["RELEASE_TAG"]), {}); [print(asset["name"], asset["url"], sep="\t") for asset in release.get("assets", [])]'
+          )
 
       - name: Validate archive deployment contract
         shell: bash
