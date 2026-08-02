@@ -79,7 +79,7 @@ jobs:
             set -euo pipefail
             export SIMA_CLI_CHECK_FOR_UPDATE=0
             curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
-            python3 sima-cli-install.py main latest --noninteractive
+            python3 sima-cli-install.py v2.1.15 --noninteractive
             rm -f sima-cli-install.py
             export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
             sima-cli neat install --help >/dev/null
@@ -213,6 +213,11 @@ jobs:
       - name: Install Apps Core for runtime tests
         run: |
           set -euo pipefail
+          cli_installer="${RUNNER_TEMP}/sima-cli-install.py"
+          curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o "${cli_installer}"
+          python3 "${cli_installer}" v2.1.15 --noninteractive
+          export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+          export SIMA_CLI_CHECK_FOR_UPDATE=0
           artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
           mapfile -t runtime_archives < <(
             find _vulcan-test/artifacts -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
@@ -233,6 +238,7 @@ jobs:
           echo "CORE_TARGET_SPEC=${core_target_spec}" >> "${GITHUB_ENV}"
           NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
             NEAT_CORE_INSTALL_MODE=vulcan \
+            SIMA_CLI_CHECK_FOR_UPDATE=0 \
             NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
             ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
 

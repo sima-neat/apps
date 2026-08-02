@@ -117,13 +117,15 @@ jobs:
 
           cli_installer="${RUNNER_TEMP}/sima-cli-install.py"
           curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o "${cli_installer}"
-          python3 "${cli_installer}" main latest --noninteractive
+          python3 "${cli_installer}" v2.1.15 --noninteractive
           export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+          export SIMA_CLI_CHECK_FOR_UPDATE=0
           echo "${HOME}/.sima-cli/.venv/bin" >> "${GITHUB_PATH}"
 
           NEAT_CORE_INSTALL_MODE=vulcan \
             NEAT_VULCAN_ENV=production \
             NEAT_INSTALLER_SKIP_PLATFORM_CHECK=ON \
+            SIMA_CLI_CHECK_FOR_UPDATE=0 \
             ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
 
           mkdir -p _ssd-validation/runtime
@@ -215,10 +217,12 @@ jobs:
               elfs = [name for name in names if name.endswith(".elf")]
               shared_objects = [name for name in names if name.endswith(".so")]
               manifests = [name for name in names if name.endswith("_mpk.json")]
-              if len(elfs) != 1 or shared_objects or len(manifests) != 1:
+              embedded_preproc = [name for name in names if name.endswith("_preproc.json")]
+              if len(elfs) != 1 or shared_objects or len(manifests) != 1 or embedded_preproc:
                   raise SystemExit(
                       f"{archive.name}: expected one ELF, no SO, one MPK manifest; "
-                      f"got elfs={elfs}, so={shared_objects}, manifests={manifests}"
+                      f"and no baked preprocessor; got elfs={elfs}, so={shared_objects}, "
+                      f"manifests={manifests}, preproc={embedded_preproc}"
                   )
               print(f"{archive.name}: {elfs[0]}")
           PY
@@ -280,14 +284,16 @@ jobs:
                   "max_detections": 100,
               },
               "runtime": {"timeout_ms": 60000, "num_runs": 1, "profile": False},
-              "output": {"overlay": False},
+              "output": {"overlay": True},
           }
           for language in ("cpp", "python"):
               config = dict(base)
               config["io"] = dict(base["io"])
+              config["io"]["output_dir"] = str(work / f"{language}-output")
               config["io"]["detections_json"] = str(work / f"{language}-detections.json")
               (work / f"{language}.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
           profile = dict(base)
+          profile["output"] = {"overlay": False}
           profile["runtime"] = {"timeout_ms": 60000, "num_runs": 1000, "profile": True}
           (work / "profile.yaml").write_text(yaml.safe_dump(profile), encoding="utf-8")
           PY
@@ -299,18 +305,61 @@ jobs:
                 | tee "${work}/python.log"
             )
 
-            WORK_DIR="${work}" "${PYTHON_TEST_BIN}" - <<'PY'
+            MODEL_NAME="${model_name}" WORK_DIR="${work}" "${PYTHON_TEST_BIN}" - <<'PY'
           import json
           import os
           from pathlib import Path
 
+          def iou(a, b):
+              inter_w = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+              inter_h = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+              intersection = inter_w * inter_h
+              union = (
+                  max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+                  + max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+                  - intersection
+              )
+              return intersection / union if union > 0.0 else 0.0
+
+          source_golden = {
+              "ssd_mobilenet_v1_heads": [
+                  {"class_id": 62, "box": [91.61, 154.68, 237.76, 375.46]},
+                  {"class_id": 63, "box": [204.36, 174.56, 613.55, 357.82]},
+              ],
+              "ssd_mobilenet_v3_heads": [
+                  {"class_id": 63, "box": [200.28, 162.25, 602.21, 353.08]},
+                  {"class_id": 62, "box": [95.86, 150.09, 229.94, 376.10]},
+              ],
+          }
           work = Path(os.environ["WORK_DIR"])
+          expected = source_golden[os.environ["MODEL_NAME"]]
           for language in ("cpp", "python"):
               report = json.loads((work / f"{language}-detections.json").read_text())
               images = report.get("images") or []
               if len(images) != 1 or not images[0].get("detections"):
                   raise SystemExit(f"{language}: expected one image with non-empty detections")
-              print(f"{language}: {len(images[0]['detections'])} detections")
+              actual = [item for item in images[0]["detections"] if item["score"] >= 0.50]
+              used = set()
+              for golden in expected:
+                  choices = [
+                      (iou(golden["box"], item["box"]), index)
+                      for index, item in enumerate(actual)
+                      if index not in used and item["class_id"] == golden["class_id"]
+                  ]
+                  if not choices:
+                      raise SystemExit(
+                          f"{language}: source class {golden['class_id']} has no candidate"
+                      )
+                  overlap, index = max(choices)
+                  if overlap < 0.45:
+                      raise SystemExit(
+                          f"{language}: source class {golden['class_id']} has IoU {overlap:.4f}"
+                      )
+                  used.add(index)
+              print(
+                  f"{language}: matched {len(expected)} source boxes; "
+                  f"{len(images[0]['detections'])} total detections"
+              )
           PY
 
             (
