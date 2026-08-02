@@ -115,6 +115,8 @@ Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all 
 
 `inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 16- and 48-stream profiles use a total limit of eight; the 24-stream profile uses 24 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 
+Detector liveness follows completed work rather than a fixed per-camera wall-clock rate. Startup requires two detections from every configured stream within `runtime.initial_detection_timeout_ms`; after that, a stream may miss up to `runtime.max_missed_detection_rounds * stream_count + inference.max_inflight_total` aggregate completions. This scales the fairness check with any supported stream shape while retaining enough headroom for work already in flight. `runtime.no_detection_timeout_ms` is a separate wall-clock guard that fires only when the entire detector stops returning results.
+
 Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
 
 Do not change `input.width`, `input.height`, or `input.fps` unless the RTSP sources also change. `input.skip_rtsp_probe` is enabled, so those values are the source contract.
@@ -173,7 +175,7 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
 - Video and metadata advance at 25 FPS for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
-- Final per-stream counters show every stream advancing; the application fails with the missing channel IDs if a stream never starts or later stops.
+- Final per-stream counters show every stream advancing; the application fails with the missing channel IDs if a stream does not prime or exceeds its aggregate-work fairness budget.
 - No detection timeout or stalled channel is reported. Metadata sender counters expose any nonblocking UDP drops without stalling inference.
 
 If channels do not start, confirm that every publisher was already reachable and that the configured source caps match the selected profile. Restart the application after restarting the publishers.

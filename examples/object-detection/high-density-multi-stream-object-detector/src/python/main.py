@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from enum import Enum, auto
 import glob
 import json
 import os
@@ -16,7 +17,10 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 MAX_STREAMS = 80
 DEFAULT_INITIAL_DETECTION_TIMEOUT_MS = 30_000
-DETECTOR_RESULT_TIMEOUT_MS = 5_000
+DEFAULT_NO_DETECTION_TIMEOUT_MS = 30_000
+DEFAULT_MAX_MISSED_DETECTION_ROUNDS = 2
+DETECTION_PRIMING_OBSERVATIONS = 2
+WATCHDOG_CHECK_INTERVAL_S = 0.1
 DEFAULT_QUEUE_DEPTH = 4
 DEFAULT_INTERNAL_QUEUE_DEPTH = 1
 DEFAULT_MAX_INFLIGHT_PER_STREAM = 4
@@ -64,6 +68,8 @@ class AppConfig:
     profile: bool = False
     warmup_frames: int = 30
     initial_detection_timeout_ms: int = DEFAULT_INITIAL_DETECTION_TIMEOUT_MS
+    no_detection_timeout_ms: int = DEFAULT_NO_DETECTION_TIMEOUT_MS
+    max_missed_detection_rounds: int = DEFAULT_MAX_MISSED_DETECTION_ROUNDS
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -178,43 +184,106 @@ class AppRuntime:
     sources: list[SourceRuntime]
 
 
+class DetectionFailureKind(Enum):
+    NONE = auto()
+    STARTUP = auto()
+    STREAM_STARVATION = auto()
+    GLOBAL_STALL = auto()
+
+
+@dataclass(frozen=True)
+class DetectionFailure:
+    kind: DetectionFailureKind = DetectionFailureKind.NONE
+    streams: tuple[int, ...] = ()
+
+    def __bool__(self) -> bool:
+        return self.kind is not DetectionFailureKind.NONE
+
+
 class DetectionWatchdog:
-    """Fail when any configured stream never starts or later goes silent."""
+    """Check detector progress without assuming per-stream wall-clock cadence."""
 
     def __init__(
         self,
         stream_count: int,
+        priming_observations: int,
         startup_timeout_s: float,
-        cadence_timeout_s: float,
+        no_progress_timeout_s: float,
+        max_missed_completions: int,
         start: float | None = None,
     ) -> None:
         if stream_count <= 0:
             raise ValueError("detection watchdog requires at least one stream")
-        if startup_timeout_s <= 0 or cadence_timeout_s <= 0:
+        if priming_observations <= 0:
+            raise ValueError("detection watchdog requires at least one priming observation")
+        if startup_timeout_s <= 0 or no_progress_timeout_s <= 0:
             raise ValueError("detection watchdog timeouts must be positive")
+        if max_missed_completions <= 0:
+            raise ValueError("detection watchdog progress budget must be positive")
         start = time.monotonic() if start is None else start
-        self._last_seen: list[float | None] = [None] * stream_count
+        self._priming_counts = [0] * stream_count
+        self._last_seen_sequence = [0] * stream_count
+        self._priming_observations = priming_observations
+        self._primed_streams = 0
+        self._total_observations = 0
         self._startup_deadline = start + startup_timeout_s
-        self._cadence_timeout_s = cadence_timeout_s
+        self._no_progress_timeout_s = no_progress_timeout_s
+        self._max_missed_completions = max_missed_completions
+        self._last_any_seen = start
+        self._running = False
 
     def observe(self, stream_index: int, now: float | None = None) -> None:
-        if stream_index < 0 or stream_index >= len(self._last_seen):
+        if stream_index < 0 or stream_index >= len(self._last_seen_sequence):
             raise IndexError("detection watchdog stream index is out of range")
-        self._last_seen[stream_index] = time.monotonic() if now is None else now
+        now = time.monotonic() if now is None else now
+        self._total_observations += 1
+        self._last_any_seen = now
+        if self._running:
+            self._last_seen_sequence[stream_index] = self._total_observations
+            return
+
+        if self._priming_counts[stream_index] < self._priming_observations:
+            self._priming_counts[stream_index] += 1
+            if self._priming_counts[stream_index] == self._priming_observations:
+                self._primed_streams += 1
+        if self._primed_streams == len(self._priming_counts):
+            self._running = True
+            # Exclude staggered startup work from steady-state starvation
+            # accounting by giving every stream the same sequence baseline.
+            self._last_seen_sequence = [self._total_observations] * len(
+                self._last_seen_sequence
+            )
 
     def startup_complete(self) -> bool:
-        return all(seen is not None for seen in self._last_seen)
+        return self._running
 
-    def expired_streams(self, now: float | None = None) -> list[int]:
+    def check(self, now: float | None = None) -> DetectionFailure:
         now = time.monotonic() if now is None else now
-        started = self.startup_complete()
-        if not started and now < self._startup_deadline:
-            return []
-        return [
+        if not self._running:
+            if now < self._startup_deadline:
+                return DetectionFailure()
+            return DetectionFailure(
+                DetectionFailureKind.STARTUP,
+                tuple(
+                    index
+                    for index, count in enumerate(self._priming_counts)
+                    if count < self._priming_observations
+                ),
+            )
+
+        if now >= self._last_any_seen + self._no_progress_timeout_s:
+            return DetectionFailure(DetectionFailureKind.GLOBAL_STALL)
+
+        streams = tuple(
             index
-            for index, seen in enumerate(self._last_seen)
-            if seen is None or (started and now - seen >= self._cadence_timeout_s)
-        ]
+            for index, sequence in enumerate(self._last_seen_sequence)
+            if self._total_observations - sequence > self._max_missed_completions
+        )
+        return (
+            DetectionFailure(DetectionFailureKind.STREAM_STARVATION, streams)
+            if streams
+            else DetectionFailure()
+        )
 
 
 def load_runtime_dependencies() -> None:
@@ -229,6 +298,12 @@ def load_runtime_dependencies() -> None:
     import pyneat as pyneat_module
 
     pyneat = pyneat_module
+
+
+def detection_progress_budget(
+    stream_count: int, missed_rounds: int, max_inflight_total: int
+) -> int:
+    return missed_rounds * stream_count + max_inflight_total
 
 
 def load_cv_dependency() -> None:
@@ -411,6 +486,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("runtime.warmup_frames must be >= 0")
     if cfg.initial_detection_timeout_ms <= 0:
         raise ValueError("runtime.initial_detection_timeout_ms must be > 0")
+    if cfg.no_detection_timeout_ms <= 0:
+        raise ValueError("runtime.no_detection_timeout_ms must be > 0")
+    if cfg.max_missed_detection_rounds <= 0:
+        raise ValueError("runtime.max_missed_detection_rounds must be > 0")
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.video_port_base > 65535:
@@ -531,6 +610,14 @@ def load_app_config(config_path: Path) -> AppConfig:
         warmup_frames=int_or(runtime, "warmup_frames", 30),
         initial_detection_timeout_ms=int_or(
             runtime, "initial_detection_timeout_ms", DEFAULT_INITIAL_DETECTION_TIMEOUT_MS
+        ),
+        no_detection_timeout_ms=int_or(
+            runtime, "no_detection_timeout_ms", DEFAULT_NO_DETECTION_TIMEOUT_MS
+        ),
+        max_missed_detection_rounds=int_or(
+            runtime,
+            "max_missed_detection_rounds",
+            DEFAULT_MAX_MISSED_DETECTION_ROUNDS,
         ),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
@@ -1145,11 +1232,17 @@ def complete_detection(
 
 
 def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: AggregateProfile) -> None:
+    max_missed_completions = detection_progress_budget(
+        len(app.sources), cfg.max_missed_detection_rounds, cfg.max_inflight_total
+    )
     watchdog = DetectionWatchdog(
         len(app.sources),
+        DETECTION_PRIMING_OBSERVATIONS,
         cfg.initial_detection_timeout_ms / 1000.0,
-        DETECTOR_RESULT_TIMEOUT_MS / 1000.0,
+        cfg.no_detection_timeout_ms / 1000.0,
+        max_missed_completions,
     )
+    next_watchdog_check = time.monotonic()
     while not _STOP_REQUESTED:
         did_work = False
         for _ in range(MAX_DETECTION_PULLS_PER_ROUND):
@@ -1171,11 +1264,22 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
             if target_reached(app.sources):
                 return
 
-        expired = watchdog.expired_streams()
-        if expired:
-            phase = "detections" if watchdog.startup_complete() else "initial detections"
-            stream_list = ",".join(str(index) for index in expired)
-            raise RuntimeError(f"timed out waiting for {phase} from streams: {stream_list}")
+        now = time.monotonic()
+        check_watchdog = did_work or now >= next_watchdog_check
+        failure = watchdog.check(now) if check_watchdog else DetectionFailure()
+        if check_watchdog:
+            next_watchdog_check = now + WATCHDOG_CHECK_INTERVAL_S
+        if failure:
+            if failure.kind is DetectionFailureKind.GLOBAL_STALL:
+                raise RuntimeError("timed out waiting for any detector progress")
+            stream_list = ",".join(str(index) for index in failure.streams)
+            if failure.kind is DetectionFailureKind.STARTUP:
+                raise RuntimeError(
+                    f"timed out waiting for two initial detections from streams: {stream_list}"
+                )
+            raise RuntimeError(
+                f"detector progress budget exceeded for streams: {stream_list}"
+            )
         if not did_work:
             time.sleep(0.001)
 
@@ -1246,6 +1350,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         cfg = load_app_config(args.config)
         if args.validate_config_only:
+            progress_budget = detection_progress_budget(
+                len(cfg.rtsp_urls),
+                cfg.max_missed_detection_rounds,
+                cfg.max_inflight_total,
+            )
             print(
                 f"Config validated: {args.config} "
                 f"(streams={len(cfg.rtsp_urls)}, workers={cfg.workers}, "
@@ -1254,6 +1363,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"inference_async={str(INFERENCE_ASYNC).lower()}, "
                 f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
                 f"max_inflight_total={cfg.max_inflight_total}, "
+                f"max_missed_detection_rounds={cfg.max_missed_detection_rounds}, "
+                f"detection_progress_budget={progress_budget}, "
+                f"no_detection_timeout_ms={cfg.no_detection_timeout_ms}, "
                 f"insight_visible_streams={effective_insight_visible_streams(cfg)}, "
                 "decoder_admission=core)"
             )

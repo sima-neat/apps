@@ -72,6 +72,8 @@ runtime:
   profile: false
   warmup_frames: 0
   initial_detection_timeout_ms: 600000
+  no_detection_timeout_ms: 30000
+  max_missed_detection_rounds: 2
 
 inference:
   workers: 1
