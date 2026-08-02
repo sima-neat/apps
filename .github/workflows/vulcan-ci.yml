@@ -226,6 +226,11 @@ jobs:
             tar -xOzf "${runtime_archives[0]}" prebuilt-apps/deps/neat-core.json \
               | python3 -c 'import json, sys; core = json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
           )"
+          core_target_spec="$(
+            tar -xOzf "${runtime_archives[0]}" prebuilt-apps/deps/neat-core.json \
+              | python3 -c 'import json, sys; print(json.load(sys.stdin)["neat-core"]["spec"])'
+          )"
+          echo "CORE_TARGET_SPEC=${core_target_spec}" >> "${GITHUB_ENV}"
           NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
             NEAT_CORE_INSTALL_MODE=vulcan \
             NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
@@ -278,6 +283,17 @@ jobs:
         run: |
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
+          wheel_cache=/opt/toolchain/aarch64/modalix/neat-install-packages
+          mapfile -t exact_pyneat_wheels < <(
+            find "${wheel_cache}" -maxdepth 1 -type f \
+              -name "pyneat-*${CORE_TARGET_SPEC}*.whl" -print | sort
+          )
+          if [[ "${#exact_pyneat_wheels[@]}" -ne 1 ]]; then
+            echo "Expected exactly one pyneat wheel for Core ${CORE_TARGET_SPEC}, found ${#exact_pyneat_wheels[@]}" >&2
+            exit 1
+          fi
+          "${PYTHON_TEST_BIN}" -m pip install --force-reinstall --no-deps \
+            "${exact_pyneat_wheels[0]}"
           "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
