@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_PATH = "models/ssd_mobilenet_v2_heads_mpk.tar.gz"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 COMMON_DIR = Path(__file__).resolve().parents[1] / "common"
+DEFAULT_LABELS_PATH = Path(
+    "examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt"
+)
 
 # Default model frame. SSD300 and SSD-MobileNet v1/v2 are 300x300; v3 is 320x320.
 # Override via `model.frame` in the config to match the model pack.
@@ -75,7 +78,7 @@ def _resolve_asset(configured: str, default_name: str) -> Path:
     candidate = Path(configured)
     if candidate.is_file():
         return candidate
-    if not configured or candidate.name == default_name:
+    if not configured or candidate == DEFAULT_LABELS_PATH:
         fallback = COMMON_DIR / default_name
         if fallback.is_file():
             return fallback
@@ -309,6 +312,15 @@ def main() -> int:
     if not image_paths:
         print(f"No images found in {input_dir}", file=sys.stderr)
         return 3
+    if detections_json:
+        report_path = Path(detections_json).resolve()
+        for image_path in image_paths:
+            if image_path.resolve() == report_path:
+                print(
+                    f"io.detections_json must not overwrite an input image: {image_path}",
+                    file=sys.stderr,
+                )
+                return 2
 
     # Imported after config validation so config errors are reported without a runtime install.
     global cv2, np, pyneat

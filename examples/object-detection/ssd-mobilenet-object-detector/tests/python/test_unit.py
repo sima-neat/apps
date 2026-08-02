@@ -95,3 +95,60 @@ class TestRuntimeConfigValidation:
         r = _run(["--config", str(config)])
         assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
         assert message in r.stderr
+
+
+@pytest.mark.unit
+def test_rejects_detection_report_that_aliases_an_input_image(tmp_path):
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    image = input_dir / "frame.jpg"
+    image.touch()
+    config = tmp_path / "alias.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+            io:
+              input_dir: {input_dir}
+              output_dir: {tmp_path / 'output'}
+              detections_json: {image}
+            output:
+              overlay: false
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "io.detections_json must not overwrite an input image" in r.stderr
+
+
+@pytest.mark.unit
+def test_missing_custom_coco_labels_path_does_not_use_packaged_fallback(tmp_path):
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    missing_labels = tmp_path / "custom" / "coco_labels.txt"
+    config = tmp_path / "missing_labels.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+              labels: {missing_labels}
+            io:
+              input_dir: {input_dir}
+              output_dir: {tmp_path / 'output'}
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert f"labels file does not exist: {missing_labels}" in r.stderr

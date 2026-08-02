@@ -37,6 +37,9 @@ namespace {
 constexpr int kDefaultModelSize = 300;
 constexpr int kNumClasses = 91; // index 0 = background, 1..90 = COCO ids.
 constexpr int kDefaultTimeoutMs = 20000;
+constexpr const char* kDefaultLabelsPath =
+    "examples/object-detection/ssd-mobilenet-object-detector/src/common/"
+    "coco_labels.txt";
 
 struct Config {
   std::string model = "models/ssd_mobilenet_v2_heads_mpk.tar.gz";
@@ -130,13 +133,15 @@ fs::path executable_dir() {
 
 // Resolve a labels asset: configured path if present, else the shipped src/common copy. All
 // fallbacks are cwd-independent (executable location, then the compiled absolute source dir).
-fs::path resolve_asset(const std::string& configured, const char* default_name) {
+fs::path resolve_asset(const std::string& configured, const char* default_path,
+                       const char* default_name) {
   if (!configured.empty() && fs::exists(configured)) {
     return configured;
   }
   // Substitute the packaged copy only for the empty/default reference; a missing custom
   // path is returned as-is so the caller fails instead of loading different labels.
-  if (!configured.empty() && fs::path(configured).filename() != default_name) {
+  if (!configured.empty() &&
+      fs::path(configured).lexically_normal() != fs::path(default_path).lexically_normal()) {
     return configured;
   }
   std::vector<fs::path> candidates;
@@ -163,7 +168,8 @@ Config load_config(const fs::path& path) {
   Config cfg;
   cfg.model = raw.string_or("model.path", "models/ssd_mobilenet_v2_heads_mpk.tar.gz");
   cfg.model_frame = raw.int_or("model.frame", kDefaultModelSize);
-  cfg.labels = resolve_asset(raw.string_or("model.labels", ""), "coco_labels.txt");
+  cfg.labels =
+      resolve_asset(raw.string_or("model.labels", ""), kDefaultLabelsPath, "coco_labels.txt");
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/ssd-mobilenet-object-detector");
   cfg.detections_json = raw.string_or("io.detections_json", "");
@@ -371,6 +377,15 @@ int main(int argc, char** argv) {
     const std::vector<fs::path> image_paths = image_paths_in_dir(cfg.input_dir);
     if (image_paths.empty()) {
       throw std::runtime_error("no images found in: " + cfg.input_dir.string());
+    }
+    if (!cfg.detections_json.empty()) {
+      const fs::path report_path = fs::weakly_canonical(cfg.detections_json);
+      for (const fs::path& image_path : image_paths) {
+        if (fs::weakly_canonical(image_path) == report_path) {
+          throw std::runtime_error("io.detections_json must not overwrite an input image: " +
+                                   image_path.string());
+        }
+      }
     }
 
     cv::Mat seed_bgr = cv::imread(image_paths.front().string(), cv::IMREAD_COLOR);

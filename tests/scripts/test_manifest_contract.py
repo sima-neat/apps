@@ -841,6 +841,31 @@ def test_vulcan_core_install_uses_minimal_temp_dir(tmp_path):
     assert not install_dir.exists()
 
 
+def test_vulcan_core_install_translates_platform_override_to_cli_force(tmp_path):
+    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
+    sima_cli_args = tmp_path / "sima-cli-args.txt"
+    _write_fake_sima_cli(tmp_path)
+
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+            "NEAT_INSTALLER_SKIP_PLATFORM_CHECK": "ON",
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert sima_cli_args.read_text(encoding="utf-8").strip() == (
+        "neat install --force --env production -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1"
+    )
+
+
 def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
     _write_fake_neat_json(
         tmp_path,

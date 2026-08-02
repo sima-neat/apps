@@ -134,6 +134,51 @@ int main(int argc, char** argv) {
     ++failures;
   }
 
+  {
+    const fs::path model = scratch_dir / "model.tar.gz";
+    const fs::path input_dir = scratch_dir / "input";
+    const fs::path image = input_dir / "frame.jpg";
+    fs::create_directories(input_dir);
+    std::ofstream(model).put('\n');
+    std::ofstream(image).put('\n');
+    const fs::path config = scratch_dir / "detections_alias.yaml";
+    std::ofstream out(config);
+    out << "model:\n"
+        << "  path: " << model.string() << "\n"
+        << "io:\n"
+        << "  input_dir: " << input_dir.string() << "\n"
+        << "  output_dir: " << (scratch_dir / "output").string() << "\n"
+        << "  detections_json: " << image.string() << "\n"
+        << "output:\n"
+        << "  overlay: false\n";
+    out.close();
+    if (!expect_config_rejected(binary, config,
+                                "io.detections_json must not overwrite an input image",
+                                "input-image detections report alias")) {
+      ++failures;
+    }
+  }
+
+  {
+    const fs::path model = scratch_dir / "model.tar.gz";
+    const fs::path input_dir = scratch_dir / "input";
+    const fs::path missing_labels = scratch_dir / "custom" / "coco_labels.txt";
+    const fs::path config = scratch_dir / "missing_custom_labels.yaml";
+    std::ofstream out(config);
+    out << "model:\n"
+        << "  path: " << model.string() << "\n"
+        << "  labels: " << missing_labels.string() << "\n"
+        << "io:\n"
+        << "  input_dir: " << input_dir.string() << "\n"
+        << "  output_dir: " << (scratch_dir / "output").string() << "\n";
+    out.close();
+    if (!expect_config_rejected(binary, config,
+                                "labels file does not exist: " + missing_labels.string(),
+                                "missing custom coco_labels path")) {
+      ++failures;
+    }
+  }
+
   remove_dir(scratch);
   return failures > 0 ? 1 : 0;
 }

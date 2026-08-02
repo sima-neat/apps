@@ -6,11 +6,6 @@ on:
       - feat/ssd-recipe-validation-and-coverage
   workflow_dispatch:
     inputs:
-      branch:
-        description: Apps Vulcan artifact branch
-        required: true
-        default: feat/ssd-recipe-validation-and-coverage
-        type: string
       release_tag:
         description: Draft release containing the compiled model archives
         required: true
@@ -54,7 +49,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          branch="${{ inputs.branch || github.ref_name }}"
+          branch="${{ github.ref_name }}"
           api_headers=(
             -H "Authorization: Bearer ${GH_TOKEN}"
             -H "Accept: application/vnd.github+json"
