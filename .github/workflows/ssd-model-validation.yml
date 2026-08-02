@@ -100,9 +100,9 @@ jobs:
             exit 1
           fi
           runtime_archive="${runtime_archives[0]}"
-          core_target="$(
+          core_target_ref="$(
             tar -xOzf "${runtime_archive}" prebuilt-apps/deps/neat-core.json \
-              | python3 -c 'import json, sys; core=json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
+              | python3 -c 'import json, sys; print(json.load(sys.stdin)["neat-core"]["ref"])'
           )"
           core_target_spec="$(
             tar -xOzf "${runtime_archive}" prebuilt-apps/deps/neat-core.json \
@@ -117,11 +117,92 @@ jobs:
           export SIMA_CLI_CHECK_FOR_UPDATE=0
           echo "${HOME}/.sima-cli/.venv/bin" >> "${GITHUB_PATH}"
 
-          NEAT_CORE_INSTALL_MODE=vulcan \
-            NEAT_VULCAN_ENV=production \
-            NEAT_INSTALLER_SKIP_PLATFORM_CHECK=ON \
-            SIMA_CLI_CHECK_FOR_UPDATE=0 \
-            ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
+          # Do not replace packages on the shared Modalix runner. Resolve the exact
+          # minimal Core package with sima-cli, then stage only its runtime payloads.
+          # This keeps the board immutable and avoids an unrelated simaai-memory
+          # downgrade transaction while still exercising the PR's exact libraries.
+          core_target="core@${core_target_ref}:${core_target_spec}"
+          metadata_resolution="$(
+            sima-cli neat install --env production -t minimal --json "${core_target}" \
+              | python3 -c 'import sys; text=sys.stdin.read(); start=text.find("{"); assert start >= 0, text; print(text[start:])'
+          )"
+          core_downloads="${GITHUB_WORKSPACE}/_ssd-validation/core-downloads"
+          core_stage="${GITHUB_WORKSPACE}/_ssd-validation/core-stage"
+          mkdir -p "${core_downloads}" "${core_stage}"
+          METADATA_RESOLUTION="${metadata_resolution}" \
+            CORE_DOWNLOADS="${core_downloads}" python3 - <<'PY'
+          import fnmatch
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from urllib.parse import quote
+          from urllib.request import urlopen
+
+          resolution = json.loads(os.environ["METADATA_RESOLUTION"])
+          metadata_url = resolution["metadata_url"]
+          with urlopen(metadata_url) as response:
+              metadata = json.load(response)
+          patterns = {
+              "core": "sima-neat-*-Linux-core.deb",
+              "gst_plugins": "neat-gst-plugins_*_arm64.deb",
+              "runtime": "neat-runtime_*_arm64.deb",
+              "appcomplex": "neat-appcomplex_*_arm64.deb",
+              "lmm": "sima-lmm-*-Linux-core.deb",
+              "pyneat": "pyneat-*-cp311-cp311-linux_aarch64.whl",
+          }
+          resources = metadata.get("resources", [])
+          selected = {}
+          for role, pattern in patterns.items():
+              matches = [name for name in resources if fnmatch.fnmatchcase(name, pattern)]
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"{role}: expected one resource matching {pattern}, found {matches}"
+                  )
+              selected[role] = matches[0]
+
+          output = Path(os.environ["CORE_DOWNLOADS"])
+          checksums = metadata.get("resources-checksum", {})
+          base_url = metadata_url.rsplit("/", 1)[0]
+          for role, name in selected.items():
+              destination = output / name
+              digest = hashlib.sha256()
+              with urlopen(f"{base_url}/{quote(name, safe='')}") as response, destination.open("wb") as stream:
+                  while chunk := response.read(1024 * 1024):
+                      stream.write(chunk)
+                      digest.update(chunk)
+              expected = checksums.get(name)
+              if expected and digest.hexdigest() != expected:
+                  destination.unlink(missing_ok=True)
+                  raise SystemExit(f"{name}: artifact digest does not match metadata")
+              print(f"{role}: {name}")
+          PY
+
+          while IFS= read -r deb; do
+            dpkg-deb -x "${deb}" "${core_stage}"
+          done < <(find "${core_downloads}" -maxdepth 1 -type f -name '*.deb' -print | sort)
+          mapfile -t pyneat_wheels < <(
+            find "${core_downloads}" -maxdepth 1 -type f -name 'pyneat-*.whl' -print
+          )
+          if [[ "${#pyneat_wheels[@]}" -ne 1 ]]; then
+            echo "Expected exactly one staged pyneat wheel" >&2
+            exit 1
+          fi
+
+          exact_lib="${core_stage}/usr/lib"
+          exact_runtime="${core_stage}/usr/lib/aarch64-linux-gnu/neat/runtime"
+          exact_plugins="${core_stage}/usr/lib/aarch64-linux-gnu/neat/gst-plugins"
+          exact_gst="${core_stage}/usr/lib/aarch64-linux-gnu/gstreamer-1.0"
+          test -f "${exact_lib}/libsima_neat.so.2.1.3"
+          test -f "${exact_runtime}/libsimaai_genboxdecode.so"
+          test -f "${exact_plugins}/libneatobjectdecode.so"
+          {
+            echo "EXACT_CORE_ROOT=${core_stage}"
+            echo "PYNEAT_WHEEL=${pyneat_wheels[0]}"
+            echo "LD_LIBRARY_PATH=${exact_lib}:${exact_runtime}:${exact_plugins}:${LD_LIBRARY_PATH:-}"
+            echo "GST_PLUGIN_PATH=${exact_gst}:${exact_plugins}:${GST_PLUGIN_PATH:-}"
+            echo "GST_REGISTRY=${GITHUB_WORKSPACE}/_ssd-validation/gstreamer-registry.bin"
+          } >> "${GITHUB_ENV}"
 
           mkdir -p _ssd-validation/runtime
           tar -xzf "${runtime_archive}" -C _ssd-validation/runtime
@@ -151,17 +232,8 @@ jobs:
         shell: bash
         run: |
           source "${PYNEAT_ACTIVATE}"
-          wheel_cache=/opt/toolchain/aarch64/modalix/neat-install-packages
-          mapfile -t exact_pyneat_wheels < <(
-            find "${wheel_cache}" -maxdepth 1 -type f \
-              -name "pyneat-*${CORE_TARGET_SPEC}*.whl" -print | sort
-          )
-          if [[ "${#exact_pyneat_wheels[@]}" -ne 1 ]]; then
-            echo "Expected exactly one pyneat wheel for Core ${CORE_TARGET_SPEC}, found ${#exact_pyneat_wheels[@]}" >&2
-            exit 1
-          fi
           "${PYTHON_TEST_BIN}" -m pip install --force-reinstall --no-deps \
-            "${exact_pyneat_wheels[0]}"
+            "${PYNEAT_WHEEL}"
           "${PYTHON_TEST_BIN}" -m pip install "numpy<2" "opencv-python-headless<4.12" PyYAML
           "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
@@ -243,6 +315,13 @@ jobs:
           test -f "${python_main}"
           test -f "${labels}"
           test -f "${source_image}"
+          ldd "${cpp_binary}" | tee _ssd-validation/cpp-runtime-libraries.txt
+          ldd "${EXACT_CORE_ROOT}/usr/lib/aarch64-linux-gnu/neat/gst-plugins/libneatobjectdecode.so" \
+            | tee _ssd-validation/boxdecode-runtime-libraries.txt
+          grep -Fq "${EXACT_CORE_ROOT}/usr/lib/libsima_neat.so" \
+            _ssd-validation/cpp-runtime-libraries.txt
+          grep -Fq "${EXACT_CORE_ROOT}/usr/lib/aarch64-linux-gnu/neat/runtime" \
+            _ssd-validation/boxdecode-runtime-libraries.txt
 
           input_dir="${GITHUB_WORKSPACE}/_ssd-validation/input"
           mkdir -p "${input_dir}"
