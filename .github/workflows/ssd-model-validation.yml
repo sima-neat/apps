@@ -43,11 +43,15 @@ jobs:
         run: |
           set -euo pipefail
           branch="${{ inputs.branch || github.ref_name }}"
+          target="apps@${branch}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            target="${target}:$(printf '%.12s' "${GITHUB_SHA}")"
+          fi
           runtime_dir=""
           for attempt in $(seq 1 20); do
             if runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
               --env production \
-              --target "apps@${branch}" \
+              --target "${target}" \
               --install-dir _ssd-validation/install \
               --force)"; then
               break
