@@ -18,6 +18,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -38,31 +39,76 @@ jobs:
         with:
           clean: true
 
-      - name: Install Apps runtime
+      - name: Install exact Apps and Core runtime
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           branch="${{ inputs.branch || github.ref_name }}"
-          target="apps@${branch}"
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            target="${target}:$(printf '%.12s' "${GITHUB_SHA}")"
-          fi
-          runtime_dir=""
-          for attempt in $(seq 1 20); do
-            if runtime_dir="$(scripts/ci/install_apps_runtime_from_vulcan.sh \
-              --env production \
-              --target "${target}" \
-              --install-dir _ssd-validation/install \
-              --force)"; then
+          run_id=""
+          while IFS=$'\t' read -r candidate_id candidate_sha; do
+            if [[ "${candidate_sha}" == "${GITHUB_SHA}" ]]; then
+              run_id="${candidate_id}"
               break
             fi
-            if [[ "${attempt}" -eq 20 ]]; then
-              echo "Apps runtime did not become available after ${attempt} attempts" >&2
+          done < <(
+            gh run list --repo "${GITHUB_REPOSITORY}" --workflow vulcan-ci.yml \
+              --branch "${branch}" --limit 20 --json databaseId,headSha \
+              --jq '.[] | [.databaseId, .headSha] | @tsv'
+          )
+          if [[ -z "${run_id}" ]]; then
+            echo "Could not find the Vulcan CI run for ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+
+          for attempt in $(seq 1 30); do
+            rm -rf _ssd-validation/build-artifacts
+            mkdir -p _ssd-validation/build-artifacts
+            if gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" \
+              --name neat-apps-build --dir _ssd-validation/build-artifacts; then
+              break
+            fi
+            if [[ "${attempt}" -eq 30 ]]; then
+              echo "Apps build artifact was unavailable after ${attempt} attempts" >&2
               exit 1
             fi
-            echo "Apps runtime is not published yet; retrying in 30 seconds" >&2
-            sleep 30
+            echo "Apps build artifact is not uploaded yet; retrying in 20 seconds" >&2
+            sleep 20
           done
+
+          mapfile -t runtime_archives < <(
+            find _ssd-validation/build-artifacts -maxdepth 1 -type f \
+              -name 'neat-apps-*.tar.gz' ! -name 'neat-apps-tests.tar.gz' -print | sort
+          )
+          if [[ "${#runtime_archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one Apps runtime archive" >&2
+            exit 1
+          fi
+          runtime_archive="${runtime_archives[0]}"
+          core_target="$(
+            tar -xOzf "${runtime_archive}" prebuilt-apps/deps/neat-core.json \
+              | python3 -c 'import json, sys; core=json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
+          )"
+
+          cli_installer="${RUNNER_TEMP}/sima-cli-install.py"
+          curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o "${cli_installer}"
+          python3 "${cli_installer}" main latest --noninteractive
+          export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
+          echo "${HOME}/.sima-cli/.venv/bin" >> "${GITHUB_PATH}"
+
+          NEAT_CORE_INSTALL_MODE=vulcan \
+            NEAT_VULCAN_ENV=production \
+            NEAT_INSTALLER_SKIP_PLATFORM_CHECK=ON \
+            ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
+
+          mkdir -p _ssd-validation/runtime
+          tar -xzf "${runtime_archive}" -C _ssd-validation/runtime
+          runtime_dir="${GITHUB_WORKSPACE}/_ssd-validation/runtime/prebuilt-apps"
+          if [[ ! -d "${runtime_dir}" ]]; then
+            echo "Apps runtime was not extracted to ${runtime_dir}" >&2
+            exit 1
+          fi
           echo "APPS_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
 
       - name: Locate Python runtime
