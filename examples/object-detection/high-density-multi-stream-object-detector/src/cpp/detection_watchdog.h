@@ -53,9 +53,9 @@ public:
                     std::chrono::milliseconds no_progress_timeout,
                     std::uint64_t max_missed_completions, TimePoint start = Clock::now())
       : priming_counts_(stream_count, 0), last_seen_sequence_(stream_count, 0),
-        priming_observations_(priming_observations), startup_deadline_(start + startup_timeout),
-        no_progress_timeout_(no_progress_timeout), max_missed_completions_(max_missed_completions),
-        last_any_seen_(start) {
+        starvation_latched_(stream_count, false), priming_observations_(priming_observations),
+        startup_deadline_(start + startup_timeout), no_progress_timeout_(no_progress_timeout),
+        max_missed_completions_(max_missed_completions), last_any_seen_(start) {
     if (stream_count == 0) {
       throw std::invalid_argument("detection watchdog requires at least one stream");
     }
@@ -80,6 +80,14 @@ public:
     last_any_seen_ = now;
     if (running_) {
       last_seen_sequence_[stream_index] = total_observations_;
+      // Latch the first violated progress boundary at the completion that
+      // crosses it. A starved stream may return later in the same drain batch,
+      // but that recovery must not erase the already-observed violation.
+      for (std::size_t index = 0; index < last_seen_sequence_.size(); ++index) {
+        if (total_observations_ - last_seen_sequence_[index] > max_missed_completions_) {
+          starvation_latched_[index] = true;
+        }
+      }
       return;
     }
 
@@ -105,6 +113,10 @@ public:
   }
 
   [[nodiscard]] DetectionFailure check(TimePoint now = Clock::now()) const {
+    if (now - last_any_seen_ >= no_progress_timeout_) {
+      return {DetectionFailureKind::GlobalStall, {}};
+    }
+
     if (!running_) {
       if (now < startup_deadline_) {
         return {};
@@ -118,13 +130,9 @@ public:
       return failure;
     }
 
-    if (now - last_any_seen_ >= no_progress_timeout_) {
-      return {DetectionFailureKind::GlobalStall, {}};
-    }
-
     DetectionFailure failure{DetectionFailureKind::StreamStarvation, {}};
-    for (std::size_t index = 0; index < last_seen_sequence_.size(); ++index) {
-      if (total_observations_ - last_seen_sequence_[index] > max_missed_completions_) {
+    for (std::size_t index = 0; index < starvation_latched_.size(); ++index) {
+      if (starvation_latched_[index]) {
         failure.streams.push_back(index);
       }
     }
@@ -134,6 +142,7 @@ public:
 private:
   std::vector<std::size_t> priming_counts_;
   std::vector<std::uint64_t> last_seen_sequence_;
+  std::vector<bool> starvation_latched_;
   std::size_t priming_observations_;
   std::size_t primed_streams_ = 0;
   std::uint64_t total_observations_ = 0;

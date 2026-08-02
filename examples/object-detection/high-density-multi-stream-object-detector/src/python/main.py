@@ -223,6 +223,7 @@ class DetectionWatchdog:
         start = time.monotonic() if start is None else start
         self._priming_counts = [0] * stream_count
         self._last_seen_sequence = [0] * stream_count
+        self._starvation_latched = [False] * stream_count
         self._priming_observations = priming_observations
         self._primed_streams = 0
         self._total_observations = 0
@@ -240,6 +241,14 @@ class DetectionWatchdog:
         self._last_any_seen = now
         if self._running:
             self._last_seen_sequence[stream_index] = self._total_observations
+            # Preserve the first violated progress boundary even if the
+            # affected stream recovers later in the same drain batch.
+            for index, sequence in enumerate(self._last_seen_sequence):
+                if (
+                    self._total_observations - sequence
+                    > self._max_missed_completions
+                ):
+                    self._starvation_latched[index] = True
             return
 
         if self._priming_counts[stream_index] < self._priming_observations:
@@ -259,6 +268,9 @@ class DetectionWatchdog:
 
     def check(self, now: float | None = None) -> DetectionFailure:
         now = time.monotonic() if now is None else now
+        if now >= self._last_any_seen + self._no_progress_timeout_s:
+            return DetectionFailure(DetectionFailureKind.GLOBAL_STALL)
+
         if not self._running:
             if now < self._startup_deadline:
                 return DetectionFailure()
@@ -271,13 +283,10 @@ class DetectionWatchdog:
                 ),
             )
 
-        if now >= self._last_any_seen + self._no_progress_timeout_s:
-            return DetectionFailure(DetectionFailureKind.GLOBAL_STALL)
-
         streams = tuple(
             index
-            for index, sequence in enumerate(self._last_seen_sequence)
-            if self._total_observations - sequence > self._max_missed_completions
+            for index, starved in enumerate(self._starvation_latched)
+            if starved
         )
         return (
             DetectionFailure(DetectionFailureKind.STREAM_STARVATION, streams)

@@ -716,7 +716,7 @@ bool test_detection_watchdog_tracks_completed_work() {
   const auto start = Watchdog::TimePoint{};
   Watchdog watchdog(/*stream_count=*/3, /*priming_observations=*/2,
                     std::chrono::milliseconds(100), /*no_progress_timeout=*/
-                    std::chrono::milliseconds(50), /*max_missed_completions=*/4, start);
+                    std::chrono::milliseconds(500), /*max_missed_completions=*/4, start);
 
   bool ok = true;
   watchdog.observe(0, start + std::chrono::milliseconds(5));
@@ -745,14 +745,26 @@ bool test_detection_watchdog_tracks_completed_work() {
   ok &= expect_true(!watchdog.check(start + std::chrono::milliseconds(153)),
                     "exactly the configured missed-completion budget is allowed");
   watchdog.observe(0, start + std::chrono::milliseconds(154));
-  const auto starvation = watchdog.check(start + std::chrono::milliseconds(154));
+  watchdog.observe(1, start + std::chrono::milliseconds(155));
+  const auto starvation = watchdog.check(start + std::chrono::milliseconds(155));
   ok &= expect_true(starvation.kind == FailureKind::StreamStarvation &&
                         starvation.streams == std::vector<std::size_t>{1},
-                    "aggregate work exposes one stream that exceeds its progress budget");
+                    "a later completion cannot clear an already-exceeded progress budget");
 
-  const auto global_stall = watchdog.check(start + std::chrono::milliseconds(204));
+  const auto global_stall = watchdog.check(start + std::chrono::milliseconds(655));
   ok &= expect_true(global_stall.kind == FailureKind::GlobalStall && global_stall.streams.empty(),
                     "a separate wall-clock guard detects total detector stagnation");
+
+  Watchdog startup_stall_watchdog(
+      /*stream_count=*/3, /*priming_observations=*/2, std::chrono::milliseconds(1000),
+      /*no_progress_timeout=*/std::chrono::milliseconds(50),
+      /*max_missed_completions=*/4, start);
+  startup_stall_watchdog.observe(0, start + std::chrono::milliseconds(5));
+  ok &= expect_true(!startup_stall_watchdog.check(start + std::chrono::milliseconds(54)),
+                    "startup allows less than the global no-progress timeout");
+  const auto startup_stall = startup_stall_watchdog.check(start + std::chrono::milliseconds(55));
+  ok &= expect_true(startup_stall.kind == FailureKind::GlobalStall && startup_stall.streams.empty(),
+                    "global detector stagnation is enforced while streams are still priming");
 
   constexpr std::size_t stream_count = 48;
   constexpr std::uint64_t progress_budget = 2 * stream_count + 8;

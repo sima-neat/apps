@@ -932,7 +932,7 @@ class TestRuntimeDelivery:
             3,
             priming_observations=2,
             startup_timeout_s=10.0,
-            no_progress_timeout_s=5.0,
+            no_progress_timeout_s=50.0,
             max_missed_completions=4,
             start=0.0,
         )
@@ -957,13 +957,28 @@ class TestRuntimeDelivery:
         watchdog.observe(2, 15.3)
         assert not watchdog.check(15.3)
         watchdog.observe(0, 15.4)
-        starvation = watchdog.check(15.4)
+        watchdog.observe(1, 15.5)
+        starvation = watchdog.check(15.5)
         assert starvation.kind is DetectionFailureKind.STREAM_STARVATION
         assert starvation.streams == (1,)
 
-        global_stall = watchdog.check(20.4)
+        global_stall = watchdog.check(65.5)
         assert global_stall.kind is DetectionFailureKind.GLOBAL_STALL
         assert global_stall.streams == ()
+
+        startup_stall_watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=100.0,
+            no_progress_timeout_s=5.0,
+            max_missed_completions=4,
+            start=0.0,
+        )
+        startup_stall_watchdog.observe(0, 1.0)
+        assert not startup_stall_watchdog.check(5.999)
+        startup_stall = startup_stall_watchdog.check(6.0)
+        assert startup_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert startup_stall.streams == ()
 
     def test_detection_watchdog_allows_observed_48_stream_gap(self):
         from main import DetectionWatchdog
