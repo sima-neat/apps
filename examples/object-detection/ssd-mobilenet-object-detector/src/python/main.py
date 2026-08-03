@@ -13,6 +13,7 @@ import math
 import struct
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -55,6 +56,24 @@ class AggregateSuppressionOptions(NamedTuple):
     min_child_containment: float = 0.90
     max_child_area_ratio: float = 0.25
     min_children: int = 2
+
+
+def config_bool_or(
+    section: Mapping[str, Any], key: str, default: bool, qualified_key: str
+) -> bool:
+    """Parse a YAML Boolean with the same null/default and string rules as C++."""
+    value = section.get(key)
+    if value is None:
+        return default
+    if value is True or value is False:
+        return value
+    if isinstance(value, str):
+        lowered = value.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    raise ValueError(f"{qualified_key} must be true or false")
 
 
 def is_image(path: Path) -> bool:
@@ -344,8 +363,22 @@ def main() -> int:
     score_threshold = float(decode_cfg.get("score_threshold", 0.55))
     nms_iou = float(decode_cfg.get("nms_iou", 0.60))
     max_detections = int(decode_cfg.get("max_detections", 100))
+    try:
+        aggregate_suppression_enabled = config_bool_or(
+            output_cfg,
+            "aggregate_suppression",
+            False,
+            "output.aggregate_suppression",
+        )
+        profile = config_bool_or(runtime_cfg, "profile", False, "runtime.profile")
+        overlay = config_bool_or(output_cfg, "overlay", True, "output.overlay")
+        verbose = config_bool_or(runtime_cfg, "verbose", False, "runtime.verbose")
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
     aggregate_suppression = AggregateSuppressionOptions(
-        enabled=bool(output_cfg.get("aggregate_suppression", False)),
+        enabled=aggregate_suppression_enabled,
         min_parent_area_fraction=float(
             output_cfg.get("aggregate_min_parent_area_fraction", 0.20)
         ),
@@ -355,13 +388,11 @@ def main() -> int:
         max_child_area_ratio=float(output_cfg.get("aggregate_max_child_area_ratio", 0.25)),
         min_children=int(output_cfg.get("aggregate_min_children", 2)),
     )
-    profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 1))
     timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
-    overlay = bool(output_cfg.get("overlay", True))
 
     global VERBOSE
-    VERBOSE = bool(runtime_cfg.get("verbose", False))
+    VERBOSE = verbose
 
     if not math.isfinite(score_threshold) or not 0.0 <= score_threshold <= 1.0:
         print("decode.score_threshold must be in [0.0, 1.0]", file=sys.stderr)

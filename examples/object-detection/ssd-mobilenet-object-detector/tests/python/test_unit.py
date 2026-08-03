@@ -50,6 +50,36 @@ def _write_config(tmp_path: Path, section: str, key: str, value: str) -> Path:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("value", "default", "expected"),
+    [
+        (True, False, True),
+        (False, True, False),
+        ("true", False, True),
+        ("FALSE", True, False),
+        (None, True, True),
+        (None, False, False),
+    ],
+)
+def test_config_bool_or_matches_scalar_config(value, default, expected):
+    assert (
+        ssd_mobilenet_main.config_bool_or(
+            {"overlay": value}, "overlay", default, "output.overlay"
+        )
+        is expected
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [0, 1, [], {}, "yes", "0", ""])
+def test_config_bool_or_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="output.overlay must be true or false"):
+        ssd_mobilenet_main.config_bool_or(
+            {"overlay": value}, "overlay", True, "output.overlay"
+        )
+
+
+@pytest.mark.unit
 def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
