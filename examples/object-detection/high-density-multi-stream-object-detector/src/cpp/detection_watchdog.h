@@ -76,6 +76,12 @@ public:
       throw std::out_of_range("detection watchdog stream index is out of range");
     }
 
+    // Preserve an already-expired detector-wide interval before recovered
+    // progress advances the timestamp. Otherwise a late result arriving
+    // between periodic checks could erase the failure.
+    if (now - last_any_seen_ >= no_progress_timeout_) {
+      global_stall_latched_ = true;
+    }
     ++total_observations_;
     last_any_seen_ = now;
     if (running_) {
@@ -113,7 +119,7 @@ public:
   }
 
   [[nodiscard]] DetectionFailure check(TimePoint now = Clock::now()) const {
-    if (now - last_any_seen_ >= no_progress_timeout_) {
+    if (global_stall_latched_ || now - last_any_seen_ >= no_progress_timeout_) {
       return {DetectionFailureKind::GlobalStall, {}};
     }
 
@@ -151,6 +157,7 @@ private:
   std::uint64_t max_missed_completions_;
   TimePoint last_any_seen_;
   bool running_ = false;
+  bool global_stall_latched_ = false;
 };
 
 } // namespace high_density

@@ -232,11 +232,16 @@ class DetectionWatchdog:
         self._max_missed_completions = max_missed_completions
         self._last_any_seen = start
         self._running = False
+        self._global_stall_latched = False
 
     def observe(self, stream_index: int, now: float | None = None) -> None:
         if stream_index < 0 or stream_index >= len(self._last_seen_sequence):
             raise IndexError("detection watchdog stream index is out of range")
         now = time.monotonic() if now is None else now
+        # Preserve an expired detector-wide interval before recovered progress
+        # advances the timestamp between periodic checks.
+        if now >= self._last_any_seen + self._no_progress_timeout_s:
+            self._global_stall_latched = True
         self._total_observations += 1
         self._last_any_seen = now
         if self._running:
@@ -268,7 +273,9 @@ class DetectionWatchdog:
 
     def check(self, now: float | None = None) -> DetectionFailure:
         now = time.monotonic() if now is None else now
-        if now >= self._last_any_seen + self._no_progress_timeout_s:
+        if self._global_stall_latched or (
+            now >= self._last_any_seen + self._no_progress_timeout_s
+        ):
             return DetectionFailure(DetectionFailureKind.GLOBAL_STALL)
 
         if not self._running:
@@ -1254,6 +1261,7 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
     next_watchdog_check = time.monotonic()
     while not _STOP_REQUESTED:
         did_work = False
+        reached_target = False
         for _ in range(MAX_DETECTION_PULLS_PER_ROUND):
             detections = app.run.pull("detections", 0)
             if detections is None:
@@ -1271,7 +1279,8 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
             watchdog.observe(stream_index)
             complete_detection(app.sources[stream_index], cfg, aggregate_profile, detections)
             if target_reached(app.sources):
-                return
+                reached_target = True
+                break
 
         now = time.monotonic()
         check_watchdog = did_work or now >= next_watchdog_check
@@ -1289,6 +1298,8 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
             raise RuntimeError(
                 f"detector progress budget exceeded for streams: {stream_list}"
             )
+        if reached_target:
+            return
         if not did_work:
             time.sleep(0.001)
 

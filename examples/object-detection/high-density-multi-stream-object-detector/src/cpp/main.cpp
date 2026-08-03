@@ -1151,6 +1151,7 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
   auto next_watchdog_check = now;
   while (g_stop_requested == 0) {
     bool did_work = false;
+    bool reached_target = false;
     constexpr int kMaxDetectionsPerRound = 64;
     for (int drained = 0; drained < kMaxDetectionsPerRound; ++drained) {
       simaai::neat::Sample detections;
@@ -1179,7 +1180,8 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
       auto& source = app.sources[static_cast<std::size_t>(stream_index)];
       complete_detection(source, cfg, aggregate_profile, detections);
       if (target_reached(app.sources)) {
-        return;
+        reached_target = true;
+        break;
       }
     }
 
@@ -1213,6 +1215,9 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
                                  stream_list);
       }
       throw std::runtime_error("detector progress budget exceeded for streams: " + stream_list);
+    }
+    if (reached_target) {
+      return;
     }
     if (liveness_ms > 0) {
       if (now >= next_liveness) {

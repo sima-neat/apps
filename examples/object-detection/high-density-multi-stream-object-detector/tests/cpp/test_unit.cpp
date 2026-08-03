@@ -766,6 +766,17 @@ bool test_detection_watchdog_tracks_completed_work() {
   ok &= expect_true(startup_stall.kind == FailureKind::GlobalStall && startup_stall.streams.empty(),
                     "global detector stagnation is enforced while streams are still priming");
 
+  Watchdog recovered_stall_watchdog(
+      /*stream_count=*/1, /*priming_observations=*/1, std::chrono::milliseconds(1000),
+      /*no_progress_timeout=*/std::chrono::milliseconds(50),
+      /*max_missed_completions=*/4, start);
+  recovered_stall_watchdog.observe(0, start + std::chrono::milliseconds(50));
+  const auto recovered_stall =
+      recovered_stall_watchdog.check(start + std::chrono::milliseconds(50));
+  ok &= expect_true(recovered_stall.kind == FailureKind::GlobalStall &&
+                        recovered_stall.streams.empty(),
+                    "late detector progress cannot clear an already-expired global stall");
+
   constexpr std::size_t stream_count = 48;
   constexpr std::uint64_t progress_budget = 2 * stream_count + 8;
   Watchdog dense_watchdog(stream_count, /*priming_observations=*/2, std::chrono::seconds(60),

@@ -925,6 +925,45 @@ class TestRuntimeDelivery:
         with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
             pull_detections(app, cfg, AggregateProfile(False, 0))
 
+    def test_target_completion_cannot_hide_latched_starvation(self, monkeypatch):
+        import main
+        from main import AppRuntime, pull_detections
+
+        detections = [0, 0, 1, 1, 0, 0, 0, 0, 1]
+
+        class FakeRun:
+            def pull(self, _name, _timeout_ms):
+                return detections.pop(0)
+
+        target_checks = 0
+
+        def reached_target(_sources):
+            nonlocal target_checks
+            target_checks += 1
+            return not detections
+
+        monkeypatch.setattr(
+            main, "stream_index_from_detection", lambda sample, _count: sample
+        )
+        monkeypatch.setattr(main, "complete_detection", lambda *_args: None)
+        monkeypatch.setattr(main, "target_reached", reached_target)
+        main._STOP_REQUESTED = False
+        app = AppRuntime(
+            model=None, graph=None, run=FakeRun(), sources=[object(), object()]
+        )
+        cfg = SimpleNamespace(
+            initial_detection_timeout_ms=1000,
+            no_detection_timeout_ms=1000,
+            max_missed_detection_rounds=1,
+            max_inflight_total=1,
+        )
+
+        with pytest.raises(
+            RuntimeError, match="progress budget exceeded for streams: 1"
+        ):
+            pull_detections(app, cfg, object())
+        assert target_checks == 9
+
     def test_detection_watchdog_tracks_completed_work(self):
         from main import DetectionFailureKind, DetectionWatchdog
 
@@ -979,6 +1018,19 @@ class TestRuntimeDelivery:
         startup_stall = startup_stall_watchdog.check(6.0)
         assert startup_stall.kind is DetectionFailureKind.GLOBAL_STALL
         assert startup_stall.streams == ()
+
+        recovered_stall_watchdog = DetectionWatchdog(
+            1,
+            priming_observations=1,
+            startup_timeout_s=100.0,
+            no_progress_timeout_s=5.0,
+            max_missed_completions=4,
+            start=0.0,
+        )
+        recovered_stall_watchdog.observe(0, 5.0)
+        recovered_stall = recovered_stall_watchdog.check(5.0)
+        assert recovered_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert recovered_stall.streams == ()
 
     def test_detection_watchdog_allows_observed_48_stream_gap(self):
         from main import DetectionWatchdog
