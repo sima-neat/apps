@@ -446,6 +446,7 @@ jobs:
           }
           work = Path(os.environ["WORK_DIR"])
           expected = source_golden[os.environ["MODEL_NAME"]]
+          reports = {}
           for language in ("cpp", "python"):
               overlays = list((work / f"{language}-output").glob("*.png"))
               if len(overlays) != 1 or overlays[0].stat().st_size == 0:
@@ -456,7 +457,12 @@ jobs:
               images = report.get("images") or []
               if len(images) != 1 or not images[0].get("detections"):
                   raise SystemExit(f"{language}: expected one image with non-empty detections")
-              actual = [item for item in images[0]["detections"] if item["score"] >= 0.50]
+              actual = images[0]["detections"]
+              if len(actual) != len(expected):
+                  raise SystemExit(
+                      f"{language}: expected exactly {len(expected)} visible detections, "
+                      f"found {len(actual)}: {actual}"
+                  )
               used = set()
               for golden in expected:
                   choices = [
@@ -482,6 +488,12 @@ jobs:
               print(
                   f"{language}: matched {len(expected)} source boxes; "
                   f"{len(images[0]['detections'])} total detections"
+              )
+              reports[language] = actual
+          if reports["cpp"] != reports["python"]:
+              raise SystemExit(
+                  "C++ and Python detections differ: "
+                  f"cpp={reports['cpp']} python={reports['python']}"
               )
           PY
 
