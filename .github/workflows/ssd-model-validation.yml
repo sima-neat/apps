@@ -47,6 +47,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          SIMA_NEAT_ENV: ${{ vars.VULCAN_ENV || 'production' }}
         run: |
           set -euo pipefail
           branch="${{ github.ref_name }}"
@@ -131,7 +132,7 @@ jobs:
           # downgrade transaction while still exercising the PR's exact libraries.
           core_target="core@${core_target_ref}:${core_target_spec}"
           metadata_resolution="$(
-            sima-cli neat install --env production -t minimal --json "${core_target}" \
+            sima-cli neat install --env "${SIMA_NEAT_ENV}" -t minimal --json "${core_target}" \
               | python3 -c 'import sys; text=sys.stdin.read(); start=text.find("{"); assert start >= 0, text; print(text[start:])'
           )"
           core_downloads="${GITHUB_WORKSPACE}/_ssd-validation/core-downloads"
@@ -260,11 +261,18 @@ jobs:
       - name: Install validation dependencies
         shell: bash
         run: |
+          set -euo pipefail
           source "${PYNEAT_ACTIVATE}"
-          "${PYTHON_TEST_BIN}" -m pip install --force-reinstall --no-deps \
-            "${PYNEAT_WHEEL}"
-          "${PYTHON_TEST_BIN}" -m pip install "numpy<2" "opencv-python-headless<4.12" PyYAML
-          "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
+          python_site="${GITHUB_WORKSPACE}/_ssd-validation/python-site"
+          mkdir -p "${python_site}"
+          "${PYTHON_TEST_BIN}" -m pip install --target "${python_site}" --upgrade \
+            --no-deps "${PYNEAT_WHEEL}"
+          "${PYTHON_TEST_BIN}" -m pip install --target "${python_site}" --upgrade \
+            "numpy<2" "opencv-python-headless<4.12" PyYAML
+          echo "PYTHONPATH=${python_site}:${PYTHONPATH:-}" >> "${GITHUB_ENV}"
+          PYTHONPATH="${python_site}:${PYTHONPATH:-}" \
+            "${PYTHON_TEST_BIN}" -c \
+              "import pyneat; print('Using job-local pyneat:', pyneat.__file__)"
 
       - name: Download compiled model archives
         shell: bash
