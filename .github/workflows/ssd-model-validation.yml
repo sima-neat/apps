@@ -189,6 +189,26 @@ jobs:
             exit 1
           fi
 
+          # Modalix runners are not all provisioned with the RTSP server runtime
+          # required by pyneat. Keep the board immutable: download the distro package
+          # and extract it beside the exact Core libraries instead of installing it.
+          if ! find /lib /usr/lib -type f -name 'libgstrtspserver-1.0.so.0*' \
+              -print -quit 2>/dev/null | grep -q .; then
+            (
+              cd "${core_downloads}"
+              apt-get download libgstrtspserver-1.0-0
+            )
+            mapfile -t rtsp_packages < <(
+              find "${core_downloads}" -maxdepth 1 -type f \
+                -name 'libgstrtspserver-1.0-0_*.deb' -print
+            )
+            if [[ "${#rtsp_packages[@]}" -ne 1 ]]; then
+              echo "Expected exactly one downloaded RTSP server runtime package" >&2
+              exit 1
+            fi
+            dpkg-deb -x "${rtsp_packages[0]}" "${core_stage}"
+          fi
+
           exact_lib="${core_stage}/usr/lib"
           exact_multiarch="${core_stage}/usr/lib/aarch64-linux-gnu"
           exact_runtime="${core_stage}/usr/lib/aarch64-linux-gnu/neat/runtime"
