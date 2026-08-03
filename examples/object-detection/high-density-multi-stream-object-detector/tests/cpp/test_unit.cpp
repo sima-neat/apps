@@ -219,10 +219,8 @@ bool test_validate_config_only_accepts_twenty_four_streams(const std::string& bi
                       "validate output reports the proven public per-stream credit default") &&
       expect_contains(result.stdout_text, "max_inflight_total=8",
                       "validate output reports the proven total credit default") &&
-      expect_contains(result.stdout_text, "max_missed_detection_rounds=2",
-                      "validate output reports the work-based starvation budget") &&
-      expect_contains(result.stdout_text, "detection_progress_budget=56",
-                      "validate output reports the computed shape-dependent budget") &&
+      expect_contains(result.stdout_text, "stream_detection_timeout_ms=30000",
+                      "validate output reports the per-stream progress timeout") &&
       expect_contains(result.stdout_text, "no_detection_timeout_ms=30000",
                       "validate output reports the global no-progress timeout") &&
       expect_contains(result.stdout_text,
@@ -241,13 +239,12 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
     int internal_queue_depth;
     int max_inflight_per_stream;
     int max_inflight_total;
-    int detection_progress_budget;
   };
 
   constexpr std::array<ProfileExpectation, 3> profiles{{
-      {"config.yaml", 16, 25, 16, 1, 1, 8, 40},
-      {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 24, 72},
-      {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, 8, 104},
+      {"config.yaml", 16, 25, 16, 1, 1, 8},
+      {"config-24x720p20fps.yaml", 24, 20, 4, 2, 4, 24},
+      {"config-48x720p10fps.yaml", 48, 10, 1, 2, 1, 8},
   }};
   const fs::path common_dir =
       "examples/object-detection/high-density-multi-stream-object-detector/src/common";
@@ -275,10 +272,8 @@ bool test_validate_config_only_accepts_named_profiles(const std::string& binary)
     ok &= expect_contains(result.stdout_text,
                           "max_inflight_total=" + std::to_string(profile.max_inflight_total),
                           label + " reports its total credit");
-    ok &= expect_contains(result.stdout_text,
-                          "detection_progress_budget=" +
-                              std::to_string(profile.detection_progress_budget),
-                          label + " reports its computed detection progress budget");
+    ok &= expect_contains(result.stdout_text, "stream_detection_timeout_ms=30000",
+                          label + " reports its per-stream progress timeout");
     ok &= expect_contains(result.stdout_text,
                           "insight_visible_streams=" + std::to_string(profile.streams),
                           label + " publishes every configured stream");
@@ -583,20 +578,18 @@ bool test_validate_config_only_checks_liveness_limits(const std::string& binary)
                            "  max_inflight_total: 12\n";
   const fs::path tuned_path = write_config("test_validate_config_only_accepts_tuned_liveness",
                                            base + "runtime:\n"
-                                                  "  no_detection_timeout_ms: 45000\n"
-                                                  "  max_missed_detection_rounds: 3\n"
+                                                  "  stream_detection_timeout_ms: 45000\n"
+                                                  "  no_detection_timeout_ms: 60000\n"
                                                   "output:\n"
                                                   "  insight:\n"
                                                   "    host: 127.0.0.1\n");
   const auto tuned =
       spawn_and_wait(binary, {"--config", tuned_path.string(), "--validate-config-only"}, 20000);
   bool ok = expect_true(tuned.exit_code == 0, "detector liveness limits can be tuned") &&
-            expect_contains(tuned.stdout_text, "no_detection_timeout_ms=45000",
-                            "validate output reports the tuned global timeout") &&
-            expect_contains(tuned.stdout_text, "max_missed_detection_rounds=3",
-                            "validate output reports the tuned missed-round count") &&
-            expect_contains(tuned.stdout_text, "detection_progress_budget=24",
-                            "validate output reports rounds times streams plus in-flight work");
+            expect_contains(tuned.stdout_text, "stream_detection_timeout_ms=45000",
+                            "validate output reports the tuned per-stream timeout") &&
+            expect_contains(tuned.stdout_text, "no_detection_timeout_ms=60000",
+                            "validate output reports the tuned global timeout");
   remove_dir(tuned_path.parent_path().string());
 
   const fs::path invalid_timeout_path =
@@ -613,19 +606,20 @@ bool test_validate_config_only_checks_liveness_limits(const std::string& binary)
                         "global timeout validation identifies the bad setting");
   remove_dir(invalid_timeout_path.parent_path().string());
 
-  const fs::path invalid_rounds_path =
-      write_config("test_validate_config_only_rejects_invalid_missed_detection_rounds",
+  const fs::path invalid_stream_timeout_path =
+      write_config("test_validate_config_only_rejects_invalid_stream_detection_timeout",
                    base + "runtime:\n"
-                          "  max_missed_detection_rounds: 0\n"
+                          "  stream_detection_timeout_ms: 0\n"
                           "output:\n"
                           "  insight:\n"
                           "    host: 127.0.0.1\n");
-  const auto invalid_rounds = spawn_and_wait(
-      binary, {"--config", invalid_rounds_path.string(), "--validate-config-only"}, 20000);
-  ok &= expect_true(invalid_rounds.exit_code == 1, "zero missed-detection rounds is rejected") &&
-        expect_contains(invalid_rounds.stderr_text, "max_missed_detection_rounds must be > 0",
-                        "missed-round validation identifies the bad setting");
-  remove_dir(invalid_rounds_path.parent_path().string());
+  const auto invalid_stream_timeout = spawn_and_wait(
+      binary, {"--config", invalid_stream_timeout_path.string(), "--validate-config-only"}, 20000);
+  ok &=
+      expect_true(invalid_stream_timeout.exit_code == 1, "zero per-stream timeout is rejected") &&
+      expect_contains(invalid_stream_timeout.stderr_text, "stream_detection_timeout_ms must be > 0",
+                      "per-stream timeout validation identifies the bad setting");
+  remove_dir(invalid_stream_timeout_path.parent_path().string());
   return ok;
 }
 
@@ -710,13 +704,14 @@ bool test_validate_config_only_rejects_invalid_decoder_tuning(const std::string&
   return ok;
 }
 
-bool test_detection_watchdog_tracks_completed_work() {
+bool test_detection_watchdog_tracks_deadlines() {
   using Watchdog = high_density::DetectionWatchdog;
   using FailureKind = high_density::DetectionFailureKind;
   const auto start = Watchdog::TimePoint{};
   Watchdog watchdog(/*stream_count=*/3, /*priming_observations=*/2,
-                    std::chrono::milliseconds(100), /*no_progress_timeout=*/
-                    std::chrono::milliseconds(500), /*max_missed_completions=*/4, start);
+                    /*startup_timeout=*/std::chrono::milliseconds(100),
+                    /*stream_timeout=*/std::chrono::milliseconds(200),
+                    /*no_progress_timeout=*/std::chrono::milliseconds(500), start);
 
   bool ok = true;
   watchdog.observe(0, start + std::chrono::milliseconds(5));
@@ -739,8 +734,9 @@ bool test_detection_watchdog_tracks_completed_work() {
                     "late priming cannot clear an already-expired startup deadline");
 
   Watchdog running_watchdog(/*stream_count=*/3, /*priming_observations=*/2,
-                            std::chrono::milliseconds(1000), /*no_progress_timeout=*/
-                            std::chrono::milliseconds(500), /*max_missed_completions=*/4, start);
+                            /*startup_timeout=*/std::chrono::milliseconds(1000),
+                            /*stream_timeout=*/std::chrono::milliseconds(50),
+                            /*no_progress_timeout=*/std::chrono::milliseconds(500), start);
   running_watchdog.observe(0, start + std::chrono::milliseconds(5));
   running_watchdog.observe(0, start + std::chrono::milliseconds(6));
   running_watchdog.observe(2, start + std::chrono::milliseconds(10));
@@ -750,21 +746,16 @@ bool test_detection_watchdog_tracks_completed_work() {
   running_watchdog.observe(2, start + std::chrono::milliseconds(105));
   ok &= expect_true(running_watchdog.startup_complete(),
                     "watchdog enters running mode when every stream primes before the deadline");
-  ok &= expect_true(!running_watchdog.check(start + std::chrono::milliseconds(149)),
-                    "wall-clock delay alone does not expire an individual stream");
-
-  running_watchdog.observe(0, start + std::chrono::milliseconds(150));
-  running_watchdog.observe(2, start + std::chrono::milliseconds(151));
-  running_watchdog.observe(0, start + std::chrono::milliseconds(152));
-  running_watchdog.observe(2, start + std::chrono::milliseconds(153));
-  ok &= expect_true(!running_watchdog.check(start + std::chrono::milliseconds(153)),
-                    "exactly the configured missed-completion budget is allowed");
-  running_watchdog.observe(0, start + std::chrono::milliseconds(154));
+  running_watchdog.observe(0, start + std::chrono::milliseconds(140));
+  running_watchdog.observe(2, start + std::chrono::milliseconds(141));
+  ok &= expect_true(!running_watchdog.check(start + std::chrono::milliseconds(154)),
+                    "each stream may be silent until its configured deadline");
+  running_watchdog.observe(0, start + std::chrono::milliseconds(155));
   running_watchdog.observe(1, start + std::chrono::milliseconds(155));
   const auto starvation = running_watchdog.check(start + std::chrono::milliseconds(155));
   ok &= expect_true(starvation.kind == FailureKind::StreamStarvation &&
                         starvation.streams == std::vector<std::size_t>{1},
-                    "a later completion cannot clear an already-exceeded progress budget");
+                    "a later completion cannot clear an already-crossed stream deadline");
 
   const auto global_stall = running_watchdog.check(start + std::chrono::milliseconds(655));
   ok &= expect_true(global_stall.kind == FailureKind::GlobalStall && global_stall.streams.empty(),
@@ -772,8 +763,8 @@ bool test_detection_watchdog_tracks_completed_work() {
 
   Watchdog startup_stall_watchdog(
       /*stream_count=*/3, /*priming_observations=*/2, std::chrono::milliseconds(1000),
-      /*no_progress_timeout=*/std::chrono::milliseconds(50),
-      /*max_missed_completions=*/4, start);
+      /*stream_timeout=*/std::chrono::milliseconds(500),
+      /*no_progress_timeout=*/std::chrono::milliseconds(50), start);
   startup_stall_watchdog.observe(0, start + std::chrono::milliseconds(5));
   ok &= expect_true(!startup_stall_watchdog.check(start + std::chrono::milliseconds(54)),
                     "startup allows less than the global no-progress timeout");
@@ -783,8 +774,8 @@ bool test_detection_watchdog_tracks_completed_work() {
 
   Watchdog recovered_stall_watchdog(
       /*stream_count=*/1, /*priming_observations=*/1, std::chrono::milliseconds(1000),
-      /*no_progress_timeout=*/std::chrono::milliseconds(50),
-      /*max_missed_completions=*/4, start);
+      /*stream_timeout=*/std::chrono::milliseconds(500),
+      /*no_progress_timeout=*/std::chrono::milliseconds(50), start);
   recovered_stall_watchdog.observe(0, start + std::chrono::milliseconds(50));
   const auto recovered_stall =
       recovered_stall_watchdog.check(start + std::chrono::milliseconds(50));
@@ -793,9 +784,9 @@ bool test_detection_watchdog_tracks_completed_work() {
                     "late detector progress cannot clear an already-expired global stall");
 
   constexpr std::size_t stream_count = 48;
-  constexpr std::uint64_t progress_budget = 2 * stream_count + 8;
   Watchdog dense_watchdog(stream_count, /*priming_observations=*/2, std::chrono::seconds(60),
-                          std::chrono::seconds(30), progress_budget, start);
+                          /*stream_timeout=*/std::chrono::seconds(5),
+                          /*no_progress_timeout=*/std::chrono::seconds(30), start);
   for (std::size_t index = 0; index < stream_count; ++index) {
     const auto offset = std::chrono::milliseconds(static_cast<int>(index * 10));
     dense_watchdog.observe(index, start + offset);
@@ -803,12 +794,19 @@ bool test_detection_watchdog_tracks_completed_work() {
   }
   ok &= expect_true(dense_watchdog.startup_complete(),
                     "staggered 48-stream startup reaches a common progress baseline");
-  for (std::uint64_t completion = 0; completion < 57; ++completion) {
-    const std::size_t stream_index = 1 + static_cast<std::size_t>(completion % 47);
-    dense_watchdog.observe(stream_index, start + std::chrono::seconds(9));
+  auto now = start + std::chrono::seconds(1);
+  for (int cycle = 0; cycle < 10; ++cycle) {
+    dense_watchdog.observe(0, now);
+    now += std::chrono::milliseconds(10);
+    for (int repeat = 0; repeat < 5; ++repeat) {
+      for (std::size_t stream_index = 1; stream_index < stream_count; ++stream_index) {
+        dense_watchdog.observe(stream_index, now);
+        now += std::chrono::milliseconds(10);
+      }
+    }
   }
-  ok &= expect_true(!dense_watchdog.check(start + std::chrono::seconds(9)),
-                    "the observed 48-stream completion gap does not false-timeout");
+  ok &= expect_true(!dense_watchdog.check(now),
+                    "sustained scheduler skew does not false-timeout healthy streams");
   return ok;
 }
 
@@ -817,6 +815,9 @@ bool test_detection_watchdog_tracks_completed_work() {
 int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--detection-egress-only") {
     return test_metadata_fast_path_preserves_insight_payload() ? 0 : 1;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--detection-watchdog-only") {
+    return test_detection_watchdog_tracks_deadlines() ? 0 : 1;
   }
   if (argc < 2) {
     std::cerr << "[ERR] usage: " << argv[0] << " <example-binary>\n";
@@ -847,6 +848,6 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_fps_scheduler_knob(binary);
   ok &= test_validate_config_only_rejects_legacy_fan_in_policy(binary);
   ok &= test_validate_config_only_rejects_invalid_decoder_tuning(binary);
-  ok &= test_detection_watchdog_tracks_completed_work();
+  ok &= test_detection_watchdog_tracks_deadlines();
   return ok ? 0 : 1;
 }

@@ -14,9 +14,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -38,11 +38,11 @@ struct DetectionFailure {
   }
 };
 
-// Verifies detector liveness without assuming a wall-clock cadence for each
-// stream. A shared accelerator may legitimately return streams in bursts, so
-// steady-state fairness is measured in completed detector work. Wall time is
-// retained only for bounded startup and the distinct case where the entire
-// detector stops making progress.
+// Verifies detector liveness without assuming round-robin scheduling. A shared
+// accelerator may legitimately return streams in unequal bursts, so aggregate
+// completions are not a valid per-stream starvation clock. Instead, startup,
+// individual stream progress, and detector-wide progress have independent,
+// configurable deadlines.
 class DetectionWatchdog {
 public:
   using Clock = std::chrono::steady_clock;
@@ -50,12 +50,12 @@ public:
 
   DetectionWatchdog(std::size_t stream_count, std::size_t priming_observations,
                     std::chrono::milliseconds startup_timeout,
-                    std::chrono::milliseconds no_progress_timeout,
-                    std::uint64_t max_missed_completions, TimePoint start = Clock::now())
-      : priming_counts_(stream_count, 0), last_seen_sequence_(stream_count, 0),
+                    std::chrono::milliseconds stream_timeout,
+                    std::chrono::milliseconds no_progress_timeout, TimePoint start = Clock::now())
+      : priming_counts_(stream_count, 0), last_seen_(stream_count, start),
         starvation_latched_(stream_count, false), priming_observations_(priming_observations),
-        startup_deadline_(start + startup_timeout), no_progress_timeout_(no_progress_timeout),
-        max_missed_completions_(max_missed_completions), last_any_seen_(start) {
+        startup_deadline_(start + startup_timeout), stream_timeout_(stream_timeout),
+        no_progress_timeout_(no_progress_timeout), last_any_seen_(start) {
     if (stream_count == 0) {
       throw std::invalid_argument("detection watchdog requires at least one stream");
     }
@@ -63,16 +63,14 @@ public:
       throw std::invalid_argument("detection watchdog requires at least one priming observation");
     }
     if (startup_timeout <= std::chrono::milliseconds::zero() ||
+        stream_timeout <= std::chrono::milliseconds::zero() ||
         no_progress_timeout <= std::chrono::milliseconds::zero()) {
       throw std::invalid_argument("detection watchdog timeouts must be positive");
-    }
-    if (max_missed_completions == 0) {
-      throw std::invalid_argument("detection watchdog progress budget must be positive");
     }
   }
 
   void observe(std::size_t stream_index, TimePoint now = Clock::now()) {
-    if (stream_index >= last_seen_sequence_.size()) {
+    if (stream_index >= last_seen_.size()) {
       throw std::out_of_range("detection watchdog stream index is out of range");
     }
 
@@ -94,18 +92,16 @@ public:
     if (now - last_any_seen_ >= no_progress_timeout_) {
       global_stall_latched_ = true;
     }
-    ++total_observations_;
     last_any_seen_ = now;
     if (running_) {
-      last_seen_sequence_[stream_index] = total_observations_;
-      // Latch the first violated progress boundary at the completion that
-      // crosses it. A starved stream may return later in the same drain batch,
-      // but that recovery must not erase the already-observed violation.
-      for (std::size_t index = 0; index < last_seen_sequence_.size(); ++index) {
-        if (total_observations_ - last_seen_sequence_[index] > max_missed_completions_) {
-          starvation_latched_[index] = true;
-        }
+      // Check the returning stream before advancing its timestamp. This keeps
+      // the completion path constant-time while ensuring that recovery later
+      // in a drain batch cannot erase an already-crossed deadline. Other
+      // expired streams are found by check().
+      if (now - last_seen_[stream_index] >= stream_timeout_) {
+        starvation_latched_[stream_index] = true;
       }
+      last_seen_[stream_index] = now;
       return;
     }
 
@@ -121,12 +117,9 @@ public:
     }
     if (primed_streams_ == priming_counts_.size()) {
       running_ = true;
-      // Priming is intentionally excluded from starvation accounting. All
-      // streams receive the same steady-state baseline even when startup was
-      // staggered or returned in large per-stream bursts.
-      for (auto& sequence : last_seen_sequence_) {
-        sequence = total_observations_;
-      }
+      // Staggered startup is excluded from steady-state liveness accounting.
+      // Every stream receives the same deadline baseline when priming ends.
+      std::fill(last_seen_.begin(), last_seen_.end(), now);
     }
   }
 
@@ -158,7 +151,7 @@ public:
 
     DetectionFailure failure{DetectionFailureKind::StreamStarvation, {}};
     for (std::size_t index = 0; index < starvation_latched_.size(); ++index) {
-      if (starvation_latched_[index]) {
+      if (starvation_latched_[index] || now - last_seen_[index] >= stream_timeout_) {
         failure.streams.push_back(index);
       }
     }
@@ -167,15 +160,14 @@ public:
 
 private:
   std::vector<std::size_t> priming_counts_;
-  std::vector<std::uint64_t> last_seen_sequence_;
+  std::vector<TimePoint> last_seen_;
   std::vector<bool> starvation_latched_;
   std::vector<std::size_t> startup_failure_streams_;
   std::size_t priming_observations_;
   std::size_t primed_streams_ = 0;
-  std::uint64_t total_observations_ = 0;
   TimePoint startup_deadline_;
+  std::chrono::milliseconds stream_timeout_;
   std::chrono::milliseconds no_progress_timeout_;
-  std::uint64_t max_missed_completions_;
   TimePoint last_any_seen_;
   bool running_ = false;
   bool startup_expired_latched_ = false;
