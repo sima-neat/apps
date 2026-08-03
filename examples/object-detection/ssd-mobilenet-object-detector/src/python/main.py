@@ -57,6 +57,16 @@ def output_stem(image_path: Path) -> str:
     return f"{image_path.stem}_{ext}" if ext else image_path.stem
 
 
+def paths_alias(lhs: Path, rhs: Path) -> bool:
+    """Return true for canonical-path aliases and existing hard-link aliases."""
+    if lhs.resolve() == rhs.resolve():
+        return True
+    try:
+        return lhs.samefile(rhs)
+    except OSError:
+        return False
+
+
 def clear_output_images(output_dir: Path, expected_names: set[str]) -> int:
     """Remove only the overlay files this run will regenerate, leaving unrelated files untouched."""
     removed = 0
@@ -299,7 +309,7 @@ def main() -> int:
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
     # Only overlay runs write into output_dir, so only they must not alias input_dir.
-    if overlay and output_dir.resolve() == input_dir.resolve():
+    if not profile and overlay and paths_alias(output_dir, input_dir):
         print("io.output_dir must differ from io.input_dir", file=sys.stderr)
         return 2
 
@@ -313,36 +323,34 @@ def main() -> int:
     if not image_paths:
         print(f"No images found in {input_dir}", file=sys.stderr)
         return 3
-    if overlay:
-        consumed_paths = {
-            path.resolve() for path in (args.config, model_path, labels_path, *image_paths)
-        }
+    if not profile and overlay:
+        consumed_paths = (args.config, model_path, labels_path, *image_paths)
         for image_path in image_paths:
             overlay_path = output_dir / f"{output_stem(image_path)}.png"
-            if overlay_path.resolve() in consumed_paths:
+            if any(paths_alias(overlay_path, consumed) for consumed in consumed_paths):
                 print(
                     f"generated overlay must not overwrite a consumed input: {overlay_path}",
                     file=sys.stderr,
                 )
                 return 2
-    if detections_json:
-        report_path = Path(detections_json).resolve()
+    if not profile and detections_json:
+        report_path = Path(detections_json)
         for consumed_path in (args.config, model_path, labels_path):
-            if consumed_path.resolve() == report_path:
+            if paths_alias(consumed_path, report_path):
                 print(
                     f"io.detections_json must not overwrite a consumed input: {consumed_path}",
                     file=sys.stderr,
                 )
                 return 2
         for image_path in image_paths:
-            if image_path.resolve() == report_path:
+            if paths_alias(image_path, report_path):
                 print(
                     f"io.detections_json must not overwrite an input image: {image_path}",
                     file=sys.stderr,
                 )
                 return 2
             overlay_path = output_dir / f"{output_stem(image_path)}.png"
-            if overlay and overlay_path.resolve() == report_path:
+            if overlay and paths_alias(overlay_path, report_path):
                 print(
                     f"io.detections_json must not overwrite a generated overlay: {overlay_path}",
                     file=sys.stderr,

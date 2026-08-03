@@ -25,6 +25,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -358,6 +359,15 @@ void write_detections_json(const fs::path& path, const nlohmann::json& images) {
   }
 }
 
+bool paths_alias(const fs::path& lhs, const fs::path& rhs) {
+  if (fs::weakly_canonical(lhs) == fs::weakly_canonical(rhs)) {
+    return true;
+  }
+  std::error_code error;
+  const bool equivalent = fs::equivalent(lhs, rhs, error);
+  return !error && equivalent;
+}
+
 void validate_detections_report_path(const Config& cfg, const std::vector<fs::path>& image_paths) {
   if (cfg.detections_json.empty()) {
     return;
@@ -365,18 +375,18 @@ void validate_detections_report_path(const Config& cfg, const std::vector<fs::pa
   const fs::path report_path = fs::weakly_canonical(cfg.detections_json);
   const std::array<fs::path, 3> consumed_files = {cfg.config_file, fs::path(cfg.model), cfg.labels};
   for (const fs::path& consumed : consumed_files) {
-    if (fs::weakly_canonical(consumed) == report_path) {
+    if (paths_alias(consumed, report_path)) {
       throw std::runtime_error("io.detections_json must not overwrite a consumed input: " +
                                consumed.string());
     }
   }
   for (const fs::path& image_path : image_paths) {
-    if (fs::weakly_canonical(image_path) == report_path) {
+    if (paths_alias(image_path, report_path)) {
       throw std::runtime_error("io.detections_json must not overwrite an input image: " +
                                image_path.string());
     }
-    if (cfg.overlay &&
-        fs::weakly_canonical(cfg.output_dir / (output_stem(image_path) + ".png")) == report_path) {
+    if (cfg.overlay && paths_alias(cfg.output_dir / (output_stem(image_path) + ".png"),
+                                   report_path)) {
       throw std::runtime_error("io.detections_json must not overwrite a generated overlay: " +
                                report_path.string());
     }
@@ -392,13 +402,13 @@ void validate_overlay_paths(const Config& cfg, const std::vector<fs::path>& imag
     const fs::path overlay_path =
         fs::weakly_canonical(cfg.output_dir / (output_stem(image_path) + ".png"));
     for (const fs::path& consumed : fixed_inputs) {
-      if (fs::weakly_canonical(consumed) == overlay_path) {
+      if (paths_alias(consumed, overlay_path)) {
         throw std::runtime_error("generated overlay must not overwrite a consumed input: " +
                                  overlay_path.string());
       }
     }
     for (const fs::path& consumed : image_paths) {
-      if (fs::weakly_canonical(consumed) == overlay_path) {
+      if (paths_alias(consumed, overlay_path)) {
         throw std::runtime_error("generated overlay must not overwrite a consumed input: " +
                                  overlay_path.string());
       }
@@ -418,8 +428,7 @@ int main(int argc, char** argv) {
       throw std::runtime_error("input_dir does not exist: " + cfg.input_dir.string());
     }
     // Only overlay runs write into output_dir, so only they must not alias input_dir.
-    if (cfg.overlay &&
-        fs::weakly_canonical(cfg.output_dir) == fs::weakly_canonical(cfg.input_dir)) {
+    if (!cfg.profile && cfg.overlay && paths_alias(cfg.output_dir, cfg.input_dir)) {
       throw std::runtime_error("io.output_dir must differ from io.input_dir");
     }
     if (!fs::exists(cfg.model)) {
@@ -432,8 +441,10 @@ int main(int argc, char** argv) {
     if (image_paths.empty()) {
       throw std::runtime_error("no images found in: " + cfg.input_dir.string());
     }
-    validate_overlay_paths(cfg, image_paths);
-    validate_detections_report_path(cfg, image_paths);
+    if (!cfg.profile) {
+      validate_overlay_paths(cfg, image_paths);
+      validate_detections_report_path(cfg, image_paths);
+    }
 
     cv::Mat seed_bgr = cv::imread(image_paths.front().string(), cv::IMREAD_COLOR);
     if (seed_bgr.empty()) {

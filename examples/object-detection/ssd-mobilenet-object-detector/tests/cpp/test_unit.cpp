@@ -173,6 +173,73 @@ int main(int argc, char** argv) {
                                 "config detections report alias")) {
       ++failures;
     }
+
+    const fs::path hardlink_report = scratch_dir / "hardlink-report.json";
+    fs::create_hard_link(image, hardlink_report);
+    const fs::path hardlink_config = scratch_dir / "hardlink_report.yaml";
+    std::ofstream hardlink_out(hardlink_config);
+    hardlink_out << "model:\n"
+                 << "  path: " << model.string() << "\n"
+                 << "  labels: " << labels.string() << "\n"
+                 << "io:\n"
+                 << "  input_dir: " << input_dir.string() << "\n"
+                 << "  output_dir: " << output_dir.string() << "\n"
+                 << "  detections_json: " << hardlink_report.string() << "\n"
+                 << "output:\n"
+                 << "  overlay: false\n";
+    hardlink_out.close();
+    if (!expect_config_rejected(binary, hardlink_config,
+                                "io.detections_json must not overwrite an input image",
+                                "hard-linked detections report alias")) {
+      ++failures;
+    }
+
+    const fs::path hardlink_overlay = output_dir / "frame_jpg.png";
+    fs::create_hard_link(model, hardlink_overlay);
+    const fs::path overlay_config = scratch_dir / "hardlink_overlay.yaml";
+    std::ofstream overlay_out(overlay_config);
+    overlay_out << "model:\n"
+                << "  path: " << model.string() << "\n"
+                << "  labels: " << labels.string() << "\n"
+                << "io:\n"
+                << "  input_dir: " << input_dir.string() << "\n"
+                << "  output_dir: " << output_dir.string() << "\n"
+                << "output:\n"
+                << "  overlay: true\n";
+    overlay_out.close();
+    if (!expect_config_rejected(binary, overlay_config,
+                                "generated overlay must not overwrite a consumed input",
+                                "hard-linked overlay alias")) {
+      ++failures;
+    }
+
+    const fs::path profile_config = scratch_dir / "profile_output_aliases.yaml";
+    std::ofstream profile_out(profile_config);
+    profile_out << "model:\n"
+                << "  path: " << model.string() << "\n"
+                << "  labels: " << labels.string() << "\n"
+                << "io:\n"
+                << "  input_dir: " << input_dir.string() << "\n"
+                << "  output_dir: " << input_dir.string() << "\n"
+                << "  detections_json: " << image.string() << "\n"
+                << "runtime:\n"
+                << "  profile: true\n"
+                << "output:\n"
+                << "  overlay: true\n";
+    profile_out.close();
+    const ProcessResult profile_result =
+        spawn_and_wait(binary, {"--config", profile_config.string()}, 20000);
+    const std::array<std::string, 3> unused_output_errors = {
+        "io.output_dir must differ from io.input_dir",
+        "io.detections_json must not overwrite",
+        "generated overlay must not overwrite",
+    };
+    for (const std::string& message : unused_output_errors) {
+      if (profile_result.stderr_text.find(message) != std::string::npos) {
+        std::cerr << "[FAIL] profiling rejected an unused output path: " << message << "\n";
+        ++failures;
+      }
+    }
   }
 
   if (!expect_config_rejected(

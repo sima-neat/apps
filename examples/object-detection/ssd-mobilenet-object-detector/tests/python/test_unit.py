@@ -1,5 +1,6 @@
 """Unit tests for ssd-mobilenet-object-detector (Python)."""
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -130,6 +131,38 @@ def test_rejects_detection_report_that_aliases_an_input_image(tmp_path):
 
 
 @pytest.mark.unit
+def test_rejects_detection_report_hard_linked_to_input_image(tmp_path):
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    image = input_dir / "frame.jpg"
+    image.touch()
+    report = tmp_path / "detections.json"
+    os.link(image, report)
+    config = tmp_path / "hardlink_alias.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+            io:
+              input_dir: {input_dir}
+              output_dir: {tmp_path / 'output'}
+              detections_json: {report}
+            output:
+              overlay: false
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "io.detections_json must not overwrite an input image" in r.stderr
+
+
+@pytest.mark.unit
 def test_rejects_overlay_that_aliases_a_consumed_input(tmp_path):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -160,6 +193,76 @@ def test_rejects_overlay_that_aliases_a_consumed_input(tmp_path):
     r = _run(["--config", str(config)])
     assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     assert "generated overlay must not overwrite a consumed input" in r.stderr
+
+
+@pytest.mark.unit
+def test_rejects_overlay_hard_linked_to_consumed_input(tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    labels = tmp_path / "labels.txt"
+    labels.write_text("background\nperson\n", encoding="utf-8")
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "frame.jpg").touch()
+    os.link(model, output_dir / "frame_jpg.png")
+    config = tmp_path / "overlay_hardlink_alias.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+              labels: {labels}
+            io:
+              input_dir: {input_dir}
+              output_dir: {output_dir}
+            output:
+              overlay: true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "generated overlay must not overwrite a consumed input" in r.stderr
+
+
+@pytest.mark.unit
+def test_profile_ignores_unused_output_collisions(tmp_path):
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    labels = tmp_path / "labels.txt"
+    labels.write_text("background\nperson\n", encoding="utf-8")
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    image = input_dir / "frame.jpg"
+    image.touch()
+    config = tmp_path / "profile.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+              labels: {labels}
+            io:
+              input_dir: {input_dir}
+              output_dir: {input_dir}
+              detections_json: {image}
+            runtime:
+              profile: true
+            output:
+              overlay: true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+    assert "io.output_dir must differ from io.input_dir" not in r.stderr
+    assert "io.detections_json must not overwrite" not in r.stderr
+    assert "generated overlay must not overwrite" not in r.stderr
 
 
 @pytest.mark.unit
