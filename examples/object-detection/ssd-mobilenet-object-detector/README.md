@@ -91,7 +91,7 @@ io:
   detections_json: ""        # Optional machine-readable detections report.
 
 decode:
-  score_threshold: 0.30
+  score_threshold: 0.55
   nms_iou: 0.60
   max_detections: 100
 

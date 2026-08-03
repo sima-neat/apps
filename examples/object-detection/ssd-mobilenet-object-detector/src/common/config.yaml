@@ -9,7 +9,7 @@ io:                          # Input and output paths.
   detections_json: ""        # Optional path for a machine-readable detections report.
 
 decode:                      # Model-managed SSD BoxDecode settings.
-  score_threshold: 0.30      # Minimum per-class sigmoid confidence.
+  score_threshold: 0.55      # Filters weak SSD-MobileNet false positives in rendered output.
   nms_iou: 0.60              # Overlap threshold for on-device NMS.
   max_detections: 100        # Top-K detections to keep per image.
 

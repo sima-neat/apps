@@ -260,7 +260,7 @@ def main() -> int:
     input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/ssd-mobilenet-object-detector"))
     detections_json = io_cfg.get("detections_json", "")
-    score_threshold = float(decode_cfg.get("score_threshold", 0.30))
+    score_threshold = float(decode_cfg.get("score_threshold", 0.55))
     nms_iou = float(decode_cfg.get("nms_iou", 0.60))
     max_detections = int(decode_cfg.get("max_detections", 100))
     profile = bool(runtime_cfg.get("profile", False))

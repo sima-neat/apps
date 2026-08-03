@@ -49,7 +49,7 @@ struct Config {
   fs::path output_dir;
   fs::path detections_json;
   int model_frame = kDefaultModelSize; // 300 for SSD300/v1/v2, 320 for v3.
-  float score_threshold = 0.30f;
+  float score_threshold = 0.55f;
   float nms_iou = 0.60f;
   int max_detections = 100;
   int timeout_ms = kDefaultTimeoutMs;
@@ -175,7 +175,7 @@ Config load_config(const fs::path& path) {
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/ssd-mobilenet-object-detector");
   cfg.detections_json = raw.string_or("io.detections_json", "");
-  cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.30));
+  cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.55));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.60));
   cfg.max_detections = raw.int_or("decode.max_detections", 100);
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
