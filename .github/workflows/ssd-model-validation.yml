@@ -384,7 +384,7 @@ jobs:
                   "output_dir": str(work / "output"),
               },
               "decode": {
-                  "score_threshold": 0.30,
+                  "score_threshold": 0.55,
                   "nms_iou": 0.60,
                   "max_detections": 100,
               },
@@ -479,7 +479,8 @@ jobs:
 
             (
               cd "${APPS_RUNTIME_DIR}"
-              SIMA_BOXDECODE_PROFILE=1 SIMA_BOXDECODE_PROFILE_EVERY=1 \
+              SIMA_BOXDECODE_PROFILE=1 SIMA_BOXDECODE_PROFILE_EVERY=1000 \
+                SIMA_BOXDECODE_PROFILE_SKIP=2 \
                 "${cpp_binary}" --config "${work}/profile.yaml" \
                 | tee "${work}/profile.log"
             )
@@ -487,41 +488,27 @@ jobs:
             PROFILE_LOG="${work}/profile.log" "${PYTHON_TEST_BIN}" - <<'PY'
           import os
           import re
-          import statistics
           from pathlib import Path
 
           text = Path(os.environ["PROFILE_LOG"]).read_text(encoding="utf-8")
-          cumulative = [
-              (int(frames), float(average))
-              for frames, average in re.findall(
-                  r"\[boxdecode-profile\] frames=([0-9]+).*?avg_ms\{[^}]*total=([0-9.]+)",
-                  text,
+          matches = re.findall(
+              r"\[boxdecode-profile\] frames=([0-9]+) skipped=([0-9]+) "
+              r"avg_ms\{[^}]*total=([0-9.]+)\}.*?"
+              r"window_ms\{samples=([0-9]+),p99=([0-9.]+),max=([0-9.]+)\}",
+              text,
+          )
+          if len(matches) != 1:
+              raise SystemExit(
+                  f"expected one backend BoxDecode profile window, got {matches}"
               )
-          ]
-          if len(cumulative) < 1001:
-              raise SystemExit("BoxDecode profile output was not emitted")
-          samples = []
-          previous_frames = 0
-          previous_total = 0.0
-          for frames, average in cumulative:
-              if frames != previous_frames + 1:
-                  raise SystemExit(
-                      f"BoxDecode profile frames are not consecutive: "
-                      f"{previous_frames} -> {frames}"
-                  )
-              total = frames * average
-              samples.append(total - previous_total)
-              previous_frames = frames
-              previous_total = total
-          # Model construction and the app warmup can both execute the decoder. The
-          # configured profile loop is always the final 1000 consecutive samples.
-          if len(samples) < 1000:
-              raise SystemExit(f"expected at least 1000 decoder samples, got {len(samples)}")
-          measured = samples[-1000:]
-          ordered = sorted(measured)
-          p99 = ordered[989]
-          mean = statistics.fmean(measured)
-          worst = max(measured)
+          frames, skipped, mean, samples, p99, worst = matches[0]
+          frames, skipped, samples = int(frames), int(skipped), int(samples)
+          mean, p99, worst = float(mean), float(p99), float(worst)
+          if (frames, skipped, samples) != (1000, 2, 1000):
+              raise SystemExit(
+                  "unexpected BoxDecode profile window: "
+                  f"frames={frames} skipped={skipped} samples={samples}"
+              )
           print(
               f"BoxDecode 1000-run latency: mean={mean:.6f} ms, "
               f"p99={p99:.6f} ms, max={worst:.6f} ms"
