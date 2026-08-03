@@ -439,6 +439,11 @@ jobs:
           work = Path(os.environ["WORK_DIR"])
           expected = source_golden[os.environ["MODEL_NAME"]]
           for language in ("cpp", "python"):
+              overlays = list((work / f"{language}-output").glob("*.png"))
+              if len(overlays) != 1 or overlays[0].stat().st_size == 0:
+                  raise SystemExit(
+                      f"{language}: expected one non-empty generated overlay, found {overlays}"
+                  )
               report = json.loads((work / f"{language}-detections.json").read_text())
               images = report.get("images") or []
               if len(images) != 1 or not images[0].get("detections"):
@@ -456,10 +461,15 @@ jobs:
                           f"{language}: source class {golden['class_id']} has no candidate"
                       )
                   overlap, index = max(choices)
-                  if overlap < 0.45:
+                  if overlap < 0.85:
                       raise SystemExit(
                           f"{language}: source class {golden['class_id']} has IoU {overlap:.4f}"
                       )
+                  print(
+                      f"{language}: class={golden['class_id']} score="
+                      f"{actual[index]['score']:.6f} IoU={overlap:.6f} "
+                      f"box={actual[index]['box']}"
+                  )
                   used.add(index)
               print(
                   f"{language}: matched {len(expected)} source boxes; "
@@ -469,7 +479,7 @@ jobs:
 
             (
               cd "${APPS_RUNTIME_DIR}"
-              SIMA_BOXDECODE_PROFILE=1 SIMA_BOXDECODE_PROFILE_EVERY=1000 \
+              SIMA_BOXDECODE_PROFILE=1 SIMA_BOXDECODE_PROFILE_EVERY=1 \
                 "${cpp_binary}" --config "${work}/profile.yaml" \
                 | tee "${work}/profile.log"
             )
@@ -477,16 +487,48 @@ jobs:
             PROFILE_LOG="${work}/profile.log" "${PYTHON_TEST_BIN}" - <<'PY'
           import os
           import re
+          import statistics
           from pathlib import Path
 
           text = Path(os.environ["PROFILE_LOG"]).read_text(encoding="utf-8")
-          totals = [float(value) for value in re.findall(r"avg_ms\{[^}]*total=([0-9.]+)", text)]
-          if not totals:
+          cumulative = [
+              (int(frames), float(average))
+              for frames, average in re.findall(
+                  r"\[boxdecode-profile\] frames=([0-9]+).*?avg_ms\{[^}]*total=([0-9.]+)",
+                  text,
+              )
+          ]
+          if len(cumulative) < 1001:
               raise SystemExit("BoxDecode profile output was not emitted")
-          worst = max(totals)
-          print(f"BoxDecode measured average: {worst:.6f} ms")
+          samples = []
+          previous_frames = 0
+          previous_total = 0.0
+          for frames, average in cumulative:
+              if frames != previous_frames + 1:
+                  raise SystemExit(
+                      f"BoxDecode profile frames are not consecutive: "
+                      f"{previous_frames} -> {frames}"
+                  )
+              total = frames * average
+              samples.append(total - previous_total)
+              previous_frames = frames
+              previous_total = total
+          # The app performs one explicit warmup before the configured profile runs.
+          measured = samples[1:]
+          if len(measured) != 1000:
+              raise SystemExit(f"expected 1000 measured decoder runs, got {len(measured)}")
+          ordered = sorted(measured)
+          p99 = ordered[989]
+          mean = statistics.fmean(measured)
+          worst = max(measured)
+          print(
+              f"BoxDecode 1000-run latency: mean={mean:.6f} ms, "
+              f"p99={p99:.6f} ms, max={worst:.6f} ms"
+          )
           if worst >= 1.0:
-              raise SystemExit(f"BoxDecode average must be <1 ms, got {worst:.6f} ms")
+              raise SystemExit(
+                  f"BoxDecode every measured run must be <1 ms, got max={worst:.6f} ms"
+              )
           PY
           }
 
