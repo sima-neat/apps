@@ -1,6 +1,7 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "ref": "fix/526-codec-valid-video-shape-coverage",
+    "spec": "19c15bd7a99c"
   },
   "sdk": {
     "channel": "develop"
