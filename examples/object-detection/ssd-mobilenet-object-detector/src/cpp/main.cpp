@@ -182,10 +182,11 @@ Config load_config(const fs::path& path) {
   cfg.num_runs = raw.int_or("runtime.num_runs", 1);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.overlay = raw.bool_or("output.overlay", true);
-  if (cfg.score_threshold < 0.0f || cfg.score_threshold > 1.0f) {
+  if (!std::isfinite(cfg.score_threshold) || cfg.score_threshold < 0.0f ||
+      cfg.score_threshold > 1.0f) {
     throw std::runtime_error("decode.score_threshold must be in [0.0, 1.0]");
   }
-  if (cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
+  if (!std::isfinite(cfg.nms_iou) || cfg.nms_iou < 0.0f || cfg.nms_iou > 1.0f) {
     throw std::runtime_error("decode.nms_iou must be in [0.0, 1.0]");
   }
   if (cfg.max_detections < 1) {
@@ -382,6 +383,29 @@ void validate_detections_report_path(const Config& cfg, const std::vector<fs::pa
   }
 }
 
+void validate_overlay_paths(const Config& cfg, const std::vector<fs::path>& image_paths) {
+  if (!cfg.overlay) {
+    return;
+  }
+  const std::array<fs::path, 3> fixed_inputs = {cfg.config_file, fs::path(cfg.model), cfg.labels};
+  for (const fs::path& image_path : image_paths) {
+    const fs::path overlay_path =
+        fs::weakly_canonical(cfg.output_dir / (output_stem(image_path) + ".png"));
+    for (const fs::path& consumed : fixed_inputs) {
+      if (fs::weakly_canonical(consumed) == overlay_path) {
+        throw std::runtime_error("generated overlay must not overwrite a consumed input: " +
+                                 overlay_path.string());
+      }
+    }
+    for (const fs::path& consumed : image_paths) {
+      if (fs::weakly_canonical(consumed) == overlay_path) {
+        throw std::runtime_error("generated overlay must not overwrite a consumed input: " +
+                                 overlay_path.string());
+      }
+    }
+  }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -408,6 +432,7 @@ int main(int argc, char** argv) {
     if (image_paths.empty()) {
       throw std::runtime_error("no images found in: " + cfg.input_dir.string());
     }
+    validate_overlay_paths(cfg, image_paths);
     validate_detections_report_path(cfg, image_paths);
 
     cv::Mat seed_bgr = cv::imread(image_paths.front().string(), cv::IMREAD_COLOR);

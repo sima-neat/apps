@@ -180,9 +180,19 @@ int main(int argc, char** argv) {
           "decode.score_threshold must be in [0.0, 1.0]", "out-of-range score_threshold")) {
     ++failures;
   }
+  if (!expect_config_rejected(
+          binary, write_decode_config(scratch_dir, "score_nan.yaml", "score_threshold", ".nan"),
+          "decode.score_threshold must be in [0.0, 1.0]", "non-finite score_threshold")) {
+    ++failures;
+  }
   if (!expect_config_rejected(binary,
                               write_decode_config(scratch_dir, "iou.yaml", "nms_iou", "-0.1"),
                               "decode.nms_iou must be in [0.0, 1.0]", "out-of-range nms_iou")) {
+    ++failures;
+  }
+  if (!expect_config_rejected(binary,
+                              write_decode_config(scratch_dir, "iou_nan.yaml", "nms_iou", ".nan"),
+                              "decode.nms_iou must be in [0.0, 1.0]", "non-finite nms_iou")) {
     ++failures;
   }
   if (!expect_config_rejected(
@@ -212,6 +222,34 @@ int main(int argc, char** argv) {
     if (!expect_config_rejected(binary, config,
                                 "io.detections_json must not overwrite an input image",
                                 "input-image detections report alias")) {
+      ++failures;
+    }
+  }
+
+  {
+    const fs::path output_dir = scratch_dir / "overlay-collision-output";
+    const fs::path model = output_dir / "frame_jpg.png";
+    const fs::path labels = scratch_dir / "overlay-collision-labels.txt";
+    const fs::path input_dir = scratch_dir / "overlay-collision-input";
+    fs::create_directories(output_dir);
+    fs::create_directories(input_dir);
+    std::ofstream(model).put('\n');
+    std::ofstream(labels) << "background\nperson\n";
+    std::ofstream(input_dir / "frame.jpg").put('\n');
+    const fs::path config = scratch_dir / "overlay_collision.yaml";
+    std::ofstream out(config);
+    out << "model:\n"
+        << "  path: " << model.string() << "\n"
+        << "  labels: " << labels.string() << "\n"
+        << "io:\n"
+        << "  input_dir: " << input_dir.string() << "\n"
+        << "  output_dir: " << output_dir.string() << "\n"
+        << "output:\n"
+        << "  overlay: true\n";
+    out.close();
+    if (!expect_config_rejected(binary, config,
+                                "generated overlay must not overwrite a consumed input",
+                                "overlay model alias")) {
       ++failures;
     }
   }

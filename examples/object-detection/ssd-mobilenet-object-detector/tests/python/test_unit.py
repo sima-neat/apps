@@ -68,7 +68,9 @@ class TestDecodeConfigValidation:
         ("key", "value", "message"),
         [
             ("score_threshold", "1.5", "decode.score_threshold must be in [0.0, 1.0]"),
+            ("score_threshold", ".nan", "decode.score_threshold must be in [0.0, 1.0]"),
             ("nms_iou", "-0.1", "decode.nms_iou must be in [0.0, 1.0]"),
+            ("nms_iou", ".nan", "decode.nms_iou must be in [0.0, 1.0]"),
             ("max_detections", "0", "decode.max_detections must be >= 1"),
         ],
     )
@@ -125,6 +127,39 @@ def test_rejects_detection_report_that_aliases_an_input_image(tmp_path):
     r = _run(["--config", str(config)])
     assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     assert "io.detections_json must not overwrite an input image" in r.stderr
+
+
+@pytest.mark.unit
+def test_rejects_overlay_that_aliases_a_consumed_input(tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    model = output_dir / "frame_jpg.png"
+    model.touch()
+    labels = tmp_path / "labels.txt"
+    labels.write_text("background\nperson\n", encoding="utf-8")
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "frame.jpg").touch()
+    config = tmp_path / "overlay_alias.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+              labels: {labels}
+            io:
+              input_dir: {input_dir}
+              output_dir: {output_dir}
+            output:
+              overlay: true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "generated overlay must not overwrite a consumed input" in r.stderr
 
 
 @pytest.mark.unit

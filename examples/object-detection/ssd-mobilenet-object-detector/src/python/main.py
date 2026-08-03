@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import struct
 import sys
 import time
@@ -270,10 +271,10 @@ def main() -> int:
     global VERBOSE
     VERBOSE = bool(runtime_cfg.get("verbose", False))
 
-    if not 0.0 <= score_threshold <= 1.0:
+    if not math.isfinite(score_threshold) or not 0.0 <= score_threshold <= 1.0:
         print("decode.score_threshold must be in [0.0, 1.0]", file=sys.stderr)
         return 2
-    if not 0.0 <= nms_iou <= 1.0:
+    if not math.isfinite(nms_iou) or not 0.0 <= nms_iou <= 1.0:
         print("decode.nms_iou must be in [0.0, 1.0]", file=sys.stderr)
         return 2
     if max_detections < 1:
@@ -312,6 +313,18 @@ def main() -> int:
     if not image_paths:
         print(f"No images found in {input_dir}", file=sys.stderr)
         return 3
+    if overlay:
+        consumed_paths = {
+            path.resolve() for path in (args.config, model_path, labels_path, *image_paths)
+        }
+        for image_path in image_paths:
+            overlay_path = output_dir / f"{output_stem(image_path)}.png"
+            if overlay_path.resolve() in consumed_paths:
+                print(
+                    f"generated overlay must not overwrite a consumed input: {overlay_path}",
+                    file=sys.stderr,
+                )
+                return 2
     if detections_json:
         report_path = Path(detections_json).resolve()
         for consumed_path in (args.config, model_path, labels_path):
