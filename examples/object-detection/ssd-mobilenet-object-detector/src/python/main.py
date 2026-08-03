@@ -68,11 +68,12 @@ def paths_alias(lhs: Path, rhs: Path) -> bool:
 
 
 def clear_output_images(output_dir: Path, expected_names: set[str]) -> int:
-    """Remove only the overlay files this run will regenerate, leaving unrelated files untouched."""
+    """Remove expected output entries by pathname without following symlinks."""
     removed = 0
     for name in expected_names:
         path = output_dir / name
-        if path.is_file():
+        # exists() follows symlinks and is false for dangling links; is_symlink() closes that gap.
+        if path.is_symlink() or path.exists():
             path.unlink()
             removed += 1
     return removed

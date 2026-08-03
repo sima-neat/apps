@@ -1,4 +1,5 @@
 // Unit test for ssd-mobilenet-object-detector: CLI arg handling and decode config validation.
+#include "examples/object-detection/ssd-mobilenet-object-detector/src/cpp/output_paths.h"
 #include "support/testing/test_process.h"
 
 #include <array>
@@ -119,6 +120,27 @@ int main(int argc, char** argv) {
     return 1;
   }
   const fs::path scratch_dir(scratch);
+
+  {
+    const fs::path input = scratch_dir / "dangling-output-input" / "frame.jpg";
+    const fs::path output_dir = scratch_dir / "dangling-output";
+    const fs::path missing_target = scratch_dir / "outside" / "missing.png";
+    const fs::path output = output_dir / "frame_jpg.png";
+    fs::create_directories(input.parent_path());
+    fs::create_directories(output_dir);
+    std::ofstream(input).put('\n');
+    fs::create_symlink(missing_target, output);
+    const int removed = ssd_mobilenet::clear_output_images(output_dir, {input});
+    std::error_code ec;
+    const fs::file_status output_status = fs::symlink_status(output, ec);
+    if (removed != 1 || output_status.type() != fs::file_type::not_found ||
+        fs::exists(missing_target)) {
+      std::cerr << "[FAIL] dangling output symlink was not removed by pathname\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] dangling output symlink removed by pathname\n";
+    }
+  }
 
   {
     const fs::path model = scratch_dir / "protected-model.tar.gz";

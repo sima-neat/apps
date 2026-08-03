@@ -1,5 +1,6 @@
 """Unit tests for ssd-mobilenet-object-detector (Python)."""
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -10,6 +11,11 @@ import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+
+MAIN_SPEC = importlib.util.spec_from_file_location("ssd_mobilenet_main", MAIN_PY)
+assert MAIN_SPEC is not None and MAIN_SPEC.loader is not None
+ssd_mobilenet_main = importlib.util.module_from_spec(MAIN_SPEC)
+MAIN_SPEC.loader.exec_module(ssd_mobilenet_main)
 
 
 def _run(args, cwd=EXAMPLE_DIR):
@@ -39,6 +45,21 @@ def _write_config(tmp_path: Path, section: str, key: str, value: str) -> Path:
         encoding="utf-8",
     )
     return config
+
+
+@pytest.mark.unit
+def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    missing_target = tmp_path / "outside" / "missing.png"
+    output = output_dir / "frame_jpg.png"
+    output.symlink_to(missing_target)
+
+    removed = ssd_mobilenet_main.clear_output_images(output_dir, {output.name})
+
+    assert removed == 1
+    assert not output.is_symlink()
+    assert not missing_target.exists()
 
 
 @pytest.mark.unit

@@ -7,6 +7,7 @@
  * Usage: ssd-mobilenet-object-detector [--config <path>]
  */
 #include "neat.h"
+#include "output_paths.h"
 #include "support/runtime/example_utils.h"
 #include "support/runtime/config_utils.h"
 
@@ -30,6 +31,8 @@
 
 namespace fs = std::filesystem;
 namespace neat = simaai::neat;
+using ssd_mobilenet::clear_output_images;
+using ssd_mobilenet::output_stem;
 
 namespace {
 
@@ -89,16 +92,6 @@ bool is_image_file(const fs::path& path) {
   return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp";
 }
 
-// Output stem keeping the (case-preserved) source extension so frame.jpg/frame.png don't collide.
-std::string output_stem(const fs::path& image_path) {
-  std::string ext = image_path.extension().string();
-  if (!ext.empty() && ext.front() == '.') {
-    ext.erase(ext.begin());
-  }
-  std::string stem = image_path.stem().string();
-  return ext.empty() ? stem : stem + "_" + ext;
-}
-
 std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
   std::vector<fs::path> images;
   for (const auto& entry : fs::directory_iterator(input_dir)) {
@@ -108,19 +101,6 @@ std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
   }
   std::sort(images.begin(), images.end());
   return images;
-}
-
-// Remove only the overlay files this run will regenerate, leaving unrelated files untouched.
-int clear_output_images(const fs::path& output_dir, const std::vector<fs::path>& image_paths) {
-  int removed = 0;
-  for (const fs::path& image_path : image_paths) {
-    const fs::path candidate = output_dir / (output_stem(image_path) + ".png");
-    std::error_code ec;
-    if (fs::is_regular_file(candidate, ec) && fs::remove(candidate, ec)) {
-      ++removed;
-    }
-  }
-  return removed;
 }
 
 // Directory holding the running executable, or empty if it cannot be determined.
@@ -385,8 +365,8 @@ void validate_detections_report_path(const Config& cfg, const std::vector<fs::pa
       throw std::runtime_error("io.detections_json must not overwrite an input image: " +
                                image_path.string());
     }
-    if (cfg.overlay && paths_alias(cfg.output_dir / (output_stem(image_path) + ".png"),
-                                   report_path)) {
+    if (cfg.overlay &&
+        paths_alias(cfg.output_dir / (output_stem(image_path) + ".png"), report_path)) {
       throw std::runtime_error("io.detections_json must not overwrite a generated overlay: " +
                                report_path.string());
     }
