@@ -76,6 +76,18 @@ public:
       throw std::out_of_range("detection watchdog stream index is out of range");
     }
 
+    if (!running_ && !startup_expired_latched_ && now >= startup_deadline_) {
+      startup_expired_latched_ = true;
+      // Preserve the streams that had not completed priming before the
+      // deadline. A late result in the same drain batch must not erase an
+      // already-expired startup interval.
+      for (std::size_t index = 0; index < priming_counts_.size(); ++index) {
+        if (priming_counts_[index] < priming_observations_) {
+          startup_failure_streams_.push_back(index);
+        }
+      }
+    }
+
     // Preserve an already-expired detector-wide interval before recovered
     // progress advances the timestamp. Otherwise a late result arriving
     // between periodic checks could erase the failure.
@@ -94,6 +106,10 @@ public:
           starvation_latched_[index] = true;
         }
       }
+      return;
+    }
+
+    if (startup_expired_latched_) {
       return;
     }
 
@@ -123,6 +139,10 @@ public:
       return {DetectionFailureKind::GlobalStall, {}};
     }
 
+    if (startup_expired_latched_) {
+      return {DetectionFailureKind::Startup, startup_failure_streams_};
+    }
+
     if (!running_) {
       if (now < startup_deadline_) {
         return {};
@@ -149,6 +169,7 @@ private:
   std::vector<std::size_t> priming_counts_;
   std::vector<std::uint64_t> last_seen_sequence_;
   std::vector<bool> starvation_latched_;
+  std::vector<std::size_t> startup_failure_streams_;
   std::size_t priming_observations_;
   std::size_t primed_streams_ = 0;
   std::uint64_t total_observations_ = 0;
@@ -157,6 +178,7 @@ private:
   std::uint64_t max_missed_completions_;
   TimePoint last_any_seen_;
   bool running_ = false;
+  bool startup_expired_latched_ = false;
   bool global_stall_latched_ = false;
 };
 

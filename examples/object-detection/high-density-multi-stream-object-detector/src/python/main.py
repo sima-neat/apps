@@ -224,6 +224,7 @@ class DetectionWatchdog:
         self._priming_counts = [0] * stream_count
         self._last_seen_sequence = [0] * stream_count
         self._starvation_latched = [False] * stream_count
+        self._startup_failure_streams: tuple[int, ...] | None = None
         self._priming_observations = priming_observations
         self._primed_streams = 0
         self._total_observations = 0
@@ -238,6 +239,19 @@ class DetectionWatchdog:
         if stream_index < 0 or stream_index >= len(self._last_seen_sequence):
             raise IndexError("detection watchdog stream index is out of range")
         now = time.monotonic() if now is None else now
+        if (
+            not self._running
+            and self._startup_failure_streams is None
+            and now >= self._startup_deadline
+        ):
+            # Preserve the streams that had not completed priming before the
+            # deadline. A late result in the same drain batch must not erase
+            # an already-expired startup interval.
+            self._startup_failure_streams = tuple(
+                index
+                for index, count in enumerate(self._priming_counts)
+                if count < self._priming_observations
+            )
         # Preserve an expired detector-wide interval before recovered progress
         # advances the timestamp between periodic checks.
         if now >= self._last_any_seen + self._no_progress_timeout_s:
@@ -254,6 +268,9 @@ class DetectionWatchdog:
                     > self._max_missed_completions
                 ):
                     self._starvation_latched[index] = True
+            return
+
+        if self._startup_failure_streams is not None:
             return
 
         if self._priming_counts[stream_index] < self._priming_observations:
@@ -277,6 +294,11 @@ class DetectionWatchdog:
             now >= self._last_any_seen + self._no_progress_timeout_s
         ):
             return DetectionFailure(DetectionFailureKind.GLOBAL_STALL)
+
+        if self._startup_failure_streams is not None:
+            return DetectionFailure(
+                DetectionFailureKind.STARTUP, self._startup_failure_streams
+            )
 
         if not self._running:
             if now < self._startup_deadline:

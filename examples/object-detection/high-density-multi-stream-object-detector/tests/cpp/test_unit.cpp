@@ -722,36 +722,51 @@ bool test_detection_watchdog_tracks_completed_work() {
   watchdog.observe(0, start + std::chrono::milliseconds(5));
   watchdog.observe(0, start + std::chrono::milliseconds(6));
   watchdog.observe(2, start + std::chrono::milliseconds(10));
+  watchdog.observe(1, start + std::chrono::milliseconds(20));
+  watchdog.observe(1, start + std::chrono::milliseconds(21));
   ok &= expect_true(!watchdog.check(start + std::chrono::milliseconds(99)),
                     "startup watchdog waits for the configured all-stream deadline");
   const auto startup_failure = watchdog.check(start + std::chrono::milliseconds(100));
   ok &= expect_true(startup_failure.kind == FailureKind::Startup &&
-                        startup_failure.streams == std::vector<std::size_t>({1, 2}),
+                        startup_failure.streams == std::vector<std::size_t>({2}),
                     "startup watchdog reports streams that have not completed priming twice");
 
-  watchdog.observe(1, start + std::chrono::milliseconds(101));
-  watchdog.observe(1, start + std::chrono::milliseconds(102));
-  watchdog.observe(0, start + std::chrono::milliseconds(105));
-  watchdog.observe(2, start + std::chrono::milliseconds(105));
-  ok &= expect_true(watchdog.startup_complete(),
-                    "watchdog enters running mode only after every stream has two completions");
-  ok &= expect_true(!watchdog.check(start + std::chrono::milliseconds(149)),
+  watchdog.observe(2, start + std::chrono::milliseconds(100));
+  const auto late_startup_failure = watchdog.check(start + std::chrono::milliseconds(100));
+  ok &= expect_true(!watchdog.startup_complete() &&
+                        late_startup_failure.kind == FailureKind::Startup &&
+                        late_startup_failure.streams == std::vector<std::size_t>({2}),
+                    "late priming cannot clear an already-expired startup deadline");
+
+  Watchdog running_watchdog(/*stream_count=*/3, /*priming_observations=*/2,
+                            std::chrono::milliseconds(1000), /*no_progress_timeout=*/
+                            std::chrono::milliseconds(500), /*max_missed_completions=*/4, start);
+  running_watchdog.observe(0, start + std::chrono::milliseconds(5));
+  running_watchdog.observe(0, start + std::chrono::milliseconds(6));
+  running_watchdog.observe(2, start + std::chrono::milliseconds(10));
+  running_watchdog.observe(1, start + std::chrono::milliseconds(101));
+  running_watchdog.observe(1, start + std::chrono::milliseconds(102));
+  running_watchdog.observe(0, start + std::chrono::milliseconds(105));
+  running_watchdog.observe(2, start + std::chrono::milliseconds(105));
+  ok &= expect_true(running_watchdog.startup_complete(),
+                    "watchdog enters running mode when every stream primes before the deadline");
+  ok &= expect_true(!running_watchdog.check(start + std::chrono::milliseconds(149)),
                     "wall-clock delay alone does not expire an individual stream");
 
-  watchdog.observe(0, start + std::chrono::milliseconds(150));
-  watchdog.observe(2, start + std::chrono::milliseconds(151));
-  watchdog.observe(0, start + std::chrono::milliseconds(152));
-  watchdog.observe(2, start + std::chrono::milliseconds(153));
-  ok &= expect_true(!watchdog.check(start + std::chrono::milliseconds(153)),
+  running_watchdog.observe(0, start + std::chrono::milliseconds(150));
+  running_watchdog.observe(2, start + std::chrono::milliseconds(151));
+  running_watchdog.observe(0, start + std::chrono::milliseconds(152));
+  running_watchdog.observe(2, start + std::chrono::milliseconds(153));
+  ok &= expect_true(!running_watchdog.check(start + std::chrono::milliseconds(153)),
                     "exactly the configured missed-completion budget is allowed");
-  watchdog.observe(0, start + std::chrono::milliseconds(154));
-  watchdog.observe(1, start + std::chrono::milliseconds(155));
-  const auto starvation = watchdog.check(start + std::chrono::milliseconds(155));
+  running_watchdog.observe(0, start + std::chrono::milliseconds(154));
+  running_watchdog.observe(1, start + std::chrono::milliseconds(155));
+  const auto starvation = running_watchdog.check(start + std::chrono::milliseconds(155));
   ok &= expect_true(starvation.kind == FailureKind::StreamStarvation &&
                         starvation.streams == std::vector<std::size_t>{1},
                     "a later completion cannot clear an already-exceeded progress budget");
 
-  const auto global_stall = watchdog.check(start + std::chrono::milliseconds(655));
+  const auto global_stall = running_watchdog.check(start + std::chrono::milliseconds(655));
   ok &= expect_true(global_stall.kind == FailureKind::GlobalStall && global_stall.streams.empty(),
                     "a separate wall-clock guard detects total detector stagnation");
 

@@ -978,11 +978,30 @@ class TestRuntimeDelivery:
         watchdog.observe(0, 1.0)
         watchdog.observe(0, 1.1)
         watchdog.observe(2, 2.0)
+        watchdog.observe(1, 3.0)
+        watchdog.observe(1, 3.1)
         assert not watchdog.check(9.99)
         startup_failure = watchdog.check(10.0)
         assert startup_failure.kind is DetectionFailureKind.STARTUP
-        assert startup_failure.streams == (1, 2)
+        assert startup_failure.streams == (2,)
 
+        watchdog.observe(2, 10.0)
+        assert not watchdog.startup_complete()
+        late_startup_failure = watchdog.check(10.0)
+        assert late_startup_failure.kind is DetectionFailureKind.STARTUP
+        assert late_startup_failure.streams == (2,)
+
+        watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=100.0,
+            no_progress_timeout_s=50.0,
+            max_missed_completions=4,
+            start=0.0,
+        )
+        watchdog.observe(0, 1.0)
+        watchdog.observe(0, 1.1)
+        watchdog.observe(2, 2.0)
         watchdog.observe(1, 10.1)
         watchdog.observe(1, 10.2)
         watchdog.observe(0, 10.5)
