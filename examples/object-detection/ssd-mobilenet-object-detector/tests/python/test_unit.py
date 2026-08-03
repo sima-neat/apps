@@ -128,6 +128,47 @@ def test_rejects_detection_report_that_aliases_an_input_image(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("collision", ["config", "model", "labels", "overlay"])
+def test_rejects_detection_report_that_aliases_run_files(tmp_path, collision):
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    labels = tmp_path / "labels.txt"
+    labels.write_text("background\nperson\n", encoding="utf-8")
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    image = input_dir / "frame.jpg"
+    image.touch()
+    config = tmp_path / "alias.yaml"
+    collision_paths = {
+        "config": config,
+        "model": model,
+        "labels": labels,
+        "overlay": tmp_path / "output" / "frame_jpg.png",
+    }
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+              labels: {labels}
+            io:
+              input_dir: {input_dir}
+              output_dir: {tmp_path / 'output'}
+              detections_json: {collision_paths[collision]}
+            output:
+              overlay: true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    expected = "generated overlay" if collision == "overlay" else "consumed input"
+    assert f"io.detections_json must not overwrite a {expected}" in r.stderr
+
+
+@pytest.mark.unit
 def test_missing_custom_coco_labels_path_does_not_use_packaged_fallback(tmp_path):
     model = tmp_path / "model.tar.gz"
     model.touch()

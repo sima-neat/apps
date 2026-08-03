@@ -1,10 +1,12 @@
 // Unit test for ssd-mobilenet-object-detector: CLI arg handling and decode config validation.
 #include "support/testing/test_process.h"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <utility>
 
 namespace fs = std::filesystem;
 using sima_examples::testing::create_test_scratch_dir;
@@ -117,6 +119,61 @@ int main(int argc, char** argv) {
     return 1;
   }
   const fs::path scratch_dir(scratch);
+
+  {
+    const fs::path model = scratch_dir / "protected-model.tar.gz";
+    const fs::path labels = scratch_dir / "protected-labels.txt";
+    const fs::path input_dir = scratch_dir / "protected-input";
+    const fs::path image = input_dir / "frame.jpg";
+    const fs::path output_dir = scratch_dir / "protected-output";
+    fs::create_directories(input_dir);
+    std::ofstream(model).put('\n');
+    std::ofstream(labels) << "background\nperson\n";
+    std::ofstream(image).put('\n');
+    const std::array<std::pair<std::string, fs::path>, 3> collisions = {{
+        {"model", model},
+        {"labels", labels},
+        {"overlay", output_dir / "frame_jpg.png"},
+    }};
+    for (const auto& [name, collision_path] : collisions) {
+      const fs::path config = scratch_dir / ("protected_" + name + ".yaml");
+      std::ofstream out(config);
+      out << "model:\n"
+          << "  path: " << model.string() << "\n"
+          << "  labels: " << labels.string() << "\n"
+          << "io:\n"
+          << "  input_dir: " << input_dir.string() << "\n"
+          << "  output_dir: " << output_dir.string() << "\n"
+          << "  detections_json: " << collision_path.string() << "\n"
+          << "output:\n"
+          << "  overlay: true\n";
+      out.close();
+      const std::string expected = name == "overlay" ? "generated overlay" : "consumed input";
+      if (!expect_config_rejected(binary, config,
+                                  "io.detections_json must not overwrite a " + expected,
+                                  name + " detections report alias")) {
+        ++failures;
+      }
+    }
+
+    const fs::path config = scratch_dir / "protected_config.yaml";
+    std::ofstream out(config);
+    out << "model:\n"
+        << "  path: " << model.string() << "\n"
+        << "  labels: " << labels.string() << "\n"
+        << "io:\n"
+        << "  input_dir: " << input_dir.string() << "\n"
+        << "  output_dir: " << output_dir.string() << "\n"
+        << "  detections_json: " << config.string() << "\n"
+        << "output:\n"
+        << "  overlay: false\n";
+    out.close();
+    if (!expect_config_rejected(binary, config,
+                                "io.detections_json must not overwrite a consumed input",
+                                "config detections report alias")) {
+      ++failures;
+    }
+  }
 
   if (!expect_config_rejected(
           binary, write_decode_config(scratch_dir, "score.yaml", "score_threshold", "1.5"),

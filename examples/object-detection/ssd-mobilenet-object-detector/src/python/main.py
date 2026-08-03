@@ -314,10 +314,24 @@ def main() -> int:
         return 3
     if detections_json:
         report_path = Path(detections_json).resolve()
+        for consumed_path in (args.config, model_path, labels_path):
+            if consumed_path.resolve() == report_path:
+                print(
+                    f"io.detections_json must not overwrite a consumed input: {consumed_path}",
+                    file=sys.stderr,
+                )
+                return 2
         for image_path in image_paths:
             if image_path.resolve() == report_path:
                 print(
                     f"io.detections_json must not overwrite an input image: {image_path}",
+                    file=sys.stderr,
+                )
+                return 2
+            overlay_path = output_dir / f"{output_stem(image_path)}.png"
+            if overlay and overlay_path.resolve() == report_path:
+                print(
+                    f"io.detections_json must not overwrite a generated overlay: {overlay_path}",
                     file=sys.stderr,
                 )
                 return 2

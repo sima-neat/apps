@@ -42,6 +42,7 @@ constexpr const char* kDefaultLabelsPath =
     "coco_labels.txt";
 
 struct Config {
+  fs::path config_file;
   std::string model = "models/ssd_mobilenet_v2_heads_mpk.tar.gz";
   fs::path labels;
   fs::path input_dir;
@@ -166,6 +167,7 @@ fs::path resolve_asset(const std::string& configured, const char* default_path,
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
+  cfg.config_file = path;
   cfg.model = raw.string_or("model.path", "models/ssd_mobilenet_v2_heads_mpk.tar.gz");
   cfg.model_frame = raw.int_or("model.frame", kDefaultModelSize);
   cfg.labels =
@@ -222,6 +224,9 @@ Config parse_config(int argc, char** argv) {
 }
 
 std::vector<std::string> load_labels(const fs::path& path) {
+  if (!fs::is_regular_file(path)) {
+    throw std::runtime_error("labels file does not exist: " + path.string());
+  }
   std::ifstream in(path);
   if (!in) {
     throw std::runtime_error("failed to open labels file: " + path.string());
@@ -352,6 +357,31 @@ void write_detections_json(const fs::path& path, const nlohmann::json& images) {
   }
 }
 
+void validate_detections_report_path(const Config& cfg, const std::vector<fs::path>& image_paths) {
+  if (cfg.detections_json.empty()) {
+    return;
+  }
+  const fs::path report_path = fs::weakly_canonical(cfg.detections_json);
+  const std::array<fs::path, 3> consumed_files = {cfg.config_file, fs::path(cfg.model), cfg.labels};
+  for (const fs::path& consumed : consumed_files) {
+    if (fs::weakly_canonical(consumed) == report_path) {
+      throw std::runtime_error("io.detections_json must not overwrite a consumed input: " +
+                               consumed.string());
+    }
+  }
+  for (const fs::path& image_path : image_paths) {
+    if (fs::weakly_canonical(image_path) == report_path) {
+      throw std::runtime_error("io.detections_json must not overwrite an input image: " +
+                               image_path.string());
+    }
+    if (cfg.overlay &&
+        fs::weakly_canonical(cfg.output_dir / (output_stem(image_path) + ".png")) == report_path) {
+      throw std::runtime_error("io.detections_json must not overwrite a generated overlay: " +
+                               report_path.string());
+    }
+  }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -378,15 +408,7 @@ int main(int argc, char** argv) {
     if (image_paths.empty()) {
       throw std::runtime_error("no images found in: " + cfg.input_dir.string());
     }
-    if (!cfg.detections_json.empty()) {
-      const fs::path report_path = fs::weakly_canonical(cfg.detections_json);
-      for (const fs::path& image_path : image_paths) {
-        if (fs::weakly_canonical(image_path) == report_path) {
-          throw std::runtime_error("io.detections_json must not overwrite an input image: " +
-                                   image_path.string());
-        }
-      }
-    }
+    validate_detections_report_path(cfg, image_paths);
 
     cv::Mat seed_bgr = cv::imread(image_paths.front().string(), cv::IMREAD_COLOR);
     if (seed_bgr.empty()) {
@@ -400,10 +422,10 @@ int main(int argc, char** argv) {
       try {
         return model.build(std::vector<cv::Mat>{seed_bgr}, neat::Model::RouteOptions{});
       } catch (const std::exception& e) {
-        throw std::runtime_error(
-            std::string(e.what()) + "\n  hint: check model.path (" + cfg.model +
-            ") and model.frame (" + std::to_string(cfg.model_frame) +
-            "); use 300 for SSD300/MobileNet v1/v2, 320 for v3.");
+        throw std::runtime_error(std::string(e.what()) + "\n  hint: check model.path (" +
+                                 cfg.model + ") and model.frame (" +
+                                 std::to_string(cfg.model_frame) +
+                                 "); use 300 for SSD300/MobileNet v1/v2, 320 for v3.");
       }
     }();
     run.run(std::vector<cv::Mat>{seed_bgr}, cfg.timeout_ms);
