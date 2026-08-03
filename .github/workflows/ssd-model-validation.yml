@@ -307,7 +307,7 @@ jobs:
           labels="$(find "${APPS_RUNTIME_DIR}/examples" -type f \
             -path '*/ssd-mobilenet-object-detector/src/common/coco_labels.txt' -print -quit)"
           mapfile -t source_images < <(
-            find "${APPS_RUNTIME_DIR}/assets/datasets-test/coco" -maxdepth 1 \
+            find "${GITHUB_WORKSPACE}/assets/datasets-test/coco" -maxdepth 1 \
               -type f -iname '*.jpg' -print | sort
           )
           source_image="${source_images[0]:-}"
