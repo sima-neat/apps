@@ -13,6 +13,13 @@ decode:                      # Model-managed SSD BoxDecode settings.
   nms_iou: 0.60              # Overlap threshold for on-device NMS.
   max_detections: 100        # Top-K detections to keep per image.
 
+postprocess:                 # Optional app policy applied after faithful model-managed decode.
+  aggregate_suppression: true       # Hide large COCO crowd regions containing object instances.
+  min_parent_area_fraction: 0.20    # Candidate aggregate must cover at least this frame fraction.
+  min_child_containment: 0.90       # Fraction of each smaller box enclosed by the aggregate.
+  max_child_area_ratio: 0.25        # Each child must be at most this fraction of the parent area.
+  min_children: 2                   # Same-class children required to suppress an aggregate.
+
 runtime:                     # Runtime settings.
   timeout_ms: 20000          # Inference timeout in milliseconds.
   num_runs: 1                # Number of repeated runs (profiling).

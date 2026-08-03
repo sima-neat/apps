@@ -14,7 +14,7 @@ import struct
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -45,6 +45,16 @@ BOX_COLORS = [
     (128, 255, 0),
     (255, 128, 0),
 ]
+
+
+class AggregateSuppressionOptions(NamedTuple):
+    """Application policy for hiding same-class crowd regions after model-managed decode."""
+
+    enabled: bool = True
+    min_parent_area_fraction: float = 0.20
+    min_child_containment: float = 0.90
+    max_child_area_ratio: float = 0.25
+    min_children: int = 2
 
 
 def is_image(path: Path) -> bool:
@@ -188,6 +198,63 @@ def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict[str,
     return detections
 
 
+def suppress_aggregate_detections(
+    detections: list[dict[str, Any]],
+    image_width: int,
+    image_height: int,
+    options: AggregateSuppressionOptions,
+) -> list[dict[str, Any]]:
+    """Remove a large region only when it contains multiple smaller same-class objects.
+
+    COCO-trained detectors can emit an ``iscrowd`` training region as an ordinary class box;
+    the packed runtime output has no crowd flag. This optional app policy leaves Core's faithful
+    SSD decode/NMS untouched and suppresses only the aggregate visualization/output record.
+    """
+    if (
+        not options.enabled
+        or len(detections) < options.min_children + 1
+        or image_width <= 0
+        or image_height <= 0
+    ):
+        return detections
+
+    image_area = float(image_width * image_height)
+    coords = [tuple(float(value) for value in det["box"]) for det in detections]
+    areas = [max(0.0, x2 - x1) * max(0.0, y2 - y1) for x1, y1, x2, y2 in coords]
+    by_class: dict[int, list[int]] = {}
+    for index, det in enumerate(detections):
+        by_class.setdefault(int(det["class_id"]), []).append(index)
+
+    suppressed = [False] * len(detections)
+    for parent_index, (px1, py1, px2, py2) in enumerate(coords):
+        parent_area = areas[parent_index]
+        if parent_area < image_area * options.min_parent_area_fraction:
+            continue
+
+        children = 0
+        max_child_area = parent_area * options.max_child_area_ratio
+        class_id = int(detections[parent_index]["class_id"])
+        for child_index in by_class[class_id]:
+            if child_index == parent_index:
+                continue
+            child_area = areas[child_index]
+            if child_area <= 0.0 or child_area > max_child_area:
+                continue
+            cx1, cy1, cx2, cy2 = coords[child_index]
+            intersection_width = max(0.0, min(px2, cx2) - max(px1, cx1))
+            intersection_height = max(0.0, min(py2, cy2) - max(py1, cy1))
+            if (
+                intersection_width * intersection_height / child_area
+                >= options.min_child_containment
+            ):
+                children += 1
+                if children >= options.min_children:
+                    suppressed[parent_index] = True
+                    break
+
+    return [det for index, det in enumerate(detections) if not suppressed[index]]
+
+
 def visualize_detections(
     image_bgr: "np.ndarray",
     detections: list[dict[str, Any]],
@@ -264,6 +331,7 @@ def main() -> int:
     decode_cfg = raw.get("decode", {})
     runtime_cfg = raw.get("runtime", {})
     output_cfg = raw.get("output", {})
+    postprocess_cfg = raw.get("postprocess", {})
 
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
     model_frame = int(model_cfg.get("frame", DEFAULT_MODEL_SIZE))
@@ -274,6 +342,13 @@ def main() -> int:
     score_threshold = float(decode_cfg.get("score_threshold", 0.55))
     nms_iou = float(decode_cfg.get("nms_iou", 0.60))
     max_detections = int(decode_cfg.get("max_detections", 100))
+    aggregate_suppression = AggregateSuppressionOptions(
+        enabled=bool(postprocess_cfg.get("aggregate_suppression", True)),
+        min_parent_area_fraction=float(postprocess_cfg.get("min_parent_area_fraction", 0.20)),
+        min_child_containment=float(postprocess_cfg.get("min_child_containment", 0.90)),
+        max_child_area_ratio=float(postprocess_cfg.get("max_child_area_ratio", 0.25)),
+        min_children=int(postprocess_cfg.get("min_children", 2)),
+    )
     profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 1))
     timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
@@ -290,6 +365,27 @@ def main() -> int:
         return 2
     if max_detections < 1:
         print("decode.max_detections must be >= 1", file=sys.stderr)
+        return 2
+    if (
+        not math.isfinite(aggregate_suppression.min_parent_area_fraction)
+        or not 0.0 <= aggregate_suppression.min_parent_area_fraction <= 1.0
+    ):
+        print("postprocess.min_parent_area_fraction must be in [0.0, 1.0]", file=sys.stderr)
+        return 2
+    if (
+        not math.isfinite(aggregate_suppression.min_child_containment)
+        or not 0.0 < aggregate_suppression.min_child_containment <= 1.0
+    ):
+        print("postprocess.min_child_containment must be in (0.0, 1.0]", file=sys.stderr)
+        return 2
+    if (
+        not math.isfinite(aggregate_suppression.max_child_area_ratio)
+        or not 0.0 < aggregate_suppression.max_child_area_ratio <= 1.0
+    ):
+        print("postprocess.max_child_area_ratio must be in (0.0, 1.0]", file=sys.stderr)
+        return 2
+    if aggregate_suppression.min_children < 2:
+        print("postprocess.min_children must be >= 2", file=sys.stderr)
         return 2
     if timeout_ms <= 0:
         print("runtime.timeout_ms must be > 0", file=sys.stderr)
@@ -416,7 +512,12 @@ def main() -> int:
                 if not payload:
                     print("Profiling failed: model returned no BBOX payload", file=sys.stderr)
                     return 4
-                last_detections = parse_bbox_payload(payload, bgr.shape[1], bgr.shape[0])
+                last_detections = suppress_aggregate_detections(
+                    parse_bbox_payload(payload, bgr.shape[1], bgr.shape[0]),
+                    bgr.shape[1],
+                    bgr.shape[0],
+                    aggregate_suppression,
+                )
                 t2 = time.perf_counter()
                 infer_times.append(t1 - t0)
                 parse_times.append(t2 - t1)
@@ -468,7 +569,12 @@ def main() -> int:
             if not payload:
                 print(f"Model returned no BBOX payload for {image_path}", file=sys.stderr)
                 return 4
-            detections = parse_bbox_payload(payload, orig_bgr.shape[1], orig_bgr.shape[0])
+            detections = suppress_aggregate_detections(
+                parse_bbox_payload(payload, orig_bgr.shape[1], orig_bgr.shape[0]),
+                orig_bgr.shape[1],
+                orig_bgr.shape[0],
+                aggregate_suppression,
+            )
 
             output_name = ""
             if overlay:

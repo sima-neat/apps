@@ -4,7 +4,9 @@
     "(x1, y1, x2, y2). class_id follows the MS-COCO 90-index map this model emits (1 = person).",
     "Produced by the bit-exact host SSD decode (== TensorFlow ssd_mobilenet_v2_coco_2018_03_29)",
     "at score_threshold 0.30 / nms_iou 0.60; only detections scoring >= 0.95 are asserted so the",
-    "int8 on-device pipeline stays well inside the match tolerances below."
+    "int8 on-device pipeline stays well inside the match tolerances below.",
+    "The forbidden rule covers COCO image 210273's iscrowd car region: the app should retain the",
+    "individual cars but must not present that aggregate annotation as one road-sized car."
   ],
   "match": {
     "min_score": 0.5,
@@ -34,6 +36,11 @@
     ],
     "000000566758.jpg": [
       { "class_id": 6, "label": "bus", "box": [43.7, 183.0, 534.9, 432.4] }
+    ]
+  },
+  "forbidden": {
+    "000000210273.jpg": [
+      { "class_id": 3, "label": "aggregate car region", "min_area_fraction": 0.20 }
     ]
   }
 }

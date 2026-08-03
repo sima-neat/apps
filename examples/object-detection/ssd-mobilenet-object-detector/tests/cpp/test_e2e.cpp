@@ -198,12 +198,15 @@ int main(int argc, char** argv) {
   const float min_iou = golden.at("match").at("min_iou").get<float>();
 
   std::map<std::string, std::vector<Box>> actual_by_image;
+  std::map<std::string, float> frame_area_by_image;
   for (const auto& entry : reported.at("images")) {
     std::vector<Box> boxes;
     for (const auto& det : entry.at("detections")) {
       boxes.push_back(box_from_json(det));
     }
-    actual_by_image[entry.at("image").get<std::string>()] = std::move(boxes);
+    const std::string image = entry.at("image").get<std::string>();
+    actual_by_image[image] = std::move(boxes);
+    frame_area_by_image[image] = entry.at("width").get<float>() * entry.at("height").get<float>();
   }
 
   int asserted = 0;
@@ -221,6 +224,29 @@ int main(int argc, char** argv) {
     asserted += static_cast<int>(expected.size());
     if (!match_image(image, expected, it->second, min_score, min_iou)) {
       ++failures;
+    }
+  }
+
+  if (golden.contains("forbidden")) {
+    for (const auto& [image, rules] : golden.at("forbidden").items()) {
+      const auto detections = actual_by_image.find(image);
+      if (detections == actual_by_image.end()) {
+        continue;
+      }
+      const float frame_area = frame_area_by_image.at(image);
+      for (const auto& rule : rules) {
+        const int class_id = rule.at("class_id").get<int>();
+        const float min_area_fraction = rule.at("min_area_fraction").get<float>();
+        for (const Box& box : detections->second) {
+          const float area = std::max(0.0f, box.x2 - box.x1) * std::max(0.0f, box.y2 - box.y1);
+          if (box.class_id == class_id && area / frame_area >= min_area_fraction) {
+            std::cerr << "[FAIL] " << image << ": forbidden " << rule.at("label").get<std::string>()
+                      << " covers " << (100.0f * area / frame_area)
+                      << "% of the frame: " << describe(box) << "\n";
+            ++failures;
+          }
+        }
+      }
     }
   }
 

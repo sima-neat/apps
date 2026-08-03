@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,71 @@ def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
 
 
 @pytest.mark.unit
+def test_suppresses_same_class_crowd_region_only():
+    detections = [
+        {"box": [43.0, 180.0, 617.0, 467.0], "score": 0.64, "class_id": 3},
+        {"box": [270.0, 330.0, 324.0, 374.0], "score": 0.76, "class_id": 3},
+        {"box": [306.0, 356.0, 368.0, 409.0], "score": 0.61, "class_id": 3},
+        {"box": [420.0, 373.0, 489.0, 440.0], "score": 0.64, "class_id": 3},
+        {"box": [20.0, 80.0, 620.0, 500.0], "score": 0.90, "class_id": 6},
+    ]
+
+    filtered = ssd_mobilenet_main.suppress_aggregate_detections(
+        detections,
+        640,
+        640,
+        ssd_mobilenet_main.AggregateSuppressionOptions(),
+    )
+
+    assert detections[0] not in filtered
+    assert filtered == detections[1:]
+
+
+@pytest.mark.unit
+def test_preserves_large_object_without_multiple_same_class_children():
+    detections = [
+        {"box": [20.0, 20.0, 620.0, 620.0], "score": 0.95, "class_id": 3},
+        {"box": [100.0, 100.0, 180.0, 180.0], "score": 0.80, "class_id": 3},
+        {"box": [300.0, 300.0, 380.0, 380.0], "score": 0.80, "class_id": 6},
+    ]
+
+    filtered = ssd_mobilenet_main.suppress_aggregate_detections(
+        detections,
+        640,
+        640,
+        ssd_mobilenet_main.AggregateSuppressionOptions(),
+    )
+
+    assert filtered == detections
+
+
+@pytest.mark.unit
+def test_aggregate_suppression_stays_below_one_millisecond():
+    # Worst-case max_detections=100 scan: all boxes are candidate parents, but none is a
+    # materially smaller child. The timed loop amortizes timer noise.
+    detections = [
+        {
+            "box": [float(i % 5), float(i % 5), 500.0 + i % 5, 500.0 + i % 5],
+            "score": 0.80,
+            "class_id": 3,
+        }
+        for i in range(100)
+    ]
+    options = ssd_mobilenet_main.AggregateSuppressionOptions()
+    runs = 500
+
+    start = time.perf_counter()
+    for _ in range(runs):
+        filtered = ssd_mobilenet_main.suppress_aggregate_detections(
+            detections, 640, 640, options
+        )
+    mean_ms = (time.perf_counter() - start) * 1000.0 / runs
+
+    assert filtered == detections
+    assert mean_ms < 1.0, f"aggregate suppression mean={mean_ms:.3f} ms"
+
+
+@pytest.mark.unit
 class TestArgParsing:
     """Validate CLI argument parsing for the SSD example."""
 
@@ -98,6 +164,36 @@ class TestDecodeConfigValidation:
     )
     def test_rejects_out_of_range_values(self, tmp_path, key, value, message):
         config = _write_config(tmp_path, "decode", key, value)
+        r = _run(["--config", str(config)])
+        assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        assert message in r.stderr
+
+
+@pytest.mark.unit
+class TestPostprocessConfigValidation:
+    @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        [
+            (
+                "min_parent_area_fraction",
+                "1.1",
+                "postprocess.min_parent_area_fraction must be in [0.0, 1.0]",
+            ),
+            (
+                "min_child_containment",
+                "0.0",
+                "postprocess.min_child_containment must be in (0.0, 1.0]",
+            ),
+            (
+                "max_child_area_ratio",
+                ".nan",
+                "postprocess.max_child_area_ratio must be in (0.0, 1.0]",
+            ),
+            ("min_children", "1", "postprocess.min_children must be >= 2"),
+        ],
+    )
+    def test_rejects_out_of_range_values(self, tmp_path, key, value, message):
+        config = _write_config(tmp_path, "postprocess", key, value)
         r = _run(["--config", str(config)])
         assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
         assert message in r.stderr

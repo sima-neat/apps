@@ -7,6 +7,7 @@
  * Usage: ssd-mobilenet-object-detector [--config <path>]
  */
 #include "neat.h"
+#include "aggregate_suppression.h"
 #include "output_paths.h"
 #include "support/runtime/example_utils.h"
 #include "support/runtime/config_utils.h"
@@ -33,6 +34,7 @@ namespace fs = std::filesystem;
 namespace neat = simaai::neat;
 using ssd_mobilenet::clear_output_images;
 using ssd_mobilenet::output_stem;
+using ssd_mobilenet::suppress_aggregate_boxes;
 
 namespace {
 
@@ -56,6 +58,7 @@ struct Config {
   float score_threshold = 0.55f;
   float nms_iou = 0.60f;
   int max_detections = 100;
+  ssd_mobilenet::AggregateSuppressionOptions aggregate_suppression;
   int timeout_ms = kDefaultTimeoutMs;
   int num_runs = 1;
   bool profile = false;
@@ -159,6 +162,14 @@ Config load_config(const fs::path& path) {
   cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.55));
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.60));
   cfg.max_detections = raw.int_or("decode.max_detections", 100);
+  cfg.aggregate_suppression.enabled = raw.bool_or("postprocess.aggregate_suppression", true);
+  cfg.aggregate_suppression.min_parent_area_fraction =
+      static_cast<float>(raw.double_or("postprocess.min_parent_area_fraction", 0.20));
+  cfg.aggregate_suppression.min_child_containment =
+      static_cast<float>(raw.double_or("postprocess.min_child_containment", 0.90));
+  cfg.aggregate_suppression.max_child_area_ratio =
+      static_cast<float>(raw.double_or("postprocess.max_child_area_ratio", 0.25));
+  cfg.aggregate_suppression.min_children = raw.int_or("postprocess.min_children", 2);
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
   cfg.num_runs = raw.int_or("runtime.num_runs", 1);
   cfg.profile = raw.bool_or("runtime.profile", false);
@@ -172,6 +183,24 @@ Config load_config(const fs::path& path) {
   }
   if (cfg.max_detections < 1) {
     throw std::runtime_error("decode.max_detections must be >= 1");
+  }
+  if (!std::isfinite(cfg.aggregate_suppression.min_parent_area_fraction) ||
+      cfg.aggregate_suppression.min_parent_area_fraction < 0.0f ||
+      cfg.aggregate_suppression.min_parent_area_fraction > 1.0f) {
+    throw std::runtime_error("postprocess.min_parent_area_fraction must be in [0.0, 1.0]");
+  }
+  if (!std::isfinite(cfg.aggregate_suppression.min_child_containment) ||
+      cfg.aggregate_suppression.min_child_containment <= 0.0f ||
+      cfg.aggregate_suppression.min_child_containment > 1.0f) {
+    throw std::runtime_error("postprocess.min_child_containment must be in (0.0, 1.0]");
+  }
+  if (!std::isfinite(cfg.aggregate_suppression.max_child_area_ratio) ||
+      cfg.aggregate_suppression.max_child_area_ratio <= 0.0f ||
+      cfg.aggregate_suppression.max_child_area_ratio > 1.0f) {
+    throw std::runtime_error("postprocess.max_child_area_ratio must be in (0.0, 1.0]");
+  }
+  if (cfg.aggregate_suppression.min_children < 2) {
+    throw std::runtime_error("postprocess.min_children must be >= 2");
   }
   if (cfg.num_runs < 1) {
     throw std::runtime_error("runtime.num_runs must be >= 1");
@@ -274,7 +303,7 @@ neat::Model::Options make_model_options(const Config& cfg) {
 }
 
 std::vector<neat::Box> parse_detections(const neat::TensorList& outputs, int image_width,
-                                        int image_height, int max_detections) {
+                                        int image_height, const Config& cfg) {
   if (outputs.empty()) {
     throw std::runtime_error("model returned no detection tensors");
   }
@@ -282,9 +311,11 @@ std::vector<neat::Box> parse_detections(const neat::TensorList& outputs, int ima
     throw std::runtime_error("expected one BBOX tensor from model-managed BoxDecode, got " +
                              std::to_string(outputs.size()));
   }
-  return neat::decode_bbox_tensor(outputs.front(), image_width, image_height, max_detections,
-                                  /*strict=*/false)
-      .boxes;
+  const std::vector<neat::Box> boxes =
+      neat::decode_bbox_tensor(outputs.front(), image_width, image_height, cfg.max_detections,
+                               /*strict=*/false)
+          .boxes;
+  return suppress_aggregate_boxes(boxes, image_width, image_height, cfg.aggregate_suppression);
 }
 
 void draw_detections(cv::Mat& bgr, const std::vector<neat::Box>& boxes,
@@ -467,7 +498,7 @@ int main(int argc, char** argv) {
         const auto t0 = std::chrono::steady_clock::now();
         neat::TensorList out = run.run(std::vector<cv::Mat>{bgr_u8}, cfg.timeout_ms);
         const auto t1 = std::chrono::steady_clock::now();
-        last_boxes = parse_detections(out, bgr_u8.cols, bgr_u8.rows, cfg.max_detections);
+        last_boxes = parse_detections(out, bgr_u8.cols, bgr_u8.rows, cfg);
         const auto t2 = std::chrono::steady_clock::now();
         infer_times.push_back(std::chrono::duration<double>(t1 - t0).count());
         parse_times.push_back(std::chrono::duration<double>(t2 - t1).count());
@@ -512,8 +543,7 @@ int main(int argc, char** argv) {
       }
 
       neat::TensorList out = run.run(std::vector<cv::Mat>{bgr_u8}, cfg.timeout_ms);
-      const std::vector<neat::Box> boxes =
-          parse_detections(out, bgr_u8.cols, bgr_u8.rows, cfg.max_detections);
+      const std::vector<neat::Box> boxes = parse_detections(out, bgr_u8.cols, bgr_u8.rows, cfg);
 
       std::string output_name;
       if (cfg.overlay) {

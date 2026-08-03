@@ -59,6 +59,24 @@ def _assert_golden_detections(reported, golden):
             else:
                 used.add(best_idx)
 
+    reported_by_image = {entry["image"]: entry for entry in reported["images"]}
+    for image, forbidden in golden.get("forbidden", {}).items():
+        entry = reported_by_image.get(image)
+        if entry is None:
+            continue
+        frame_area = float(entry["width"] * entry["height"])
+        for rule in forbidden:
+            for det in entry["detections"]:
+                if det["class_id"] != rule["class_id"]:
+                    continue
+                x1, y1, x2, y2 = det["box"]
+                area_fraction = max(0.0, x2 - x1) * max(0.0, y2 - y1) / frame_area
+                if area_fraction >= rule["min_area_fraction"]:
+                    failures.append(
+                        f"{image}: forbidden {rule['label']} covers {area_fraction:.1%} "
+                        f"of the frame: {det['box']}"
+                    )
+
     assert asserted > 0, "no golden detections were asserted; input folder has none of the golden images"
     assert not failures, "golden detection mismatch:\n" + "\n".join(failures)
 

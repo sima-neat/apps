@@ -1,13 +1,17 @@
 // Unit test for ssd-mobilenet-object-detector: CLI arg handling and decode config validation.
+#include "examples/object-detection/ssd-mobilenet-object-detector/src/cpp/aggregate_suppression.h"
 #include "examples/object-detection/ssd-mobilenet-object-detector/src/cpp/output_paths.h"
 #include "support/testing/test_process.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 using sima_examples::testing::create_test_scratch_dir;
@@ -16,6 +20,20 @@ using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
 
 namespace {
+
+struct TestBox {
+  float x1;
+  float y1;
+  float x2;
+  float y2;
+  float score;
+  int class_id;
+};
+
+bool has_box(const std::vector<TestBox>& boxes, float x1, int class_id) {
+  return std::any_of(boxes.begin(), boxes.end(),
+                     [=](const TestBox& box) { return box.x1 == x1 && box.class_id == class_id; });
+}
 
 // Write a config whose decode section carries the supplied value for `key`.
 fs::path write_decode_config(const fs::path& dir, const std::string& name, const std::string& key,
@@ -58,6 +76,73 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
   int failures = 0;
+
+  {
+    // Regression for COCO 000000210273: a road-sized class-3 crowd region enclosing individual
+    // cars is hidden, while the children and an unrelated large bus remain.
+    const std::vector<TestBox> boxes = {
+        {43.0f, 180.0f, 617.0f, 467.0f, 0.64f, 3},  {270.0f, 330.0f, 324.0f, 374.0f, 0.76f, 3},
+        {306.0f, 356.0f, 368.0f, 409.0f, 0.61f, 3}, {420.0f, 373.0f, 489.0f, 440.0f, 0.64f, 3},
+        {20.0f, 80.0f, 620.0f, 500.0f, 0.90f, 6},
+    };
+    const auto filtered = ssd_mobilenet::suppress_aggregate_boxes(
+        boxes, 640, 640, ssd_mobilenet::AggregateSuppressionOptions{});
+    if (filtered.size() != boxes.size() - 1 || has_box(filtered, 43.0f, 3) ||
+        !has_box(filtered, 20.0f, 6)) {
+      std::cerr << "[FAIL] aggregate suppression did not isolate the same-class crowd region\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] same-class crowd region suppressed without removing large bus\n";
+    }
+  }
+
+  {
+    // A large object with fewer than two materially smaller same-class children is a valid
+    // instance, not an aggregate.
+    const std::vector<TestBox> boxes = {
+        {20.0f, 20.0f, 620.0f, 620.0f, 0.95f, 3},
+        {100.0f, 100.0f, 180.0f, 180.0f, 0.80f, 3},
+        {300.0f, 300.0f, 380.0f, 380.0f, 0.80f, 6},
+    };
+    const auto filtered = ssd_mobilenet::suppress_aggregate_boxes(
+        boxes, 640, 640, ssd_mobilenet::AggregateSuppressionOptions{});
+    if (filtered.size() != boxes.size() || !has_box(filtered, 20.0f, 3)) {
+      std::cerr << "[FAIL] valid large object was treated as an aggregate\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] valid large object preserved\n";
+    }
+  }
+
+  {
+    // Worst-case max_detections=100 scan: every large box is examined and none has a qualifying
+    // child. Average hot-path cost must remain below the application's 1 ms budget.
+    std::vector<TestBox> boxes;
+    boxes.reserve(100);
+    for (int i = 0; i < 100; ++i) {
+      const float inset = static_cast<float>(i % 5);
+      boxes.push_back({inset, inset, 500.0f + inset, 500.0f + inset, 0.8f, 3});
+    }
+    constexpr int kRuns = 2000;
+    std::size_t observed = 0;
+    const auto start = std::chrono::steady_clock::now();
+    for (int run = 0; run < kRuns; ++run) {
+      observed += ssd_mobilenet::suppress_aggregate_boxes(
+                      boxes, 640, 640, ssd_mobilenet::AggregateSuppressionOptions{})
+                      .size();
+    }
+    const double mean_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+            .count() /
+        static_cast<double>(kRuns);
+    if (observed != boxes.size() * kRuns || mean_ms >= 1.0) {
+      std::cerr << "[FAIL] aggregate suppression mean=" << mean_ms
+                << " ms (budget <1 ms), observed=" << observed << "\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] aggregate suppression mean=" << mean_ms << " ms (<1 ms)\n";
+    }
+  }
 
   {
     ProcessResult r = spawn_and_wait(binary, {"--help"}, 20000);
