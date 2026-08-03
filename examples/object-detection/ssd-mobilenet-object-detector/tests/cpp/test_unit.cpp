@@ -302,6 +302,7 @@ int main(int argc, char** argv) {
     }
 
     const fs::path hardlink_overlay = output_dir / "frame_jpg.png";
+    fs::create_directories(output_dir);
     fs::create_hard_link(model, hardlink_overlay);
     const fs::path overlay_config = scratch_dir / "hardlink_overlay.yaml";
     std::ofstream overlay_out(overlay_config);
