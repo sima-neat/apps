@@ -1,6 +1,7 @@
 {
   "neat-core": {
-    "policy": "snap"
+    "ref": "feat/ssd-recipe-validation-and-coverage",
+    "spec": "3acd20373528"
   },
   "sdk": {
     "channel": "develop"
