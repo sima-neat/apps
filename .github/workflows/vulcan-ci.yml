@@ -23,6 +23,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   SIMA_CLI_AUTO_ACCEPT_UPDATE: "1"
+  SIMA_CLI_CHECK_FOR_UPDATE: "0"
 
 jobs:
   resolve-vulcan-config:
