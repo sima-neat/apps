@@ -1,0 +1,13 @@
+models: {}
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: Enable after sima-neat/models#24 publishes SuperPoint to the Vulcan artifact registry.
+    models: []
+  cpp:
+    enabled: false
+    reason: Enable after sima-neat/models#24 publishes SuperPoint to the Vulcan artifact registry.
+    models: []

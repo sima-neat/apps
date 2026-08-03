@@ -1,0 +1,10 @@
+model:
+  path: models/superpoint_mpk.tar.gz
+
+io:
+  input: assets/datasets/tum-rgbd/freiburg1-desk.mp4
+  output: sandbox/superpoint-feature-extractor.mp4
+
+runtime:
+  frames: 0
+  timeout_ms: 20000
