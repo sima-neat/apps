@@ -55,17 +55,25 @@ jobs:
             -H "Accept: application/vnd.github+json"
             -H "X-GitHub-Api-Version: 2022-11-28"
           )
-          run_id="$(
-            curl -fsSL "${api_headers[@]}" --get \
-              --data-urlencode "branch=${branch}" --data 'per_page=50' \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/vulcan-ci.yml/runs" \
-              | TARGET_SHA="${GITHUB_SHA}" python3 -c \
-                'import json, os, sys; runs=json.load(sys.stdin).get("workflow_runs", []); print(next((run["id"] for run in runs if run.get("head_sha") == os.environ["TARGET_SHA"]), ""))'
-          )"
-          if [[ -z "${run_id}" ]]; then
-            echo "Could not find the Vulcan CI run for ${GITHUB_SHA}" >&2
-            exit 1
-          fi
+          run_id=""
+          for attempt in $(seq 1 60); do
+            run_id="$(
+              curl -fsSL "${api_headers[@]}" --get \
+                --data-urlencode "branch=${branch}" --data 'per_page=50' \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/vulcan-ci.yml/runs" \
+                | TARGET_SHA="${GITHUB_SHA}" python3 -c \
+                  'import json, os, sys; runs=json.load(sys.stdin).get("workflow_runs", []); print(next((run["id"] for run in runs if run.get("head_sha") == os.environ["TARGET_SHA"]), ""))'
+            )"
+            if [[ -n "${run_id}" ]]; then
+              break
+            fi
+            if [[ "${attempt}" -eq 60 ]]; then
+              echo "Could not find the Vulcan CI run for ${GITHUB_SHA} after ${attempt} attempts" >&2
+              exit 1
+            fi
+            echo "Vulcan CI run for ${GITHUB_SHA} is not registered yet; retrying in 10 seconds" >&2
+            sleep 10
+          done
 
           for attempt in $(seq 1 60); do
             rm -rf _ssd-validation/build-artifacts
