@@ -316,6 +316,35 @@ int main(int argc, char** argv) {
   }
 
   {
+    const fs::path model = scratch_dir / "image-report-model.tar.gz";
+    const fs::path input_dir = scratch_dir / "image-report-input";
+    const fs::path report = input_dir / "detections.png";
+    fs::create_directories(input_dir);
+    std::ofstream(model).put('\n');
+    std::ofstream(input_dir / "frame.jpg").put('\n');
+    const fs::path config = scratch_dir / "image_report.yaml";
+    std::ofstream out(config);
+    out << "model:\n"
+        << "  path: " << model.string() << "\n"
+        << "io:\n"
+        << "  input_dir: " << input_dir.string() << "\n"
+        << "  output_dir: " << (scratch_dir / "image-report-output").string() << "\n"
+        << "  detections_json: " << report.string() << "\n"
+        << "output:\n"
+        << "  overlay: false\n";
+    out.close();
+    if (!expect_config_rejected(
+            binary, config, "io.detections_json must not use an image filename inside io.input_dir",
+            "new image-named detections report inside input_dir")) {
+      ++failures;
+    }
+    if (fs::exists(report)) {
+      std::cerr << "[FAIL] rejected image-named detections report was created\n";
+      ++failures;
+    }
+  }
+
+  {
     const fs::path output_dir = scratch_dir / "overlay-collision-output";
     const fs::path model = output_dir / "frame_jpg.png";
     const fs::path labels = scratch_dir / "overlay-collision-labels.txt";

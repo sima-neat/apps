@@ -152,6 +152,38 @@ def test_rejects_detection_report_that_aliases_an_input_image(tmp_path):
 
 
 @pytest.mark.unit
+def test_rejects_new_image_named_detection_report_inside_input_dir(tmp_path):
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "frame.jpg").touch()
+    report = input_dir / "detections.png"
+    config = tmp_path / "image_report.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+            io:
+              input_dir: {input_dir}
+              output_dir: {tmp_path / 'output'}
+              detections_json: {report}
+            output:
+              overlay: false
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "io.detections_json must not use an image filename inside io.input_dir" in r.stderr
+    assert not report.exists()
+
+
+@pytest.mark.unit
 def test_rejects_detection_report_hard_linked_to_input_image(tmp_path):
     model = tmp_path / "model.tar.gz"
     model.touch()

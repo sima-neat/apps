@@ -357,6 +357,13 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 2
+        if is_image(report_path) and paths_alias(report_path.parent, input_dir):
+            print(
+                "io.detections_json must not use an image filename inside io.input_dir: "
+                f"{report_path}",
+                file=sys.stderr,
+            )
+            return 2
 
     # Imported after config validation so config errors are reported without a runtime install.
     global cv2, np, pyneat

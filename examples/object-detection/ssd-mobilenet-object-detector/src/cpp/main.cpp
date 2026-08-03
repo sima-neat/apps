@@ -371,6 +371,11 @@ void validate_detections_report_path(const Config& cfg, const std::vector<fs::pa
                                report_path.string());
     }
   }
+  if (is_image_file(report_path) && paths_alias(report_path.parent_path(), cfg.input_dir)) {
+    throw std::runtime_error(
+        "io.detections_json must not use an image filename inside io.input_dir: " +
+        report_path.string());
+  }
 }
 
 void validate_overlay_paths(const Config& cfg, const std::vector<fs::path>& image_paths) {
