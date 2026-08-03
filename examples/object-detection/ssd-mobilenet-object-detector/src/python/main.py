@@ -58,13 +58,17 @@ class AggregateSuppressionOptions(NamedTuple):
     min_children: int = 2
 
 
+def config_value_or(section: Mapping[str, Any], key: str, default: Any) -> Any:
+    """Return a scalar config value, treating YAML null as an omitted setting."""
+    value = section.get(key)
+    return default if value is None else value
+
+
 def config_bool_or(
     section: Mapping[str, Any], key: str, default: bool, qualified_key: str
 ) -> bool:
     """Parse a YAML Boolean with the same null/default and string rules as C++."""
-    value = section.get(key)
-    if value is None:
-        return default
+    value = config_value_or(section, key, default)
     if value is True or value is False:
         return value
     if isinstance(value, str):
@@ -354,15 +358,19 @@ def main() -> int:
     runtime_cfg = raw.get("runtime", {})
     output_cfg = raw.get("output", {})
 
-    model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
-    model_frame = int(model_cfg.get("frame", DEFAULT_MODEL_SIZE))
-    labels_path = _resolve_asset(model_cfg.get("labels", ""), "coco_labels.txt")
-    input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
-    output_dir = Path(io_cfg.get("output_dir", "sandbox/ssd-mobilenet-object-detector"))
-    detections_json = io_cfg.get("detections_json", "")
-    score_threshold = float(decode_cfg.get("score_threshold", 0.55))
-    nms_iou = float(decode_cfg.get("nms_iou", 0.60))
-    max_detections = int(decode_cfg.get("max_detections", 100))
+    model_path = Path(config_value_or(model_cfg, "path", DEFAULT_MODEL_PATH))
+    model_frame = int(config_value_or(model_cfg, "frame", DEFAULT_MODEL_SIZE))
+    labels_path = _resolve_asset(
+        config_value_or(model_cfg, "labels", ""), "coco_labels.txt"
+    )
+    input_dir = Path(config_value_or(io_cfg, "input_dir", "assets/datasets/coco"))
+    output_dir = Path(
+        config_value_or(io_cfg, "output_dir", "sandbox/ssd-mobilenet-object-detector")
+    )
+    detections_json = config_value_or(io_cfg, "detections_json", "")
+    score_threshold = float(config_value_or(decode_cfg, "score_threshold", 0.55))
+    nms_iou = float(config_value_or(decode_cfg, "nms_iou", 0.60))
+    max_detections = int(config_value_or(decode_cfg, "max_detections", 100))
     try:
         aggregate_suppression_enabled = config_bool_or(
             output_cfg,
@@ -380,16 +388,18 @@ def main() -> int:
     aggregate_suppression = AggregateSuppressionOptions(
         enabled=aggregate_suppression_enabled,
         min_parent_area_fraction=float(
-            output_cfg.get("aggregate_min_parent_area_fraction", 0.20)
+            config_value_or(output_cfg, "aggregate_min_parent_area_fraction", 0.20)
         ),
         min_child_containment=float(
-            output_cfg.get("aggregate_min_child_containment", 0.90)
+            config_value_or(output_cfg, "aggregate_min_child_containment", 0.90)
         ),
-        max_child_area_ratio=float(output_cfg.get("aggregate_max_child_area_ratio", 0.25)),
-        min_children=int(output_cfg.get("aggregate_min_children", 2)),
+        max_child_area_ratio=float(
+            config_value_or(output_cfg, "aggregate_max_child_area_ratio", 0.25)
+        ),
+        min_children=int(config_value_or(output_cfg, "aggregate_min_children", 2)),
     )
-    num_runs = int(runtime_cfg.get("num_runs", 1))
-    timeout_ms = int(runtime_cfg.get("timeout_ms", 20000))
+    num_runs = int(config_value_or(runtime_cfg, "num_runs", 1))
+    timeout_ms = int(config_value_or(runtime_cfg, "timeout_ms", 20000))
 
     global VERBOSE
     VERBOSE = verbose

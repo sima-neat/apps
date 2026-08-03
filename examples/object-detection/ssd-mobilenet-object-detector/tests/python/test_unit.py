@@ -80,6 +80,20 @@ def test_config_bool_or_rejects_invalid_values(value):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("section", "key", "default", "expected"),
+    [
+        ({}, "num_runs", 1, 1),
+        ({"num_runs": None}, "num_runs", 1, 1),
+        ({"num_runs": 7}, "num_runs", 1, 7),
+        ({"score_threshold": None}, "score_threshold", 0.55, 0.55),
+    ],
+)
+def test_config_value_or_treats_null_as_omitted(section, key, default, expected):
+    assert ssd_mobilenet_main.config_value_or(section, key, default) == expected
+
+
+@pytest.mark.unit
 def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -279,6 +293,14 @@ class TestAggregateDisplayConfigValidation:
 @pytest.mark.unit
 class TestRuntimeConfigValidation:
     """Runtime limits must be rejected as config errors, not surface as load/profile failures."""
+
+    @pytest.mark.parametrize("key", ["timeout_ms", "num_runs"])
+    def test_null_values_use_documented_defaults(self, tmp_path, key):
+        config = _write_config(tmp_path, "runtime", key, "null")
+        r = _run(["--config", str(config)])
+        assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        assert "Model file does not exist" in r.stderr
+        assert "Traceback" not in r.stderr
 
     @pytest.mark.parametrize(
         ("key", "value", "message"),
