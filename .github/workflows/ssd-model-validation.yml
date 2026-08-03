@@ -190,6 +190,7 @@ jobs:
           fi
 
           exact_lib="${core_stage}/usr/lib"
+          exact_multiarch="${core_stage}/usr/lib/aarch64-linux-gnu"
           exact_runtime="${core_stage}/usr/lib/aarch64-linux-gnu/neat/runtime"
           exact_plugins="${core_stage}/usr/lib/aarch64-linux-gnu/neat/gst-plugins"
           exact_gst="${core_stage}/usr/lib/aarch64-linux-gnu/gstreamer-1.0"
@@ -199,7 +200,7 @@ jobs:
           {
             echo "EXACT_CORE_ROOT=${core_stage}"
             echo "PYNEAT_WHEEL=${pyneat_wheels[0]}"
-            echo "LD_LIBRARY_PATH=${exact_lib}:${exact_runtime}:${exact_plugins}:${LD_LIBRARY_PATH:-}"
+            echo "LD_LIBRARY_PATH=${exact_lib}:${exact_multiarch}:${exact_runtime}:${exact_plugins}:${LD_LIBRARY_PATH:-}"
             echo "GST_PLUGIN_PATH=${exact_gst}:${exact_plugins}:${GST_PLUGIN_PATH:-}"
             echo "GST_REGISTRY=${GITHUB_WORKSPACE}/_ssd-validation/gstreamer-registry.bin"
           } >> "${GITHUB_ENV}"
@@ -319,6 +320,8 @@ jobs:
           ldd "${EXACT_CORE_ROOT}/usr/lib/aarch64-linux-gnu/neat/gst-plugins/libneatobjectdecode.so" \
             | tee _ssd-validation/boxdecode-runtime-libraries.txt
           grep -Fq "${EXACT_CORE_ROOT}/usr/lib/libsima_neat.so" \
+            _ssd-validation/cpp-runtime-libraries.txt
+          grep -Fq "${EXACT_CORE_ROOT}/usr/lib/aarch64-linux-gnu/libsima_lmm_runtime.so" \
             _ssd-validation/cpp-runtime-libraries.txt
           grep -Fq "${EXACT_CORE_ROOT}/usr/lib/aarch64-linux-gnu/neat/runtime" \
             _ssd-validation/boxdecode-runtime-libraries.txt
