@@ -9,7 +9,7 @@ namespace ssd_mobilenet {
 // Optional application policy for hiding detector outputs that represent a same-class crowd
 // region rather than one object. Core SSD decode/NMS deliberately remains model-faithful.
 struct AggregateSuppressionOptions {
-  bool enabled = true;
+  bool enabled = false;
   float min_parent_area_fraction = 0.20f;
   float min_child_containment = 0.90f;
   float max_child_area_ratio = 0.25f;

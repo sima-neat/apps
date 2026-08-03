@@ -5,8 +5,8 @@
     "Produced by the bit-exact host SSD decode (== TensorFlow ssd_mobilenet_v2_coco_2018_03_29)",
     "at score_threshold 0.30 / nms_iou 0.60; only detections scoring >= 0.95 are asserted so the",
     "int8 on-device pipeline stays well inside the match tolerances below.",
-    "The forbidden rule covers COCO image 210273's iscrowd car region: the app should retain the",
-    "individual cars but must not present that aggregate annotation as one road-sized car."
+    "The forbidden display rule covers COCO image 210273's iscrowd car region: the app should",
+    "retain it in raw JSON but must not display that aggregate annotation as one road-sized car."
   ],
   "match": {
     "min_score": 0.5,

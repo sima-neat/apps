@@ -78,6 +78,22 @@ int main(int argc, char** argv) {
   int failures = 0;
 
   {
+    const std::vector<TestBox> boxes = {
+        {0.0f, 0.0f, 600.0f, 600.0f, 0.9f, 3},
+        {10.0f, 10.0f, 50.0f, 50.0f, 0.8f, 3},
+        {60.0f, 60.0f, 100.0f, 100.0f, 0.8f, 3},
+    };
+    const auto filtered = ssd_mobilenet::suppress_aggregate_boxes(
+        boxes, 640, 640, ssd_mobilenet::AggregateSuppressionOptions{});
+    if (filtered.size() != boxes.size()) {
+      std::cerr << "[FAIL] aggregate suppression was enabled by default\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] aggregate suppression is opt-in\n";
+    }
+  }
+
+  {
     // Regression for COCO 000000210273: a road-sized class-3 crowd region enclosing individual
     // cars is hidden, while the children and an unrelated large bus remain.
     const std::vector<TestBox> boxes = {
@@ -85,8 +101,9 @@ int main(int argc, char** argv) {
         {306.0f, 356.0f, 368.0f, 409.0f, 0.61f, 3}, {420.0f, 373.0f, 489.0f, 440.0f, 0.64f, 3},
         {20.0f, 80.0f, 620.0f, 500.0f, 0.90f, 6},
     };
-    const auto filtered = ssd_mobilenet::suppress_aggregate_boxes(
-        boxes, 640, 640, ssd_mobilenet::AggregateSuppressionOptions{});
+    ssd_mobilenet::AggregateSuppressionOptions options;
+    options.enabled = true;
+    const auto filtered = ssd_mobilenet::suppress_aggregate_boxes(boxes, 640, 640, options);
     if (filtered.size() != boxes.size() - 1 || has_box(filtered, 43.0f, 3) ||
         !has_box(filtered, 20.0f, 6)) {
       std::cerr << "[FAIL] aggregate suppression did not isolate the same-class crowd region\n";
@@ -104,8 +121,9 @@ int main(int argc, char** argv) {
         {100.0f, 100.0f, 180.0f, 180.0f, 0.80f, 3},
         {300.0f, 300.0f, 380.0f, 380.0f, 0.80f, 6},
     };
-    const auto filtered = ssd_mobilenet::suppress_aggregate_boxes(
-        boxes, 640, 640, ssd_mobilenet::AggregateSuppressionOptions{});
+    ssd_mobilenet::AggregateSuppressionOptions options;
+    options.enabled = true;
+    const auto filtered = ssd_mobilenet::suppress_aggregate_boxes(boxes, 640, 640, options);
     if (filtered.size() != boxes.size() || !has_box(filtered, 20.0f, 3)) {
       std::cerr << "[FAIL] valid large object was treated as an aggregate\n";
       ++failures;
@@ -124,12 +142,12 @@ int main(int argc, char** argv) {
       boxes.push_back({inset, inset, 500.0f + inset, 500.0f + inset, 0.8f, 3});
     }
     constexpr int kRuns = 2000;
+    ssd_mobilenet::AggregateSuppressionOptions options;
+    options.enabled = true;
     std::size_t observed = 0;
     const auto start = std::chrono::steady_clock::now();
     for (int run = 0; run < kRuns; ++run) {
-      observed += ssd_mobilenet::suppress_aggregate_boxes(
-                      boxes, 640, 640, ssd_mobilenet::AggregateSuppressionOptions{})
-                      .size();
+      observed += ssd_mobilenet::suppress_aggregate_boxes(boxes, 640, 640, options).size();
     }
     const double mean_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)

@@ -7,6 +7,7 @@ import sys
 import textwrap
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -64,6 +65,48 @@ def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
 
 
 @pytest.mark.unit
+def test_aggregate_suppression_is_opt_in():
+    detections = [
+        {"box": [0.0, 0.0, 600.0, 600.0], "score": 0.9, "class_id": 3},
+        {"box": [10.0, 10.0, 50.0, 50.0], "score": 0.8, "class_id": 3},
+        {"box": [60.0, 60.0, 100.0, 100.0], "score": 0.8, "class_id": 3},
+    ]
+
+    assert (
+        ssd_mobilenet_main.suppress_aggregate_detections(
+            detections, 640, 640, ssd_mobilenet_main.AggregateSuppressionOptions()
+        )
+        == detections
+    )
+
+
+@pytest.mark.unit
+def test_detection_report_preserves_hidden_raw_box():
+    raw = [
+        {"box": [0.0, 0.0, 600.0, 600.0], "score": 0.9, "class_id": 3},
+        {"box": [10.0, 10.0, 50.0, 50.0], "score": 0.8, "class_id": 3},
+        {"box": [60.0, 60.0, 100.0, 100.0], "score": 0.8, "class_id": 3},
+    ]
+    displayed = ssd_mobilenet_main.suppress_aggregate_detections(
+        raw,
+        640,
+        640,
+        ssd_mobilenet_main.AggregateSuppressionOptions(enabled=True),
+    )
+
+    record = ssd_mobilenet_main.detections_record(
+        Path("frame.jpg"),
+        SimpleNamespace(shape=(640, 640, 3)),
+        raw,
+        displayed,
+        ["background", "N/A", "N/A", "car"],
+    )
+
+    assert len(record["detections"]) == len(raw)
+    assert [det["displayed"] for det in record["detections"]] == [False, True, True]
+
+
+@pytest.mark.unit
 def test_suppresses_same_class_crowd_region_only():
     detections = [
         {"box": [43.0, 180.0, 617.0, 467.0], "score": 0.64, "class_id": 3},
@@ -77,7 +120,7 @@ def test_suppresses_same_class_crowd_region_only():
         detections,
         640,
         640,
-        ssd_mobilenet_main.AggregateSuppressionOptions(),
+        ssd_mobilenet_main.AggregateSuppressionOptions(enabled=True),
     )
 
     assert detections[0] not in filtered
@@ -96,7 +139,7 @@ def test_preserves_large_object_without_multiple_same_class_children():
         detections,
         640,
         640,
-        ssd_mobilenet_main.AggregateSuppressionOptions(),
+        ssd_mobilenet_main.AggregateSuppressionOptions(enabled=True),
     )
 
     assert filtered == detections
@@ -114,7 +157,7 @@ def test_aggregate_suppression_stays_below_one_millisecond():
         }
         for i in range(100)
     ]
-    options = ssd_mobilenet_main.AggregateSuppressionOptions()
+    options = ssd_mobilenet_main.AggregateSuppressionOptions(enabled=True)
     runs = 500
 
     start = time.perf_counter()
@@ -170,30 +213,34 @@ class TestDecodeConfigValidation:
 
 
 @pytest.mark.unit
-class TestPostprocessConfigValidation:
+class TestAggregateDisplayConfigValidation:
     @pytest.mark.parametrize(
         ("key", "value", "message"),
         [
             (
-                "min_parent_area_fraction",
+                "aggregate_min_parent_area_fraction",
                 "1.1",
-                "postprocess.min_parent_area_fraction must be in [0.0, 1.0]",
+                "output.aggregate_min_parent_area_fraction must be in [0.0, 1.0]",
             ),
             (
-                "min_child_containment",
+                "aggregate_min_child_containment",
                 "0.0",
-                "postprocess.min_child_containment must be in (0.0, 1.0]",
+                "output.aggregate_min_child_containment must be in (0.0, 1.0]",
             ),
             (
-                "max_child_area_ratio",
+                "aggregate_max_child_area_ratio",
                 ".nan",
-                "postprocess.max_child_area_ratio must be in (0.0, 1.0]",
+                "output.aggregate_max_child_area_ratio must be in (0.0, 1.0]",
             ),
-            ("min_children", "1", "postprocess.min_children must be >= 2"),
+            (
+                "aggregate_min_children",
+                "1",
+                "output.aggregate_min_children must be >= 2",
+            ),
         ],
     )
     def test_rejects_out_of_range_values(self, tmp_path, key, value, message):
-        config = _write_config(tmp_path, "postprocess", key, value)
+        config = _write_config(tmp_path, "output", key, value)
         r = _run(["--config", str(config)])
         assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
         assert message in r.stderr

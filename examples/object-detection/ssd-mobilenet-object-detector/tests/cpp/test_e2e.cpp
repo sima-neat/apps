@@ -25,6 +25,7 @@ struct Box {
   float y2 = 0.0f;
   float score = 0.0f;
   int class_id = -1;
+  bool displayed = true;
 };
 
 Box box_from_json(const nlohmann::json& node) {
@@ -37,6 +38,9 @@ Box box_from_json(const nlohmann::json& node) {
   b.class_id = node.at("class_id").get<int>();
   if (node.contains("score")) {
     b.score = node.at("score").get<float>();
+  }
+  if (node.contains("displayed")) {
+    b.displayed = node.at("displayed").get<bool>();
   }
   return b;
 }
@@ -237,14 +241,25 @@ int main(int argc, char** argv) {
       for (const auto& rule : rules) {
         const int class_id = rule.at("class_id").get<int>();
         const float min_area_fraction = rule.at("min_area_fraction").get<float>();
+        bool retained_hidden_box = false;
         for (const Box& box : detections->second) {
           const float area = std::max(0.0f, box.x2 - box.x1) * std::max(0.0f, box.y2 - box.y1);
-          if (box.class_id == class_id && area / frame_area >= min_area_fraction) {
+          if (box.class_id != class_id || area / frame_area < min_area_fraction) {
+            continue;
+          }
+          if (box.displayed) {
             std::cerr << "[FAIL] " << image << ": forbidden " << rule.at("label").get<std::string>()
                       << " covers " << (100.0f * area / frame_area)
                       << "% of the frame: " << describe(box) << "\n";
             ++failures;
+          } else {
+            retained_hidden_box = true;
           }
+        }
+        if (!retained_hidden_box) {
+          std::cerr << "[FAIL] " << image << ": " << rule.at("label").get<std::string>()
+                    << " was not retained as a hidden raw detection\n";
+          ++failures;
         }
       }
     }

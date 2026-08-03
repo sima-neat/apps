@@ -66,16 +66,25 @@ def _assert_golden_detections(reported, golden):
             continue
         frame_area = float(entry["width"] * entry["height"])
         for rule in forbidden:
+            retained_hidden_box = False
             for det in entry["detections"]:
                 if det["class_id"] != rule["class_id"]:
                     continue
                 x1, y1, x2, y2 = det["box"]
                 area_fraction = max(0.0, x2 - x1) * max(0.0, y2 - y1) / frame_area
-                if area_fraction >= rule["min_area_fraction"]:
+                if area_fraction < rule["min_area_fraction"]:
+                    continue
+                if det.get("displayed", True):
                     failures.append(
                         f"{image}: forbidden {rule['label']} covers {area_fraction:.1%} "
                         f"of the frame: {det['box']}"
                     )
+                else:
+                    retained_hidden_box = True
+            if not retained_hidden_box:
+                failures.append(
+                    f"{image}: {rule['label']} was not retained as a hidden raw detection"
+                )
 
     assert asserted > 0, "no golden detections were asserted; input folder has none of the golden images"
     assert not failures, "golden detection mismatch:\n" + "\n".join(failures)

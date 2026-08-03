@@ -26,9 +26,11 @@ detections.
 
 Some COCO-trained SSD models emit a large `iscrowd` training region as an ordinary class box. The
 runtime `BBOX` record has no crowd flag, so the app applies an optional, conservative aggregate
-filter after decode: a large box is removed only when it almost entirely contains multiple much
-smaller boxes of the same class. This is an application output policy, not part of SSD decoding,
-and can be disabled with `postprocess.aggregate_suppression: false`.
+filter after decode: a large box is hidden only when it almost entirely contains multiple much
+smaller boxes of the same class. This is an opt-in display policy, not part of SSD decoding. It is
+disabled by default in code; this demo config explicitly enables it with
+`output.aggregate_suppression: true`. Machine-readable JSON always retains every raw model
+detection and marks overlay membership with a `displayed` boolean.
 
 Preprocess is a direct **stretch** to the model frame with `[-1, 1]` normalization
 (`(pixel / 127.5) - 1`, i.e. mean/stddev `0.5`). The models were trained with a
@@ -101,13 +103,6 @@ decode:
   nms_iou: 0.60
   max_detections: 100
 
-postprocess:
-  aggregate_suppression: true
-  min_parent_area_fraction: 0.20
-  min_child_containment: 0.90
-  max_child_area_ratio: 0.25
-  min_children: 2
-
 runtime:
   timeout_ms: 20000
   num_runs: 1
@@ -116,6 +111,11 @@ runtime:
 
 output:
   overlay: true              # Draw boxes and labels on output images.
+  aggregate_suppression: true       # Explicit demo-only display policy opt-in.
+  aggregate_min_parent_area_fraction: 0.20
+  aggregate_min_child_containment: 0.90
+  aggregate_max_child_area_ratio: 0.25
+  aggregate_min_children: 2
 ```
 
 The `labels` path is repo-relative. If the working directory differs, the app falls back to the
@@ -147,11 +147,13 @@ python3 examples/object-detection/ssd-mobilenet-object-detector/src/python/main.
   This model requires a **stretch** resize; the example already sets it.
 - If detections are missing but the pipeline runs, lower `decode.score_threshold` — int8
   quantization of the classification heads can drop weak detections.
-- If a model's raw crowd-region boxes are required for source-fidelity analysis, set
-  `postprocess.aggregate_suppression: false`. Source-versus-compiled agreement measures compiler
-  fidelity; it does not by itself establish detection accuracy or visual usefulness.
+- Aggregate suppression affects overlays only. Set `output.aggregate_suppression: false` to render
+  every raw box. The JSON report always preserves all raw detections and adds `displayed: false`
+  for boxes omitted from the overlay. Source-versus-compiled agreement measures compiler fidelity;
+  it does not by itself establish detection accuracy or visual usefulness.
 - Set `runtime.profile: true` to print pipeline vs. output-parsing timing for the first image.
-- Set `io.detections_json` to write per-image detections (class, score, box) for offline checks.
+- Set `io.detections_json` to write per-image detections (class, score, box, displayed) for offline
+  checks.
 
 ## Source Files
 

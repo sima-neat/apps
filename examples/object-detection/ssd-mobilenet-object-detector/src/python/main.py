@@ -50,7 +50,7 @@ BOX_COLORS = [
 class AggregateSuppressionOptions(NamedTuple):
     """Application policy for hiding same-class crowd regions after model-managed decode."""
 
-    enabled: bool = True
+    enabled: bool = False
     min_parent_area_fraction: float = 0.20
     min_child_containment: float = 0.90
     max_child_area_ratio: float = 0.25
@@ -208,7 +208,7 @@ def suppress_aggregate_detections(
 
     COCO-trained detectors can emit an ``iscrowd`` training region as an ordinary class box;
     the packed runtime output has no crowd flag. This optional app policy leaves Core's faithful
-    SSD decode/NMS untouched and suppresses only the aggregate visualization/output record.
+    SSD decode/NMS and raw output untouched and suppresses only the aggregate visualization.
     """
     if (
         not options.enabled
@@ -282,10 +282,12 @@ def detections_record(
     image_path: Path,
     image_bgr: "np.ndarray",
     detections: list[dict[str, Any]],
+    displayed_detections: list[dict[str, Any]],
     labels: list[str],
 ) -> dict[str, Any]:
     """Machine-readable detection record, written when io.detections_json is set."""
     height, width = image_bgr.shape[:2]
+    displayed_ids = {id(det) for det in displayed_detections}
     return {
         "image": image_path.name,
         "width": int(width),
@@ -296,6 +298,7 @@ def detections_record(
                 "label": class_name(labels, det["class_id"]),
                 "score": det["score"],
                 "box": det["box"],
+                "displayed": id(det) in displayed_ids,
             }
             for det in detections
         ],
@@ -331,7 +334,6 @@ def main() -> int:
     decode_cfg = raw.get("decode", {})
     runtime_cfg = raw.get("runtime", {})
     output_cfg = raw.get("output", {})
-    postprocess_cfg = raw.get("postprocess", {})
 
     model_path = Path(model_cfg.get("path", DEFAULT_MODEL_PATH))
     model_frame = int(model_cfg.get("frame", DEFAULT_MODEL_SIZE))
@@ -343,11 +345,15 @@ def main() -> int:
     nms_iou = float(decode_cfg.get("nms_iou", 0.60))
     max_detections = int(decode_cfg.get("max_detections", 100))
     aggregate_suppression = AggregateSuppressionOptions(
-        enabled=bool(postprocess_cfg.get("aggregate_suppression", True)),
-        min_parent_area_fraction=float(postprocess_cfg.get("min_parent_area_fraction", 0.20)),
-        min_child_containment=float(postprocess_cfg.get("min_child_containment", 0.90)),
-        max_child_area_ratio=float(postprocess_cfg.get("max_child_area_ratio", 0.25)),
-        min_children=int(postprocess_cfg.get("min_children", 2)),
+        enabled=bool(output_cfg.get("aggregate_suppression", False)),
+        min_parent_area_fraction=float(
+            output_cfg.get("aggregate_min_parent_area_fraction", 0.20)
+        ),
+        min_child_containment=float(
+            output_cfg.get("aggregate_min_child_containment", 0.90)
+        ),
+        max_child_area_ratio=float(output_cfg.get("aggregate_max_child_area_ratio", 0.25)),
+        min_children=int(output_cfg.get("aggregate_min_children", 2)),
     )
     profile = bool(runtime_cfg.get("profile", False))
     num_runs = int(runtime_cfg.get("num_runs", 1))
@@ -370,22 +376,25 @@ def main() -> int:
         not math.isfinite(aggregate_suppression.min_parent_area_fraction)
         or not 0.0 <= aggregate_suppression.min_parent_area_fraction <= 1.0
     ):
-        print("postprocess.min_parent_area_fraction must be in [0.0, 1.0]", file=sys.stderr)
+        print(
+            "output.aggregate_min_parent_area_fraction must be in [0.0, 1.0]",
+            file=sys.stderr,
+        )
         return 2
     if (
         not math.isfinite(aggregate_suppression.min_child_containment)
         or not 0.0 < aggregate_suppression.min_child_containment <= 1.0
     ):
-        print("postprocess.min_child_containment must be in (0.0, 1.0]", file=sys.stderr)
+        print("output.aggregate_min_child_containment must be in (0.0, 1.0]", file=sys.stderr)
         return 2
     if (
         not math.isfinite(aggregate_suppression.max_child_area_ratio)
         or not 0.0 < aggregate_suppression.max_child_area_ratio <= 1.0
     ):
-        print("postprocess.max_child_area_ratio must be in (0.0, 1.0]", file=sys.stderr)
+        print("output.aggregate_max_child_area_ratio must be in (0.0, 1.0]", file=sys.stderr)
         return 2
     if aggregate_suppression.min_children < 2:
-        print("postprocess.min_children must be >= 2", file=sys.stderr)
+        print("output.aggregate_min_children must be >= 2", file=sys.stderr)
         return 2
     if timeout_ms <= 0:
         print("runtime.timeout_ms must be > 0", file=sys.stderr)
@@ -502,6 +511,7 @@ def main() -> int:
             infer_times: list[float] = []
             parse_times: list[float] = []
             last_detections: list[dict[str, Any]] = []
+            last_displayed_detections: list[dict[str, Any]] = []
 
             for _ in range(num_runs):
                 t0 = time.perf_counter()
@@ -512,8 +522,9 @@ def main() -> int:
                 if not payload:
                     print("Profiling failed: model returned no BBOX payload", file=sys.stderr)
                     return 4
-                last_detections = suppress_aggregate_detections(
-                    parse_bbox_payload(payload, bgr.shape[1], bgr.shape[0]),
+                last_detections = parse_bbox_payload(payload, bgr.shape[1], bgr.shape[0])
+                last_displayed_detections = suppress_aggregate_detections(
+                    last_detections,
                     bgr.shape[1],
                     bgr.shape[0],
                     aggregate_suppression,
@@ -524,8 +535,11 @@ def main() -> int:
 
             print(f"Profiling over {len(infer_times)} runs (image='{image_path}'):")
             print(format_profile_stats("Pipeline run (preprocess+infer+decode)", infer_times))
-            print(format_profile_stats("Output parsing", parse_times))
-            print(f"Last run detections: {len(last_detections)}")
+            print(format_profile_stats("Output parsing + display policy", parse_times))
+            print(
+                f"Last run detections: {len(last_detections)} raw, "
+                f"{len(last_displayed_detections)} displayed"
+            )
             for i, det in enumerate(last_detections[:20]):
                 box = det["box"]
                 print(
@@ -569,8 +583,9 @@ def main() -> int:
             if not payload:
                 print(f"Model returned no BBOX payload for {image_path}", file=sys.stderr)
                 return 4
-            detections = suppress_aggregate_detections(
-                parse_bbox_payload(payload, orig_bgr.shape[1], orig_bgr.shape[0]),
+            detections = parse_bbox_payload(payload, orig_bgr.shape[1], orig_bgr.shape[0])
+            displayed_detections = suppress_aggregate_detections(
+                detections,
                 orig_bgr.shape[1],
                 orig_bgr.shape[0],
                 aggregate_suppression,
@@ -579,7 +594,7 @@ def main() -> int:
             output_name = ""
             if overlay:
                 output_path = output_dir / f"{output_stem(image_path)}.png"
-                out_img = visualize_detections(orig_bgr, detections, labels)
+                out_img = visualize_detections(orig_bgr, displayed_detections, labels)
                 # imwrite returns False (never raises) on failure; a failed overlay fails the run.
                 if not cv2.imwrite(str(output_path), out_img):
                     print(f"Failed to write: {output_path}", file=sys.stderr)
@@ -587,9 +602,15 @@ def main() -> int:
                 output_name = output_path.name
 
             if detections_json:
-                records.append(detections_record(image_path, orig_bgr, detections, labels))
+                records.append(
+                    detections_record(
+                        image_path, orig_bgr, detections, displayed_detections, labels
+                    )
+                )
             processed += 1
-            det_str = f"({len(detections)} detections)"
+            det_str = (
+                f"({len(detections)} detections, {len(displayed_detections)} displayed)"
+            )
             if overlay:
                 print(f"[{processed}/{len(image_paths)}] {image_path.name} -> {output_name} {det_str}")
             else:
