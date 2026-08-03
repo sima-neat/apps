@@ -513,10 +513,11 @@ jobs:
               samples.append(total - previous_total)
               previous_frames = frames
               previous_total = total
-          # The app performs one explicit warmup before the configured profile runs.
-          measured = samples[1:]
-          if len(measured) != 1000:
-              raise SystemExit(f"expected 1000 measured decoder runs, got {len(measured)}")
+          # Model construction and the app warmup can both execute the decoder. The
+          # configured profile loop is always the final 1000 consecutive samples.
+          if len(samples) < 1000:
+              raise SystemExit(f"expected at least 1000 decoder samples, got {len(samples)}")
+          measured = samples[-1000:]
           ordered = sorted(measured)
           p99 = ordered[989]
           mean = statistics.fmean(measured)
