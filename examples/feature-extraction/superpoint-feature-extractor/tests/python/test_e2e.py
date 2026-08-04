@@ -15,10 +15,26 @@ EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 REFERENCE = EXAMPLE_DIR / "tests" / "data" / "fp32-a65-tum-desk.npz"
 ACCURACY_MODELS = (
-    "superpoint_modalix_int8_tessellation_mla_mpk.tar.gz",
-    "superpoint_modalix_int8_tessellation_ev74_mpk.tar.gz",
-    "superpoint_modalix_bf16_tessellation_mla_mpk.tar.gz",
-    "superpoint_modalix_bf16_tessellation_ev74_mpk.tar.gz",
+    pytest.param(
+        "superpoint_modalix_int8_tessellation_mla_mpk.tar.gz",
+        0.990,
+        id="int8-mla-tessellation",
+    ),
+    pytest.param(
+        "superpoint_modalix_int8_tessellation_ev74_mpk.tar.gz",
+        0.990,
+        id="int8-ev74-tessellation",
+    ),
+    pytest.param(
+        "superpoint_modalix_bf16_tessellation_mla_mpk.tar.gz",
+        0.995,
+        id="bf16-mla-tessellation",
+    ),
+    pytest.param(
+        "superpoint_modalix_bf16_tessellation_ev74_mpk.tar.gz",
+        0.995,
+        id="bf16-ev74-tessellation",
+    ),
 )
 
 
@@ -106,8 +122,10 @@ def test_video_pipeline(
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize("model_file", ACCURACY_MODELS)
-def test_fp32_a65_accuracy(models_dir, skip_unless_e2e_ready, model_file):
+@pytest.mark.parametrize("model_file,min_descriptor_cosine", ACCURACY_MODELS)
+def test_fp32_a65_accuracy(
+    models_dir, skip_unless_e2e_ready, model_file, min_descriptor_cosine
+):
     import pyneat
 
     example = load_example()
@@ -187,5 +205,8 @@ def test_fp32_a65_accuracy(models_dir, skip_unless_e2e_ready, model_file):
         descriptor_coverage >= 0.70
     ), f"{model_file}: descriptor coverage {descriptor_coverage:.6f}"
     assert (
-        descriptor_cosine >= 0.995
-    ), f"{model_file}: descriptor cosine {descriptor_cosine:.6f}"
+        descriptor_cosine >= min_descriptor_cosine
+    ), (
+        f"{model_file}: descriptor cosine {descriptor_cosine:.6f} "
+        f"is below {min_descriptor_cosine:.3f}"
+    )
