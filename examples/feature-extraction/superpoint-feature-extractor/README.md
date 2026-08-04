@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | superpoint-feature-extractor |
-| Model | superpoint / modalix_bf16_packed |
+| Model | superpoint / modalix_int8_tessellation_mla |
 
 ## Concept
 
@@ -49,14 +49,14 @@ Run the remaining commands from `prebuilt-apps/`.
 ## Prepare the Model
 
 The [Neat Model Registry](https://github.com/sima-neat/models/issues/24) publishes SuperPoint
-through the Vulcan artifact registry. After that issue is complete, install the production package
-and select its BF16 packed variant:
+through the Vulcan artifact registry. Install the production package and select the INT8 variant
+that keeps tessellation inside the MLA:
 
 ```bash
 mkdir -p models/superpoint
 sima-cli neat install models/superpoint@main:latest --install-dir models/superpoint
 
-model="$(find models/superpoint/modalix_bf16_packed -type f -name '*_mpk.tar.gz' -print -quit)"
+model="$(find models/superpoint/modalix_int8_tessellation_mla -type f -name '*_mpk.tar.gz' -print -quit)"
 test -n "$model"
 cp "$model" models/superpoint_mpk.tar.gz
 ```
@@ -65,12 +65,13 @@ Use `--stg models/superpoint@develop:latest` instead while validating a staging 
 download the model from an ad hoc attachment or copy; the registry package supplies the immutable
 artifact and verifies its published checksum.
 
-The example has been qualified with the registry's `modalix_bf16_packed` variant. The reference
-archive was calibrated with 128 frames from TUM RGB-D `freiburg1_desk`, contains one MLA program,
-and has this SHA-256 checksum:
+The default CI video test uses `modalix_int8_tessellation_mla`, while the accuracy matrix covers
+all four INT8/BF16 and MLA/EV74 tessellation combinations. The INT8 MLA archive was calibrated with
+128 deterministic images (80 COCO val2017, 32 HPatches, and 16 TUM RGB-D), contains one MLA
+program, and has this SHA-256 checksum:
 
 ```text
-5a06e51c8a3fa43bb6560e78f68f4b26c43e4c1ad09cc5d66395179482bdddb1
+fd777d36b64c3744f2eb8ae3e21d6e95c8e239e30f0e016a45a2a12630624c9f
 ```
 
 Verify the selected package when reproducing the reference qualification:
@@ -80,7 +81,7 @@ sha256sum models/superpoint_mpk.tar.gz
 ```
 
 The model accepts a normalized 640x480 grayscale input and publishes a 65-channel detector head
-and a 256-channel descriptor head. Other compiled representations require separate qualification.
+and a 256-channel descriptor head. The registry also provides BF16 and EV74-tessellation variants.
 
 Configure `model.path` after the model is published under a different filename.
 
