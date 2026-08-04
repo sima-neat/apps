@@ -235,6 +235,7 @@ PY
     cp "${src_file}" "${target_dir}/"
   done < <(
     find "${ROOT_DIR}/examples" -type f \
+      ! -path '*/tests/*' \
       ! -path '*/__pycache__/*' \
       ! -name '*.pyc' \
       ! -name '*.pyo' \
