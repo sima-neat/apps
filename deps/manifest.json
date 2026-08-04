@@ -1,7 +1,6 @@
 {
   "neat-core": {
-    "branch": "codex/superpoint-clean-core",
-    "spec": "ad46c7eff70a"
+    "policy": "snap"
   },
   "sdk": {
     "channel": "develop"
