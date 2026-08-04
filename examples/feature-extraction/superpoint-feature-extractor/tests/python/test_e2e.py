@@ -1,6 +1,7 @@
 """End-to-end tests for the Python SuperPoint example."""
 
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -75,20 +76,27 @@ def common_descriptor_cosine(
 
 
 @pytest.mark.e2e
-def test_video_pipeline(
+def test_insight_pipeline(
     apps_root,
     e2e_model_path,
     e2e_config_writer,
-    tmp_output_dir,
     test_timeout_ms,
 ):
     input_video = apps_root / "assets" / "datasets" / "tum-rgbd" / "freiburg1-desk.mp4"
     assert input_video.is_file()
-    output_video = tmp_output_dir / "annotated.mp4"
+    insight_host = os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_HOST", "127.0.0.1")
+    video_port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "9000"))
     config = e2e_config_writer(
         {
             "model": {"path": str(e2e_model_path)},
-            "io": {"input": str(input_video), "output": str(output_video)},
+            "io": {"input": str(input_video)},
+            "output": {
+                "insight": {
+                    "host": insight_host,
+                    "video_port": video_port,
+                    "channel": 0,
+                }
+            },
             "runtime": {"frames": 8},
         }
     )
@@ -108,17 +116,7 @@ def test_video_pipeline(
     )
     assert match, result.stdout
     assert 0 < float(match.group(1)) <= 600
-
-    video = cv2.VideoCapture(str(output_video))
-    ok, frame = video.read()
-    frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    fourcc_value = int(video.get(cv2.CAP_PROP_FOURCC))
-    video.release()
-    fourcc = "".join(chr((fourcc_value >> (8 * index)) & 0xFF) for index in range(4))
-    assert ok
-    assert frame.shape[:2] == (480, 640)
-    assert frame_count == 8
-    assert fourcc == "avc1"
+    assert f"video_sender={insight_host}:{video_port}" in result.stdout
 
 
 @pytest.mark.e2e
@@ -204,9 +202,7 @@ def test_fp32_a65_accuracy(
     assert (
         descriptor_coverage >= 0.70
     ), f"{model_file}: descriptor coverage {descriptor_coverage:.6f}"
-    assert (
-        descriptor_cosine >= min_descriptor_cosine
-    ), (
+    assert descriptor_cosine >= min_descriptor_cosine, (
         f"{model_file}: descriptor cosine {descriptor_cosine:.6f} "
         f"is below {min_descriptor_cosine:.3f}"
     )

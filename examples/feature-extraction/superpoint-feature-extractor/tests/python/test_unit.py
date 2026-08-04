@@ -1,5 +1,6 @@
 """CLI tests for the Python SuperPoint example."""
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,37 @@ import pytest
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+
+
+def load_example():
+    spec = importlib.util.spec_from_file_location("superpoint_example", MAIN_PY)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_draw_points_marks_the_requested_coordinate():
+    class FakeCv2:
+        LINE_AA = 16
+        FONT_HERSHEY_SIMPLEX = 0
+
+        def __init__(self):
+            self.circles = []
+
+        def circle(self, _frame, center, *_args):
+            self.circles.append(center)
+
+        @staticmethod
+        def putText(*_args):
+            pass
+
+    example = load_example()
+    cv2 = FakeCv2()
+
+    example.draw_points(object(), [(40.0, 50.0)], cv2)
+
+    assert cv2.circles == [(40, 50)]
 
 
 @pytest.mark.unit

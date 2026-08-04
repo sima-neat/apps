@@ -14,9 +14,9 @@
 
 ## Concept
 
-`superpoint-feature-extractor` runs SuperPoint on a 640x480 video and writes an H.264 video with
-the extracted feature points overlaid. The example demonstrates grayscale normalization, MLA
-inference, A65 SuperPoint BoxDecode, and the typed `FEATURE_POINTS_V1` result.
+`superpoint-feature-extractor` runs SuperPoint on a 640x480 video and streams the feature-point
+overlay to Insight. The example demonstrates grayscale normalization, MLA inference, A65
+SuperPoint BoxDecode, and the typed `FEATURE_POINTS_V1` result.
 
 The application selects the A65V1 numerical profile explicitly. Tensor roles, output dtypes, and
 storage layouts come from the MPK contract rather than being inferred from tensor order or values.
@@ -32,7 +32,7 @@ Frame from the included TUM RGB-D `freiburg1_desk` sequence:
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported
   Modalix or DevKit target.
 - Neat Library with SuperPoint BoxDecode support.
-- OpenCV with FFmpeg H.264 encoding support.
+- Insight or another RTP receiver for the annotated output stream.
 - A qualified SuperPoint MPK as described below.
 
 ## Install Apps
@@ -65,7 +65,7 @@ Use `--stg models/superpoint@develop:latest` instead while validating a staging 
 download the model from an ad hoc attachment or copy; the registry package supplies the immutable
 artifact and verifies its published checksum.
 
-The default CI video test uses `modalix_int8_tessellation_mla`, while the accuracy matrix covers
+The default CI pipeline test uses `modalix_int8_tessellation_mla`, while the accuracy matrix covers
 all four INT8/BF16 and MLA/EV74 tessellation combinations. The INT8 MLA archive was calibrated with
 128 deterministic images (80 COCO val2017, 32 HPatches, and 16 TUM RGB-D), contains one MLA
 program, and has this SHA-256 checksum:
@@ -95,7 +95,13 @@ model:
 
 io:
   input: assets/datasets/tum-rgbd/freiburg1-desk.mp4
-  output: sandbox/superpoint-feature-extractor.mp4
+
+output:
+  insight:
+    host: <insight-host-ip>
+    video_port: 9000
+    channel: 0
+    bitrate_kbps: 1000
 
 runtime:
   frames: 0
@@ -104,6 +110,9 @@ runtime:
 
 `runtime.frames: 0` processes the complete video. The application rejects other frame sizes rather
 than silently resizing them, preserving the model's coordinate system.
+
+Set `output.insight.host` to the host running Insight. The application sends the annotated stream
+as H.264 over RTP/UDP using the configured base port and channel.
 
 The included sequence comes from the TUM RGB-D visual-SLAM benchmark. Its camera motion and office
 scene are representative of the repeatable local features SuperPoint is designed to extract. The
@@ -128,15 +137,15 @@ python3 examples/feature-extraction/superpoint-feature-extractor/src/python/main
   --config examples/feature-extraction/superpoint-feature-extractor/src/common/config.yaml
 ```
 
-Both implementations write the configured H.264 MP4 and print the number of processed frames,
-average feature count, and descriptor dimension.
+Both implementations stream the overlay to Insight and print the number of processed frames,
+average feature count, descriptor dimension, and selected video endpoint.
 
 ## Troubleshooting
 
 - Confirm `model.path` points to the qualified SuperPoint package.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
 - Confirm the input is a 640x480 BGR video.
-- Confirm OpenCV can encode H.264 through its FFmpeg backend.
+- Confirm Insight is reachable at the configured host and UDP video port.
 - Set `runtime.frames: 30` for a short smoke run.
 
 ## Source Files

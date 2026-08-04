@@ -2,7 +2,6 @@
 #include "support/testing/test_process.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <regex>
 #include <string>
@@ -17,14 +16,6 @@ bool has_valid_summary(const std::string& text) {
   std::smatch match;
   return std::regex_search(text, match, summary) && std::stod(match[1].str()) > 0.0 &&
          std::stod(match[1].str()) <= 600.0;
-}
-
-bool is_h264_mp4(const fs::path& path) {
-  std::ifstream input(path, std::ios::binary);
-  std::string bytes(128, '\0');
-  input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  bytes.resize(static_cast<std::size_t>(input.gcount()));
-  return bytes.find("ftyp") != std::string::npos && bytes.find("avc1") != std::string::npos;
 }
 
 } // namespace
@@ -46,13 +37,18 @@ int main(int argc, char** argv) {
     return skip_or_fail("TUM RGB-D SuperPoint input video is missing");
   }
 
-  const fs::path output_dir = create_test_output_dir("superpoint-feature-extractor", "pipeline");
-  const fs::path output = output_dir / "annotated.mp4";
-  const fs::path config = output_dir.parent_path() / "config.yaml";
+  const std::string insight_host = env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
+                                       ? env_or_null("SIMANEAT_APPS_TEST_INSIGHT_HOST")
+                                       : "127.0.0.1";
+  const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
+  const fs::path test_dir = create_test_output_dir("superpoint-feature-extractor", "pipeline");
+  const fs::path config = test_dir / "config.yaml";
   write_e2e_config("superpoint-feature-extractor", config,
                    {{"model.path", fs::absolute(model).string()},
                     {"io.input", fs::absolute(input).string()},
-                    {"io.output", fs::absolute(output).string()},
+                    {"output.insight.host", insight_host},
+                    {"output.insight.video_port", std::to_string(video_port)},
+                    {"output.insight.channel", "0"},
                     {"runtime.frames", "8"}});
 
   const int timeout = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
@@ -65,14 +61,12 @@ int main(int argc, char** argv) {
   } else if (!has_valid_summary(result.stdout_text)) {
     std::cerr << "[FAIL] missing or invalid feature summary\n" << result.stdout_text << "\n";
     rc = 1;
-  } else if (!fs::is_regular_file(output) || fs::file_size(output) == 0) {
-    std::cerr << "[FAIL] annotated H.264 video was not written\n";
-    rc = 1;
-  } else if (!is_h264_mp4(output)) {
-    std::cerr << "[FAIL] output is not an H.264 MP4\n";
+  } else if (result.stdout_text.find("video_sender=" + insight_host + ":" +
+                                     std::to_string(video_port)) == std::string::npos) {
+    std::cerr << "[FAIL] missing Insight video sender summary\n" << result.stdout_text << "\n";
     rc = 1;
   }
 
-  remove_dir(output_dir.string());
+  remove_dir(test_dir.string());
   return rc;
 }

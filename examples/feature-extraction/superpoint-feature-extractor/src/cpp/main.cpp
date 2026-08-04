@@ -1,6 +1,6 @@
 /**
  * @example superpoint-feature-extractor.cpp
- * Run SuperPoint on a video and draw the extracted feature points.
+ * Run SuperPoint on a video and stream the feature-point overlay to Insight.
  *
  * Usage: superpoint-feature-extractor [--config <path>]
  */
@@ -10,6 +10,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -33,7 +34,10 @@ constexpr int kMaxPoints = 600;
 struct Config {
   fs::path model;
   fs::path input;
-  fs::path output;
+  std::string insight_host;
+  int video_port = 9000;
+  int channel = 0;
+  int bitrate_kbps = 1000;
   int frames = 0;
   int timeout_ms = 20000;
 };
@@ -43,7 +47,10 @@ Config load_config(const fs::path& path) {
   Config cfg;
   cfg.model = raw.string_or("model.path", "models/superpoint_mpk.tar.gz");
   cfg.input = raw.string_or("io.input", "assets/datasets/tum-rgbd/freiburg1-desk.mp4");
-  cfg.output = raw.string_or("io.output", "sandbox/superpoint-feature-extractor.mp4");
+  cfg.insight_host = raw.string_or("output.insight.host", "127.0.0.1");
+  cfg.video_port = raw.int_or("output.insight.video_port", 9000);
+  cfg.channel = raw.int_or("output.insight.channel", 0);
+  cfg.bitrate_kbps = raw.int_or("output.insight.bitrate_kbps", 1000);
   cfg.frames = raw.int_or("runtime.frames", 0);
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", 20000);
   if (cfg.frames < 0) {
@@ -51,6 +58,18 @@ Config load_config(const fs::path& path) {
   }
   if (cfg.timeout_ms <= 0) {
     throw std::runtime_error("runtime.timeout_ms must be > 0");
+  }
+  if (cfg.insight_host.empty()) {
+    throw std::runtime_error("output.insight.host must be set");
+  }
+  if (cfg.video_port <= 0 || cfg.video_port > 65535) {
+    throw std::runtime_error("output.insight.video_port must be in [1, 65535]");
+  }
+  if (cfg.channel < 0 || cfg.video_port + cfg.channel > 65535) {
+    throw std::runtime_error("output.insight channel selects an invalid UDP port");
+  }
+  if (cfg.bitrate_kbps <= 0) {
+    throw std::runtime_error("output.insight.bitrate_kbps must be > 0");
   }
   return cfg;
 }
@@ -185,17 +204,50 @@ neat::Model::Options model_options() {
   return options;
 }
 
-cv::VideoWriter open_writer(const fs::path& output, double fps) {
-  if (output.extension() != ".mp4") {
-    throw std::runtime_error("io.output must use the .mp4 extension");
+struct VideoSender {
+  neat::Graph graph{"insight"};
+  neat::Run run;
+  int port = 0;
+};
+
+VideoSender build_video_sender(const Config& cfg, double fps) {
+  const int output_fps = std::max(1, cvRound(fps));
+  neat::InputOptions input_options;
+  input_options.payload_type = neat::PayloadType::Image;
+  input_options.format = "RGB";
+  input_options.width = kWidth;
+  input_options.height = kHeight;
+  input_options.depth = 3;
+  input_options.fps_n = output_fps;
+  input_options.fps_d = 1;
+  input_options.memory_policy = neat::InputMemoryPolicy::Ev74;
+
+  auto sender_options =
+      neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(kWidth, kHeight, output_fps);
+  sender_options.host = cfg.insight_host;
+  sender_options.channel = cfg.channel;
+  sender_options.video_port_base = cfg.video_port;
+  sender_options.encoder.bitrate_kbps = cfg.bitrate_kbps;
+
+  VideoSender sender;
+  sender.port = sender_options.video_port();
+  sender.graph.add(neat::nodes::Input(input_options));
+  sender.graph.add(neat::nodes::groups::VideoSender(sender_options));
+  cv::Mat seed(kHeight, kWidth, CV_8UC3, cv::Scalar(0, 0, 0));
+  const auto tensor =
+      neat::Tensor::from_cv_mat(seed, neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74);
+  sender.run = sender.graph.build(neat::TensorList{tensor});
+  return sender;
+}
+
+void stream_frame(neat::Run& run, const cv::Mat& frame) {
+  cv::Mat rgb;
+  cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
+  const auto tensor =
+      neat::Tensor::from_cv_mat(rgb, neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74);
+  if (!run.push(neat::TensorList{tensor})) {
+    throw std::runtime_error("Insight video push failed");
   }
-  cv::VideoWriter writer;
-  writer.open(output.string(), cv::CAP_FFMPEG, cv::VideoWriter::fourcc('a', 'v', 'c', '1'), fps,
-              cv::Size(kWidth, kHeight));
-  if (!writer.isOpened()) {
-    throw std::runtime_error("failed to open H.264 output video: " + output.string());
-  }
-  return writer;
 }
 
 void validate_frame(const cv::Mat& frame) {
@@ -215,9 +267,6 @@ int main(int argc, char** argv) {
     if (!fs::is_regular_file(cfg.input)) {
       throw std::runtime_error("input video does not exist: " + cfg.input.string());
     }
-    if (fs::absolute(cfg.input).lexically_normal() == fs::absolute(cfg.output).lexically_normal()) {
-      throw std::runtime_error("input and output paths must differ");
-    }
 
     cv::VideoCapture video(cfg.input.string());
     cv::Mat frame;
@@ -226,12 +275,8 @@ int main(int argc, char** argv) {
     }
     validate_frame(frame);
 
-    if (!cfg.output.parent_path().empty()) {
-      fs::create_directories(cfg.output.parent_path());
-    }
     const double input_fps = video.get(cv::CAP_PROP_FPS);
     const double fps = std::isfinite(input_fps) && input_fps > 0.0 ? input_fps : 30.0;
-    auto writer = open_writer(cfg.output, fps);
 
     neat::Model model(cfg.model.string(), model_options());
     const auto input_specs = model.input_specs();
@@ -241,6 +286,7 @@ int main(int argc, char** argv) {
     const auto input_dtype = select_input_dtype(input_specs.front());
     auto input = prepare_input(frame, input_dtype);
     auto runner = model.build(neat::TensorList{input});
+    auto video_sender = build_video_sender(cfg, fps);
 
     std::size_t total_points = 0;
     int processed = 0;
@@ -253,7 +299,7 @@ int main(int argc, char** argv) {
       const auto points = keypoints(decoded.front());
       total_points += points.size() / 2;
       draw_points(frame, points);
-      writer.write(frame);
+      stream_frame(video_sender.run, frame);
       ++processed;
 
       if ((cfg.frames > 0 && processed >= cfg.frames) || !video.read(frame)) {
@@ -264,10 +310,11 @@ int main(int argc, char** argv) {
     }
 
     runner.close();
-    writer.release();
+    video_sender.run.close();
     const double average = static_cast<double>(total_points) / processed;
     std::cout << "frames=" << processed << " average_points=" << cv::format("%.1f", average)
-              << " descriptor_dim=" << kDescriptorDim << " output=" << cfg.output << "\n";
+              << " descriptor_dim=" << kDescriptorDim << " video_sender=" << cfg.insight_host << ":"
+              << video_sender.port << "\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "Error: " << error.what() << "\n";

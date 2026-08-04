@@ -1,4 +1,4 @@
-"""Run SuperPoint on a video and draw the extracted feature points."""
+"""Run SuperPoint on a video and stream the feature-point overlay to Insight."""
 
 from __future__ import annotations
 
@@ -18,7 +18,9 @@ MAX_POINTS = 600
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SuperPoint video feature extractor")
     default_config = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
-    parser.add_argument("--config", type=Path, default=default_config, help="Path to YAML configuration")
+    parser.add_argument(
+        "--config", type=Path, default=default_config, help="Path to YAML configuration"
+    )
     return parser.parse_args()
 
 
@@ -27,11 +29,15 @@ def load_config(path: Path) -> argparse.Namespace:
         raw = yaml.safe_load(handle) or {}
     model = raw.get("model", {})
     io = raw.get("io", {})
+    insight = raw.get("output", {}).get("insight", {})
     runtime = raw.get("runtime", {})
     config = argparse.Namespace(
         model=Path(model.get("path", "models/superpoint_mpk.tar.gz")),
         input=Path(io.get("input", "assets/datasets/tum-rgbd/freiburg1-desk.mp4")),
-        output=Path(io.get("output", "sandbox/superpoint-feature-extractor.mp4")),
+        insight_host=str(insight.get("host", "127.0.0.1")),
+        video_port=int(insight.get("video_port", 9000)),
+        channel=int(insight.get("channel", 0)),
+        bitrate_kbps=int(insight.get("bitrate_kbps", 1000)),
         frames=int(runtime.get("frames", 0)),
         timeout_ms=int(runtime.get("timeout_ms", 20000)),
     )
@@ -39,6 +45,14 @@ def load_config(path: Path) -> argparse.Namespace:
         raise ValueError("runtime.frames must be >= 0")
     if config.timeout_ms <= 0:
         raise ValueError("runtime.timeout_ms must be > 0")
+    if not config.insight_host:
+        raise ValueError("output.insight.host must be set")
+    if not 0 < config.video_port <= 65535:
+        raise ValueError("output.insight.video_port must be in [1, 65535]")
+    if config.channel < 0 or config.video_port + config.channel > 65535:
+        raise ValueError("output.insight channel selects an invalid UDP port")
+    if config.bitrate_kbps <= 0:
+        raise ValueError("output.insight.bitrate_kbps must be > 0")
     return config
 
 
@@ -100,7 +114,9 @@ def input_tensor(frame, dtype, cv2, np, pyneat):
         )
     if dtype == pyneat.TensorDType.BFloat16:
         bits = values.view(np.uint32)
-        rounded = ((bits + np.uint32(0x7FFF) + ((bits >> 16) & 1)) >> 16).astype(np.uint16)
+        rounded = ((bits + np.uint32(0x7FFF) + ((bits >> 16) & 1)) >> 16).astype(
+            np.uint16
+        )
         tensor = pyneat.Tensor.from_numpy(
             rounded,
             copy=True,
@@ -141,6 +157,50 @@ def draw_points(frame, points, cv2) -> None:
     )
 
 
+def build_video_sender(config, fps, np, pyneat):
+    output_fps = max(1, int(round(fps)))
+    input_options = pyneat.InputOptions()
+    input_options.payload_type = pyneat.PayloadType.Image
+    input_options.format = pyneat.Format.RGB
+    input_options.width = WIDTH
+    input_options.height = HEIGHT
+    input_options.depth = 3
+    input_options.fps_n = output_fps
+    input_options.fps_d = 1
+    input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
+
+    sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(
+        WIDTH, HEIGHT, output_fps
+    )
+    sender_options.host = config.insight_host
+    sender_options.channel = config.channel
+    sender_options.video_port_base = config.video_port
+    sender_options.encoder.bitrate_kbps = config.bitrate_kbps
+
+    graph = pyneat.Graph("insight")
+    graph.add(pyneat.nodes.input(input_options))
+    graph.add(pyneat.groups.video_sender(sender_options))
+    seed = pyneat.Tensor.from_numpy(
+        np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
+    return graph, graph.build([seed]), sender_options.video_port
+
+
+def stream_frame(run, frame, cv2, pyneat) -> None:
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    tensor = pyneat.Tensor.from_numpy(
+        rgb,
+        copy=True,
+        image_format=pyneat.PixelFormat.RGB,
+        memory=pyneat.TensorMemory.EV74,
+    )
+    if not run.push([tensor]):
+        raise RuntimeError("Insight video push failed")
+
+
 def validate_frame(frame, np) -> None:
     if frame.shape != (HEIGHT, WIDTH, 3) or frame.dtype != np.uint8:
         raise RuntimeError("SuperPoint input must be 640x480 BGR video")
@@ -160,12 +220,6 @@ def main() -> int:
     if not config.input.is_file():
         print(f"Error: input video does not exist: {config.input}", file=sys.stderr)
         return 2
-    if config.input.resolve() == config.output.resolve():
-        print("Error: input and output paths must differ", file=sys.stderr)
-        return 2
-    if config.output.suffix != ".mp4":
-        print("Error: io.output must use the .mp4 extension", file=sys.stderr)
-        return 2
 
     import cv2
     import numpy as np
@@ -177,22 +231,11 @@ def main() -> int:
         print(f"Error: failed to read input video: {config.input}", file=sys.stderr)
         return 2
 
-    config.output.parent.mkdir(parents=True, exist_ok=True)
     fps = video.get(cv2.CAP_PROP_FPS)
     fps = fps if np.isfinite(fps) and fps > 0 else 30.0
-    writer = cv2.VideoWriter(
-        str(config.output),
-        cv2.CAP_FFMPEG,
-        cv2.VideoWriter_fourcc(*"avc1"),
-        fps,
-        (WIDTH, HEIGHT),
-    )
-    if not writer.isOpened():
-        video.release()
-        print(f"Error: failed to open H.264 output video: {config.output}", file=sys.stderr)
-        return 2
 
     runner = None
+    video_run = None
     try:
         validate_frame(frame, np)
         model = pyneat.Model(str(config.model), model_options(pyneat))
@@ -206,6 +249,9 @@ def main() -> int:
             route_options=pyneat.ModelRouteOptions(),
             run_options=pyneat.RunOptions(),
         )
+        _video_graph, video_run, video_port = build_video_sender(
+            config, fps, np, pyneat
+        )
 
         processed = 0
         total_points = 0
@@ -214,10 +260,10 @@ def main() -> int:
             points = feature_points(output, np, pyneat)
             total_points += len(points)
             draw_points(frame, points, cv2)
-            writer.write(frame)
+            stream_frame(video_run, frame, cv2, pyneat)
             processed += 1
 
-            if (config.frames > 0 and processed >= config.frames):
+            if config.frames > 0 and processed >= config.frames:
                 break
             ok, frame = video.read()
             if not ok:
@@ -228,7 +274,8 @@ def main() -> int:
         average = total_points / processed
         print(
             f"frames={processed} average_points={average:.1f} "
-            f"descriptor_dim={DESCRIPTOR_DIM} output={config.output}"
+            f"descriptor_dim={DESCRIPTOR_DIM} "
+            f"video_sender={config.insight_host}:{video_port}"
         )
         return 0
     except Exception as error:
@@ -237,8 +284,9 @@ def main() -> int:
     finally:
         if runner is not None:
             runner.close()
+        if video_run is not None:
+            video_run.close()
         video.release()
-        writer.release()
 
 
 if __name__ == "__main__":
