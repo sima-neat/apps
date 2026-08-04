@@ -7,36 +7,58 @@ import subprocess
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
 import pytest
+
+from tests.utils.test_scope import enabled_models, load_scope
 
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
+APPS_ROOT = EXAMPLE_DIR.parents[2]
+EXAMPLE_KEY = "feature-extraction/superpoint-feature-extractor"
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 REFERENCE = EXAMPLE_DIR / "tests" / "data" / "fp32-a65-tum-desk.npz"
-ACCURACY_MODELS = (
-    pytest.param(
-        "superpoint_modalix_int8_tessellation_mla_mpk.tar.gz",
+ACCURACY_MODELS = {
+    "superpoint_modalix_int8_tessellation_mla_mpk.tar.gz": (
         0.990,
-        id="int8-mla-tessellation",
+        "int8-mla-tessellation",
     ),
-    pytest.param(
-        "superpoint_modalix_int8_tessellation_ev74_mpk.tar.gz",
+    "superpoint_modalix_int8_tessellation_ev74_mpk.tar.gz": (
         0.990,
-        id="int8-ev74-tessellation",
+        "int8-ev74-tessellation",
     ),
-    pytest.param(
-        "superpoint_modalix_bf16_tessellation_mla_mpk.tar.gz",
+    "superpoint_modalix_bf16_tessellation_mla_mpk.tar.gz": (
         0.995,
-        id="bf16-mla-tessellation",
+        "bf16-mla-tessellation",
     ),
-    pytest.param(
-        "superpoint_modalix_bf16_tessellation_ev74_mpk.tar.gz",
+    "superpoint_modalix_bf16_tessellation_ev74_mpk.tar.gz": (
         0.995,
-        id="bf16-ev74-tessellation",
+        "bf16-ev74-tessellation",
     ),
-)
+}
+
+
+def scoped_accuracy_models():
+    scope_source = Path(
+        os.environ.get("SIMANEAT_APPS_TEST_SCOPE_FILE", APPS_ROOT / "examples")
+    )
+    scope = load_scope(scope_source, APPS_ROOT)
+    entry = scope["examples"].get(EXAMPLE_KEY)
+    if not isinstance(entry, dict):
+        return ()
+
+    models = entry.get("models", {})
+    parameters = []
+    for model_id in enabled_models(entry, "python"):
+        model = models.get(model_id, {})
+        model_file = str(model.get("file", "")) if isinstance(model, dict) else ""
+        if model_file not in ACCURACY_MODELS:
+            raise ValueError(
+                f"{EXAMPLE_KEY}: no accuracy threshold for scoped model {model_id!r} "
+                f"({model_file!r})"
+            )
+        threshold, parameter_id = ACCURACY_MODELS[model_file]
+        parameters.append(pytest.param(model_file, threshold, id=parameter_id))
+    return tuple(parameters)
 
 
 def load_example():
@@ -48,6 +70,8 @@ def load_example():
 
 
 def mean_keypoint_parity(reference, actual):
+    import numpy as np
+
     if not len(reference) or not len(actual):
         return 0.0, 0.0
     distances = np.sum((reference[:, None] - actual[None, :]) ** 2, axis=2)
@@ -59,6 +83,8 @@ def mean_keypoint_parity(reference, actual):
 def common_descriptor_cosine(
     reference_points, reference_descriptors, points, descriptors
 ):
+    import numpy as np
+
     actual_by_point = {
         tuple(point): descriptor for point, descriptor in zip(points, descriptors)
     }
@@ -120,15 +146,20 @@ def test_insight_pipeline(
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize("model_file,min_descriptor_cosine", ACCURACY_MODELS)
+@pytest.mark.parametrize(
+    "model_file,min_descriptor_cosine", scoped_accuracy_models()
+)
 def test_fp32_a65_accuracy(
     models_dir, skip_unless_e2e_ready, model_file, min_descriptor_cosine
 ):
+    model_path = models_dir / model_file
+    skip_unless_e2e_ready(model_path.is_file(), f"model not found: {model_path}")
+
+    import cv2
+    import numpy as np
     import pyneat
 
     example = load_example()
-    model_path = models_dir / model_file
-    skip_unless_e2e_ready(model_path.is_file(), f"model not found: {model_path}")
     with np.load(REFERENCE) as reference:
         images = reference["image"]
         offsets = reference["offsets"]
