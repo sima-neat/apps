@@ -71,7 +71,7 @@ all four INT8/BF16 and MLA/EV74 tessellation combinations. The INT8 MLA archive 
 program, and has this SHA-256 checksum:
 
 ```text
-fd777d36b64c3744f2eb8ae3e21d6e95c8e239e30f0e016a45a2a12630624c9f
+768f8f2838b335ffa92fd4d2464730b61a4bcdf4190484aac125b7395e271d53
 ```
 
 Verify the selected package when reproducing the reference qualification:
