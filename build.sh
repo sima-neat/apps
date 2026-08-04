@@ -551,6 +551,10 @@ core = data.get("components", {}).get("core", {})
 channel = str(core.get("channel", "")).strip()
 tag = str(core.get("tag", "")).strip()
 actual_env = str(core.get("provenance", {}).get("vulcanEnvironment", "")).strip()
+runtime_version = str(data.get("components", {}).get("runtime", {}).get("version", "")).strip()
+gst_plugins_version = str(
+    data.get("components", {}).get("gstPlugins", {}).get("version", "")
+).strip()
 
 def normalize_env(value: str) -> str:
     if value in {"production", "prod", "prd"}:
@@ -567,6 +571,17 @@ if tag != expected_version:
     raise SystemExit(1)
 if expected_env and normalize_env(actual_env) != expected_env:
     raise SystemExit(1)
+
+# The Core provenance marker is not sufficient on a persistent runner: an
+# interrupted installation can leave the requested Core package beside runtime
+# and GStreamer packages from another branch. Those mixed packages made
+# `neat --json` report the requested Core tag while BoxDecode still loaded an
+# older plugin. Require the installed board-side components to come from the
+# same branch before skipping installation.
+expected_component_prefix = f"+{expected_branch_key}."
+for version in (runtime_version, gst_plugins_version):
+    if expected_component_prefix not in version:
+        raise SystemExit(1)
 PY
   then
     return 1
