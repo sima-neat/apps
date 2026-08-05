@@ -109,6 +109,15 @@ def _assert_golden_detections(reported, golden):
             else:
                 used.add(best_idx)
 
+    assert (
+        asserted > 0
+    ), "no golden detections were asserted; input folder has none of the golden images"
+    assert not failures, "golden detection mismatch:\n" + "\n".join(failures)
+
+
+def _assert_forbidden_display_regions(reported, golden):
+    """Display-policy goldens must be retained in raw JSON but hidden from overlays."""
+    failures = []
     reported_by_image = {entry["image"]: entry for entry in reported["images"]}
     for image, forbidden in golden.get("forbidden", {}).items():
         entry = reported_by_image.get(image)
@@ -136,10 +145,7 @@ def _assert_golden_detections(reported, golden):
                     f"{image}: {rule['label']} was not retained as a hidden raw detection"
                 )
 
-    assert (
-        asserted > 0
-    ), "no golden detections were asserted; input folder has none of the golden images"
-    assert not failures, "golden detection mismatch:\n" + "\n".join(failures)
+    assert not failures, "display policy mismatch:\n" + "\n".join(failures)
 
 
 def _source_parity_metrics(reported, reference):
@@ -225,6 +231,7 @@ class TestE2E:
         reported = json.loads(detections_path.read_text(encoding="utf-8"))
         golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
         _assert_golden_detections(reported, golden)
+        _assert_forbidden_display_regions(reported, golden)
 
 
 @pytest.mark.e2e
@@ -283,6 +290,7 @@ def test_precision_matrix_source_accuracy(
     reported = json.loads(detections_path.read_text(encoding="utf-8"))
     if family == "v2":
         golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
+        # This lane measures raw source parity; overlay policy is covered by test_full_pipeline.
         _assert_golden_detections(reported, golden)
         print(f"model={model_file} family=v2 golden_parity=passed")
         return
