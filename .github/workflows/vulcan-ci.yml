@@ -291,24 +291,22 @@ jobs:
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
           pyneat_site="${RUNNER_TEMP}/apps-pyneat-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${pyneat_site}"
-          wheel_cache=/opt/toolchain/aarch64/modalix/neat-install-packages
-          mapfile -t exact_pyneat_wheels < <(
-            find "${wheel_cache}" -maxdepth 1 -type f \
-              -name "pyneat-*${CORE_TARGET_SPEC}*.whl" -print | sort
-          )
-          if [[ "${#exact_pyneat_wheels[@]}" -ne 1 ]]; then
-            echo "Expected exactly one pyneat wheel for Core ${CORE_TARGET_SPEC}, found ${#exact_pyneat_wheels[@]}" >&2
+          installed_pyneat_version="$(
+            "${PYTHON_TEST_BIN}" -c \
+              'from importlib.metadata import version; print(version("pyneat"))'
+          )"
+          if [[ "${installed_pyneat_version}" != *"${CORE_TARGET_SPEC}"* ]]; then
+            echo "Installed pyneat ${installed_pyneat_version} does not match Core ${CORE_TARGET_SPEC}" >&2
             exit 1
           fi
-          "${PYTHON_TEST_BIN}" -m pip install --target "${pyneat_site}" --upgrade --no-deps \
-            "${exact_pyneat_wheels[0]}"
+          echo "Using exact Core pyneat: ${installed_pyneat_version}"
           "${PYTHON_TEST_BIN}" -m pip install --target "${pyneat_site}" --upgrade \
             pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
           echo "PYTHONPATH=${pyneat_site}${PYTHONPATH:+:${PYTHONPATH}}" >> "${GITHUB_ENV}"
           PYTHONPATH="${pyneat_site}${PYTHONPATH:+:${PYTHONPATH}}" \
             "${PYTHON_TEST_BIN}" -c \
-            'import pathlib, pyneat, sys; site=pathlib.Path(sys.argv[1]).resolve(); module=pathlib.Path(pyneat.__file__).resolve(); assert module.is_relative_to(site), (module, site); print("Using job-local pyneat:", module)' \
-            "${pyneat_site}"
+            'from importlib.metadata import version; import pathlib, pyneat, sys; root=pathlib.Path(sys.prefix).resolve(); module=pathlib.Path(pyneat.__file__).resolve(); assert module.is_relative_to(root), (module, root); assert sys.argv[1] in version("pyneat"), version("pyneat"); print("Using installed Core pyneat:", module)' \
+            "${CORE_TARGET_SPEC}"
 
       - name: Run all activated Apps tests
         env:
