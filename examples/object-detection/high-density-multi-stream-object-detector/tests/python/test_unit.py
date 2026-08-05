@@ -116,14 +116,14 @@ class TestConfigLoading:
             "max_inflight_total",
         ),
         [
-            ("config.yaml", 16, 25, 8, 2, "auto", 16, 1, 1, 8),
+            ("config.yaml", 16, 25, 8, 2, "throughput-low-latency", 16, 1, 1, 8),
             (
                 "config-24x720p20fps.yaml",
                 24,
                 20,
                 16,
                 2,
-                "auto",
+                "throughput-low-latency",
                 4,
                 2,
                 4,
