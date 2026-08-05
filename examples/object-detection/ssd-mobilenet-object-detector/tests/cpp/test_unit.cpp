@@ -257,16 +257,28 @@ int main(int argc, char** argv) {
                              "  path: model.tar.gz\n"
                              "streams:\n"
                              "  - rtsp://example/0\n"
-                             "  - rtsp://example/1\n";
+                             "  - rtsp://example/1\n"
+                             "runtime:\n"
+                             "  num_runs:\n"
+                             "  profile: null\n"
+                             "literal:\n"
+                             "  value: \"null\"\n";
     const auto raw = sima_examples::ScalarConfig::load(config);
     if (raw.root_kind() != sima_examples::ConfigNodeKind::Mapping ||
         raw.node_kind("model") != sima_examples::ConfigNodeKind::Mapping ||
         raw.node_kind("model.path") != sima_examples::ConfigNodeKind::Scalar ||
-        raw.node_kind("streams") != sima_examples::ConfigNodeKind::Sequence) {
-      std::cerr << "[FAIL] scalar config did not preserve mapping/sequence node kinds\n";
+        raw.node_kind("streams") != sima_examples::ConfigNodeKind::Sequence ||
+        raw.node_kind("runtime") != sima_examples::ConfigNodeKind::Mapping ||
+        raw.node_kind("runtime.num_runs") != sima_examples::ConfigNodeKind::Null ||
+        raw.int_or("runtime.num_runs", 7) != 7 ||
+        raw.node_kind("runtime.profile") != sima_examples::ConfigNodeKind::Null ||
+        !raw.bool_or("runtime.profile", true) ||
+        raw.node_kind("literal") != sima_examples::ConfigNodeKind::Mapping ||
+        raw.string_or("literal.value", "missing") != "null") {
+      std::cerr << "[FAIL] scalar config did not preserve mapping/sequence/null node kinds\n";
       ++failures;
     } else {
-      std::cout << "[OK] scalar config preserves mapping/sequence node kinds\n";
+      std::cout << "[OK] scalar config preserves mapping/sequence/null node kinds\n";
     }
   }
 

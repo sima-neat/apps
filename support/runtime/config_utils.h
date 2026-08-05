@@ -10,6 +10,7 @@ namespace sima_examples {
 
 enum class ConfigNodeKind {
   Missing,
+  Null,
   Scalar,
   Mapping,
   Sequence,

@@ -101,6 +101,18 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 
   ScalarConfig config;
   std::vector<std::pair<int, std::string>> stack;
+  const auto promote_stack_mappings = [&config, &stack](std::size_t count) {
+    std::string path;
+    for (std::size_t index = 0; index < count; ++index) {
+      if (!path.empty()) {
+        path += '.';
+      }
+      path += stack[index].second;
+      if (config.node_kinds_[path] == ConfigNodeKind::Null) {
+        config.node_kinds_[path] = ConfigNodeKind::Mapping;
+      }
+    }
+  };
   int list_block_indent = -1;
   std::string raw_line;
   while (std::getline(input, raw_line)) {
@@ -126,6 +138,9 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     if (line.rfind("- ", 0) == 0) {
       while (!stack.empty() && indent <= stack.back().first) {
         stack.pop_back();
+      }
+      if (!stack.empty()) {
+        promote_stack_mappings(stack.size() - 1);
       }
       const std::string sequence_key = join_stack(stack);
       if (sequence_key.empty()) {
@@ -157,6 +172,7 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     while (!stack.empty() && indent <= stack.back().first) {
       stack.pop_back();
     }
+    promote_stack_mappings(stack.size());
 
     std::string full_key = join_stack(stack);
     if (!full_key.empty()) {
@@ -164,7 +180,12 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     }
     full_key += key;
 
-    if (value.empty() || value == "{}") {
+    if (value.empty()) {
+      config.node_kinds_[full_key] = ConfigNodeKind::Null;
+      stack.emplace_back(indent, key);
+      continue;
+    }
+    if (value == "{}") {
       config.node_kinds_[full_key] = ConfigNodeKind::Mapping;
       stack.emplace_back(indent, key);
       continue;
@@ -172,6 +193,10 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 
     const bool quoted = value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
                                               (value.front() == '\'' && value.back() == '\''));
+    if (!quoted && is_nullish(value)) {
+      config.node_kinds_[full_key] = ConfigNodeKind::Null;
+      continue;
+    }
     if (!quoted && value.size() >= 2 && value.front() == '[' && value.back() == ']') {
       config.node_kinds_[full_key] = ConfigNodeKind::Sequence;
     } else if (!quoted && value.size() >= 2 && value.front() == '{' && value.back() == '}') {
@@ -187,11 +212,14 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 
 std::optional<std::string> ScalarConfig::string_value(const std::string& key) const {
   const ConfigNodeKind kind = node_kind(key);
+  if (kind == ConfigNodeKind::Missing || kind == ConfigNodeKind::Null) {
+    return std::nullopt;
+  }
   if (kind == ConfigNodeKind::Mapping || kind == ConfigNodeKind::Sequence) {
     throw std::runtime_error(key + " must be a scalar value");
   }
   const auto it = scalars_.find(key);
-  if (it == scalars_.end() || is_nullish(it->second)) {
+  if (it == scalars_.end()) {
     return std::nullopt;
   }
   return it->second;

@@ -139,10 +139,9 @@ void validate_config_mappings(const sima_examples::ScalarConfig& raw) {
   }
   for (const std::string& section : {"model", "io", "decode", "runtime", "output"}) {
     const auto kind = raw.node_kind(section);
-    const bool null_mapping =
-        kind == sima_examples::ConfigNodeKind::Scalar && !raw.string_value(section).has_value();
     if (kind != sima_examples::ConfigNodeKind::Missing &&
-        kind != sima_examples::ConfigNodeKind::Mapping && !null_mapping) {
+        kind != sima_examples::ConfigNodeKind::Null &&
+        kind != sima_examples::ConfigNodeKind::Mapping) {
       throw std::runtime_error(section + " must be a mapping");
     }
   }
