@@ -94,6 +94,28 @@ def test_config_value_or_treats_null_as_omitted(section, key, default, expected)
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("profile", "mean", "stddev"),
+    [
+        ("tensorflow_ssd", [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        (
+            "torchvision_ssdlite",
+            [0.485, 0.456, 0.406],
+            [0.229, 0.224, 0.225],
+        ),
+    ],
+)
+def test_normalization_profiles_are_explicit(profile, mean, stddev):
+    assert ssd_mobilenet_main.normalization_for_profile(profile) == (mean, stddev)
+
+
+@pytest.mark.unit
+def test_normalization_profile_rejects_unknown_value():
+    with pytest.raises(ValueError, match="tensorflow_ssd or torchvision_ssdlite"):
+        ssd_mobilenet_main.normalization_for_profile("guess-from-filename")
+
+
+@pytest.mark.unit
 def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -374,7 +396,10 @@ def test_rejects_new_image_named_detection_report_inside_input_dir(tmp_path):
     r = _run(["--config", str(config)])
 
     assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
-    assert "io.detections_json must not use an image filename inside io.input_dir" in r.stderr
+    assert (
+        "io.detections_json must not use an image filename inside io.input_dir"
+        in r.stderr
+    )
     assert not report.exists()
 
 

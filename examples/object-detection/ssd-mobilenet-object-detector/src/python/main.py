@@ -1,7 +1,7 @@
-"""SSD (TF COCO) folder object detection via the model-managed BoxDecodeType.Ssd pipeline.
+"""SSD folder object detection via the model-managed BoxDecodeType.Ssd pipeline.
 
-Runs any of the four supported SSD models: SSD300 and SSD-MobileNet v1/v2 (300x300) or v3
-(320x320, set model.frame=320). Defaults to SSD-MobileNetV2.
+Runs TensorFlow SSD-MobileNet v1/v2 (300x300) and TorchVision SSDlite-MobileNetV3
+(320x320) with an explicit preprocessing profile.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ DEFAULT_LABELS_PATH = Path(
 # Default model frame. SSD300 and SSD-MobileNet v1/v2 are 300x300; v3 is 320x320.
 # Override via `model.frame` in the config to match the model pack.
 DEFAULT_MODEL_SIZE = 300
+DEFAULT_PREPROCESSING_PROFILE = "tensorflow_ssd"
 NUM_CLASSES = 91  # index 0 = background, 1..90 = COCO ids.
 BBOX_RECORD_SIZE = 24  # int32 x, y, w, h + float32 score + int32 class_id
 
@@ -133,7 +134,9 @@ def _resolve_asset(configured: str, default_name: str) -> Path:
 def load_labels(path: Path) -> list[str]:
     if not path.is_file():
         raise FileNotFoundError(f"labels file does not exist: {path}")
-    labels = [line.rstrip("\n") for line in path.read_text(encoding="utf-8").splitlines()]
+    labels = [
+        line.rstrip("\n") for line in path.read_text(encoding="utf-8").splitlines()
+    ]
     if not labels:
         raise ValueError(f"labels file is empty: {path}")
     return labels
@@ -151,25 +154,39 @@ def class_color(class_idx: int) -> tuple[int, int, int]:
     return BOX_COLORS[abs(class_idx) % len(BOX_COLORS)]
 
 
-def make_model_options(
-    score_threshold: float, nms_iou: float, max_detections: int, model_frame: int
-) -> "pyneat.ModelOptions":
-    """Model-managed SSD decode: stretch preprocess to the model frame, normalize to [-1, 1].
+def normalization_for_profile(profile: str) -> tuple[list[float], list[float]]:
+    if profile == "tensorflow_ssd":
+        return [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
+    if profile == "torchvision_ssdlite":
+        return [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+    raise ValueError(
+        "model.preprocessing_profile must be tensorflow_ssd or torchvision_ssdlite"
+    )
 
-    Frame is 300 for SSD300/v1/v2, 320 for v3 (set via model.frame).
+
+def make_model_options(
+    score_threshold: float,
+    nms_iou: float,
+    max_detections: int,
+    model_frame: int,
+    preprocessing_profile: str = DEFAULT_PREPROCESSING_PROFILE,
+) -> "pyneat.ModelOptions":
+    """Model-managed SSD decode with an explicit source-model preprocessing profile.
+
+    Frame is 300 for SSD300/v1/v2 and 320 for either 320x320 recipe.
     """
+    mean, stddev = normalization_for_profile(preprocessing_profile)
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    # STRETCH, not the default Letterbox: these TF models train on a direct square resize.
+    # STRETCH, not the default Letterbox: every registered SSD recipe uses a direct square resize.
     opt.preprocess.resize.enable = pyneat.AutoFlag.On
     opt.preprocess.resize.mode = pyneat.ResizeMode.Stretch
     opt.preprocess.resize.width = model_frame
     opt.preprocess.resize.height = model_frame
-    # Model input range is [-1, 1] = (pixel / 127.5 - 1); the CVU computes (pixel/255 - mean)/stddev.
     opt.preprocess.normalize.enable = pyneat.AutoFlag.On
-    opt.preprocess.normalize.mean = [0.5, 0.5, 0.5]
-    opt.preprocess.normalize.stddev = [0.5, 0.5, 0.5]
+    opt.preprocess.normalize.mean = mean
+    opt.preprocess.normalize.stddev = stddev
     opt.preprocess.normalize.has_explicit_stats = True
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
     opt.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
@@ -338,15 +355,22 @@ def format_profile_stats(name: str, values: list[float]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="SSD folder object detection example (SSD300, MobileNet v1/v2/v3)")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration")
+    parser = argparse.ArgumentParser(
+        description="SSD folder object detection example (SSD300, MobileNet v1/v2/v3)"
+    )
+    parser.add_argument(
+        "--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML configuration"
+    )
     args = parser.parse_args()
 
     try:
         with args.config.open("r", encoding="utf-8") as handle:
             raw = yaml.safe_load(handle) or {}
     except OSError as exc:
-        print(f"failed to open config file: {args.config} ({exc.strerror})", file=sys.stderr)
+        print(
+            f"failed to open config file: {args.config} ({exc.strerror})",
+            file=sys.stderr,
+        )
         return 2
     except yaml.YAMLError as exc:
         print(f"failed to parse config file: {args.config} ({exc})", file=sys.stderr)
@@ -360,6 +384,11 @@ def main() -> int:
 
     model_path = Path(config_value_or(model_cfg, "path", DEFAULT_MODEL_PATH))
     model_frame = int(config_value_or(model_cfg, "frame", DEFAULT_MODEL_SIZE))
+    preprocessing_profile = str(
+        config_value_or(
+            model_cfg, "preprocessing_profile", DEFAULT_PREPROCESSING_PROFILE
+        )
+    )
     labels_path = _resolve_asset(
         config_value_or(model_cfg, "labels", ""), "coco_labels.txt"
     )
@@ -426,13 +455,19 @@ def main() -> int:
         not math.isfinite(aggregate_suppression.min_child_containment)
         or not 0.0 < aggregate_suppression.min_child_containment <= 1.0
     ):
-        print("output.aggregate_min_child_containment must be in (0.0, 1.0]", file=sys.stderr)
+        print(
+            "output.aggregate_min_child_containment must be in (0.0, 1.0]",
+            file=sys.stderr,
+        )
         return 2
     if (
         not math.isfinite(aggregate_suppression.max_child_area_ratio)
         or not 0.0 < aggregate_suppression.max_child_area_ratio <= 1.0
     ):
-        print("output.aggregate_max_child_area_ratio must be in (0.0, 1.0]", file=sys.stderr)
+        print(
+            "output.aggregate_max_child_area_ratio must be in (0.0, 1.0]",
+            file=sys.stderr,
+        )
         return 2
     if aggregate_suppression.min_children < 2:
         print("output.aggregate_min_children must be >= 2", file=sys.stderr)
@@ -446,6 +481,17 @@ def main() -> int:
     if model_frame not in (300, 320):
         print(
             f"model.frame must be 300 (SSD300/MobileNet v1/v2) or 320 (v3), got {model_frame}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        normalization_for_profile(preprocessing_profile)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if preprocessing_profile == "torchvision_ssdlite" and model_frame != 320:
+        print(
+            "model.preprocessing_profile torchvision_ssdlite requires model.frame=320",
             file=sys.stderr,
         )
         return 2
@@ -520,7 +566,13 @@ def main() -> int:
     try:
         model = pyneat.Model(
             str(model_path),
-            make_model_options(score_threshold, nms_iou, max_detections, model_frame),
+            make_model_options(
+                score_threshold,
+                nms_iou,
+                max_detections,
+                model_frame,
+                preprocessing_profile,
+            ),
         )
         seed_bgr = cv2.imread(str(image_paths[0]), cv2.IMREAD_COLOR)
         if seed_bgr is None:
@@ -561,9 +613,14 @@ def main() -> int:
                 payload = extract_bbox_payload(out)
                 # Any missing run makes the reported stats incomplete, so fail the whole profile.
                 if not payload:
-                    print("Profiling failed: model returned no BBOX payload", file=sys.stderr)
+                    print(
+                        "Profiling failed: model returned no BBOX payload",
+                        file=sys.stderr,
+                    )
                     return 4
-                last_detections = parse_bbox_payload(payload, bgr.shape[1], bgr.shape[0])
+                last_detections = parse_bbox_payload(
+                    payload, bgr.shape[1], bgr.shape[0]
+                )
                 last_displayed_detections = suppress_aggregate_detections(
                     last_detections,
                     bgr.shape[1],
@@ -575,7 +632,11 @@ def main() -> int:
                 parse_times.append(t2 - t1)
 
             print(f"Profiling over {len(infer_times)} runs (image='{image_path}'):")
-            print(format_profile_stats("Pipeline run (preprocess+infer+decode)", infer_times))
+            print(
+                format_profile_stats(
+                    "Pipeline run (preprocess+infer+decode)", infer_times
+                )
+            )
             print(format_profile_stats("Output parsing + display policy", parse_times))
             print(
                 f"Last run detections: {len(last_detections)} raw, "
@@ -617,14 +678,20 @@ def main() -> int:
                 out = runner.run([image_to_tensor(orig_bgr)], timeout_ms=timeout_ms)
             except Exception as exc:
                 logger.debug("Inference failure", exc_info=exc)
-                print(f"Error during inference for {image_path}: {exc}", file=sys.stderr)
+                print(
+                    f"Error during inference for {image_path}: {exc}", file=sys.stderr
+                )
                 return 3
 
             payload = extract_bbox_payload(out)
             if not payload:
-                print(f"Model returned no BBOX payload for {image_path}", file=sys.stderr)
+                print(
+                    f"Model returned no BBOX payload for {image_path}", file=sys.stderr
+                )
                 return 4
-            detections = parse_bbox_payload(payload, orig_bgr.shape[1], orig_bgr.shape[0])
+            detections = parse_bbox_payload(
+                payload, orig_bgr.shape[1], orig_bgr.shape[0]
+            )
             displayed_detections = suppress_aggregate_detections(
                 detections,
                 orig_bgr.shape[1],
@@ -653,7 +720,9 @@ def main() -> int:
                 f"({len(detections)} detections, {len(displayed_detections)} displayed)"
             )
             if overlay:
-                print(f"[{processed}/{len(image_paths)}] {image_path.name} -> {output_name} {det_str}")
+                print(
+                    f"[{processed}/{len(image_paths)}] {image_path.name} -> {output_name} {det_str}"
+                )
             else:
                 print(f"[{processed}/{len(image_paths)}] {image_path.name} {det_str}")
     finally:
@@ -663,9 +732,14 @@ def main() -> int:
         json_path = Path(detections_json)
         try:
             json_path.parent.mkdir(parents=True, exist_ok=True)
-            json_path.write_text(json.dumps({"images": records}, indent=2) + "\n", encoding="utf-8")
+            json_path.write_text(
+                json.dumps({"images": records}, indent=2) + "\n", encoding="utf-8"
+            )
         except OSError as exc:
-            print(f"Failed to write detections json: {json_path} ({exc.strerror})", file=sys.stderr)
+            print(
+                f"Failed to write detections json: {json_path} ({exc.strerror})",
+                file=sys.stderr,
+            )
             return 4
         print(f"Wrote detections: {json_path}")
 

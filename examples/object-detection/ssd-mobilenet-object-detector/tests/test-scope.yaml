@@ -1,8 +1,64 @@
 models:
-  ssd_mobilenet_v2_heads:
+  ssd_v1_bf16_tess_mla:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/ssd_mobilenet_v2_heads_mpk.tar.gz
-    file: ssd_mobilenet_v2_heads_mpk.tar.gz
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v1/modalix_bf16_tess_mla/ssd_mobilenet_v1_modalix_bf16_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v1_modalix_bf16_tess_mla_mpk.tar.gz
+    sha256: 183ff89036f566ba17cdc1ab92adc63356d98d5a4ac3d855bb36eee4db68e1ec
+  ssd_v1_bf16_tess_off_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v1/modalix_bf16_tess_off_mla/ssd_mobilenet_v1_modalix_bf16_tess_off_mla_mpk.tar.gz
+    file: ssd_mobilenet_v1_modalix_bf16_tess_off_mla_mpk.tar.gz
+    sha256: 9f5cbae806b132f3c3c6654b058bfee2650537a3aeda2e82725e472e79f4a86d
+  ssd_v1_int8_tess_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v1/modalix_int8_tess_mla/ssd_mobilenet_v1_modalix_int8_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v1_modalix_int8_tess_mla_mpk.tar.gz
+    sha256: bf49dbb3a2f24a5af91a5109eb1f595666ef743ccf651611c737bb8edec09366
+  ssd_v1_int8_tess_off_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v1/modalix_int8_tess_off_mla/ssd_mobilenet_v1_modalix_int8_tess_off_mla_mpk.tar.gz
+    file: ssd_mobilenet_v1_modalix_int8_tess_off_mla_mpk.tar.gz
+    sha256: 46665dfa5adb627a19494a4bd7d62df6f35a1f468863ebbd250066aa1cc88a37
+  ssd_v2_bf16_tess_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v2/modalix_bf16_tess_mla/ssd_mobilenet_v2_modalix_bf16_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v2_modalix_bf16_tess_mla_mpk.tar.gz
+    sha256: baa10b27a746c683b2acecfc0120508f43af55cee9115e2a12f8c325702914a8
+  ssd_v2_bf16_tess_off_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v2/modalix_bf16_tess_off_mla/ssd_mobilenet_v2_modalix_bf16_tess_off_mla_mpk.tar.gz
+    file: ssd_mobilenet_v2_modalix_bf16_tess_off_mla_mpk.tar.gz
+    sha256: 139fdc0ebeb558f41e96d717877cab092f70f9bc5de847e4bb63bfc34df0bdfb
+  ssd_v2_int8_tess_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v2/modalix_int8_tess_mla/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+    sha256: df63802305fffa634bb6368a9e3e964c54cdf249e7226e6c336f1994f1d13752
+  ssd_v2_int8_tess_off_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v2/modalix_int8_tess_off_mla/ssd_mobilenet_v2_modalix_int8_tess_off_mla_mpk.tar.gz
+    file: ssd_mobilenet_v2_modalix_int8_tess_off_mla_mpk.tar.gz
+    sha256: a5629d1303a0b044a133b5b82dacece53556ef42af5827d485f0a51139705390
+  ssd_v3_bf16_tess_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/3ac60faacff9/ssd_mobilenet_v3/modalix_bf16_tess_mla/ssd_mobilenet_v3_modalix_bf16_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v3_modalix_bf16_tess_mla_mpk.tar.gz
+    sha256: 28ce1e11a5f6744879d12b6c8eb1b7a9f5e2bde90320a44937853c14dc957746
+  ssd_v3_bf16_tess_off_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/3ac60faacff9/ssd_mobilenet_v3/modalix_bf16_tess_off_mla/ssd_mobilenet_v3_modalix_bf16_tess_off_mla_mpk.tar.gz
+    file: ssd_mobilenet_v3_modalix_bf16_tess_off_mla_mpk.tar.gz
+    sha256: aedd1d84c097f8fc2aff7e00514a8364cbf5dc9e1f434212c3485cc0db2cd1c1
+  ssd_v3_int8_tess_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/3ac60faacff9/ssd_mobilenet_v3/modalix_int8_tess_mla/ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz
+    sha256: 77406c7e2ce10ec5ba1526fc7bc2226a8562bb788b47ec1897e5a6cbf7ef17ed
+  ssd_v3_int8_tess_off_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/3ac60faacff9/ssd_mobilenet_v3/modalix_int8_tess_off_mla/ssd_mobilenet_v3_modalix_int8_tess_off_mla_mpk.tar.gz
+    file: ssd_mobilenet_v3_modalix_int8_tess_off_mla_mpk.tar.gz
+    sha256: 985a6b20c0d57421937473841c223e244f20a8fd0165fc954e75ce71b0fbc4f8
 unit:
   python: true
   cpp: true
@@ -10,8 +66,19 @@ e2e:
   python:
     enabled: true
     models:
-    - ssd_mobilenet_v2_heads
+      - ssd_v2_int8_tess_mla
+      - ssd_v1_bf16_tess_mla
+      - ssd_v1_bf16_tess_off_mla
+      - ssd_v1_int8_tess_mla
+      - ssd_v1_int8_tess_off_mla
+      - ssd_v2_bf16_tess_mla
+      - ssd_v2_bf16_tess_off_mla
+      - ssd_v2_int8_tess_off_mla
+      - ssd_v3_bf16_tess_mla
+      - ssd_v3_bf16_tess_off_mla
+      - ssd_v3_int8_tess_mla
+      - ssd_v3_int8_tess_off_mla
   cpp:
     enabled: true
     models:
-    - ssd_mobilenet_v2_heads
+      - ssd_v2_int8_tess_mla

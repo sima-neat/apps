@@ -10,19 +10,19 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | ssd-mobilenet-object-detector |
-| Model | ssd_mobilenet_v2_heads (default) |
+| Model | SSD-MobileNet V1/V2 and TorchVision SSDlite-MobileNetV3 |
 
 ## Concept
 
-Folder-based object detection with a compiled **SSD** model. The app supports **four models**
-through the model-managed `BoxDecodeType::Ssd` contract — SSD300 and the TensorFlow Object
-Detection API SSD-MobileNet **v1**, **v2** and **v3** COCO detectors. Each image is inferred,
-annotated with boxes and labels, and written to an output folder.
+Folder-based object detection with a compiled **SSD** model. The app supports the TensorFlow
+SSD-MobileNet **v1/v2** sources and TorchVision
+`ssdlite320_mobilenet_v3_large`. Each image is inferred, annotated with boxes and labels, and
+written to an output folder.
 
 Decoding is **model-managed**: the app selects `BoxDecodeType::Ssd`, and the Neat Library pipeline
-owns the priors, box decode, class scoring (softmax for SSD300, per-class sigmoid for MobileNet)
-and NMS. The app only configures preprocess and decode, parses the `BBOX` output and draws the
-detections.
+owns the recipe-specific priors, localization order, class scoring (sigmoid for V1/V2, 91-way
+softmax for V3), and NMS. The app only configures preprocess and decode, parses the `BBOX` output,
+and draws the detections.
 
 Some COCO-trained SSD models emit a large `iscrowd` training region as an ordinary class box. The
 runtime `BBOX` record has no crowd flag, so the app applies an optional, conservative aggregate
@@ -32,11 +32,12 @@ disabled by default in code; this demo config explicitly enables it with
 `output.aggregate_suppression: true`. Machine-readable JSON always retains every raw model
 detection and marks overlay membership with a `displayed` boolean.
 
-Preprocess is a direct **stretch** to the model frame with `[-1, 1]` normalization
-(`(pixel / 127.5) - 1`, i.e. mean/stddev `0.5`). The models were trained with a
-`fixed_shape_resizer`, and the SSD box back-projection inverts the same per-axis stretch — a
-letterbox resize would squash every box vertically and pull it toward the frame center. The frame
-is **300×300 for SSD300 and MobileNet v1/v2**, and **320×320 for v3**; set it via `model.frame`.
+Preprocess is a direct **stretch** to the model frame. `tensorflow_ssd` is the exported `[-1,1]`
+boundary (mean/stddev `0.5`); `torchvision_ssdlite` is ImageNet normalization. Select the profile
+from the published-artifact table below rather than inferring it from the family name: the V3 BF16
+export retains the `[-1,1]` adapter, while its QAT INT8 export exposes the normalized boundary.
+SSD box back-projection inverts the same per-axis stretch—a letterbox resize would move and distort
+every box. The frame is **300×300 for V1/V2** and **320×320 for V3**.
 
 ## Preview
 
@@ -59,12 +60,12 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Model file | Role | Frame (`model.frame`) |
-| --- | --- | --- |
-| `ssd_mobilenet_v2_heads_mpk.tar.gz` | Default | 300 |
-| `ssd_mobilenet_v1_heads_mpk.tar.gz` | Supported | 300 |
-| `ssd_mobilenet_v3_heads_mpk.tar.gz` | Supported | 320 |
-| `ssd300_heads_mpk.tar.gz` | Supported | 300 |
+| Family | Frame | `model.preprocessing_profile` | Published variants |
+| --- | --- | --- | --- |
+| SSD-MobileNetV1 | 300 | `tensorflow_ssd` | INT8/BF16 × tessellation in/out of MLA |
+| SSD-MobileNetV2 | 300 | `tensorflow_ssd` | INT8/BF16 × tessellation in/out of MLA |
+| SSDlite-MobileNetV3 BF16 | 320 | `tensorflow_ssd` | BF16 × tessellation in/out of MLA |
+| SSDlite-MobileNetV3 QAT INT8 | 320 | `torchvision_ssdlite` | INT8 × tessellation in/out of MLA |
 
 Model packages come from the Model Zoo release below, which can differ from the installed platform
 version.
@@ -77,8 +78,8 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-Set `model.path` in the config to the downloaded package. For **SSD-MobileNet v3**, also set
-`model.frame: 320` (v1/v2 and SSD300 use the default `300`).
+Set `model.path`, `model.frame`, and `model.preprocessing_profile` together. The app validates the
+profile name and rejects the TorchVision profile unless the frame is 320.
 
 The only shipped asset is `src/common/coco_labels.txt` — 91 lines (`0=background`, `1..90` =
 MS-COCO ids). No anchor asset is needed: the priors live in the model-managed SSD decode.
@@ -90,7 +91,8 @@ Edit `examples/object-detection/ssd-mobilenet-object-detector/src/common/config.
 ```yaml
 model:
   path: <model-path>
-  frame: 300                 # 300 for SSD300/v1/v2, 320 for v3.
+  frame: 300                 # 300 for v1/v2, 320 for v3.
+  preprocessing_profile: tensorflow_ssd  # Use the published-artifact table above.
   labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt
 
 io:

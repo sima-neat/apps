@@ -1,6 +1,7 @@
 model:                       # SSD detector selection (SSD300 or SSD-MobileNet v1/v2/v3).
   path: <model-path>         # Example: models/ssd_mobilenet_v2_heads_mpk.tar.gz
   frame: 300                 # Model input frame: 300 for SSD300/v1/v2, 320 for v3.
+  preprocessing_profile: tensorflow_ssd  # tensorflow_ssd or torchvision_ssdlite (v3 matrix).
   labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt      # 91 lines: 0=background, 1..90 COCO.
 
 io:                          # Input and output paths.

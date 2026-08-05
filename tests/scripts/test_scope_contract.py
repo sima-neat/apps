@@ -54,18 +54,44 @@ def test_validate_scope_accepts_cpp_source_tests(tmp_path):
     example_key = _write_example(tmp_path)
     tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
     tests_dir.mkdir(parents=True)
-    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    (tests_dir / "test_unit.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    (tests_dir / "test_e2e.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
 
     assert validate_scope(_scope(example_key), tmp_path) == []
+
+
+def test_validate_scope_rejects_malformed_sha256(tmp_path):
+    example_key = _write_example(tmp_path)
+    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_unit.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    (tests_dir / "test_e2e.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    scope = _scope(example_key)
+    scope["examples"][example_key]["models"]["demo-model"]["sha256"] = "ABC123"
+
+    assert validate_scope(scope, tmp_path) == [
+        f"{example_key}: model demo-model sha256 must be 64 lowercase hex characters"
+    ]
 
 
 def test_load_scope_discovers_per_example_scope_files(tmp_path):
     example_key = _write_example(tmp_path)
     tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
     tests_dir.mkdir(parents=True)
-    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    (tests_dir / "test_unit.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    (tests_dir / "test_e2e.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
     scope_file = tmp_path / "examples" / example_key / "tests" / "test-scope.yaml"
     scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
 
@@ -79,8 +105,12 @@ def test_load_scope_accepts_single_per_example_scope_file(tmp_path):
     example_key = _write_example(tmp_path)
     tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
     tests_dir.mkdir(parents=True)
-    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    (tests_dir / "test_unit.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    (tests_dir / "test_e2e.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
     scope_file = tmp_path / "examples" / example_key / "tests" / "test-scope.yaml"
     scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
 
@@ -200,7 +230,10 @@ def test_download_models_fails_when_scope_resolution_fails(tmp_path):
 
 
 def test_download_models_preserves_empty_url_model_name(tmp_path):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("download_models.sh requires bash with mapfile support")
 
     fake_scope_python = tmp_path / "fake_scope_python"
@@ -212,7 +245,9 @@ def test_download_models_preserves_empty_url_model_name(tmp_path):
     fake_scope_python.chmod(0o755)
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    (models_dir / "demo-file.tar.gz").write_text("already downloaded\n", encoding="utf-8")
+    (models_dir / "demo-file.tar.gz").write_text(
+        "already downloaded\n", encoding="utf-8"
+    )
 
     result = subprocess.run(
         [
@@ -235,8 +270,103 @@ def test_download_models_preserves_empty_url_model_name(tmp_path):
     assert "[skip] url-demo already exists" in result.stdout
 
 
+def test_download_models_rejects_existing_file_with_wrong_sha256(tmp_path):
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+    fake_scope_python = tmp_path / "fake_scope_python"
+    fake_scope_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'url-demo\\turl\\t\\thttps://example.test/demo-file.tar.gz\\t"
+        "demo-file.tar.gz\\t\\t\\t"
+        "0000000000000000000000000000000000000000000000000000000000000000\\n'\n",
+        encoding="utf-8",
+    )
+    fake_scope_python.chmod(0o755)
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "demo-file.tar.gz").write_text(
+        "not the expected artifact\n", encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha256 mismatch for demo-file.tar.gz" in result.stderr
+    assert "[skip]" not in result.stdout
+
+
+def test_download_models_rejects_new_file_with_wrong_sha256_before_install(tmp_path):
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+    fake_scope_python = tmp_path / "fake_scope_python"
+    fake_scope_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'url-demo\\turl\\t\\thttps://example.test/demo-file.tar.gz\\t"
+        "demo-file.tar.gz\\t\\t\\t"
+        "0000000000000000000000000000000000000000000000000000000000000000\\n'\n",
+        encoding="utf-8",
+    )
+    fake_scope_python.chmod(0o755)
+    fake_sima_cli = tmp_path / "sima-cli"
+    fake_sima_cli.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'not the expected artifact\\n' > demo-file.tar.gz\n",
+        encoding="utf-8",
+    )
+    fake_sima_cli.chmod(0o755)
+    models_dir = tmp_path / "models"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
+            "SIMA_CLI_BIN": str(fake_sima_cli),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha256 mismatch for demo-file.tar.gz" in result.stderr
+    assert not (models_dir / "demo-file.tar.gz").exists()
+
+
 def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("download_models.sh requires bash with mapfile support")
 
     fake_scope_python = tmp_path / "fake_scope_python"
@@ -251,7 +381,7 @@ def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
     fake_sima_cli = tmp_path / "sima-cli"
     fake_sima_cli.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" > \"$NEAT_APPS_TEST_SIMA_CLI_ARGS\"\n"
+        'printf \'%s\\n\' "$*" > "$NEAT_APPS_TEST_SIMA_CLI_ARGS"\n'
         "touch demo-file.tar.gz\n",
         encoding="utf-8",
     )
@@ -284,7 +414,10 @@ def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
 
 
 def test_download_models_rejects_unknown_url_placeholder(tmp_path):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("download_models.sh requires bash with mapfile support")
 
     fake_scope_python = tmp_path / "fake_scope_python"
@@ -333,7 +466,10 @@ def test_download_models_rejects_unknown_url_placeholder(tmp_path):
 def test_download_models_resolves_modelzoo_version_from_manifest(
     tmp_path, manifest_json, expected_version
 ):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
         pytest.skip("download_models.sh requires bash with mapfile support")
 
     root = tmp_path / "apps"
@@ -352,7 +488,7 @@ def test_download_models_resolves_modelzoo_version_from_manifest(
     fake_sima_cli = tmp_path / "sima-cli"
     fake_sima_cli.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" > \"$NEAT_APPS_TEST_SIMA_CLI_ARGS\"\n",
+        'printf \'%s\\n\' "$*" > "$NEAT_APPS_TEST_SIMA_CLI_ARGS"\n',
         encoding="utf-8",
     )
     fake_sima_cli.chmod(0o755)

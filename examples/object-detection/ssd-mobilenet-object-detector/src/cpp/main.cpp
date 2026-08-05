@@ -1,8 +1,8 @@
 /**
  * @example ssd-mobilenet-object-detector.cpp
- * SSD (TF COCO) folder detection via the model-managed BoxDecodeType::Ssd pipeline. Runs any
- * of the four supported SSD models: SSD300 and SSD-MobileNet v1/v2 (300x300) or v3 (320x320,
- * set model.frame=320). Defaults to SSD-MobileNetV2.
+ * SSD folder detection via the model-managed BoxDecodeType::Ssd pipeline. Runs TensorFlow
+ * SSD-MobileNet v1/v2 (300x300) and TorchVision SSDlite-MobileNetV3 (320x320) with an explicit
+ * preprocessing profile.
  *
  * Usage: ssd-mobilenet-object-detector [--config <path>]
  */
@@ -55,6 +55,7 @@ struct Config {
   fs::path output_dir;
   fs::path detections_json;
   int model_frame = kDefaultModelSize; // 300 for SSD300/v1/v2, 320 for v3.
+  std::string preprocessing_profile = "tensorflow_ssd";
   float score_threshold = 0.55f;
   float nms_iou = 0.60f;
   int max_detections = 100;
@@ -154,6 +155,7 @@ Config load_config(const fs::path& path) {
   cfg.config_file = path;
   cfg.model = raw.string_or("model.path", "models/ssd_mobilenet_v2_heads_mpk.tar.gz");
   cfg.model_frame = raw.int_or("model.frame", kDefaultModelSize);
+  cfg.preprocessing_profile = raw.string_or("model.preprocessing_profile", "tensorflow_ssd");
   cfg.labels =
       resolve_asset(raw.string_or("model.labels", ""), kDefaultLabelsPath, "coco_labels.txt");
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
@@ -211,6 +213,15 @@ Config load_config(const fs::path& path) {
   if (cfg.model_frame != 300 && cfg.model_frame != 320) {
     throw std::runtime_error("model.frame must be 300 (SSD300/MobileNet v1/v2) or 320 (v3), got " +
                              std::to_string(cfg.model_frame));
+  }
+  if (cfg.preprocessing_profile != "tensorflow_ssd" &&
+      cfg.preprocessing_profile != "torchvision_ssdlite") {
+    throw std::runtime_error(
+        "model.preprocessing_profile must be tensorflow_ssd or torchvision_ssdlite");
+  }
+  if (cfg.preprocessing_profile == "torchvision_ssdlite" && cfg.model_frame != 320) {
+    throw std::runtime_error(
+        "model.preprocessing_profile torchvision_ssdlite requires model.frame=320");
   }
   return cfg;
 }
@@ -276,21 +287,25 @@ cv::Scalar class_color(int class_id) {
   return kColors[idx];
 }
 
-// Model-managed SSD decode: stretch to the model frame, normalize to [-1, 1]; BoxDecode
-// owns the rest. Frame is 300 for SSD300/v1/v2, 320 for v3 (set via model.frame).
+// Model-managed SSD decode: stretch to the model frame and apply the explicit
+// source-model normalization profile; BoxDecode owns the rest.
 neat::Model::Options make_model_options(const Config& cfg) {
   neat::Model::Options opt;
   opt.preprocess.kind = neat::InputKind::Image;
   opt.preprocess.enable = neat::AutoFlag::On;
-  // STRETCH, not the default Letterbox: these TF models train on a direct square resize.
+  // STRETCH, not the default Letterbox: every registered SSD recipe uses a direct square resize.
   opt.preprocess.resize.enable = neat::AutoFlag::On;
   opt.preprocess.resize.mode = neat::ResizeMode::Stretch;
   opt.preprocess.resize.width = cfg.model_frame;
   opt.preprocess.resize.height = cfg.model_frame;
-  // Model input range is [-1, 1] = (pixel / 127.5 - 1); the CVU computes (pixel/255 - mean)/stddev.
   opt.preprocess.normalize.enable = neat::AutoFlag::On;
-  opt.preprocess.normalize.mean = {0.5f, 0.5f, 0.5f};
-  opt.preprocess.normalize.stddev = {0.5f, 0.5f, 0.5f};
+  if (cfg.preprocessing_profile == "torchvision_ssdlite") {
+    opt.preprocess.normalize.mean = {0.485f, 0.456f, 0.406f};
+    opt.preprocess.normalize.stddev = {0.229f, 0.224f, 0.225f};
+  } else {
+    opt.preprocess.normalize.mean = {0.5f, 0.5f, 0.5f};
+    opt.preprocess.normalize.stddev = {0.5f, 0.5f, 0.5f};
+  }
   opt.preprocess.normalize.has_explicit_stats = true;
   opt.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
   opt.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;

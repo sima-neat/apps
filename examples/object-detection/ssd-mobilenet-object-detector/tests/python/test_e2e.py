@@ -10,6 +10,56 @@ import pytest
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 GOLDEN_PATH = EXAMPLE_DIR / "tests" / "golden_detections.json"
+ACCURACY_REFERENCE_PATH = EXAMPLE_DIR / "tests" / "ssd_accuracy_reference.json"
+ACCURACY_MODELS = (
+    ("ssd_mobilenet_v1_modalix_bf16_tess_mla_mpk.tar.gz", "v1", 300, "tensorflow_ssd"),
+    (
+        "ssd_mobilenet_v1_modalix_bf16_tess_off_mla_mpk.tar.gz",
+        "v1",
+        300,
+        "tensorflow_ssd",
+    ),
+    ("ssd_mobilenet_v1_modalix_int8_tess_mla_mpk.tar.gz", "v1", 300, "tensorflow_ssd"),
+    (
+        "ssd_mobilenet_v1_modalix_int8_tess_off_mla_mpk.tar.gz",
+        "v1",
+        300,
+        "tensorflow_ssd",
+    ),
+    ("ssd_mobilenet_v2_modalix_bf16_tess_mla_mpk.tar.gz", "v2", 300, "tensorflow_ssd"),
+    (
+        "ssd_mobilenet_v2_modalix_bf16_tess_off_mla_mpk.tar.gz",
+        "v2",
+        300,
+        "tensorflow_ssd",
+    ),
+    ("ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz", "v2", 300, "tensorflow_ssd"),
+    (
+        "ssd_mobilenet_v2_modalix_int8_tess_off_mla_mpk.tar.gz",
+        "v2",
+        300,
+        "tensorflow_ssd",
+    ),
+    ("ssd_mobilenet_v3_modalix_bf16_tess_mla_mpk.tar.gz", "v3", 320, "tensorflow_ssd"),
+    (
+        "ssd_mobilenet_v3_modalix_bf16_tess_off_mla_mpk.tar.gz",
+        "v3",
+        320,
+        "tensorflow_ssd",
+    ),
+    (
+        "ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz",
+        "v3",
+        320,
+        "torchvision_ssdlite",
+    ),
+    (
+        "ssd_mobilenet_v3_modalix_int8_tess_off_mla_mpk.tar.gz",
+        "v3",
+        320,
+        "torchvision_ssdlite",
+    ),
+)
 
 
 def _iou(a, b):
@@ -28,7 +78,9 @@ def _assert_golden_detections(reported, golden):
     """Every golden detection must be matched by a reported detection of the same class."""
     min_score = float(golden["match"]["min_score"])
     min_iou = float(golden["match"]["min_iou"])
-    actual_by_image = {entry["image"]: entry["detections"] for entry in reported["images"]}
+    actual_by_image = {
+        entry["image"]: entry["detections"] for entry in reported["images"]
+    }
 
     asserted = 0
     failures = []
@@ -37,9 +89,7 @@ def _assert_golden_detections(reported, golden):
             # The harness may point at a different image folder; only assert what it ran.
             continue
         candidates = [
-            det
-            for det in actual_by_image[image]
-            if det["score"] >= min_score
+            det for det in actual_by_image[image] if det["score"] >= min_score
         ]
         used = set()
         for exp in expected:
@@ -86,8 +136,37 @@ def _assert_golden_detections(reported, golden):
                     f"{image}: {rule['label']} was not retained as a hidden raw detection"
                 )
 
-    assert asserted > 0, "no golden detections were asserted; input folder has none of the golden images"
+    assert (
+        asserted > 0
+    ), "no golden detections were asserted; input folder has none of the golden images"
     assert not failures, "golden detection mismatch:\n" + "\n".join(failures)
+
+
+def _source_parity_metrics(reported, reference):
+    actual_by_image = {
+        entry["image"]: entry["detections"] for entry in reported["images"]
+    }
+    matched_ious = []
+    reference_count = 0
+    for image, expected in reference["images"].items():
+        candidates = actual_by_image.get(image, [])
+        used = set()
+        for exp in expected:
+            reference_count += 1
+            best_iou, best_index = 0.0, None
+            for index, actual in enumerate(candidates):
+                if index in used or actual["class_id"] != exp["class_id"]:
+                    continue
+                overlap = _iou(exp["box"], actual["box"])
+                if overlap > best_iou:
+                    best_iou, best_index = overlap, index
+            if best_index is not None and best_iou >= float(reference["min_iou"]):
+                used.add(best_index)
+                matched_ious.append(best_iou)
+    assert reference_count > 0
+    recall = len(matched_ious) / reference_count
+    mean_iou = sum(matched_ious) / len(matched_ious) if matched_ious else 0.0
+    return recall, mean_iou, len(matched_ious), reference_count
 
 
 @pytest.mark.e2e
@@ -136,9 +215,89 @@ class TestE2E:
         )
         output_files = [path for path in tmp_output_dir.iterdir() if path.is_file()]
         assert output_files, "Expected annotated output images to be written"
-        assert all(path.stat().st_size > 0 for path in output_files), "Output image is empty"
+        assert all(
+            path.stat().st_size > 0 for path in output_files
+        ), "Output image is empty"
 
-        assert detections_path.is_file(), f"Expected a detections report at {detections_path}"
+        assert (
+            detections_path.is_file()
+        ), f"Expected a detections report at {detections_path}"
         reported = json.loads(detections_path.read_text(encoding="utf-8"))
         golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
         _assert_golden_detections(reported, golden)
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize(
+    ("model_file", "family", "model_frame", "preprocessing_profile"),
+    ACCURACY_MODELS,
+    ids=[entry[0].removesuffix("_mpk.tar.gz") for entry in ACCURACY_MODELS],
+)
+def test_precision_matrix_source_accuracy(
+    model_file,
+    family,
+    model_frame,
+    preprocessing_profile,
+    models_dir,
+    test_images_dir,
+    tmp_output_dir,
+    test_timeout_ms,
+    skip_unless_e2e_ready,
+    e2e_config_writer,
+):
+    model_path = models_dir / model_file
+    skip_unless_e2e_ready(model_path.is_file(), f"model not found: {model_path}")
+    skip_unless_e2e_ready(
+        test_images_dir.exists() and any(test_images_dir.iterdir()),
+        f"test_images_dir is missing or empty: {test_images_dir}",
+    )
+    detections_path = tmp_output_dir.parent / "accuracy-detections.json"
+    config_path = e2e_config_writer(
+        {
+            "model": {
+                "path": str(model_path),
+                "frame": model_frame,
+                "preprocessing_profile": preprocessing_profile,
+            },
+            "io": {
+                "input_dir": str(test_images_dir),
+                "output_dir": str(tmp_output_dir),
+                "detections_json": str(detections_path),
+            },
+            "decode": {"score_threshold": 0.30, "nms_iou": 0.60, "max_detections": 100},
+            "runtime": {"num_runs": 1},
+            "output": {"overlay": False, "aggregate_suppression": False},
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+        capture_output=True,
+        text=True,
+        timeout=max(test_timeout_ms / 1000, 120),
+        cwd=str(EXAMPLE_DIR),
+    )
+    assert result.returncode == 0, (
+        f"{model_file}: main.py exited with code {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    reported = json.loads(detections_path.read_text(encoding="utf-8"))
+    if family == "v2":
+        golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
+        _assert_golden_detections(reported, golden)
+        print(f"model={model_file} family=v2 golden_parity=passed")
+        return
+
+    references = json.loads(ACCURACY_REFERENCE_PATH.read_text(encoding="utf-8"))
+    reference = references["families"][family]
+    recall, mean_iou, matched, total = _source_parity_metrics(reported, reference)
+    print(
+        f"model={model_file} family={family} matched={matched}/{total} "
+        f"source_recall_at_iou_0_45={recall:.6f} mean_matched_iou={mean_iou:.6f}"
+    )
+    assert recall >= float(
+        reference["min_recall"]
+    ), f"{model_file}: source recall {recall:.6f} below {reference['min_recall']}"
+    assert mean_iou >= float(reference["min_mean_matched_iou"]), (
+        f"{model_file}: mean matched IoU {mean_iou:.6f} below "
+        f"{reference['min_mean_matched_iou']}"
+    )

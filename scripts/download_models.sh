@@ -193,6 +193,34 @@ model_exists() {
     return 1
 }
 
+verify_sha256_file() {
+    local model_id="$1"
+    local file="$2"
+    local expected_sha256="$3"
+    if [[ -z "$expected_sha256" ]]; then
+        return 0
+    fi
+    if [[ -z "$file" || ! -f "$file" ]]; then
+        echo "[error] $model_id: sha256 requires the declared file to exist: ${file##*/}" >&2
+        return 1
+    fi
+    local actual_sha256
+    actual_sha256="$(sha256sum "$file" | awk '{print $1}')"
+    if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+        echo "[error] $model_id: sha256 mismatch for ${file##*/}" >&2
+        echo "        expected=$expected_sha256" >&2
+        echo "        actual=$actual_sha256" >&2
+        return 1
+    fi
+}
+
+verify_sha256() {
+    local model_id="$1"
+    local expected_file="$2"
+    local expected_sha256="$3"
+    verify_sha256_file "$model_id" "${MODELS_DIR}/${expected_file}" "$expected_sha256"
+}
+
 download_modelzoo_model() {
     local model_id="$1"
     local model_name="$2"
@@ -224,6 +252,7 @@ download_url_model() {
     local model_id="$1"
     local url="$2"
     local expected_file="$3"
+    local expected_sha256="$4"
     local tmpdir
     local downloaded_files=()
     if [[ "$url" == *"{modelzoo_version}"* ]]; then
@@ -239,6 +268,7 @@ download_url_model() {
     fi
 
     if model_exists "$model_id" "$expected_file"; then
+        verify_sha256 "$model_id" "$expected_file" "$expected_sha256" || return 1
         echo "[skip] $model_id already exists"
         return 0
     fi
@@ -260,6 +290,13 @@ download_url_model() {
         return 1
     fi
 
+    if [[ -n "$expected_sha256" ]]; then
+        if ! verify_sha256_file "$model_id" "$tmpdir/$expected_file" "$expected_sha256"; then
+            rm -rf "$tmpdir"
+            return 1
+        fi
+    fi
+
     local file
     for file in "${downloaded_files[@]}"; do
         mv "$file" "$MODELS_DIR/"
@@ -267,6 +304,7 @@ download_url_model() {
     rm -rf "$tmpdir"
 
     if model_exists "$model_id" "$expected_file"; then
+        verify_sha256 "$model_id" "$expected_file" "$expected_sha256" || return 1
         echo "[ok] $model_id"
         return 0
     fi
@@ -326,7 +364,7 @@ download_scoped_models() {
     acquire_lock
 
     local failed=0
-    local row model_id source name url expected_file repo path fields
+    local row model_id source name url expected_file repo path expected_sha256 fields
     for row in "${rows[@]}"; do
         fields=()
         split_tsv_row "$row" fields
@@ -337,12 +375,13 @@ download_scoped_models() {
         expected_file="${fields[4]:-}"
         repo="${fields[5]:-}"
         path="${fields[6]:-}"
+        expected_sha256="${fields[7]:-}"
         case "$source" in
             modelzoo)
                 download_modelzoo_model "$model_id" "${name:-$model_id}" "$expected_file" || failed=1
                 ;;
             url)
-                download_url_model "$model_id" "$url" "$expected_file" || failed=1
+                download_url_model "$model_id" "$url" "$expected_file" "$expected_sha256" || failed=1
                 ;;
             huggingface)
                 download_huggingface_model "$model_id" "$repo" "$path" || failed=1

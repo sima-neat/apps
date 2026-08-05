@@ -44,11 +44,15 @@ def example_key_from_scope_file(path: Path, examples_root: Path) -> str:
         raise ValueError(f"{path} is not under {examples_root}") from exc
     parts = relative.parts
     if len(parts) != 2:
-        raise ValueError(f"{path} must be at examples/<category>/<example>/{SCOPE_FILE_SUBPATH}")
+        raise ValueError(
+            f"{path} must be at examples/<category>/<example>/{SCOPE_FILE_SUBPATH}"
+        )
     return str(relative)
 
 
-def scope_entry_from_file(path: Path, examples_root: Path) -> tuple[str, dict[str, Any]]:
+def scope_entry_from_file(
+    path: Path, examples_root: Path
+) -> tuple[str, dict[str, Any]]:
     payload = load_yaml_mapping(path)
     example_key = example_key_from_scope_file(path, examples_root)
     if "examples" in payload:
@@ -69,7 +73,9 @@ def discover_scope(scope_source: Path, apps_root: Path = APPS_ROOT) -> dict[str,
     examples_root = examples_root_from_source(scope_source, apps_root)
     scope_files = sorted(examples_root.glob(f"*/*/{SCOPE_FILE_SUBPATH}"))
     if not scope_files:
-        raise FileNotFoundError(f"no {SCOPE_FILE_SUBPATH} files found under {examples_root}")
+        raise FileNotFoundError(
+            f"no {SCOPE_FILE_SUBPATH} files found under {examples_root}"
+        )
 
     examples: dict[str, Any] = {}
     for scope_file in scope_files:
@@ -106,7 +112,9 @@ def example_name(example_key: str) -> str:
     return example_key.split("/", 1)[1]
 
 
-def test_source_path(apps_root: Path, example_key: str, language: str, kind: str) -> Path:
+def test_source_path(
+    apps_root: Path, example_key: str, language: str, kind: str
+) -> Path:
     if language == "python":
         filename = "test_unit.py" if kind == "unit" else "test_e2e.py"
         return apps_root / "examples" / example_key / "tests" / "python" / filename
@@ -184,11 +192,18 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                 continue
             source = model.get("source")
             if source not in VALID_SOURCES:
-                errors.append(f"{example_key}: model {model_id} has invalid source {source!r}")
+                errors.append(
+                    f"{example_key}: model {model_id} has invalid source {source!r}"
+                )
             if source == "modelzoo" and not str(model.get("name", "")).strip():
                 errors.append(f"{example_key}: modelzoo model {model_id} needs name")
             if source == "url" and not str(model.get("url", "")).strip():
                 errors.append(f"{example_key}: url model {model_id} needs url")
+            sha256 = str(model.get("sha256", "") or "")
+            if sha256 and not re.fullmatch(r"[0-9a-f]{64}", sha256):
+                errors.append(
+                    f"{example_key}: model {model_id} sha256 must be 64 lowercase hex characters"
+                )
         for language in sorted(VALID_LANGUAGES):
             for kind in sorted(VALID_KINDS):
                 try:
@@ -196,7 +211,9 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                 except ValueError as exc:
                     errors.append(f"{example_key}: {exc}")
                     continue
-                artifact_paths = test_artifact_paths(apps_root, example_key, language, kind)
+                artifact_paths = test_artifact_paths(
+                    apps_root, example_key, language, kind
+                )
                 if enabled and not any(path.exists() for path in artifact_paths):
                     errors.append(
                         f"{example_key}: {language} {kind} is enabled but no test "
@@ -209,8 +226,12 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         errors.append(
                             f"{example_key}: e2e.{language} references undefined model {model_id}"
                         )
-                if is_enabled(entry, language, "e2e") and not enabled_models(entry, language):
-                    errors.append(f"{example_key}: e2e.{language} is enabled but models is empty")
+                if is_enabled(entry, language, "e2e") and not enabled_models(
+                    entry, language
+                ):
+                    errors.append(
+                        f"{example_key}: e2e.{language} is enabled but models is empty"
+                    )
             except ValueError as exc:
                 errors.append(f"{example_key}: {exc}")
     return errors
@@ -250,7 +271,9 @@ def scoped_models(
     if kind == "unit":
         return []
 
-    result: dict[tuple[str, str, str, str, str, str, str], tuple[str, dict[str, Any]]] = {}
+    result: dict[
+        tuple[str, str, str, str, str, str, str, str], tuple[str, dict[str, Any]]
+    ] = {}
     for example_key, entry in sorted(scope["examples"].items()):
         models = entry.get("models", {})
         for language in languages:
@@ -266,12 +289,15 @@ def scoped_models(
                     model_field(model, "file"),
                     model_field(model, "repo"),
                     model_field(model, "path"),
+                    model_field(model, "sha256"),
                 )
                 result.setdefault(identity, (model_id, model))
     return [item for _, item in sorted(result.items())]
 
 
-def scoped_model_files(scope: dict[str, Any], language: str, kind: str) -> list[tuple[str, str]]:
+def scoped_model_files(
+    scope: dict[str, Any], language: str, kind: str
+) -> list[tuple[str, str]]:
     if kind == "unit":
         return []
 
@@ -316,11 +342,15 @@ def main() -> int:
 
     models = sub.add_parser("models")
     models.add_argument("--kind", choices=sorted(VALID_KINDS), default="e2e")
-    models.add_argument("--language", choices=sorted(VALID_LANGUAGES), action="append", required=True)
+    models.add_argument(
+        "--language", choices=sorted(VALID_LANGUAGES), action="append", required=True
+    )
 
     model_files = sub.add_parser("model-files")
     model_files.add_argument("--kind", choices=sorted(VALID_KINDS), default="e2e")
-    model_files.add_argument("--language", choices=sorted(VALID_LANGUAGES), required=True)
+    model_files.add_argument(
+        "--language", choices=sorted(VALID_LANGUAGES), required=True
+    )
 
     args = parser.parse_args()
     scope = load_scope(args.scope_file, APPS_ROOT)
@@ -358,11 +388,14 @@ def main() -> int:
                 model_field(model, "file"),
                 model_field(model, "repo"),
                 model_field(model, "path"),
+                model_field(model, "sha256"),
             ]
             print("\t".join(fields))
         return 0
     if args.command == "model-files":
-        for example_key, file_name in scoped_model_files(scope, args.language, args.kind):
+        for example_key, file_name in scoped_model_files(
+            scope, args.language, args.kind
+        ):
             print(f"{example_key}\t{file_name}")
         return 0
     raise AssertionError(args.command)
