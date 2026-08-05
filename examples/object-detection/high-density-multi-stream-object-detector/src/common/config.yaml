@@ -34,7 +34,7 @@ input:
   fps: 25
   decoder_buffers: 8
   decoder_input_buffers: 2
-  decoder_tuning: auto
+  decoder_tuning: throughput-low-latency
 
 runtime:
   profile: false
