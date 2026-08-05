@@ -14,6 +14,7 @@ import struct
 import sys
 import time
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -79,6 +80,41 @@ def config_bool_or(
         if lowered == "false":
             return False
     raise ValueError(f"{qualified_key} must be true or false")
+
+
+def config_float_or(
+    section: Mapping[str, Any], key: str, default: float, qualified_key: str
+) -> float:
+    """Parse a numeric scalar without accepting Python's Boolean-as-integer coercion."""
+    value = config_value_or(section, key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f"{qualified_key} must be a number")
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{qualified_key} must be a number") from exc
+
+
+def config_int_or(
+    section: Mapping[str, Any], key: str, default: int, qualified_key: str
+) -> int:
+    """Parse an integer-valued scalar without truncating fractions or Booleans."""
+    value = config_value_or(section, key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f"{qualified_key} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
+        raise ValueError(f"{qualified_key} must be an integer")
+    try:
+        parsed = Decimal(value.strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{qualified_key} must be an integer") from exc
+    if not parsed.is_finite() or parsed != parsed.to_integral_value():
+        raise ValueError(f"{qualified_key} must be an integer")
+    return int(parsed)
 
 
 def is_image(path: Path) -> bool:
@@ -383,7 +419,6 @@ def main() -> int:
     output_cfg = raw.get("output", {})
 
     model_path = Path(config_value_or(model_cfg, "path", DEFAULT_MODEL_PATH))
-    model_frame = int(config_value_or(model_cfg, "frame", DEFAULT_MODEL_SIZE))
     preprocessing_profile = str(
         config_value_or(
             model_cfg, "preprocessing_profile", DEFAULT_PREPROCESSING_PROFILE
@@ -397,10 +432,17 @@ def main() -> int:
         config_value_or(io_cfg, "output_dir", "sandbox/ssd-mobilenet-object-detector")
     )
     detections_json = config_value_or(io_cfg, "detections_json", "")
-    score_threshold = float(config_value_or(decode_cfg, "score_threshold", 0.55))
-    nms_iou = float(config_value_or(decode_cfg, "nms_iou", 0.60))
-    max_detections = int(config_value_or(decode_cfg, "max_detections", 100))
     try:
+        model_frame = config_int_or(
+            model_cfg, "frame", DEFAULT_MODEL_SIZE, "model.frame"
+        )
+        score_threshold = config_float_or(
+            decode_cfg, "score_threshold", 0.55, "decode.score_threshold"
+        )
+        nms_iou = config_float_or(decode_cfg, "nms_iou", 0.60, "decode.nms_iou")
+        max_detections = config_int_or(
+            decode_cfg, "max_detections", 100, "decode.max_detections"
+        )
         aggregate_suppression_enabled = config_bool_or(
             output_cfg,
             "aggregate_suppression",
@@ -410,25 +452,40 @@ def main() -> int:
         profile = config_bool_or(runtime_cfg, "profile", False, "runtime.profile")
         overlay = config_bool_or(output_cfg, "overlay", True, "output.overlay")
         verbose = config_bool_or(runtime_cfg, "verbose", False, "runtime.verbose")
+        aggregate_suppression = AggregateSuppressionOptions(
+            enabled=aggregate_suppression_enabled,
+            min_parent_area_fraction=config_float_or(
+                output_cfg,
+                "aggregate_min_parent_area_fraction",
+                0.20,
+                "output.aggregate_min_parent_area_fraction",
+            ),
+            min_child_containment=config_float_or(
+                output_cfg,
+                "aggregate_min_child_containment",
+                0.90,
+                "output.aggregate_min_child_containment",
+            ),
+            max_child_area_ratio=config_float_or(
+                output_cfg,
+                "aggregate_max_child_area_ratio",
+                0.25,
+                "output.aggregate_max_child_area_ratio",
+            ),
+            min_children=config_int_or(
+                output_cfg,
+                "aggregate_min_children",
+                2,
+                "output.aggregate_min_children",
+            ),
+        )
+        num_runs = config_int_or(runtime_cfg, "num_runs", 1, "runtime.num_runs")
+        timeout_ms = config_int_or(
+            runtime_cfg, "timeout_ms", 20000, "runtime.timeout_ms"
+        )
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-
-    aggregate_suppression = AggregateSuppressionOptions(
-        enabled=aggregate_suppression_enabled,
-        min_parent_area_fraction=float(
-            config_value_or(output_cfg, "aggregate_min_parent_area_fraction", 0.20)
-        ),
-        min_child_containment=float(
-            config_value_or(output_cfg, "aggregate_min_child_containment", 0.90)
-        ),
-        max_child_area_ratio=float(
-            config_value_or(output_cfg, "aggregate_max_child_area_ratio", 0.25)
-        ),
-        min_children=int(config_value_or(output_cfg, "aggregate_min_children", 2)),
-    )
-    num_runs = int(config_value_or(runtime_cfg, "num_runs", 1))
-    timeout_ms = int(config_value_or(runtime_cfg, "timeout_ms", 20000))
 
     global VERBOSE
     VERBOSE = verbose

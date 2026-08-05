@@ -95,6 +95,34 @@ def test_config_value_or_treats_null_as_omitted(section, key, default, expected)
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
+    ("value", "expected"),
+    [(7, 7), (7.0, 7), ("7", 7), ("7.0", 7), (None, 3)],
+)
+def test_config_int_or_accepts_only_integer_values(value, expected):
+    assert (
+        ssd_mobilenet_main.config_int_or({"count": value}, "count", 3, "runtime.count")
+        == expected
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [True, False, 1.9, "1.9", float("nan"), [], {}])
+def test_config_int_or_rejects_boolean_fractional_and_non_scalar_values(value):
+    with pytest.raises(ValueError, match="runtime.count must be an integer"):
+        ssd_mobilenet_main.config_int_or({"count": value}, "count", 3, "runtime.count")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [True, False, [], {}, "not-a-number"])
+def test_config_float_or_rejects_boolean_and_non_numeric_values(value):
+    with pytest.raises(ValueError, match="decode.threshold must be a number"):
+        ssd_mobilenet_main.config_float_or(
+            {"threshold": value}, "threshold", 0.5, "decode.threshold"
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
     ("profile", "mean", "stddev"),
     [
         ("tensorflow_ssd", [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
@@ -277,6 +305,22 @@ class TestDecodeConfigValidation:
         assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
         assert message in r.stderr
 
+    @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        [
+            ("score_threshold", "true", "decode.score_threshold must be a number"),
+            ("max_detections", "1.9", "decode.max_detections must be an integer"),
+            ("max_detections", "true", "decode.max_detections must be an integer"),
+        ],
+    )
+    def test_rejects_boolean_and_fractional_numeric_values(
+        self, tmp_path, key, value, message
+    ):
+        config = _write_config(tmp_path, "decode", key, value)
+        r = _run(["--config", str(config)])
+        assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        assert message in r.stderr
+
 
 @pytest.mark.unit
 class TestAggregateDisplayConfigValidation:
@@ -336,6 +380,13 @@ class TestRuntimeConfigValidation:
         r = _run(["--config", str(config)])
         assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
         assert message in r.stderr
+
+    @pytest.mark.parametrize("key", ["timeout_ms", "num_runs"])
+    def test_rejects_fractional_values(self, tmp_path, key):
+        config = _write_config(tmp_path, "runtime", key, "1.5")
+        r = _run(["--config", str(config)])
+        assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        assert f"runtime.{key} must be an integer" in r.stderr
 
 
 @pytest.mark.unit
