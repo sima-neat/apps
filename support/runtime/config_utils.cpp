@@ -59,7 +59,8 @@ std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
 }
 
 bool is_nullish(const std::string& value) {
-  return lower_copy(trim_copy(value)) == "null";
+  const std::string normalized = lower_copy(trim_copy(value));
+  return normalized == "null" || normalized == "~";
 }
 
 int parse_int(const std::string& value, const std::string& key) {
@@ -123,8 +124,27 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       list_block_indent = -1;
     }
     if (line.rfind("- ", 0) == 0) {
+      while (!stack.empty() && indent <= stack.back().first) {
+        stack.pop_back();
+      }
+      const std::string sequence_key = join_stack(stack);
+      if (sequence_key.empty()) {
+        if (config.root_kind_ == ConfigNodeKind::Mapping) {
+          throw std::runtime_error("config root must be a mapping");
+        }
+        config.root_kind_ = ConfigNodeKind::Sequence;
+      } else {
+        config.node_kinds_[sequence_key] = ConfigNodeKind::Sequence;
+      }
       list_block_indent = indent;
       continue;
+    }
+
+    if (indent == 0) {
+      if (config.root_kind_ == ConfigNodeKind::Sequence) {
+        throw std::runtime_error("config root must be a mapping");
+      }
+      config.root_kind_ = ConfigNodeKind::Mapping;
     }
 
     const std::size_t colon = line.find(':');
@@ -138,16 +158,20 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       stack.pop_back();
     }
 
-    if (value.empty() || value == "{}") {
-      stack.emplace_back(indent, key);
-      continue;
-    }
-
     std::string full_key = join_stack(stack);
     if (!full_key.empty()) {
       full_key += '.';
     }
     full_key += key;
+
+    if (value.empty() || value == "{}") {
+      config.node_kinds_[full_key] = ConfigNodeKind::Mapping;
+      stack.emplace_back(indent, key);
+      continue;
+    }
+
+    config.node_kinds_[full_key] =
+        value == "[]" ? ConfigNodeKind::Sequence : ConfigNodeKind::Scalar;
     config.scalars_[full_key] = unquote(value);
   }
 
@@ -160,6 +184,15 @@ std::optional<std::string> ScalarConfig::string_value(const std::string& key) co
     return std::nullopt;
   }
   return it->second;
+}
+
+ConfigNodeKind ScalarConfig::node_kind(const std::string& key) const {
+  const auto it = node_kinds_.find(key);
+  return it == node_kinds_.end() ? ConfigNodeKind::Missing : it->second;
+}
+
+ConfigNodeKind ScalarConfig::root_kind() const {
+  return root_kind_;
 }
 
 std::string ScalarConfig::string_or(const std::string& key,

@@ -1,6 +1,7 @@
 // Unit test for ssd-mobilenet-object-detector: CLI arg handling and decode config validation.
 #include "examples/object-detection/ssd-mobilenet-object-detector/src/cpp/aggregate_suppression.h"
 #include "examples/object-detection/ssd-mobilenet-object-detector/src/cpp/output_paths.h"
+#include "support/runtime/config_utils.h"
 #include "support/testing/test_process.h"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -223,6 +225,39 @@ int main(int argc, char** argv) {
     return 1;
   }
   const fs::path scratch_dir(scratch);
+
+  const std::array<std::tuple<std::string, std::string, std::string>, 4> malformed_configs = {{
+      {"root_list.yaml", "- model\n", "config root must be a mapping"},
+      {"inline_model_list.yaml", "model: []\n", "model must be a mapping"},
+      {"block_model_list.yaml", "model:\n  - path\n", "model must be a mapping"},
+      {"scalar_io.yaml", "io: input\n", "io must be a mapping"},
+  }};
+  for (const auto& [name, contents, expected] : malformed_configs) {
+    const fs::path config = scratch_dir / name;
+    std::ofstream(config) << contents;
+    if (!expect_config_rejected(binary, config, expected, name)) {
+      ++failures;
+    }
+  }
+
+  {
+    const fs::path config = scratch_dir / "valid_nested_sequence.yaml";
+    std::ofstream(config) << "model:\n"
+                             "  path: model.tar.gz\n"
+                             "streams:\n"
+                             "  - rtsp://example/0\n"
+                             "  - rtsp://example/1\n";
+    const auto raw = sima_examples::ScalarConfig::load(config);
+    if (raw.root_kind() != sima_examples::ConfigNodeKind::Mapping ||
+        raw.node_kind("model") != sima_examples::ConfigNodeKind::Mapping ||
+        raw.node_kind("model.path") != sima_examples::ConfigNodeKind::Scalar ||
+        raw.node_kind("streams") != sima_examples::ConfigNodeKind::Sequence) {
+      std::cerr << "[FAIL] scalar config did not preserve mapping/sequence node kinds\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] scalar config preserves mapping/sequence node kinds\n";
+    }
+  }
 
   {
     const fs::path input = scratch_dir / "dangling-output-input" / "frame.jpg";

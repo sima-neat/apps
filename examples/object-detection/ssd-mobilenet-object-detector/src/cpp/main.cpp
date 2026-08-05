@@ -133,6 +133,21 @@ double config_double_or(const sima_examples::ScalarConfig& raw, const std::strin
   return raw.double_or(key, default_value);
 }
 
+void validate_config_mappings(const sima_examples::ScalarConfig& raw) {
+  if (raw.root_kind() == sima_examples::ConfigNodeKind::Sequence) {
+    throw std::runtime_error("config root must be a mapping");
+  }
+  for (const std::string& section : {"model", "io", "decode", "runtime", "output"}) {
+    const auto kind = raw.node_kind(section);
+    const bool null_mapping =
+        kind == sima_examples::ConfigNodeKind::Scalar && !raw.string_value(section).has_value();
+    if (kind != sima_examples::ConfigNodeKind::Missing &&
+        kind != sima_examples::ConfigNodeKind::Mapping && !null_mapping) {
+      throw std::runtime_error(section + " must be a mapping");
+    }
+  }
+}
+
 // Directory holding the running executable, or empty if it cannot be determined.
 fs::path executable_dir() {
   std::error_code ec;
@@ -177,6 +192,7 @@ fs::path resolve_asset(const std::string& configured, const char* default_path,
 
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
+  validate_config_mappings(raw);
   Config cfg;
   cfg.config_file = path;
   cfg.model = raw.string_or("model.path", "models/ssd_mobilenet_v2_heads_mpk.tar.gz");
