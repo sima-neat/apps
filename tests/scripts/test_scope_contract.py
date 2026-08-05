@@ -362,6 +362,99 @@ def test_download_models_rejects_new_file_with_wrong_sha256_before_install(tmp_p
     assert not (models_dir / "demo-file.tar.gz").exists()
 
 
+def test_download_models_rejects_existing_modelzoo_file_with_wrong_sha256(tmp_path):
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+    fake_scope_python = tmp_path / "fake_scope_python"
+    fake_scope_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'modelzoo-demo\\tmodelzoo\\tdemo_model\\t\\tdemo-file.tar.gz\\t\\t\\t"
+        "0000000000000000000000000000000000000000000000000000000000000000\\n'\n",
+        encoding="utf-8",
+    )
+    fake_scope_python.chmod(0o755)
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "demo-file.tar.gz").write_text(
+        "not the expected artifact\n", encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha256 mismatch for demo-file.tar.gz" in result.stderr
+    assert "[skip]" not in result.stdout
+
+
+def test_download_models_rejects_new_modelzoo_file_with_wrong_sha256_before_install(
+    tmp_path,
+):
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+    fake_scope_python = tmp_path / "fake_scope_python"
+    fake_scope_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'modelzoo-demo\\tmodelzoo\\tdemo_model\\t\\tdemo-file.tar.gz\\t\\t\\t"
+        "0000000000000000000000000000000000000000000000000000000000000000\\n'\n",
+        encoding="utf-8",
+    )
+    fake_scope_python.chmod(0o755)
+    fake_sima_cli = tmp_path / "sima-cli"
+    fake_sima_cli.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'not the expected artifact\\n' > demo-file.tar.gz\n",
+        encoding="utf-8",
+    )
+    fake_sima_cli.chmod(0o755)
+    models_dir = tmp_path / "models"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
+            "SIMA_CLI_BIN": str(fake_sima_cli),
+            "NEAT_APPS_MODELZOO_VERSION": "2.1.1",
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha256 mismatch for demo-file.tar.gz" in result.stderr
+    assert not (models_dir / "demo-file.tar.gz").exists()
+
+
 def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
     if (
         subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode

@@ -225,20 +225,53 @@ download_modelzoo_model() {
     local model_id="$1"
     local model_name="$2"
     local expected_file="$3"
+    local expected_sha256="${4:-}"
+    local download_dir="$MODELS_DIR"
+    local tmpdir=""
+    local downloaded_files=()
+    if [[ -n "$expected_sha256" && -z "$expected_file" ]]; then
+        echo "[error] $model_id: sha256 requires a declared file" >&2
+        return 1
+    fi
     if model_exists "$model_name" "$expected_file"; then
+        verify_sha256 "$model_id" "$expected_file" "$expected_sha256" || return 1
         echo "[skip] $model_id already exists"
         return 0
     fi
     ensure_sima_cli_bin
     ensure_modelzoo_version
 
+    # A checksummed artifact is downloaded outside the shared model directory so
+    # it cannot become visible to a test until its declared digest is verified.
+    if [[ -n "$expected_sha256" ]]; then
+        tmpdir="$(mktemp -d)"
+        download_dir="$tmpdir"
+    fi
+
     local before
-    before=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
+    before=$(find "$download_dir" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
     echo "[download] $model_id (modelzoo: $model_name, modelzoo-version: $MODELZOO_VERSION)"
-    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$MODELZOO_VERSION" get "$model_name")
+    if ! (cd "$download_dir" && "$SIMA_CLI_BIN" modelzoo -v "$MODELZOO_VERSION" get "$model_name"); then
+        [[ -z "$tmpdir" ]] || rm -rf "$tmpdir"
+        return 1
+    fi
 
     local after
-    after=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
+    after=$(find "$download_dir" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
+    if [[ -n "$expected_sha256" ]]; then
+        if ! verify_sha256_file "$model_id" "$tmpdir/$expected_file" "$expected_sha256"; then
+            rm -rf "$tmpdir"
+            return 1
+        fi
+        while IFS= read -r file; do
+            downloaded_files+=("$file")
+        done < <(find "$tmpdir" -maxdepth 1 -type f | sort)
+        local file
+        for file in "${downloaded_files[@]}"; do
+            mv "$file" "$MODELS_DIR/"
+        done
+        rm -rf "$tmpdir"
+    fi
     if [[ "$after" -gt "$before" || -z "$expected_file" || -f "${MODELS_DIR}/${expected_file}" ]]; then
         echo "[ok] $model_id"
         return 0
@@ -378,7 +411,8 @@ download_scoped_models() {
         expected_sha256="${fields[7]:-}"
         case "$source" in
             modelzoo)
-                download_modelzoo_model "$model_id" "${name:-$model_id}" "$expected_file" || failed=1
+                download_modelzoo_model \
+                    "$model_id" "${name:-$model_id}" "$expected_file" "$expected_sha256" || failed=1
                 ;;
             url)
                 download_url_model "$model_id" "$url" "$expected_file" "$expected_sha256" || failed=1
