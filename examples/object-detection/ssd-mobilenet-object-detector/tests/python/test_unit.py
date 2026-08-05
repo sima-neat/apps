@@ -107,6 +107,15 @@ def test_config_mapping_or_empty_rejects_other_yaml_types(value):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("value", [[], {}, True, 1, 1.5])
+def test_config_string_or_rejects_non_strings(value):
+    with pytest.raises(ValueError, match="model.path must be a string"):
+        ssd_mobilenet_main.config_string_or(
+            {"path": value}, "path", "default", "model.path"
+        )
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("value", "expected"),
     [(7, 7), (7.0, 7), ("7", 7), ("7.0", 7), (None, 3)],
@@ -333,6 +342,28 @@ class TestArgParsing:
 
         assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
         assert message in r.stderr
+        assert "Traceback" not in r.stderr
+
+    @pytest.mark.parametrize(
+        ("section", "key"),
+        [
+            ("model", "path"),
+            ("model", "labels"),
+            ("io", "input_dir"),
+            ("io", "output_dir"),
+            ("io", "detections_json"),
+        ],
+    )
+    @pytest.mark.parametrize("value", ["[]", "true"])
+    def test_rejects_non_string_paths_without_traceback(
+        self, tmp_path, section, key, value
+    ):
+        config = _write_config(tmp_path, section, key, value)
+
+        r = _run(["--config", str(config)])
+
+        assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        assert f"{section}.{key} must be a string" in r.stderr
         assert "Traceback" not in r.stderr
 
 

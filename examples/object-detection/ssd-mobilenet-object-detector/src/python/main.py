@@ -75,6 +75,16 @@ def config_mapping_or_empty(value: Any, qualified_key: str) -> dict[str, Any]:
     return value
 
 
+def config_string_or(
+    section: Mapping[str, Any], key: str, default: str, qualified_key: str
+) -> str:
+    """Parse a YAML string without coercing collections, numbers, or Booleans."""
+    value = config_value_or(section, key, default)
+    if not isinstance(value, str):
+        raise ValueError(f"{qualified_key} must be a string")
+    return value
+
+
 def config_bool_or(
     section: Mapping[str, Any], key: str, default: bool, qualified_key: str
 ) -> bool:
@@ -436,21 +446,36 @@ def main() -> int:
         print(exc, file=sys.stderr)
         return 2
 
-    model_path = Path(config_value_or(model_cfg, "path", DEFAULT_MODEL_PATH))
-    preprocessing_profile = str(
-        config_value_or(
-            model_cfg, "preprocessing_profile", DEFAULT_PREPROCESSING_PROFILE
-        )
-    )
-    labels_path = _resolve_asset(
-        config_value_or(model_cfg, "labels", ""), "coco_labels.txt"
-    )
-    input_dir = Path(config_value_or(io_cfg, "input_dir", "assets/datasets/coco"))
-    output_dir = Path(
-        config_value_or(io_cfg, "output_dir", "sandbox/ssd-mobilenet-object-detector")
-    )
-    detections_json = config_value_or(io_cfg, "detections_json", "")
     try:
+        model_path = Path(
+            config_string_or(model_cfg, "path", DEFAULT_MODEL_PATH, "model.path")
+        )
+        preprocessing_profile = config_string_or(
+            model_cfg,
+            "preprocessing_profile",
+            DEFAULT_PREPROCESSING_PROFILE,
+            "model.preprocessing_profile",
+        )
+        labels_path = _resolve_asset(
+            config_string_or(model_cfg, "labels", "", "model.labels"),
+            "coco_labels.txt",
+        )
+        input_dir = Path(
+            config_string_or(
+                io_cfg, "input_dir", "assets/datasets/coco", "io.input_dir"
+            )
+        )
+        output_dir = Path(
+            config_string_or(
+                io_cfg,
+                "output_dir",
+                "sandbox/ssd-mobilenet-object-detector",
+                "io.output_dir",
+            )
+        )
+        detections_json = config_string_or(
+            io_cfg, "detections_json", "", "io.detections_json"
+        )
         model_frame = config_int_or(
             model_cfg, "frame", DEFAULT_MODEL_SIZE, "model.frame"
         )
