@@ -226,11 +226,22 @@ int main(int argc, char** argv) {
   }
   const fs::path scratch_dir(scratch);
 
-  const std::array<std::tuple<std::string, std::string, std::string>, 4> malformed_configs = {{
+  const std::array<std::tuple<std::string, std::string, std::string>, 10> malformed_configs = {{
       {"root_list.yaml", "- model\n", "config root must be a mapping"},
       {"inline_model_list.yaml", "model: []\n", "model must be a mapping"},
       {"block_model_list.yaml", "model:\n  - path\n", "model must be a mapping"},
       {"scalar_io.yaml", "io: input\n", "io must be a mapping"},
+      {"model_path_list.yaml", "model:\n  path:\n    - custom.tar.gz\n",
+       "model.path must be a scalar value"},
+      {"inline_model_values.yaml", "model: [path]\n", "model must be a mapping"},
+      {"inline_model_mapping.yaml", "model: {path: custom.tar.gz}\n",
+       "inline mappings are not supported for model"},
+      {"inline_model_path_list.yaml", "model:\n  path: [custom.tar.gz]\n",
+       "model.path must be a scalar value"},
+      {"decode_max_mapping.yaml", "decode:\n  max_detections: {}\n",
+       "decode.max_detections must be a scalar value"},
+      {"runtime_profile_list.yaml", "runtime:\n  profile: []\n",
+       "runtime.profile must be a scalar value"},
   }};
   for (const auto& [name, contents, expected] : malformed_configs) {
     const fs::path config = scratch_dir / name;

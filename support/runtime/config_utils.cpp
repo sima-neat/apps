@@ -170,8 +170,15 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       continue;
     }
 
-    config.node_kinds_[full_key] =
-        value == "[]" ? ConfigNodeKind::Sequence : ConfigNodeKind::Scalar;
+    const bool quoted = value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
+                                              (value.front() == '\'' && value.back() == '\''));
+    if (!quoted && value.size() >= 2 && value.front() == '[' && value.back() == ']') {
+      config.node_kinds_[full_key] = ConfigNodeKind::Sequence;
+    } else if (!quoted && value.size() >= 2 && value.front() == '{' && value.back() == '}') {
+      throw std::runtime_error("inline mappings are not supported for " + full_key);
+    } else {
+      config.node_kinds_[full_key] = ConfigNodeKind::Scalar;
+    }
     config.scalars_[full_key] = unquote(value);
   }
 
@@ -179,6 +186,10 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 }
 
 std::optional<std::string> ScalarConfig::string_value(const std::string& key) const {
+  const ConfigNodeKind kind = node_kind(key);
+  if (kind == ConfigNodeKind::Mapping || kind == ConfigNodeKind::Sequence) {
+    throw std::runtime_error(key + " must be a scalar value");
+  }
   const auto it = scalars_.find(key);
   if (it == scalars_.end() || is_nullish(it->second)) {
     return std::nullopt;
