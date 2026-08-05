@@ -94,6 +94,19 @@ def test_config_value_or_treats_null_as_omitted(section, key, default, expected)
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("value", [None, {}])
+def test_config_mapping_or_empty_accepts_null_and_mapping(value):
+    assert ssd_mobilenet_main.config_mapping_or_empty(value, "model") == {}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [[], "model", 1, True])
+def test_config_mapping_or_empty_rejects_other_yaml_types(value):
+    with pytest.raises(ValueError, match="model must be a mapping"):
+        ssd_mobilenet_main.config_mapping_or_empty(value, "model")
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("value", "expected"),
     [(7, 7), (7.0, 7), ("7", 7), ("7.0", 7), (None, 3)],
@@ -156,6 +169,21 @@ def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
     assert removed == 1
     assert not output.is_symlink()
     assert not missing_target.exists()
+
+
+@pytest.mark.unit
+def test_clear_output_images_refuses_directory(tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    output = output_dir / "frame_jpg.png"
+    output.mkdir()
+
+    with pytest.raises(
+        IsADirectoryError, match="generated overlay path is a directory"
+    ):
+        ssd_mobilenet_main.clear_output_images(output_dir, {output.name})
+
+    assert output.is_dir()
 
 
 @pytest.mark.unit
@@ -283,6 +311,29 @@ class TestArgParsing:
         r = _run(["--bogus"])
         assert r.returncode == 2
         assert "unrecognized" in r.stderr.lower() or "error" in r.stderr.lower()
+
+    @pytest.mark.parametrize(
+        ("document", "message"),
+        [
+            ("- model\n", "config root must be a mapping"),
+            ("model: []\n", "model must be a mapping"),
+            ("io: input\n", "io must be a mapping"),
+            ("decode: true\n", "decode must be a mapping"),
+            ("runtime: 1\n", "runtime must be a mapping"),
+            ("output: []\n", "output must be a mapping"),
+        ],
+    )
+    def test_rejects_non_mapping_config_nodes_without_traceback(
+        self, tmp_path, document, message
+    ):
+        config = tmp_path / "malformed-node.yaml"
+        config.write_text(document, encoding="utf-8")
+
+        r = _run(["--config", str(config)])
+
+        assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+        assert message in r.stderr
+        assert "Traceback" not in r.stderr
 
 
 @pytest.mark.unit
@@ -484,6 +535,43 @@ def test_rejects_detection_report_hard_linked_to_input_image(tmp_path):
     r = _run(["--config", str(config)])
     assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     assert "io.detections_json must not overwrite an input image" in r.stderr
+
+
+@pytest.mark.unit
+def test_rejects_directory_at_generated_overlay_path_without_traceback(tmp_path):
+    model = tmp_path / "model.tar.gz"
+    model.touch()
+    labels = tmp_path / "labels.txt"
+    labels.write_text("background\nperson\n", encoding="utf-8")
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "frame.jpg").touch()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "frame_jpg.png").mkdir()
+    config = tmp_path / "overlay_directory.yaml"
+    config.write_text(
+        textwrap.dedent(
+            f"""\
+            model:
+              path: {model}
+              labels: {labels}
+            io:
+              input_dir: {input_dir}
+              output_dir: {output_dir}
+            output:
+              overlay: true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(["--config", str(config)])
+
+    assert r.returncode == 2, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "generated overlay path must not be a directory" in r.stderr
+    assert "Traceback" not in r.stderr
+    assert (output_dir / "frame_jpg.png").is_dir()
 
 
 @pytest.mark.unit

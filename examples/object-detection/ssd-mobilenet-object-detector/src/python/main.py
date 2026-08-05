@@ -66,6 +66,15 @@ def config_value_or(section: Mapping[str, Any], key: str, default: Any) -> Any:
     return default if value is None else value
 
 
+def config_mapping_or_empty(value: Any, qualified_key: str) -> dict[str, Any]:
+    """Normalize a missing YAML mapping and reject every other node type."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{qualified_key} must be a mapping")
+    return value
+
+
 def config_bool_or(
     section: Mapping[str, Any], key: str, default: bool, qualified_key: str
 ) -> bool:
@@ -144,6 +153,10 @@ def clear_output_images(output_dir: Path, expected_names: set[str]) -> int:
         path = output_dir / name
         # exists() follows symlinks and is false for dangling links; is_symlink() closes that gap.
         if path.is_symlink() or path.exists():
+            if path.is_dir() and not path.is_symlink():
+                raise IsADirectoryError(
+                    f"generated overlay path is a directory: {path}"
+                )
             path.unlink()
             removed += 1
     return removed
@@ -401,7 +414,7 @@ def main() -> int:
 
     try:
         with args.config.open("r", encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle) or {}
+            loaded = yaml.safe_load(handle)
     except OSError as exc:
         print(
             f"failed to open config file: {args.config} ({exc.strerror})",
@@ -412,11 +425,16 @@ def main() -> int:
         print(f"failed to parse config file: {args.config} ({exc})", file=sys.stderr)
         return 2
 
-    model_cfg = raw.get("model", {})
-    io_cfg = raw.get("io", {})
-    decode_cfg = raw.get("decode", {})
-    runtime_cfg = raw.get("runtime", {})
-    output_cfg = raw.get("output", {})
+    try:
+        raw = config_mapping_or_empty(loaded, "config root")
+        model_cfg = config_mapping_or_empty(raw.get("model"), "model")
+        io_cfg = config_mapping_or_empty(raw.get("io"), "io")
+        decode_cfg = config_mapping_or_empty(raw.get("decode"), "decode")
+        runtime_cfg = config_mapping_or_empty(raw.get("runtime"), "runtime")
+        output_cfg = config_mapping_or_empty(raw.get("output"), "output")
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     model_path = Path(config_value_or(model_cfg, "path", DEFAULT_MODEL_PATH))
     preprocessing_profile = str(
@@ -577,6 +595,12 @@ def main() -> int:
         consumed_paths = (args.config, model_path, labels_path, *image_paths)
         for image_path in image_paths:
             overlay_path = output_dir / f"{output_stem(image_path)}.png"
+            if overlay_path.is_dir() and not overlay_path.is_symlink():
+                print(
+                    f"generated overlay path must not be a directory: {overlay_path}",
+                    file=sys.stderr,
+                )
+                return 2
             if any(paths_alias(overlay_path, consumed) for consumed in consumed_paths):
                 print(
                     f"generated overlay must not overwrite a consumed input: {overlay_path}",
@@ -715,9 +739,14 @@ def main() -> int:
 
     # Only overlay runs touch output_dir, so a JSON-only run leaves it alone.
     if overlay:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        expected_outputs = {f"{output_stem(p)}.png" for p in image_paths}
-        removed_outputs = clear_output_images(output_dir, expected_outputs)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            expected_outputs = {f"{output_stem(p)}.png" for p in image_paths}
+            removed_outputs = clear_output_images(output_dir, expected_outputs)
+        except OSError as exc:
+            runner.close()
+            print(f"Failed to prepare output directory: {exc}", file=sys.stderr)
+            return 4
         if removed_outputs:
             print(f"Cleared {removed_outputs} stale output images")
 
