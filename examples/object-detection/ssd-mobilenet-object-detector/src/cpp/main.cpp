@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -107,6 +108,31 @@ std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
   return images;
 }
 
+// ScalarConfig intentionally implements only the small YAML subset used by the examples.
+// Normalize YAML's special floating-point spellings here so the finite/range validation below
+// reports the same domain-specific error as the Python implementation.
+double config_double_or(const sima_examples::ScalarConfig& raw, const std::string& key,
+                        double default_value) {
+  const auto value = raw.string_value(key);
+  if (!value.has_value()) {
+    return default_value;
+  }
+
+  std::string normalized = sima_examples::trim_copy(*value);
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (normalized == ".nan") {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (normalized == ".inf" || normalized == "+.inf") {
+    return std::numeric_limits<double>::infinity();
+  }
+  if (normalized == "-.inf") {
+    return -std::numeric_limits<double>::infinity();
+  }
+  return raw.double_or(key, default_value);
+}
+
 // Directory holding the running executable, or empty if it cannot be determined.
 fs::path executable_dir() {
   std::error_code ec;
@@ -161,16 +187,16 @@ Config load_config(const fs::path& path) {
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/ssd-mobilenet-object-detector");
   cfg.detections_json = raw.string_or("io.detections_json", "");
-  cfg.score_threshold = static_cast<float>(raw.double_or("decode.score_threshold", 0.55));
-  cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", 0.60));
+  cfg.score_threshold = static_cast<float>(config_double_or(raw, "decode.score_threshold", 0.55));
+  cfg.nms_iou = static_cast<float>(config_double_or(raw, "decode.nms_iou", 0.60));
   cfg.max_detections = raw.int_or("decode.max_detections", 100);
   cfg.aggregate_suppression.enabled = raw.bool_or("output.aggregate_suppression", false);
   cfg.aggregate_suppression.min_parent_area_fraction =
-      static_cast<float>(raw.double_or("output.aggregate_min_parent_area_fraction", 0.20));
+      static_cast<float>(config_double_or(raw, "output.aggregate_min_parent_area_fraction", 0.20));
   cfg.aggregate_suppression.min_child_containment =
-      static_cast<float>(raw.double_or("output.aggregate_min_child_containment", 0.90));
+      static_cast<float>(config_double_or(raw, "output.aggregate_min_child_containment", 0.90));
   cfg.aggregate_suppression.max_child_area_ratio =
-      static_cast<float>(raw.double_or("output.aggregate_max_child_area_ratio", 0.25));
+      static_cast<float>(config_double_or(raw, "output.aggregate_max_child_area_ratio", 0.25));
   cfg.aggregate_suppression.min_children = raw.int_or("output.aggregate_min_children", 2);
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
   cfg.num_runs = raw.int_or("runtime.num_runs", 1);

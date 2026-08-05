@@ -7,6 +7,7 @@ Runs TensorFlow SSD-MobileNet v1/v2 (300x300) and TorchVision SSDlite-MobileNetV
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 import json
 import logging
 import math
@@ -318,11 +319,24 @@ def suppress_aggregate_detections(
         return detections
 
     image_area = float(image_width * image_height)
-    coords = [tuple(float(value) for value in det["box"]) for det in detections]
+    # Parsed detections already own numeric coordinates; keep references instead of rebuilding
+    # four-float tuples on every frame.
+    coords = [det["box"] for det in detections]
     areas = [max(0.0, x2 - x1) * max(0.0, y2 - y1) for x1, y1, x2, y2 in coords]
     by_class: dict[int, list[int]] = {}
     for index, det in enumerate(detections):
         by_class.setdefault(int(det["class_id"]), []).append(index)
+
+    # Sort once by area so each parent considers only candidates small enough to be children.
+    # This preserves the policy while avoiding the quadratic scan when many similarly sized
+    # detections are present (the common worst case for max_detections=100).
+    class_candidates: dict[int, tuple[list[float], list[int]]] = {}
+    for class_id, indices in by_class.items():
+        ordered_indices = sorted(indices, key=areas.__getitem__)
+        class_candidates[class_id] = (
+            [areas[index] for index in ordered_indices],
+            ordered_indices,
+        )
 
     suppressed = [False] * len(detections)
     for parent_index, (px1, py1, px2, py2) in enumerate(coords):
@@ -333,7 +347,10 @@ def suppress_aggregate_detections(
         children = 0
         max_child_area = parent_area * options.max_child_area_ratio
         class_id = int(detections[parent_index]["class_id"])
-        for child_index in by_class[class_id]:
+        candidate_areas, candidate_indices = class_candidates[class_id]
+        eligible_count = bisect_right(candidate_areas, max_child_area)
+        for candidate_position in range(eligible_count):
+            child_index = candidate_indices[candidate_position]
             if child_index == parent_index:
                 continue
             child_area = areas[child_index]
