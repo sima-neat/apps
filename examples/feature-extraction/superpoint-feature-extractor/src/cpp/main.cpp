@@ -111,21 +111,8 @@ struct FrameSize {
   int height = 0;
 };
 
-FrameSize model_frame(const neat::Model& model) {
-  const auto shape = model.preprocess_requirements().output_shape;
-  if (shape.size() < 3U) {
-    throw std::runtime_error("SuperPoint Preproc must expose an HWC output shape");
-  }
-  const int height = shape[shape.size() - 3U];
-  const int width = shape[shape.size() - 2U];
-  if (width <= 0 || height <= 0) {
-    throw std::runtime_error("SuperPoint Preproc resolved an invalid model frame");
-  }
-  return {width, height};
-}
-
-std::vector<float> keypoints(const neat::FeaturePointTensors& features, const FrameSize& model_size,
-                             const FrameSize& output_size) {
+std::vector<float> keypoints(const neat::FeaturePointTensors& features,
+                             const FrameSize& source_size) {
   if (features.keypoints.shape.size() != 2 || features.keypoints.shape[1] != 2 ||
       features.scores.shape.size() != 1 || features.descriptors.shape.size() != 2) {
     throw std::runtime_error("invalid SuperPoint output ranks");
@@ -148,13 +135,10 @@ std::vector<float> keypoints(const neat::FeaturePointTensors& features, const Fr
   for (std::size_t i = 0; i < points.size(); i += 2) {
     const float x = points[i];
     const float y = points[i + 1];
-    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F || x >= model_size.width ||
-        y >= model_size.height) {
+    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F || x >= source_size.width ||
+        y >= source_size.height) {
       throw std::runtime_error("SuperPoint returned an invalid keypoint coordinate");
     }
-    points[i] = x * static_cast<float>(output_size.width) / static_cast<float>(model_size.width);
-    points[i + 1] =
-        y * static_cast<float>(output_size.height) / static_cast<float>(model_size.height);
   }
   return points;
 }
@@ -278,7 +262,6 @@ int main(int argc, char** argv) {
     const double fps = std::isfinite(input_fps) && input_fps > 0.0 ? input_fps : 30.0;
 
     neat::Model model(cfg.model.string(), model_options(input_width, input_height));
-    const FrameSize model_size = model_frame(model);
     auto input = prepare_input(frame);
     auto runner = model.build(neat::TensorList{input});
     auto video_sender = build_video_sender(cfg, fps, input_width, input_height);
@@ -291,7 +274,7 @@ int main(int argc, char** argv) {
       if (decoded.size() != 1) {
         throw std::runtime_error("SuperPoint must return one feature set per frame");
       }
-      const auto points = keypoints(decoded.front(), model_size, FrameSize{frame.cols, frame.rows});
+      const auto points = keypoints(decoded.front(), FrameSize{frame.cols, frame.rows});
       total_points += points.size() / 2;
       draw_points(frame, points);
       stream_frame(video_sender.run, frame);

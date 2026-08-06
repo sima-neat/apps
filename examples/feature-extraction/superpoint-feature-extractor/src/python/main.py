@@ -78,24 +78,7 @@ def model_options(pyneat, input_width, input_height):
     return options
 
 
-def model_frame(model):
-    shape = tuple(int(value) for value in model.preprocess_requirements().output_shape)
-    if len(shape) < 3 or shape[-3] <= 0 or shape[-2] <= 0:
-        raise RuntimeError("SuperPoint Preproc must expose a positive HWC output shape")
-    return shape[-2], shape[-3]
-
-
-def remap_points(points, model_width, model_height, output_width, output_height, np):
-    remapped = np.array(points, dtype=np.float32, copy=True)
-    if remapped.size:
-        remapped[:, 0] *= np.float32(output_width / model_width)
-        remapped[:, 1] *= np.float32(output_height / model_height)
-    return remapped
-
-
-def feature_points(
-    output, model_width, model_height, output_width, output_height, np, pyneat
-):
+def feature_points(output, source_width, source_height, np, pyneat):
     decoded = pyneat.decode_superpoint(list(output))
     if len(decoded) != 1:
         raise RuntimeError("SuperPoint must return one feature set per frame")
@@ -118,14 +101,12 @@ def feature_points(
     if points.size and (
         not np.all(np.isfinite(points))
         or np.any(points[:, 0] < 0)
-        or np.any(points[:, 0] >= model_width)
+        or np.any(points[:, 0] >= source_width)
         or np.any(points[:, 1] < 0)
-        or np.any(points[:, 1] >= model_height)
+        or np.any(points[:, 1] >= source_height)
     ):
         raise RuntimeError("SuperPoint returned an invalid keypoint coordinate")
-    return remap_points(
-        points, model_width, model_height, output_width, output_height, np
-    )
+    return points
 
 
 def input_tensor(frame, np, pyneat):
@@ -256,7 +237,6 @@ def main() -> int:
         model = pyneat.Model(
             str(config.model), model_options(pyneat, input_width, input_height)
         )
-        model_width, model_height = model_frame(model)
         model_input = input_tensor(frame, np, pyneat)
         runner = model.build(
             [model_input],
@@ -273,8 +253,6 @@ def main() -> int:
             output = runner.run([model_input], timeout_ms=config.timeout_ms)
             points = feature_points(
                 output,
-                model_width,
-                model_height,
                 frame.shape[1],
                 frame.shape[0],
                 np,

@@ -17,7 +17,8 @@
 `superpoint-feature-extractor` runs SuperPoint on a video and streams the feature-point overlay
 to Insight. Like the YOLO examples, it feeds BGR image tensors into Core preprocessing. Preproc
 owns resize, BGR-to-grayscale conversion, normalization, and the original/model geometry metadata
-consumed by A65 SuperPoint BoxDecode; the app does not duplicate BoxDecode W/H overrides.
+consumed by A65 SuperPoint BoxDecode. BoxDecode applies the inverse Preproc affine to feature
+coordinates, so the app does not duplicate W/H, resize-mode, or coordinate-remap logic.
 
 The application selects the A65V1 numerical profile explicitly. Tensor roles, output dtypes, and
 storage layouts come from the MPK contract rather than being inferred from tensor order or values.
@@ -111,9 +112,9 @@ runtime:
 
 `runtime.frames: 0` processes the complete video. Any stable input resolution supported by the
 hardware may be used. Core Preproc stretches each frame to the model's 640x480 input and publishes
-the resize geometry; the app maps model-space feature coordinates back to the source frame for the
-Insight overlay. A mid-stream resolution change is rejected because the model and video-sender
-graphs are built once from the first frame.
+the resize geometry; BoxDecode returns source-space feature coordinates for the Insight overlay. A
+mid-stream resolution change is rejected because the model and video-sender graphs are built once
+from the first frame.
 
 Set `output.insight.host` to the host running Insight. The application sends the annotated stream
 as H.264 over RTP/UDP using the configured base port and channel.

@@ -45,28 +45,25 @@ def test_draw_points_marks_the_requested_coordinate():
     assert cv2.circles == [(40, 50)]
 
 
-def test_remap_points_scales_model_coordinates_to_source_frame():
+def test_feature_points_uses_source_coordinates_from_boxdecode_unchanged():
     example = load_example()
-
-    actual = example.remap_points(
-        np.asarray([[320.0, 240.0]], dtype=np.float32),
-        640,
-        480,
-        1280,
-        720,
-        np,
+    keypoints = SimpleNamespace(
+        dtype="fp32",
+        to_numpy=lambda copy: np.asarray([[900.0, 500.0]], dtype=np.float32),
+    )
+    features = SimpleNamespace(
+        keypoints=keypoints,
+        scores=SimpleNamespace(shape=(1,), dtype="fp32"),
+        descriptors=SimpleNamespace(shape=(1, 256), dtype="fp32"),
+    )
+    pyneat = SimpleNamespace(
+        TensorDType=SimpleNamespace(Float32="fp32"),
+        decode_superpoint=lambda _output: [features],
     )
 
-    np.testing.assert_allclose(actual, [[640.0, 360.0]])
+    actual = example.feature_points([object()], 960, 540, np, pyneat)
 
-
-def test_model_frame_comes_from_resolved_preproc_output():
-    example = load_example()
-    model = SimpleNamespace(
-        preprocess_requirements=lambda: SimpleNamespace(output_shape=(1, 480, 640, 1))
-    )
-
-    assert example.model_frame(model) == (640, 480)
+    np.testing.assert_array_equal(actual, [[900.0, 500.0]])
 
 
 def test_model_options_delegate_image_geometry_to_core_preproc():
@@ -89,7 +86,7 @@ def test_model_options_delegate_image_geometry_to_core_preproc():
                     input_max_width=0,
                     input_max_height=0,
                     input_max_depth=0,
-                    resize=SimpleNamespace(enable=None, mode=None),
+                    resize=SimpleNamespace(enable=None, mode=None, width=0, height=0),
                     color_convert=SimpleNamespace(
                         enable=None, input_format=None, output_format=None
                     ),
@@ -119,6 +116,7 @@ def test_model_options_delegate_image_geometry_to_core_preproc():
         720,
     )
     assert options.preprocess.resize.mode == "stretch"
+    assert (options.preprocess.resize.width, options.preprocess.resize.height) == (0, 0)
     assert options.preprocess.color_convert.input_format == "bgr"
     assert options.preprocess.color_convert.output_format == "gray8"
     assert options.preprocess.normalize.mean == (0.0, 0.0, 0.0)

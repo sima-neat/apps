@@ -165,7 +165,6 @@ def test_non_model_resolution_runs_through_core_preproc(
         str(e2e_model_path),
         example.model_options(pyneat, frame.shape[1], frame.shape[0]),
     )
-    model_width, model_height = example.model_frame(model)
     model_input = example.input_tensor(frame, np, pyneat)
     runner = model.build(
         [model_input],
@@ -176,8 +175,6 @@ def test_non_model_resolution_runs_through_core_preproc(
         output = runner.run([model_input], timeout_ms=test_timeout_ms)
         points = example.feature_points(
             output,
-            model_width,
-            model_height,
             frame.shape[1],
             frame.shape[0],
             np,
