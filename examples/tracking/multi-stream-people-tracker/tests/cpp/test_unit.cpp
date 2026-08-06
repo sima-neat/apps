@@ -141,6 +141,27 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
   return ok;
 }
 
+bool test_validate_config_only_rejects_nan_threshold(const std::string& binary) {
+  const fs::path config_path = write_config("test_validate_config_only_rejects_nan_threshold",
+                                            "model:\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "streams:\n"
+                                            "  - rtsp://127.0.0.1:8554/src1\n"
+                                            "inference:\n"
+                                            "  min_score: nan\n"
+                                            "output:\n"
+                                            "  insight:\n"
+                                            "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 1, "NaN detection threshold is rejected") &&
+                  expect_contains(result.stderr_text, "min_score must be between 0 and 1",
+                                  "NaN threshold error names min_score");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 bool test_omitted_tracking_thresholds_follow_decoder_floor(const std::string& binary) {
   const fs::path config_path = write_config("test_omitted_tracking_thresholds_follow_decoder_floor",
                                             "model:\n"
@@ -372,6 +393,7 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
+  ok &= test_validate_config_only_rejects_nan_threshold(binary);
   ok &= test_omitted_tracking_thresholds_follow_decoder_floor(binary);
   ok &= test_omitted_new_track_threshold_follows_high_threshold(binary);
   ok &= test_legacy_iou_config_keeps_iou_only_matching(binary);

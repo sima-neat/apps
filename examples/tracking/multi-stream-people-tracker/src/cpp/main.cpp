@@ -290,23 +290,30 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(std::any_of(cfg.target_label.begin(), cfg.target_label.end(),
                                      [](unsigned char c) { return std::isspace(c) == 0; }),
                          "inference.target_label must be set");
-  sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
+  sima_examples::require(std::isfinite(cfg.min_score) && cfg.min_score >= 0.0 &&
+                             cfg.min_score <= 1.0,
                          "inference.min_score must be between 0 and 1");
-  sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
+  sima_examples::require(std::isfinite(cfg.nms_iou) && cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
                          "inference.nms_iou must be between 0 and 1");
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
   sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
-  sima_examples::require(cfg.tracker_iou_threshold >= 0.0f && cfg.tracker_iou_threshold <= 1.0f,
+  sima_examples::require(std::isfinite(cfg.tracker_iou_threshold) &&
+                             cfg.tracker_iou_threshold >= 0.0f &&
+                             cfg.tracker_iou_threshold <= 1.0f,
                          "tracking.match_iou_threshold must be between 0 and 1");
-  sima_examples::require(cfg.tracker_high_score >= cfg.min_score && cfg.tracker_high_score <= 1.0f,
+  sima_examples::require(std::isfinite(cfg.tracker_high_score) &&
+                             cfg.tracker_high_score >= cfg.min_score &&
+                             cfg.tracker_high_score <= 1.0f,
                          "tracking.high_score_threshold must be in [inference.min_score, 1]");
-  sima_examples::require(cfg.tracker_new_track_score >= cfg.tracker_high_score &&
+  sima_examples::require(std::isfinite(cfg.tracker_new_track_score) &&
+                             cfg.tracker_new_track_score >= cfg.tracker_high_score &&
                              cfg.tracker_new_track_score <= 1.0f,
                          "tracking.new_track_threshold must be in [high_score_threshold, 1]");
   sima_examples::require(std::isfinite(cfg.tracker_max_center_distance) &&
                              cfg.tracker_max_center_distance >= 0.0f,
                          "tracking.max_center_distance must be >= 0");
-  sima_examples::require(cfg.tracker_velocity_momentum >= 0.0f &&
+  sima_examples::require(std::isfinite(cfg.tracker_velocity_momentum) &&
+                             cfg.tracker_velocity_momentum >= 0.0f &&
                              cfg.tracker_velocity_momentum < 1.0f,
                          "tracking.velocity_momentum must be in [0, 1)");
   sima_examples::require(cfg.tracker_max_missing >= 0, "tracking.max_missing_frames must be >= 0");
