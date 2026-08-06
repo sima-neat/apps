@@ -889,7 +889,9 @@ ensure_neat_core() {
   write_neat_core_metadata "${branch}" "${version}"
 
   local expected_tag="${branch}/${version}"
-  if neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
+  if [[ -n "${NEAT_APPS_CORE_INSTALL_DIR:-}" || -n "${PYNEAT_VENV_DIR:-}" ]]; then
+    echo "Job-local Core outputs requested; staging ${expected_tag} even if it is installed."
+  elif neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
     echo "NEAT core already installed (${expected_tag}). Skipping install."
     return 0
   fi

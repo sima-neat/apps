@@ -875,6 +875,42 @@ def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
     )
 
 
+def test_vulcan_core_install_stages_requested_job_local_outputs(tmp_path):
+    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
+    sima_cli_args = tmp_path / "sima-cli-args.txt"
+    core_install_dir = tmp_path / "run-core"
+    pyneat_venv = tmp_path / "run-pyneat"
+    _write_fake_sima_cli(tmp_path)
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env="prod",
+    )
+
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+            "NEAT_APPS_CORE_INSTALL_DIR": str(core_install_dir),
+            "PYNEAT_VENV_DIR": str(pyneat_venv),
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "Job-local Core outputs requested" in proc.stdout
+    assert sima_cli_cwd.read_text(encoding="utf-8").strip() == str(core_install_dir)
+    assert sima_cli_args.read_text(encoding="utf-8").strip() == (
+        "neat install --env production -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1"
+    )
+
+
 def test_vulcan_core_install_repairs_mixed_runtime_branch(tmp_path):
     sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
     sima_cli_args = tmp_path / "sima-cli-args.txt"
@@ -1132,6 +1168,19 @@ def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
         'bash "${GITHUB_WORKSPACE}/scripts/install-vulcan-apps-package.sh" '
         '"./prebuilt-apps"' in workflow
     )
+
+
+def test_vulcan_runtime_gate_uses_job_local_exact_pyneat():
+    workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'NEAT_APPS_CORE_INSTALL_DIR="${core_install_dir}"' in workflow
+    assert 'PYNEAT_VENV_DIR="${pyneat_venv}"' in workflow
+    assert 'find "${CORE_WHEEL_DIR}" -type f -name \'pyneat-*.whl\'' in workflow
+    assert '"$(basename "${core_wheels[0]}")" != *"${CORE_TARGET_SPEC}"*' in workflow
+    assert '--target "${pyneat_site}" --no-deps --upgrade' in workflow
+    assert "assert module.is_relative_to(site)" in workflow
+    assert "assert spec in installed" in workflow
+    assert "/media/nvme/pyneat" not in workflow
 
 
 def test_vulcan_package_shell_quotes_exact_runtime_candidate():
