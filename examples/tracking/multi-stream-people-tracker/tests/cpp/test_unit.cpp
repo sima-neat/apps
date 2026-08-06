@@ -327,15 +327,34 @@ bool test_tracker_enforces_monotonic_frames_without_active_tracks() {
   return expect_true(false, "tracker rejects a non-monotonic empty frame");
 }
 
-bool test_tracker_rejects_non_finite_motion_gate() {
-  TrackerConfig config;
-  config.max_center_distance = std::numeric_limits<float>::quiet_NaN();
+bool rejects_tracker_config(const TrackerConfig& config) {
   try {
     ObjectTracker tracker(config);
+    (void)tracker;
   } catch (const std::invalid_argument&) {
-    return expect_true(true, "tracker rejects a non-finite motion gate");
+    return true;
   }
-  return expect_true(false, "tracker rejects a non-finite motion gate");
+  return false;
+}
+
+bool test_tracker_rejects_non_finite_thresholds() {
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  TrackerConfig config;
+  config.high_score_threshold = nan;
+  bool ok = expect_true(rejects_tracker_config(config), "tracker rejects a non-finite high score");
+  config = TrackerConfig{};
+  config.new_track_threshold = nan;
+  ok &= expect_true(rejects_tracker_config(config), "tracker rejects a non-finite new-track score");
+  config = TrackerConfig{};
+  config.match_iou_threshold = nan;
+  ok &= expect_true(rejects_tracker_config(config), "tracker rejects a non-finite IoU threshold");
+  config = TrackerConfig{};
+  config.max_center_distance = nan;
+  ok &= expect_true(rejects_tracker_config(config), "tracker rejects a non-finite motion gate");
+  config = TrackerConfig{};
+  config.velocity_momentum = nan;
+  ok &= expect_true(rejects_tracker_config(config), "tracker rejects non-finite momentum");
+  return ok;
 }
 
 } // namespace
@@ -366,6 +385,6 @@ int main(int argc, char** argv) {
   ok &= test_tracker_confirmation_suppresses_single_frame_noise();
   ok &= test_tracker_does_not_revive_after_missing_budget();
   ok &= test_tracker_enforces_monotonic_frames_without_active_tracks();
-  ok &= test_tracker_rejects_non_finite_motion_gate();
+  ok &= test_tracker_rejects_non_finite_thresholds();
   return ok ? 0 : 1;
 }

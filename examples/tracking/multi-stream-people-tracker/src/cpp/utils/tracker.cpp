@@ -77,20 +77,24 @@ Detection predict(const TrackState& track, int frame_index) {
 }
 
 void validate_config(const TrackerConfig& config) {
-  if (config.high_score_threshold < 0.0f || config.high_score_threshold > 1.0f) {
+  if (!std::isfinite(config.high_score_threshold) || config.high_score_threshold < 0.0f ||
+      config.high_score_threshold > 1.0f) {
     throw std::invalid_argument("high_score_threshold must be in [0, 1]");
   }
-  if (config.new_track_threshold < config.high_score_threshold ||
+  if (!std::isfinite(config.new_track_threshold) ||
+      config.new_track_threshold < config.high_score_threshold ||
       config.new_track_threshold > 1.0f) {
     throw std::invalid_argument("new_track_threshold must be in [high_score_threshold, 1]");
   }
-  if (config.match_iou_threshold < 0.0f || config.match_iou_threshold > 1.0f) {
+  if (!std::isfinite(config.match_iou_threshold) || config.match_iou_threshold < 0.0f ||
+      config.match_iou_threshold > 1.0f) {
     throw std::invalid_argument("match_iou_threshold must be in [0, 1]");
   }
   if (!std::isfinite(config.max_center_distance) || config.max_center_distance < 0.0f) {
     throw std::invalid_argument("max_center_distance must be >= 0");
   }
-  if (config.velocity_momentum < 0.0f || config.velocity_momentum >= 1.0f) {
+  if (!std::isfinite(config.velocity_momentum) || config.velocity_momentum < 0.0f ||
+      config.velocity_momentum >= 1.0f) {
     throw std::invalid_argument("velocity_momentum must be in [0, 1)");
   }
   if (config.max_missing_frames < 0) {
