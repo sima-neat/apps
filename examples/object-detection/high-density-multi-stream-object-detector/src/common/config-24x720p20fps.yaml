@@ -41,7 +41,7 @@ input:                       # RTSP input transport settings.
   fps: 20
   decoder_buffers: 16        # Per-stream decoder output pool used by the validated profile.
   decoder_input_buffers: 2   # Per-stream compressed-input pool.
-  decoder_tuning: auto
+  decoder_tuning: throughput-low-latency
 
 runtime:                     # Runtime and profiling settings.
   profile: false             # Leave hot-path profiling off for the live visualizer run.
