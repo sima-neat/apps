@@ -146,6 +146,53 @@ def test_insight_pipeline(
 
 
 @pytest.mark.e2e
+def test_non_model_resolution_runs_through_core_preproc(
+    apps_root, e2e_model_path, test_timeout_ms
+):
+    import cv2
+    import numpy as np
+    import pyneat
+
+    input_video = apps_root / "assets" / "datasets" / "tum-rgbd" / "freiburg1-desk.mp4"
+    video = cv2.VideoCapture(str(input_video))
+    ok, source = video.read()
+    video.release()
+    assert ok
+
+    frame = cv2.resize(source, (960, 540), interpolation=cv2.INTER_LINEAR)
+    example = load_example()
+    model = pyneat.Model(
+        str(e2e_model_path),
+        example.model_options(pyneat, frame.shape[1], frame.shape[0]),
+    )
+    model_width, model_height = example.model_frame(model)
+    model_input = example.input_tensor(frame, np, pyneat)
+    runner = model.build(
+        [model_input],
+        route_options=pyneat.ModelRouteOptions(),
+        run_options=pyneat.RunOptions(),
+    )
+    try:
+        output = runner.run([model_input], timeout_ms=test_timeout_ms)
+        points = example.feature_points(
+            output,
+            model_width,
+            model_height,
+            frame.shape[1],
+            frame.shape[0],
+            np,
+            pyneat,
+        )
+    finally:
+        runner.close()
+
+    assert points.ndim == 2 and points.shape[1:] == (2,)
+    assert len(points) > 0
+    assert np.all(points[:, 0] >= 0) and np.all(points[:, 0] < frame.shape[1])
+    assert np.all(points[:, 1] >= 0) and np.all(points[:, 1] < frame.shape[0])
+
+
+@pytest.mark.e2e
 @pytest.mark.parametrize("model_file,min_descriptor_cosine", scoped_accuracy_models())
 def test_fp32_a65_accuracy(
     models_dir, skip_unless_e2e_ready, model_file, min_descriptor_cosine
