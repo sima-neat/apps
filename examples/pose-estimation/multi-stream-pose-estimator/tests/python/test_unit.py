@@ -264,7 +264,7 @@ class FakeSample:
 
 
 class TestMetadata:
-    def test_send_metadata_uses_object_detection_contract(self):
+    def test_send_metadata_uses_pose_estimation_contract(self):
         from main import ProfileWindow, StreamRuntime, send_metadata
 
         sender = FakeMetadataSender()
@@ -273,7 +273,6 @@ class TestMetadata:
             url="rtsp://127.0.0.1:8554/src1",
             source_options=None,
             metadata_sender=sender,
-            labels=["person"],
             profile=ProfileWindow(False, 0),
             latest_debug_frame=None,
             frame_w=100,
@@ -281,31 +280,41 @@ class TestMetadata:
             output_fps=30,
             video_port=9000,
         )
-        boxes = [
+        # Only the nose clears the visibility floor, so the published payload must
+        # carry that one joint and drop the other sixteen.
+        poses = [
             {
                 "x1": 10.0,
                 "y1": 20.0,
                 "x2": 40.0,
                 "y2": 60.0,
                 "score": 0.75,
-                "class_id": 0,
+                "keypoints": [
+                    {"x": 11.0, "y": 21.0, "visibility": 0.9 if index == 0 else 0.1}
+                    for index in range(17)
+                ],
             }
         ]
 
-        send_metadata(runtime, FakeSample(), boxes)
+        send_metadata(
+            runtime, SimpleNamespace(min_keypoint_visibility=0.30), FakeSample(), poses
+        )
 
         assert len(sender.calls) == 1
         metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
-        assert metadata_type == "object-detection"
+        assert metadata_type == "pose-estimation"
         assert timestamp_ms == 1234
         assert frame_id == "42"
         assert json.loads(data_json) == {
-            "objects": [
+            "poses": [
                 {
-                    "id": "obj_1",
+                    "id": "pose_1",
                     "label": "person",
                     "confidence": 0.75,
                     "bbox": [10.0, 20.0, 30.0, 40.0],
+                    "keypoints": [
+                        {"name": "nose", "x": 11.0, "y": 21.0, "confidence": 0.9}
+                    ],
                 }
             ]
         }
