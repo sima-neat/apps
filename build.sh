@@ -900,9 +900,15 @@ ensure_neat_core() {
 
   if [[ "${install_mode}" == "vulcan" ]]; then
     local install_status
+    local -a compatibility_args=()
     if ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
       echo "ERROR: NEAT_CORE_INSTALL_MODE=vulcan requires sima-cli on PATH or SIMA_CLI_BIN." >&2
       exit 1
+    fi
+    # The legacy installer consumed this environment variable itself.  The
+    # sima-cli interface exposes the same CI override explicitly as --force.
+    if [[ "${NEAT_INSTALLER_SKIP_PLATFORM_CHECK:-}" == "ON" ]]; then
+      compatibility_args+=(--force)
     fi
     echo "Installing NEAT core from Vulcan env ${vulcan_env} using sima-cli."
     prepare_vulcan_core_install_dir
@@ -911,6 +917,7 @@ ensure_neat_core() {
     (
       cd "${NEAT_CORE_INSTALL_DIR}"
       run_sima_cli_core_install "${sima_cli_bin}" \
+        "${compatibility_args[@]}" \
         --env "${vulcan_env}" \
         -d . \
         -t minimal \
