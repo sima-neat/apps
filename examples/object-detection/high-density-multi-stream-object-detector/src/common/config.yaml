@@ -1,4 +1,4 @@
-# Default profile: 16 x 720p @ 25 FPS.
+# Default profile: 16 x 720p @ 30 FPS.
 # Relative model paths use this file; label paths use the Apps root.
 model:
   path: <model-path>
@@ -31,7 +31,7 @@ input:
   skip_rtsp_probe: true
   width: 1280
   height: 720
-  fps: 25
+  fps: 30
   decoder_buffers: 8
   decoder_input_buffers: 2
   decoder_tuning: throughput-low-latency
