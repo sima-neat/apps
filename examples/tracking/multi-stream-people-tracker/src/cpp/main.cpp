@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -42,8 +43,9 @@
 
 namespace fs = std::filesystem;
 using multi_stream_people_tracker::Detection;
-using multi_stream_people_tracker::PeopleTracker;
+using multi_stream_people_tracker::ObjectTracker;
 using multi_stream_people_tracker::TrackedDetection;
+using multi_stream_people_tracker::TrackerConfig;
 
 namespace {
 
@@ -62,14 +64,20 @@ struct AppConfig {
   int fps = 0;
   int max_inflight_per_stream = 4;
   int max_inflight_total = 16;
-  int person_class_id = 0;
-  double min_score = 0.55;
+  int target_class_id = 0;
+  std::string target_label = "person";
+  double min_score = 0.30;
   double nms_iou = 0.60;
   int max_detections = 50;
   bool profile = false;
   int warmup_frames = 30;
-  float tracker_iou_threshold = 0.3f;
+  float tracker_high_score = 0.30f;
+  float tracker_new_track_score = 0.30f;
+  float tracker_iou_threshold = 0.10f;
+  float tracker_max_center_distance = 2.5f;
+  float tracker_velocity_momentum = 0.80f;
   int tracker_max_missing = 15;
+  int tracker_min_confirmed_hits = 1;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -133,7 +141,7 @@ struct StreamRuntime {
   std::string url;
   simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
-  PeopleTracker tracker;
+  ObjectTracker tracker;
   ProfileWindow profile;
   std::optional<cv::Mat> latest_debug_frame;
   int frame_w = 0;
@@ -258,7 +266,10 @@ void validate_config(const AppConfig& cfg) {
                          "inference.max_inflight_per_stream must be -1 or > 0");
   sima_examples::require(cfg.max_inflight_total == -1 || cfg.max_inflight_total > 0,
                          "inference.max_inflight_total must be -1 or > 0");
-  sima_examples::require(cfg.person_class_id >= 0, "inference.person_class_id must be >= 0");
+  sima_examples::require(cfg.target_class_id >= 0, "inference.target_class_id must be >= 0");
+  sima_examples::require(std::any_of(cfg.target_label.begin(), cfg.target_label.end(),
+                                     [](unsigned char c) { return std::isspace(c) == 0; }),
+                         "inference.target_label must be set");
   sima_examples::require(cfg.min_score >= 0.0 && cfg.min_score <= 1.0,
                          "inference.min_score must be between 0 and 1");
   sima_examples::require(cfg.nms_iou >= 0.0 && cfg.nms_iou <= 1.0,
@@ -266,8 +277,21 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
   sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
   sima_examples::require(cfg.tracker_iou_threshold >= 0.0f && cfg.tracker_iou_threshold <= 1.0f,
-                         "tracking.iou_threshold must be between 0 and 1");
+                         "tracking.match_iou_threshold must be between 0 and 1");
+  sima_examples::require(cfg.tracker_high_score >= cfg.min_score && cfg.tracker_high_score <= 1.0f,
+                         "tracking.high_score_threshold must be in [inference.min_score, 1]");
+  sima_examples::require(cfg.tracker_new_track_score >= cfg.tracker_high_score &&
+                             cfg.tracker_new_track_score <= 1.0f,
+                         "tracking.new_track_threshold must be in [high_score_threshold, 1]");
+  sima_examples::require(std::isfinite(cfg.tracker_max_center_distance) &&
+                             cfg.tracker_max_center_distance >= 0.0f,
+                         "tracking.max_center_distance must be >= 0");
+  sima_examples::require(cfg.tracker_velocity_momentum >= 0.0f &&
+                             cfg.tracker_velocity_momentum < 1.0f,
+                         "tracking.velocity_momentum must be in [0, 1)");
   sima_examples::require(cfg.tracker_max_missing >= 0, "tracking.max_missing_frames must be >= 0");
+  sima_examples::require(cfg.tracker_min_confirmed_hits >= 1,
+                         "tracking.min_confirmed_hits must be >= 1");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0,
                          "output.insight.metadata_port_base must be > 0");
@@ -286,14 +310,25 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.fps = raw.int_or("inference.fps", 0);
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
   cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", 16);
-  cfg.person_class_id = raw.int_or("inference.person_class_id", 0);
-  cfg.min_score = raw.double_or("inference.min_score", 0.55);
+  cfg.target_class_id =
+      raw.int_or("inference.target_class_id", raw.int_or("inference.person_class_id", 0));
+  cfg.target_label = raw.string_or("inference.target_label", "person");
+  cfg.min_score = raw.double_or("inference.min_score", 0.30);
   cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
-  cfg.tracker_iou_threshold = static_cast<float>(raw.double_or("tracking.iou_threshold", 0.3));
+  cfg.tracker_high_score = static_cast<float>(raw.double_or("tracking.high_score_threshold", 0.30));
+  cfg.tracker_new_track_score =
+      static_cast<float>(raw.double_or("tracking.new_track_threshold", 0.30));
+  cfg.tracker_iou_threshold = static_cast<float>(
+      raw.double_or("tracking.match_iou_threshold", raw.double_or("tracking.iou_threshold", 0.10)));
+  cfg.tracker_max_center_distance =
+      static_cast<float>(raw.double_or("tracking.max_center_distance", 2.5));
+  cfg.tracker_velocity_momentum =
+      static_cast<float>(raw.double_or("tracking.velocity_momentum", 0.80));
   cfg.tracker_max_missing = raw.int_or("tracking.max_missing_frames", 15);
+  cfg.tracker_min_confirmed_hits = raw.int_or("tracking.min_confirmed_hits", 1);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -325,20 +360,22 @@ bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::u
   return objdet::extract_bbox_payload(sample, payload, err);
 }
 
-std::vector<Detection> filter_people(const std::vector<objdet::Box>& boxes, int person_class_id) {
-  std::vector<Detection> people;
-  people.reserve(boxes.size());
+std::vector<Detection> filter_target_class(const std::vector<objdet::Box>& boxes,
+                                           int target_class_id) {
+  std::vector<Detection> detections;
+  detections.reserve(boxes.size());
   for (const auto& box : boxes) {
-    if (box.class_id != person_class_id) {
+    if (box.class_id != target_class_id) {
       continue;
     }
-    people.push_back(Detection{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
+    detections.push_back(Detection{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
   }
-  return people;
+  return detections;
 }
 
 std::vector<sima_examples::MetadataBox>
-build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, int frame_h) {
+build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, int frame_h,
+                      const std::string& target_label) {
   std::vector<sima_examples::MetadataBox> metadata_boxes;
   metadata_boxes.reserve(tracks.size());
   for (const auto& track : tracks) {
@@ -353,7 +390,7 @@ build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, 
 
     sima_examples::MetadataBox obj;
     obj.id = std::to_string(track.track_id);
-    obj.label = "person";
+    obj.label = target_label;
     obj.confidence = track.score;
     obj.x = static_cast<float>(x1);
     obj.y = static_cast<float>(y1);
@@ -585,7 +622,15 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   StreamRuntime runtime;
   runtime.index = stream_index;
   runtime.url = url;
-  runtime.tracker = PeopleTracker(cfg.tracker_iou_threshold, cfg.tracker_max_missing);
+  runtime.tracker = ObjectTracker(TrackerConfig{
+      cfg.tracker_high_score,
+      cfg.tracker_new_track_score,
+      cfg.tracker_iou_threshold,
+      cfg.tracker_max_center_distance,
+      cfg.tracker_velocity_momentum,
+      cfg.tracker_max_missing,
+      cfg.tracker_min_confirmed_hits,
+  });
   const auto source_options =
       build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
@@ -662,9 +707,10 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
   }
 }
 
-void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
+void send_metadata(StreamRuntime& stream, const AppConfig& cfg, const simaai::neat::Sample& sample,
                    const std::vector<TrackedDetection>& tracks) {
-  const auto metadata_tracks = build_metadata_tracks(tracks, stream.frame_w, stream.frame_h);
+  const auto metadata_tracks =
+      build_metadata_tracks(tracks, stream.frame_w, stream.frame_h, cfg.target_label);
   const std::string data_json = sima_examples::metadata_boxes_data_json("tracks", metadata_tracks);
   const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
   const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
@@ -721,16 +767,16 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
   }
   const auto boxes = objdet::parse_boxes_strict(payload, stream.frame_w, stream.frame_h,
                                                 cfg.max_detections, false);
-  const auto people = filter_people(boxes, cfg.person_class_id);
+  const auto target_detections = filter_target_class(boxes, cfg.target_class_id);
   const double tracker_start = sima_examples::time_ms();
-  const auto tracks = stream.tracker.update(people, stream.processed);
+  const auto tracks = stream.tracker.update(target_detections, stream.processed);
   const double tracker_end = sima_examples::time_ms();
 
   ++stream.processed;
   const bool warming_up = stream.processed <= cfg.warmup_frames;
   if (!warming_up) {
     const double metadata_start = sima_examples::time_ms();
-    send_metadata(stream, sample, tracks);
+    send_metadata(stream, cfg, sample, tracks);
     const double metadata_end = sima_examples::time_ms();
     if (save_frames_enabled(cfg)) {
       maybe_save_debug_frame(

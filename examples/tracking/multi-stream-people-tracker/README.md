@@ -1,4 +1,4 @@
-# Multi-Stream People Tracker
+# Multi-Stream Object Tracker
 
 ## Metadata
 
@@ -6,7 +6,7 @@
 | --- | --- |
 | Category | tracking |
 | Difficulty | Advanced |
-| Tags | object-detection, yolo26, rtsp, multistream, insight, people-tracking |
+| Tags | object-detection, yolo26, rtsp, multistream, insight, tracking, tiny-drone |
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | multi-stream-people-tracker |
@@ -14,7 +14,12 @@
 
 ## Concept
 
-Track people across multiple RTSP inputs with mixed-resolution support. The pipeline filters detections to the configured person class, assigns stable IDs per stream, and publishes live video and metadata to Insight.
+Track a configured object class across multiple mixed-resolution RTSP inputs.
+The default profile tracks people. The optional tiny-drone profile uses a
+one-class YOLO26n-P2 INT8 QAT model, two-stage score association, and
+constant-velocity matching for boxes that may move far enough to have zero IoU
+between frames. Track IDs remain local to each stream, and live video plus
+metadata is published to Insight.
 
 ## Preview
 
@@ -47,6 +52,16 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
 | `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
+
+The tiny-drone profile expects
+`yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz`. This is a custom, one-class model,
+not a current public Model Zoo download. Generate and qualify it with the
+`training/yolo26_tiny_drone` recipe in the Models repository before selecting
+`src/common/tiny-drone.yaml`. The package must expose four raw bbox heads
+followed by four class-logit heads for P2 through P5; Neat derives the four
+strides from the model output dimensions. As in the YOLO detector example,
+input width, height, normalization, and letterboxing come from model
+preprocessing; do not duplicate them in this app configuration.
 
 Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
 
@@ -83,9 +98,15 @@ inference:
   frames: 0
   max_inflight_per_stream: 4
   max_inflight_total: 16
+  target_class_id: 0
+  target_label: person
   min_score: 0.30
 
 tracking:
+  high_score_threshold: 0.30
+  new_track_threshold: 0.30
+  match_iou_threshold: 0.10
+  max_center_distance: 2.5
   max_missing_frames: 15
 
 output:
@@ -94,6 +115,11 @@ output:
     video_port_base: <videoUDP-start-port>
     metadata_port_base: <metadataUDP-start-port>
 ```
+
+For the qualified one-class drone model, copy
+`src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight
+host. Its low decoder floor is intentional: detections below the high-score
+threshold may recover an existing track but cannot create a new one.
 
 ## Run
 
@@ -119,6 +145,8 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
 - Verify `model.path`, every RTSP URL, and the Insight port ranges.
 - Set either inflight limit to `-1` to use the Core default.
 - Use `output.debug_dir` and `output.save_every` to save sampled overlays.
+- Do not use the tiny-drone thresholds with a generic COCO model; the extra
+  low-score candidates add unnecessary postprocessing work.
 
 ## Source Files
 
@@ -130,6 +158,31 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
+## Accuracy Qualification
+
+Evaluate one stream at a time. Ground truth JSONL uses frame dimensions and
+`objects`; predictions may be plain `tracks` JSONL or captured Insight
+metadata envelopes. Both use pixel-space `[x, y, width, height]` boxes and
+numeric frame IDs.
+
+```bash
+python3 examples/tracking/multi-stream-people-tracker/src/python/evaluate_tracking.py \
+  --ground-truth <ground-truth.jsonl> \
+  --predictions <insight-metadata.jsonl> \
+  --output <accuracy-report.json> \
+  --fps <source-fps> \
+  --minimum-frames <required-frames> \
+  --minimum-recall <required-recall> \
+  --minimum-tiny-recall <required-tiny-recall> \
+  --maximum-false-positives-per-minute <allowed-fp-per-minute> \
+  --maximum-id-switches <allowed-id-switches> \
+  --maximum-fragmentations <allowed-fragmentations>
+```
+
+Tiny/small/medium/large buckets are measured after the same 640-pixel model
+input scale, so the tiny-object recall gate reflects what the detector sees.
+
 ## Development From Source
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
+Source validation includes the evaluator and its JSONL/Insight envelope tests.

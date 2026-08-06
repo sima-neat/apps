@@ -4,12 +4,15 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 #include <string>
 
 namespace fs = std::filesystem;
 
 using multi_stream_people_tracker::Detection;
-using multi_stream_people_tracker::PeopleTracker;
+using multi_stream_people_tracker::ObjectTracker;
+using multi_stream_people_tracker::TrackerConfig;
 using sima_examples::testing::create_test_scratch_dir;
 using sima_examples::testing::remove_dir;
 using sima_examples::testing::spawn_and_wait;
@@ -131,7 +134,7 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
 }
 
 bool test_tracker_reuses_track_id_for_nearby_detection() {
-  PeopleTracker tracker(0.3f, 2);
+  ObjectTracker tracker;
   const auto first = tracker.update({Detection{10.0f, 10.0f, 50.0f, 80.0f, 0.9f, 0}}, 0);
   const auto second = tracker.update({Detection{12.0f, 11.0f, 52.0f, 81.0f, 0.8f, 0}}, 1);
   return expect_true(first.size() == 1, "tracker returns one detection on first frame") &&
@@ -141,12 +144,89 @@ bool test_tracker_reuses_track_id_for_nearby_detection() {
 }
 
 bool test_tracker_drops_track_after_missing_budget() {
-  PeopleTracker tracker(0.3f, 1);
+  TrackerConfig config;
+  config.max_missing_frames = 1;
+  ObjectTracker tracker(config);
   tracker.update({Detection{10.0f, 10.0f, 50.0f, 80.0f, 0.9f, 0}}, 0);
   tracker.update({}, 1);
   tracker.update({}, 2);
   return expect_true(tracker.active_track_count() == 0,
                      "tracker expires track after missing frame budget");
+}
+
+bool test_tracker_matches_tiny_non_overlapping_boxes_by_motion() {
+  TrackerConfig config;
+  config.match_iou_threshold = 0.5f;
+  config.max_center_distance = 2.0f;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{10.0f, 10.0f, 12.0f, 12.0f, 0.9f, 0}}, 0);
+  const auto second = tracker.update({Detection{13.0f, 10.0f, 15.0f, 12.0f, 0.8f, 0}}, 1);
+  return expect_true(first.size() == 1 && second.size() == 1,
+                     "tiny non-overlapping detections are tracked") &&
+         expect_true(first.front().track_id == second.front().track_id,
+                     "motion gate preserves the tiny-object track id");
+}
+
+bool test_low_score_detection_recovers_but_does_not_create_track() {
+  TrackerConfig config;
+  config.high_score_threshold = 0.5f;
+  config.new_track_threshold = 0.7f;
+  ObjectTracker established(config);
+  const auto first = established.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0}}, 0);
+  const auto recovered = established.update({Detection{11.0f, 10.0f, 15.0f, 14.0f, 0.2f, 0}}, 1);
+
+  ObjectTracker fresh(config);
+  const auto low_only = fresh.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.2f, 0}}, 0);
+  return expect_true(first.size() == 1 && recovered.size() == 1,
+                     "low-score detection recovers an established track") &&
+         expect_true(first.front().track_id == recovered.front().track_id,
+                     "recovered detection retains the track id") &&
+         expect_true(low_only.empty() && fresh.active_track_count() == 0,
+                     "low-score detection cannot create a track");
+}
+
+bool test_tracker_confirmation_suppresses_single_frame_noise() {
+  TrackerConfig config;
+  config.min_confirmed_hits = 2;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0}}, 0);
+  const auto second = tracker.update({Detection{10.5f, 10.0f, 14.5f, 14.0f, 0.8f, 0}}, 1);
+  return expect_true(first.empty(), "unconfirmed one-frame track is not published") &&
+         expect_true(second.size() == 1, "track is published after the configured hit count");
+}
+
+bool test_tracker_does_not_revive_after_missing_budget() {
+  TrackerConfig config;
+  config.max_missing_frames = 1;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0}}, 0);
+  const auto replacement = tracker.update({Detection{11.0f, 10.0f, 15.0f, 14.0f, 0.9f, 0}}, 2);
+  return expect_true(first.size() == 1 && replacement.size() == 1,
+                     "detection after missing budget creates a replacement track") &&
+         expect_true(first.front().track_id != replacement.front().track_id,
+                     "expired track id is not revived");
+}
+
+bool test_tracker_enforces_monotonic_frames_without_active_tracks() {
+  ObjectTracker tracker;
+  tracker.update({}, 5);
+  try {
+    tracker.update({}, 4);
+  } catch (const std::invalid_argument&) {
+    return expect_true(true, "tracker rejects a non-monotonic empty frame");
+  }
+  return expect_true(false, "tracker rejects a non-monotonic empty frame");
+}
+
+bool test_tracker_rejects_non_finite_motion_gate() {
+  TrackerConfig config;
+  config.max_center_distance = std::numeric_limits<float>::quiet_NaN();
+  try {
+    ObjectTracker tracker(config);
+  } catch (const std::invalid_argument&) {
+    return expect_true(true, "tracker rejects a non-finite motion gate");
+  }
+  return expect_true(false, "tracker rejects a non-finite motion gate");
 }
 
 } // namespace
@@ -166,5 +246,11 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   ok &= test_tracker_reuses_track_id_for_nearby_detection();
   ok &= test_tracker_drops_track_after_missing_budget();
+  ok &= test_tracker_matches_tiny_non_overlapping_boxes_by_motion();
+  ok &= test_low_score_detection_recovers_but_does_not_create_track();
+  ok &= test_tracker_confirmation_suppresses_single_frame_noise();
+  ok &= test_tracker_does_not_revive_after_missing_budget();
+  ok &= test_tracker_enforces_monotonic_frames_without_active_tracks();
+  ok &= test_tracker_rejects_non_finite_motion_gate();
   return ok ? 0 : 1;
 }

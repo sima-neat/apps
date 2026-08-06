@@ -1,0 +1,44 @@
+model:
+  # Custom one-class YOLO26n-P2 INT8 QAT pack. It must expose grouped raw
+  # bbox heads followed by class-logit heads for P2, P3, P4, and P5.
+  path: models/yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz
+
+streams:
+  - <tiny-drone-rtsp-url>
+
+input:
+  tcp: true
+  latency_ms: 100
+
+runtime:
+  profile: true
+  warmup_frames: 30
+
+inference:
+  frames: 0
+  fps: 0
+  max_inflight_per_stream: 4
+  max_inflight_total: 4
+  target_class_id: 0
+  target_label: drone
+  min_score: 0.05
+  nms_iou: 0.60
+  max_detections: 100
+
+tracking:
+  high_score_threshold: 0.20
+  new_track_threshold: 0.30
+  match_iou_threshold: 0.05
+  max_center_distance: 3.0
+  velocity_momentum: 0.75
+  max_missing_frames: 30
+  min_confirmed_hits: 2
+
+output:
+  insight:
+    host: <insight-host-ip>
+    video_port_base: 9000
+    metadata_port_base: 9100
+  video_enabled: true
+  debug_dir: null
+  save_every: 0
