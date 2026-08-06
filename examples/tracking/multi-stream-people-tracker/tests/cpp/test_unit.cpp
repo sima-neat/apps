@@ -135,6 +135,47 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
   return ok;
 }
 
+bool test_omitted_tracking_thresholds_follow_decoder_floor(const std::string& binary) {
+  const fs::path config_path = write_config("test_omitted_tracking_thresholds_follow_decoder_floor",
+                                            "model:\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "streams:\n"
+                                            "  - rtsp://127.0.0.1:8554/src1\n"
+                                            "inference:\n"
+                                            "  min_score: 0.70\n"
+                                            "output:\n"
+                                            "  insight:\n"
+                                            "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 0,
+                              "omitted tracker thresholds follow a raised decoder floor");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_omitted_new_track_threshold_follows_high_threshold(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_omitted_new_track_threshold_follows_high_threshold",
+                   "model:\n"
+                   "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "tracking:\n"
+                   "  high_score_threshold: 0.75\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 0,
+                              "omitted new-track threshold follows the resolved high threshold");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 bool test_tracker_reuses_track_id_for_nearby_detection() {
   ObjectTracker tracker;
   const auto first = tracker.update({Detection{10.0f, 10.0f, 50.0f, 80.0f, 0.9f, 0}}, 0);
@@ -271,6 +312,8 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
+  ok &= test_omitted_tracking_thresholds_follow_decoder_floor(binary);
+  ok &= test_omitted_new_track_threshold_follows_high_threshold(binary);
   ok &= test_tracker_reuses_track_id_for_nearby_detection();
   ok &= test_tracker_drops_track_after_missing_budget();
   ok &= test_zero_missing_budget_keeps_continuous_track();

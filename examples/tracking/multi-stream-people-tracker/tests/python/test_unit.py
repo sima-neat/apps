@@ -159,6 +159,58 @@ class TestConfigLoading:
         assert cfg.target_class_id == 0
         assert cfg.target_label == "person"
 
+    def test_omitted_tracking_thresholds_follow_decoder_floor(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                """
+                model:
+                  path: models/yolo26m-det-int8-b1.tar.gz
+                streams:
+                  - rtsp://127.0.0.1:8554/src1
+                inference:
+                  min_score: 0.70
+                output:
+                  insight:
+                    host: 127.0.0.1
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_app_config(config_path)
+
+        assert cfg.tracker_high_score == 0.70
+        assert cfg.tracker_new_track_score == 0.70
+
+    def test_omitted_new_track_threshold_follows_high_threshold(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                """
+                model:
+                  path: models/yolo26m-det-int8-b1.tar.gz
+                streams:
+                  - rtsp://127.0.0.1:8554/src1
+                tracking:
+                  high_score_threshold: 0.75
+                output:
+                  insight:
+                    host: 127.0.0.1
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_app_config(config_path)
+
+        assert cfg.tracker_high_score == 0.75
+        assert cfg.tracker_new_track_score == 0.75
+
     def test_load_app_config_rejects_too_many_streams(self, tmp_path: Path):
         from main import load_app_config
 

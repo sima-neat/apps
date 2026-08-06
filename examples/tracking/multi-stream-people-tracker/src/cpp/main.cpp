@@ -73,8 +73,8 @@ struct AppConfig {
   int max_detections = 50;
   bool profile = false;
   int warmup_frames = 30;
-  float tracker_high_score = 0.30f;
-  float tracker_new_track_score = 0.30f;
+  double tracker_high_score = 0.30;
+  double tracker_new_track_score = 0.30;
   float tracker_iou_threshold = 0.10f;
   float tracker_max_center_distance = 2.5f;
   float tracker_velocity_momentum = 0.80f;
@@ -338,9 +338,9 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
-  cfg.tracker_high_score = static_cast<float>(raw.double_or("tracking.high_score_threshold", 0.30));
+  cfg.tracker_high_score = raw.double_or("tracking.high_score_threshold", cfg.min_score);
   cfg.tracker_new_track_score =
-      static_cast<float>(raw.double_or("tracking.new_track_threshold", 0.30));
+      raw.double_or("tracking.new_track_threshold", cfg.tracker_high_score);
   cfg.tracker_iou_threshold = static_cast<float>(
       raw.double_or("tracking.match_iou_threshold", raw.double_or("tracking.iou_threshold", 0.10)));
   cfg.tracker_max_center_distance =
@@ -667,8 +667,8 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   runtime.index = stream_index;
   runtime.url = url;
   runtime.tracker = ObjectTracker(TrackerConfig{
-      cfg.tracker_high_score,
-      cfg.tracker_new_track_score,
+      static_cast<float>(cfg.tracker_high_score),
+      static_cast<float>(cfg.tracker_new_track_score),
       cfg.tracker_iou_threshold,
       cfg.tracker_max_center_distance,
       cfg.tracker_velocity_momentum,

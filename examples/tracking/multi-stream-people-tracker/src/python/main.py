@@ -288,6 +288,12 @@ def load_app_config(config_path: Path) -> AppConfig:
             raise ValueError(f"streams[{index}] must be a non-empty string")
         rtsp_urls.append(value)
 
+    min_score = float_or(inference, "min_score", 0.30)
+    tracker_high_score = float_or(tracking, "high_score_threshold", min_score)
+    tracker_new_track_score = float_or(
+        tracking, "new_track_threshold", tracker_high_score
+    )
+
     cfg = AppConfig(
         model_path=string_or(model, "path"),
         rtsp_urls=rtsp_urls,
@@ -302,13 +308,13 @@ def load_app_config(config_path: Path) -> AppConfig:
             inference, "target_class_id", int_or(inference, "person_class_id", 0)
         ),
         target_label=string_or(inference, "target_label", "person"),
-        min_score=float_or(inference, "min_score", 0.30),
+        min_score=min_score,
         nms_iou=float_or(inference, "nms_iou", 0.60),
         max_detections=int_or(inference, "max_detections", 50),
         profile=bool_or(runtime, "profile", False),
         warmup_frames=int_or(runtime, "warmup_frames", 30),
-        tracker_high_score=float_or(tracking, "high_score_threshold", 0.30),
-        tracker_new_track_score=float_or(tracking, "new_track_threshold", 0.30),
+        tracker_high_score=tracker_high_score,
+        tracker_new_track_score=tracker_new_track_score,
         tracker_iou_threshold=float_or(
             tracking, "match_iou_threshold", float_or(tracking, "iou_threshold", 0.10)
         ),
