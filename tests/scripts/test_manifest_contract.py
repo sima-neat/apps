@@ -890,6 +890,42 @@ def test_vulcan_core_install_skips_when_neat_json_matches(tmp_path):
     )
 
 
+def test_vulcan_core_install_stages_requested_job_local_outputs(tmp_path):
+    sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
+    sima_cli_args = tmp_path / "sima-cli-args.txt"
+    core_install_dir = tmp_path / "run-core"
+    pyneat_venv = tmp_path / "run-pyneat"
+    _write_fake_sima_cli(tmp_path)
+    _write_fake_neat_json(
+        tmp_path,
+        channel="scratch-core-for-test",
+        tag="scratchsha1",
+        env="prod",
+    )
+
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env={
+            "NEAT_APPS_DEPENDENCY_BRANCH": "scratch-core-for-test",
+            "NEAT_CORE_INSTALL_MODE": "vulcan",
+            "NEAT_VULCAN_ENV": "production",
+            "NEAT_APPS_CORE_INSTALL_DIR": str(core_install_dir),
+            "PYNEAT_VENV_DIR": str(pyneat_venv),
+            "NEAT_APPS_TEST_SIMA_CLI_CWD": str(sima_cli_cwd),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "Job-local Core outputs requested" in proc.stdout
+    assert sima_cli_cwd.read_text(encoding="utf-8").strip() == str(core_install_dir)
+    assert sima_cli_args.read_text(encoding="utf-8").strip() == (
+        "neat install --env production -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1"
+    )
+
+
 def test_vulcan_installer_creates_flat_prebuilt_apps_directory(tmp_path):
     package_dir = tmp_path / "package"
     runtime_dir = _write_vulcan_runtime(package_dir)
