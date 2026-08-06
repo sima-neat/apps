@@ -12,51 +12,44 @@ MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 GOLDEN_PATH = EXAMPLE_DIR / "tests" / "golden_detections.json"
 ACCURACY_REFERENCE_PATH = EXAMPLE_DIR / "tests" / "ssd_accuracy_reference.json"
 ACCURACY_MODELS = (
-    ("ssd_mobilenet_v1_modalix_bf16_tess_mla_mpk.tar.gz", "v1", 300, "tensorflow_ssd"),
+    ("ssd_mobilenet_v1_modalix_bf16_tess_mla_mpk.tar.gz", "v1", "tensorflow_ssd"),
     (
         "ssd_mobilenet_v1_modalix_bf16_tess_off_mla_mpk.tar.gz",
         "v1",
-        300,
         "tensorflow_ssd",
     ),
-    ("ssd_mobilenet_v1_modalix_int8_tess_mla_mpk.tar.gz", "v1", 300, "tensorflow_ssd"),
+    ("ssd_mobilenet_v1_modalix_int8_tess_mla_mpk.tar.gz", "v1", "tensorflow_ssd"),
     (
         "ssd_mobilenet_v1_modalix_int8_tess_off_mla_mpk.tar.gz",
         "v1",
-        300,
         "tensorflow_ssd",
     ),
-    ("ssd_mobilenet_v2_modalix_bf16_tess_mla_mpk.tar.gz", "v2", 300, "tensorflow_ssd"),
+    ("ssd_mobilenet_v2_modalix_bf16_tess_mla_mpk.tar.gz", "v2", "tensorflow_ssd"),
     (
         "ssd_mobilenet_v2_modalix_bf16_tess_off_mla_mpk.tar.gz",
         "v2",
-        300,
         "tensorflow_ssd",
     ),
-    ("ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz", "v2", 300, "tensorflow_ssd"),
+    ("ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz", "v2", "tensorflow_ssd"),
     (
         "ssd_mobilenet_v2_modalix_int8_tess_off_mla_mpk.tar.gz",
         "v2",
-        300,
         "tensorflow_ssd",
     ),
-    ("ssd_mobilenet_v3_modalix_bf16_tess_mla_mpk.tar.gz", "v3", 320, "tensorflow_ssd"),
+    ("ssd_mobilenet_v3_modalix_bf16_tess_mla_mpk.tar.gz", "v3", "tensorflow_ssd"),
     (
         "ssd_mobilenet_v3_modalix_bf16_tess_off_mla_mpk.tar.gz",
         "v3",
-        320,
         "tensorflow_ssd",
     ),
     (
         "ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz",
         "v3",
-        320,
         "torchvision_ssdlite",
     ),
     (
         "ssd_mobilenet_v3_modalix_int8_tess_off_mla_mpk.tar.gz",
         "v3",
-        320,
         "torchvision_ssdlite",
     ),
 )
@@ -236,14 +229,13 @@ class TestE2E:
 
 @pytest.mark.e2e
 @pytest.mark.parametrize(
-    ("model_file", "family", "model_frame", "preprocessing_profile"),
+    ("model_file", "family", "preprocessing_profile"),
     ACCURACY_MODELS,
     ids=[entry[0].removesuffix("_mpk.tar.gz") for entry in ACCURACY_MODELS],
 )
 def test_precision_matrix_source_accuracy(
     model_file,
     family,
-    model_frame,
     preprocessing_profile,
     models_dir,
     test_images_dir,
@@ -263,7 +255,6 @@ def test_precision_matrix_source_accuracy(
         {
             "model": {
                 "path": str(model_path),
-                "frame": model_frame,
                 "preprocessing_profile": preprocessing_profile,
             },
             "io": {
@@ -288,13 +279,6 @@ def test_precision_matrix_source_accuracy(
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     reported = json.loads(detections_path.read_text(encoding="utf-8"))
-    if family == "v2":
-        golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
-        # This lane measures raw source parity; overlay policy is covered by test_full_pipeline.
-        _assert_golden_detections(reported, golden)
-        print(f"model={model_file} family=v2 golden_parity=passed")
-        return
-
     references = json.loads(ACCURACY_REFERENCE_PATH.read_text(encoding="utf-8"))
     reference = references["families"][family]
     recall, mean_iou, matched, total = _source_parity_metrics(reported, reference)

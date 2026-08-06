@@ -2,6 +2,7 @@
   "_comment": [
     "Source-model detections for the Apps SSD precision matrix. These ten COCO val2017 images are separate from the 128-image PTQ calibration set and the 32-image compiler validation set.",
     "Only source detections with score >= 0.50 are stored. Runtime variants are matched one-to-one by class and IoU; scores are not compared.",
+    "V2 is generated from the pinned Kalray raw-head ONNX source (SHA-256 f0d9458cd8ae5c0cde8eadf22b75c6451059f4d9dd46df266e996dcbec417a8f) with the same Neat SSD decode/NMS contract. On the pinned devkit matrix BF16 matches 14/14 and INT8 matches 13/14; both MLA layouts are identical.",
     "The V3 recall floor accounts for backend NMS collapsing several overlapping source detections. On the pinned devkit matrix BF16 matches 14/20 and QAT INT8 matches 15/20; both MLA layouts are identical."
   ],
   "families": {
@@ -43,6 +44,48 @@
         ],
         "000000566758.jpg": [
           {"class_id": 6, "box": [41.0303, 189.2129, 523.676, 434.315]}
+        ]
+      }
+    },
+    "v2": {
+      "source_score_floor": 0.5,
+      "min_iou": 0.45,
+      "min_recall": 0.9,
+      "min_mean_matched_iou": 0.85,
+      "images": {
+        "000000081061.jpg": [
+          {"class_id": 62, "box": [91.0372, 165.014, 233.525, 370.0649]},
+          {"class_id": 63, "box": [213.5568, 180.4163, 614.5093, 355.984]}
+        ],
+        "000000116439.jpg": [
+          {"class_id": 1, "box": [187.7694, 267.3028, 392.8489, 424.1732]}
+        ],
+        "000000237864.jpg": [
+          {"class_id": 22, "box": [69.5643, 236.0568, 348.4748, 416.7338]}
+        ],
+        "000000265108.jpg": [
+          {"class_id": 33, "box": [353.3667, 452.7914, 451.6769, 601.6365]}
+        ],
+        "000000331075.jpg": [
+          {"class_id": 18, "box": [0.0, 135.3226, 536.8087, 635.2107]}
+        ],
+        "000000437331.jpg": [
+          {"class_id": 1, "box": [244.066, 204.1654, 358.7629, 369.2691]}
+        ],
+        "000000449579.jpg": [
+          {"class_id": 1, "box": [115.1346, 155.1882, 248.4639, 432.5235]},
+          {"class_id": 43, "box": [97.955, 180.8059, 132.858, 287.7928]}
+        ],
+        "000000516173.jpg": [
+          {"class_id": 1, "box": [176.2135, 158.3044, 348.5408, 600.6945]},
+          {"class_id": 42, "box": [278.3379, 264.0703, 354.2444, 438.9465]}
+        ],
+        "000000550349.jpg": [
+          {"class_id": 6, "box": [179.0005, 151.6932, 560.0532, 539.0744]},
+          {"class_id": 1, "box": [103.0802, 327.5328, 181.2977, 515.1836]}
+        ],
+        "000000566758.jpg": [
+          {"class_id": 6, "box": [37.3899, 186.0951, 541.8681, 431.2906]}
         ]
       }
     },
