@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from pathlib import Path
 import glob
 import json
+import math
 import os
 import struct
 import sys
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
 import yaml
-
-from utils.tracker import PeopleTracker, TrackedDetection
+from utils.tracker import ObjectTracker, TrackedDetection, TrackerConfig
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
@@ -36,14 +36,20 @@ class AppConfig:
     fps: int = 0
     max_inflight_per_stream: int = 4
     max_inflight_total: int = 16
-    person_class_id: int = 0
-    min_score: float = 0.55
+    target_class_id: int = 0
+    target_label: str = "person"
+    min_score: float = 0.30
     nms_iou: float = 0.60
     max_detections: int = 50
     profile: bool = False
     warmup_frames: int = 30
-    tracker_iou_threshold: float = 0.3
+    tracker_high_score: float = 0.30
+    tracker_new_track_score: float = 0.30
+    tracker_iou_threshold: float = 0.10
+    tracker_max_center_distance: float = 2.5
+    tracker_velocity_momentum: float = 0.80
     tracker_max_missing: int = 15
+    tracker_min_confirmed_hits: int = 1
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -58,7 +64,7 @@ class StreamRuntime:
     url: str
     source_options: object
     metadata_sender: object
-    tracker: PeopleTracker
+    tracker: ObjectTracker
     profile: "ProfileWindow"
     latest_debug_frame: object | None
     frame_w: int
@@ -226,8 +232,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.max_inflight_per_stream must be -1 or > 0")
     if cfg.max_inflight_total != -1 and cfg.max_inflight_total <= 0:
         raise ValueError("inference.max_inflight_total must be -1 or > 0")
-    if cfg.person_class_id < 0:
-        raise ValueError("inference.person_class_id must be >= 0")
+    if cfg.target_class_id < 0:
+        raise ValueError("inference.target_class_id must be >= 0")
+    if not cfg.target_label.strip():
+        raise ValueError("inference.target_label must be set")
     if not 0.0 <= cfg.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.nms_iou <= 1.0:
@@ -237,9 +245,19 @@ def validate_config(cfg: AppConfig) -> None:
     if cfg.warmup_frames < 0:
         raise ValueError("runtime.warmup_frames must be >= 0")
     if not 0.0 <= cfg.tracker_iou_threshold <= 1.0:
-        raise ValueError("tracking.iou_threshold must be between 0 and 1")
+        raise ValueError("tracking.match_iou_threshold must be between 0 and 1")
+    if not cfg.min_score <= cfg.tracker_high_score <= 1.0:
+        raise ValueError("tracking.high_score_threshold must be in [inference.min_score, 1]")
+    if not cfg.tracker_high_score <= cfg.tracker_new_track_score <= 1.0:
+        raise ValueError("tracking.new_track_threshold must be in [high_score_threshold, 1]")
+    if not math.isfinite(cfg.tracker_max_center_distance) or cfg.tracker_max_center_distance < 0.0:
+        raise ValueError("tracking.max_center_distance must be >= 0")
+    if not 0.0 <= cfg.tracker_velocity_momentum < 1.0:
+        raise ValueError("tracking.velocity_momentum must be in [0, 1)")
     if cfg.tracker_max_missing < 0:
         raise ValueError("tracking.max_missing_frames must be >= 0")
+    if cfg.tracker_min_confirmed_hits < 1:
+        raise ValueError("tracking.min_confirmed_hits must be >= 1")
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.metadata_port_base <= 0:
@@ -280,14 +298,24 @@ def load_app_config(config_path: Path) -> AppConfig:
         fps=int_or(inference, "fps", 0),
         max_inflight_per_stream=int_or(inference, "max_inflight_per_stream", 4),
         max_inflight_total=int_or(inference, "max_inflight_total", 16),
-        person_class_id=int_or(inference, "person_class_id", 0),
-        min_score=float_or(inference, "min_score", 0.55),
+        target_class_id=int_or(
+            inference, "target_class_id", int_or(inference, "person_class_id", 0)
+        ),
+        target_label=string_or(inference, "target_label", "person"),
+        min_score=float_or(inference, "min_score", 0.30),
         nms_iou=float_or(inference, "nms_iou", 0.60),
         max_detections=int_or(inference, "max_detections", 50),
         profile=bool_or(runtime, "profile", False),
         warmup_frames=int_or(runtime, "warmup_frames", 30),
-        tracker_iou_threshold=float_or(tracking, "iou_threshold", 0.3),
+        tracker_high_score=float_or(tracking, "high_score_threshold", 0.30),
+        tracker_new_track_score=float_or(tracking, "new_track_threshold", 0.30),
+        tracker_iou_threshold=float_or(
+            tracking, "match_iou_threshold", float_or(tracking, "iou_threshold", 0.10)
+        ),
+        tracker_max_center_distance=float_or(tracking, "max_center_distance", 2.5),
+        tracker_velocity_momentum=float_or(tracking, "velocity_momentum", 0.80),
         tracker_max_missing=int_or(tracking, "max_missing_frames", 15),
+        tracker_min_confirmed_hits=int_or(tracking, "min_confirmed_hits", 1),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
@@ -361,12 +389,12 @@ def parse_boxes_strict(payload: bytes, img_w: int, img_h: int, expected_topk: in
     return boxes
 
 
-def filter_people(boxes: list[dict], person_class_id: int) -> list[dict]:
-    return [box for box in boxes if int(box["class_id"]) == person_class_id]
+def filter_target_class(boxes: list[dict], target_class_id: int) -> list[dict]:
+    return [box for box in boxes if int(box["class_id"]) == target_class_id]
 
 
 def build_metadata_tracks(
-    tracks: list[TrackedDetection], frame_w: int, frame_h: int
+    tracks: list[TrackedDetection], frame_w: int, frame_h: int, target_label: str
 ) -> list[dict]:
     metadata_tracks = []
     for track in tracks:
@@ -381,7 +409,7 @@ def build_metadata_tracks(
         metadata_tracks.append(
             {
                 "id": str(track.track_id),
-                "label": "person",
+                "label": target_label,
                 "confidence": float(track.score),
                 "bbox": [float(x), float(y), float(max(0, w)), float(max(0, h))],
             }
@@ -647,7 +675,17 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
         url=url,
         source_options=source_options,
         metadata_sender=metadata_sender,
-        tracker=PeopleTracker(cfg.tracker_iou_threshold, cfg.tracker_max_missing),
+        tracker=ObjectTracker(
+            TrackerConfig(
+                high_score_threshold=cfg.tracker_high_score,
+                new_track_threshold=cfg.tracker_new_track_score,
+                match_iou_threshold=cfg.tracker_iou_threshold,
+                max_center_distance=cfg.tracker_max_center_distance,
+                velocity_momentum=cfg.tracker_velocity_momentum,
+                max_missing_frames=cfg.tracker_max_missing,
+                min_confirmed_hits=cfg.tracker_min_confirmed_hits,
+            )
+        ),
         profile=ProfileWindow(cfg.profile, stream_index),
         latest_debug_frame=None,
         frame_w=frame_w,
@@ -697,8 +735,12 @@ def connect_stream_graph(
         )
 
 
-def send_metadata(stream: StreamRuntime, sample, tracks: list[TrackedDetection]) -> None:
-    metadata_tracks = build_metadata_tracks(tracks, stream.frame_w, stream.frame_h)
+def send_metadata(
+    stream: StreamRuntime, cfg: AppConfig, sample, tracks: list[TrackedDetection]
+) -> None:
+    metadata_tracks = build_metadata_tracks(
+        tracks, stream.frame_w, stream.frame_h, cfg.target_label
+    )
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     stream.metadata_sender.send_metadata(
@@ -800,16 +842,16 @@ def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detecti
 
     payload = extract_bbox_payload(sample)
     boxes = parse_boxes_strict(payload, stream.frame_w, stream.frame_h, cfg.max_detections)
-    people = filter_people(boxes, cfg.person_class_id)
+    target_detections = filter_target_class(boxes, cfg.target_class_id)
     tracker_start = time_ms()
-    tracks = stream.tracker.update(people, stream.processed)
+    tracks = stream.tracker.update(target_detections, stream.processed)
     tracker_end = time_ms()
 
     stream.processed += 1
     warming_up = stream.processed <= cfg.warmup_frames
     if not warming_up:
         metadata_start = time_ms()
-        send_metadata(stream, sample, tracks)
+        send_metadata(stream, cfg, sample, tracks)
         metadata_end = time_ms()
         if save_frames_enabled(cfg):
             maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, tracks)

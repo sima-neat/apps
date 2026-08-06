@@ -2,24 +2,30 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
+ACCURACY_PATH = PYTHON_DIR / "evaluate_tracking.py"
 
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
 pytestmark = pytest.mark.unit
+
+ACCURACY_SPEC = importlib.util.spec_from_file_location("evaluate_tracking", ACCURACY_PATH)
+assert ACCURACY_SPEC and ACCURACY_SPEC.loader
+evaluate_tracking = importlib.util.module_from_spec(ACCURACY_SPEC)
+ACCURACY_SPEC.loader.exec_module(evaluate_tracking)
 
 
 def write_config(
@@ -150,6 +156,8 @@ class TestConfigLoading:
         cfg = load_app_config(EXAMPLE_DIR / "src" / "common" / "config.yaml")
 
         assert cfg.min_score == 0.30
+        assert cfg.target_class_id == 0
+        assert cfg.target_label == "person"
 
     def test_load_app_config_rejects_too_many_streams(self, tmp_path: Path):
         from main import load_app_config
@@ -272,8 +280,8 @@ class FakeSample:
 
 class TestMetadata:
     def test_send_metadata_uses_tracking_contract(self):
-        from main import ProfileWindow, StreamRuntime, send_metadata
-        from utils.tracker import PeopleTracker, TrackedDetection
+        from main import AppConfig, ProfileWindow, StreamRuntime, send_metadata
+        from utils.tracker import ObjectTracker, TrackedDetection
 
         sender = FakeMetadataSender()
         runtime = StreamRuntime(
@@ -281,7 +289,7 @@ class TestMetadata:
             url="rtsp://127.0.0.1:8554/src1",
             source_options=None,
             metadata_sender=sender,
-            tracker=PeopleTracker(),
+            tracker=ObjectTracker(),
             profile=ProfileWindow(False, 0),
             latest_debug_frame=None,
             frame_w=100,
@@ -291,7 +299,12 @@ class TestMetadata:
         )
         tracks = [TrackedDetection(7, 10.0, 20.0, 40.0, 60.0, 0.75, 0)]
 
-        send_metadata(runtime, FakeSample(), tracks)
+        cfg = AppConfig(
+            model_path="models/yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz",
+            rtsp_urls=[runtime.url],
+            target_label="drone",
+        )
+        send_metadata(runtime, cfg, FakeSample(), tracks)
 
         assert len(sender.calls) == 1
         metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
@@ -302,7 +315,7 @@ class TestMetadata:
             "tracks": [
                 {
                     "id": "7",
-                    "label": "person",
+                    "label": "drone",
                     "confidence": 0.75,
                     "bbox": [10.0, 20.0, 30.0, 40.0],
                 }
@@ -312,9 +325,9 @@ class TestMetadata:
 
 class TestTracker:
     def test_tracker_reuses_track_id_for_nearby_detection(self):
-        from utils.tracker import PeopleTracker
+        from utils.tracker import ObjectTracker
 
-        tracker = PeopleTracker(iou_threshold=0.3, max_missing_frames=2)
+        tracker = ObjectTracker()
         first = tracker.update(
             [{"x1": 10.0, "y1": 10.0, "x2": 50.0, "y2": 80.0, "score": 0.9, "class_id": 0}],
             frame_index=0,
@@ -329,9 +342,9 @@ class TestTracker:
         assert first[0].track_id == second[0].track_id
 
     def test_tracker_drops_track_after_missing_budget(self):
-        from utils.tracker import PeopleTracker
+        from utils.tracker import ObjectTracker, TrackerConfig
 
-        tracker = PeopleTracker(iou_threshold=0.3, max_missing_frames=1)
+        tracker = ObjectTracker(TrackerConfig(max_missing_frames=1))
         tracker.update(
             [{"x1": 10.0, "y1": 10.0, "x2": 50.0, "y2": 80.0, "score": 0.9, "class_id": 0}],
             frame_index=0,
@@ -340,3 +353,183 @@ class TestTracker:
         tracker.update([], frame_index=2)
 
         assert tracker.active_track_count() == 0
+
+    def test_tracker_matches_tiny_boxes_after_zero_iou_shift(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(match_iou_threshold=0.5, max_center_distance=2.0)
+        )
+        first = tracker.update(
+            [{"x1": 10, "y1": 10, "x2": 12, "y2": 12, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        second = tracker.update(
+            [{"x1": 13, "y1": 10, "x2": 15, "y2": 12, "score": 0.8, "class_id": 0}],
+            frame_index=1,
+        )
+
+        assert len(first) == len(second) == 1
+        assert first[0].track_id == second[0].track_id
+
+    def test_low_score_detection_recovers_but_cannot_create_track(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        config = TrackerConfig(high_score_threshold=0.5, new_track_threshold=0.7)
+        established = ObjectTracker(config)
+        first = established.update(
+            [{"x1": 10, "y1": 10, "x2": 14, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        recovered = established.update(
+            [{"x1": 11, "y1": 10, "x2": 15, "y2": 14, "score": 0.2, "class_id": 0}],
+            frame_index=1,
+        )
+
+        fresh = ObjectTracker(config)
+        low_only = fresh.update(
+            [{"x1": 10, "y1": 10, "x2": 14, "y2": 14, "score": 0.2, "class_id": 0}],
+            frame_index=0,
+        )
+
+        assert len(first) == len(recovered) == 1
+        assert first[0].track_id == recovered[0].track_id
+        assert low_only == []
+        assert fresh.active_track_count() == 0
+
+    def test_confirmation_suppresses_single_frame_noise(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(TrackerConfig(min_confirmed_hits=2))
+        first = tracker.update(
+            [{"x1": 10, "y1": 10, "x2": 14, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        second = tracker.update(
+            [{"x1": 10.5, "y1": 10, "x2": 14.5, "y2": 14, "score": 0.8, "class_id": 0}],
+            frame_index=1,
+        )
+
+        assert first == []
+        assert len(second) == 1
+
+    def test_tracker_does_not_revive_after_missing_budget(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(TrackerConfig(max_missing_frames=1))
+        first = tracker.update(
+            [{"x1": 10, "y1": 10, "x2": 14, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        replacement = tracker.update(
+            [{"x1": 11, "y1": 10, "x2": 15, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=2,
+        )
+
+        assert first[0].track_id != replacement[0].track_id
+
+    def test_tracker_enforces_monotonic_frames_without_active_tracks(self):
+        from utils.tracker import ObjectTracker
+
+        tracker = ObjectTracker()
+        tracker.update([], frame_index=5)
+        with pytest.raises(ValueError, match="monotonic"):
+            tracker.update([], frame_index=4)
+
+    def test_tracker_rejects_non_finite_motion_gate(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        with pytest.raises(ValueError, match="max_center_distance"):
+            ObjectTracker(TrackerConfig(max_center_distance=float("nan")))
+
+
+class TestAccuracyEvaluation:
+    def test_metrics_count_recall_false_positives_and_id_switches(self):
+        truth = {
+            0: {
+                "frame_index": 0,
+                "width": 1920,
+                "height": 1080,
+                "objects": [{"track_id": "d1", "bbox": [10, 10, 12, 8]}],
+            },
+            1: {
+                "frame_index": 1,
+                "width": 1920,
+                "height": 1080,
+                "objects": [{"track_id": "d1", "bbox": [12, 10, 12, 8]}],
+            },
+            2: {
+                "frame_index": 2,
+                "width": 1920,
+                "height": 1080,
+                "objects": [{"track_id": "d1", "bbox": [14, 10, 12, 8]}],
+            },
+        }
+        predictions = {
+            0: {"frame_index": 0, "tracks": [{"id": "1", "bbox": [10, 10, 12, 8]}]},
+            1: {
+                "frame_index": 1,
+                "tracks": [{"id": "noise", "bbox": [100, 100, 10, 10]}],
+            },
+            2: {"frame_index": 2, "tracks": [{"id": "2", "bbox": [14, 10, 12, 8]}]},
+        }
+
+        report = evaluate_tracking.evaluate(
+            truth, predictions, iou_threshold=0.3, fps=30.0, model_size=640
+        )
+
+        assert report["detection"]["true_positives"] == 2
+        assert report["detection"]["false_positives"] == 1
+        assert report["detection"]["false_negatives"] == 1
+        assert report["detection"]["recall"] == pytest.approx(2 / 3)
+        assert report["tracking"]["id_switches"] == 1
+        assert report["tracking"]["fragmentations"] == 1
+        assert (
+            report["detection"]["recall_by_model_input_size"]["tiny"]["ground_truth"]
+            == 3
+        )
+
+    def test_greedy_matching_is_one_to_one(self):
+        truth = [{"bbox": [0, 0, 10, 10]}, {"bbox": [1, 1, 10, 10]}]
+        predictions = [{"bbox": [0, 0, 10, 10]}]
+
+        matches = evaluate_tracking.greedy_matches(truth, predictions, 0.3)
+
+        assert len(matches) == 1
+
+    def test_reader_accepts_insight_metadata_envelope(self, tmp_path: Path):
+        path = tmp_path / "predictions.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "tracking",
+                    "frame_id": "42",
+                    "timestamp": 1000,
+                    "data": {"tracks": [{"id": "7", "bbox": [1, 2, 3, 4]}]},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        frames = evaluate_tracking.read_jsonl(path, "tracks")
+
+        assert frames[42]["tracks"][0]["id"] == "7"
+
+    def test_reader_accepts_json_encoded_insight_data(self, tmp_path: Path):
+        path = tmp_path / "predictions.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "type": "tracking",
+                    "frame_id": 7,
+                    "data": json.dumps({"tracks": [{"id": "2", "bbox": [1, 2, 3, 4]}]}),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        frames = evaluate_tracking.read_jsonl(path, "tracks")
+
+        assert frames[7]["tracks"][0]["id"] == "2"
