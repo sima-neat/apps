@@ -19,6 +19,7 @@ inference:
   fps: 0
   max_inflight_per_stream: 4
   max_inflight_total: 4
+  num_classes: 1
   target_class_id: 0
   target_label: drone
   min_score: 0.05

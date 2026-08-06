@@ -66,6 +66,7 @@ struct AppConfig {
   int fps = 0;
   int max_inflight_per_stream = 4;
   int max_inflight_total = 16;
+  int num_classes = 80;
   int target_class_id = 0;
   std::string target_label = "person";
   double min_score = 0.55;
@@ -286,7 +287,12 @@ void validate_config(const AppConfig& cfg) {
                          "inference.max_inflight_per_stream must be -1 or > 0");
   sima_examples::require(cfg.max_inflight_total == -1 || cfg.max_inflight_total > 0,
                          "inference.max_inflight_total must be -1 or > 0");
+  sima_examples::require(cfg.num_classes > 0, "inference.num_classes must be > 0");
   sima_examples::require(cfg.target_class_id >= 0, "inference.target_class_id must be >= 0");
+  sima_examples::require(cfg.target_class_id < cfg.num_classes,
+                         "inference.target_class_id (" + std::to_string(cfg.target_class_id) +
+                             ") must be less than inference.num_classes (" +
+                             std::to_string(cfg.num_classes) + ")");
   sima_examples::require(std::any_of(cfg.target_label.begin(), cfg.target_label.end(),
                                      [](unsigned char c) { return std::isspace(c) == 0; }),
                          "inference.target_label must be set");
@@ -298,8 +304,7 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
   sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
   sima_examples::require(std::isfinite(cfg.tracker_iou_threshold) &&
-                             cfg.tracker_iou_threshold >= 0.0f &&
-                             cfg.tracker_iou_threshold <= 1.0f,
+                             cfg.tracker_iou_threshold >= 0.0f && cfg.tracker_iou_threshold <= 1.0f,
                          "tracking.match_iou_threshold must be between 0 and 1");
   sima_examples::require(std::isfinite(cfg.tracker_high_score) &&
                              cfg.tracker_high_score >= cfg.min_score &&
@@ -338,6 +343,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.fps = raw.int_or("inference.fps", 0);
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
   cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", 16);
+  cfg.num_classes = raw.int_or("inference.num_classes", 80);
   cfg.target_class_id =
       raw.int_or("inference.target_class_id", raw.int_or("inference.person_class_id", 0));
   cfg.target_label = raw.string_or("inference.target_label", "person");
@@ -584,6 +590,7 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
   model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
+  model_opt.num_classes = cfg.num_classes;
   model_opt.score_threshold = cfg.min_score;
   model_opt.nms_iou_threshold = cfg.nms_iou;
   model_opt.top_k = cfg.max_detections;

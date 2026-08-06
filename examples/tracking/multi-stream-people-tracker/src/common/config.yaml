@@ -21,6 +21,7 @@ inference:                   # Detection controls.
   fps: 0                     # Max per-stream processing and output FPS. 0 means use source FPS.
   max_inflight_per_stream: 4 # Raw decoder-backed frames admitted per stream to the shared detector.
   max_inflight_total: 16     # Raw decoder-backed frames admitted across all detector streams.
+  num_classes: 80            # Detector class count; must match the YOLO26 class-head depth.
   target_class_id: 0         # Class id to track. COCO id 0 is person.
   target_label: person       # Label emitted in Insight metadata.
   min_score: 0.30            # Decoder floor; lower it only when recovery tracking is needed.

@@ -103,6 +103,7 @@ inference:
   frames: 0
   max_inflight_per_stream: 4
   max_inflight_total: 16
+  num_classes: 80
   target_class_id: 0
   target_label: person
   min_score: 0.30
@@ -130,6 +131,10 @@ For the qualified one-class drone model, copy
 `src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight
 host. Its low decoder floor is intentional: detections below the high-score
 threshold may recover an existing track but cannot create a new one.
+`inference.num_classes` is part of the detector contract and must match the
+YOLO26 class-head depth (`1` for the tiny-drone model and `80` for COCO). The
+application rejects non-positive class counts and target class IDs outside
+that range before constructing the model.
 
 ## Run
 

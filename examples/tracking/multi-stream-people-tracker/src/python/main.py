@@ -36,6 +36,7 @@ class AppConfig:
     fps: int = 0
     max_inflight_per_stream: int = 4
     max_inflight_total: int = 16
+    num_classes: int = 80
     target_class_id: int = 0
     target_label: str = "person"
     min_score: float = 0.55
@@ -233,8 +234,15 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.max_inflight_per_stream must be -1 or > 0")
     if cfg.max_inflight_total != -1 and cfg.max_inflight_total <= 0:
         raise ValueError("inference.max_inflight_total must be -1 or > 0")
+    if cfg.num_classes <= 0:
+        raise ValueError("inference.num_classes must be > 0")
     if cfg.target_class_id < 0:
         raise ValueError("inference.target_class_id must be >= 0")
+    if cfg.target_class_id >= cfg.num_classes:
+        raise ValueError(
+            f"inference.target_class_id ({cfg.target_class_id}) must be less than "
+            f"inference.num_classes ({cfg.num_classes})"
+        )
     if not cfg.target_label.strip():
         raise ValueError("inference.target_label must be set")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -309,6 +317,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         fps=int_or(inference, "fps", 0),
         max_inflight_per_stream=int_or(inference, "max_inflight_per_stream", 4),
         max_inflight_total=int_or(inference, "max_inflight_total", 16),
+        num_classes=int_or(inference, "num_classes", 80),
         target_class_id=int_or(
             inference, "target_class_id", int_or(inference, "person_class_id", 0)
         ),
@@ -575,6 +584,7 @@ def build_model(cfg: AppConfig):
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26
+    opt.num_classes = cfg.num_classes
     opt.score_threshold = cfg.min_score
     opt.nms_iou_threshold = cfg.nms_iou
     opt.top_k = cfg.max_detections

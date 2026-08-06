@@ -34,16 +34,30 @@ def write_config(
     codec: str | None = None,
     max_inflight_per_stream: int | None = None,
     max_inflight_total: int | None = None,
+    num_classes: int | None = None,
+    target_class_id: int | None = None,
 ) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
     inference = []
     input_config = ["input:", f"  codec: {codec}"] if codec else []
-    if max_inflight_per_stream is not None or max_inflight_total is not None:
+    if any(
+        value is not None
+        for value in (
+            max_inflight_per_stream,
+            max_inflight_total,
+            num_classes,
+            target_class_id,
+        )
+    ):
         inference.append("inference:")
         if max_inflight_per_stream is not None:
             inference.append(f"  max_inflight_per_stream: {max_inflight_per_stream}")
         if max_inflight_total is not None:
             inference.append(f"  max_inflight_total: {max_inflight_total}")
+        if num_classes is not None:
+            inference.append(f"  num_classes: {num_classes}")
+        if target_class_id is not None:
+            inference.append(f"  target_class_id: {target_class_id}")
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
@@ -114,6 +128,7 @@ class TestConfigLoading:
         assert cfg.tracker_max_missing == 15
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
+        assert cfg.num_classes == 80
         assert cfg.min_score == 0.55
         assert cfg.tracker_high_score == 0.55
         assert cfg.tracker_new_track_score == 0.55
@@ -155,6 +170,34 @@ class TestConfigLoading:
         with pytest.raises(ValueError, match="max_inflight_per_stream must be -1 or > 0"):
             load_app_config(config_path)
 
+    def test_load_app_config_rejects_non_positive_class_count(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            ["rtsp://127.0.0.1:8554/src1"],
+            num_classes=0,
+        )
+
+        with pytest.raises(ValueError, match="inference.num_classes must be > 0"):
+            load_app_config(config_path)
+
+    def test_load_app_config_rejects_target_outside_class_count(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            ["rtsp://127.0.0.1:8554/src1"],
+            num_classes=1,
+            target_class_id=1,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"inference.target_class_id \(1\) must be less than inference.num_classes \(1\)",
+        ):
+            load_app_config(config_path)
+
     def test_default_config_uses_tracking_threshold(self):
         from main import load_app_config
 
@@ -162,9 +205,18 @@ class TestConfigLoading:
 
         assert cfg.min_score == 0.30
         assert cfg.target_class_id == 0
+        assert cfg.num_classes == 80
         assert cfg.target_label == "person"
         assert cfg.tracker_iou_threshold == 0.10
         assert cfg.tracker_center_distance_enabled is True
+
+    def test_tiny_drone_config_uses_one_class_contract(self):
+        from main import load_app_config
+
+        cfg = load_app_config(EXAMPLE_DIR / "src" / "common" / "tiny-drone.yaml")
+
+        assert cfg.num_classes == 1
+        assert cfg.target_class_id == 0
 
     def test_legacy_iou_config_keeps_iou_only_matching(self, tmp_path: Path):
         from main import load_app_config
