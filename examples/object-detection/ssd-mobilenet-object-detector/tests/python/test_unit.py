@@ -166,6 +166,44 @@ def test_normalization_profile_rejects_unknown_value():
 
 
 @pytest.mark.unit
+def test_model_options_leave_model_frame_to_core_preproc(monkeypatch):
+    class FakePyneat:
+        AutoFlag = SimpleNamespace(On="on")
+        InputKind = SimpleNamespace(Image="image")
+        ResizeMode = SimpleNamespace(Stretch="stretch")
+        PreprocessColorFormat = SimpleNamespace(BGR="bgr", RGB="rgb")
+        BoxDecodeType = SimpleNamespace(Ssd="ssd")
+
+        @staticmethod
+        def ModelOptions():
+            return SimpleNamespace(
+                preprocess=SimpleNamespace(
+                    kind=None,
+                    enable=None,
+                    resize=SimpleNamespace(enable=None, mode=None, width=0, height=0),
+                    normalize=SimpleNamespace(
+                        enable=None, mean=None, stddev=None, has_explicit_stats=False
+                    ),
+                    color_convert=SimpleNamespace(input_format=None, output_format=None),
+                ),
+                decode_type=None,
+                num_classes=0,
+                score_threshold=0.0,
+                nms_iou_threshold=0.0,
+                top_k=0,
+            )
+
+    monkeypatch.setattr(ssd_mobilenet_main, "pyneat", FakePyneat, raising=False)
+    options = ssd_mobilenet_main.make_model_options(
+        0.55, 0.60, 100, "tensorflow_ssd"
+    )
+
+    assert options.preprocess.resize.mode == "stretch"
+    assert (options.preprocess.resize.width, options.preprocess.resize.height) == (0, 0)
+    assert options.decode_type == "ssd"
+
+
+@pytest.mark.unit
 def test_clear_output_images_unlinks_dangling_symlink(tmp_path):
     output_dir = tmp_path / "output"
     output_dir.mkdir()

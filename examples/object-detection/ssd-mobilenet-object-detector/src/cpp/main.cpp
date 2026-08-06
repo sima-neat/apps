@@ -39,9 +39,6 @@ using ssd_mobilenet::suppress_aggregate_boxes;
 
 namespace {
 
-// Default model frame. SSD300 and SSD-MobileNet v1/v2 are 300x300; v3 is 320x320.
-// Override via `model.frame` in the config to match the model pack.
-constexpr int kDefaultModelSize = 300;
 constexpr int kNumClasses = 91; // index 0 = background, 1..90 = COCO ids.
 constexpr int kDefaultTimeoutMs = 20000;
 constexpr const char* kDefaultLabelsPath =
@@ -55,7 +52,6 @@ struct Config {
   fs::path input_dir;
   fs::path output_dir;
   fs::path detections_json;
-  int model_frame = kDefaultModelSize; // 300 for SSD300/v1/v2, 320 for v3.
   std::string preprocessing_profile = "tensorflow_ssd";
   float score_threshold = 0.55f;
   float nms_iou = 0.60f;
@@ -195,7 +191,6 @@ Config load_config(const fs::path& path) {
   Config cfg;
   cfg.config_file = path;
   cfg.model = raw.string_or("model.path", "models/ssd_mobilenet_v2_heads_mpk.tar.gz");
-  cfg.model_frame = raw.int_or("model.frame", kDefaultModelSize);
   cfg.preprocessing_profile = raw.string_or("model.preprocessing_profile", "tensorflow_ssd");
   cfg.labels =
       resolve_asset(raw.string_or("model.labels", ""), kDefaultLabelsPath, "coco_labels.txt");
@@ -251,18 +246,10 @@ Config load_config(const fs::path& path) {
   if (cfg.timeout_ms <= 0) {
     throw std::runtime_error("runtime.timeout_ms must be > 0");
   }
-  if (cfg.model_frame != 300 && cfg.model_frame != 320) {
-    throw std::runtime_error("model.frame must be 300 (SSD300/MobileNet v1/v2) or 320 (v3), got " +
-                             std::to_string(cfg.model_frame));
-  }
   if (cfg.preprocessing_profile != "tensorflow_ssd" &&
       cfg.preprocessing_profile != "torchvision_ssdlite") {
     throw std::runtime_error(
         "model.preprocessing_profile must be tensorflow_ssd or torchvision_ssdlite");
-  }
-  if (cfg.preprocessing_profile == "torchvision_ssdlite" && cfg.model_frame != 320) {
-    throw std::runtime_error(
-        "model.preprocessing_profile torchvision_ssdlite requires model.frame=320");
   }
   return cfg;
 }
@@ -335,10 +322,9 @@ neat::Model::Options make_model_options(const Config& cfg) {
   opt.preprocess.kind = neat::InputKind::Image;
   opt.preprocess.enable = neat::AutoFlag::On;
   // STRETCH, not the default Letterbox: every registered SSD recipe uses a direct square resize.
+  // Core infers the target width/height from the MPK's MLA input contract, as it does for YOLO.
   opt.preprocess.resize.enable = neat::AutoFlag::On;
   opt.preprocess.resize.mode = neat::ResizeMode::Stretch;
-  opt.preprocess.resize.width = cfg.model_frame;
-  opt.preprocess.resize.height = cfg.model_frame;
   opt.preprocess.normalize.enable = neat::AutoFlag::On;
   if (cfg.preprocessing_profile == "torchvision_ssdlite") {
     opt.preprocess.normalize.mean = {0.485f, 0.456f, 0.406f};
@@ -531,17 +517,15 @@ int main(int argc, char** argv) {
       throw std::runtime_error("failed to read build seed image: " + image_paths.front().string());
     }
 
-    // Model load and graph build resolve the SSD recipe and validate the model frame; a
-    // recipe/frame mismatch surfaces here. Add a hint pointing at the two config knobs.
+    // Core resolves the preprocess frame from the MPK and validates it against the SSD recipe.
     neat::Model model(cfg.model, make_model_options(cfg));
     neat::Model::Runner run = [&] {
       try {
         return model.build(std::vector<cv::Mat>{seed_bgr}, neat::Model::RouteOptions{});
       } catch (const std::exception& e) {
-        throw std::runtime_error(std::string(e.what()) + "\n  hint: check model.path (" +
-                                 cfg.model + ") and model.frame (" +
-                                 std::to_string(cfg.model_frame) +
-                                 "); use 300 for SSD300/MobileNet v1/v2, 320 for v3.");
+        throw std::runtime_error(std::string(e.what()) +
+                                 "\n  hint: verify model.path points to a supported SSD model "
+                                 "pack whose MLA input contract contains its model frame.");
       }
     }();
     run.run(std::vector<cv::Mat>{seed_bgr}, cfg.timeout_ms);

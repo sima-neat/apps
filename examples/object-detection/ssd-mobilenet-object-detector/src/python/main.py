@@ -32,9 +32,6 @@ DEFAULT_LABELS_PATH = Path(
     "examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt"
 )
 
-# Default model frame. SSD300 and SSD-MobileNet v1/v2 are 300x300; v3 is 320x320.
-# Override via `model.frame` in the config to match the model pack.
-DEFAULT_MODEL_SIZE = 300
 DEFAULT_PREPROCESSING_PROFILE = "tensorflow_ssd"
 NUM_CLASSES = 91  # index 0 = background, 1..90 = COCO ids.
 BBOX_RECORD_SIZE = 24  # int32 x, y, w, h + float32 score + int32 class_id
@@ -228,22 +225,16 @@ def make_model_options(
     score_threshold: float,
     nms_iou: float,
     max_detections: int,
-    model_frame: int,
     preprocessing_profile: str = DEFAULT_PREPROCESSING_PROFILE,
 ) -> "pyneat.ModelOptions":
-    """Model-managed SSD decode with an explicit source-model preprocessing profile.
-
-    Frame is 300 for SSD300/v1/v2 and 320 for either 320x320 recipe.
-    """
+    """Model-managed SSD decode with an explicit source-model preprocessing profile."""
     mean, stddev = normalization_for_profile(preprocessing_profile)
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    # STRETCH, not the default Letterbox: every registered SSD recipe uses a direct square resize.
+    # Core infers the target W/H from the MPK's MLA input contract, as it does for YOLO.
     opt.preprocess.resize.enable = pyneat.AutoFlag.On
     opt.preprocess.resize.mode = pyneat.ResizeMode.Stretch
-    opt.preprocess.resize.width = model_frame
-    opt.preprocess.resize.height = model_frame
     opt.preprocess.normalize.enable = pyneat.AutoFlag.On
     opt.preprocess.normalize.mean = mean
     opt.preprocess.normalize.stddev = stddev
@@ -493,9 +484,6 @@ def main() -> int:
         detections_json = config_string_or(
             io_cfg, "detections_json", "", "io.detections_json"
         )
-        model_frame = config_int_or(
-            model_cfg, "frame", DEFAULT_MODEL_SIZE, "model.frame"
-        )
         score_threshold = config_float_or(
             decode_cfg, "score_threshold", 0.55, "decode.score_threshold"
         )
@@ -595,22 +583,10 @@ def main() -> int:
     if num_runs < 1:
         print("runtime.num_runs must be >= 1", file=sys.stderr)
         return 2
-    if model_frame not in (300, 320):
-        print(
-            f"model.frame must be 300 (SSD300/MobileNet v1/v2) or 320 (v3), got {model_frame}",
-            file=sys.stderr,
-        )
-        return 2
     try:
         normalization_for_profile(preprocessing_profile)
     except ValueError as exc:
         print(exc, file=sys.stderr)
-        return 2
-    if preprocessing_profile == "torchvision_ssdlite" and model_frame != 320:
-        print(
-            "model.preprocessing_profile torchvision_ssdlite requires model.frame=320",
-            file=sys.stderr,
-        )
         return 2
     if not model_path.is_file():
         print(f"Model file does not exist: {model_path}", file=sys.stderr)
@@ -693,7 +669,6 @@ def main() -> int:
                 score_threshold,
                 nms_iou,
                 max_detections,
-                model_frame,
                 preprocessing_profile,
             ),
         )
@@ -707,11 +682,11 @@ def main() -> int:
         _log("warmup done")
     except Exception as exc:
         logger.debug("Model/pipeline build failure", exc_info=exc)
-        # Recipe/frame mismatch surfaces here; point at the two config knobs.
+        # Core resolves the preprocess frame from the MPK and validates the SSD recipe.
         print(f"Error loading model: {exc}", file=sys.stderr)
         print(
-            f"  hint: check model.path ({model_path}) and model.frame ({model_frame}); "
-            "use 300 for SSD300/MobileNet v1/v2, 320 for v3.",
+            f"  hint: verify model.path ({model_path}) points to a supported SSD model "
+            "pack whose MLA input contract contains its model frame.",
             file=sys.stderr,
         )
         return 3

@@ -32,7 +32,8 @@ disabled by default in code; this demo config explicitly enables it with
 `output.aggregate_suppression: true`. Machine-readable JSON always retains every raw model
 detection and marks overlay membership with a `displayed` boolean.
 
-Preprocess is a direct **stretch** to the model frame. `tensorflow_ssd` is the exported `[-1,1]`
+Preprocess is a direct **stretch** to the model frame, whose width and height Core derives from the
+MPK's MLA input contract. `tensorflow_ssd` is the exported `[-1,1]`
 boundary (mean/stddev `0.5`); `torchvision_ssdlite` is ImageNet normalization. Select the profile
 from the published-artifact table below rather than inferring it from the family name: the V3 BF16
 export retains the `[-1,1]` adapter, while its QAT INT8 export exposes the normalized boundary.
@@ -78,8 +79,9 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-Set `model.path`, `model.frame`, and `model.preprocessing_profile` together. The app validates the
-profile name and rejects the TorchVision profile unless the frame is 320.
+Set `model.path` and `model.preprocessing_profile` together. Core derives the 300×300 or 320×320
+preprocess target from the model pack and validates it against the selected SSD recipe; the app
+does not duplicate those dimensions.
 
 The only shipped asset is `src/common/coco_labels.txt` — 91 lines (`0=background`, `1..90` =
 MS-COCO ids). No anchor asset is needed: the priors live in the model-managed SSD decode.
@@ -91,7 +93,6 @@ Edit `examples/object-detection/ssd-mobilenet-object-detector/src/common/config.
 ```yaml
 model:
   path: <model-path>
-  frame: 300                 # 300 for v1/v2, 320 for v3.
   preprocessing_profile: tensorflow_ssd  # Use the published-artifact table above.
   labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt
 
