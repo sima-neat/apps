@@ -231,8 +231,10 @@ def evaluate(
 ) -> dict[str, Any]:
     if not 0.0 < iou_threshold <= 1.0:
         raise ValueError("iou_threshold must be in (0, 1]")
-    if fps <= 0.0 or model_size <= 0:
-        raise ValueError("fps and model_size must be positive")
+    if not math.isfinite(fps) or fps <= 0.0:
+        raise ValueError("fps must be finite and positive")
+    if model_size <= 0:
+        raise ValueError("model_size must be positive")
     unannotated_prediction_frames = sorted(set(prediction_frames) - set(truth_frames))
     if unannotated_prediction_frames:
         preview = ", ".join(str(frame) for frame in unannotated_prediction_frames[:5])
@@ -408,9 +410,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.minimum_frames < 1:
         parser.error("minimum-frames must be positive")
+    if not math.isfinite(args.fps) or args.fps <= 0.0:
+        parser.error("fps must be finite and positive")
     if not 0.0 <= args.minimum_recall <= 1.0 or not 0.0 <= args.minimum_tiny_recall <= 1.0:
         parser.error("minimum recall gates must be in [0, 1]")
-    if args.maximum_false_positives_per_minute < 0.0:
+    if (
+        math.isnan(args.maximum_false_positives_per_minute)
+        or args.maximum_false_positives_per_minute < 0.0
+    ):
         parser.error("maximum-false-positives-per-minute must be >= 0")
     if (
         args.maximum_id_switches is not None

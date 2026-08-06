@@ -581,6 +581,49 @@ class TestTracker:
 
 
 class TestAccuracyEvaluation:
+    @pytest.mark.parametrize("fps", [float("nan"), float("inf")])
+    def test_nonfinite_fps_is_rejected(self, fps: float):
+        truth = {
+            0: {
+                "frame_index": 0,
+                "width": 640,
+                "height": 640,
+                "objects": [],
+            }
+        }
+
+        with pytest.raises(ValueError, match="fps must be finite and positive"):
+            evaluate_tracking.evaluate(
+                truth, {}, iou_threshold=0.3, fps=fps, model_size=640
+            )
+
+    def test_cli_rejects_nan_false_positive_limit(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                str(ACCURACY_PATH),
+                "--ground-truth",
+                "missing-truth.jsonl",
+                "--predictions",
+                "missing-predictions.jsonl",
+                "--output",
+                "unused.json",
+                "--fps",
+                "30",
+                "--maximum-false-positives-per-minute",
+                "nan",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as error:
+            evaluate_tracking.main()
+
+        assert error.value.code == 2
+        assert "maximum-false-positives-per-minute must be >= 0" in capsys.readouterr().err
+
     def test_metrics_count_recall_false_positives_and_id_switches(self):
         truth = {
             0: {
