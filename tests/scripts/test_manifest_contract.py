@@ -1118,6 +1118,19 @@ def test_vulcan_runtime_gate_uses_packaged_core_without_customer_dependencies():
     )
 
 
+def test_vulcan_runtime_gate_uses_job_local_exact_pyneat():
+    workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'NEAT_APPS_CORE_INSTALL_DIR="${core_install_dir}"' in workflow
+    assert 'PYNEAT_VENV_DIR="${pyneat_venv}"' in workflow
+    assert 'find "${CORE_WHEEL_DIR}" -type f -name \'pyneat-*.whl\'' in workflow
+    assert '"$(basename "${core_wheels[0]}")" != *"${CORE_TARGET_SPEC}"*' in workflow
+    assert '--target "${pyneat_site}" --no-deps --upgrade' in workflow
+    assert "assert module.is_relative_to(site)" in workflow
+    assert "assert spec in installed" in workflow
+    assert "/media/nvme/pyneat" not in workflow
+
+
 def test_vulcan_package_shell_quotes_exact_runtime_candidate():
     workflow = VULCAN_WORKFLOW.read_text(encoding="utf-8")
 
