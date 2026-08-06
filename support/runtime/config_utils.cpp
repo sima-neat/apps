@@ -157,6 +157,9 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     }
 
     const std::string line = trim_copy(without_comment);
+    if (indent == 0 && !line.empty() && (line.front() == '{' || line.front() == '[')) {
+      throw std::runtime_error("config root must be a block mapping");
+    }
     if (list_block_indent >= 0) {
       if (indent > list_block_indent) {
         continue;
@@ -198,7 +201,7 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       config.root_kind_ = ConfigNodeKind::Mapping;
     }
 
-    const std::string key = trim_copy(line.substr(0, colon));
+    const std::string key = unquote(line.substr(0, colon));
     std::string value = trim_copy(line.substr(colon + 1));
     while (!stack.empty() && indent <= stack.back().first) {
       stack.pop_back();

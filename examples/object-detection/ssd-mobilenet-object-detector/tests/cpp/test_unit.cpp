@@ -226,8 +226,9 @@ int main(int argc, char** argv) {
   }
   const fs::path scratch_dir(scratch);
 
-  const std::array<std::tuple<std::string, std::string, std::string>, 11> malformed_configs = {{
+  const std::array<std::tuple<std::string, std::string, std::string>, 12> malformed_configs = {{
       {"root_list.yaml", "- model\n", "config root must be a mapping"},
+      {"root_flow_mapping.yaml", "{model: []}\n", "config root must be a block mapping"},
       {"quoted_root_scalar.yaml", "\"model: []\"\n", "config root must be a mapping"},
       {"inline_model_list.yaml", "model: []\n", "model must be a mapping"},
       {"block_model_list.yaml", "model:\n  - path\n", "model must be a mapping"},
@@ -249,6 +250,21 @@ int main(int argc, char** argv) {
     std::ofstream(config) << contents;
     if (!expect_config_rejected(binary, config, expected, name)) {
       ++failures;
+    }
+  }
+
+  {
+    const fs::path config = scratch_dir / "quoted_mapping_keys.yaml";
+    std::ofstream(config) << "\"model\":\n"
+                             "  'path': model.tar.gz\n";
+    const auto raw = sima_examples::ScalarConfig::load(config);
+    if (raw.node_kind("model") != sima_examples::ConfigNodeKind::Mapping ||
+        raw.node_kind("model.path") != sima_examples::ConfigNodeKind::Scalar ||
+        raw.string_or("model.path", "missing") != "model.tar.gz") {
+      std::cerr << "[FAIL] scalar config did not normalize quoted mapping keys\n";
+      ++failures;
+    } else {
+      std::cout << "[OK] scalar config normalizes quoted mapping keys\n";
     }
   }
 
