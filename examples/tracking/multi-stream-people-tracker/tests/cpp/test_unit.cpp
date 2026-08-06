@@ -86,12 +86,86 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
                       "validate output reports per-stream inflight limit") &&
       expect_contains(result.stdout_text, "max_inflight_total=12",
                       "validate output reports total inflight limit") &&
+      expect_contains(result.stdout_text, "overflow_policy=keep_latest",
+                      "validate output reports default overflow policy") &&
       expect_contains(result.stdout_text, "min_score=0.55",
                       "legacy omission preserves the decoder floor") &&
       expect_contains(result.stdout_text, "match_iou_threshold=0.3",
                       "legacy omission preserves the IoU threshold") &&
       expect_contains(result.stdout_text, "center_distance_enabled=false",
                       "legacy omission preserves IoU-only matching");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_validate_config_only_accepts_block_overflow_policy(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_accepts_block_overflow_policy",
+                   "model:\n"
+                   "  path: models/yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "runtime:\n"
+                   "  overflow_policy: block\n"
+                   "inference:\n"
+                   "  num_classes: 1\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 0, "block overflow policy validates") &&
+                  expect_contains(result.stdout_text, "overflow_policy=block",
+                                  "validate output reports block overflow policy");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_validate_config_only_rejects_invalid_overflow_policy(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_rejects_invalid_overflow_policy",
+                   "model:\n"
+                   "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "runtime:\n"
+                   "  overflow_policy: drop_oldest\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok =
+      expect_true(result.exit_code == 1, "invalid overflow policy is rejected") &&
+      expect_contains(result.stderr_text, "runtime.overflow_policy must be keep_latest or block",
+                      "invalid overflow policy error names accepted values");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_validate_config_only_rejects_block_with_shared_fan_in(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_rejects_block_with_shared_fan_in",
+                   "model:\n"
+                   "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "  - rtsp://127.0.0.1:8554/src2\n"
+                   "runtime:\n"
+                   "  overflow_policy: block\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok =
+      expect_true(result.exit_code == 1, "block policy rejects shared detector fan-in") &&
+      expect_contains(result.stderr_text,
+                      "runtime.overflow_policy=block requires exactly one stream",
+                      "shared fan-in error explains the single-stream requirement");
   remove_dir(config_path.parent_path().string());
   return ok;
 }
@@ -438,6 +512,9 @@ int main(int argc, char** argv) {
   ok &= test_help_runs(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_accepts_four_streams(binary);
+  ok &= test_validate_config_only_accepts_block_overflow_policy(binary);
+  ok &= test_validate_config_only_rejects_invalid_overflow_policy(binary);
+  ok &= test_validate_config_only_rejects_block_with_shared_fan_in(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   ok &= test_validate_config_only_rejects_non_positive_class_count(binary);

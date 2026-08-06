@@ -44,6 +44,7 @@ class AppConfig:
     max_detections: int = 50
     profile: bool = False
     warmup_frames: int = 30
+    overflow_policy: str = "keep_latest"
     tracker_high_score: float = 0.55
     tracker_new_track_score: float = 0.55
     tracker_iou_threshold: float = 0.30
@@ -215,6 +216,13 @@ def parse_input_codec(value: str) -> str:
     raise ValueError("input.codec must be h264/avc or h265/hevc")
 
 
+def parse_overflow_policy(value: str) -> str:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in {"keep_latest", "block"}:
+        return normalized
+    raise ValueError("runtime.overflow_policy must be keep_latest or block")
+
+
 def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path:
         raise ValueError("model.path must be set")
@@ -222,6 +230,13 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("streams must be set")
     if len(cfg.rtsp_urls) > 4:
         raise ValueError("this phase supports up to four streams")
+    if cfg.overflow_policy not in {"keep_latest", "block"}:
+        raise ValueError("runtime.overflow_policy must be keep_latest or block")
+    if cfg.overflow_policy == "block" and len(cfg.rtsp_urls) != 1:
+        raise ValueError(
+            "runtime.overflow_policy=block requires exactly one stream because shared detector "
+            "fan-in uses latest-frame scheduling"
+        )
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
     if cfg.latency_ms < 0:
@@ -327,6 +342,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         max_detections=int_or(inference, "max_detections", 50),
         profile=bool_or(runtime, "profile", False),
         warmup_frames=int_or(runtime, "warmup_frames", 30),
+        overflow_policy=parse_overflow_policy(string_or(runtime, "overflow_policy", "keep_latest")),
         tracker_high_score=tracker_high_score,
         tracker_new_track_score=tracker_new_track_score,
         tracker_iou_threshold=float_or(
@@ -591,11 +607,15 @@ def build_model(cfg: AppConfig):
     return pyneat.Model(cfg.model_path, opt)
 
 
-def build_run_options() -> pyneat.RunOptions:
+def build_run_options(cfg: AppConfig) -> pyneat.RunOptions:
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
     run_options.queue_depth = 4
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.overflow_policy = (
+        pyneat.OverflowPolicy.Block
+        if cfg.overflow_policy == "block"
+        else pyneat.OverflowPolicy.KeepLatest
+    )
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     return run_options
 
@@ -624,14 +644,19 @@ def stream_index_from_sample(sample, stream_count: int) -> int:
     return index
 
 
-def realtime_link(
+def stream_link(
+    cfg: AppConfig,
     stream_index: int,
     queue_depth: int,
     max_inflight_per_stream: int = -1,
     max_inflight_total: int = -1,
 ):
     link = pyneat.GraphLinkOptions()
-    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    link.policy = (
+        pyneat.GraphLinkPolicy.Default
+        if cfg.overflow_policy == "block"
+        else pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    )
     link.queue_depth = queue_depth
     link.max_inflight_per_stream = max_inflight_per_stream
     link.max_inflight_total = max_inflight_total
@@ -729,16 +754,16 @@ def connect_stream_graph(
     if cfg.video_enabled:
         encoded_branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
         app.graph.connect(source, encoded_branch)
-        app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3))
+        app.graph.connect(encoded_branch, decoder, stream_link(cfg, stream.index, 3))
 
         video_options = make_video_options(cfg, stream.index)
         app.graph.connect(
             encoded_branch,
             build_video_sender_graph("video_h264", rtsp_codec(cfg.codec), video_options),
-            realtime_link(stream.index, 3),
+            stream_link(cfg, stream.index, 3),
         )
     else:
-        app.graph.connect(source, decoder, realtime_link(stream.index, 3))
+        app.graph.connect(source, decoder, stream_link(cfg, stream.index, 3))
 
     save_debug_frames = save_frames_enabled(cfg)
     decoded_outputs = ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
@@ -747,7 +772,8 @@ def connect_stream_graph(
     app.graph.connect(
         decoded_branch,
         detector_graph,
-        realtime_link(
+        stream_link(
+            cfg,
             stream.index,
             4,
             cfg.max_inflight_per_stream,
@@ -756,7 +782,9 @@ def connect_stream_graph(
     )
     if save_debug_frames:
         app.graph.connect(
-            decoded_branch, build_debug_frame_graph(stream.index), realtime_link(stream.index, 4)
+            decoded_branch,
+            build_debug_frame_graph(stream.index),
+            stream_link(cfg, stream.index, 4),
         )
 
 
@@ -943,7 +971,7 @@ def run_app(cfg: AppConfig) -> None:
     try:
         if cfg.profile:
             print(f"Backend:\n{app.graph.describe_backend()}")
-        app.run = app.graph.build(build_run_options())
+        app.run = app.graph.build(build_run_options(cfg))
         while not all_streams_done(app.streams, cfg.frames):
             process_run_once(app, cfg, "detections")
     except KeyboardInterrupt:
@@ -968,6 +996,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)}, "
                 f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
                 f"max_inflight_total={cfg.max_inflight_total}, "
+                f"overflow_policy={cfg.overflow_policy}, "
                 "center_distance_enabled="
                 f"{str(cfg.tracker_center_distance_enabled).lower()})"
             )

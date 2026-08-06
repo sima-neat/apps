@@ -99,6 +99,9 @@ streams:
 input:
   codec: h264  # h264/avc or h265/hevc
 
+runtime:
+  overflow_policy: keep_latest
+
 inference:
   frames: 0
   max_inflight_per_stream: 4
@@ -127,7 +130,7 @@ without `tracking.max_center_distance`, matching remains IoU-only; set the
 center-distance value explicitly or use `match_iou_threshold` to enable the
 motion-aware OR gate.
 
-For the qualified one-class drone model, copy
+For the one-class drone candidate, copy
 `src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight
 host. Its low decoder floor is intentional: detections below the high-score
 threshold may recover an existing track but cannot create a new one.
@@ -135,6 +138,14 @@ threshold may recover an existing track but cannot create a new one.
 YOLO26 class-head depth (`1` for the tiny-drone model and `80` for COCO). The
 application rejects non-positive class counts and target class IDs outside
 that range before constructing the model.
+
+`runtime.overflow_policy` defaults to `keep_latest`, which bounds latency by
+discarding stale work when a live source outruns inference. Use `block` for a
+single-stream, frame-complete accuracy run; it applies backpressure at both
+graph links and runtime outputs. The application rejects `block` with multiple
+streams because Core's shared live detector fan-in intentionally uses
+latest-frame scheduling, so accepting that combination would falsely imply
+lossless processing.
 
 ## Run
 
@@ -175,7 +186,7 @@ The packaged C++ source is an implementation reference. Run the executable under
 
 ## Accuracy Qualification
 
-Evaluate one stream at a time. Ground truth JSONL uses frame dimensions and
+Evaluate one stream at a time with `runtime.overflow_policy: block`. Ground truth JSONL uses frame dimensions and
 `objects`; predictions may be plain `tracks` JSONL or captured Insight
 metadata envelopes. Both use pixel-space `[x, y, width, height]` boxes and
 numeric frame IDs. Ground truth must contain every evaluated frame, including

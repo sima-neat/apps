@@ -55,6 +55,11 @@ void request_stop(int) {
   g_stop_requested = 1;
 }
 
+enum class RuntimeOverflowPolicy {
+  KeepLatest,
+  Block,
+};
+
 struct AppConfig {
   std::string model_path;
   std::vector<std::string> rtsp_urls;
@@ -74,6 +79,7 @@ struct AppConfig {
   int max_detections = 50;
   bool profile = false;
   int warmup_frames = 30;
+  RuntimeOverflowPolicy overflow_policy = RuntimeOverflowPolicy::KeepLatest;
   double tracker_high_score = 0.55;
   double tracker_new_track_score = 0.55;
   float tracker_iou_threshold = 0.30f;
@@ -105,6 +111,21 @@ simaai::neat::nodes::groups::RtspCodec parse_input_codec(const std::string& valu
     return simaai::neat::nodes::groups::RtspCodec::H265;
   }
   throw std::runtime_error("input.codec must be h264/avc or h265/hevc");
+}
+
+RuntimeOverflowPolicy parse_overflow_policy(const std::string& value) {
+  const std::string lowered = lower_copy(value);
+  if (lowered == "keep_latest" || lowered == "keep-latest") {
+    return RuntimeOverflowPolicy::KeepLatest;
+  }
+  if (lowered == "block") {
+    return RuntimeOverflowPolicy::Block;
+  }
+  throw std::runtime_error("runtime.overflow_policy must be keep_latest or block");
+}
+
+const char* overflow_policy_name(RuntimeOverflowPolicy policy) {
+  return policy == RuntimeOverflowPolicy::Block ? "block" : "keep_latest";
 }
 
 struct CliOptions {
@@ -279,6 +300,10 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
   sima_examples::require(!cfg.rtsp_urls.empty(), "streams must be set");
   sima_examples::require(cfg.rtsp_urls.size() <= 4, "this phase supports up to four streams");
+  sima_examples::require(
+      cfg.overflow_policy != RuntimeOverflowPolicy::Block || cfg.rtsp_urls.size() == 1,
+      "runtime.overflow_policy=block requires exactly one stream because shared detector fan-in "
+      "uses latest-frame scheduling");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
@@ -352,6 +377,8 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
+  cfg.overflow_policy =
+      parse_overflow_policy(raw.string_or("runtime.overflow_policy", "keep_latest"));
   cfg.tracker_high_score = raw.double_or("tracking.high_score_threshold", cfg.min_score);
   cfg.tracker_new_track_score =
       raw.double_or("tracking.new_track_threshold", cfg.tracker_high_score);
@@ -597,11 +624,13 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   return std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
 }
 
-simaai::neat::RunOptions build_run_options() {
+simaai::neat::RunOptions build_run_options(const AppConfig& cfg) {
   simaai::neat::RunOptions run_options;
   run_options.preset = simaai::neat::RunPreset::Realtime;
   run_options.queue_depth = 4;
-  run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
+  run_options.overflow_policy = cfg.overflow_policy == RuntimeOverflowPolicy::Block
+                                    ? simaai::neat::OverflowPolicy::Block
+                                    : simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   return run_options;
 }
@@ -634,11 +663,13 @@ int stream_index_from_sample(const simaai::neat::Sample& sample, int stream_coun
   return index;
 }
 
-simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth,
-                                             int max_inflight_per_stream = -1,
-                                             int max_inflight_total = -1) {
+simaai::neat::GraphLinkOptions stream_link(const AppConfig& cfg, int stream_index, int queue_depth,
+                                           int max_inflight_per_stream = -1,
+                                           int max_inflight_total = -1) {
   simaai::neat::GraphLinkOptions link;
-  link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
+  link.policy = cfg.overflow_policy == RuntimeOverflowPolicy::Block
+                    ? simaai::neat::GraphLinkPolicy::Default
+                    : simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
   link.queue_depth = queue_depth;
   link.max_inflight_per_stream = max_inflight_per_stream;
   link.max_inflight_total = max_inflight_total;
@@ -741,14 +772,14 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
   if (cfg.video_enabled) {
     auto encoded_branch = simaai::neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
     app.graph.connect(source, encoded_branch);
-    app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3));
+    app.graph.connect(encoded_branch, decoder, stream_link(cfg, stream.index, 3));
 
     const auto video_options = make_video_options(cfg, stream.index);
     app.graph.connect(encoded_branch,
                       build_video_sender_graph("video_h264", cfg.codec, video_options),
-                      realtime_link(stream.index, 3));
+                      stream_link(cfg, stream.index, 3));
   } else {
-    app.graph.connect(source, decoder, realtime_link(stream.index, 3));
+    app.graph.connect(source, decoder, stream_link(cfg, stream.index, 3));
   }
 
   const bool save_debug_frames = save_frames_enabled(cfg);
@@ -758,10 +789,10 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
   app.graph.connect(decoder, decoded_branch);
   app.graph.connect(
       decoded_branch, detector_graph,
-      realtime_link(stream.index, 4, cfg.max_inflight_per_stream, cfg.max_inflight_total));
+      stream_link(cfg, stream.index, 4, cfg.max_inflight_per_stream, cfg.max_inflight_total));
   if (save_debug_frames) {
     app.graph.connect(decoded_branch, build_debug_frame_graph(stream.index),
-                      realtime_link(stream.index, 4));
+                      stream_link(cfg, stream.index, 4));
   }
 }
 
@@ -930,7 +961,7 @@ void run_app(const AppConfig& cfg) {
     std::cout << "Backend:\n" << app.graph.describe_backend() << "\n";
   }
 
-  app.run = app.graph.build(build_run_options());
+  app.run = app.graph.build(build_run_options(cfg));
   while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
     (void)process_run_once(app, cfg, "detections");
   }
@@ -959,6 +990,7 @@ int main(int argc, char** argv) {
       std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.rtsp_urls.size()
                 << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
                 << ", max_inflight_total=" << cfg.max_inflight_total
+                << ", overflow_policy=" << overflow_policy_name(cfg.overflow_policy)
                 << ", min_score=" << cfg.min_score
                 << ", match_iou_threshold=" << cfg.tracker_iou_threshold
                 << ", center_distance_enabled="

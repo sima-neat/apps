@@ -13,6 +13,7 @@ input:
 runtime:
   profile: true
   warmup_frames: 30
+  overflow_policy: keep_latest
 
 inference:
   frames: 0

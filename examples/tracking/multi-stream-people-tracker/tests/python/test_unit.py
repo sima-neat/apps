@@ -36,10 +36,14 @@ def write_config(
     max_inflight_total: int | None = None,
     num_classes: int | None = None,
     target_class_id: int | None = None,
+    overflow_policy: str | None = None,
 ) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
     inference = []
     input_config = ["input:", f"  codec: {codec}"] if codec else []
+    runtime_config = (
+        ["runtime:", f"  overflow_policy: {overflow_policy}"] if overflow_policy else []
+    )
     if any(
         value is not None
         for value in (
@@ -67,6 +71,7 @@ def write_config(
                 "streams:",
                 stream_lines,
                 *input_config,
+                *runtime_config,
                 *inference,
                 "output:",
                 "  insight:",
@@ -128,6 +133,7 @@ class TestConfigLoading:
         assert cfg.tracker_max_missing == 15
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
+        assert cfg.overflow_policy == "keep_latest"
         assert cfg.num_classes == 80
         assert cfg.min_score == 0.55
         assert cfg.tracker_high_score == 0.55
@@ -157,6 +163,52 @@ class TestConfigLoading:
 
         assert cfg.max_inflight_per_stream == 3
         assert cfg.max_inflight_total == 12
+
+    def test_load_app_config_accepts_block_overflow_policy(self, tmp_path: Path):
+        from main import load_app_config
+
+        cfg = load_app_config(
+            write_config(
+                tmp_path,
+                ["rtsp://127.0.0.1:8554/src1"],
+                overflow_policy="block",
+            )
+        )
+
+        assert cfg.overflow_policy == "block"
+
+    def test_load_app_config_rejects_invalid_overflow_policy(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            ["rtsp://127.0.0.1:8554/src1"],
+            overflow_policy="drop_oldest",
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="runtime.overflow_policy must be keep_latest or block",
+        ):
+            load_app_config(config_path)
+
+    def test_load_app_config_rejects_block_with_shared_detector_fan_in(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            [
+                "rtsp://127.0.0.1:8554/src1",
+                "rtsp://127.0.0.1:8554/src2",
+            ],
+            overflow_policy="block",
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="runtime.overflow_policy=block requires exactly one stream",
+        ):
+            load_app_config(config_path)
 
     def test_load_app_config_rejects_invalid_inflight_limit(self, tmp_path: Path):
         from main import load_app_config
@@ -355,9 +407,43 @@ class TestConfigLoading:
         assert "streams=2" in result.stdout
         assert "max_inflight_per_stream=4" in result.stdout
         assert "max_inflight_total=16" in result.stdout
+        assert "overflow_policy=keep_latest" in result.stdout
 
 
 class TestRuntimeOptions:
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [("keep_latest", "keep-latest"), ("block", "block")],
+    )
+    def test_run_and_link_options_use_configured_overflow_policy(
+        self, monkeypatch, configured, expected
+    ):
+        import main
+
+        fake_pyneat = SimpleNamespace(
+            RunOptions=type("RunOptions", (), {}),
+            RunPreset=SimpleNamespace(Realtime="realtime"),
+            OverflowPolicy=SimpleNamespace(KeepLatest="keep-latest", Block="block"),
+            OutputMemory=SimpleNamespace(ZeroCopy="zero-copy"),
+            GraphLinkOptions=type("GraphLinkOptions", (), {}),
+            GraphLinkPolicy=SimpleNamespace(
+                Default="default", RealtimeLatestByStream="keep-latest"
+            ),
+        )
+        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+        cfg = main.AppConfig(
+            model_path="model.tar.gz",
+            rtsp_urls=["rtsp://source"],
+            overflow_policy=configured,
+        )
+
+        run_options = main.build_run_options(cfg)
+        link_options = main.stream_link(cfg, 0, 4, 3, 12)
+
+        assert run_options.overflow_policy == expected
+        assert link_options.policy == ("default" if configured == "block" else "keep-latest")
+        assert link_options.stream_id == "stream0"
+
     def test_encoded_input_options_carry_codec_format(self, monkeypatch):
         import main
 
@@ -392,7 +478,8 @@ class TestRuntimeOptions:
         )
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
 
-        link = main.realtime_link(2, 4, 3, 12)
+        cfg = main.AppConfig(model_path="model.tar.gz", rtsp_urls=["rtsp://source"])
+        link = main.stream_link(cfg, 2, 4, 3, 12)
 
         assert link.policy == "latest-by-stream"
         assert link.queue_depth == 4
