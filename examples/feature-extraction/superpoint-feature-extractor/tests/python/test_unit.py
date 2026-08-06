@@ -49,10 +49,24 @@ def test_remap_points_scales_model_coordinates_to_source_frame():
     example = load_example()
 
     actual = example.remap_points(
-        np.asarray([[320.0, 240.0]], dtype=np.float32), 1280, 720, np
+        np.asarray([[320.0, 240.0]], dtype=np.float32),
+        640,
+        480,
+        1280,
+        720,
+        np,
     )
 
     np.testing.assert_allclose(actual, [[640.0, 360.0]])
+
+
+def test_model_frame_comes_from_resolved_preproc_output():
+    example = load_example()
+    model = SimpleNamespace(
+        preprocess_requirements=lambda: SimpleNamespace(output_shape=(1, 480, 640, 1))
+    )
+
+    assert example.model_frame(model) == (640, 480)
 
 
 def test_model_options_delegate_image_geometry_to_core_preproc():

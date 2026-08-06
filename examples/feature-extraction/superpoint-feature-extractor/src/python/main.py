@@ -9,8 +9,6 @@ from pathlib import Path
 import yaml
 
 
-MODEL_WIDTH = 640
-MODEL_HEIGHT = 480
 DESCRIPTOR_DIM = 256
 MAX_POINTS = 600
 
@@ -56,7 +54,7 @@ def load_config(path: Path) -> argparse.Namespace:
     return config
 
 
-def model_options(pyneat, input_width=MODEL_WIDTH, input_height=MODEL_HEIGHT):
+def model_options(pyneat, input_width, input_height):
     options = pyneat.ModelOptions()
     options.preprocess.kind = pyneat.InputKind.Image
     options.preprocess.enable = pyneat.AutoFlag.On
@@ -80,15 +78,24 @@ def model_options(pyneat, input_width=MODEL_WIDTH, input_height=MODEL_HEIGHT):
     return options
 
 
-def remap_points(points, output_width, output_height, np):
+def model_frame(model):
+    shape = tuple(int(value) for value in model.preprocess_requirements().output_shape)
+    if len(shape) < 3 or shape[-3] <= 0 or shape[-2] <= 0:
+        raise RuntimeError("SuperPoint Preproc must expose a positive HWC output shape")
+    return shape[-2], shape[-3]
+
+
+def remap_points(points, model_width, model_height, output_width, output_height, np):
     remapped = np.array(points, dtype=np.float32, copy=True)
     if remapped.size:
-        remapped[:, 0] *= np.float32(output_width / MODEL_WIDTH)
-        remapped[:, 1] *= np.float32(output_height / MODEL_HEIGHT)
+        remapped[:, 0] *= np.float32(output_width / model_width)
+        remapped[:, 1] *= np.float32(output_height / model_height)
     return remapped
 
 
-def feature_points(output, output_width, output_height, np, pyneat):
+def feature_points(
+    output, model_width, model_height, output_width, output_height, np, pyneat
+):
     decoded = pyneat.decode_superpoint(list(output))
     if len(decoded) != 1:
         raise RuntimeError("SuperPoint must return one feature set per frame")
@@ -111,12 +118,14 @@ def feature_points(output, output_width, output_height, np, pyneat):
     if points.size and (
         not np.all(np.isfinite(points))
         or np.any(points[:, 0] < 0)
-        or np.any(points[:, 0] >= MODEL_WIDTH)
+        or np.any(points[:, 0] >= model_width)
         or np.any(points[:, 1] < 0)
-        or np.any(points[:, 1] >= MODEL_HEIGHT)
+        or np.any(points[:, 1] >= model_height)
     ):
         raise RuntimeError("SuperPoint returned an invalid keypoint coordinate")
-    return remap_points(points, output_width, output_height, np)
+    return remap_points(
+        points, model_width, model_height, output_width, output_height, np
+    )
 
 
 def input_tensor(frame, np, pyneat):
@@ -247,6 +256,7 @@ def main() -> int:
         model = pyneat.Model(
             str(config.model), model_options(pyneat, input_width, input_height)
         )
+        model_width, model_height = model_frame(model)
         model_input = input_tensor(frame, np, pyneat)
         runner = model.build(
             [model_input],
@@ -261,7 +271,15 @@ def main() -> int:
         total_points = 0
         while True:
             output = runner.run([model_input], timeout_ms=config.timeout_ms)
-            points = feature_points(output, frame.shape[1], frame.shape[0], np, pyneat)
+            points = feature_points(
+                output,
+                model_width,
+                model_height,
+                frame.shape[1],
+                frame.shape[0],
+                np,
+                pyneat,
+            )
             total_points += len(points)
             draw_points(frame, points, cv2)
             stream_frame(video_run, frame, cv2, pyneat)
