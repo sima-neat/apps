@@ -851,7 +851,7 @@ def test_vulcan_core_install_uses_minimal_temp_dir(tmp_path):
     assert not install_dir.exists()
 
 
-def test_vulcan_core_install_honors_platform_check_override(tmp_path):
+def test_vulcan_core_install_translates_platform_override_to_cli_force(tmp_path):
     sima_cli_cwd = tmp_path / "sima-cli-cwd.txt"
     sima_cli_args = tmp_path / "sima-cli-args.txt"
     _write_fake_sima_cli(tmp_path)
