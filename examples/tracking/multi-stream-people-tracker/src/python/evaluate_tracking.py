@@ -233,6 +233,13 @@ def evaluate(
         raise ValueError("iou_threshold must be in (0, 1]")
     if fps <= 0.0 or model_size <= 0:
         raise ValueError("fps and model_size must be positive")
+    unannotated_prediction_frames = sorted(set(prediction_frames) - set(truth_frames))
+    if unannotated_prediction_frames:
+        preview = ", ".join(str(frame) for frame in unannotated_prediction_frames[:5])
+        suffix = "..." if len(unannotated_prediction_frames) > 5 else ""
+        raise ValueError(
+            f"predictions contain frames without ground truth: {preview}{suffix}"
+        )
 
     true_positives = 0
     false_positives = 0
@@ -256,7 +263,7 @@ def evaluate(
         issue for issue in (ground_truth_id_issue, prediction_id_issue) if issue is not None
     ]
 
-    frame_indices = sorted(set(truth_frames) | set(prediction_frames))
+    frame_indices = sorted(truth_frames)
     for frame_index in frame_indices:
         truth_frame = truth_frames.get(frame_index, {"objects": []})
         prediction_frame = prediction_frames.get(frame_index, {"tracks": []})

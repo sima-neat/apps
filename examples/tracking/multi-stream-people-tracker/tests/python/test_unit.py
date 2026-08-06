@@ -759,6 +759,27 @@ class TestAccuracyEvaluation:
             for truth_index, prediction_index, _ in matches
         ] == [(0, 0), (1, 1)]
 
+    def test_prediction_frames_outside_annotation_are_rejected(self):
+        truth = {
+            10: {
+                "frame_index": 10,
+                "width": 640,
+                "height": 640,
+                "objects": [],
+            }
+        }
+        predictions = {
+            10: {"frame_index": 10, "tracks": []},
+            11: {"frame_index": 11, "tracks": []},
+        }
+
+        with pytest.raises(
+            ValueError, match="predictions contain frames without ground truth: 11"
+        ):
+            evaluate_tracking.evaluate(
+                truth, predictions, iou_threshold=0.3, fps=30.0, model_size=640
+            )
+
     def test_reader_accepts_insight_metadata_envelope(self, tmp_path: Path):
         path = tmp_path / "predictions.jsonl"
         path.write_text(

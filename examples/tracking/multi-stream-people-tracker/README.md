@@ -173,8 +173,11 @@ The packaged C++ source is an implementation reference. Run the executable under
 Evaluate one stream at a time. Ground truth JSONL uses frame dimensions and
 `objects`; predictions may be plain `tracks` JSONL or captured Insight
 metadata envelopes. Both use pixel-space `[x, y, width, height]` boxes and
-numeric frame IDs. Each ground-truth object may contain `track_id`, and each
-prediction may contain `id`. Non-empty IDs are required on every object/track
+numeric frame IDs. Ground truth must contain every evaluated frame, including
+frames with an empty `objects` array; predictions outside that annotated set
+are rejected so coverage and false-positive rates cannot be diluted. Each
+ground-truth object may contain `track_id`, and each prediction may contain
+`id`. Non-empty IDs are required on every object/track
 when either ID-switch or fragmentation gate is requested, and IDs must be
 unique within each frame. Without complete, per-frame-unique IDs, detection
 metrics remain available while tracking metrics are reported as unavailable
