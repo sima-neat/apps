@@ -226,8 +226,9 @@ int main(int argc, char** argv) {
   }
   const fs::path scratch_dir(scratch);
 
-  const std::array<std::tuple<std::string, std::string, std::string>, 10> malformed_configs = {{
+  const std::array<std::tuple<std::string, std::string, std::string>, 11> malformed_configs = {{
       {"root_list.yaml", "- model\n", "config root must be a mapping"},
+      {"quoted_root_scalar.yaml", "\"model: []\"\n", "config root must be a mapping"},
       {"inline_model_list.yaml", "model: []\n", "model must be a mapping"},
       {"block_model_list.yaml", "model:\n  - path\n", "model must be a mapping"},
       {"scalar_io.yaml", "io: input\n", "io must be a mapping"},

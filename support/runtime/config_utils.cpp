@@ -44,6 +44,34 @@ std::string unquote(std::string value) {
   return value;
 }
 
+std::size_t find_mapping_separator(const std::string& line) {
+  bool in_single = false;
+  bool in_double = false;
+  bool escaped = false;
+  for (std::size_t index = 0; index < line.size(); ++index) {
+    const char c = line[index];
+    if (in_double && c == '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (c == '"' && !in_single && !escaped) {
+      in_double = !in_double;
+    } else if (c == '\'' && !in_double) {
+      if (in_single && index + 1 < line.size() && line[index + 1] == '\'') {
+        ++index;
+      } else {
+        in_single = !in_single;
+      }
+    } else if (c == ':' && !in_single && !in_double &&
+               (index + 1 == line.size() ||
+                std::isspace(static_cast<unsigned char>(line[index + 1])) != 0)) {
+      return index;
+    }
+    escaped = false;
+  }
+  return std::string::npos;
+}
+
 std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
   std::ostringstream out;
   bool first = true;
@@ -155,16 +183,19 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       continue;
     }
 
+    const std::size_t colon = find_mapping_separator(line);
+    if (colon == std::string::npos) {
+      if (indent == 0) {
+        throw std::runtime_error("config root must be a mapping");
+      }
+      throw std::runtime_error("invalid config line: " + line);
+    }
+
     if (indent == 0) {
       if (config.root_kind_ == ConfigNodeKind::Sequence) {
         throw std::runtime_error("config root must be a mapping");
       }
       config.root_kind_ = ConfigNodeKind::Mapping;
-    }
-
-    const std::size_t colon = line.find(':');
-    if (colon == std::string::npos) {
-      throw std::runtime_error("invalid config line: " + line);
     }
 
     const std::string key = trim_copy(line.substr(0, colon));

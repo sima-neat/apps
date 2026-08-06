@@ -204,6 +204,14 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                 errors.append(
                     f"{example_key}: model {model_id} sha256 must be 64 lowercase hex characters"
                 )
+            if (
+                sha256
+                and source in {"modelzoo", "url"}
+                and not str(model.get("file", "")).strip()
+            ):
+                errors.append(
+                    f"{example_key}: model {model_id} sha256 requires file for {source} source"
+                )
         for language in sorted(VALID_LANGUAGES):
             for kind in sorted(VALID_KINDS):
                 try:

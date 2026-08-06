@@ -82,6 +82,29 @@ def test_validate_scope_rejects_malformed_sha256(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("source", ["modelzoo", "url"])
+def test_validate_scope_requires_file_for_checksummed_download(tmp_path, source):
+    example_key = _write_example(tmp_path)
+    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_unit.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    (tests_dir / "test_e2e.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    scope = _scope(example_key)
+    model = scope["examples"][example_key]["models"]["demo-model"]
+    model["source"] = source
+    model["url"] = "https://example.invalid/demo-model.tar.gz"
+    model["sha256"] = "a" * 64
+    model.pop("file")
+
+    assert validate_scope(scope, tmp_path) == [
+        f"{example_key}: model demo-model sha256 requires file for {source} source"
+    ]
+
+
 def test_load_scope_discovers_per_example_scope_files(tmp_path):
     example_key = _write_example(tmp_path)
     tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
