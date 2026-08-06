@@ -14,9 +14,10 @@
 
 ## Concept
 
-`superpoint-feature-extractor` runs SuperPoint on a 640x480 video and streams the feature-point
-overlay to Insight. The example demonstrates grayscale normalization, MLA inference, A65
-SuperPoint BoxDecode, and the typed `FEATURE_POINTS_V1` result.
+`superpoint-feature-extractor` runs SuperPoint on a video and streams the feature-point overlay
+to Insight. Like the YOLO examples, it feeds BGR image tensors into Core preprocessing. Preproc
+owns resize, BGR-to-grayscale conversion, normalization, and the original/model geometry metadata
+consumed by A65 SuperPoint BoxDecode; the app does not duplicate BoxDecode W/H overrides.
 
 The application selects the A65V1 numerical profile explicitly. Tensor roles, output dtypes, and
 storage layouts come from the MPK contract rather than being inferred from tensor order or values.
@@ -108,8 +109,11 @@ runtime:
   timeout_ms: 20000
 ```
 
-`runtime.frames: 0` processes the complete video. The application rejects other frame sizes rather
-than silently resizing them, preserving the model's coordinate system.
+`runtime.frames: 0` processes the complete video. Any stable input resolution supported by the
+hardware may be used. Core Preproc stretches each frame to the model's 640x480 input and publishes
+the resize geometry; the app maps model-space feature coordinates back to the source frame for the
+Insight overlay. A mid-stream resolution change is rejected because the model and video-sender
+graphs are built once from the first frame.
 
 Set `output.insight.host` to the host running Insight. The application sends the annotated stream
 as H.264 over RTP/UDP using the configured base port and channel.
@@ -144,7 +148,7 @@ average feature count, descriptor dimension, and selected video endpoint.
 
 - Confirm `model.path` points to the qualified SuperPoint package.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
-- Confirm the input is a 640x480 BGR video.
+- Confirm the input is a stable-resolution BGR video supported by the target hardware.
 - Confirm Insight is reachable at the configured host and UDP video port.
 - Set `runtime.frames: 30` for a short smoke run.
 

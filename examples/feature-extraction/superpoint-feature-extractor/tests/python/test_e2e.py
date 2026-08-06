@@ -146,9 +146,7 @@ def test_insight_pipeline(
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize(
-    "model_file,min_descriptor_cosine", scoped_accuracy_models()
-)
+@pytest.mark.parametrize("model_file,min_descriptor_cosine", scoped_accuracy_models())
 def test_fp32_a65_accuracy(
     models_dir, skip_unless_e2e_ready, model_file, min_descriptor_cosine
 ):
@@ -169,11 +167,11 @@ def test_fp32_a65_accuracy(
         sample_descriptors = reference["sample_descriptors"]
 
         first_frame = cv2.cvtColor(images[0], cv2.COLOR_GRAY2BGR)
-        model = pyneat.Model(str(model_path), example.model_options(pyneat))
-        input_specs = model.input_specs()
-        assert len(input_specs) == 1
-        input_dtype = example.select_input_dtype(input_specs[0], pyneat)
-        model_input = example.input_tensor(first_frame, input_dtype, cv2, np, pyneat)
+        model = pyneat.Model(
+            str(model_path),
+            example.model_options(pyneat, first_frame.shape[1], first_frame.shape[0]),
+        )
+        model_input = example.input_tensor(first_frame, np, pyneat)
         runner = model.build(
             [model_input],
             route_options=pyneat.ModelRouteOptions(),
@@ -187,7 +185,7 @@ def test_fp32_a65_accuracy(
         try:
             for index, gray in enumerate(images):
                 frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                model_input = example.input_tensor(frame, input_dtype, cv2, np, pyneat)
+                model_input = example.input_tensor(frame, np, pyneat)
                 output = runner.run([model_input], timeout_ms=20000)
                 decoded = pyneat.decode_superpoint(list(output))
                 assert len(decoded) == 1
