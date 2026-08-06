@@ -64,6 +64,7 @@ class TrackerConfig:
     velocity_momentum: float = 0.80
     max_missing_frames: int = 15
     min_confirmed_hits: int = 1
+    center_distance_enabled: bool = True
 
     def validate(self) -> None:
         if not 0.0 <= self.high_score_threshold <= 1.0:
@@ -145,10 +146,11 @@ class ObjectTracker:
                 bbox = _bbox(detection)
                 iou = _iou_xyxy(predicted, bbox)
                 center_distance = _normalized_center_distance(predicted, bbox)
-                if (
-                    iou < self.config.match_iou_threshold
-                    and center_distance > self.config.max_center_distance
-                ):
+                center_match = (
+                    self.config.center_distance_enabled
+                    and center_distance <= self.config.max_center_distance
+                )
+                if iou < self.config.match_iou_threshold and not center_match:
                     continue
                 affinity = iou + 1.0 / (1.0 + center_distance)
                 candidates.append((affinity, track_id, detection_index))

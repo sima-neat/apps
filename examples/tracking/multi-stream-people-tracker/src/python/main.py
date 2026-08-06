@@ -50,6 +50,7 @@ class AppConfig:
     tracker_velocity_momentum: float = 0.80
     tracker_max_missing: int = 15
     tracker_min_confirmed_hits: int = 1
+    tracker_center_distance_enabled: bool = True
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -293,6 +294,14 @@ def load_app_config(config_path: Path) -> AppConfig:
     tracker_new_track_score = float_or(
         tracking, "new_track_threshold", tracker_high_score
     )
+    has_new_iou_threshold = tracking.get("match_iou_threshold") is not None
+    has_legacy_iou_threshold = tracking.get("iou_threshold") is not None
+    has_center_distance = tracking.get("max_center_distance") is not None
+    tracker_center_distance_enabled = (
+        has_center_distance
+        or has_new_iou_threshold
+        or not has_legacy_iou_threshold
+    )
 
     cfg = AppConfig(
         model_path=string_or(model, "path"),
@@ -322,6 +331,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         tracker_velocity_momentum=float_or(tracking, "velocity_momentum", 0.80),
         tracker_max_missing=int_or(tracking, "max_missing_frames", 15),
         tracker_min_confirmed_hits=int_or(tracking, "min_confirmed_hits", 1),
+        tracker_center_distance_enabled=tracker_center_distance_enabled,
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
@@ -690,6 +700,7 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
                 velocity_momentum=cfg.tracker_velocity_momentum,
                 max_missing_frames=cfg.tracker_max_missing,
                 min_confirmed_hits=cfg.tracker_min_confirmed_hits,
+                center_distance_enabled=cfg.tracker_center_distance_enabled,
             )
         ),
         profile=ProfileWindow(cfg.profile, stream_index),
@@ -948,7 +959,9 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)}, "
                 f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
-                f"max_inflight_total={cfg.max_inflight_total})"
+                f"max_inflight_total={cfg.max_inflight_total}, "
+                "center_distance_enabled="
+                f"{str(cfg.tracker_center_distance_enabled).lower()})"
             )
             return 0
 

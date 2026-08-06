@@ -158,6 +158,33 @@ class TestConfigLoading:
         assert cfg.min_score == 0.30
         assert cfg.target_class_id == 0
         assert cfg.target_label == "person"
+        assert cfg.tracker_center_distance_enabled is True
+
+    def test_legacy_iou_config_keeps_iou_only_matching(self, tmp_path: Path):
+        from main import load_app_config
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            textwrap.dedent(
+                """
+                model:
+                  path: models/yolo26m-det-int8-b1.tar.gz
+                streams:
+                  - rtsp://127.0.0.1:8554/src1
+                tracking:
+                  iou_threshold: 0.50
+                output:
+                  insight:
+                    host: 127.0.0.1
+                """
+            ).strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_app_config(config_path)
+
+        assert cfg.tracker_iou_threshold == 0.50
+        assert cfg.tracker_center_distance_enabled is False
 
     def test_omitted_tracking_thresholds_follow_decoder_floor(self, tmp_path: Path):
         from main import load_app_config
@@ -454,6 +481,27 @@ class TestTracker:
 
         assert len(first) == len(second) == 1
         assert first[0].track_id == second[0].track_id
+
+    def test_tracker_can_disable_center_distance_matching(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                match_iou_threshold=0.5,
+                max_center_distance=2.5,
+                center_distance_enabled=False,
+            )
+        )
+        first = tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 10, "y2": 10, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        below_iou = tracker.update(
+            [{"x1": 5, "y1": 0, "x2": 15, "y2": 10, "score": 0.9, "class_id": 0}],
+            frame_index=1,
+        )
+
+        assert first[0].track_id != below_iou[0].track_id
 
     def test_low_score_detection_recovers_but_cannot_create_track(self):
         from utils.tracker import ObjectTracker, TrackerConfig

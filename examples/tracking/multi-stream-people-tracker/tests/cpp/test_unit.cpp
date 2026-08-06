@@ -176,6 +176,27 @@ bool test_omitted_new_track_threshold_follows_high_threshold(const std::string& 
   return ok;
 }
 
+bool test_legacy_iou_config_keeps_iou_only_matching(const std::string& binary) {
+  const fs::path config_path = write_config("test_legacy_iou_config_keeps_iou_only_matching",
+                                            "model:\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "streams:\n"
+                                            "  - rtsp://127.0.0.1:8554/src1\n"
+                                            "tracking:\n"
+                                            "  iou_threshold: 0.50\n"
+                                            "output:\n"
+                                            "  insight:\n"
+                                            "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 0, "legacy IoU config validates") &&
+                  expect_contains(result.stdout_text, "center_distance_enabled=false",
+                                  "legacy IoU config preserves IoU-only matching");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 bool test_tracker_reuses_track_id_for_nearby_detection() {
   ObjectTracker tracker;
   const auto first = tracker.update({Detection{10.0f, 10.0f, 50.0f, 80.0f, 0.9f, 0}}, 0);
@@ -233,6 +254,20 @@ bool test_tracker_matches_tiny_non_overlapping_boxes_by_motion() {
                      "tiny non-overlapping detections are tracked") &&
          expect_true(first.front().track_id == second.front().track_id,
                      "motion gate preserves the tiny-object track id");
+}
+
+bool test_tracker_can_disable_center_distance_matching() {
+  TrackerConfig config;
+  config.match_iou_threshold = 0.5f;
+  config.max_center_distance = 2.5f;
+  config.center_distance_enabled = false;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{0.0f, 0.0f, 10.0f, 10.0f, 0.9f, 0}}, 0);
+  const auto below_iou = tracker.update({Detection{5.0f, 0.0f, 15.0f, 10.0f, 0.9f, 0}}, 1);
+  return expect_true(first.size() == 1 && below_iou.size() == 1,
+                     "IoU-only tracker returns both detections") &&
+         expect_true(first.front().track_id != below_iou.front().track_id,
+                     "IoU-only tracker rejects a below-threshold center match");
 }
 
 bool test_low_score_detection_recovers_but_does_not_create_track() {
@@ -314,11 +349,13 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   ok &= test_omitted_tracking_thresholds_follow_decoder_floor(binary);
   ok &= test_omitted_new_track_threshold_follows_high_threshold(binary);
+  ok &= test_legacy_iou_config_keeps_iou_only_matching(binary);
   ok &= test_tracker_reuses_track_id_for_nearby_detection();
   ok &= test_tracker_drops_track_after_missing_budget();
   ok &= test_zero_missing_budget_keeps_continuous_track();
   ok &= test_tracker_recovers_after_exact_missing_budget();
   ok &= test_tracker_matches_tiny_non_overlapping_boxes_by_motion();
+  ok &= test_tracker_can_disable_center_distance_matching();
   ok &= test_low_score_detection_recovers_but_does_not_create_track();
   ok &= test_tracker_confirmation_suppresses_single_frame_noise();
   ok &= test_tracker_does_not_revive_after_missing_budget();

@@ -121,6 +121,11 @@ output:
     metadata_port_base: <metadataUDP-start-port>
 ```
 
+The legacy `tracking.iou_threshold` key remains supported. When it is used
+without `tracking.max_center_distance`, matching remains IoU-only; set the
+center-distance value explicitly or use `match_iou_threshold` to enable the
+motion-aware OR gate.
+
 For the qualified one-class drone model, copy
 `src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight
 host. Its low decoder floor is intentional: detections below the high-score

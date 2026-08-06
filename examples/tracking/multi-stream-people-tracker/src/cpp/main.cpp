@@ -80,6 +80,7 @@ struct AppConfig {
   float tracker_velocity_momentum = 0.80f;
   int tracker_max_missing = 15;
   int tracker_min_confirmed_hits = 1;
+  bool tracker_center_distance_enabled = true;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -349,6 +350,11 @@ AppConfig load_app_config(const fs::path& config_path) {
       static_cast<float>(raw.double_or("tracking.velocity_momentum", 0.80));
   cfg.tracker_max_missing = raw.int_or("tracking.max_missing_frames", 15);
   cfg.tracker_min_confirmed_hits = raw.int_or("tracking.min_confirmed_hits", 1);
+  const bool has_new_iou_threshold = raw.string_value("tracking.match_iou_threshold").has_value();
+  const bool has_legacy_iou_threshold = raw.string_value("tracking.iou_threshold").has_value();
+  const bool has_center_distance = raw.string_value("tracking.max_center_distance").has_value();
+  cfg.tracker_center_distance_enabled =
+      has_center_distance || has_new_iou_threshold || !has_legacy_iou_threshold;
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -674,6 +680,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
       cfg.tracker_velocity_momentum,
       cfg.tracker_max_missing,
       cfg.tracker_min_confirmed_hits,
+      cfg.tracker_center_distance_enabled,
   });
   const auto source_options =
       build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
@@ -937,7 +944,8 @@ int main(int argc, char** argv) {
     if (cli.validate_config_only) {
       std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.rtsp_urls.size()
                 << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
-                << ", max_inflight_total=" << cfg.max_inflight_total << ")\n";
+                << ", max_inflight_total=" << cfg.max_inflight_total << ", center_distance_enabled="
+                << (cfg.tracker_center_distance_enabled ? "true" : "false") << ")\n";
       return 0;
     }
     run_app(cfg);

@@ -173,7 +173,9 @@ std::vector<TrackedDetection> ObjectTracker::update(const std::vector<Detection>
         }
         const float iou = iou_xyxy(predicted, detection);
         const float center_distance = normalized_center_distance(predicted, detection);
-        if (iou < config_.match_iou_threshold && center_distance > config_.max_center_distance) {
+        const bool center_match =
+            config_.center_distance_enabled && center_distance <= config_.max_center_distance;
+        if (iou < config_.match_iou_threshold && !center_match) {
           continue;
         }
         const float affinity = iou + 1.0f / (1.0f + center_distance);

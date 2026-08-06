@@ -32,6 +32,7 @@ struct TrackerConfig {
   float velocity_momentum = 0.80f;
   int max_missing_frames = 15;
   int min_confirmed_hits = 1;
+  bool center_distance_enabled = true;
 };
 
 // A compact two-stage tracker for detections whose boxes may be only a few
