@@ -68,19 +68,19 @@ struct AppConfig {
   int max_inflight_total = 16;
   int target_class_id = 0;
   std::string target_label = "person";
-  double min_score = 0.30;
+  double min_score = 0.55;
   double nms_iou = 0.60;
   int max_detections = 50;
   bool profile = false;
   int warmup_frames = 30;
-  double tracker_high_score = 0.30;
-  double tracker_new_track_score = 0.30;
-  float tracker_iou_threshold = 0.10f;
+  double tracker_high_score = 0.55;
+  double tracker_new_track_score = 0.55;
+  float tracker_iou_threshold = 0.30f;
   float tracker_max_center_distance = 2.5f;
   float tracker_velocity_momentum = 0.80f;
   int tracker_max_missing = 15;
   int tracker_min_confirmed_hits = 1;
-  bool tracker_center_distance_enabled = true;
+  bool tracker_center_distance_enabled = false;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -334,7 +334,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.target_class_id =
       raw.int_or("inference.target_class_id", raw.int_or("inference.person_class_id", 0));
   cfg.target_label = raw.string_or("inference.target_label", "person");
-  cfg.min_score = raw.double_or("inference.min_score", 0.30);
+  cfg.min_score = raw.double_or("inference.min_score", 0.55);
   cfg.nms_iou = raw.double_or("inference.nms_iou", 0.60);
   cfg.max_detections = raw.int_or("inference.max_detections", 50);
   cfg.profile = raw.bool_or("runtime.profile", false);
@@ -342,19 +342,19 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.tracker_high_score = raw.double_or("tracking.high_score_threshold", cfg.min_score);
   cfg.tracker_new_track_score =
       raw.double_or("tracking.new_track_threshold", cfg.tracker_high_score);
+  const bool has_new_iou_threshold = raw.string_value("tracking.match_iou_threshold").has_value();
+  const bool has_center_distance = raw.string_value("tracking.max_center_distance").has_value();
+  cfg.tracker_center_distance_enabled = has_center_distance || has_new_iou_threshold;
+  const double default_iou_threshold = cfg.tracker_center_distance_enabled ? 0.10 : 0.30;
   cfg.tracker_iou_threshold = static_cast<float>(
-      raw.double_or("tracking.match_iou_threshold", raw.double_or("tracking.iou_threshold", 0.10)));
+      raw.double_or("tracking.match_iou_threshold",
+                    raw.double_or("tracking.iou_threshold", default_iou_threshold)));
   cfg.tracker_max_center_distance =
       static_cast<float>(raw.double_or("tracking.max_center_distance", 2.5));
   cfg.tracker_velocity_momentum =
       static_cast<float>(raw.double_or("tracking.velocity_momentum", 0.80));
   cfg.tracker_max_missing = raw.int_or("tracking.max_missing_frames", 15);
   cfg.tracker_min_confirmed_hits = raw.int_or("tracking.min_confirmed_hits", 1);
-  const bool has_new_iou_threshold = raw.string_value("tracking.match_iou_threshold").has_value();
-  const bool has_legacy_iou_threshold = raw.string_value("tracking.iou_threshold").has_value();
-  const bool has_center_distance = raw.string_value("tracking.max_center_distance").has_value();
-  cfg.tracker_center_distance_enabled =
-      has_center_distance || has_new_iou_threshold || !has_legacy_iou_threshold;
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -944,7 +944,10 @@ int main(int argc, char** argv) {
     if (cli.validate_config_only) {
       std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.rtsp_urls.size()
                 << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
-                << ", max_inflight_total=" << cfg.max_inflight_total << ", center_distance_enabled="
+                << ", max_inflight_total=" << cfg.max_inflight_total
+                << ", min_score=" << cfg.min_score
+                << ", match_iou_threshold=" << cfg.tracker_iou_threshold
+                << ", center_distance_enabled="
                 << (cfg.tracker_center_distance_enabled ? "true" : "false") << ")\n";
       return 0;
     }

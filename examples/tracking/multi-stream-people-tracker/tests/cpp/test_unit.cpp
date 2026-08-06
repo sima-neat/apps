@@ -85,7 +85,13 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
       expect_contains(result.stdout_text, "max_inflight_per_stream=3",
                       "validate output reports per-stream inflight limit") &&
       expect_contains(result.stdout_text, "max_inflight_total=12",
-                      "validate output reports total inflight limit");
+                      "validate output reports total inflight limit") &&
+      expect_contains(result.stdout_text, "min_score=0.55",
+                      "legacy omission preserves the decoder floor") &&
+      expect_contains(result.stdout_text, "match_iou_threshold=0.3",
+                      "legacy omission preserves the IoU threshold") &&
+      expect_contains(result.stdout_text, "center_distance_enabled=false",
+                      "legacy omission preserves IoU-only matching");
   remove_dir(config_path.parent_path().string());
   return ok;
 }

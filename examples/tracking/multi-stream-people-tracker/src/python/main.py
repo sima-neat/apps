@@ -38,19 +38,19 @@ class AppConfig:
     max_inflight_total: int = 16
     target_class_id: int = 0
     target_label: str = "person"
-    min_score: float = 0.30
+    min_score: float = 0.55
     nms_iou: float = 0.60
     max_detections: int = 50
     profile: bool = False
     warmup_frames: int = 30
-    tracker_high_score: float = 0.30
-    tracker_new_track_score: float = 0.30
-    tracker_iou_threshold: float = 0.10
+    tracker_high_score: float = 0.55
+    tracker_new_track_score: float = 0.55
+    tracker_iou_threshold: float = 0.30
     tracker_max_center_distance: float = 2.5
     tracker_velocity_momentum: float = 0.80
     tracker_max_missing: int = 15
     tracker_min_confirmed_hits: int = 1
-    tracker_center_distance_enabled: bool = True
+    tracker_center_distance_enabled: bool = False
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -289,19 +289,15 @@ def load_app_config(config_path: Path) -> AppConfig:
             raise ValueError(f"streams[{index}] must be a non-empty string")
         rtsp_urls.append(value)
 
-    min_score = float_or(inference, "min_score", 0.30)
+    min_score = float_or(inference, "min_score", 0.55)
     tracker_high_score = float_or(tracking, "high_score_threshold", min_score)
     tracker_new_track_score = float_or(
         tracking, "new_track_threshold", tracker_high_score
     )
     has_new_iou_threshold = tracking.get("match_iou_threshold") is not None
-    has_legacy_iou_threshold = tracking.get("iou_threshold") is not None
     has_center_distance = tracking.get("max_center_distance") is not None
-    tracker_center_distance_enabled = (
-        has_center_distance
-        or has_new_iou_threshold
-        or not has_legacy_iou_threshold
-    )
+    tracker_center_distance_enabled = has_center_distance or has_new_iou_threshold
+    default_iou_threshold = 0.10 if tracker_center_distance_enabled else 0.30
 
     cfg = AppConfig(
         model_path=string_or(model, "path"),
@@ -325,7 +321,9 @@ def load_app_config(config_path: Path) -> AppConfig:
         tracker_high_score=tracker_high_score,
         tracker_new_track_score=tracker_new_track_score,
         tracker_iou_threshold=float_or(
-            tracking, "match_iou_threshold", float_or(tracking, "iou_threshold", 0.10)
+            tracking,
+            "match_iou_threshold",
+            float_or(tracking, "iou_threshold", default_iou_threshold),
         ),
         tracker_max_center_distance=float_or(tracking, "max_center_distance", 2.5),
         tracker_velocity_momentum=float_or(tracking, "velocity_momentum", 0.80),

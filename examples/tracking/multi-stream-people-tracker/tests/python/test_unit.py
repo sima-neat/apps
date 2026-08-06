@@ -114,6 +114,11 @@ class TestConfigLoading:
         assert cfg.tracker_max_missing == 15
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
+        assert cfg.min_score == 0.55
+        assert cfg.tracker_high_score == 0.55
+        assert cfg.tracker_new_track_score == 0.55
+        assert cfg.tracker_iou_threshold == 0.30
+        assert cfg.tracker_center_distance_enabled is False
 
     def test_load_app_config_accepts_hevc(self, tmp_path: Path):
         from main import load_app_config
@@ -158,6 +163,7 @@ class TestConfigLoading:
         assert cfg.min_score == 0.30
         assert cfg.target_class_id == 0
         assert cfg.target_label == "person"
+        assert cfg.tracker_iou_threshold == 0.10
         assert cfg.tracker_center_distance_enabled is True
 
     def test_legacy_iou_config_keeps_iou_only_matching(self, tmp_path: Path):
