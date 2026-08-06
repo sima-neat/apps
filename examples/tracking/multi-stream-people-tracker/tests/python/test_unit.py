@@ -354,6 +354,37 @@ class TestTracker:
 
         assert tracker.active_track_count() == 0
 
+    def test_zero_missing_budget_keeps_continuous_track(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(TrackerConfig(max_missing_frames=0))
+        first = tracker.update(
+            [{"x1": 10, "y1": 10, "x2": 14, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        continuous = tracker.update(
+            [{"x1": 11, "y1": 10, "x2": 15, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=1,
+        )
+
+        assert first[0].track_id == continuous[0].track_id
+
+    def test_tracker_recovers_after_exact_missing_budget(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(TrackerConfig(max_missing_frames=1))
+        first = tracker.update(
+            [{"x1": 10, "y1": 10, "x2": 14, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        tracker.update([], frame_index=1)
+        recovered = tracker.update(
+            [{"x1": 11, "y1": 10, "x2": 15, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=2,
+        )
+
+        assert first[0].track_id == recovered[0].track_id
+
     def test_tracker_matches_tiny_boxes_after_zero_iou_shift(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 
@@ -423,7 +454,7 @@ class TestTracker:
         )
         replacement = tracker.update(
             [{"x1": 11, "y1": 10, "x2": 15, "y2": 14, "score": 0.9, "class_id": 0}],
-            frame_index=2,
+            frame_index=3,
         )
 
         assert first[0].track_id != replacement[0].track_id

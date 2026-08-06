@@ -133,7 +133,8 @@ std::vector<TrackedDetection> ObjectTracker::update(const std::vector<Detection>
 
   std::vector<int> stale_tracks;
   for (const auto& [track_id, track] : impl_->tracks) {
-    if (frame_index - track.last_frame_index > config_.max_missing_frames) {
+    const int intervening_frames = std::max(0, frame_index - track.last_frame_index - 1);
+    if (intervening_frames > config_.max_missing_frames) {
       stale_tracks.push_back(track_id);
     }
   }

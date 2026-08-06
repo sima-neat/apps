@@ -171,7 +171,8 @@ class ObjectTracker:
         self._tracks = {
             track_id: track
             for track_id, track in self._tracks.items()
-            if frame_index - track.last_frame_index <= self.config.max_missing_frames
+            if max(0, frame_index - track.last_frame_index - 1)
+            <= self.config.max_missing_frames
         }
 
         high = [

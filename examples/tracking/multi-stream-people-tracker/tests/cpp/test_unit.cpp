@@ -156,6 +156,31 @@ bool test_tracker_drops_track_after_missing_budget() {
                      "tracker expires track after missing frame budget");
 }
 
+bool test_zero_missing_budget_keeps_continuous_track() {
+  TrackerConfig config;
+  config.max_missing_frames = 0;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0}}, 0);
+  const auto continuous = tracker.update({Detection{11.0f, 10.0f, 15.0f, 14.0f, 0.9f, 0}}, 1);
+  return expect_true(first.size() == 1 && continuous.size() == 1,
+                     "continuous detections are tracked with zero missing-frame budget") &&
+         expect_true(first.front().track_id == continuous.front().track_id,
+                     "zero missing-frame budget preserves a continuous track id");
+}
+
+bool test_tracker_recovers_after_exact_missing_budget() {
+  TrackerConfig config;
+  config.max_missing_frames = 1;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0}}, 0);
+  tracker.update({}, 1);
+  const auto recovered = tracker.update({Detection{11.0f, 10.0f, 15.0f, 14.0f, 0.9f, 0}}, 2);
+  return expect_true(first.size() == 1 && recovered.size() == 1,
+                     "detection returns after the full missing-frame budget") &&
+         expect_true(first.front().track_id == recovered.front().track_id,
+                     "track id survives the exact missing-frame budget");
+}
+
 bool test_tracker_matches_tiny_non_overlapping_boxes_by_motion() {
   TrackerConfig config;
   config.match_iou_threshold = 0.5f;
@@ -202,7 +227,7 @@ bool test_tracker_does_not_revive_after_missing_budget() {
   config.max_missing_frames = 1;
   ObjectTracker tracker(config);
   const auto first = tracker.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0}}, 0);
-  const auto replacement = tracker.update({Detection{11.0f, 10.0f, 15.0f, 14.0f, 0.9f, 0}}, 2);
+  const auto replacement = tracker.update({Detection{11.0f, 10.0f, 15.0f, 14.0f, 0.9f, 0}}, 3);
   return expect_true(first.size() == 1 && replacement.size() == 1,
                      "detection after missing budget creates a replacement track") &&
          expect_true(first.front().track_id != replacement.front().track_id,
@@ -248,6 +273,8 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   ok &= test_tracker_reuses_track_id_for_nearby_detection();
   ok &= test_tracker_drops_track_after_missing_budget();
+  ok &= test_zero_missing_budget_keeps_continuous_track();
+  ok &= test_tracker_recovers_after_exact_missing_budget();
   ok &= test_tracker_matches_tiny_non_overlapping_boxes_by_motion();
   ok &= test_low_score_detection_recovers_but_does_not_create_track();
   ok &= test_tracker_confirmation_suppresses_single_frame_noise();
