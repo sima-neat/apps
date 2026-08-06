@@ -114,6 +114,14 @@ def safe_ratio(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else 0.0
 
 
+def valid_track_id(value: Any) -> bool:
+    return (
+        isinstance(value, (str, int))
+        and not isinstance(value, bool)
+        and str(value) != ""
+    )
+
+
 def evaluate(
     truth_frames: dict[int, dict[str, Any]],
     prediction_frames: dict[int, dict[str, Any]],
@@ -138,6 +146,23 @@ def evaluate(
     id_switches = 0
     fragmentations = 0
 
+    ground_truth_ids_available = all(
+        valid_track_id(obj.get("track_id"))
+        for frame in truth_frames.values()
+        for obj in frame.get("objects", [])
+    )
+    prediction_ids_available = all(
+        valid_track_id(obj.get("id"))
+        for frame in prediction_frames.values()
+        for obj in frame.get("tracks", [])
+    )
+    tracking_available = ground_truth_ids_available and prediction_ids_available
+    unavailable_reasons = []
+    if not ground_truth_ids_available:
+        unavailable_reasons.append("ground-truth objects require non-empty track_id values")
+    if not prediction_ids_available:
+        unavailable_reasons.append("predicted tracks require non-empty id values")
+
     frame_indices = sorted(set(truth_frames) | set(prediction_frames))
     for frame_index in frame_indices:
         truth_frame = truth_frames.get(frame_index, {"objects": []})
@@ -160,16 +185,16 @@ def evaluate(
                 size_counts[bucket]["matched"] += 1
 
         matches_by_truth = {truth_index: prediction_index for truth_index, prediction_index, _ in matches}
+        if not tracking_available:
+            continue
         for truth_index, truth_object in enumerate(truth):
-            truth_id = str(truth_object.get("track_id", f"frame-{frame_index}-object-{truth_index}"))
+            truth_id = str(truth_object["track_id"])
             prediction_index = matches_by_truth.get(truth_index)
             if prediction_index is None:
                 if truth_id in truth_seen_match:
                     truth_was_matched[truth_id] = False
                 continue
             raw_prediction_id = predictions[prediction_index].get("id")
-            if not isinstance(raw_prediction_id, (str, int)) or str(raw_prediction_id) == "":
-                raise ValueError(f"frame {frame_index}: matched prediction has no track id")
             prediction_id = str(raw_prediction_id)
             if truth_id in truth_seen_match and not truth_was_matched.get(truth_id, False):
                 fragmentations += 1
@@ -206,14 +231,21 @@ def evaluate(
             },
         },
         "tracking": {
-            "ground_truth_track_count": len({
-                str(obj.get("track_id"))
-                for frame in truth_frames.values()
-                for obj in frame.get("objects", [])
-                if obj.get("track_id") is not None
-            }),
-            "id_switches": id_switches,
-            "fragmentations": fragmentations,
+            "available": tracking_available,
+            "unavailable_reason": "; ".join(unavailable_reasons) or None,
+            "ground_truth_track_count": (
+                len(
+                    {
+                        str(obj["track_id"])
+                        for frame in truth_frames.values()
+                        for obj in frame.get("objects", [])
+                    }
+                )
+                if tracking_available
+                else None
+            ),
+            "id_switches": id_switches if tracking_available else None,
+            "fragmentations": fragmentations if tracking_available else None,
         },
     }
 
@@ -235,14 +267,27 @@ def enforce_gates(report: dict[str, Any], args: argparse.Namespace) -> list[str]
             f"{detection['false_positives_per_minute']:.6f} > allowed "
             f"{args.maximum_false_positives_per_minute:.6f}"
         )
-    if tracking["id_switches"] > args.maximum_id_switches:
-        failures.append(
-            f"id switches {tracking['id_switches']} > allowed {args.maximum_id_switches}"
-        )
-    if tracking["fragmentations"] > args.maximum_fragmentations:
-        failures.append(
-            f"fragmentations {tracking['fragmentations']} > allowed {args.maximum_fragmentations}"
-        )
+    tracking_gate_requested = (
+        args.maximum_id_switches is not None
+        or args.maximum_fragmentations is not None
+    )
+    if tracking_gate_requested and not tracking["available"]:
+        failures.append(f"tracking metrics unavailable: {tracking['unavailable_reason']}")
+    elif tracking["available"]:
+        if (
+            args.maximum_id_switches is not None
+            and tracking["id_switches"] > args.maximum_id_switches
+        ):
+            failures.append(
+                f"id switches {tracking['id_switches']} > allowed {args.maximum_id_switches}"
+            )
+        if (
+            args.maximum_fragmentations is not None
+            and tracking["fragmentations"] > args.maximum_fragmentations
+        ):
+            failures.append(
+                f"fragmentations {tracking['fragmentations']} > allowed {args.maximum_fragmentations}"
+            )
     return failures
 
 
@@ -258,8 +303,8 @@ def main() -> int:
     parser.add_argument("--minimum-recall", type=float, default=0.0)
     parser.add_argument("--minimum-tiny-recall", type=float, default=0.0)
     parser.add_argument("--maximum-false-positives-per-minute", type=float, default=math.inf)
-    parser.add_argument("--maximum-id-switches", type=int, default=2**31 - 1)
-    parser.add_argument("--maximum-fragmentations", type=int, default=2**31 - 1)
+    parser.add_argument("--maximum-id-switches", type=int)
+    parser.add_argument("--maximum-fragmentations", type=int)
     args = parser.parse_args()
     if args.minimum_frames < 1:
         parser.error("minimum-frames must be positive")
@@ -267,7 +312,13 @@ def main() -> int:
         parser.error("minimum recall gates must be in [0, 1]")
     if args.maximum_false_positives_per_minute < 0.0:
         parser.error("maximum-false-positives-per-minute must be >= 0")
-    if args.maximum_id_switches < 0 or args.maximum_fragmentations < 0:
+    if (
+        args.maximum_id_switches is not None
+        and args.maximum_id_switches < 0
+    ) or (
+        args.maximum_fragmentations is not None
+        and args.maximum_fragmentations < 0
+    ):
         parser.error("tracking count gates must be >= 0")
 
     report = evaluate(

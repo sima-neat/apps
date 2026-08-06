@@ -173,7 +173,11 @@ The packaged C++ source is an implementation reference. Run the executable under
 Evaluate one stream at a time. Ground truth JSONL uses frame dimensions and
 `objects`; predictions may be plain `tracks` JSONL or captured Insight
 metadata envelopes. Both use pixel-space `[x, y, width, height]` boxes and
-numeric frame IDs.
+numeric frame IDs. Each ground-truth object may contain `track_id`, and each
+prediction may contain `id`. Non-empty IDs are required on every object/track
+when either ID-switch or fragmentation gate is requested. Without complete
+IDs, detection metrics remain available while tracking metrics are reported as
+unavailable (`null`) and any requested tracking gate fails closed.
 
 ```bash
 python3 examples/tracking/multi-stream-people-tracker/src/python/evaluate_tracking.py \

@@ -615,10 +615,72 @@ class TestAccuracyEvaluation:
         assert report["detection"]["recall"] == pytest.approx(2 / 3)
         assert report["tracking"]["id_switches"] == 1
         assert report["tracking"]["fragmentations"] == 1
+        assert report["tracking"]["available"] is True
         assert (
             report["detection"]["recall_by_model_input_size"]["tiny"]["ground_truth"]
             == 3
         )
+
+    def test_missing_ground_truth_ids_make_tracking_metrics_unavailable(self):
+        truth = {
+            0: {
+                "frame_index": 0,
+                "width": 640,
+                "height": 640,
+                "objects": [{"bbox": [10, 10, 8, 8]}],
+            }
+        }
+        predictions = {
+            0: {"frame_index": 0, "tracks": [{"id": "1", "bbox": [10, 10, 8, 8]}]}
+        }
+
+        report = evaluate_tracking.evaluate(
+            truth, predictions, iou_threshold=0.3, fps=30.0, model_size=640
+        )
+
+        assert report["detection"]["recall"] == 1.0
+        assert report["tracking"] == {
+            "available": False,
+            "unavailable_reason": "ground-truth objects require non-empty track_id values",
+            "ground_truth_track_count": None,
+            "id_switches": None,
+            "fragmentations": None,
+        }
+
+    def test_tracking_gate_fails_when_ground_truth_ids_are_missing(self):
+        report = {
+            "frames": 1,
+            "detection": {
+                "recall": 1.0,
+                "false_positives_per_minute": 0.0,
+                "recall_by_model_input_size": {"tiny": {"recall": 1.0}},
+            },
+            "tracking": {
+                "available": False,
+                "unavailable_reason": "ground-truth objects require non-empty track_id values",
+                "ground_truth_track_count": None,
+                "id_switches": None,
+                "fragmentations": None,
+            },
+        }
+        args = SimpleNamespace(
+            minimum_frames=1,
+            minimum_recall=0.0,
+            minimum_tiny_recall=0.0,
+            maximum_false_positives_per_minute=float("inf"),
+            maximum_id_switches=None,
+            maximum_fragmentations=None,
+        )
+
+        assert evaluate_tracking.enforce_gates(report, args) == []
+
+        args.maximum_id_switches = 0
+        failures = evaluate_tracking.enforce_gates(report, args)
+
+        assert failures == [
+            "tracking metrics unavailable: "
+            "ground-truth objects require non-empty track_id values"
+        ]
 
     def test_greedy_matching_is_one_to_one(self):
         truth = [{"bbox": [0, 0, 10, 10]}, {"bbox": [1, 1, 10, 10]}]
