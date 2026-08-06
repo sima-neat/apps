@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import math
 from pathlib import Path
@@ -70,27 +71,112 @@ def read_jsonl(path: Path, array_key: str) -> dict[int, dict[str, Any]]:
     return frames
 
 
-def greedy_matches(
+class _FlowEdge:
+    __slots__ = ("capacity", "cost", "reverse", "to")
+
+    def __init__(self, to: int, reverse: int, capacity: int, cost: float) -> None:
+        self.to = to
+        self.reverse = reverse
+        self.capacity = capacity
+        self.cost = cost
+
+
+def optimal_matches(
     truth: list[dict[str, Any]], predictions: list[dict[str, Any]], threshold: float
 ) -> list[tuple[int, int, float]]:
-    candidates = []
+    """Return a maximum-cardinality match, maximizing total IoU among ties."""
+    truth_count = len(truth)
+    prediction_count = len(predictions)
+    source = 0
+    first_truth = 1
+    first_prediction = first_truth + truth_count
+    sink = first_prediction + prediction_count
+    graph: list[list[_FlowEdge]] = [[] for _ in range(sink + 1)]
+
+    def add_edge(start: int, end: int, capacity: int, cost: float) -> _FlowEdge:
+        forward = _FlowEdge(end, len(graph[end]), capacity, cost)
+        reverse = _FlowEdge(start, len(graph[start]), 0, -cost)
+        graph[start].append(forward)
+        graph[end].append(reverse)
+        return forward
+
+    for truth_index in range(truth_count):
+        add_edge(source, first_truth + truth_index, 1, 0.0)
+    for prediction_index in range(prediction_count):
+        add_edge(first_prediction + prediction_index, sink, 1, 0.0)
+
+    candidates: list[tuple[int, int, float, _FlowEdge]] = []
+    best_overlap_by_prediction = [0.0] * prediction_count
     for truth_index, truth_object in enumerate(truth):
         truth_box = xywh_to_xyxy(truth_object["bbox"])
         for prediction_index, prediction in enumerate(predictions):
             overlap = iou(truth_box, xywh_to_xyxy(prediction["bbox"]))
             if overlap >= threshold:
-                candidates.append((overlap, truth_index, prediction_index))
-    candidates.sort(reverse=True)
-    matched_truth: set[int] = set()
-    matched_predictions: set[int] = set()
-    matches = []
-    for overlap, truth_index, prediction_index in candidates:
-        if truth_index in matched_truth or prediction_index in matched_predictions:
-            continue
-        matched_truth.add(truth_index)
-        matched_predictions.add(prediction_index)
-        matches.append((truth_index, prediction_index, overlap))
-    return matches
+                edge = add_edge(
+                    first_truth + truth_index,
+                    first_prediction + prediction_index,
+                    1,
+                    -overlap,
+                )
+                candidates.append((truth_index, prediction_index, overlap, edge))
+                best_overlap_by_prediction[prediction_index] = max(
+                    best_overlap_by_prediction[prediction_index], overlap
+                )
+
+    # Initial shortest-path potentials make all reduced edge costs non-negative.
+    # Successive shortest augmenting paths then produce a min-cost maximum flow:
+    # maximum match count first, and maximum summed IoU for that count.
+    potential = [0.0] * len(graph)
+    for prediction_index, overlap in enumerate(best_overlap_by_prediction):
+        potential[first_prediction + prediction_index] = -overlap
+    potential[sink] = min(
+        (potential[first_prediction + index] for index in range(prediction_count)),
+        default=0.0,
+    )
+
+    while True:
+        distances = [math.inf] * len(graph)
+        previous: list[tuple[int, int] | None] = [None] * len(graph)
+        distances[source] = 0.0
+        queue = [(0.0, source)]
+        while queue:
+            distance, node = heapq.heappop(queue)
+            if distance > distances[node]:
+                continue
+            for edge_index, edge in enumerate(graph[node]):
+                if edge.capacity == 0:
+                    continue
+                reduced_cost = edge.cost + potential[node] - potential[edge.to]
+                if -1e-12 < reduced_cost < 0.0:
+                    reduced_cost = 0.0
+                candidate_distance = distance + reduced_cost
+                if candidate_distance + 1e-12 >= distances[edge.to]:
+                    continue
+                distances[edge.to] = candidate_distance
+                previous[edge.to] = (node, edge_index)
+                heapq.heappush(queue, (candidate_distance, edge.to))
+
+        if previous[sink] is None:
+            break
+        for node, distance in enumerate(distances):
+            if math.isfinite(distance):
+                potential[node] += distance
+        node = sink
+        while node != source:
+            step = previous[node]
+            if step is None:
+                raise RuntimeError("incomplete augmenting path")
+            previous_node, edge_index = step
+            edge = graph[previous_node][edge_index]
+            edge.capacity -= 1
+            graph[node][edge.reverse].capacity += 1
+            node = previous_node
+
+    return sorted(
+        (truth_index, prediction_index, overlap)
+        for truth_index, prediction_index, overlap, edge in candidates
+        if edge.capacity == 0
+    )
 
 
 def model_box_area(box: list[float], source_width: int, source_height: int, model_size: int) -> float:
@@ -122,6 +208,19 @@ def valid_track_id(value: Any) -> bool:
     )
 
 
+def track_id_issue(
+    frames: dict[int, dict[str, Any]], array_key: str, id_key: str, label: str
+) -> str | None:
+    for frame in frames.values():
+        if any(not valid_track_id(obj.get(id_key)) for obj in frame.get(array_key, [])):
+            return f"{label} require non-empty {id_key} values"
+    for frame in frames.values():
+        ids = [str(obj[id_key]) for obj in frame.get(array_key, [])]
+        if len(ids) != len(set(ids)):
+            return f"{label} require unique {id_key} values within each frame"
+    return None
+
+
 def evaluate(
     truth_frames: dict[int, dict[str, Any]],
     prediction_frames: dict[int, dict[str, Any]],
@@ -146,22 +245,16 @@ def evaluate(
     id_switches = 0
     fragmentations = 0
 
-    ground_truth_ids_available = all(
-        valid_track_id(obj.get("track_id"))
-        for frame in truth_frames.values()
-        for obj in frame.get("objects", [])
+    ground_truth_id_issue = track_id_issue(
+        truth_frames, "objects", "track_id", "ground-truth objects"
     )
-    prediction_ids_available = all(
-        valid_track_id(obj.get("id"))
-        for frame in prediction_frames.values()
-        for obj in frame.get("tracks", [])
+    prediction_id_issue = track_id_issue(
+        prediction_frames, "tracks", "id", "predicted tracks"
     )
-    tracking_available = ground_truth_ids_available and prediction_ids_available
-    unavailable_reasons = []
-    if not ground_truth_ids_available:
-        unavailable_reasons.append("ground-truth objects require non-empty track_id values")
-    if not prediction_ids_available:
-        unavailable_reasons.append("predicted tracks require non-empty id values")
+    tracking_available = ground_truth_id_issue is None and prediction_id_issue is None
+    unavailable_reasons = [
+        issue for issue in (ground_truth_id_issue, prediction_id_issue) if issue is not None
+    ]
 
     frame_indices = sorted(set(truth_frames) | set(prediction_frames))
     for frame_index in frame_indices:
@@ -171,7 +264,7 @@ def evaluate(
         predictions = prediction_frame.get("tracks", [])
         width = int(truth_frame.get("width", 0))
         height = int(truth_frame.get("height", 0))
-        matches = greedy_matches(truth, predictions, iou_threshold)
+        matches = optimal_matches(truth, predictions, iou_threshold)
         matched_truth_indices = {match[0] for match in matches}
         true_positives += len(matches)
         false_positives += len(predictions) - len(matches)

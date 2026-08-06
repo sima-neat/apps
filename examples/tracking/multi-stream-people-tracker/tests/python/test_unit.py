@@ -682,13 +682,76 @@ class TestAccuracyEvaluation:
             "ground-truth objects require non-empty track_id values"
         ]
 
-    def test_greedy_matching_is_one_to_one(self):
-        truth = [{"bbox": [0, 0, 10, 10]}, {"bbox": [1, 1, 10, 10]}]
-        predictions = [{"bbox": [0, 0, 10, 10]}]
+    @pytest.mark.parametrize(
+        ("truth_ids", "prediction_ids", "reason"),
+        [
+            (
+                ["same", "same"],
+                ["1", "2"],
+                "ground-truth objects require unique track_id values within each frame",
+            ),
+            (
+                ["a", "b"],
+                ["same", "same"],
+                "predicted tracks require unique id values within each frame",
+            ),
+        ],
+    )
+    def test_duplicate_per_frame_ids_make_tracking_metrics_unavailable(
+        self, truth_ids: list[str], prediction_ids: list[str], reason: str
+    ):
+        truth = {
+            0: {
+                "frame_index": 0,
+                "width": 640,
+                "height": 640,
+                "objects": [
+                    {"track_id": truth_ids[0], "bbox": [0, 0, 10, 10]},
+                    {"track_id": truth_ids[1], "bbox": [100, 100, 10, 10]},
+                ],
+            }
+        }
+        predictions = {
+            0: {
+                "frame_index": 0,
+                "tracks": [
+                    {"id": prediction_ids[0], "bbox": [0, 0, 10, 10]},
+                    {"id": prediction_ids[1], "bbox": [100, 100, 10, 10]},
+                ],
+            }
+        }
 
-        matches = evaluate_tracking.greedy_matches(truth, predictions, 0.3)
+        report = evaluate_tracking.evaluate(
+            truth, predictions, iou_threshold=0.3, fps=30.0, model_size=640
+        )
 
-        assert len(matches) == 1
+        assert report["detection"]["true_positives"] == 2
+        assert report["tracking"]["available"] is False
+        assert report["tracking"]["unavailable_reason"] == reason
+        assert report["tracking"]["id_switches"] is None
+        assert report["tracking"]["fragmentations"] is None
+
+    def test_matching_maximizes_cardinality_before_iou(self):
+        truth = [{"bbox": [0, 0, 10, 10]}, {"bbox": [4, 0, 10, 10]}]
+        predictions = [{"bbox": [1, 0, 10, 10]}, {"bbox": [-3, 0, 10, 10]}]
+
+        matches = evaluate_tracking.optimal_matches(truth, predictions, 0.3)
+
+        assert [
+            (truth_index, prediction_index)
+            for truth_index, prediction_index, _ in matches
+        ] == [(0, 1), (1, 0)]
+
+    def test_matching_maximizes_total_iou_at_equal_cardinality(self):
+        truth = [{"bbox": [0, 0, 10, 10]}, {"bbox": [4, 0, 10, 10]}]
+        predictions = [{"bbox": [1, 0, 10, 10]}, {"bbox": [3, 0, 10, 10]}]
+
+        matches = evaluate_tracking.optimal_matches(truth, predictions, 0.3)
+
+        assert [
+            (truth_index, prediction_index)
+            for truth_index, prediction_index, _ in matches
+        ] == [(0, 0), (1, 1)]
 
     def test_reader_accepts_insight_metadata_envelope(self, tmp_path: Path):
         path = tmp_path / "predictions.jsonl"
