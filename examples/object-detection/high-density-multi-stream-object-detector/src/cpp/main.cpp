@@ -16,8 +16,8 @@
 #include "neat/models.h"
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
-#include "detection_egress.h"
 #include "detection_watchdog.h"
+#include "support/object_detection/detection_egress.h"
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
@@ -1061,7 +1061,7 @@ void send_metadata(SourceRuntime& source, const simaai::neat::Sample& frame,
   if (!source.metadata_sender) {
     return;
   }
-  high_density::detection_egress::FrameMetadata metadata;
+  sima_examples::detection_egress::FrameMetadata metadata;
   metadata.stream_index = source.index;
   const std::string fallback_stream_id =
       frame.stream_id.empty() ? stream_id_for(source.index) : std::string{};
@@ -1078,8 +1078,8 @@ void send_metadata(SourceRuntime& source, const simaai::neat::Sample& frame,
 
   std::string payload;
   try {
-    payload = high_density::detection_egress::serialize(boxes, source.labels, source.frame_w,
-                                                        source.frame_h, metadata);
+    payload = sima_examples::detection_egress::serialize(boxes, source.labels, source.frame_w,
+                                                         source.frame_h, metadata);
   } catch (const std::exception& ex) {
     std::cerr << "[warn] stream " << source.index << " metadata JSON build failed: " << ex.what()
               << "\n";
