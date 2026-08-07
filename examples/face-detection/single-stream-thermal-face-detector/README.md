@@ -98,24 +98,26 @@ assume the defaults:
 Keep video and metadata on the same channel (0).
 
 ## Supported Models
-Use the SDK platform version wherever `<platform-version>` appears.
-
 Primary model: `yolov5s_face_raw_split`
+
+Model packages come from the Model Zoo release below, which can differ from the
+installed platform version.
 
 Download the model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
-sima-cli modelzoo -v <platform-version> get yolov5s_face_raw_split
-cd ../..
+export MODELZOO_VERSION="2.1.2"
+mkdir -p models
+cd models
+sima-cli modelzoo -v "${MODELZOO_VERSION}" get yolov5s_face_raw_split
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
+- Model artifacts are user-managed and should be downloaded into `models/`.
   Download the model with the command above.
 - A running neat-insight instance reachable from the board, plus an RTSP source.
   In the SDK, upload a video through Insight and start a media source to get an
@@ -142,7 +144,7 @@ Edit `examples/face-detection/single-stream-thermal-face-detector/src/common/con
 
 ```yaml
 model:
-  path: assets/models/yolov5s_face_raw_split_mpk.tar.gz
+  path: models/yolov5s_face_raw_split_mpk.tar.gz
   labels: examples/face-detection/single-stream-thermal-face-detector/src/common/face_label.txt
 
 source:

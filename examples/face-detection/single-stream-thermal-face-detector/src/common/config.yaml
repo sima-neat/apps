@@ -1,5 +1,5 @@
 model:
-  path: assets/models/yolov5s_face_raw_split_mpk.tar.gz   # Compiled model archive.
+  path: models/yolov5s_face_raw_split_mpk.tar.gz   # Compiled model archive.
   labels: examples/face-detection/single-stream-thermal-face-detector/src/common/face_label.txt
 
 source:
