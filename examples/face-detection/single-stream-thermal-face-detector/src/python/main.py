@@ -362,9 +362,20 @@ def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float
         a = np.asarray(o)
         if a.ndim != 4 or a.shape[0] != 1:
             raise ValueError(f"Expected 4D [1,...] tensor, got shape {a.shape}")
-        if a.shape[-1] in (BOX_CHANNELS, LM_CHANNELS):
-            ch, ny, nx = a.shape[-1], a.shape[1], a.shape[2]
+        # The channel axis is located by size, so the same decode path accepts
+        # every layout a split head can arrive in. Probed in order of how likely
+        # each is to be the real channel axis for this model:
+        #   [1,H,W,C] already normalized to NHWC,
+        #   [1,H,C,W] NEAT's raw head layout (see face-detector/RetinaFace),
+        #   [1,C,H,W] ONNX-native NCHW, used by offline/reference runs.
+        # Grid sizes here are 100/50/25, so they never collide with the 18/30
+        # channel counts and the probe stays unambiguous.
+        if a.shape[3] in (BOX_CHANNELS, LM_CHANNELS):
+            ch, ny, nx = a.shape[3], a.shape[1], a.shape[2]
             arr = a.astype(np.float32, copy=False)
+        elif a.shape[2] in (BOX_CHANNELS, LM_CHANNELS):
+            ch, ny, nx = a.shape[2], a.shape[1], a.shape[3]
+            arr = a.astype(np.float32, copy=False).transpose(0, 1, 3, 2)
         elif a.shape[1] in (BOX_CHANNELS, LM_CHANNELS):
             ch, ny, nx = a.shape[1], a.shape[2], a.shape[3]
             arr = a.astype(np.float32, copy=False).transpose(0, 2, 3, 1)

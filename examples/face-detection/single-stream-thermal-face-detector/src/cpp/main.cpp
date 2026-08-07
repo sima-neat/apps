@@ -272,26 +272,75 @@ struct HwcTensor {
   const float* floats() const { return data.data(); }
 };
 
+// Mirrors decode_yolov5face_split() in the Python path: the channel axis is
+// located by size, so the same decode accepts every layout a split head can
+// arrive in. Probed in order of how likely each is to be the real channel axis
+// for this model:
+//   [1,H,W,C] already channels-last,
+//   [1,H,C,W] NEAT's raw head layout (see face-detector/RetinaFace),
+//   [1,C,H,W] ONNX-native NCHW, used by offline/reference runs.
+// Grid sizes here are 100/50/25, so they never collide with the 18/30 channel
+// counts and the probe stays unambiguous.
 HwcTensor tensor_to_hwc(const simaai::neat::Tensor& t) {
   if (t.dtype != simaai::neat::TensorDType::Float32) {
     throw std::runtime_error("expected Float32 tensor");
   }
   if (t.shape.size() != 4 || t.shape[0] != 1) {
-    throw std::runtime_error("expected 4D tensor with shape [1,H,W,C]");
+    throw std::runtime_error("expected 4D tensor with leading batch dim 1");
   }
-  const int c = static_cast<int>(t.shape[3]);
-  if (c != kBoxChan && c != kLmChan) {
-    throw std::runtime_error("expected NHWC tensor with channel dim " + std::to_string(kBoxChan) +
-                             " or " + std::to_string(kLmChan) + ", got channel " +
-                             std::to_string(c));
+  const auto dim = [&t](int i) { return static_cast<int>(t.shape[i]); };
+  const auto is_chan = [](int v) { return v == kBoxChan || v == kLmChan; };
+
+  int chan_axis = 0;
+  if (is_chan(dim(3))) {
+    chan_axis = 3;
+  } else if (is_chan(dim(2))) {
+    chan_axis = 2;
+  } else if (is_chan(dim(1))) {
+    chan_axis = 1;
+  } else {
+    throw std::runtime_error("unrecognized split output shape [1," + std::to_string(dim(1)) + "," +
+                             std::to_string(dim(2)) + "," + std::to_string(dim(3)) +
+                             "]; expected channel dim " + std::to_string(kBoxChan) + " or " +
+                             std::to_string(kLmChan));
   }
+
   HwcTensor out;
-  out.h = static_cast<int>(t.shape[1]);
-  out.w = static_cast<int>(t.shape[2]);
-  out.c = c;
+  out.c = dim(chan_axis);
+  out.h = chan_axis == 1 ? dim(2) : dim(1);
+  out.w = chan_axis == 3 ? dim(2) : dim(3);
+
   const std::vector<uint8_t> bytes = t.copy_dense_bytes_tight();
-  out.data.resize(bytes.size() / sizeof(float));
-  std::memcpy(out.data.data(), bytes.data(), out.data.size() * sizeof(float));
+  const size_t count = bytes.size() / sizeof(float);
+  const size_t expected = static_cast<size_t>(out.h) * out.w * out.c;
+  if (count != expected) {
+    throw std::runtime_error("tensor byte count " + std::to_string(count) + " does not match " +
+                             std::to_string(expected) + " elements");
+  }
+  out.data.resize(count);
+
+  if (chan_axis == 3) {
+    std::memcpy(out.data.data(), bytes.data(), count * sizeof(float));
+    return out;
+  }
+
+  // Permute into (h, w, c). The source bytes follow the tensor's own axis
+  // order, so index it accordingly and scatter into channels-last.
+  std::vector<float> src(count);
+  std::memcpy(src.data(), bytes.data(), count * sizeof(float));
+  for (int h = 0; h < out.h; ++h) {
+    for (int w = 0; w < out.w; ++w) {
+      float* dst = out.data.data() + (static_cast<size_t>(h) * out.w + w) * out.c;
+      for (int c = 0; c < out.c; ++c) {
+        const size_t si = chan_axis == 2
+                              // [1,H,C,W]
+                              ? (static_cast<size_t>(h) * out.c + c) * out.w + w
+                              // [1,C,H,W]
+                              : (static_cast<size_t>(c) * out.h + h) * out.w + w;
+        dst[c] = src[si];
+      }
+    }
+  }
   return out;
 }
 
