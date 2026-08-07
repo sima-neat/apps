@@ -26,6 +26,7 @@ class ModelRow:
     package: str
     used_by: str
     preferred_path: str
+    decode_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -39,17 +40,17 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
         "General Models",
         (
             ModelRow("resnet_50", "resnet_50_mpk.tar.gz", "image-classifier",
-                     "assets/models/resnet_50_mpk.tar.gz"),
+                     "models/resnet_50_mpk.tar.gz"),
             ModelRow("depth_anything_v2_vits", "depth_anything_v2_vits_mpk.tar.gz",
-                     "depth-estimator", "assets/models/depth_anything_v2_vits_mpk.tar.gz"),
+                     "depth-estimator", "models/depth_anything_v2_vits_mpk.tar.gz"),
             ModelRow("retinaface_mobilenet25", "retinaface_mobilenet25_mod_0_mpk.tar.gz",
-                     "face-detector", "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz"),
+                     "face-detector", "models/retinaface_mobilenet25_mod_0_mpk.tar.gz"),
             ModelRow("detr_resnet50_modified_class_embed_bbox_embed",
                      "detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz",
                      "detr-object-detector",
-                     "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"),
+                     "models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz"),
             ModelRow("yolo_v8n_seg", "yolo_v8n_seg_mpk.tar.gz",
-                     "yolov8-instance-segmenter", "assets/models/yolo_v8n_seg_mpk.tar.gz"),
+                     "yolov8-instance-segmenter", "models/yolo_v8n_seg_mpk.tar.gz"),
         ),
     ),
     (
@@ -59,36 +60,44 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
                      "yolo26n-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26n-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26n-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26s-det-bf16-mla_tess-b1",
                      "yolo26s-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26s-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26s-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-det-bf16-mla_tess-b1",
                      "yolo26m-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "yolo26-object-detector, detection-to-vlm-assistant, "
                      "multi-stream-people-tracker",
-                     "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/yolo26m-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26l-det-bf16-mla_tess-b1",
                      "yolo26l-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26l-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26l-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26x-det-bf16-mla_tess-b1",
                      "yolo26x-det-bf16-mla_tess-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26x-det-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26x-det-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-det-bf16-b1", "yolo26m-det-bf16-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "detection-to-vlm-assistant, multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26m-det-bf16-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26m-det-bf16-b1.tar.gz"),
+            ModelRow("yolo26n-det-int8-b1", "yolo26n-det-int8-b1.tar.gz",
+                     "high-density-multi-stream-object-detector",
+                     "models/YOLO26-DETECTION/yolo26n-det-int8-b1.tar.gz"),
             ModelRow("yolo26m-det-int8-b1", "yolo26m-det-int8-b1.tar.gz",
                      "single-stream-object-detector, multi-stream-object-detector, "
                      "detection-to-vlm-assistant, multi-stream-people-tracker",
-                     "assets/models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz"),
+                     "models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz"),
+            ModelRow("yolo26m-det-int8-b1-boxdecode", "yolo26m-det-int8-b1.tar.gz",
+                     "single-stream-object-detector, multi-stream-object-detector, "
+                     "detection-to-vlm-assistant, multi-stream-people-tracker",
+                     "models/YOLO26-DETECTION/yolo26m-det-int8-b1.tar.gz",
+                     decode_type="yolo26-det"),
         ),
     ),
     (
@@ -96,29 +105,33 @@ GROUPS: tuple[tuple[str, tuple[ModelRow, ...]], ...] = (
         (
             ModelRow("yolo26n-seg-bf16-mla_tess", "yolo26n-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26n-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26n-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26s-seg-bf16-mla_tess", "yolo26s-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26s-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26s-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26m-seg-bf16-mla_tess", "yolo26m-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26l-seg-bf16-mla_tess", "yolo26l-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26l-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26l-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26x-seg-bf16-mla_tess", "yolo26x-seg-bf16-mla_tess.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26x-seg-bf16-mla_tess.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26x-seg-bf16-mla_tess.tar.gz"),
             ModelRow("yolo26m-seg-bf16-b1", "yolo26m-seg-bf16-b1.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/yolo26m-seg-bf16-b1.tar.gz"),
+                     "models/yolo26m-seg-bf16-b1.tar.gz"),
             ModelRow("yolo26m-seg-bf16-mla_tess-b1",
                      "yolo26m-seg-bf16-mla_tess-b1.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess-b1.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-mla_tess-b1.tar.gz"),
             ModelRow("yolo26m-seg-int8-b1", "yolo26m-seg-int8-b1.tar.gz",
                      "single-stream-instance-segmenter",
-                     "assets/models/YOLO26-SEGMENTATION/yolo26m-seg-int8-b1.tar.gz"),
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-int8-b1.tar.gz"),
+            ModelRow("yolo26m-seg-int8-b1-boxdecode", "yolo26m-seg-int8-b1.tar.gz",
+                     "single-stream-instance-segmenter",
+                     "models/YOLO26-SEGMENTATION/yolo26m-seg-int8-b1.tar.gz",
+                     decode_type="yolo26-seg"),
         ),
     ),
 )
@@ -160,10 +173,18 @@ def resolve_model_path(row: ModelRow) -> Path:
     preferred = APPS_ROOT / row.preferred_path
     if preferred.exists():
         return preferred
-    matches = sorted((APPS_ROOT / "assets" / "models").rglob(row.package))
+    matches = sorted((APPS_ROOT / "models").rglob(row.package))
     if not matches:
         raise FileNotFoundError(f"model package not found: {row.package}")
     return matches[0]
+
+
+def benchmark_command(row: ModelRow, model_path: Path, frames: int, out_path: Path) -> list[str]:
+    command = [sys.executable, str(MAIN_PY), "--model", str(model_path),
+               "--frames", str(frames), "--output-json", str(out_path)]
+    if row.decode_type:
+        command += ["--decode-type", row.decode_type]
+    return command
 
 
 def run_benchmarks(frames: int, reports_dir: Path, rows: tuple[ModelRow, ...]) -> list[BenchmarkFailure]:
@@ -178,16 +199,8 @@ def run_benchmarks(frames: int, reports_dir: Path, rows: tuple[ModelRow, ...]) -
             continue
         out_path = reports_dir / f"{row.model_id}.json"
         print(f"[benchmark] {row.model_id}: {model_path}", flush=True)
-        result = subprocess.run([
-            sys.executable,
-            str(MAIN_PY),
-            "--model",
-            str(model_path),
-            "--frames",
-            str(frames),
-            "--output-json",
-            str(out_path),
-        ], cwd=APPS_ROOT, check=False)
+        result = subprocess.run(benchmark_command(row, model_path, frames, out_path),
+                                cwd=APPS_ROOT, check=False)
         if result.returncode != 0:
             failures.append(BenchmarkFailure(row.model_id, f"exit {result.returncode}"))
             print(f"[failed] {row.model_id}: exit {result.returncode}", file=sys.stderr,
@@ -195,13 +208,11 @@ def run_benchmarks(frames: int, reports_dir: Path, rows: tuple[ModelRow, ...]) -
     return failures
 
 
-def report_metrics(reports_dir: Path, row: ModelRow) -> tuple[float, float]:
+def read_report(reports_dir: Path, row: ModelRow) -> dict:
     report_path = reports_dir / f"{row.model_id}.json"
     if not report_path.exists():
         raise FileNotFoundError(f"missing benchmark report: {report_path}")
-    data = json.loads(report_path.read_text())
-    metrics = data["metrics"]
-    return float(metrics["latency_ms"]), float(metrics["fps"])
+    return json.loads(report_path.read_text())
 
 
 def report_date(reports_dir: Path) -> str:
@@ -233,24 +244,30 @@ def render_markdown(frames: int, sdk: str, run_date: str, reports_dir: Path) -> 
         f"| SDK | {sdk} |",
         f"| Date | {run_date} |",
         f"| Frames | {frames} |",
-        "| Command | `python3 examples/benchmarking/model-benchmark/src/python/main.py --model <model-package>` |",
+        "| Command | `python3 examples/benchmarking/model-benchmark/src/python/main.py --model <model-package> [--decode-type <yolo26-det\\|yolo26-seg>]` |",
         "| Refresh Script | `python3 examples/benchmarking/model-benchmark/scripts/refresh_results.py --run` |",
         "| JSON Reports | `sandbox/model-benchmark/runs/<model-id>.json` |",
         "| Power Columns | Omitted |",
+        "| BoxDecode Options | `top_k=100`, `score_threshold=0` (keeps all candidates), "
+        "`nms_iou_threshold=0` (NMS disabled) |",
         "",
     ]
     for title, rows in GROUPS:
         lines.extend([
             f"## {title}",
             "",
-            "| Model ID | Package | Used By | Latency / FPS |",
-            "| --- | --- | --- | ---: |",
+            "| Model ID | Package | Used By | Postprocess | Outputs | Latency / FPS |",
+            "| --- | --- | --- | --- | ---: | ---: |",
         ])
         for row in rows:
-            latency_ms, fps = report_metrics(reports_dir, row)
+            report = read_report(reports_dir, row)
+            model, metrics = report["model"], report["metrics"]
+            specs = model["output_specs"]
+            outputs = "n/a" if specs[0].startswith("unavailable:") else len(specs)
             lines.append(
                 f"| `{row.model_id}` | `{row.package}` | {row.used_by} | "
-                f"{latency_ms:.3f} / {fps:.2f} |"
+                f"`{model['resolved_postprocess']}` | {outputs} | "
+                f"{float(metrics['latency_ms']):.3f} / {float(metrics['fps']):.2f} |"
             )
         lines.append("")
     return "\n".join(lines)

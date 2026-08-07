@@ -1,61 +1,62 @@
 # Profile: 48 x 720p @ 10 FPS (q1/i2/m1).
-# Model and label paths are resolved relative to this file.
+# Relative model paths use this file; label paths use the Apps root.
 model:
-  path: yolo26n-det-int8-b1.tar.gz
-  labels: coco_label.txt
+  path: <model-path>
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
   decode_type: yolo26
 
 streams:
-  - rtsp://192.168.1.9:25689/src1
-  - rtsp://192.168.1.9:25689/src2
-  - rtsp://192.168.1.9:25689/src3
-  - rtsp://192.168.1.9:25689/src4
-  - rtsp://192.168.1.9:25689/src5
-  - rtsp://192.168.1.9:25689/src6
-  - rtsp://192.168.1.9:25689/src7
-  - rtsp://192.168.1.9:25689/src8
-  - rtsp://192.168.1.9:25689/src9
-  - rtsp://192.168.1.9:25689/src10
-  - rtsp://192.168.1.9:25689/src11
-  - rtsp://192.168.1.9:25689/src12
-  - rtsp://192.168.1.9:25689/src13
-  - rtsp://192.168.1.9:25689/src14
-  - rtsp://192.168.1.9:25689/src15
-  - rtsp://192.168.1.9:25689/src16
-  - rtsp://192.168.1.9:25689/src17
-  - rtsp://192.168.1.9:25689/src18
-  - rtsp://192.168.1.9:25689/src19
-  - rtsp://192.168.1.9:25689/src20
-  - rtsp://192.168.1.9:25689/src21
-  - rtsp://192.168.1.9:25689/src22
-  - rtsp://192.168.1.9:25689/src23
-  - rtsp://192.168.1.9:25689/src24
-  - rtsp://192.168.1.9:25689/src25
-  - rtsp://192.168.1.9:25689/src26
-  - rtsp://192.168.1.9:25689/src27
-  - rtsp://192.168.1.9:25689/src28
-  - rtsp://192.168.1.9:25689/src29
-  - rtsp://192.168.1.9:25689/src30
-  - rtsp://192.168.1.9:25689/src31
-  - rtsp://192.168.1.9:25689/src32
-  - rtsp://192.168.1.9:25689/src33
-  - rtsp://192.168.1.9:25689/src34
-  - rtsp://192.168.1.9:25689/src35
-  - rtsp://192.168.1.9:25689/src36
-  - rtsp://192.168.1.9:25689/src37
-  - rtsp://192.168.1.9:25689/src38
-  - rtsp://192.168.1.9:25689/src39
-  - rtsp://192.168.1.9:25689/src40
-  - rtsp://192.168.1.9:25689/src41
-  - rtsp://192.168.1.9:25689/src42
-  - rtsp://192.168.1.9:25689/src43
-  - rtsp://192.168.1.9:25689/src44
-  - rtsp://192.168.1.9:25689/src45
-  - rtsp://192.168.1.9:25689/src46
-  - rtsp://192.168.1.9:25689/src47
-  - rtsp://192.168.1.9:25689/src48
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  - <rtsp-url-3>
+  - <rtsp-url-4>
+  - <rtsp-url-5>
+  - <rtsp-url-6>
+  - <rtsp-url-7>
+  - <rtsp-url-8>
+  - <rtsp-url-9>
+  - <rtsp-url-10>
+  - <rtsp-url-11>
+  - <rtsp-url-12>
+  - <rtsp-url-13>
+  - <rtsp-url-14>
+  - <rtsp-url-15>
+  - <rtsp-url-16>
+  - <rtsp-url-17>
+  - <rtsp-url-18>
+  - <rtsp-url-19>
+  - <rtsp-url-20>
+  - <rtsp-url-21>
+  - <rtsp-url-22>
+  - <rtsp-url-23>
+  - <rtsp-url-24>
+  - <rtsp-url-25>
+  - <rtsp-url-26>
+  - <rtsp-url-27>
+  - <rtsp-url-28>
+  - <rtsp-url-29>
+  - <rtsp-url-30>
+  - <rtsp-url-31>
+  - <rtsp-url-32>
+  - <rtsp-url-33>
+  - <rtsp-url-34>
+  - <rtsp-url-35>
+  - <rtsp-url-36>
+  - <rtsp-url-37>
+  - <rtsp-url-38>
+  - <rtsp-url-39>
+  - <rtsp-url-40>
+  - <rtsp-url-41>
+  - <rtsp-url-42>
+  - <rtsp-url-43>
+  - <rtsp-url-44>
+  - <rtsp-url-45>
+  - <rtsp-url-46>
+  - <rtsp-url-47>
+  - <rtsp-url-48>
 
 input:
+  codec: h264                # h264/avc or h265/hevc.
   tcp: true
   latency_ms: 100
   drop_on_latency: true
@@ -84,7 +85,7 @@ inference:
 
 output:
   insight:
-    host: 192.168.1.9
+    host: <insight-host-ip>
     video_port_base: 9000
     metadata_port_base: 9100
     max_visible_streams: 48

@@ -1,6 +1,7 @@
 # Multi-Stream People Tracker
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | tracking |
@@ -12,106 +13,102 @@
 | Model | yolo26m-det-int8-b1 |
 
 ## Concept
-Multi-stream people tracking example with RTSP inputs, mixed-resolution support, Insight live video plus metadata output, and optional sampled overlay saves. The pipeline filters detector output to the configured person class and assigns stable track IDs per stream.
+
+Track people across multiple RTSP inputs with mixed-resolution support. The pipeline filters detections to the configured person class, assigns stable IDs per stream, and publishes live video and metadata to Insight.
 
 ## Preview
-Preview image from a live run:
 
-![Multi-stream people tracker preview](../../../assets/portal/tracking/multi-stream-people-tracker/image.png)
-
-## Insight Setup
-[Neat Insight](https://developer.sima.ai/software/tools/insight/) can host RTSP streams, receive video from `VideoSender`, receive tracking metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
-
-In the Neat Development Environment, install the sample video assets:
-
-```bash
-sima-cli install assets/multi-video-sources
-```
-
-This provides 720p and 480p videos that Insight can stream as RTSP sources.
-
-To create reproducible RTSP inputs:
-1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
-2. In Insight, open `RTSP Source`.
-3. Use sample videos or upload your own videos.
-4. Start each stream and copy the RTSP URLs.
-5. Put those RTSP URLs into `streams`.
-
-Use the same `neat` output to set `output.insight.host`, `video_port_base`, and `metadata_port_base` from the reported `videoUDP` and `metadataUDP` ranges.
-
-## Supported Models
-Use the SDK platform version wherever `<platform-version>` appears.
-
-Default model: `yolo26m-det-int8-b1.tar.gz`.
-
-Download the default model:
-
-```bash
-mkdir -p assets/models
-cd assets/models
-
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
-
-cd ../..
-```
-
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+![Multi-stream people tracker preview](../../../portal/assets/examples/tracking/multi-stream-people-tracker/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- A Neat Library Python environment with `pyneat`, `numpy`, and OpenCV available.
-- RTSP sources created in Insight or provided by your cameras.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 detector model, or set `model.path` to another readable model package.
-- An Insight viewer instance reachable from the board/host running this example.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- H.264 or H.265 RTSP sources matching `input.codec`, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 
-Clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+| Model file | Role |
+| --- | --- |
+| `yolo26m-det-int8-b1.tar.gz` | Default |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-b1.tar.gz` | Supported |
+
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
+
+```bash
+export MODELZOO_VERSION="2.1.2"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
+cd ..
+```
+
+Set `model.path` in the config to the downloaded package.
+
+## Prepare Insight
+
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render tracking metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
+
+In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure
+
 Edit `examples/tracking/multi-stream-people-tracker/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: <model-path>                                   # Path to the model package.
+  path: <model-path>
 
 streams:
-  - <first-rtsp-url-copied-from-insight>               # First RTSP stream.
-  - <second-rtsp-url-copied-from-insight>              # Second RTSP stream.
+  - <first-rtsp-url>
+  - <second-rtsp-url>
+
+input:
+  codec: h264  # h264/avc or h265/hevc
 
 inference:
-  frames: 0                                            # Frame limit per stream. 0 runs continuously.
-  max_inflight_per_stream: 4                           # Raw frames admitted per stream to the detector.
-  max_inflight_total: 16                               # Raw frames admitted across detector streams.
-  min_score: 0.30                                      # Minimum person confidence.
+  frames: 0
+  max_inflight_per_stream: 4
+  max_inflight_total: 16
+  min_score: 0.30
 
 tracking:
-  max_missing_frames: 15                               # Frames to keep a missing track alive.
+  max_missing_frames: 15
 
 output:
   insight:
-    host: <insight-host-ip>                            # Host running Insight.
-    video_port_base: <videoUDP start port from neat>   # First UDP video port.
-    metadata_port_base: <metadataUDP start port from neat> # First UDP metadata port.
+    host: <insight-host-ip>
+    video_port_base: <videoUDP-start-port>
+    metadata_port_base: <metadataUDP-start-port>
 ```
 
 ## Run
+
 ### C++
+
 ```bash
-./build/examples/tracking/multi-stream-people-tracker/multi-stream-people-tracker \
+./examples/tracking/multi-stream-people-tracker/src/cpp/pre-built/multi-stream-people-tracker \
   --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
 ```
 
 ### Python
+
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/tracking/multi-stream-people-tracker/src/python/requirements.txt
@@ -119,31 +116,23 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
   --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
 ```
 
-## Debugging Notes
-- Start with one RTSP stream and confirm the config before scaling to multiple cameras.
-- Confirm `model.path` points to a readable model package.
-- Confirm each RTSP URL is reachable from the board or host running the example.
-- `max_inflight_per_stream` and `max_inflight_total` tune raw decoder-backed frame admission at the shared detector fan-in. Set either to `-1` to use Core defaults.
-- If Insight appears idle, verify `output.insight.host`, `video_port_base`, and `metadata_port_base`.
-- If you want saved overlay frames, set both `output.debug_dir` and `output.save_every`.
+## Troubleshooting
 
-## Appendix: Additional Models
-Other supported batch-1 YOLO26 detection models:
-- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-b1.tar.gz`
-
-Replace the default filename in the download command and `model.path`.
+- Start with one stream before scaling to multiple inputs.
+- Verify `model.path`, every RTSP URL, and the Insight port ranges.
+- Set either inflight limit to `-1` to use the Core default.
+- Use `output.debug_dir` and `output.save_every` to save sampled overlays.
 
 ## Source Files
-- C++ source: `src/cpp/main.cpp`
-- C++ tracker helpers: `src/cpp/utils/tracker_api.cpp`, `src/cpp/utils/tracker.cpp`
-- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+
+- C++ reference source: `src/cpp/main.cpp`
+- C++ tracker helpers: `src/cpp/utils/`
 - Python source: `src/python/main.py`
-- Python tracker helpers: `src/python/utils/tracker.py`
-- Example config: `src/common/config.yaml`
-- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
-- Shared example data: `src/common/`
+- Python tracker helpers: `src/python/utils/`
+- Shared runtime files: `src/common/`
+
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

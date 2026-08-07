@@ -1,6 +1,7 @@
 # Model Benchmark
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | benchmarking |
@@ -12,86 +13,99 @@
 | Model | Any compiled model package |
 
 ## Concept
-Before building a full camera or Insight pipeline, benchmark the compiled model package by itself. This example loads one `.tar.gz` model package, runs `pyneat.Model.benchmark()`, and writes a JSON report with latency, FPS, power, and energy.
 
-This is a model-only synthetic benchmark. It does not measure RTSP input, camera decode, Insight video, metadata, overlays, or application postprocessing.
+Benchmark a compiled model before integrating it into a full pipeline. The example runs `pyneat.Model.benchmark()` and writes latency, FPS, power, and energy measurements to JSON.
+
+This synthetic model benchmark does not measure input decoding, Insight output, overlays, or application postprocessing.
 
 ## Preview
-The benchmark writes a report that can be compared across model packages:
 
-![Model benchmark preview](../../../assets/portal/benchmarking/model-benchmark/image.png)
-
-## Supported Models
-This example accepts any compiled model package supported by `pyneat.Model`.
-
-`tests/test-scope.yaml` lists the compiled model packages already used by Apps examples. `BENCHMARK_RESULTS.md` is the manually maintained table for reference benchmark results.
+![Model benchmark preview](../../../portal/assets/examples/benchmarking/model-benchmark/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Activated `pyneat` environment.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- A compiled model package supported by `pyneat.Model`.
 
-Clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+This example accepts any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
+
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download a Model Zoo package:
+
+```bash
+export MODELZOO_VERSION="2.1.2"
+mkdir -p models
+cd models
+sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
+cd ..
+```
+
+For a model published as a direct artifact:
+
+```bash
+mkdir -p models
+cd models
+sima-cli download <model-url>
+cd ..
+```
 
 ## Configure
-Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or override these values from the command line.
+
+Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or provide the same values on the command line.
 
 ```yaml
 model:
-  path: <model-path>                          # Path to the model package.
+  path: <model-path>
 
 benchmark:
-  frames: 1000                                # Number of synthetic frames.
+  frames: 1000
 
 output:
-  report_json: sandbox/model-benchmark/report.json # JSON report path.
+  report_json: sandbox/model-benchmark/report.json
 ```
 
 ## Run
-On the Modalix/DevKit board, from the Apps repo root:
 
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/benchmarking/model-benchmark/src/python/requirements.txt
-
 python3 examples/benchmarking/model-benchmark/src/python/main.py \
-  --model assets/models/my_model.tar.gz \
+  --model models/<model-file>.tar.gz \
   --frames 1000 \
-  --output-json sandbox/model-benchmark/my_model.json
+  --output-json sandbox/model-benchmark/report.json
 ```
 
-The command prints the headline metrics and writes the JSON report:
+The command prints headline metrics and writes the complete report to the selected JSON path.
 
-```text
-latency_ms=...
-fps=...
-avg_power_watts=...
-energy_joules=...
-report_json=sandbox/model-benchmark/my_model.json
-```
+Without `--decode-type`, the model runs through the route its package declares. Add `--decode-type yolo26-det` or `--decode-type yolo26-seg` to benchmark a YOLO26 package through its BoxDecode route instead. Every report records the requested decode type and the postprocess Core resolved, so the two routes stay distinguishable.
 
 ## Benchmark Results
-See `BENCHMARK_RESULTS.md` for the manually maintained reference results for Apps-supported model packages.
 
-## Debugging Notes
-- If `pyneat` is missing, activate the Neat Python environment with `source ~/pyneat/bin/activate`.
-- If the model path fails, confirm the `.tar.gz` file exists on the target device.
-- If power is zero, the benchmark still completed; board power telemetry was unavailable for that run.
+See the maintained [benchmark results](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/model-benchmark/BENCHMARK_RESULTS.md) for measurements from Apps-supported packages.
+
+## Troubleshooting
+
+- Activate `~/pyneat` if the `pyneat` module is unavailable.
+- Confirm the model path points to a compiled `.tar.gz` package.
+- A zero power result means board power telemetry was unavailable; the model benchmark still completed.
 
 ## Source Files
+
 - Python source: `src/python/main.py`
-- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
 - Shared config: `src/common/config.yaml`
-- Test scope: `tests/test-scope.yaml`
-- Reference results: `BENCHMARK_RESULTS.md`
+
+## Development From Source
+
+To modify or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

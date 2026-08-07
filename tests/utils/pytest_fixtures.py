@@ -25,6 +25,8 @@ __all__ = [
     "models_dir",
     "rtsp_h264_url",
     "rtsp_h264_urls",
+    "rtsp_h265_url",
+    "rtsp_h265_urls",
     "rtsp_mjpeg_url",
     "rtsp_mjpeg_urls",
     "http_mjpeg_url",
@@ -78,11 +80,11 @@ def e2e_config_section():
 
 @pytest.fixture
 def models_dir() -> Path:
-    """Resolve SIMANEAT_APPS_TEST_MODELS_DIR (default: assets/models)."""
+    """Resolve SIMANEAT_APPS_TEST_MODELS_DIR (default: models)."""
     raw = os.environ.get("SIMANEAT_APPS_TEST_MODELS_DIR", "").strip()
     if raw:
         return Path(raw)
-    return APPS_ROOT / "assets" / "models"
+    return APPS_ROOT / "models"
 
 
 def _csv_env(key: str, description: str) -> list[str]:
@@ -101,6 +103,20 @@ def rtsp_h264_urls() -> list[str]:
     """Resolve SIMANEAT_TEST_RTSP_H264_URLS; skip if unset."""
     return _csv_env(
         "SIMANEAT_TEST_RTSP_H264_URLS", "comma-separated RTSP H.264 URLs for multistream"
+    )
+
+
+@pytest.fixture
+def rtsp_h265_url() -> str:
+    """Resolve SIMANEAT_TEST_RTSP_H265_URL; skip if unset."""
+    return _require_env("SIMANEAT_TEST_RTSP_H265_URL", "single RTSP H.265 stream URL")
+
+
+@pytest.fixture
+def rtsp_h265_urls() -> list[str]:
+    """Resolve SIMANEAT_TEST_RTSP_H265_URLS; skip if unset."""
+    return _csv_env(
+        "SIMANEAT_TEST_RTSP_H265_URLS", "comma-separated RTSP H.265 URLs for multistream"
     )
 
 
@@ -316,7 +332,7 @@ def run_until_output_files(request):
 def test_images_dir() -> Path:
     """Return the path to bundled test images."""
     raw = os.environ.get("SIMANEAT_APPS_TEST_INPUT_DIR", "").strip()
-    return Path(raw) if raw else APPS_ROOT / "assets" / "test_images"
+    return Path(raw) if raw else APPS_ROOT / "assets/datasets-test/coco"
 
 
 @pytest.fixture

@@ -1,39 +1,40 @@
-# Default profile: 16 x 720p @ 25 FPS.
-# Model and label paths are resolved relative to this file.
+# Default profile: 16 x 720p @ 30 FPS.
+# Relative model paths use this file; label paths use the Apps root.
 model:
-  path: yolo26n-det-int8-b1.tar.gz
-  labels: coco_label.txt
+  path: <model-path>
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
   decode_type: yolo26
 
 streams:
-  - rtsp://192.168.1.9:25689/src1
-  - rtsp://192.168.1.9:25689/src2
-  - rtsp://192.168.1.9:25689/src3
-  - rtsp://192.168.1.9:25689/src4
-  - rtsp://192.168.1.9:25689/src5
-  - rtsp://192.168.1.9:25689/src6
-  - rtsp://192.168.1.9:25689/src7
-  - rtsp://192.168.1.9:25689/src8
-  - rtsp://192.168.1.9:25689/src9
-  - rtsp://192.168.1.9:25689/src10
-  - rtsp://192.168.1.9:25689/src11
-  - rtsp://192.168.1.9:25689/src12
-  - rtsp://192.168.1.9:25689/src13
-  - rtsp://192.168.1.9:25689/src14
-  - rtsp://192.168.1.9:25689/src15
-  - rtsp://192.168.1.9:25689/src16
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  - <rtsp-url-3>
+  - <rtsp-url-4>
+  - <rtsp-url-5>
+  - <rtsp-url-6>
+  - <rtsp-url-7>
+  - <rtsp-url-8>
+  - <rtsp-url-9>
+  - <rtsp-url-10>
+  - <rtsp-url-11>
+  - <rtsp-url-12>
+  - <rtsp-url-13>
+  - <rtsp-url-14>
+  - <rtsp-url-15>
+  - <rtsp-url-16>
 
 input:
+  codec: h264                # h264/avc or h265/hevc.
   tcp: true
   latency_ms: 100
   drop_on_latency: true
   skip_rtsp_probe: true
   width: 1280
   height: 720
-  fps: 25
+  fps: 30
   decoder_buffers: 8
   decoder_input_buffers: 2
-  decoder_tuning: auto
+  decoder_tuning: throughput-low-latency
 
 runtime:
   profile: false
@@ -52,7 +53,7 @@ inference:
 
 output:
   insight:
-    host: 192.168.1.9
+    host: <insight-host-ip>
     video_port_base: 9000
     metadata_port_base: 9100
     max_visible_streams: 16

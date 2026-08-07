@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS_DIR="${NEAT_APPS_TEST_DEPS_DIR:-${ROOT_DIR}/deps}"
 APPS_MANIFEST="${DEPS_DIR}/manifest.json"
+NEAT_CORE_METADATA="${DEPS_DIR}/neat-core.json"
 NEAT_DEBS_DIR="${DEPS_DIR}/debs"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
 NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
@@ -131,9 +132,8 @@ artifact_version() {
 package_distribution() {
   local build_path="${ROOT_DIR}/${BUILD_DIR}"
   local stage_root stage_dir test_stage_dir
-  local branch_key version archive_name archive_path
+  local branch_key version archive_name archive_path apps_ref apps_spec
   local test_archive_path="${ROOT_DIR}/neat-apps-tests.tar.gz"
-  local neat_core_branch neat_core_version
 
   if [[ ! -d "${build_path}" ]]; then
     echo "Skipping distribution packaging: build directory not found: ${build_path}"
@@ -145,35 +145,61 @@ package_distribution() {
   archive_name="neat-apps-${branch_key}-${version}.tar.gz"
   archive_path="${ROOT_DIR}/${archive_name}"
   stage_root="$(mktemp -d /tmp/neat-apps-package.XXXXXX)"
-  stage_dir="${stage_root}/neat-apps-runtime"
+  stage_dir="${stage_root}/prebuilt-apps"
   test_stage_dir="${stage_root}/neat-apps-tests"
 
   mkdir -p \
     "${stage_dir}/examples" \
     "${stage_dir}/assets" \
+    "${stage_dir}/deps" \
     "${test_stage_dir}/examples"
 
-  load_neat_core_target
-  neat_core_branch="${NEAT_CORE_TARGET_BRANCH}"
-  neat_core_version="${NEAT_CORE_TARGET_VERSION}"
-  if [[ "${neat_core_version}" == "latest" ]]; then
-    neat_core_version="$(resolve_latest_version "${neat_core_branch}")"
+  if [[ ! -f "${NEAT_CORE_METADATA}" ]]; then
+    echo "ERROR: missing resolved Core metadata: ${NEAT_CORE_METADATA}" >&2
+    rm -rf "${stage_root}"
+    return 1
   fi
-  python3 - <<'PY' "${stage_dir}/neat-core.json" "${neat_core_branch}" "${neat_core_version}"
+  cp "${NEAT_CORE_METADATA}" "${stage_dir}/deps/neat-core.json"
+  apps_ref="${NEAT_APPS_ARTIFACT_BRANCH_KEY:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}}"
+  if [[ -z "${apps_ref}" ]] && command -v git >/dev/null 2>&1; then
+    apps_ref="$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "${apps_ref}" ]]; then
+    echo "ERROR: unable to determine the Apps source ref." >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+  apps_spec="${GITHUB_SHA:-}"
+  if [[ -z "${apps_spec}" ]] && command -v git >/dev/null 2>&1; then
+    apps_spec="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "${apps_spec}" ]]; then
+    echo "ERROR: unable to determine the Apps source commit." >&2
+    rm -rf "${stage_root}"
+    return 1
+  fi
+  python3 - "${stage_dir}/deps/neat-apps.json" "${apps_ref}" "${apps_spec}" <<'PY'
 import json
 import sys
 
-payload = {
-    "neat-core": {
-        "branch": sys.argv[2],
-        "version": sys.argv[3],
-    }
-}
-
-with open(sys.argv[1], "w", encoding="utf-8") as fh:
-    json.dump(payload, fh, indent=2)
-    fh.write("\n")
+path, ref, spec = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"neat-apps": {"ref": ref, "spec": spec}}, handle, indent=2)
+    handle.write("\n")
 PY
+
+  while IFS= read -r cpp_dir; do
+    local rel target_dir
+    rel="${cpp_dir#"${ROOT_DIR}"/examples/}"
+    target_dir="${stage_dir}/examples/$(dirname "${rel}")"
+    mkdir -p "${target_dir}"
+    cp -a "${cpp_dir}" "${target_dir}/"
+    rm -f "${target_dir}/cpp/CMakeLists.txt"
+    rm -rf "${target_dir}/cpp/pre-built"
+  done < <(
+    find "${ROOT_DIR}/examples" -mindepth 4 -maxdepth 4 \
+      -type d -path '*/src/cpp' | sort
+  )
 
   # Keep production and test executables in separate artifacts while
   # preserving the example layout expected by the test runner.
@@ -183,7 +209,12 @@ PY
     if [[ "${exe}" == *_unit_test || "${exe}" == *_e2e_test ]]; then
       target_dir="${test_stage_dir}/$(dirname "${rel}")/tests/cpp"
     else
-      target_dir="${stage_dir}/$(dirname "${rel}")"
+      local example_rel
+      example_rel="$(dirname "${rel}")"
+      example_rel="${example_rel%_cpp}"
+      [[ "$(basename "${exe}")" == "$(basename "${example_rel}")" ]] || continue
+      [[ -d "${ROOT_DIR}/${example_rel}/src/cpp" ]] || continue
+      target_dir="${stage_dir}/${example_rel}/src/cpp/pre-built"
     fi
     mkdir -p "${target_dir}"
     cp "${exe}" "${target_dir}/"
@@ -204,6 +235,7 @@ PY
     cp "${src_file}" "${target_dir}/"
   done < <(
     find "${ROOT_DIR}/examples" -type f \
+      ! -path '*/tests/*' \
       ! -path '*/__pycache__/*' \
       ! -name '*.pyc' \
       ! -name '*.pyo' \
@@ -235,12 +267,11 @@ PY
   cp "${ROOT_DIR}/tests/conftest.py" "${test_stage_dir}/examples/conftest.py"
   local asset_files=()
   if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    mapfile -t asset_files < <(git -C "${ROOT_DIR}" ls-files assets)
+    mapfile -t asset_files < <(git -C "${ROOT_DIR}" ls-files assets/datasets)
   fi
   if [[ "${#asset_files[@]}" -eq 0 ]]; then
     mapfile -t asset_files < <(
-      find "${ROOT_DIR}/assets" -type f \
-        ! -path "${ROOT_DIR}/assets/models/*" \
+      find "${ROOT_DIR}/assets/datasets" -type f \
         ! -name '.DS_Store' \
         | sed "s#^${ROOT_DIR}/##" \
         | sort
@@ -255,13 +286,49 @@ PY
     cp "${src_file}" "${target_dir}/"
   done
 
-  find "${stage_dir}" -type d -name "__pycache__" -prune -exec rm -rf {} +
-  find "${stage_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+  local test_asset_files=()
+  if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    mapfile -t test_asset_files < <(git -C "${ROOT_DIR}" ls-files assets/datasets-test)
+  fi
+  if [[ "${#test_asset_files[@]}" -eq 0 ]]; then
+    mapfile -t test_asset_files < <(
+      find "${ROOT_DIR}/assets/datasets-test" -type f \
+        ! -name '.DS_Store' \
+        | sed "s#^${ROOT_DIR}/##" \
+        | sort
+    )
+  fi
+  for rel in "${test_asset_files[@]}"; do
+    local src_file target_dir
+    src_file="${ROOT_DIR}/${rel}"
+    [[ -f "${src_file}" ]] || continue
+    target_dir="${test_stage_dir}/$(dirname "${rel}")"
+    mkdir -p "${target_dir}"
+    cp "${src_file}" "${target_dir}/"
+  done
+
+  find "${test_stage_dir}" -type f -name '.env.local' -delete
+  find "${stage_dir}" "${test_stage_dir}" -type d \
+    \( -name '__pycache__' -o -name '.pytest_cache' \) -prune -exec rm -rf {} +
+  find "${stage_dir}" "${test_stage_dir}" -type f \
+    \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
   tar -czf "${archive_path}" -C "${stage_root}" "$(basename "${stage_dir}")"
   tar -czf "${test_archive_path}" -C "${stage_root}" "$(basename "${test_stage_dir}")"
   "${ROOT_DIR}/scripts/ci/validate_apps_runtime_archive.sh" "${archive_path}"
   tar -tzf "${test_archive_path}" neat-apps-tests/tests/test.sh >/dev/null
+  tar -tzf "${test_archive_path}" \
+    neat-apps-tests/assets/datasets-test/imagenet/goldfish.jpeg >/dev/null
+  local test_coco_count
+  test_coco_count="$(
+    tar -tzf "${test_archive_path}" \
+      | grep -Ec '^neat-apps-tests/assets/datasets-test/coco/[^/]+\.jpg$' \
+      || true
+  )"
+  if [[ "${test_coco_count}" -ne 10 ]]; then
+    echo "ERROR: expected 10 COCO test images, found ${test_coco_count}." >&2
+    return 1
+  fi
   rm -rf "${stage_root}"
 
   echo ""
@@ -365,11 +432,11 @@ current_dependency_branch() {
     printf '%s\n' "${NEAT_APPS_DEPENDENCY_BRANCH}"
     return 0
   fi
-  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
-    printf '%s\n' "${GITHUB_BASE_REF}"
+  if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+    printf '%s\n' "${GITHUB_HEAD_REF}"
     return 0
   fi
-  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+  if [[ "${GITHUB_REF_TYPE:-}" != "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
     printf '%s\n' "${GITHUB_REF_NAME}"
     return 0
   fi
@@ -390,28 +457,6 @@ current_dependency_tag() {
     return 0
   fi
   printf '\n'
-}
-
-protected_manifest_branch_context() {
-  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
-    printf '%s\n' "${GITHUB_BASE_REF}"
-    return 0
-  fi
-  if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
-    printf '%s\n' "${GITHUB_REF_NAME}"
-    return 0
-  fi
-  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null
-    return 0
-  fi
-  echo ""
-}
-
-is_protected_manifest_context() {
-  local branch
-  branch="$(protected_manifest_branch_context)"
-  [[ "${branch}" == "main" || "${branch}" == "develop" ]]
 }
 
 core_branch_exists() {
@@ -506,6 +551,10 @@ core = data.get("components", {}).get("core", {})
 channel = str(core.get("channel", "")).strip()
 tag = str(core.get("tag", "")).strip()
 actual_env = str(core.get("provenance", {}).get("vulcanEnvironment", "")).strip()
+runtime_version = str(data.get("components", {}).get("runtime", {}).get("version", "")).strip()
+gst_plugins_version = str(
+    data.get("components", {}).get("gstPlugins", {}).get("version", "")
+).strip()
 
 def normalize_env(value: str) -> str:
     if value in {"production", "prod", "prd"}:
@@ -522,6 +571,17 @@ if tag != expected_version:
     raise SystemExit(1)
 if expected_env and normalize_env(actual_env) != expected_env:
     raise SystemExit(1)
+
+# The Core provenance marker is not sufficient on a persistent runner: an
+# interrupted installation can leave the requested Core package beside runtime
+# and GStreamer packages from another branch. Those mixed packages made
+# `neat --json` report the requested Core tag while BoxDecode still loaded an
+# older plugin. Require the installed board-side components to come from the
+# same branch before skipping installation.
+expected_component_prefix = f"+{expected_branch_key}."
+for version in (runtime_version, gst_plugins_version):
+    if expected_component_prefix not in version:
+        raise SystemExit(1)
 PY
   then
     return 1
@@ -674,15 +734,7 @@ validate_explicit_core_ref() {
 }
 
 resolve_empty_neat_core_branch() {
-  local branch tag
-  if [[ -z "${NEAT_APPS_DEPENDENCY_BRANCH:-}" ]]; then
-    tag="$(current_dependency_tag)"
-    if [[ -n "${tag}" ]]; then
-      printf '%s\n' "${tag}"
-      return 0
-    fi
-  fi
-
+  local branch
   branch="$(current_dependency_branch)"
 
   if [[ "${branch}" == "main" || "${branch}" == "develop" ]]; then
@@ -725,11 +777,6 @@ resolve_neat_core_target() {
   fi
 
   if [[ -n "${manifest_core}" ]]; then
-    if is_protected_manifest_context; then
-      echo "ERROR: ${APPS_MANIFEST} must keep neat-core as policy=snap on main/develop." >&2
-      return 1
-    fi
-
     if [[ "${manifest_core}" == *":"* ]]; then
       branch="${manifest_core%%:*}"
       version="${manifest_core#*:}"
@@ -745,6 +792,21 @@ resolve_neat_core_target() {
     printf '%s\n%s\n' "${branch}" "${version}"
     return 0
   fi
+}
+
+write_neat_core_metadata() {
+  local ref="$1"
+  local spec="$2"
+  mkdir -p "$(dirname "${NEAT_CORE_METADATA}")"
+  python3 - "${NEAT_CORE_METADATA}" "${ref}" "${spec}" <<'PY'
+import json
+import sys
+
+path, ref, spec = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"neat-core": {"ref": ref, "spec": spec}}, handle, indent=2)
+    handle.write("\n")
+PY
 }
 
 load_neat_core_target() {
@@ -802,7 +864,7 @@ run_sima_cli_core_install() {
 }
 
 ensure_neat_core() {
-  local branch exact_tag install_mode sima_cli_bin version vulcan_env
+  local branch install_mode sima_cli_bin version vulcan_env
   mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
   load_neat_core_target
   branch="${NEAT_CORE_TARGET_BRANCH}"
@@ -821,14 +883,10 @@ ensure_neat_core() {
 
   # Resolve "latest" to an exact tag before checking installed state.
   if [[ "${version}" == "latest" ]]; then
-    if ! version="$(resolve_latest_version "${branch}")"; then
-      exact_tag="$(current_dependency_tag)"
-      if [[ -n "${exact_tag}" && "${branch}" == "${exact_tag}" ]]; then
-        echo "ERROR: Failed to resolve exact tag-snap NEAT core artifact for tag '${branch}'." >&2
-      fi
-      exit 1
-    fi
+    version="$(resolve_latest_version "${branch}")" || exit 1
   fi
+  NEAT_CORE_TARGET_VERSION="${version}"
+  write_neat_core_metadata "${branch}" "${version}"
 
   local expected_tag="${branch}/${version}"
   if neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
@@ -924,13 +982,7 @@ if [[ "${INSTALL_CORE}" -eq 1 ]]; then
   NEAT_CORE_DISPLAY_BRANCH="${NEAT_CORE_TARGET_BRANCH}"
   NEAT_CORE_DISPLAY_VERSION="${NEAT_CORE_TARGET_VERSION}"
   if [[ "${NEAT_CORE_DISPLAY_VERSION}" == "latest" ]]; then
-    if ! NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")"; then
-      exact_tag="$(current_dependency_tag)"
-      if [[ -n "${exact_tag}" && "${NEAT_CORE_DISPLAY_BRANCH}" == "${exact_tag}" ]]; then
-        echo "ERROR: Failed to resolve exact tag-snap NEAT core artifact for tag '${NEAT_CORE_DISPLAY_BRANCH}'." >&2
-      fi
-      exit 1
-    fi
+    NEAT_CORE_DISPLAY_VERSION="$(resolve_latest_version "${NEAT_CORE_DISPLAY_BRANCH}")" || exit 1
   fi
 fi
 

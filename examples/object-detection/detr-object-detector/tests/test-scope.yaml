@@ -1,7 +1,7 @@
 models:
   detr_resnet50_modified_class_embed_bbox_embed:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
     file: detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz
 unit:
   python: true

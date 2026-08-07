@@ -93,7 +93,7 @@ struct Detection {
 
 struct Config {
   fs::path input_dir;
-  std::string model = "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz";
+  std::string model = "models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz";
   fs::path output_dir;
   float conf = 0.5f;
   int max_draw = 50;
@@ -153,9 +153,9 @@ std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model = raw.string_or(
-      "model.path", "assets/models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz");
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.model = raw.string_or("model.path",
+                            "models/detr_resnet50_modified_class_embed_bbox_embed_mpk.tar.gz");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/detr-object-detector");
   cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.5));
   cfg.max_draw = raw.int_or("decode.max_draw", 50);

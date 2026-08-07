@@ -1,7 +1,7 @@
 models:
   retinaface_mobilenet25:
     source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{platform_version}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz
     file: retinaface_mobilenet25_mod_0_mpk.tar.gz
 unit:
   python: true
