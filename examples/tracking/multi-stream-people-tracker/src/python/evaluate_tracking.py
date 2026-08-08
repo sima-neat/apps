@@ -74,17 +74,26 @@ def read_jsonl(path: Path, array_key: str, *, allow_empty: bool = False) -> dict
 class _FlowEdge:
     __slots__ = ("capacity", "cost", "reverse", "to")
 
-    def __init__(self, to: int, reverse: int, capacity: int, cost: float) -> None:
+    def __init__(
+        self, to: int, reverse: int, capacity: int, cost: tuple[int, int]
+    ) -> None:
         self.to = to
         self.reverse = reverse
         self.capacity = capacity
         self.cost = cost
 
 
+_IOU_COST_SCALE = 10**12
+
+
 def optimal_matches(
-    truth: list[dict[str, Any]], predictions: list[dict[str, Any]], threshold: float
+    truth: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+    threshold: float,
+    preferred_matches: set[tuple[int, int]] | None = None,
 ) -> list[tuple[int, int, float]]:
-    """Return a maximum-cardinality match, maximizing total IoU among ties."""
+    """Maximize match count, then IoU, then the number of preferred pairs."""
+    preferred_matches = preferred_matches or set()
     truth_count = len(truth)
     prediction_count = len(predictions)
     source = 0
@@ -93,74 +102,103 @@ def optimal_matches(
     sink = first_prediction + prediction_count
     graph: list[list[_FlowEdge]] = [[] for _ in range(sink + 1)]
 
-    def add_edge(start: int, end: int, capacity: int, cost: float) -> _FlowEdge:
+    def add_edge(
+        start: int, end: int, capacity: int, cost: tuple[int, int]
+    ) -> _FlowEdge:
         forward = _FlowEdge(end, len(graph[end]), capacity, cost)
-        reverse = _FlowEdge(start, len(graph[start]), 0, -cost)
+        reverse = _FlowEdge(
+            start, len(graph[start]), 0, (-cost[0], -cost[1])
+        )
         graph[start].append(forward)
         graph[end].append(reverse)
         return forward
 
     for truth_index in range(truth_count):
-        add_edge(source, first_truth + truth_index, 1, 0.0)
+        add_edge(source, first_truth + truth_index, 1, (0, 0))
     for prediction_index in range(prediction_count):
-        add_edge(first_prediction + prediction_index, sink, 1, 0.0)
+        add_edge(first_prediction + prediction_index, sink, 1, (0, 0))
 
     candidates: list[tuple[int, int, float, _FlowEdge]] = []
-    best_overlap_by_prediction = [0.0] * prediction_count
+    overlap_candidates: list[tuple[int, int, float]] = []
     for truth_index, truth_object in enumerate(truth):
         truth_box = xywh_to_xyxy(truth_object["bbox"])
         for prediction_index, prediction in enumerate(predictions):
             overlap = iou(truth_box, xywh_to_xyxy(prediction["bbox"]))
             if overlap >= threshold:
-                edge = add_edge(
-                    first_truth + truth_index,
-                    first_prediction + prediction_index,
-                    1,
-                    -overlap,
-                )
-                candidates.append((truth_index, prediction_index, overlap, edge))
-                best_overlap_by_prediction[prediction_index] = max(
-                    best_overlap_by_prediction[prediction_index], overlap
-                )
+                overlap_candidates.append((truth_index, prediction_index, overlap))
 
+    # Express IoU at the evaluator's 1e-12 comparison resolution as integers.
+    # This removes accumulation-order noise while ensuring identity preference
+    # cannot trade away a meaningful amount of summed IoU.
+    best_cost_by_prediction: list[tuple[int, int] | None] = [None] * prediction_count
+    for truth_index, prediction_index, overlap in overlap_candidates:
+        overlap_units = round(overlap * _IOU_COST_SCALE)
+        edge = add_edge(
+            first_truth + truth_index,
+            first_prediction + prediction_index,
+            1,
+            (
+                -overlap_units,
+                -int((truth_index, prediction_index) in preferred_matches),
+            ),
+        )
+        candidates.append((truth_index, prediction_index, overlap, edge))
+        best_cost = best_cost_by_prediction[prediction_index]
+        if best_cost is None or edge.cost < best_cost:
+            best_cost_by_prediction[prediction_index] = edge.cost
+
+    # Tuple costs make identity preservation a strict final tie-breaker: it
+    # cannot trade away match cardinality or any represented IoU.
     # Initial shortest-path potentials make all reduced edge costs non-negative.
     # Successive shortest augmenting paths then produce a min-cost maximum flow:
-    # maximum match count first, and maximum summed IoU for that count.
-    potential = [0.0] * len(graph)
-    for prediction_index, overlap in enumerate(best_overlap_by_prediction):
-        potential[first_prediction + prediction_index] = -overlap
+    # maximum match count, maximum summed IoU, then maximum preferred matches.
+    potential = [(0, 0)] * len(graph)
+    for prediction_index, cost in enumerate(best_cost_by_prediction):
+        if cost is not None:
+            potential[first_prediction + prediction_index] = cost
     potential[sink] = min(
-        (potential[first_prediction + index] for index in range(prediction_count)),
-        default=0.0,
+        (cost for cost in best_cost_by_prediction if cost is not None),
+        default=(0, 0),
     )
 
     while True:
-        distances = [math.inf] * len(graph)
+        distances: list[tuple[int, int] | None] = [None] * len(graph)
         previous: list[tuple[int, int] | None] = [None] * len(graph)
-        distances[source] = 0.0
-        queue = [(0.0, source)]
+        distances[source] = (0, 0)
+        queue = [(0, 0, source)]
         while queue:
-            distance, node = heapq.heappop(queue)
-            if distance > distances[node]:
+            primary_distance, preference_distance, node = heapq.heappop(queue)
+            distance = (primary_distance, preference_distance)
+            if distance != distances[node]:
                 continue
             for edge_index, edge in enumerate(graph[node]):
                 if edge.capacity == 0:
                     continue
-                reduced_cost = edge.cost + potential[node] - potential[edge.to]
-                if -1e-12 < reduced_cost < 0.0:
-                    reduced_cost = 0.0
-                candidate_distance = distance + reduced_cost
-                if candidate_distance + 1e-12 >= distances[edge.to]:
+                reduced_cost = (
+                    edge.cost[0] + potential[node][0] - potential[edge.to][0],
+                    edge.cost[1] + potential[node][1] - potential[edge.to][1],
+                )
+                candidate_distance = (
+                    distance[0] + reduced_cost[0],
+                    distance[1] + reduced_cost[1],
+                )
+                if (
+                    distances[edge.to] is not None
+                    and candidate_distance >= distances[edge.to]
+                ):
                     continue
                 distances[edge.to] = candidate_distance
                 previous[edge.to] = (node, edge_index)
-                heapq.heappush(queue, (candidate_distance, edge.to))
+                heapq.heappush(queue, (*candidate_distance, edge.to))
 
         if previous[sink] is None:
             break
         for node, distance in enumerate(distances):
-            if math.isfinite(distance):
-                potential[node] += distance
+            if distance is not None:
+                potential[node] = (
+                    potential[node][0] + distance[0],
+                    potential[node][1] + distance[1],
+                )
         node = sink
         while node != source:
             step = previous[node]
@@ -273,7 +311,23 @@ def evaluate(
         predictions = prediction_frame.get("tracks", [])
         width = int(truth_frame.get("width", 0))
         height = int(truth_frame.get("height", 0))
-        matches = optimal_matches(truth, predictions, iou_threshold)
+        preferred_matches: set[tuple[int, int]] = set()
+        if tracking_available:
+            prediction_indices_by_id = {
+                str(prediction["id"]): index
+                for index, prediction in enumerate(predictions)
+            }
+            for truth_index, truth_object in enumerate(truth):
+                previous_prediction = last_prediction_by_truth.get(
+                    str(truth_object["track_id"])
+                )
+                if previous_prediction in prediction_indices_by_id:
+                    preferred_matches.add(
+                        (truth_index, prediction_indices_by_id[previous_prediction])
+                    )
+        matches = optimal_matches(
+            truth, predictions, iou_threshold, preferred_matches
+        )
         matched_truth_indices = {match[0] for match in matches}
         true_positives += len(matches)
         false_positives += len(predictions) - len(matches)

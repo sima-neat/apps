@@ -963,12 +963,53 @@ class TestAccuracyEvaluation:
         truth = [{"bbox": [0, 0, 10, 10]}, {"bbox": [4, 0, 10, 10]}]
         predictions = [{"bbox": [1, 0, 10, 10]}, {"bbox": [3, 0, 10, 10]}]
 
-        matches = evaluate_tracking.optimal_matches(truth, predictions, 0.3)
+        matches = evaluate_tracking.optimal_matches(
+            truth, predictions, 0.3, {(0, 1), (1, 0)}
+        )
 
         assert [
             (truth_index, prediction_index)
             for truth_index, prediction_index, _ in matches
         ] == [(0, 0), (1, 1)]
+
+    def test_matching_preserves_prior_identity_only_after_iou_ties(self):
+        truth = {
+            0: {
+                "frame_index": 0,
+                "width": 640,
+                "height": 640,
+                "objects": [
+                    {"track_id": "a", "bbox": [10, 10, 8, 8]},
+                    {"track_id": "b", "bbox": [10, 10, 8, 8]},
+                ],
+            },
+            1: {
+                "frame_index": 1,
+                "width": 640,
+                "height": 640,
+                "objects": [
+                    {"track_id": "b", "bbox": [10, 10, 8, 8]},
+                    {"track_id": "a", "bbox": [10, 10, 8, 8]},
+                ],
+            },
+        }
+        predictions = {
+            frame_index: {
+                "frame_index": frame_index,
+                "tracks": [
+                    {"id": "1", "bbox": [10, 10, 8, 8]},
+                    {"id": "2", "bbox": [10, 10, 8, 8]},
+                ],
+            }
+            for frame_index in truth
+        }
+
+        report = evaluate_tracking.evaluate(
+            truth, predictions, iou_threshold=0.3, fps=30.0, model_size=640
+        )
+
+        assert report["detection"]["true_positives"] == 4
+        assert report["tracking"]["id_switches"] == 0
 
     def test_prediction_frames_outside_annotation_are_rejected(self):
         truth = {
