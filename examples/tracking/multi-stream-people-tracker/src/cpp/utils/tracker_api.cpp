@@ -22,6 +22,7 @@ struct TrackedDetection {
   float y2 = 0.0f;
   float score = 0.0f;
   int class_id = -1;
+  bool predicted = false;
 };
 
 struct TrackerConfig {
@@ -32,6 +33,7 @@ struct TrackerConfig {
   float velocity_momentum = 0.80f;
   int max_missing_frames = 15;
   int min_confirmed_hits = 1;
+  int max_prediction_frames = 0;
   bool center_distance_enabled = true;
 };
 
@@ -50,6 +52,8 @@ public:
 
   int active_track_count() const;
   std::vector<TrackedDetection> update(const std::vector<Detection>& detections, int frame_index);
+  void update_into(const std::vector<Detection>& detections, int frame_index,
+                   std::vector<TrackedDetection>& tracked);
 
 private:
   TrackerConfig config_;

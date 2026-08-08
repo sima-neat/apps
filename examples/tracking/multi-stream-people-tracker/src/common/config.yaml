@@ -37,6 +37,7 @@ tracking:                    # Per-stream tracker settings.
   velocity_momentum: 0.80    # Constant-velocity estimate smoothing.
   max_missing_frames: 15     # Frames to keep a missing track alive.
   min_confirmed_hits: 1      # Matches required before publishing a track.
+  max_prediction_frames: 0   # Publish motion prediction over short detector gaps. 0 disables it.
 
 output:                      # Insight output plus optional local debug saves.
   insight:                   # Live video and metadata destination.

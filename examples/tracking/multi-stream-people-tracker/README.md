@@ -117,6 +117,7 @@ tracking:
   match_iou_threshold: 0.10
   max_center_distance: 2.5
   max_missing_frames: 15
+  max_prediction_frames: 0
 
 output:
   insight:
@@ -134,6 +135,9 @@ For the one-class drone candidate, copy
 `src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight
 host. Its low decoder floor is intentional: detections below the high-score
 threshold may recover an existing track but cannot create a new one.
+The tiny-drone profile publishes at most one predicted frame for an already
+confirmed, high-confidence track. This bridges isolated detector misses without
+letting low-confidence candidates create or extend identities.
 `inference.num_classes` is part of the detector contract and must match the
 YOLO26 class-head depth (`1` for the tiny-drone model and `80` for COCO). The
 application rejects non-positive class counts and target class IDs outside
@@ -170,7 +174,9 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
 - Start with one stream before scaling to multiple inputs.
 - Verify `model.path`, every RTSP URL, and the Insight port ranges.
 - Set either inflight limit to `-1` to use the Core default.
-- Use `output.debug_dir` and `output.save_every` to save sampled overlays.
+- Use `output.debug_dir` and `output.save_every` to save sampled overlays. The
+  saved overlay uses a stable, distinct color and compact ID label per track;
+  predicted boxes use a thin/dashed outline.
 - Do not use the tiny-drone thresholds with a generic COCO model; the extra
   low-score candidates add unnecessary postprocessing work.
 

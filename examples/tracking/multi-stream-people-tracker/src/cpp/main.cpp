@@ -17,6 +17,7 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
+#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_overlay_api.cpp"
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
@@ -43,6 +44,7 @@
 
 namespace fs = std::filesystem;
 using multi_stream_people_tracker::Detection;
+using multi_stream_people_tracker::draw_tracks_bgr;
 using multi_stream_people_tracker::ObjectTracker;
 using multi_stream_people_tracker::TrackedDetection;
 using multi_stream_people_tracker::TrackerConfig;
@@ -87,6 +89,7 @@ struct AppConfig {
   float tracker_velocity_momentum = 0.80f;
   int tracker_max_missing = 15;
   int tracker_min_confirmed_hits = 1;
+  int tracker_max_prediction_frames = 0;
   bool tracker_center_distance_enabled = false;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
@@ -141,10 +144,13 @@ struct ProfileWindow {
   int boxes = 0;
   double start_ms = 0.0;
   double detection_pull_ms = 0.0;
+  double box_parse_ms = 0.0;
   double tracker_ms = 0.0;
   double metadata_send_ms = 0.0;
+  double overlay_ms = 0.0;
 
-  void add(double detection_pull, double tracker, double metadata_send, int box_count) {
+  void add(double detection_pull, double box_parse, double tracker, double metadata_send,
+           double overlay, int box_count) {
     if (!enabled)
       return;
     if (frames == 0)
@@ -152,8 +158,10 @@ struct ProfileWindow {
     ++frames;
     boxes += box_count;
     detection_pull_ms += detection_pull;
+    box_parse_ms += box_parse;
     tracker_ms += tracker;
     metadata_send_ms += metadata_send;
+    overlay_ms += overlay;
     if (frames >= interval)
       flush();
   }
@@ -166,15 +174,18 @@ struct ProfileWindow {
     const auto avg = [this](double value) { return value / static_cast<double>(frames); };
     std::cout << "[profile stream=" << stream_index << "] frames=" << frames
               << " output_fps=" << output_fps << " avg_detection_pull_ms=" << avg(detection_pull_ms)
-              << " avg_tracker_ms=" << avg(tracker_ms)
+              << " avg_box_parse_ms=" << avg(box_parse_ms) << " avg_tracker_ms=" << avg(tracker_ms)
               << " avg_metadata_send_ms=" << avg(metadata_send_ms)
+              << " avg_overlay_ms=" << avg(overlay_ms)
               << " avg_tracks=" << static_cast<double>(boxes) / static_cast<double>(frames) << "\n";
     frames = 0;
     boxes = 0;
     start_ms = 0.0;
     detection_pull_ms = 0.0;
+    box_parse_ms = 0.0;
     tracker_ms = 0.0;
     metadata_send_ms = 0.0;
+    overlay_ms = 0.0;
   }
 };
 
@@ -185,6 +196,11 @@ struct StreamRuntime {
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   ObjectTracker tracker;
   ProfileWindow profile;
+  std::vector<std::uint8_t> payload;
+  std::vector<objdet::Box> boxes;
+  std::vector<Detection> detections;
+  std::vector<TrackedDetection> tracks;
+  std::vector<sima_examples::MetadataBox> metadata_tracks;
   std::optional<cv::Mat> latest_debug_frame;
   int frame_w = 0;
   int frame_h = 0;
@@ -349,6 +365,9 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.tracker_max_missing >= 0, "tracking.max_missing_frames must be >= 0");
   sima_examples::require(cfg.tracker_min_confirmed_hits >= 1,
                          "tracking.min_confirmed_hits must be >= 1");
+  sima_examples::require(cfg.tracker_max_prediction_frames >= 0 &&
+                             cfg.tracker_max_prediction_frames <= cfg.tracker_max_missing,
+                         "tracking.max_prediction_frames must be in [0, max_missing_frames]");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0,
                          "output.insight.metadata_port_base must be > 0");
@@ -395,6 +414,7 @@ AppConfig load_app_config(const fs::path& config_path) {
       static_cast<float>(raw.double_or("tracking.velocity_momentum", 0.80));
   cfg.tracker_max_missing = raw.int_or("tracking.max_missing_frames", 15);
   cfg.tracker_min_confirmed_hits = raw.int_or("tracking.min_confirmed_hits", 1);
+  cfg.tracker_max_prediction_frames = raw.int_or("tracking.max_prediction_frames", 0);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -426,9 +446,9 @@ bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::u
   return objdet::extract_bbox_payload(sample, payload, err);
 }
 
-std::vector<Detection> filter_target_class(const std::vector<objdet::Box>& boxes,
-                                           int target_class_id) {
-  std::vector<Detection> detections;
+void filter_target_class_into(const std::vector<objdet::Box>& boxes, int target_class_id,
+                              std::vector<Detection>& detections) {
+  detections.clear();
   detections.reserve(boxes.size());
   for (const auto& box : boxes) {
     if (box.class_id != target_class_id) {
@@ -436,13 +456,12 @@ std::vector<Detection> filter_target_class(const std::vector<objdet::Box>& boxes
     }
     detections.push_back(Detection{box.x1, box.y1, box.x2, box.y2, box.score, box.class_id});
   }
-  return detections;
 }
 
-std::vector<sima_examples::MetadataBox>
-build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, int frame_h,
-                      const std::string& target_label) {
-  std::vector<sima_examples::MetadataBox> metadata_boxes;
+void build_metadata_tracks_into(const std::vector<TrackedDetection>& tracks, int frame_w,
+                                int frame_h, const std::string& target_label,
+                                std::vector<sima_examples::MetadataBox>& metadata_boxes) {
+  metadata_boxes.clear();
   metadata_boxes.reserve(tracks.size());
   for (const auto& track : tracks) {
     int x1 = std::max(0, static_cast<int>(track.x1));
@@ -464,7 +483,6 @@ build_metadata_tracks(const std::vector<TrackedDetection>& tracks, int frame_w, 
     obj.h = static_cast<float>(std::max(0, h));
     metadata_boxes.push_back(obj);
   }
-  return metadata_boxes;
 }
 
 simaai::neat::nodes::groups::RtspDecodedInputOptions
@@ -613,7 +631,6 @@ build_video_sender_graph(const std::string& input_name,
 std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
-  model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
   model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
@@ -624,14 +641,9 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   return std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
 }
 
-simaai::neat::RunOptions build_run_options(const AppConfig& cfg) {
+simaai::neat::RunOptions build_run_options() {
   simaai::neat::RunOptions run_options;
   run_options.preset = simaai::neat::RunPreset::Realtime;
-  run_options.queue_depth = 4;
-  run_options.overflow_policy = cfg.overflow_policy == RuntimeOverflowPolicy::Block
-                                    ? simaai::neat::OverflowPolicy::Block
-                                    : simaai::neat::OverflowPolicy::KeepLatest;
-  run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   return run_options;
 }
 
@@ -725,6 +737,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
       cfg.tracker_velocity_momentum,
       cfg.tracker_max_missing,
       cfg.tracker_min_confirmed_hits,
+      cfg.tracker_max_prediction_frames,
       cfg.tracker_center_distance_enabled,
   });
   const auto source_options =
@@ -798,9 +811,10 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
 
 void send_metadata(StreamRuntime& stream, const AppConfig& cfg, const simaai::neat::Sample& sample,
                    const std::vector<TrackedDetection>& tracks) {
-  const auto metadata_tracks =
-      build_metadata_tracks(tracks, stream.frame_w, stream.frame_h, cfg.target_label);
-  const std::string data_json = sima_examples::metadata_boxes_data_json("tracks", metadata_tracks);
+  build_metadata_tracks_into(tracks, stream.frame_w, stream.frame_h, cfg.target_label,
+                             stream.metadata_tracks);
+  const std::string data_json =
+      sima_examples::metadata_boxes_data_json("tracks", stream.metadata_tracks);
   const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
   const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
@@ -819,13 +833,7 @@ void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream, c
   }
 
   cv::Mat bgr = frame->clone();
-  std::vector<objdet::Box> draw_boxes;
-  draw_boxes.reserve(tracks.size());
-  for (const auto& track : tracks) {
-    draw_boxes.push_back(
-        objdet::Box{track.x1, track.y1, track.x2, track.y2, track.score, track.track_id});
-  }
-  objdet::draw_boxes(bgr, draw_boxes, cfg.min_score, cv::Scalar(0, 255, 0), "track ");
+  draw_tracks_bgr(bgr, tracks, static_cast<float>(cfg.min_score));
   const auto out_path = cfg.save_dir / ("stream_" + std::to_string(stream.index) + "_frame_" +
                                         std::to_string(stream.processed) + ".jpg");
   if (!cv::imwrite(out_path.string(), bgr)) {
@@ -848,31 +856,37 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
     return;
   }
 
-  std::vector<std::uint8_t> payload;
   std::string err;
-  if (!extract_bbox_payload(sample, payload, err)) {
+  if (!extract_bbox_payload(sample, stream.payload, err)) {
     throw std::runtime_error("stream " + std::to_string(stream.index) +
                              " bbox extract failed: " + err);
   }
-  const auto boxes = objdet::parse_boxes_strict(payload, stream.frame_w, stream.frame_h,
-                                                cfg.max_detections, false);
-  const auto target_detections = filter_target_class(boxes, cfg.target_class_id);
+  const double box_parse_start = sima_examples::time_ms();
+  objdet::parse_boxes_strict_into(stream.payload, stream.frame_w, stream.frame_h,
+                                  cfg.max_detections, false, stream.boxes);
+  filter_target_class_into(stream.boxes, cfg.target_class_id, stream.detections);
+  const double box_parse_end = sima_examples::time_ms();
   const double tracker_start = sima_examples::time_ms();
-  const auto tracks = stream.tracker.update(target_detections, stream.processed);
+  stream.tracker.update_into(stream.detections, stream.processed, stream.tracks);
   const double tracker_end = sima_examples::time_ms();
 
   ++stream.processed;
   const bool warming_up = stream.processed <= cfg.warmup_frames;
   if (!warming_up) {
     const double metadata_start = sima_examples::time_ms();
-    send_metadata(stream, cfg, sample, tracks);
+    send_metadata(stream, cfg, sample, stream.tracks);
     const double metadata_end = sima_examples::time_ms();
+    double overlay_ms = 0.0;
     if (save_frames_enabled(cfg)) {
-      maybe_save_debug_frame(
-          cfg, stream, stream.latest_debug_frame ? &*stream.latest_debug_frame : nullptr, tracks);
+      const double overlay_start = sima_examples::time_ms();
+      maybe_save_debug_frame(cfg, stream,
+                             stream.latest_debug_frame ? &*stream.latest_debug_frame : nullptr,
+                             stream.tracks);
+      overlay_ms = sima_examples::time_ms() - overlay_start;
     }
-    stream.profile.add(detection_pull_ms, tracker_end - tracker_start,
-                       metadata_end - metadata_start, static_cast<int>(tracks.size()));
+    stream.profile.add(detection_pull_ms, box_parse_end - box_parse_start,
+                       tracker_end - tracker_start, metadata_end - metadata_start, overlay_ms,
+                       static_cast<int>(stream.tracks.size()));
   }
 }
 
@@ -961,7 +975,7 @@ void run_app(const AppConfig& cfg) {
     std::cout << "Backend:\n" << app.graph.describe_backend() << "\n";
   }
 
-  app.run = app.graph.build(build_run_options(cfg));
+  app.run = app.graph.build(build_run_options());
   while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
     (void)process_run_once(app, cfg, "detections");
   }
@@ -994,7 +1008,8 @@ int main(int argc, char** argv) {
                 << ", min_score=" << cfg.min_score
                 << ", match_iou_threshold=" << cfg.tracker_iou_threshold
                 << ", center_distance_enabled="
-                << (cfg.tracker_center_distance_enabled ? "true" : "false") << ")\n";
+                << (cfg.tracker_center_distance_enabled ? "true" : "false")
+                << ", max_prediction_frames=" << cfg.tracker_max_prediction_frames << ")\n";
       return 0;
     }
     run_app(cfg);

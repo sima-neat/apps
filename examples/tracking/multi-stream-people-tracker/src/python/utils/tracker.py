@@ -1,4 +1,4 @@
-"""Two-stage, motion-aware tracking for small object detections."""
+"""Deterministic two-stage tracking for small object detections."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass
 
 BBox = tuple[float, float, float, float]
+_BLOCKED_COST = 1.0e6
+_UNMATCHED_COST = 1.0e3
 
 
 def _width(box: BBox) -> float:
@@ -35,13 +37,59 @@ def _normalized_center_distance(a: BBox, b: BBox) -> float:
     bx, by = _center(b)
     scale = max(
         1.0,
-        0.5
-        * (
-            math.hypot(_width(a), _height(a))
-            + math.hypot(_width(b), _height(b))
-        ),
+        0.5 * (math.hypot(_width(a), _height(a)) + math.hypot(_width(b), _height(b))),
     )
     return math.hypot(ax - bx, ay - by) / scale
+
+
+def _solve_assignment(costs: list[list[float]]) -> list[int]:
+    """Return the minimum-cost column for each row of a rows <= columns matrix."""
+    rows = len(costs)
+    if not rows:
+        return []
+    columns = len(costs[0])
+    u = [0.0] * (rows + 1)
+    v = [0.0] * (columns + 1)
+    p = [0] * (columns + 1)
+    way = [0] * (columns + 1)
+    for row in range(1, rows + 1):
+        p[0] = row
+        column0 = 0
+        minv = [math.inf] * (columns + 1)
+        used = [False] * (columns + 1)
+        while True:
+            used[column0] = True
+            row0 = p[column0]
+            delta = math.inf
+            column1 = 0
+            for column in range(1, columns + 1):
+                if used[column]:
+                    continue
+                current = costs[row0 - 1][column - 1] - u[row0] - v[column]
+                if current < minv[column]:
+                    minv[column] = current
+                    way[column] = column0
+                if minv[column] < delta:
+                    delta = minv[column]
+                    column1 = column
+            for column in range(columns + 1):
+                if used[column]:
+                    u[p[column]] += delta
+                    v[column] -= delta
+                else:
+                    minv[column] -= delta
+            column0 = column1
+            if p[column0] == 0:
+                break
+        while column0:
+            column1 = way[column0]
+            p[column0] = p[column1]
+            column0 = column1
+    result = [-1] * rows
+    for column in range(1, columns + 1):
+        if p[column]:
+            result[p[column] - 1] = column - 1
+    return result
 
 
 @dataclass(frozen=True)
@@ -53,6 +101,7 @@ class TrackedDetection:
     y2: float
     score: float
     class_id: int
+    predicted: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,6 +113,7 @@ class TrackerConfig:
     velocity_momentum: float = 0.80
     max_missing_frames: int = 15
     min_confirmed_hits: int = 1
+    max_prediction_frames: int = 0
     center_distance_enabled: bool = True
 
     def validate(self) -> None:
@@ -73,7 +123,10 @@ class TrackerConfig:
             raise ValueError("new_track_threshold must be in [high_score_threshold, 1]")
         if not 0.0 <= self.match_iou_threshold <= 1.0:
             raise ValueError("match_iou_threshold must be in [0, 1]")
-        if not math.isfinite(self.max_center_distance) or self.max_center_distance < 0.0:
+        if (
+            not math.isfinite(self.max_center_distance)
+            or self.max_center_distance < 0.0
+        ):
             raise ValueError("max_center_distance must be >= 0")
         if not 0.0 <= self.velocity_momentum < 1.0:
             raise ValueError("velocity_momentum must be in [0, 1)")
@@ -81,6 +134,8 @@ class TrackerConfig:
             raise ValueError("max_missing_frames must be >= 0")
         if self.min_confirmed_hits < 1:
             raise ValueError("min_confirmed_hits must be >= 1")
+        if not 0 <= self.max_prediction_frames <= self.max_missing_frames:
+            raise ValueError("max_prediction_frames must be in [0, max_missing_frames]")
 
 
 @dataclass
@@ -93,6 +148,7 @@ class TrackState:
     velocity: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     missing_frames: int = 0
     hits: int = 1
+    confirmed: bool = True
 
     def predict(self, frame_index: int) -> BBox:
         elapsed = max(0, frame_index - self.last_frame_index)
@@ -111,7 +167,7 @@ class TrackState:
 
 
 class ObjectTracker:
-    """Track tiny boxes with two-score association and constant-velocity prediction."""
+    """Track tiny boxes with global two-score association and motion prediction."""
 
     def __init__(self, config: TrackerConfig | None = None) -> None:
         self.config = config or TrackerConfig()
@@ -132,16 +188,27 @@ class ObjectTracker:
         matched_detections: set[int],
         assignments: dict[int, int],
     ) -> None:
-        candidates: list[tuple[float, int, int]] = []
-        for track_id, track in self._tracks.items():
-            if track_id in matched_tracks:
-                continue
-            reference = track.predict(frame_index) if self.config.center_distance_enabled else track.bbox
+        track_ids = sorted(
+            track_id for track_id in self._tracks if track_id not in matched_tracks
+        )
+        detection_indices = [
+            index for index in detection_indices if index not in matched_detections
+        ]
+        if not track_ids or not detection_indices:
+            return
+        costs: list[list[float]] = []
+        for row, track_id in enumerate(track_ids):
+            track = self._tracks[track_id]
+            reference = (
+                track.predict(frame_index)
+                if self.config.center_distance_enabled
+                else track.bbox
+            )
+            row_costs: list[float] = []
             for detection_index in detection_indices:
-                if detection_index in matched_detections:
-                    continue
                 detection = detections[detection_index]
                 if int(detection["class_id"]) != track.class_id:
+                    row_costs.append(_BLOCKED_COST)
                     continue
                 bbox = _bbox(detection)
                 iou = _iou_xyxy(reference, bbox)
@@ -151,23 +218,36 @@ class ObjectTracker:
                     and center_distance <= self.config.max_center_distance
                 )
                 if iou < self.config.match_iou_threshold and not center_match:
+                    row_costs.append(_BLOCKED_COST)
                     continue
                 affinity = (
                     iou + 1.0 / (1.0 + center_distance)
                     if self.config.center_distance_enabled
                     else iou
                 )
-                candidates.append((affinity, track_id, detection_index))
-
-        candidates.sort(reverse=True)
-        for _affinity, track_id, detection_index in candidates:
-            if track_id in matched_tracks or detection_index in matched_detections:
+                row_costs.append(
+                    2.0 - affinity
+                    if self.config.center_distance_enabled
+                    else 1.0 - affinity
+                )
+            row_costs.extend([_UNMATCHED_COST] * len(track_ids))
+            costs.append(row_costs)
+        for row, column in enumerate(_solve_assignment(costs)):
+            if (
+                column < 0
+                or column >= len(detection_indices)
+                or costs[row][column] >= _BLOCKED_COST
+            ):
                 continue
+            track_id = track_ids[row]
+            detection_index = detection_indices[column]
             matched_tracks.add(track_id)
             matched_detections.add(detection_index)
             assignments[detection_index] = track_id
 
-    def update(self, detections: list[dict], frame_index: int) -> list[TrackedDetection]:
+    def update(
+        self, detections: list[dict], frame_index: int
+    ) -> list[TrackedDetection]:
         if frame_index < 0:
             raise ValueError("frame_index must be >= 0")
         if frame_index < self._last_frame_index:
@@ -177,10 +257,12 @@ class ObjectTracker:
         self._tracks = {
             track_id: track
             for track_id, track in self._tracks.items()
-            if max(0, frame_index - track.last_frame_index - 1)
-            <= self.config.max_missing_frames
+            if not (
+                (not track.confirmed and frame_index - track.last_frame_index - 1 > 0)
+                or frame_index - track.last_frame_index - 1
+                > self.config.max_missing_frames
+            )
         }
-
         high = [
             index
             for index, detection in enumerate(detections)
@@ -190,7 +272,6 @@ class ObjectTracker:
         matched_tracks: set[int] = set()
         matched_detections: set[int] = set()
         assignments: dict[int, int] = {}
-
         self._associate(
             detections,
             high,
@@ -231,6 +312,7 @@ class ObjectTracker:
             track.last_frame_index = frame_index
             track.missing_frames = 0
             track.hits += 1
+            track.confirmed = track.hits >= self.config.min_confirmed_hits
 
         for detection_index in high:
             if detection_index in matched_detections:
@@ -246,38 +328,65 @@ class ObjectTracker:
                 score=float(detection["score"]),
                 class_id=int(detection["class_id"]),
                 last_frame_index=frame_index,
+                confirmed=self.config.min_confirmed_hits <= 1,
             )
             matched_tracks.add(track_id)
             matched_detections.add(detection_index)
             assignments[detection_index] = track_id
 
-        for track_id, track in list(self._tracks.items()):
-            if track_id in matched_tracks:
-                continue
-            track.missing_frames = frame_index - track.last_frame_index
-            if track.missing_frames > self.config.max_missing_frames:
-                del self._tracks[track_id]
+        for track_id, track in self._tracks.items():
+            if track_id not in matched_tracks:
+                track.missing_frames = frame_index - track.last_frame_index
 
         tracked: list[TrackedDetection] = []
         for detection_index, detection in enumerate(detections):
             track_id = assignments.get(detection_index)
-            if track_id is None:
-                continue
-            track = self._tracks[track_id]
-            if track.hits < self.config.min_confirmed_hits:
+            if track_id is None or not self._tracks[track_id].confirmed:
                 continue
             bbox = _bbox(detection)
             tracked.append(
                 TrackedDetection(
-                    track_id=track_id,
-                    x1=bbox[0],
-                    y1=bbox[1],
-                    x2=bbox[2],
-                    y2=bbox[3],
-                    score=float(detection["score"]),
-                    class_id=int(detection["class_id"]),
+                    track_id,
+                    *bbox,
+                    float(detection["score"]),
+                    int(detection["class_id"]),
                 )
             )
+
+        if self.config.max_prediction_frames:
+            for track in self._tracks.values():
+                if (
+                    not track.confirmed
+                    or not 0 < track.missing_frames <= self.config.max_prediction_frames
+                    or track.score < self.config.high_score_threshold
+                ):
+                    continue
+                bbox = track.predict(frame_index)
+                if any(
+                    output.class_id == track.class_id
+                    and _iou_xyxy((output.x1, output.y1, output.x2, output.y2), bbox)
+                    > 0.5
+                    for output in tracked
+                ):
+                    continue
+                tracked.append(
+                    TrackedDetection(
+                        track.track_id,
+                        *bbox,
+                        track.score * 0.9**track.missing_frames,
+                        track.class_id,
+                        True,
+                    )
+                )
+
+        self._tracks = {
+            track_id: track
+            for track_id, track in self._tracks.items()
+            if not (
+                (not track.confirmed and track.missing_frames > 0)
+                or track.missing_frames > self.config.max_missing_frames
+            )
+        }
         return tracked
 
 

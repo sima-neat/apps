@@ -1,6 +1,8 @@
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
+#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_overlay_api.cpp"
 #include "support/testing/test_process.h"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -11,7 +13,10 @@
 namespace fs = std::filesystem;
 
 using multi_stream_people_tracker::Detection;
+using multi_stream_people_tracker::draw_tracks_bgr;
 using multi_stream_people_tracker::ObjectTracker;
+using multi_stream_people_tracker::track_color;
+using multi_stream_people_tracker::TrackedDetection;
 using multi_stream_people_tracker::TrackerConfig;
 using sima_examples::testing::create_test_scratch_dir;
 using sima_examples::testing::remove_dir;
@@ -471,6 +476,69 @@ bool test_tracker_confirmation_suppresses_single_frame_noise() {
          expect_true(second.size() == 1, "track is published after the configured hit count");
 }
 
+bool test_global_assignment_avoids_greedy_identity_loss() {
+  TrackerConfig config;
+  config.match_iou_threshold = 0.10f;
+  config.center_distance_enabled = false;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update(
+      {Detection{0.0f, 0.0f, 10.0f, 10.0f, 0.9f, 0}, Detection{8.0f, 0.0f, 18.0f, 10.0f, 0.9f, 0}},
+      0);
+  const auto second = tracker.update(
+      {Detection{1.0f, 0.0f, 11.0f, 10.0f, 0.9f, 0}, Detection{-3.0f, 0.0f, 7.0f, 10.0f, 0.9f, 0}},
+      1);
+  return expect_true(first.size() == 2 && second.size() == 2,
+                     "global assignment retains both feasible tracks") &&
+         expect_true(second[0].track_id == first[1].track_id &&
+                         second[1].track_id == first[0].track_id,
+                     "global assignment chooses the minimum-cost complete matching");
+}
+
+bool test_prediction_bridges_one_high_confidence_gap() {
+  TrackerConfig config;
+  config.high_score_threshold = 0.5f;
+  config.new_track_threshold = 0.5f;
+  config.velocity_momentum = 0.0f;
+  config.max_missing_frames = 3;
+  config.max_prediction_frames = 1;
+  ObjectTracker tracker(config);
+  tracker.update({Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}}, 0);
+  const auto observed = tracker.update({Detection{1.0f, 0.0f, 5.0f, 4.0f, 0.9f, 0}}, 1);
+  const auto bridged = tracker.update({}, 2);
+  const auto beyond_horizon = tracker.update({}, 3);
+  return expect_true(observed.size() == 1 && bridged.size() == 1,
+                     "one-frame detector gap is bridged") &&
+         expect_true(bridged.front().track_id == observed.front().track_id &&
+                         bridged.front().predicted,
+                     "bridged box keeps the identity and is marked predicted") &&
+         expect_true(std::abs(bridged.front().x1 - 2.0f) < 1e-4f,
+                     "bridged box follows the velocity estimate") &&
+         expect_true(beyond_horizon.empty(), "prediction stops at the configured horizon");
+}
+
+bool test_unconfirmed_track_expires_on_first_miss() {
+  TrackerConfig config;
+  config.min_confirmed_hits = 2;
+  config.max_missing_frames = 30;
+  ObjectTracker tracker(config);
+  tracker.update({Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}}, 0);
+  tracker.update({}, 1);
+  return expect_true(tracker.active_track_count() == 0,
+                     "unconfirmed one-frame noise expires on its first miss");
+}
+
+bool test_track_overlay_uses_stable_per_identity_colors() {
+  const auto first = track_color(1);
+  const auto repeated = track_color(1);
+  const auto second = track_color(2);
+  cv::Mat frame = cv::Mat::zeros(32, 32, CV_8UC3);
+  draw_tracks_bgr(frame, {TrackedDetection{1, 2.0f, 10.0f, 12.0f, 20.0f, 0.9f, 0, false},
+                          TrackedDetection{2, 18.0f, 10.0f, 29.0f, 20.0f, 0.9f, 0, false}});
+  return expect_true(first == repeated, "track color is stable for an identity") &&
+         expect_true(first != second, "different identities receive different colors") &&
+         expect_true(cv::countNonZero(frame.reshape(1)) > 0, "overlay modifies the output frame");
+}
+
 bool test_tracker_does_not_revive_after_missing_budget() {
   TrackerConfig config;
   config.max_missing_frames = 1;
@@ -521,6 +589,10 @@ bool test_tracker_rejects_non_finite_thresholds() {
   config = TrackerConfig{};
   config.velocity_momentum = nan;
   ok &= expect_true(rejects_tracker_config(config), "tracker rejects non-finite momentum");
+  config = TrackerConfig{};
+  config.max_prediction_frames = config.max_missing_frames + 1;
+  ok &= expect_true(rejects_tracker_config(config),
+                    "tracker rejects an excessive prediction horizon");
   return ok;
 }
 
@@ -557,6 +629,10 @@ int main(int argc, char** argv) {
   ok &= test_iou_only_tracker_does_not_apply_motion_prediction();
   ok &= test_low_score_detection_recovers_but_does_not_create_track();
   ok &= test_tracker_confirmation_suppresses_single_frame_noise();
+  ok &= test_global_assignment_avoids_greedy_identity_loss();
+  ok &= test_prediction_bridges_one_high_confidence_gap();
+  ok &= test_unconfirmed_track_expires_on_first_miss();
+  ok &= test_track_overlay_uses_stable_per_identity_colors();
   ok &= test_tracker_does_not_revive_after_missing_budget();
   ok &= test_tracker_enforces_monotonic_frames_without_active_tracks();
   ok &= test_tracker_rejects_non_finite_thresholds();

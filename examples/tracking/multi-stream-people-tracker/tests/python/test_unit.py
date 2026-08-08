@@ -22,7 +22,9 @@ if str(PYTHON_DIR) not in sys.path:
 
 pytestmark = pytest.mark.unit
 
-ACCURACY_SPEC = importlib.util.spec_from_file_location("evaluate_tracking", ACCURACY_PATH)
+ACCURACY_SPEC = importlib.util.spec_from_file_location(
+    "evaluate_tracking", ACCURACY_PATH
+)
 assert ACCURACY_SPEC and ACCURACY_SPEC.loader
 evaluate_tracking = importlib.util.module_from_spec(ACCURACY_SPEC)
 ACCURACY_SPEC.loader.exec_module(evaluate_tracking)
@@ -192,7 +194,9 @@ class TestConfigLoading:
         ):
             load_app_config(config_path)
 
-    def test_load_app_config_rejects_block_with_shared_detector_fan_in(self, tmp_path: Path):
+    def test_load_app_config_rejects_block_with_shared_detector_fan_in(
+        self, tmp_path: Path
+    ):
         from main import load_app_config
 
         config_path = write_config(
@@ -219,7 +223,9 @@ class TestConfigLoading:
             max_inflight_per_stream=0,
         )
 
-        with pytest.raises(ValueError, match="max_inflight_per_stream must be -1 or > 0"):
+        with pytest.raises(
+            ValueError, match="max_inflight_per_stream must be -1 or > 0"
+        ):
             load_app_config(config_path)
 
     def test_load_app_config_rejects_non_positive_class_count(self, tmp_path: Path):
@@ -269,6 +275,9 @@ class TestConfigLoading:
 
         assert cfg.num_classes == 1
         assert cfg.target_class_id == 0
+        assert cfg.tracker_max_center_distance == 5.0
+        assert cfg.tracker_velocity_momentum == 0.75
+        assert cfg.tracker_max_prediction_frames == 1
 
     def test_legacy_iou_config_keeps_iou_only_matching(self, tmp_path: Path):
         from main import load_app_config
@@ -396,7 +405,13 @@ class TestConfigLoading:
         )
 
         result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path), "--validate-config-only"],
+            [
+                sys.executable,
+                str(MAIN_PY),
+                "--config",
+                str(config_path),
+                "--validate-config-only",
+            ],
             capture_output=True,
             text=True,
             cwd=str(EXAMPLE_DIR),
@@ -412,16 +427,20 @@ class TestConfigLoading:
 
 class TestRuntimeOptions:
     @pytest.mark.parametrize(
-        ("configured", "expected"),
-        [("keep_latest", "keep-latest"), ("block", "block")],
+        ("configured", "expected_link"),
+        [("keep_latest", "keep-latest"), ("block", "default")],
     )
-    def test_run_and_link_options_use_configured_overflow_policy(
-        self, monkeypatch, configured, expected
+    def test_realtime_run_and_configured_link_options(
+        self, monkeypatch, configured, expected_link
     ):
         import main
 
+        class FakeRunOptions:
+            def __init__(self):
+                self.overflow_policy = "auto"
+
         fake_pyneat = SimpleNamespace(
-            RunOptions=type("RunOptions", (), {}),
+            RunOptions=FakeRunOptions,
             RunPreset=SimpleNamespace(Realtime="realtime"),
             OverflowPolicy=SimpleNamespace(KeepLatest="keep-latest", Block="block"),
             OutputMemory=SimpleNamespace(ZeroCopy="zero-copy"),
@@ -437,11 +456,12 @@ class TestRuntimeOptions:
             overflow_policy=configured,
         )
 
-        run_options = main.build_run_options(cfg)
+        run_options = main.build_run_options()
         link_options = main.stream_link(cfg, 0, 4, 3, 12)
 
-        assert run_options.overflow_policy == expected
-        assert link_options.policy == ("default" if configured == "block" else "keep-latest")
+        assert run_options.preset == "realtime"
+        assert run_options.overflow_policy == "auto"
+        assert link_options.policy == expected_link
         assert link_options.stream_id == "stream0"
 
     def test_encoded_input_options_carry_codec_format(self, monkeypatch):
@@ -553,11 +573,29 @@ class TestTracker:
 
         tracker = ObjectTracker()
         first = tracker.update(
-            [{"x1": 10.0, "y1": 10.0, "x2": 50.0, "y2": 80.0, "score": 0.9, "class_id": 0}],
+            [
+                {
+                    "x1": 10.0,
+                    "y1": 10.0,
+                    "x2": 50.0,
+                    "y2": 80.0,
+                    "score": 0.9,
+                    "class_id": 0,
+                }
+            ],
             frame_index=0,
         )
         second = tracker.update(
-            [{"x1": 12.0, "y1": 11.0, "x2": 52.0, "y2": 81.0, "score": 0.8, "class_id": 0}],
+            [
+                {
+                    "x1": 12.0,
+                    "y1": 11.0,
+                    "x2": 52.0,
+                    "y2": 81.0,
+                    "score": 0.8,
+                    "class_id": 0,
+                }
+            ],
             frame_index=1,
         )
 
@@ -570,7 +608,16 @@ class TestTracker:
 
         tracker = ObjectTracker(TrackerConfig(max_missing_frames=1))
         tracker.update(
-            [{"x1": 10.0, "y1": 10.0, "x2": 50.0, "y2": 80.0, "score": 0.9, "class_id": 0}],
+            [
+                {
+                    "x1": 10.0,
+                    "y1": 10.0,
+                    "x2": 50.0,
+                    "y2": 80.0,
+                    "score": 0.9,
+                    "class_id": 0,
+                }
+            ],
             frame_index=0,
         )
         tracker.update([], frame_index=1)
@@ -718,6 +765,74 @@ class TestTracker:
         assert first == []
         assert len(second) == 1
 
+    def test_global_assignment_avoids_greedy_identity_loss(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(match_iou_threshold=0.10, center_distance_enabled=False)
+        )
+        first = tracker.update(
+            [
+                {"x1": 0, "y1": 0, "x2": 10, "y2": 10, "score": 0.9, "class_id": 0},
+                {"x1": 8, "y1": 0, "x2": 18, "y2": 10, "score": 0.9, "class_id": 0},
+            ],
+            frame_index=0,
+        )
+        second = tracker.update(
+            [
+                {"x1": 1, "y1": 0, "x2": 11, "y2": 10, "score": 0.9, "class_id": 0},
+                {"x1": -3, "y1": 0, "x2": 7, "y2": 10, "score": 0.9, "class_id": 0},
+            ],
+            frame_index=1,
+        )
+
+        assert [track.track_id for track in second] == [
+            first[1].track_id,
+            first[0].track_id,
+        ]
+
+    def test_prediction_bridges_one_high_confidence_gap(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                high_score_threshold=0.5,
+                new_track_threshold=0.5,
+                velocity_momentum=0.0,
+                max_missing_frames=3,
+                max_prediction_frames=1,
+            )
+        )
+        tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        observed = tracker.update(
+            [{"x1": 1, "y1": 0, "x2": 5, "y2": 4, "score": 0.9, "class_id": 0}],
+            frame_index=1,
+        )
+        bridged = tracker.update([], frame_index=2)
+        beyond_horizon = tracker.update([], frame_index=3)
+
+        assert bridged[0].track_id == observed[0].track_id
+        assert bridged[0].predicted is True
+        assert bridged[0].x1 == pytest.approx(2.0)
+        assert beyond_horizon == []
+
+    def test_unconfirmed_track_expires_on_first_miss(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(min_confirmed_hits=2, max_missing_frames=30)
+        )
+        tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        tracker.update([], frame_index=1)
+
+        assert tracker.active_track_count() == 0
+
     def test_tracker_does_not_revive_after_missing_budget(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 
@@ -746,6 +861,12 @@ class TestTracker:
 
         with pytest.raises(ValueError, match="max_center_distance"):
             ObjectTracker(TrackerConfig(max_center_distance=float("nan")))
+
+    def test_tracker_rejects_excessive_prediction_horizon(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        with pytest.raises(ValueError, match="max_prediction_frames"):
+            ObjectTracker(TrackerConfig(max_missing_frames=1, max_prediction_frames=2))
 
 
 class TestAccuracyEvaluation:
@@ -790,7 +911,9 @@ class TestAccuracyEvaluation:
             evaluate_tracking.main()
 
         assert error.value.code == 2
-        assert "maximum-false-positives-per-minute must be >= 0" in capsys.readouterr().err
+        assert (
+            "maximum-false-positives-per-minute must be >= 0" in capsys.readouterr().err
+        )
 
     def test_metrics_count_recall_false_positives_and_id_switches(self):
         truth = {

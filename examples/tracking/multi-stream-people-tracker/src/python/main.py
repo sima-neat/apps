@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import colorsys
 import glob
 import json
 import math
@@ -52,6 +53,7 @@ class AppConfig:
     tracker_velocity_momentum: float = 0.80
     tracker_max_missing: int = 15
     tracker_min_confirmed_hits: int = 1
+    tracker_max_prediction_frames: int = 0
     tracker_center_distance_enabled: bool = False
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
@@ -99,7 +101,11 @@ class ProfileWindow:
         self.metadata_send_ms = 0.0
 
     def add(
-        self, detection_pull_ms: float, tracker_ms: float, metadata_send_ms: float, track_count: int
+        self,
+        detection_pull_ms: float,
+        tracker_ms: float,
+        metadata_send_ms: float,
+        track_count: int,
     ) -> None:
         if not self.enabled:
             return
@@ -158,7 +164,9 @@ def time_ms() -> float:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Multi-camera RTSP YOLO26 Insight example")
+    parser = argparse.ArgumentParser(
+        description="Multi-camera RTSP YOLO26 Insight example"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -271,10 +279,17 @@ def validate_config(cfg: AppConfig) -> None:
     if not 0.0 <= cfg.tracker_iou_threshold <= 1.0:
         raise ValueError("tracking.match_iou_threshold must be between 0 and 1")
     if not cfg.min_score <= cfg.tracker_high_score <= 1.0:
-        raise ValueError("tracking.high_score_threshold must be in [inference.min_score, 1]")
+        raise ValueError(
+            "tracking.high_score_threshold must be in [inference.min_score, 1]"
+        )
     if not cfg.tracker_high_score <= cfg.tracker_new_track_score <= 1.0:
-        raise ValueError("tracking.new_track_threshold must be in [high_score_threshold, 1]")
-    if not math.isfinite(cfg.tracker_max_center_distance) or cfg.tracker_max_center_distance < 0.0:
+        raise ValueError(
+            "tracking.new_track_threshold must be in [high_score_threshold, 1]"
+        )
+    if (
+        not math.isfinite(cfg.tracker_max_center_distance)
+        or cfg.tracker_max_center_distance < 0.0
+    ):
         raise ValueError("tracking.max_center_distance must be >= 0")
     if not 0.0 <= cfg.tracker_velocity_momentum < 1.0:
         raise ValueError("tracking.velocity_momentum must be in [0, 1)")
@@ -282,6 +297,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("tracking.max_missing_frames must be >= 0")
     if cfg.tracker_min_confirmed_hits < 1:
         raise ValueError("tracking.min_confirmed_hits must be >= 1")
+    if not 0 <= cfg.tracker_max_prediction_frames <= cfg.tracker_max_missing:
+        raise ValueError(
+            "tracking.max_prediction_frames must be in [0, max_missing_frames]"
+        )
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.metadata_port_base <= 0:
@@ -342,7 +361,9 @@ def load_app_config(config_path: Path) -> AppConfig:
         max_detections=int_or(inference, "max_detections", 50),
         profile=bool_or(runtime, "profile", False),
         warmup_frames=int_or(runtime, "warmup_frames", 30),
-        overflow_policy=parse_overflow_policy(string_or(runtime, "overflow_policy", "keep_latest")),
+        overflow_policy=parse_overflow_policy(
+            string_or(runtime, "overflow_policy", "keep_latest")
+        ),
         tracker_high_score=tracker_high_score,
         tracker_new_track_score=tracker_new_track_score,
         tracker_iou_threshold=float_or(
@@ -354,6 +375,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         tracker_velocity_momentum=float_or(tracking, "velocity_momentum", 0.80),
         tracker_max_missing=int_or(tracking, "max_missing_frames", 15),
         tracker_min_confirmed_hits=int_or(tracking, "min_confirmed_hits", 1),
+        tracker_max_prediction_frames=int_or(tracking, "max_prediction_frames", 0),
         tracker_center_distance_enabled=tracker_center_distance_enabled,
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
@@ -399,7 +421,9 @@ def extract_bbox_payload(sample) -> bytes:
     return extract_tensor_bbox_payload(sample)
 
 
-def parse_boxes_strict(payload: bytes, img_w: int, img_h: int, expected_topk: int) -> list[dict]:
+def parse_boxes_strict(
+    payload: bytes, img_w: int, img_h: int, expected_topk: int
+) -> list[dict]:
     if len(payload) < 4:
         raise RuntimeError("bbox buffer too small")
 
@@ -596,7 +620,6 @@ def build_video_sender_graph(input_name: str, codec, video_options) -> pyneat.Gr
 def build_model(cfg: AppConfig):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
-    opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26
@@ -607,16 +630,9 @@ def build_model(cfg: AppConfig):
     return pyneat.Model(cfg.model_path, opt)
 
 
-def build_run_options(cfg: AppConfig) -> pyneat.RunOptions:
+def build_run_options() -> pyneat.RunOptions:
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 4
-    run_options.overflow_policy = (
-        pyneat.OverflowPolicy.Block
-        if cfg.overflow_policy == "block"
-        else pyneat.OverflowPolicy.KeepLatest
-    )
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     return run_options
 
 
@@ -676,7 +692,9 @@ def build_detector_graph(cfg: AppConfig):
 
 def build_detections_graph() -> pyneat.Graph:
     detections = pyneat.Graph("detections")
-    detections.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+    detections.add(
+        pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4))
+    )
     return detections
 
 
@@ -684,7 +702,9 @@ def build_debug_frame_graph(stream_index: int) -> pyneat.Graph:
     frames = pyneat.Graph("debug_frame")
     frames.connect(
         pyneat.nodes.input("debug_frame"),
-        pyneat.nodes.output(f"debug_frame_{stream_index}", pyneat.OutputOptions.every_frame(4)),
+        pyneat.nodes.output(
+            f"debug_frame_{stream_index}", pyneat.OutputOptions.every_frame(4)
+        ),
     )
     return frames
 
@@ -733,6 +753,7 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
                 velocity_momentum=cfg.tracker_velocity_momentum,
                 max_missing_frames=cfg.tracker_max_missing,
                 min_confirmed_hits=cfg.tracker_min_confirmed_hits,
+                max_prediction_frames=cfg.tracker_max_prediction_frames,
                 center_distance_enabled=cfg.tracker_center_distance_enabled,
             )
         ),
@@ -759,14 +780,18 @@ def connect_stream_graph(
         video_options = make_video_options(cfg, stream.index)
         app.graph.connect(
             encoded_branch,
-            build_video_sender_graph("video_h264", rtsp_codec(cfg.codec), video_options),
+            build_video_sender_graph(
+                "video_h264", rtsp_codec(cfg.codec), video_options
+            ),
             stream_link(cfg, stream.index, 3),
         )
     else:
         app.graph.connect(source, decoder, stream_link(cfg, stream.index, 3))
 
     save_debug_frames = save_frames_enabled(cfg)
-    decoded_outputs = ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
+    decoded_outputs = (
+        ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
+    )
     decoded_branch = pyneat.graphs.branch("decoded", decoded_outputs)
     app.graph.connect(decoder, decoded_branch)
     app.graph.connect(
@@ -827,7 +852,9 @@ def tensor_bgr_from_decoded(tensor):
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
+        payload = np.frombuffer(
+            tensor.contiguous().copy_payload_bytes(), dtype=np.uint8
+        )
         expected = width * height * 3 // 2
         if payload.size < expected:
             raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
@@ -855,30 +882,42 @@ def draw_tracks(frame, tracks: list[TrackedDetection], min_score: float) -> None
         y2 = min(frame.shape[0] - 1, int(round(track.y2)))
         if x2 <= x1 or y2 <= y1:
             continue
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"track id={track.track_id} score={score:.6f}"
+        hue = (max(0, track.track_id) * 137.50776405 % 360.0) / 360.0
+        red, green, blue = colorsys.hsv_to_rgb(hue, 0.82, 1.0)
+        color = (round(blue * 255), round(green * 255), round(red * 255))
+        line_type = cv2.LINE_AA if not track.predicted else cv2.LINE_4
+        thickness = 1 if track.predicted else 2
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness, line_type)
+        label = f"#{track.track_id}"
         cv2.putText(
             frame,
             label,
             (x1, max(0, y1 - 4)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (0, 255, 0),
+            0.35,
+            color,
             1,
+            cv2.LINE_AA,
         )
 
 
 def maybe_save_debug_frame(
     cfg: AppConfig, stream: StreamRuntime, frame, tracks: list[TrackedDetection]
 ) -> None:
-    if not cfg.save_dir or cfg.save_every <= 0 or stream.processed % cfg.save_every != 0:
+    if (
+        not cfg.save_dir
+        or cfg.save_every <= 0
+        or stream.processed % cfg.save_every != 0
+    ):
         return
     if frame is None:
         return
 
     frame = frame.copy()
     draw_tracks(frame, tracks, cfg.min_score)
-    out_path = Path(cfg.save_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
+    out_path = (
+        Path(cfg.save_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
+    )
     if not cv2.imwrite(str(out_path), frame):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
@@ -889,12 +928,16 @@ def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     return all(stream.processed >= frame_limit or stream.closed for stream in streams)
 
 
-def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float) -> None:
+def process_output_sample(
+    stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float
+) -> None:
     if cfg.frames > 0 and stream.processed >= cfg.frames:
         return
 
     payload = extract_bbox_payload(sample)
-    boxes = parse_boxes_strict(payload, stream.frame_w, stream.frame_h, cfg.max_detections)
+    boxes = parse_boxes_strict(
+        payload, stream.frame_w, stream.frame_h, cfg.max_detections
+    )
     target_detections = filter_target_class(boxes, cfg.target_class_id)
     tracker_start = time_ms()
     tracks = stream.tracker.update(target_detections, stream.processed)
@@ -971,7 +1014,7 @@ def run_app(cfg: AppConfig) -> None:
     try:
         if cfg.profile:
             print(f"Backend:\n{app.graph.describe_backend()}")
-        app.run = app.graph.build(build_run_options(cfg))
+        app.run = app.graph.build(build_run_options())
         while not all_streams_done(app.streams, cfg.frames):
             process_run_once(app, cfg, "detections")
     except KeyboardInterrupt:
@@ -998,7 +1041,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"max_inflight_total={cfg.max_inflight_total}, "
                 f"overflow_policy={cfg.overflow_policy}, "
                 "center_distance_enabled="
-                f"{str(cfg.tracker_center_distance_enabled).lower()})"
+                f"{str(cfg.tracker_center_distance_enabled).lower()}, "
+                f"max_prediction_frames={cfg.tracker_max_prediction_frames})"
             )
             return 0
 
