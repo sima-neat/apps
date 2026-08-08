@@ -186,7 +186,11 @@ The packaged C++ source is an implementation reference. Run the executable under
 
 ## Accuracy Qualification
 
-Evaluate one stream at a time with `runtime.overflow_policy: block`. Ground truth JSONL uses frame dimensions and
+Evaluate one stream at a time with `runtime.overflow_policy: block` and
+`runtime.warmup_frames: 0`. A finite `inference.frames` limit includes warmup
+frames, while warmup frames intentionally suppress metadata; leaving the
+shipped 30-frame warmup enabled would therefore make a frame-complete accuracy
+capture 30 prediction records short. Ground truth JSONL uses frame dimensions and
 `objects`; predictions may be plain `tracks` JSONL or captured Insight
 metadata envelopes. Both use pixel-space `[x, y, width, height]` boxes and
 numeric frame IDs. Ground truth must contain every evaluated frame, including
@@ -205,6 +209,7 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/evaluate_tracki
   --predictions <insight-metadata.jsonl> \
   --output <accuracy-report.json> \
   --fps <source-fps> \
+  --model-size <model-input-size> \
   --minimum-frames <required-frames> \
   --minimum-recall <required-recall> \
   --minimum-tiny-recall <required-tiny-recall> \
@@ -213,8 +218,10 @@ python3 examples/tracking/multi-stream-people-tracker/src/python/evaluate_tracki
   --maximum-fragmentations <allowed-fragmentations>
 ```
 
-Tiny/small/medium/large buckets are measured after the same 640-pixel model
-input scale, so the tiny-object recall gate reflects what the detector sees.
+Tiny/small/medium/large buckets are measured after the configured model input
+scale (`640` by default). Pass the deployed model's input size, such as `1600`
+for the tiny-drone profile, so the tiny-object recall gate reflects what the
+detector sees.
 
 ## Development From Source
 
