@@ -116,14 +116,14 @@ class TestConfigLoading:
             "max_inflight_total",
         ),
         [
-            ("config.yaml", 16, 25, 8, 2, "auto", 16, 1, 1, 8),
+            ("config.yaml", 16, 30, 8, 2, "throughput-low-latency", 16, 1, 1, 8),
             (
                 "config-24x720p20fps.yaml",
                 24,
                 20,
                 16,
                 2,
-                "auto",
+                "throughput-low-latency",
                 4,
                 2,
                 4,
@@ -184,10 +184,10 @@ class TestConfigLoading:
         assert not Path(raw["model"]["path"]).is_absolute()
         assert not Path(raw["model"]["labels"]).is_absolute()
 
-    def test_default_config_is_the_16x25_profile(self):
+    def test_default_config_is_the_16x30_profile(self):
         default = yaml.safe_load((COMMON_DIR / "config.yaml").read_text(encoding="utf-8"))
         assert len(default["streams"]) == 16
-        assert default["input"]["fps"] == 25
+        assert default["input"]["fps"] == 30
 
     def test_config_rejects_overlapping_insight_port_ranges(self, tmp_path: Path):
         from main import load_app_config

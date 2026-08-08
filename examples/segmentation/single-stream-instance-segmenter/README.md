@@ -14,7 +14,11 @@
 
 ## Concept
 
-This example ingests one RTSP H.264/H.265/MJPEG or HTTP MJPEG stream, runs YOLO26 instance segmentation, renders masks, and sends H.264 video plus segmentation metadata to Insight.
+This example ingests one RTSP H.264/H.265/MJPEG or HTTP MJPEG stream, runs YOLO26 instance segmentation, and sends H.264 video plus segmentation metadata to Insight, which draws the masks over the video.
+
+The decoded frame branches inside a single graph to the segmenter and to the H.264 sender. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each mask on the frame it came from. Setting `output.save_dir` adds a third branch that returns the decoded frame to the application so it can write annotated JPEGs.
+
+Metadata is sent as `type: "segmentation"` with one `data.segments[]` entry per instance. The model emits masks on a 160x160 grid covering its letterboxed 640x640 input, not the detection box, so each mask is mapped back through that scale and padding, upscaled to the detection rectangle, and only then thresholded. The silhouette is sent as `mask_format: "polygon"` in frame pixels: a polygon keeps the crisp contour the mask has at frame resolution, while run-length encoding would ship a mask crop only a few pixels across and leave Insight to stretch it. Each frame stays inside a 32 KB payload budget; over it, the lowest-confidence segments are dropped and counted in the run summary.
 
 ## Preview
 
