@@ -418,6 +418,31 @@ bool test_tracker_can_disable_center_distance_matching() {
                      "IoU-only tracker rejects a below-threshold center match");
 }
 
+bool test_iou_only_tracker_does_not_apply_motion_prediction() {
+  TrackerConfig config;
+  config.match_iou_threshold = 0.3f;
+  config.velocity_momentum = 0.0f;
+  config.center_distance_enabled = false;
+  ObjectTracker tracker(config);
+  int track_id = 0;
+  const std::vector<float> positions{0.0f, 5.0f, 10.0f, 15.0f, 20.0f, 15.0f};
+  for (std::size_t frame_index = 0; frame_index < positions.size(); ++frame_index) {
+    const float x1 = positions[frame_index];
+    const auto tracked = tracker.update({Detection{x1, 0.0f, x1 + 10.0f, 10.0f, 0.9f, 0}},
+                                        static_cast<int>(frame_index));
+    if (!expect_true(tracked.size() == 1, "IoU-only reversal produces one track")) {
+      return false;
+    }
+    if (frame_index == 0) {
+      track_id = tracked.front().track_id;
+    } else if (!expect_true(tracked.front().track_id == track_id,
+                            "IoU-only reversal retains the legacy track id")) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool test_low_score_detection_recovers_but_does_not_create_track() {
   TrackerConfig config;
   config.high_score_threshold = 0.5f;
@@ -529,6 +554,7 @@ int main(int argc, char** argv) {
   ok &= test_tracker_recovers_after_exact_missing_budget();
   ok &= test_tracker_matches_tiny_non_overlapping_boxes_by_motion();
   ok &= test_tracker_can_disable_center_distance_matching();
+  ok &= test_iou_only_tracker_does_not_apply_motion_prediction();
   ok &= test_low_score_detection_recovers_but_does_not_create_track();
   ok &= test_tracker_confirmation_suppresses_single_frame_noise();
   ok &= test_tracker_does_not_revive_after_missing_budget();

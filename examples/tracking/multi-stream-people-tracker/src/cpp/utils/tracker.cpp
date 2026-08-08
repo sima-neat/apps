@@ -166,7 +166,8 @@ std::vector<TrackedDetection> ObjectTracker::update(const std::vector<Detection>
       if (matched_tracks.count(track_id) != 0) {
         continue;
       }
-      const Detection predicted = predict(track, frame_index);
+      const Detection reference =
+          config_.center_distance_enabled ? predict(track, frame_index) : track.detection;
       for (const int detection_index : detection_indices) {
         if (matched_detections.count(detection_index) != 0) {
           continue;
@@ -175,14 +176,15 @@ std::vector<TrackedDetection> ObjectTracker::update(const std::vector<Detection>
         if (detection.class_id != track.detection.class_id) {
           continue;
         }
-        const float iou = iou_xyxy(predicted, detection);
-        const float center_distance = normalized_center_distance(predicted, detection);
+        const float iou = iou_xyxy(reference, detection);
+        const float center_distance = normalized_center_distance(reference, detection);
         const bool center_match =
             config_.center_distance_enabled && center_distance <= config_.max_center_distance;
         if (iou < config_.match_iou_threshold && !center_match) {
           continue;
         }
-        const float affinity = iou + 1.0f / (1.0f + center_distance);
+        const float affinity =
+            config_.center_distance_enabled ? iou + 1.0f / (1.0f + center_distance) : iou;
         candidates.emplace_back(affinity, track_id, detection_index);
       }
     }

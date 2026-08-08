@@ -648,6 +648,35 @@ class TestTracker:
 
         assert first[0].track_id != below_iou[0].track_id
 
+    def test_iou_only_tracker_does_not_apply_motion_prediction(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                match_iou_threshold=0.3,
+                velocity_momentum=0.0,
+                center_distance_enabled=False,
+            )
+        )
+        track_ids = []
+        for frame_index, x1 in enumerate((0, 5, 10, 15, 20, 15)):
+            tracked = tracker.update(
+                [
+                    {
+                        "x1": x1,
+                        "y1": 0,
+                        "x2": x1 + 10,
+                        "y2": 10,
+                        "score": 0.9,
+                        "class_id": 0,
+                    }
+                ],
+                frame_index=frame_index,
+            )
+            track_ids.append(tracked[0].track_id)
+
+        assert track_ids == [track_ids[0]] * len(track_ids)
+
     def test_low_score_detection_recovers_but_cannot_create_track(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 
@@ -998,3 +1027,25 @@ class TestAccuracyEvaluation:
         frames = evaluate_tracking.read_jsonl(path, "tracks")
 
         assert frames[7]["tracks"][0]["id"] == "2"
+
+    def test_empty_prediction_capture_is_scored_as_no_detections(self, tmp_path: Path):
+        path = tmp_path / "predictions.jsonl"
+        path.write_text("", encoding="utf-8")
+        truth = {
+            0: {
+                "frame_index": 0,
+                "width": 640,
+                "height": 640,
+                "objects": [{"track_id": "drone", "bbox": [10, 10, 8, 8]}],
+            }
+        }
+
+        predictions = evaluate_tracking.read_jsonl(path, "tracks", allow_empty=True)
+        report = evaluate_tracking.evaluate(
+            truth, predictions, iou_threshold=0.3, fps=30.0, model_size=640
+        )
+
+        assert predictions == {}
+        assert report["detection"]["recall"] == 0.0
+        assert report["detection"]["false_negatives"] == 1
+        assert report["frames"] == 1

@@ -34,7 +34,7 @@ def iou(a: tuple[float, float, float, float], b: tuple[float, float, float, floa
     return intersection / union_area if union_area > 0 else 0.0
 
 
-def read_jsonl(path: Path, array_key: str) -> dict[int, dict[str, Any]]:
+def read_jsonl(path: Path, array_key: str, *, allow_empty: bool = False) -> dict[int, dict[str, Any]]:
     frames: dict[int, dict[str, Any]] = {}
     with path.open(encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, start=1):
@@ -66,7 +66,7 @@ def read_jsonl(path: Path, array_key: str) -> dict[int, dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number}: {array_key} must be a list")
             document["frame_index"] = frame_index
             frames[frame_index] = document
-    if not frames:
+    if not frames and not allow_empty:
         raise ValueError(f"{path}: no frames found")
     return frames
 
@@ -430,7 +430,7 @@ def main() -> int:
 
     report = evaluate(
         read_jsonl(args.ground_truth, "objects"),
-        read_jsonl(args.predictions, "tracks"),
+        read_jsonl(args.predictions, "tracks", allow_empty=True),
         iou_threshold=args.iou_threshold,
         fps=args.fps,
         model_size=args.model_size,

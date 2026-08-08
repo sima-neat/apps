@@ -136,7 +136,7 @@ class ObjectTracker:
         for track_id, track in self._tracks.items():
             if track_id in matched_tracks:
                 continue
-            predicted = track.predict(frame_index)
+            reference = track.predict(frame_index) if self.config.center_distance_enabled else track.bbox
             for detection_index in detection_indices:
                 if detection_index in matched_detections:
                     continue
@@ -144,15 +144,19 @@ class ObjectTracker:
                 if int(detection["class_id"]) != track.class_id:
                     continue
                 bbox = _bbox(detection)
-                iou = _iou_xyxy(predicted, bbox)
-                center_distance = _normalized_center_distance(predicted, bbox)
+                iou = _iou_xyxy(reference, bbox)
+                center_distance = _normalized_center_distance(reference, bbox)
                 center_match = (
                     self.config.center_distance_enabled
                     and center_distance <= self.config.max_center_distance
                 )
                 if iou < self.config.match_iou_threshold and not center_match:
                     continue
-                affinity = iou + 1.0 / (1.0 + center_distance)
+                affinity = (
+                    iou + 1.0 / (1.0 + center_distance)
+                    if self.config.center_distance_enabled
+                    else iou
+                )
                 candidates.append((affinity, track_id, detection_index))
 
         candidates.sort(reverse=True)
