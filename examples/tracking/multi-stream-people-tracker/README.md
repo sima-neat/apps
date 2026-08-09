@@ -116,6 +116,8 @@ tracking:
   new_track_threshold: 0.30
   match_iou_threshold: 0.10
   max_center_distance: 2.5
+  velocity_momentum: 0.80
+  box_smoothing_alpha: 1.0
   max_missing_frames: 15
   max_prediction_frames: 0
 
@@ -130,6 +132,11 @@ The legacy `tracking.iou_threshold` key remains supported. When it is used
 without `tracking.max_center_distance`, matching remains IoU-only; set the
 center-distance value explicitly or use `match_iou_threshold` to enable the
 motion-aware OR gate.
+
+`box_smoothing_alpha` blends an observation with its motion-predicted box.
+`1.0` publishes raw detector geometry; lower values reduce localization jitter.
+Association is recency-cascaded so retained stale tracks cannot steal a
+detection from a track observed on the immediately preceding frame.
 
 For the one-class drone candidate, copy
 `src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight

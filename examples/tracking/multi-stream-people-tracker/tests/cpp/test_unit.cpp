@@ -360,6 +360,35 @@ bool test_tracker_reuses_track_id_for_nearby_detection() {
                      "tracker reuses track id for nearby detection");
 }
 
+bool test_motion_compensated_box_smoothing_reduces_jitter() {
+  TrackerConfig config;
+  config.box_smoothing_alpha = 0.5f;
+  config.velocity_momentum = 0.9f;
+  ObjectTracker tracker(config);
+  tracker.update({Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}}, 0);
+  const auto smoothed = tracker.update({Detection{2.0f, 0.0f, 6.0f, 4.0f, 0.9f, 0}}, 1);
+  return expect_true(smoothed.size() == 1, "smoothed track remains visible") &&
+         expect_true(std::abs(smoothed.front().x1 - 1.0f) < 1e-4f &&
+                         std::abs(smoothed.front().x2 - 5.0f) < 1e-4f,
+                     "motion-compensated smoothing attenuates detector box jitter");
+}
+
+bool test_recent_track_wins_before_stale_track() {
+  TrackerConfig config;
+  config.max_center_distance = 2.0f;
+  config.velocity_momentum = 0.9f;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update(
+      {Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}, Detection{10.0f, 0.0f, 14.0f, 4.0f, 0.9f, 0}},
+      0);
+  tracker.update({Detection{6.0f, 0.0f, 10.0f, 4.0f, 0.9f, 0}}, 1);
+  const auto recent = tracker.update({Detection{2.0f, 0.0f, 6.0f, 4.0f, 0.9f, 0}}, 2);
+  return expect_true(first.size() == 2 && recent.size() == 1,
+                     "recency scenario produces one active detection") &&
+         expect_true(recent.front().track_id == first[1].track_id,
+                     "active track keeps the detection ahead of a stale track");
+}
+
 bool test_tracker_drops_track_after_missing_budget() {
   TrackerConfig config;
   config.max_missing_frames = 1;
@@ -590,6 +619,9 @@ bool test_tracker_rejects_non_finite_thresholds() {
   config.velocity_momentum = nan;
   ok &= expect_true(rejects_tracker_config(config), "tracker rejects non-finite momentum");
   config = TrackerConfig{};
+  config.box_smoothing_alpha = 0.0f;
+  ok &= expect_true(rejects_tracker_config(config), "tracker rejects zero smoothing alpha");
+  config = TrackerConfig{};
   config.max_prediction_frames = config.max_missing_frames + 1;
   ok &= expect_true(rejects_tracker_config(config),
                     "tracker rejects an excessive prediction horizon");
@@ -621,6 +653,8 @@ int main(int argc, char** argv) {
   ok &= test_omitted_new_track_threshold_follows_high_threshold(binary);
   ok &= test_legacy_iou_config_keeps_iou_only_matching(binary);
   ok &= test_tracker_reuses_track_id_for_nearby_detection();
+  ok &= test_motion_compensated_box_smoothing_reduces_jitter();
+  ok &= test_recent_track_wins_before_stale_track();
   ok &= test_tracker_drops_track_after_missing_budget();
   ok &= test_zero_missing_budget_keeps_continuous_track();
   ok &= test_tracker_recovers_after_exact_missing_budget();

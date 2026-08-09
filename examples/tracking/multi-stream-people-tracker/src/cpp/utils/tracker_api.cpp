@@ -31,6 +31,7 @@ struct TrackerConfig {
   float match_iou_threshold = 0.10f;
   float max_center_distance = 2.5f;
   float velocity_momentum = 0.80f;
+  float box_smoothing_alpha = 1.0f;
   int max_missing_frames = 15;
   int min_confirmed_hits = 1;
   int max_prediction_frames = 0;

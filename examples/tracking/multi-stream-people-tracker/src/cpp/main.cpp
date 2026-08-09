@@ -33,10 +33,12 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -87,6 +89,7 @@ struct AppConfig {
   float tracker_iou_threshold = 0.30f;
   float tracker_max_center_distance = 2.5f;
   float tracker_velocity_momentum = 0.80f;
+  float tracker_box_smoothing_alpha = 1.0f;
   int tracker_max_missing = 15;
   int tracker_min_confirmed_hits = 1;
   int tracker_max_prediction_frames = 0;
@@ -201,7 +204,14 @@ struct StreamRuntime {
   std::vector<Detection> detections;
   std::vector<TrackedDetection> tracks;
   std::vector<sima_examples::MetadataBox> metadata_tracks;
-  std::optional<cv::Mat> latest_debug_frame;
+  struct DebugFrame {
+    int64_t frame_id = -1;
+    int64_t input_seq = -1;
+    int64_t orig_input_seq = -1;
+    int64_t pts_ns = -1;
+    cv::Mat bgr;
+  };
+  std::deque<DebugFrame> debug_frames;
   int frame_w = 0;
   int frame_h = 0;
   int output_fps = 0;
@@ -362,6 +372,10 @@ void validate_config(const AppConfig& cfg) {
                              cfg.tracker_velocity_momentum >= 0.0f &&
                              cfg.tracker_velocity_momentum < 1.0f,
                          "tracking.velocity_momentum must be in [0, 1)");
+  sima_examples::require(std::isfinite(cfg.tracker_box_smoothing_alpha) &&
+                             cfg.tracker_box_smoothing_alpha > 0.0f &&
+                             cfg.tracker_box_smoothing_alpha <= 1.0f,
+                         "tracking.box_smoothing_alpha must be in (0, 1]");
   sima_examples::require(cfg.tracker_max_missing >= 0, "tracking.max_missing_frames must be >= 0");
   sima_examples::require(cfg.tracker_min_confirmed_hits >= 1,
                          "tracking.min_confirmed_hits must be >= 1");
@@ -412,6 +426,8 @@ AppConfig load_app_config(const fs::path& config_path) {
       static_cast<float>(raw.double_or("tracking.max_center_distance", 2.5));
   cfg.tracker_velocity_momentum =
       static_cast<float>(raw.double_or("tracking.velocity_momentum", 0.80));
+  cfg.tracker_box_smoothing_alpha =
+      static_cast<float>(raw.double_or("tracking.box_smoothing_alpha", 1.0));
   cfg.tracker_max_missing = raw.int_or("tracking.max_missing_frames", 15);
   cfg.tracker_min_confirmed_hits = raw.int_or("tracking.min_confirmed_hits", 1);
   cfg.tracker_max_prediction_frames = raw.int_or("tracking.max_prediction_frames", 0);
@@ -735,6 +751,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
       cfg.tracker_iou_threshold,
       cfg.tracker_max_center_distance,
       cfg.tracker_velocity_momentum,
+      cfg.tracker_box_smoothing_alpha,
       cfg.tracker_max_missing,
       cfg.tracker_min_confirmed_hits,
       cfg.tracker_max_prediction_frames,
@@ -850,6 +867,27 @@ bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit
   });
 }
 
+bool samples_identify_same_frame(const simaai::neat::Sample& sample,
+                                 const StreamRuntime::DebugFrame& frame) {
+  if (sample.pts_ns >= 0 && frame.pts_ns >= 0) {
+    return sample.pts_ns == frame.pts_ns;
+  }
+  if (sample.orig_input_seq >= 0 && frame.orig_input_seq >= 0) {
+    return sample.orig_input_seq == frame.orig_input_seq;
+  }
+  if (sample.input_seq >= 0 && frame.input_seq >= 0) {
+    return sample.input_seq == frame.input_seq;
+  }
+  return sample.frame_id >= 0 && frame.frame_id >= 0 && sample.frame_id == frame.frame_id;
+}
+
+bool has_matching_debug_frame(const StreamRuntime& stream, const simaai::neat::Sample& sample) {
+  return std::any_of(stream.debug_frames.begin(), stream.debug_frames.end(),
+                     [&sample](const StreamRuntime::DebugFrame& frame) {
+                       return samples_identify_same_frame(sample, frame);
+                     });
+}
+
 void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
                            const simaai::neat::Sample& sample, double detection_pull_ms) {
   if (cfg.frames > 0 && stream.processed >= cfg.frames) {
@@ -879,9 +917,17 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
     double overlay_ms = 0.0;
     if (save_frames_enabled(cfg)) {
       const double overlay_start = sima_examples::time_ms();
-      maybe_save_debug_frame(cfg, stream,
-                             stream.latest_debug_frame ? &*stream.latest_debug_frame : nullptr,
-                             stream.tracks);
+      const auto frame = std::find_if(stream.debug_frames.begin(), stream.debug_frames.end(),
+                                      [&sample](const StreamRuntime::DebugFrame& candidate) {
+                                        return samples_identify_same_frame(sample, candidate);
+                                      });
+      if (frame != stream.debug_frames.end()) {
+        maybe_save_debug_frame(cfg, stream, &frame->bgr, stream.tracks);
+        stream.debug_frames.erase(stream.debug_frames.begin(), std::next(frame));
+      } else {
+        std::cerr << "[warn] stream " << stream.index << " has no decoded frame matching detection"
+                  << " frame_id=" << sample.frame_id << " pts_ns=" << sample.pts_ns << "\n";
+      }
       overlay_ms = sima_examples::time_ms() - overlay_start;
     }
     stream.profile.add(detection_pull_ms, box_parse_end - box_parse_start,
@@ -894,35 +940,60 @@ std::string debug_frame_output_name(int stream_index) {
   return "debug_frame_" + std::to_string(stream_index);
 }
 
+bool pull_debug_frame(AppRuntime& app, StreamRuntime& stream, int timeout_ms) {
+  const std::string output_name = debug_frame_output_name(stream.index);
+  simaai::neat::Sample sample;
+  simaai::neat::PullError pull_error;
+  const auto status = app.run.pull(output_name, timeout_ms, sample, &pull_error);
+  if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
+    return false;
+  }
+  if (status != simaai::neat::PullStatus::Ok) {
+    throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
+  }
+  const auto tensors = simaai::neat::tensors_from_sample(sample, false);
+  if (tensors.empty()) {
+    return true;
+  }
+  cv::Mat bgr;
+  std::string err;
+  if (!sima_examples::nv12_to_bgr(tensors.front(), bgr, err)) {
+    std::cerr << "[warn] failed to prepare debug frame: " << err << "\n";
+    return true;
+  }
+  constexpr std::size_t kMaxBufferedDebugFrames = 16;
+  if (stream.debug_frames.size() >= kMaxBufferedDebugFrames) {
+    stream.debug_frames.pop_front();
+  }
+  stream.debug_frames.push_back(StreamRuntime::DebugFrame{
+      sample.frame_id, sample.input_seq, sample.orig_input_seq, sample.pts_ns, std::move(bgr)});
+  return true;
+}
+
 void drain_debug_frames(AppRuntime& app, const AppConfig& cfg) {
   if (!save_frames_enabled(cfg)) {
     return;
   }
 
   for (auto& stream : app.streams) {
-    const std::string output_name = debug_frame_output_name(stream.index);
-    for (;;) {
-      simaai::neat::Sample sample;
-      simaai::neat::PullError pull_error;
-      const auto status = app.run.pull(output_name, 0, sample, &pull_error);
-      if (status == simaai::neat::PullStatus::Timeout ||
-          status == simaai::neat::PullStatus::Closed) {
-        break;
-      }
-      if (status != simaai::neat::PullStatus::Ok) {
-        throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
-      }
-      const auto tensors = simaai::neat::tensors_from_sample(sample, false);
-      if (tensors.empty()) {
-        continue;
-      }
-      cv::Mat bgr;
-      std::string err;
-      if (!sima_examples::nv12_to_bgr(tensors.front(), bgr, err)) {
-        std::cerr << "[warn] failed to prepare debug frame: " << err << "\n";
-        continue;
-      }
-      stream.latest_debug_frame = std::move(bgr);
+    while (pull_debug_frame(app, stream, 0)) {
+    }
+  }
+}
+
+void await_matching_debug_frame(AppRuntime& app, const AppConfig& cfg, int stream_index,
+                                const simaai::neat::Sample& detection) {
+  if (!save_frames_enabled(cfg)) {
+    return;
+  }
+  auto& stream = app.streams[static_cast<std::size_t>(stream_index)];
+  constexpr double kMaxWaitMs = 50.0;
+  const double deadline = sima_examples::time_ms() + kMaxWaitMs;
+  while (!has_matching_debug_frame(stream, detection)) {
+    const int remaining_ms =
+        std::max(0, static_cast<int>(std::ceil(deadline - sima_examples::time_ms())));
+    if (remaining_ms == 0 || !pull_debug_frame(app, stream, remaining_ms)) {
+      return;
     }
   }
 }
@@ -942,9 +1013,10 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
     throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
   }
   const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
+  drain_debug_frames(app, cfg);
+  await_matching_debug_frame(app, cfg, stream_index, sample);
   process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,
                         pull_end - pull_start);
-  drain_debug_frames(app, cfg);
   return true;
 }
 

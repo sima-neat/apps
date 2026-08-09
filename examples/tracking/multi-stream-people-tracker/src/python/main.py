@@ -11,6 +11,7 @@ import os
 import struct
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +52,7 @@ class AppConfig:
     tracker_iou_threshold: float = 0.30
     tracker_max_center_distance: float = 2.5
     tracker_velocity_momentum: float = 0.80
+    tracker_box_smoothing_alpha: float = 1.0
     tracker_max_missing: int = 15
     tracker_min_confirmed_hits: int = 1
     tracker_max_prediction_frames: int = 0
@@ -70,14 +72,23 @@ class StreamRuntime:
     source_options: object
     metadata_sender: object
     tracker: ObjectTracker
-    profile: "ProfileWindow"
-    latest_debug_frame: object | None
+    profile: ProfileWindow
+    debug_frames: deque[DebugFrame]
     frame_w: int
     frame_h: int
     output_fps: int
     video_port: int
     processed: int = 0
     closed: bool = False
+
+
+@dataclass
+class DebugFrame:
+    frame_id: int
+    input_seq: int
+    orig_input_seq: int
+    pts_ns: int
+    bgr: object
 
 
 @dataclass
@@ -293,6 +304,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("tracking.max_center_distance must be >= 0")
     if not 0.0 <= cfg.tracker_velocity_momentum < 1.0:
         raise ValueError("tracking.velocity_momentum must be in [0, 1)")
+    if not 0.0 < cfg.tracker_box_smoothing_alpha <= 1.0:
+        raise ValueError("tracking.box_smoothing_alpha must be in (0, 1]")
     if cfg.tracker_max_missing < 0:
         raise ValueError("tracking.max_missing_frames must be >= 0")
     if cfg.tracker_min_confirmed_hits < 1:
@@ -373,6 +386,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         ),
         tracker_max_center_distance=float_or(tracking, "max_center_distance", 2.5),
         tracker_velocity_momentum=float_or(tracking, "velocity_momentum", 0.80),
+        tracker_box_smoothing_alpha=float_or(tracking, "box_smoothing_alpha", 1.0),
         tracker_max_missing=int_or(tracking, "max_missing_frames", 15),
         tracker_min_confirmed_hits=int_or(tracking, "min_confirmed_hits", 1),
         tracker_max_prediction_frames=int_or(tracking, "max_prediction_frames", 0),
@@ -751,6 +765,7 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
                 match_iou_threshold=cfg.tracker_iou_threshold,
                 max_center_distance=cfg.tracker_max_center_distance,
                 velocity_momentum=cfg.tracker_velocity_momentum,
+                box_smoothing_alpha=cfg.tracker_box_smoothing_alpha,
                 max_missing_frames=cfg.tracker_max_missing,
                 min_confirmed_hits=cfg.tracker_min_confirmed_hits,
                 max_prediction_frames=cfg.tracker_max_prediction_frames,
@@ -758,7 +773,7 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
             )
         ),
         profile=ProfileWindow(cfg.profile, stream_index),
-        latest_debug_frame=None,
+        debug_frames=deque(),
         frame_w=frame_w,
         frame_h=frame_h,
         output_fps=output_fps,
@@ -950,7 +965,15 @@ def process_output_sample(
         send_metadata(stream, cfg, sample, tracks)
         metadata_end = time_ms()
         if save_frames_enabled(cfg):
-            maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, tracks)
+            frame = take_matching_debug_frame(stream, sample)
+            if frame is None:
+                print(
+                    f"[warn] stream {stream.index} has no decoded frame matching "
+                    f"detection frame_id={sample.frame_id} pts_ns={sample.pts_ns}",
+                    file=sys.stderr,
+                )
+            else:
+                maybe_save_debug_frame(cfg, stream, frame, tracks)
         stream.profile.add(
             detection_pull_ms,
             tracker_end - tracker_start,
@@ -963,18 +986,72 @@ def debug_frame_output_name(stream_index: int) -> str:
     return f"debug_frame_{stream_index}"
 
 
+def samples_identify_same_frame(sample, frame: DebugFrame) -> bool:
+    for name in ("pts_ns", "orig_input_seq", "input_seq", "frame_id"):
+        sample_value = int(getattr(sample, name, -1))
+        frame_value = int(getattr(frame, name))
+        if sample_value >= 0 and frame_value >= 0:
+            return sample_value == frame_value
+    return False
+
+
+def take_matching_debug_frame(stream: StreamRuntime, sample):
+    for index, frame in enumerate(stream.debug_frames):
+        if not samples_identify_same_frame(sample, frame):
+            continue
+        matched = frame.bgr
+        for _ in range(index + 1):
+            stream.debug_frames.popleft()
+        return matched
+    return None
+
+
+def pull_debug_frame(app: AppRuntime, stream: StreamRuntime, timeout_ms: int) -> bool:
+    sample = app.run.pull(debug_frame_output_name(stream.index), timeout_ms)
+    if sample is None:
+        last_error_fn = getattr(app.run, "last_error", None)
+        last_error = last_error_fn() if callable(last_error_fn) else ""
+        if last_error:
+            raise RuntimeError(f"runtime error: {last_error}")
+        return False
+    tensor = first_tensor_from_sample(sample)
+    if tensor is None:
+        return True
+    if len(stream.debug_frames) >= 16:
+        stream.debug_frames.popleft()
+    stream.debug_frames.append(
+        DebugFrame(
+            frame_id=int(getattr(sample, "frame_id", -1)),
+            input_seq=int(getattr(sample, "input_seq", -1)),
+            orig_input_seq=int(getattr(sample, "orig_input_seq", -1)),
+            pts_ns=int(getattr(sample, "pts_ns", -1)),
+            bgr=tensor_bgr_from_decoded(tensor),
+        )
+    )
+    return True
+
+
 def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
     if not save_frames_enabled(cfg):
         return
     for stream in app.streams:
-        output_name = debug_frame_output_name(stream.index)
-        while True:
-            sample = app.run.pull(output_name, 0)
-            if sample is None:
-                break
-            tensor = first_tensor_from_sample(sample)
-            if tensor is not None:
-                stream.latest_debug_frame = tensor_bgr_from_decoded(tensor)
+        while pull_debug_frame(app, stream, 0):
+            pass
+
+
+def await_matching_debug_frame(
+    app: AppRuntime, cfg: AppConfig, stream_index: int, detection
+) -> None:
+    if not save_frames_enabled(cfg):
+        return
+    stream = app.streams[stream_index]
+    deadline_ms = time_ms() + 50.0
+    while not any(
+        samples_identify_same_frame(detection, frame) for frame in stream.debug_frames
+    ):
+        remaining_ms = max(0, math.ceil(deadline_ms - time_ms()))
+        if remaining_ms == 0 or not pull_debug_frame(app, stream, remaining_ms):
+            return
 
 
 def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
@@ -989,8 +1066,9 @@ def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
             raise RuntimeError(f"runtime error: {last_error}")
         return False
     stream_index = stream_index_from_sample(sample, len(app.streams))
-    process_output_sample(app.streams[stream_index], cfg, sample, pull_end - pull_start)
     drain_debug_frames(app, cfg)
+    await_matching_debug_frame(app, cfg, stream_index, sample)
+    process_output_sample(app.streams[stream_index], cfg, sample, pull_end - pull_start)
     return True
 
 

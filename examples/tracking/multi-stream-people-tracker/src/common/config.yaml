@@ -35,6 +35,7 @@ tracking:                    # Per-stream tracker settings.
   match_iou_threshold: 0.10  # Accept a match at or above this IoU.
   max_center_distance: 2.5   # Or accept by center distance, normalized by box diagonal.
   velocity_momentum: 0.80    # Constant-velocity estimate smoothing.
+  box_smoothing_alpha: 1.0   # Observation weight after motion prediction. 1 disables smoothing.
   max_missing_frames: 15     # Frames to keep a missing track alive.
   min_confirmed_hits: 1      # Matches required before publishing a track.
   max_prediction_frames: 0   # Publish motion prediction over short detector gaps. 0 disables it.

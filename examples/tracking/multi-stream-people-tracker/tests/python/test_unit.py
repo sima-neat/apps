@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import textwrap
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -133,6 +134,7 @@ class TestConfigLoading:
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.warmup_frames == 30
         assert cfg.tracker_max_missing == 15
+        assert cfg.tracker_box_smoothing_alpha == 1.0
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
         assert cfg.overflow_policy == "keep_latest"
@@ -275,8 +277,9 @@ class TestConfigLoading:
 
         assert cfg.num_classes == 1
         assert cfg.target_class_id == 0
-        assert cfg.tracker_max_center_distance == 5.0
-        assert cfg.tracker_velocity_momentum == 0.75
+        assert cfg.tracker_max_center_distance == 0.50
+        assert cfg.tracker_velocity_momentum == 0.90
+        assert cfg.tracker_box_smoothing_alpha == 0.50
         assert cfg.tracker_max_prediction_frames == 1
 
     def test_legacy_iou_config_keeps_iou_only_matching(self, tmp_path: Path):
@@ -535,7 +538,7 @@ class TestMetadata:
             metadata_sender=sender,
             tracker=ObjectTracker(),
             profile=ProfileWindow(False, 0),
-            latest_debug_frame=None,
+            debug_frames=deque(),
             frame_w=100,
             frame_h=100,
             output_fps=30,
@@ -565,6 +568,66 @@ class TestMetadata:
                 }
             ]
         }
+
+
+class TestDebugFrameSynchronization:
+    def test_pts_matches_across_different_segment_frame_ids(self):
+        from main import DebugFrame, samples_identify_same_frame
+
+        sample = SimpleNamespace(
+            pts_ns=123_000,
+            orig_input_seq=-1,
+            input_seq=-1,
+            frame_id=17,
+        )
+        frame = DebugFrame(3, -1, -1, 123_000, object())
+
+        assert samples_identify_same_frame(sample, frame)
+
+    def test_mismatched_pts_never_falls_back_to_equal_frame_id(self):
+        from main import DebugFrame, samples_identify_same_frame
+
+        sample = SimpleNamespace(
+            pts_ns=123_000,
+            orig_input_seq=-1,
+            input_seq=-1,
+            frame_id=17,
+        )
+        frame = DebugFrame(17, -1, -1, 124_000, object())
+
+        assert not samples_identify_same_frame(sample, frame)
+
+    def test_waits_for_a_lagging_debug_branch(self, monkeypatch):
+        import main
+
+        sample = SimpleNamespace(
+            pts_ns=123_000,
+            orig_input_seq=-1,
+            input_seq=-1,
+            frame_id=17,
+        )
+        stream = SimpleNamespace(index=0, debug_frames=deque())
+        app = SimpleNamespace(streams=[stream])
+        cfg = main.AppConfig(
+            model_path="model.tar.gz",
+            rtsp_urls=["rtsp://127.0.0.1/src"],
+            save_dir="debug",
+            save_every=1,
+        )
+        timeouts = []
+
+        def pull_lagging_frame(_app, target_stream, timeout_ms):
+            timeouts.append(timeout_ms)
+            target_stream.debug_frames.append(
+                main.DebugFrame(3, -1, -1, 123_000, object())
+            )
+            return True
+
+        monkeypatch.setattr(main, "pull_debug_frame", pull_lagging_frame)
+        main.await_matching_debug_frame(app, cfg, 0, sample)
+
+        assert timeouts and timeouts[0] > 0
+        assert main.samples_identify_same_frame(sample, stream.debug_frames[0])
 
 
 class TestTracker:
@@ -602,6 +665,48 @@ class TestTracker:
         assert len(first) == 1
         assert len(second) == 1
         assert first[0].track_id == second[0].track_id
+
+    def test_motion_compensated_box_smoothing_reduces_jitter(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(box_smoothing_alpha=0.5, velocity_momentum=0.9)
+        )
+        tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        smoothed = tracker.update(
+            [{"x1": 2, "y1": 0, "x2": 6, "y2": 4, "score": 0.9, "class_id": 0}],
+            frame_index=1,
+        )
+
+        assert smoothed[0].x1 == pytest.approx(1.0)
+        assert smoothed[0].x2 == pytest.approx(5.0)
+
+    def test_recent_track_wins_before_stale_track(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(max_center_distance=2.0, velocity_momentum=0.9)
+        )
+        first = tracker.update(
+            [
+                {"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 10, "y1": 0, "x2": 14, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            frame_index=0,
+        )
+        tracker.update(
+            [{"x1": 6, "y1": 0, "x2": 10, "y2": 4, "score": 0.9, "class_id": 0}],
+            frame_index=1,
+        )
+        recent = tracker.update(
+            [{"x1": 2, "y1": 0, "x2": 6, "y2": 4, "score": 0.9, "class_id": 0}],
+            frame_index=2,
+        )
+
+        assert recent[0].track_id == first[1].track_id
 
     def test_tracker_drops_track_after_missing_budget(self):
         from utils.tracker import ObjectTracker, TrackerConfig
@@ -867,6 +972,12 @@ class TestTracker:
 
         with pytest.raises(ValueError, match="max_prediction_frames"):
             ObjectTracker(TrackerConfig(max_missing_frames=1, max_prediction_frames=2))
+
+    def test_tracker_rejects_invalid_box_smoothing(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        with pytest.raises(ValueError, match="box_smoothing_alpha"):
+            ObjectTracker(TrackerConfig(box_smoothing_alpha=0.0))
 
 
 class TestAccuracyEvaluation:

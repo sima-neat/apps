@@ -31,8 +31,9 @@ tracking:
   high_score_threshold: 0.20
   new_track_threshold: 0.30
   match_iou_threshold: 0.05
-  max_center_distance: 5.0
-  velocity_momentum: 0.75
+  max_center_distance: 0.50
+  velocity_momentum: 0.90
+  box_smoothing_alpha: 0.50
   max_missing_frames: 30
   min_confirmed_hits: 2
   max_prediction_frames: 1

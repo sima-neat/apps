@@ -20,6 +20,7 @@ constexpr float kUnmatchedCost = 1.0e3f;
 struct TrackState {
   int track_id = 0;
   Detection detection;
+  Detection filtered_detection;
   float velocity_x = 0.0f;
   float velocity_y = 0.0f;
   float velocity_w = 0.0f;
@@ -66,16 +67,37 @@ float normalized_center_distance(const Detection& a, const Detection& b) {
 
 Detection predict(const TrackState& track, int frame_index) {
   const int elapsed = std::max(0, frame_index - track.last_frame_index);
-  const float predicted_x = center_x(track.detection) + track.velocity_x * elapsed;
-  const float predicted_y = center_y(track.detection) + track.velocity_y * elapsed;
-  const float predicted_w = std::max(1.0f, width(track.detection) + track.velocity_w * elapsed);
-  const float predicted_h = std::max(1.0f, height(track.detection) + track.velocity_h * elapsed);
+  const float predicted_x = center_x(track.filtered_detection) + track.velocity_x * elapsed;
+  const float predicted_y = center_y(track.filtered_detection) + track.velocity_y * elapsed;
+  const float predicted_w =
+      std::max(1.0f, width(track.filtered_detection) + track.velocity_w * elapsed);
+  const float predicted_h =
+      std::max(1.0f, height(track.filtered_detection) + track.velocity_h * elapsed);
   return Detection{predicted_x - predicted_w * 0.5f,
                    predicted_y - predicted_h * 0.5f,
                    predicted_x + predicted_w * 0.5f,
                    predicted_y + predicted_h * 0.5f,
                    track.detection.score,
                    track.detection.class_id};
+}
+
+Detection smooth_detection(const Detection& prediction, const Detection& observation,
+                           float observation_alpha) {
+  const float predicted = 1.0f - observation_alpha;
+  const float smoothed_x =
+      predicted * center_x(prediction) + observation_alpha * center_x(observation);
+  const float smoothed_y =
+      predicted * center_y(prediction) + observation_alpha * center_y(observation);
+  const float smoothed_w =
+      std::max(1.0f, predicted * width(prediction) + observation_alpha * width(observation));
+  const float smoothed_h =
+      std::max(1.0f, predicted * height(prediction) + observation_alpha * height(observation));
+  return Detection{smoothed_x - smoothed_w * 0.5f,
+                   smoothed_y - smoothed_h * 0.5f,
+                   smoothed_x + smoothed_w * 0.5f,
+                   smoothed_y + smoothed_h * 0.5f,
+                   observation.score,
+                   observation.class_id};
 }
 
 void validate_config(const TrackerConfig& config) {
@@ -98,6 +120,10 @@ void validate_config(const TrackerConfig& config) {
   if (!std::isfinite(config.velocity_momentum) || config.velocity_momentum < 0.0f ||
       config.velocity_momentum >= 1.0f) {
     throw std::invalid_argument("velocity_momentum must be in [0, 1)");
+  }
+  if (!std::isfinite(config.box_smoothing_alpha) || config.box_smoothing_alpha <= 0.0f ||
+      config.box_smoothing_alpha > 1.0f) {
+    throw std::invalid_argument("box_smoothing_alpha must be in (0, 1]");
   }
   if (config.max_missing_frames < 0) {
     throw std::invalid_argument("max_missing_frames must be >= 0");
@@ -335,24 +361,22 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
   impl_->matched_detections.assign(detections.size(), 0);
   impl_->assignments.assign(detections.size(), -1);
 
-  const auto associate = [&](const std::vector<int>& detection_indices) {
-    impl_->track_indices.clear();
-    for (std::size_t index = 0; index < impl_->tracks.size(); ++index) {
-      if (impl_->matched_tracks[index] == 0) {
-        impl_->track_indices.push_back(static_cast<int>(index));
-      }
+  const auto associate_group = [&](const std::vector<int>& detection_indices, std::size_t begin,
+                                   std::size_t end) {
+    if (begin == end) {
+      return;
     }
     impl_->stage.prepare(detections, detection_indices, impl_->matched_detections);
-    const int rows = static_cast<int>(impl_->track_indices.size());
+    const int rows = static_cast<int>(end - begin);
     const int detection_columns = static_cast<int>(impl_->stage.detection_index.size());
-    if (rows == 0 || detection_columns == 0) {
+    if (detection_columns == 0) {
       return;
     }
 
     const int columns = detection_columns + rows;
     impl_->costs.assign(static_cast<std::size_t>(rows * columns), kUnmatchedCost);
     for (int row = 0; row < rows; ++row) {
-      const int track_index = impl_->track_indices[static_cast<std::size_t>(row)];
+      const int track_index = impl_->track_indices[begin + static_cast<std::size_t>(row)];
       const TrackState& track = impl_->tracks[static_cast<std::size_t>(track_index)];
       const Detection reference =
           config_.center_distance_enabled ? predict(track, frame_index) : track.detection;
@@ -392,11 +416,41 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
           impl_->costs[static_cast<std::size_t>(row * columns + column)] >= kBlockedCost) {
         continue;
       }
-      const int track_index = impl_->track_indices[static_cast<std::size_t>(row)];
+      const int track_index = impl_->track_indices[begin + static_cast<std::size_t>(row)];
       const int detection_index = impl_->stage.detection_index[static_cast<std::size_t>(column)];
       impl_->matched_tracks[static_cast<std::size_t>(track_index)] = 1;
       impl_->matched_detections[static_cast<std::size_t>(detection_index)] = 1;
       impl_->assignments[static_cast<std::size_t>(detection_index)] = track_index;
+    }
+  };
+
+  const auto associate = [&](const std::vector<int>& detection_indices) {
+    impl_->track_indices.clear();
+    for (std::size_t index = 0; index < impl_->tracks.size(); ++index) {
+      if (impl_->matched_tracks[index] == 0) {
+        impl_->track_indices.push_back(static_cast<int>(index));
+      }
+    }
+    std::sort(impl_->track_indices.begin(), impl_->track_indices.end(), [&](int a, int b) {
+      const TrackState& lhs = impl_->tracks[static_cast<std::size_t>(a)];
+      const TrackState& rhs = impl_->tracks[static_cast<std::size_t>(b)];
+      if (lhs.last_frame_index != rhs.last_frame_index) {
+        return lhs.last_frame_index > rhs.last_frame_index;
+      }
+      return lhs.track_id < rhs.track_id;
+    });
+    std::size_t begin = 0;
+    while (begin < impl_->track_indices.size()) {
+      const int last_frame =
+          impl_->tracks[static_cast<std::size_t>(impl_->track_indices[begin])].last_frame_index;
+      std::size_t end = begin + 1;
+      while (end < impl_->track_indices.size() &&
+             impl_->tracks[static_cast<std::size_t>(impl_->track_indices[end])].last_frame_index ==
+                 last_frame) {
+        ++end;
+      }
+      associate_group(detection_indices, begin, end);
+      begin = end;
     }
   };
 
@@ -417,12 +471,15 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     const float measured_vy = (center_y(detection) - center_y(track.detection)) / elapsed;
     const float measured_vw = (width(detection) - width(track.detection)) / elapsed;
     const float measured_vh = (height(detection) - height(track.detection)) / elapsed;
+    const Detection filtered_prediction = predict(track, frame_index);
     const float previous = config_.velocity_momentum;
     const float measured = 1.0f - previous;
     track.velocity_x = previous * track.velocity_x + measured * measured_vx;
     track.velocity_y = previous * track.velocity_y + measured * measured_vy;
     track.velocity_w = previous * track.velocity_w + measured * measured_vw;
     track.velocity_h = previous * track.velocity_h + measured * measured_vh;
+    track.filtered_detection =
+        smooth_detection(filtered_prediction, detection, config_.box_smoothing_alpha);
     track.detection = detection;
     track.last_frame_index = frame_index;
     track.missing_frames = 0;
@@ -437,8 +494,8 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     }
     const Detection& detection = detections[static_cast<std::size_t>(detection_index)];
     const int track_index = static_cast<int>(impl_->tracks.size());
-    impl_->tracks.push_back(TrackState{next_track_id_++, detection, 0.0f, 0.0f, 0.0f, 0.0f,
-                                       frame_index, 0, 1, config_.min_confirmed_hits <= 1});
+    impl_->tracks.push_back(TrackState{next_track_id_++, detection, detection, 0.0f, 0.0f, 0.0f,
+                                       0.0f, frame_index, 0, 1, config_.min_confirmed_hits <= 1});
     impl_->matched_tracks.push_back(1);
     impl_->matched_detections[static_cast<std::size_t>(detection_index)] = 1;
     impl_->assignments[static_cast<std::size_t>(detection_index)] = track_index;
@@ -461,9 +518,10 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     if (!track.confirmed) {
       continue;
     }
+    const Detection& filtered = track.filtered_detection;
     const Detection& detection = detections[detection_index];
-    tracked.push_back(TrackedDetection{track.track_id, detection.x1, detection.y1, detection.x2,
-                                       detection.y2, detection.score, detection.class_id, false});
+    tracked.push_back(TrackedDetection{track.track_id, filtered.x1, filtered.y1, filtered.x2,
+                                       filtered.y2, detection.score, detection.class_id, false});
   }
 
   if (config_.max_prediction_frames > 0) {

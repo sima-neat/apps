@@ -111,6 +111,7 @@ class TrackerConfig:
     match_iou_threshold: float = 0.10
     max_center_distance: float = 2.5
     velocity_momentum: float = 0.80
+    box_smoothing_alpha: float = 1.0
     max_missing_frames: int = 15
     min_confirmed_hits: int = 1
     max_prediction_frames: int = 0
@@ -130,6 +131,8 @@ class TrackerConfig:
             raise ValueError("max_center_distance must be >= 0")
         if not 0.0 <= self.velocity_momentum < 1.0:
             raise ValueError("velocity_momentum must be in [0, 1)")
+        if not 0.0 < self.box_smoothing_alpha <= 1.0:
+            raise ValueError("box_smoothing_alpha must be in (0, 1]")
         if self.max_missing_frames < 0:
             raise ValueError("max_missing_frames must be >= 0")
         if self.min_confirmed_hits < 1:
@@ -145,6 +148,7 @@ class TrackState:
     score: float
     class_id: int
     last_frame_index: int
+    filtered_bbox: BBox | None = None
     velocity: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     missing_frames: int = 0
     hits: int = 1
@@ -152,12 +156,13 @@ class TrackState:
 
     def predict(self, frame_index: int) -> BBox:
         elapsed = max(0, frame_index - self.last_frame_index)
-        center_x, center_y = _center(self.bbox)
+        reference = self.filtered_bbox or self.bbox
+        center_x, center_y = _center(reference)
         vx, vy, vw, vh = self.velocity
         center_x += vx * elapsed
         center_y += vy * elapsed
-        width = max(1.0, _width(self.bbox) + vw * elapsed)
-        height = max(1.0, _height(self.bbox) + vh * elapsed)
+        width = max(1.0, _width(reference) + vw * elapsed)
+        height = max(1.0, _height(reference) + vh * elapsed)
         return (
             center_x - width * 0.5,
             center_y - height * 0.5,
@@ -188,16 +193,51 @@ class ObjectTracker:
         matched_detections: set[int],
         assignments: dict[int, int],
     ) -> None:
-        track_ids = sorted(
-            track_id for track_id in self._tracks if track_id not in matched_tracks
+        candidates = sorted(
+            (
+                track
+                for track in self._tracks.values()
+                if track.track_id not in matched_tracks
+            ),
+            key=lambda track: (-track.last_frame_index, track.track_id),
         )
-        detection_indices = [
+        begin = 0
+        while begin < len(candidates):
+            end = begin + 1
+            while (
+                end < len(candidates)
+                and candidates[end].last_frame_index
+                == candidates[begin].last_frame_index
+            ):
+                end += 1
+            self._associate_recency_group(
+                detections,
+                detection_indices,
+                frame_index,
+                [track.track_id for track in candidates[begin:end]],
+                matched_tracks,
+                matched_detections,
+                assignments,
+            )
+            begin = end
+
+    def _associate_recency_group(
+        self,
+        detections: list[dict],
+        detection_indices: list[int],
+        frame_index: int,
+        track_ids: list[int],
+        matched_tracks: set[int],
+        matched_detections: set[int],
+        assignments: dict[int, int],
+    ) -> None:
+        available_detections = [
             index for index in detection_indices if index not in matched_detections
         ]
-        if not track_ids or not detection_indices:
+        if not track_ids or not available_detections:
             return
         costs: list[list[float]] = []
-        for row, track_id in enumerate(track_ids):
+        for track_id in track_ids:
             track = self._tracks[track_id]
             reference = (
                 track.predict(frame_index)
@@ -205,7 +245,7 @@ class ObjectTracker:
                 else track.bbox
             )
             row_costs: list[float] = []
-            for detection_index in detection_indices:
+            for detection_index in available_detections:
                 detection = detections[detection_index]
                 if int(detection["class_id"]) != track.class_id:
                     row_costs.append(_BLOCKED_COST)
@@ -235,12 +275,12 @@ class ObjectTracker:
         for row, column in enumerate(_solve_assignment(costs)):
             if (
                 column < 0
-                or column >= len(detection_indices)
+                or column >= len(available_detections)
                 or costs[row][column] >= _BLOCKED_COST
             ):
                 continue
             track_id = track_ids[row]
-            detection_index = detection_indices[column]
+            detection_index = available_detections[column]
             matched_tracks.add(track_id)
             matched_detections.add(detection_index)
             assignments[detection_index] = track_id
@@ -303,9 +343,29 @@ class ObjectTracker:
                 (_height(bbox) - _height(track.bbox)) / elapsed,
             )
             momentum = self.config.velocity_momentum
+            prediction = track.predict(frame_index)
             track.velocity = tuple(
                 momentum * previous + (1.0 - momentum) * current
                 for previous, current in zip(track.velocity, measured)
+            )
+            alpha = self.config.box_smoothing_alpha
+            predicted_center = _center(prediction)
+            observed_center = _center(bbox)
+            filtered_center = tuple(
+                (1.0 - alpha) * previous + alpha * current
+                for previous, current in zip(predicted_center, observed_center)
+            )
+            filtered_width = max(
+                1.0, (1.0 - alpha) * _width(prediction) + alpha * _width(bbox)
+            )
+            filtered_height = max(
+                1.0, (1.0 - alpha) * _height(prediction) + alpha * _height(bbox)
+            )
+            track.filtered_bbox = (
+                filtered_center[0] - filtered_width * 0.5,
+                filtered_center[1] - filtered_height * 0.5,
+                filtered_center[0] + filtered_width * 0.5,
+                filtered_center[1] + filtered_height * 0.5,
             )
             track.bbox = bbox
             track.score = float(detection["score"])
@@ -328,6 +388,7 @@ class ObjectTracker:
                 score=float(detection["score"]),
                 class_id=int(detection["class_id"]),
                 last_frame_index=frame_index,
+                filtered_bbox=_bbox(detection),
                 confirmed=self.config.min_confirmed_hits <= 1,
             )
             matched_tracks.add(track_id)
@@ -343,7 +404,7 @@ class ObjectTracker:
             track_id = assignments.get(detection_index)
             if track_id is None or not self._tracks[track_id].confirmed:
                 continue
-            bbox = _bbox(detection)
+            bbox = self._tracks[track_id].filtered_bbox or _bbox(detection)
             tracked.append(
                 TrackedDetection(
                     track_id,
