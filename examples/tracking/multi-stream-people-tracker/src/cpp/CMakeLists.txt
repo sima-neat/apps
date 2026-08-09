@@ -10,7 +10,31 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc features2d calib3d)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(TRACKER_OPENCV REQUIRED opencv4)
+
+# Some Modalix SDK layouts contain both OpenCV archives and DSOs while selected
+# unversioned shared-library links are absent.  Prefer the versioned shared
+# objects for the camera-motion path so a transitive -lopencv_* cannot mix a
+# static component with OpenCV DSOs in the same link.
+set(TRACKER_OPENCV_SHARED_LIBRARIES)
+foreach(component IN ITEMS calib3d features2d imgcodecs imgproc core)
+  string(TOUPPER "${component}" component_upper)
+  find_library(TRACKER_OPENCV_${component_upper}_SHARED
+    NAMES "libopencv_${component}.so.${TRACKER_OPENCV_VERSION}"
+    PATHS ${TRACKER_OPENCV_LIBRARY_DIRS}
+    NO_DEFAULT_PATH
+  )
+  if (NOT TRACKER_OPENCV_${component_upper}_SHARED)
+    message(FATAL_ERROR
+      "The tracker requires the shared OpenCV ${component} component "
+      "for ABI-safe camera-motion linking."
+    )
+  endif()
+  list(APPEND TRACKER_OPENCV_SHARED_LIBRARIES
+    "${TRACKER_OPENCV_${component_upper}_SHARED}"
+  )
+endforeach()
 
 get_filename_component(APPS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 if (NOT TARGET SimaNeatApps::sima_neat)
@@ -25,19 +49,10 @@ add_library(multi_stream_people_tracker_lib STATIC
   "${CMAKE_CURRENT_LIST_DIR}/utils/tracker.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/utils/tracker_overlay.cpp"
 )
-target_link_libraries(multi_stream_people_tracker_lib
-  PUBLIC
-    SimaNeatApps::sima_neat
-    SimaNeatApps::support_runtime
-    opencv_core
-    opencv_imgcodecs
-    opencv_imgproc
-    opencv_features2d
-    opencv_calib3d
-)
 target_include_directories(multi_stream_people_tracker_lib
   PUBLIC
     "${APPS_ROOT}"
+    ${TRACKER_OPENCV_INCLUDE_DIRS}
 )
 target_compile_definitions(multi_stream_people_tracker_lib
   PUBLIC
@@ -53,14 +68,23 @@ sima_neat_apps_module(
     "${CMAKE_CURRENT_LIST_DIR}/main.cpp"
 )
 
-target_link_libraries("${MULTI_CAMERA_PEOPLE_TRACKING_TARGET}"
-  PRIVATE
+# Put the tracker archive and its shared OpenCV dependencies before Core's
+# transitive, unversioned OpenCV flags.  Link order matters when an SDK contains
+# both archives and DSOs but omits selected unversioned shared-library links.
+function(link_multi_stream_people_tracker target)
+  get_target_property(existing_link_libraries "${target}" LINK_LIBRARIES)
+  if (NOT existing_link_libraries)
+    set(existing_link_libraries)
+  endif()
+  set_property(TARGET "${target}" PROPERTY LINK_LIBRARIES
     multi_stream_people_tracker_lib
-)
+    ${TRACKER_OPENCV_SHARED_LIBRARIES}
+    ${existing_link_libraries}
+  )
+endfunction()
+
+link_multi_stream_people_tracker("${MULTI_CAMERA_PEOPLE_TRACKING_TARGET}")
 
 if (TARGET multi-stream-people-tracker_unit_test)
-  target_link_libraries(multi-stream-people-tracker_unit_test
-    PRIVATE
-      multi_stream_people_tracker_lib
-  )
+  link_multi_stream_people_tracker(multi-stream-people-tracker_unit_test)
 endif()
