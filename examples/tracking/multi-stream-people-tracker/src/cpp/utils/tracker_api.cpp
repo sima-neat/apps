@@ -25,6 +25,18 @@ struct TrackedDetection {
   bool predicted = false;
 };
 
+// Partial-affine transform from the previous decoded frame into the current
+// frame. Invalid transforms let the tracker fall back to detection consensus.
+struct CameraTransform {
+  float a = 1.0f;
+  float b = 0.0f;
+  float tx = 0.0f;
+  float c = 0.0f;
+  float d = 1.0f;
+  float ty = 0.0f;
+  bool valid = false;
+};
+
 struct TrackerConfig {
   float high_score_threshold = 0.30f;
   float new_track_threshold = 0.30f;
@@ -36,6 +48,7 @@ struct TrackerConfig {
   int min_confirmed_hits = 1;
   int max_prediction_frames = 0;
   bool center_distance_enabled = true;
+  bool camera_motion_compensation = false;
 };
 
 // A compact two-stage tracker for detections whose boxes may be only a few
@@ -52,9 +65,11 @@ public:
   ObjectTracker& operator=(const ObjectTracker&) = delete;
 
   int active_track_count() const;
-  std::vector<TrackedDetection> update(const std::vector<Detection>& detections, int frame_index);
+  std::vector<TrackedDetection> update(const std::vector<Detection>& detections, int frame_index,
+                                       const CameraTransform& camera_transform = {});
   void update_into(const std::vector<Detection>& detections, int frame_index,
-                   std::vector<TrackedDetection>& tracked);
+                   std::vector<TrackedDetection>& tracked,
+                   const CameraTransform& camera_transform = {});
 
 private:
   TrackerConfig config_;

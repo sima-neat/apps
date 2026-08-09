@@ -144,6 +144,7 @@ class TestConfigLoading:
         assert cfg.tracker_new_track_score == 0.55
         assert cfg.tracker_iou_threshold == 0.30
         assert cfg.tracker_center_distance_enabled is False
+        assert cfg.tracker_camera_motion_compensation is False
 
     def test_load_app_config_accepts_hevc(self, tmp_path: Path):
         from main import load_app_config
@@ -280,6 +281,7 @@ class TestConfigLoading:
         assert cfg.tracker_max_center_distance == 0.50
         assert cfg.tracker_velocity_momentum == 0.90
         assert cfg.tracker_box_smoothing_alpha == 0.50
+        assert cfg.tracker_camera_motion_compensation is True
         assert cfg.tracker_max_prediction_frames == 1
 
     def test_legacy_iou_config_keeps_iou_only_matching(self, tmp_path: Path):
@@ -683,6 +685,124 @@ class TestTracker:
 
         assert smoothed[0].x1 == pytest.approx(1.0)
         assert smoothed[0].x2 == pytest.approx(5.0)
+
+    def test_camera_motion_compensation_preserves_ids_across_fast_pan(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                max_center_distance=0.5,
+                box_smoothing_alpha=0.5,
+                camera_motion_compensation=True,
+            )
+        )
+        first_detections = [
+            {
+                "x1": 40 * index,
+                "y1": 20,
+                "x2": 40 * index + 4,
+                "y2": 24,
+                "score": 0.9,
+                "class_id": 0,
+            }
+            for index in range(6)
+        ]
+        panned_detections = [
+            {**detection, "x1": detection["x1"] + 20, "x2": detection["x2"] + 20}
+            for detection in first_detections
+        ]
+
+        first = tracker.update(first_detections, frame_index=0)
+        panned = tracker.update(panned_detections, frame_index=1)
+
+        assert [track.track_id for track in panned] == [
+            track.track_id for track in first
+        ]
+        assert [track.x1 for track in panned] == pytest.approx(
+            [detection["x1"] for detection in panned_detections]
+        )
+
+    def test_camera_motion_compensation_does_not_bridge_scene_cut(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(max_center_distance=0.5, camera_motion_compensation=True)
+        )
+        first_detections = [
+            {
+                "x1": 20 * index,
+                "y1": 20,
+                "x2": 20 * index + 4,
+                "y2": 24,
+                "score": 0.9,
+                "class_id": 0,
+            }
+            for index in range(8)
+        ]
+        cut_detections = [
+            {
+                **detection,
+                "x1": detection["x1"] + 100,
+                "x2": detection["x2"] + 100,
+                "y1": 100,
+                "y2": 104,
+            }
+            for detection in first_detections
+        ]
+
+        first = tracker.update(first_detections, frame_index=0)
+        after_cut = tracker.update(cut_detections, frame_index=1)
+
+        assert after_cut[0].track_id != first[0].track_id
+        assert tracker.active_track_count() == 16
+
+    def test_external_camera_transform_is_not_learned_as_object_velocity(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                max_center_distance=0.5,
+                velocity_momentum=0.9,
+                camera_motion_compensation=True,
+            )
+        )
+        first = tracker.update(
+            [{"x1": 0, "y1": 20, "x2": 4, "y2": 24, "score": 0.9, "class_id": 0}],
+            0,
+        )
+        track_id = first[0].track_id
+        pan = (1.0, 0.0, 20.0, 0.0, 1.0, 0.0)
+        for frame in range(1, 13):
+            x = 20 * frame
+            tracked = tracker.update(
+                [{"x1": x, "y1": 20, "x2": x + 4, "y2": 24, "score": 0.9, "class_id": 0}],
+                frame,
+                pan,
+            )
+            assert tracked[0].track_id == track_id
+            assert tracked[0].x1 == pytest.approx(x)
+
+    def test_orb_camera_motion_estimator_recovers_translation(self):
+        from utils.tracker import FrameCameraMotionEstimator
+
+        cv2 = pytest.importorskip("cv2")
+        np = pytest.importorskip("numpy")
+        first = np.random.default_rng(12345).integers(
+            0, 256, size=(256, 320), dtype=np.uint8
+        )
+        first = cv2.GaussianBlur(first, (3, 3), 0.8)
+        second = cv2.warpAffine(
+            first,
+            np.float32([[1, 0, 18], [0, 1, 7]]),
+            (first.shape[1], first.shape[0]),
+        )
+        estimator = FrameCameraMotionEstimator()
+
+        assert estimator.update(first) is None
+        motion = estimator.update(second)
+        assert motion is not None
+        assert motion[2] == pytest.approx(18, abs=2)
+        assert motion[5] == pytest.approx(7, abs=2)
 
     def test_recent_track_wins_before_stale_track(self):
         from utils.tracker import ObjectTracker, TrackerConfig

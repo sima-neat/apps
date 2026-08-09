@@ -1,3 +1,4 @@
+#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/camera_motion_api.cpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_overlay_api.cpp"
 #include "support/testing/test_process.h"
@@ -10,10 +11,13 @@
 #include <stdexcept>
 #include <string>
 
+#include <opencv2/imgproc.hpp>
+
 namespace fs = std::filesystem;
 
 using multi_stream_people_tracker::Detection;
 using multi_stream_people_tracker::draw_tracks_bgr;
+using multi_stream_people_tracker::FrameCameraMotionEstimator;
 using multi_stream_people_tracker::ObjectTracker;
 using multi_stream_people_tracker::track_color;
 using multi_stream_people_tracker::TrackedDetection;
@@ -373,6 +377,102 @@ bool test_motion_compensated_box_smoothing_reduces_jitter() {
                      "motion-compensated smoothing attenuates detector box jitter");
 }
 
+bool test_camera_motion_compensation_preserves_ids_across_fast_pan() {
+  TrackerConfig config;
+  config.max_center_distance = 0.5f;
+  config.box_smoothing_alpha = 0.5f;
+  config.camera_motion_compensation = true;
+  ObjectTracker tracker(config);
+  std::vector<Detection> first_detections;
+  std::vector<Detection> panned_detections;
+  for (int index = 0; index < 6; ++index) {
+    const float x = 40.0f * index;
+    first_detections.push_back(Detection{x, 20.0f, x + 4.0f, 24.0f, 0.9f, 0});
+    panned_detections.push_back(Detection{x + 20.0f, 20.0f, x + 24.0f, 24.0f, 0.9f, 0});
+  }
+  const auto first = tracker.update(first_detections, 0);
+  const auto panned = tracker.update(panned_detections, 1);
+  if (!expect_true(first.size() == 6 && panned.size() == 6,
+                   "camera pan keeps every tracked detection")) {
+    return false;
+  }
+  for (std::size_t index = 0; index < first.size(); ++index) {
+    if (!expect_true(first[index].track_id == panned[index].track_id,
+                     "camera pan preserves each identity") ||
+        !expect_true(std::abs(panned[index].x1 - panned_detections[index].x1) < 1e-4f,
+                     "camera-compensated smoothing follows the pan without lag")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool test_camera_motion_compensation_does_not_bridge_scene_cut() {
+  TrackerConfig config;
+  config.max_center_distance = 0.5f;
+  config.camera_motion_compensation = true;
+  ObjectTracker tracker(config);
+  std::vector<Detection> first_detections;
+  std::vector<Detection> cut_detections;
+  for (int index = 0; index < 8; ++index) {
+    const float x = 20.0f * index;
+    first_detections.push_back(Detection{x, 20.0f, x + 4.0f, 24.0f, 0.9f, 0});
+    cut_detections.push_back(Detection{x + 100.0f, 100.0f, x + 104.0f, 104.0f, 0.9f, 0});
+  }
+  const auto first = tracker.update(first_detections, 0);
+  const auto after_cut = tracker.update(cut_detections, 1);
+  return expect_true(first.size() == 8 && after_cut.size() == 8,
+                     "scene cut publishes the new observations") &&
+         expect_true(after_cut.front().track_id != first.front().track_id,
+                     "scene cut does not carry an identity across unrelated images") &&
+         expect_true(tracker.active_track_count() == 16,
+                     "scene cut is not mistaken for coherent camera motion");
+}
+
+bool test_external_camera_transform_is_not_learned_as_object_velocity() {
+  TrackerConfig config;
+  config.max_center_distance = 0.5f;
+  config.velocity_momentum = 0.9f;
+  config.camera_motion_compensation = true;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{0.0f, 20.0f, 4.0f, 24.0f, 0.9f, 0}}, 0);
+  if (!expect_true(first.size() == 1, "camera transform test creates one track")) {
+    return false;
+  }
+  const int track_id = first.front().track_id;
+  const multi_stream_people_tracker::CameraTransform pan{1.0f, 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, true};
+  for (int frame = 1; frame <= 12; ++frame) {
+    const float x = 20.0f * frame;
+    const auto tracked =
+        tracker.update({Detection{x, 20.0f, x + 4.0f, 24.0f, 0.9f, 0}}, frame, pan);
+    if (!expect_true(tracked.size() == 1 && tracked.front().track_id == track_id,
+                     "repeated global pan preserves the original identity") ||
+        !expect_true(std::abs(tracked.front().x1 - x) < 1e-4f,
+                     "global pan is applied exactly once")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool test_orb_camera_motion_estimator_recovers_translation() {
+  cv::Mat first(256, 320, CV_8UC1);
+  cv::RNG rng(12345);
+  rng.fill(first, cv::RNG::UNIFORM, 0, 256);
+  cv::GaussianBlur(first, first, cv::Size(3, 3), 0.8);
+  cv::Mat second;
+  const cv::Mat affine = (cv::Mat_<double>(2, 3) << 1.0, 0.0, 18.0, 0.0, 1.0, 7.0);
+  cv::warpAffine(first, second, affine, first.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT);
+
+  FrameCameraMotionEstimator estimator;
+  const auto initial = estimator.update(first);
+  const auto motion = estimator.update(second);
+  return expect_true(!initial.valid, "first frame does not invent camera motion") &&
+         expect_true(motion.valid, "ORB/RANSAC accepts a coherent frame translation") &&
+         expect_true(std::abs(motion.tx - 18.0f) < 2.0f && std::abs(motion.ty - 7.0f) < 2.0f,
+                     "ORB/RANSAC recovers the frame translation");
+}
+
 bool test_recent_track_wins_before_stale_track() {
   TrackerConfig config;
   config.max_center_distance = 2.0f;
@@ -654,6 +754,10 @@ int main(int argc, char** argv) {
   ok &= test_legacy_iou_config_keeps_iou_only_matching(binary);
   ok &= test_tracker_reuses_track_id_for_nearby_detection();
   ok &= test_motion_compensated_box_smoothing_reduces_jitter();
+  ok &= test_camera_motion_compensation_preserves_ids_across_fast_pan();
+  ok &= test_camera_motion_compensation_does_not_bridge_scene_cut();
+  ok &= test_external_camera_transform_is_not_learned_as_object_velocity();
+  ok &= test_orb_camera_motion_estimator_recovers_translation();
   ok &= test_recent_track_wins_before_stale_track();
   ok &= test_tracker_drops_track_after_missing_budget();
   ok &= test_zero_missing_budget_keeps_continuous_track();

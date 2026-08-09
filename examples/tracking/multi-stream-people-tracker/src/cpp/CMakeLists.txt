@@ -19,6 +19,7 @@ if (NOT TARGET SimaNeatApps::support_runtime)
 endif()
 
 add_library(multi_stream_people_tracker_lib STATIC
+  "${CMAKE_CURRENT_LIST_DIR}/utils/camera_motion.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/utils/tracker.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/utils/tracker_overlay.cpp"
 )

@@ -34,6 +34,7 @@ tracking:
   max_center_distance: 0.50
   velocity_momentum: 0.90
   box_smoothing_alpha: 0.50
+  camera_motion_compensation: true
   max_missing_frames: 30
   min_confirmed_hits: 2
   max_prediction_frames: 1

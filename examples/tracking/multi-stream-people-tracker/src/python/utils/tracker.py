@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 
 BBox = tuple[float, float, float, float]
+CameraTransform = tuple[float, float, float, float, float, float]
 _BLOCKED_COST = 1.0e6
 _UNMATCHED_COST = 1.0e3
 
@@ -20,6 +21,42 @@ def _height(box: BBox) -> float:
 
 def _center(box: BBox) -> tuple[float, float]:
     return 0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3])
+
+
+def _translate(box: BBox, motion: tuple[float, float]) -> BBox:
+    x, y = motion
+    return box[0] + x, box[1] + y, box[2] + x, box[3] + y
+
+
+def _transform_bbox(box: BBox, transform: CameraTransform) -> BBox:
+    a, b, tx, c, d, ty = transform
+    points = (
+        (a * box[0] + b * box[1] + tx, c * box[0] + d * box[1] + ty),
+        (a * box[2] + b * box[1] + tx, c * box[2] + d * box[1] + ty),
+        (a * box[0] + b * box[3] + tx, c * box[0] + d * box[3] + ty),
+        (a * box[2] + b * box[3] + tx, c * box[2] + d * box[3] + ty),
+    )
+    return (
+        min(point[0] for point in points),
+        min(point[1] for point in points),
+        max(point[0] for point in points),
+        max(point[1] for point in points),
+    )
+
+
+def _valid_camera_transform(transform: CameraTransform | None) -> bool:
+    if transform is None or not all(math.isfinite(value) for value in transform):
+        return False
+    a, b, _, c, d, _ = transform
+    return abs(a * d - b * c) > 0.01
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return 0.5 * (ordered[middle - 1] + ordered[middle])
 
 
 def _iou_xyxy(a: BBox, b: BBox) -> float:
@@ -116,6 +153,7 @@ class TrackerConfig:
     min_confirmed_hits: int = 1
     max_prediction_frames: int = 0
     center_distance_enabled: bool = True
+    camera_motion_compensation: bool = False
 
     def validate(self) -> None:
         if not 0.0 <= self.high_score_threshold <= 1.0:
@@ -183,6 +221,112 @@ class ObjectTracker:
 
     def active_track_count(self) -> int:
         return len(self._tracks)
+
+    def _estimate_camera_motion(
+        self, detections: list[dict], high: list[int], frame_index: int
+    ) -> tuple[tuple[float, float], bool]:
+        recent = [
+            track
+            for track in self._tracks.values()
+            if track.last_frame_index == frame_index - 1
+        ]
+        if len(recent) < 3 or len(high) < 3:
+            return (0.0, 0.0), False
+
+        predictions = [track.predict(frame_index) for track in recent]
+        boxes = [_bbox(detections[index]) for index in high]
+        diagonals = [
+            math.hypot(_width(box), _height(box)) for box in predictions + boxes
+        ]
+        typical_diagonal = max(1.0, _median(diagonals))
+        maximum_shift = max(16.0, 4.0 * typical_diagonal)
+        bin_size = max(2.0, 0.25 * typical_diagonal)
+
+        votes: list[tuple[float, float, int, int]] = []
+        histogram: dict[tuple[int, int], int] = {}
+        for track, prediction in zip(recent, predictions):
+            predicted_center = _center(prediction)
+            for detection_index in high:
+                detection = detections[detection_index]
+                if int(detection["class_id"]) != track.class_id:
+                    continue
+                observed_center = _center(_bbox(detection))
+                x = observed_center[0] - predicted_center[0]
+                y = observed_center[1] - predicted_center[1]
+                if math.hypot(x, y) > maximum_shift:
+                    continue
+                bin_xy = math.floor(x / bin_size), math.floor(y / bin_size)
+                votes.append((x, y, *bin_xy))
+                histogram[bin_xy] = histogram.get(bin_xy, 0) + 1
+        if len(votes) < 3:
+            return (0.0, 0.0), False
+
+        def neighborhood_support(bin_xy: tuple[int, int]) -> int:
+            return sum(
+                histogram.get((bin_xy[0] + dx, bin_xy[1] + dy), 0)
+                for dx in (-1, 0, 1)
+                for dy in (-1, 0, 1)
+            )
+
+        best_bin = min(
+            histogram,
+            key=lambda bin_xy: (
+                -neighborhood_support(bin_xy),
+                bin_xy[0] ** 2 + bin_xy[1] ** 2,
+                bin_xy,
+            ),
+        )
+        consensus = [
+            (x, y)
+            for x, y, bin_x, bin_y in votes
+            if abs(bin_x - best_bin[0]) <= 1 and abs(bin_y - best_bin[1]) <= 1
+        ]
+        initial = (
+            _median([motion[0] for motion in consensus]),
+            _median([motion[1] for motion in consensus]),
+        )
+
+        candidate_gate = max(0.75, self.config.max_center_distance)
+        pairs: list[tuple[float, int, int]] = []
+        for track, prediction in zip(recent, predictions):
+            reference = _translate(prediction, initial)
+            for detection_index in high:
+                detection = detections[detection_index]
+                if int(detection["class_id"]) != track.class_id:
+                    continue
+                distance = _normalized_center_distance(
+                    reference, _bbox(detection)
+                )
+                if distance <= candidate_gate:
+                    pairs.append((distance, track.track_id, detection_index))
+
+        used_tracks: set[int] = set()
+        used_detections: set[int] = set()
+        offsets: list[tuple[float, float]] = []
+        for _, track_id, detection_index in sorted(pairs):
+            if track_id in used_tracks or detection_index in used_detections:
+                continue
+            prediction = self._tracks[track_id].predict(frame_index)
+            observed = _bbox(detections[detection_index])
+            predicted_center = _center(prediction)
+            observed_center = _center(observed)
+            offsets.append(
+                (
+                    observed_center[0] - predicted_center[0],
+                    observed_center[1] - predicted_center[1],
+                )
+            )
+            used_tracks.add(track_id)
+            used_detections.add(detection_index)
+
+        possible = min(len(recent), len(high))
+        required = max(3, (possible + 2) // 3)
+        if len(offsets) < required:
+            return (0.0, 0.0), False
+        return (
+            _median([offset[0] for offset in offsets]),
+            _median([offset[1] for offset in offsets]),
+        ), False
 
     def _associate(
         self,
@@ -286,7 +430,10 @@ class ObjectTracker:
             assignments[detection_index] = track_id
 
     def update(
-        self, detections: list[dict], frame_index: int
+        self,
+        detections: list[dict],
+        frame_index: int,
+        camera_transform: CameraTransform | None = None,
     ) -> list[TrackedDetection]:
         if frame_index < 0:
             raise ValueError("frame_index must be >= 0")
@@ -309,6 +456,39 @@ class ObjectTracker:
             if float(detection["score"]) >= self.config.high_score_threshold
         ]
         low = [index for index in range(len(detections)) if index not in high]
+        applied_camera_transform: CameraTransform | None = None
+        if self.config.camera_motion_compensation:
+            if _valid_camera_transform(camera_transform):
+                applied_camera_transform = camera_transform
+            else:
+                camera_motion, _ = self._estimate_camera_motion(
+                    detections, high, frame_index
+                )
+                if camera_motion != (0.0, 0.0):
+                    applied_camera_transform = (
+                        1.0,
+                        0.0,
+                        camera_motion[0],
+                        0.0,
+                        1.0,
+                        camera_motion[1],
+                    )
+        if applied_camera_transform is not None:
+            a, b, _, c, d, _ = applied_camera_transform
+            for track in self._tracks.values():
+                bbox = track.bbox
+                filtered_bbox = track.filtered_bbox or bbox
+                track.bbox = _transform_bbox(bbox, applied_camera_transform)
+                track.filtered_bbox = _transform_bbox(
+                    filtered_bbox, applied_camera_transform
+                )
+                vx, vy, vw, vh = track.velocity
+                track.velocity = (
+                    a * vx + b * vy,
+                    c * vx + d * vy,
+                    vw * math.hypot(a, c),
+                    vh * math.hypot(b, d),
+                )
         matched_tracks: set[int] = set()
         matched_detections: set[int] = set()
         assignments: dict[int, int] = {}
@@ -349,6 +529,12 @@ class ObjectTracker:
                 for previous, current in zip(track.velocity, measured)
             )
             alpha = self.config.box_smoothing_alpha
+            if applied_camera_transform is not None and alpha < 1.0:
+                innovation = _normalized_center_distance(prediction, bbox)
+                response = min(
+                    1.0, innovation / max(0.01, self.config.max_center_distance)
+                )
+                alpha += (1.0 - alpha) * response
             predicted_center = _center(prediction)
             observed_center = _center(bbox)
             filtered_center = tuple(
@@ -458,3 +644,141 @@ def _bbox(detection: dict) -> BBox:
         float(detection["x2"]),
         float(detection["y2"]),
     )
+
+
+class FrameCameraMotionEstimator:
+    """Downscaled ORB/RANSAC partial-affine camera-motion estimator."""
+
+    def __init__(self, downscale: int = 2, max_features: int = 500) -> None:
+        import cv2
+        import numpy as np
+
+        self._cv2 = cv2
+        self._np = np
+        self._downscale = max(1, int(downscale))
+        self._orb = cv2.ORB_create(
+            nfeatures=max(64, int(max_features)),
+            scaleFactor=1.2,
+            nlevels=4,
+            edgeThreshold=15,
+            patchSize=15,
+            fastThreshold=20,
+        )
+        self._matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        self._previous_keypoints = None
+        self._previous_descriptors = None
+
+    def reset(self) -> None:
+        self._previous_keypoints = None
+        self._previous_descriptors = None
+
+    def update(self, gray_frame, detections: list[dict] | None = None) -> CameraTransform | None:
+        cv2 = self._cv2
+        np = self._np
+        if gray_frame is None or gray_frame.ndim != 2 or gray_frame.dtype != np.uint8:
+            self.reset()
+            return None
+        if self._downscale > 1:
+            gray = cv2.resize(
+                gray_frame,
+                (
+                    gray_frame.shape[1] // self._downscale,
+                    gray_frame.shape[0] // self._downscale,
+                ),
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            gray = gray_frame
+
+        feature_mask = np.zeros(gray.shape, dtype=np.uint8)
+        border_x = max(1, gray.shape[1] // 50)
+        border_y = max(1, gray.shape[0] // 50)
+        feature_mask[
+            border_y : gray.shape[0] - border_y,
+            border_x : gray.shape[1] - border_x,
+        ] = 255
+        for detection in detections or ():
+            scale = float(self._downscale)
+            x1 = max(0, math.floor(float(detection["x1"]) / scale) - 2)
+            y1 = max(0, math.floor(float(detection["y1"]) / scale) - 2)
+            x2 = min(gray.shape[1], math.ceil(float(detection["x2"]) / scale) + 2)
+            y2 = min(gray.shape[0], math.ceil(float(detection["y2"]) / scale) + 2)
+            if x2 > x1 and y2 > y1:
+                feature_mask[y1:y2, x1:x2] = 0
+
+        keypoints, descriptors = self._orb.detectAndCompute(gray, feature_mask)
+        result = None
+        if (
+            self._previous_descriptors is not None
+            and descriptors is not None
+            and self._previous_keypoints is not None
+            and len(self._previous_keypoints) >= 8
+            and len(keypoints) >= 8
+        ):
+            pairs = self._matcher.knnMatch(
+                self._previous_descriptors, descriptors, k=2
+            )
+            accepted = [
+                pair[0]
+                for pair in pairs
+                if len(pair) >= 2 and pair[0].distance < 0.80 * pair[1].distance
+            ]
+            if len(accepted) >= 8:
+                previous = np.float32(
+                    [self._previous_keypoints[match.queryIdx].pt for match in accepted]
+                )
+                current = np.float32(
+                    [keypoints[match.trainIdx].pt for match in accepted]
+                )
+                affine, inlier_mask = cv2.estimateAffinePartial2D(
+                    previous,
+                    current,
+                    method=cv2.RANSAC,
+                    ransacReprojThreshold=2.5,
+                    maxIters=500,
+                    confidence=0.99,
+                    refineIters=10,
+                )
+                inliers = (
+                    int(np.count_nonzero(inlier_mask))
+                    if inlier_mask is not None
+                    else 0
+                )
+                if affine is not None and self._plausible(
+                    affine, gray.shape[1], gray.shape[0], inliers, len(accepted)
+                ):
+                    scale = float(self._downscale)
+                    result = (
+                        float(affine[0, 0]),
+                        float(affine[0, 1]),
+                        scale * float(affine[0, 2]),
+                        float(affine[1, 0]),
+                        float(affine[1, 1]),
+                        scale * float(affine[1, 2]),
+                    )
+
+        self._previous_keypoints = keypoints
+        self._previous_descriptors = (
+            None if descriptors is None else descriptors.copy()
+        )
+        return result
+
+    @staticmethod
+    def _plausible(affine, width: int, height: int, inliers: int, matches: int) -> bool:
+        if inliers < 8 or matches <= 0 or inliers / matches < 0.25:
+            return False
+        a, b, tx = (float(value) for value in affine[0])
+        c, d, ty = (float(value) for value in affine[1])
+        values = (a, b, tx, c, d, ty)
+        if not all(math.isfinite(value) for value in values):
+            return False
+        scale_x = math.hypot(a, c)
+        scale_y = math.hypot(b, d)
+        rotation = abs(math.atan2(c, a))
+        return (
+            0.85 <= scale_x <= 1.15
+            and 0.85 <= scale_y <= 1.15
+            and rotation <= 0.20
+            and abs(tx) <= 0.5 * width
+            and abs(ty) <= 0.5 * height
+        )

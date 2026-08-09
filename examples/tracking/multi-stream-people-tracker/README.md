@@ -118,6 +118,7 @@ tracking:
   max_center_distance: 2.5
   velocity_momentum: 0.80
   box_smoothing_alpha: 1.0
+  camera_motion_compensation: false
   max_missing_frames: 15
   max_prediction_frames: 0
 
@@ -137,14 +138,23 @@ motion-aware OR gate.
 `1.0` publishes raw detector geometry; lower values reduce localization jitter.
 Association is recency-cascaded so retained stale tracks cannot steal a
 detection from a track observed on the immediately preceding frame.
+`camera_motion_compensation` estimates a partial-affine frame transform with
+downscaled ORB features and RANSAC, then transforms every retained track before
+prediction and association. If the image has too little texture for a reliable
+estimate, the tracker may fall back to a robust shared translation from the
+detection cloud. It is useful for moving-camera scenes and is disabled by
+default so fixed-camera and legacy profiles retain their exact matching
+behavior.
 
 For the one-class drone candidate, copy
 `src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight
 host. Its low decoder floor is intentional: detections below the high-score
 threshold may recover an existing track but cannot create a new one.
-The tiny-drone profile publishes at most one predicted frame for an already
-confirmed, high-confidence track. This bridges isolated detector misses without
-letting low-confidence candidates create or extend identities.
+The tiny-drone profile enables camera-motion compensation and publishes at most
+one motion-compensated prediction for an isolated detector miss. Low-confidence
+detections may recover a confirmed identity, but cannot create one.
+When `output.save_dir` is enabled, annotated JPEGs are encoded by a bounded
+background writer so debug rendering does not serialize the inference loop.
 `inference.num_classes` is part of the detector contract and must match the
 YOLO26 class-head depth (`1` for the tiny-drone model and `80` for COCO). The
 application rejects non-positive class counts and target class IDs outside

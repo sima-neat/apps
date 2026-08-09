@@ -8,15 +8,22 @@ import glob
 import json
 import math
 import os
+import queue
 import struct
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from utils.tracker import ObjectTracker, TrackedDetection, TrackerConfig
+from utils.tracker import (
+    FrameCameraMotionEstimator,
+    ObjectTracker,
+    TrackedDetection,
+    TrackerConfig,
+)
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
@@ -57,6 +64,7 @@ class AppConfig:
     tracker_min_confirmed_hits: int = 1
     tracker_max_prediction_frames: int = 0
     tracker_center_distance_enabled: bool = False
+    tracker_camera_motion_compensation: bool = False
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -80,6 +88,9 @@ class StreamRuntime:
     video_port: int
     processed: int = 0
     closed: bool = False
+    camera_motion: FrameCameraMotionEstimator | None = None
+    debug_writer: DebugFrameWriter | None = None
+    save_bgr: bool = False
 
 
 @dataclass
@@ -89,6 +100,35 @@ class DebugFrame:
     orig_input_seq: int
     pts_ns: int
     bgr: object
+    gray: object = None
+
+
+class DebugFrameWriter:
+    """Keep JPEG compression off the inference/output thread."""
+
+    def __init__(self, maximum_queued_frames: int = 16) -> None:
+        self._tasks: queue.Queue[tuple[Path, object] | None] = queue.Queue(
+            maxsize=maximum_queued_frames
+        )
+        self._worker = threading.Thread(target=self._run, daemon=False)
+        self._worker.start()
+
+    def enqueue(self, path: Path, frame) -> None:
+        self._tasks.put((path, frame))
+
+    def close(self) -> None:
+        if self._worker.is_alive():
+            self._tasks.put(None)
+            self._worker.join()
+
+    def _run(self) -> None:
+        while True:
+            task = self._tasks.get()
+            if task is None:
+                return
+            path, frame = task
+            if not cv2.imwrite(str(path), frame):
+                print(f"[warn] failed to write output frame: {path}", file=sys.stderr)
 
 
 @dataclass
@@ -391,6 +431,9 @@ def load_app_config(config_path: Path) -> AppConfig:
         tracker_min_confirmed_hits=int_or(tracking, "min_confirmed_hits", 1),
         tracker_max_prediction_frames=int_or(tracking, "max_prediction_frames", 0),
         tracker_center_distance_enabled=tracker_center_distance_enabled,
+        tracker_camera_motion_compensation=bool_or(
+            tracking, "camera_motion_compensation", False
+        ),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
@@ -475,14 +518,12 @@ def build_metadata_tracks(
 ) -> list[dict]:
     metadata_tracks = []
     for track in tracks:
-        x = max(0, int(track.x1))
-        y = max(0, int(track.y1))
-        w = max(0, int(track.x2 - track.x1))
-        h = max(0, int(track.y2 - track.y1))
-        if x + w > frame_w:
-            w = frame_w - x
-        if y + h > frame_h:
-            h = frame_h - y
+        x = min(frame_w, max(0, round(track.x1)))
+        y = min(frame_h, max(0, round(track.y1)))
+        x2 = min(frame_w, max(0, round(track.x2)))
+        y2 = min(frame_h, max(0, round(track.y2)))
+        w = max(0, x2 - x)
+        h = max(0, y2 - y)
         metadata_tracks.append(
             {
                 "id": str(track.track_id),
@@ -654,6 +695,10 @@ def save_frames_enabled(cfg: AppConfig) -> bool:
     return bool(cfg.save_dir) and cfg.save_every > 0
 
 
+def tracking_frames_enabled(cfg: AppConfig) -> bool:
+    return save_frames_enabled(cfg) or cfg.tracker_camera_motion_compensation
+
+
 def stream_id_for(stream_index: int) -> str:
     return f"stream{stream_index}"
 
@@ -770,14 +815,22 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
                 min_confirmed_hits=cfg.tracker_min_confirmed_hits,
                 max_prediction_frames=cfg.tracker_max_prediction_frames,
                 center_distance_enabled=cfg.tracker_center_distance_enabled,
+                camera_motion_compensation=cfg.tracker_camera_motion_compensation,
             )
         ),
+        camera_motion=(
+            FrameCameraMotionEstimator()
+            if cfg.tracker_camera_motion_compensation
+            else None
+        ),
+        debug_writer=DebugFrameWriter() if save_frames_enabled(cfg) else None,
         profile=ProfileWindow(cfg.profile, stream_index),
         debug_frames=deque(),
         frame_w=frame_w,
         frame_h=frame_h,
         output_fps=output_fps,
         video_port=video_port,
+        save_bgr=save_frames_enabled(cfg),
     )
 
 
@@ -803,7 +856,7 @@ def connect_stream_graph(
     else:
         app.graph.connect(source, decoder, stream_link(cfg, stream.index, 3))
 
-    save_debug_frames = save_frames_enabled(cfg)
+    save_debug_frames = tracking_frames_enabled(cfg)
     decoded_outputs = (
         ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
     )
@@ -863,7 +916,7 @@ def first_tensor_from_sample(sample):
     return None
 
 
-def tensor_bgr_from_decoded(tensor):
+def tensor_tracking_frame(tensor, include_bgr: bool):
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
@@ -874,7 +927,13 @@ def tensor_bgr_from_decoded(tensor):
         if payload.size < expected:
             raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
         nv12 = payload[:expected].reshape((height * 3 // 2, width))
-        return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
+        gray = np.ascontiguousarray(nv12[:height])
+        bgr = (
+            np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
+            if include_bgr
+            else None
+        )
+        return gray, bgr
 
     frame = np.asarray(tensor.to_numpy(copy=True))
     if frame.ndim == 4 and frame.shape[0] == 1:
@@ -883,7 +942,10 @@ def tensor_bgr_from_decoded(tensor):
         raise RuntimeError(f"unexpected decoded tensor shape {frame.shape}")
     if frame.dtype != np.uint8:
         frame = np.clip(frame, 0, 255).astype(np.uint8)
-    return np.ascontiguousarray(frame)
+    frame = np.ascontiguousarray(frame)
+    return np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)), (
+        frame if include_bgr else None
+    )
 
 
 def draw_tracks(frame, tracks: list[TrackedDetection], min_score: float) -> None:
@@ -933,8 +995,8 @@ def maybe_save_debug_frame(
     out_path = (
         Path(cfg.save_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
     )
-    if not cv2.imwrite(str(out_path), frame):
-        print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
+    if stream.debug_writer is not None:
+        stream.debug_writer.enqueue(out_path, frame)
 
 
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
@@ -954,8 +1016,24 @@ def process_output_sample(
         payload, stream.frame_w, stream.frame_h, cfg.max_detections
     )
     target_detections = filter_target_class(boxes, cfg.target_class_id)
+    frame = take_matching_debug_frame(stream, sample)
     tracker_start = time_ms()
-    tracks = stream.tracker.update(target_detections, stream.processed)
+    if cfg.tracker_camera_motion_compensation and stream.camera_motion is None:
+        stream.camera_motion = FrameCameraMotionEstimator()
+    camera_transform = None
+    if (
+        cfg.tracker_camera_motion_compensation
+        and stream.camera_motion is not None
+        and frame is not None
+    ):
+        camera_transform = stream.camera_motion.update(frame.gray, target_detections)
+    elif cfg.tracker_camera_motion_compensation and stream.camera_motion is not None:
+        # Avoid applying a transform spanning an already compensated missing
+        # side-branch frame when image samples resume.
+        stream.camera_motion.reset()
+    tracks = stream.tracker.update(
+        target_detections, stream.processed, camera_transform
+    )
     tracker_end = time_ms()
 
     stream.processed += 1
@@ -965,7 +1043,6 @@ def process_output_sample(
         send_metadata(stream, cfg, sample, tracks)
         metadata_end = time_ms()
         if save_frames_enabled(cfg):
-            frame = take_matching_debug_frame(stream, sample)
             if frame is None:
                 print(
                     f"[warn] stream {stream.index} has no decoded frame matching "
@@ -973,7 +1050,7 @@ def process_output_sample(
                     file=sys.stderr,
                 )
             else:
-                maybe_save_debug_frame(cfg, stream, frame, tracks)
+                maybe_save_debug_frame(cfg, stream, frame.bgr, tracks)
         stream.profile.add(
             detection_pull_ms,
             tracker_end - tracker_start,
@@ -999,10 +1076,9 @@ def take_matching_debug_frame(stream: StreamRuntime, sample):
     for index, frame in enumerate(stream.debug_frames):
         if not samples_identify_same_frame(sample, frame):
             continue
-        matched = frame.bgr
         for _ in range(index + 1):
             stream.debug_frames.popleft()
-        return matched
+        return frame
     return None
 
 
@@ -1017,6 +1093,7 @@ def pull_debug_frame(app: AppRuntime, stream: StreamRuntime, timeout_ms: int) ->
     tensor = first_tensor_from_sample(sample)
     if tensor is None:
         return True
+    gray, bgr = tensor_tracking_frame(tensor, bool(getattr(stream, "save_bgr", False)))
     if len(stream.debug_frames) >= 16:
         stream.debug_frames.popleft()
     stream.debug_frames.append(
@@ -1025,14 +1102,15 @@ def pull_debug_frame(app: AppRuntime, stream: StreamRuntime, timeout_ms: int) ->
             input_seq=int(getattr(sample, "input_seq", -1)),
             orig_input_seq=int(getattr(sample, "orig_input_seq", -1)),
             pts_ns=int(getattr(sample, "pts_ns", -1)),
-            bgr=tensor_bgr_from_decoded(tensor),
+            gray=gray,
+            bgr=bgr,
         )
     )
     return True
 
 
 def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
-    if not save_frames_enabled(cfg):
+    if not tracking_frames_enabled(cfg):
         return
     for stream in app.streams:
         while pull_debug_frame(app, stream, 0):
@@ -1042,7 +1120,7 @@ def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
 def await_matching_debug_frame(
     app: AppRuntime, cfg: AppConfig, stream_index: int, detection
 ) -> None:
-    if not save_frames_enabled(cfg):
+    if not tracking_frames_enabled(cfg):
         return
     stream = app.streams[stream_index]
     deadline_ms = time_ms() + 50.0
@@ -1083,13 +1161,13 @@ def run_app(cfg: AppConfig) -> None:
     model, detector_graph = build_detector_graph(cfg)
     detections_graph = build_detections_graph()
     app = AppRuntime(graph=pyneat.Graph(), run=None, model=model, streams=[])
-    for index, url in enumerate(cfg.rtsp_urls):
-        stream = build_stream_runtime(cfg, index, url)
-        app.streams.append(stream)
-        connect_stream_graph(app, cfg, stream, detector_graph)
-    app.graph.connect(detector_graph, detections_graph)
-
     try:
+        for index, url in enumerate(cfg.rtsp_urls):
+            stream = build_stream_runtime(cfg, index, url)
+            app.streams.append(stream)
+            connect_stream_graph(app, cfg, stream, detector_graph)
+        app.graph.connect(detector_graph, detections_graph)
+
         if cfg.profile:
             print(f"Backend:\n{app.graph.describe_backend()}")
         app.run = app.graph.build(build_run_options())
@@ -1101,6 +1179,8 @@ def run_app(cfg: AppConfig) -> None:
         if app.run is not None:
             app.run.close()
         for stream in app.streams:
+            if stream.debug_writer is not None:
+                stream.debug_writer.close()
             stream.profile.flush()
             print(f"[stream {stream.index}] processed={stream.processed}")
 
@@ -1120,6 +1200,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"overflow_policy={cfg.overflow_policy}, "
                 "center_distance_enabled="
                 f"{str(cfg.tracker_center_distance_enabled).lower()}, "
+                "camera_motion_compensation="
+                f"{str(cfg.tracker_camera_motion_compensation).lower()}, "
                 f"max_prediction_frames={cfg.tracker_max_prediction_frames})"
             )
             return 0

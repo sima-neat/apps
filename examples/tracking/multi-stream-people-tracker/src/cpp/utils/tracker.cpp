@@ -1,9 +1,11 @@
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -29,6 +31,19 @@ struct TrackState {
   int missing_frames = 0;
   int hits = 1;
   bool confirmed = true;
+};
+
+struct MotionPair {
+  float distance = 0.0f;
+  int track_index = -1;
+  int detection_index = -1;
+};
+
+struct MotionVote {
+  float x = 0.0f;
+  float y = 0.0f;
+  int bin_x = 0;
+  int bin_y = 0;
 };
 
 float width(const Detection& detection) {
@@ -79,6 +94,61 @@ Detection predict(const TrackState& track, int frame_index) {
                    predicted_y + predicted_h * 0.5f,
                    track.detection.score,
                    track.detection.class_id};
+}
+
+Detection translate(Detection detection, float x, float y) {
+  detection.x1 += x;
+  detection.x2 += x;
+  detection.y1 += y;
+  detection.y2 += y;
+  return detection;
+}
+
+bool valid_camera_transform(const CameraTransform& transform) {
+  if (!transform.valid || !std::isfinite(transform.a) || !std::isfinite(transform.b) ||
+      !std::isfinite(transform.tx) || !std::isfinite(transform.c) || !std::isfinite(transform.d) ||
+      !std::isfinite(transform.ty)) {
+    return false;
+  }
+  const float determinant = transform.a * transform.d - transform.b * transform.c;
+  return std::abs(determinant) > 0.01f;
+}
+
+Detection transform_detection(const Detection& detection, const CameraTransform& transform) {
+  const auto transform_point = [&](float x, float y) {
+    return std::pair{transform.a * x + transform.b * y + transform.tx,
+                     transform.c * x + transform.d * y + transform.ty};
+  };
+  const auto p0 = transform_point(detection.x1, detection.y1);
+  const auto p1 = transform_point(detection.x2, detection.y1);
+  const auto p2 = transform_point(detection.x1, detection.y2);
+  const auto p3 = transform_point(detection.x2, detection.y2);
+  return Detection{std::min({p0.first, p1.first, p2.first, p3.first}),
+                   std::min({p0.second, p1.second, p2.second, p3.second}),
+                   std::max({p0.first, p1.first, p2.first, p3.first}),
+                   std::max({p0.second, p1.second, p2.second, p3.second}),
+                   detection.score,
+                   detection.class_id};
+}
+
+void transform_track_state(TrackState& track, const CameraTransform& transform) {
+  track.detection = transform_detection(track.detection, transform);
+  track.filtered_detection = transform_detection(track.filtered_detection, transform);
+  const float velocity_x = transform.a * track.velocity_x + transform.b * track.velocity_y;
+  const float velocity_y = transform.c * track.velocity_x + transform.d * track.velocity_y;
+  track.velocity_x = velocity_x;
+  track.velocity_y = velocity_y;
+  track.velocity_w *= std::hypot(transform.a, transform.c);
+  track.velocity_h *= std::hypot(transform.b, transform.d);
+}
+
+float median(std::vector<float>& values) {
+  if (values.empty()) {
+    return 0.0f;
+  }
+  std::sort(values.begin(), values.end());
+  const std::size_t middle = values.size() / 2;
+  return values.size() % 2 == 0 ? 0.5f * (values[middle - 1] + values[middle]) : values[middle];
 }
 
 Detection smooth_detection(const Detection& prediction, const Detection& observation,
@@ -310,8 +380,184 @@ struct ObjectTracker::Impl {
   std::vector<int> way;
   std::vector<int> row_to_column;
   std::vector<unsigned char> used;
+  std::vector<int> motion_tracks;
+  std::vector<int> motion_detections;
+  std::vector<float> motion_values_x;
+  std::vector<float> motion_values_y;
+  std::vector<float> motion_scales;
+  std::vector<float> motion_offsets_x;
+  std::vector<float> motion_offsets_y;
+  std::vector<MotionVote> motion_votes;
+  std::vector<MotionPair> motion_pairs;
+  std::unordered_map<std::uint64_t, int> motion_histogram;
+  std::vector<unsigned char> motion_track_used;
+  std::vector<unsigned char> motion_detection_used;
   int last_frame_index = -1;
 };
+
+template <typename ImplType>
+CameraTransform estimate_camera_motion(ImplType& impl, const std::vector<Detection>& detections,
+                                       const TrackerConfig& config, int frame_index) {
+  constexpr std::size_t kMinimumObjects = 3;
+
+  impl.motion_tracks.clear();
+  impl.motion_detections.clear();
+  impl.motion_scales.clear();
+  for (std::size_t index = 0; index < impl.tracks.size(); ++index) {
+    const auto& track = impl.tracks[index];
+    if (track.last_frame_index != frame_index - 1) {
+      continue;
+    }
+    const Detection prediction = predict(track, frame_index);
+    impl.motion_tracks.push_back(static_cast<int>(index));
+    impl.motion_scales.push_back(std::hypot(width(prediction), height(prediction)));
+  }
+  const std::size_t track_count = impl.motion_tracks.size();
+
+  for (std::size_t index = 0; index < detections.size(); ++index) {
+    const auto& detection = detections[index];
+    if (detection.score < config.high_score_threshold) {
+      continue;
+    }
+    impl.motion_detections.push_back(static_cast<int>(index));
+    impl.motion_scales.push_back(std::hypot(width(detection), height(detection)));
+  }
+  const std::size_t detection_count = impl.motion_detections.size();
+  if (track_count < kMinimumObjects || detection_count < kMinimumObjects) {
+    return {};
+  }
+
+  const float typical_diagonal = std::max(1.0f, median(impl.motion_scales));
+  const float maximum_shift = std::max(16.0f, 4.0f * typical_diagonal);
+  const float bin_size = std::max(2.0f, 0.25f * typical_diagonal);
+  const auto bin_key = [](int x, int y) {
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32U) |
+           static_cast<std::uint32_t>(y);
+  };
+
+  // Every correct correspondence votes for nearly the same translation;
+  // incorrect cross-object pairs spread across the displacement plane. A
+  // compact 3x3-bin consensus is robust to individual drone motion, detector
+  // dropouts, and boxes entering or leaving the image.
+  impl.motion_votes.clear();
+  impl.motion_histogram.clear();
+  for (const int track_index : impl.motion_tracks) {
+    const auto& track = impl.tracks[static_cast<std::size_t>(track_index)];
+    const Detection prediction = predict(track, frame_index);
+    for (const int detection_index : impl.motion_detections) {
+      const Detection& detection = detections[static_cast<std::size_t>(detection_index)];
+      if (detection.class_id != track.detection.class_id) {
+        continue;
+      }
+      const float x = center_x(detection) - center_x(prediction);
+      const float y = center_y(detection) - center_y(prediction);
+      if (std::hypot(x, y) > maximum_shift) {
+        continue;
+      }
+      const int bin_x = static_cast<int>(std::floor(x / bin_size));
+      const int bin_y = static_cast<int>(std::floor(y / bin_size));
+      impl.motion_votes.push_back(MotionVote{x, y, bin_x, bin_y});
+      ++impl.motion_histogram[bin_key(bin_x, bin_y)];
+    }
+  }
+  if (impl.motion_votes.size() < kMinimumObjects) {
+    return {};
+  }
+
+  int best_x = 0;
+  int best_y = 0;
+  int best_support = 0;
+  for (const auto& [key, count] : impl.motion_histogram) {
+    (void)count;
+    const int bin_x = static_cast<std::int32_t>(key >> 32U);
+    const int bin_y = static_cast<std::int32_t>(key & 0xffffffffU);
+    int support = 0;
+    for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+      for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+        const auto found = impl.motion_histogram.find(bin_key(bin_x + offset_x, bin_y + offset_y));
+        if (found != impl.motion_histogram.end()) {
+          support += found->second;
+        }
+      }
+    }
+    const int squared_norm = bin_x * bin_x + bin_y * bin_y;
+    const int best_squared_norm = best_x * best_x + best_y * best_y;
+    if (support > best_support ||
+        (support == best_support && (squared_norm < best_squared_norm ||
+                                     (squared_norm == best_squared_norm &&
+                                      std::pair{bin_x, bin_y} < std::pair{best_x, best_y})))) {
+      best_support = support;
+      best_x = bin_x;
+      best_y = bin_y;
+    }
+  }
+
+  impl.motion_values_x.clear();
+  impl.motion_values_y.clear();
+  for (const auto& vote : impl.motion_votes) {
+    if (std::abs(vote.bin_x - best_x) <= 1 && std::abs(vote.bin_y - best_y) <= 1) {
+      impl.motion_values_x.push_back(vote.x);
+      impl.motion_values_y.push_back(vote.y);
+    }
+  }
+  const float initial_x = median(impl.motion_values_x);
+  const float initial_y = median(impl.motion_values_y);
+
+  // Validate the consensus using unique pairs, then refine the translation
+  // from only those correspondences.
+  impl.motion_pairs.clear();
+  const float candidate_gate = std::max(0.75f, config.max_center_distance);
+  for (const int track_index : impl.motion_tracks) {
+    const auto& track = impl.tracks[static_cast<std::size_t>(track_index)];
+    const Detection reference = translate(predict(track, frame_index), initial_x, initial_y);
+    for (const int detection_index : impl.motion_detections) {
+      const auto& detection = detections[static_cast<std::size_t>(detection_index)];
+      if (detection.class_id != track.detection.class_id) {
+        continue;
+      }
+      const float distance = normalized_center_distance(reference, detection);
+      if (distance <= candidate_gate) {
+        impl.motion_pairs.push_back(MotionPair{distance, track_index, detection_index});
+      }
+    }
+  }
+  std::sort(impl.motion_pairs.begin(), impl.motion_pairs.end(),
+            [](const MotionPair& lhs, const MotionPair& rhs) {
+              if (lhs.distance != rhs.distance) {
+                return lhs.distance < rhs.distance;
+              }
+              if (lhs.track_index != rhs.track_index) {
+                return lhs.track_index < rhs.track_index;
+              }
+              return lhs.detection_index < rhs.detection_index;
+            });
+
+  impl.motion_track_used.assign(impl.tracks.size(), 0);
+  impl.motion_detection_used.assign(detections.size(), 0);
+  impl.motion_offsets_x.clear();
+  impl.motion_offsets_y.clear();
+  for (const auto& pair : impl.motion_pairs) {
+    if (impl.motion_track_used[static_cast<std::size_t>(pair.track_index)] != 0 ||
+        impl.motion_detection_used[static_cast<std::size_t>(pair.detection_index)] != 0) {
+      continue;
+    }
+    const Detection prediction =
+        predict(impl.tracks[static_cast<std::size_t>(pair.track_index)], frame_index);
+    const Detection& detection = detections[static_cast<std::size_t>(pair.detection_index)];
+    impl.motion_track_used[static_cast<std::size_t>(pair.track_index)] = 1;
+    impl.motion_detection_used[static_cast<std::size_t>(pair.detection_index)] = 1;
+    impl.motion_offsets_x.push_back(center_x(detection) - center_x(prediction));
+    impl.motion_offsets_y.push_back(center_y(detection) - center_y(prediction));
+  }
+
+  const std::size_t possible = std::min(track_count, detection_count);
+  const std::size_t required = std::max(kMinimumObjects, (possible + 2) / 3);
+  if (impl.motion_offsets_x.size() < required) {
+    return {};
+  }
+  return CameraTransform{
+      1.0f, 0.0f, median(impl.motion_offsets_x), 0.0f, 1.0f, median(impl.motion_offsets_y), true};
+}
 
 ObjectTracker::ObjectTracker(TrackerConfig config)
     : config_(config), impl_(std::make_unique<Impl>()) {
@@ -327,14 +573,16 @@ int ObjectTracker::active_track_count() const {
 }
 
 std::vector<TrackedDetection> ObjectTracker::update(const std::vector<Detection>& detections,
-                                                    int frame_index) {
+                                                    int frame_index,
+                                                    const CameraTransform& camera_transform) {
   std::vector<TrackedDetection> tracked;
-  update_into(detections, frame_index, tracked);
+  update_into(detections, frame_index, tracked, camera_transform);
   return tracked;
 }
 
 void ObjectTracker::update_into(const std::vector<Detection>& detections, int frame_index,
-                                std::vector<TrackedDetection>& tracked) {
+                                std::vector<TrackedDetection>& tracked,
+                                const CameraTransform& camera_transform) {
   if (frame_index < 0) {
     throw std::invalid_argument("frame_index must be >= 0");
   }
@@ -357,6 +605,19 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     stage.push_back(static_cast<int>(index));
   }
 
+  CameraTransform camera_motion;
+  if (config_.camera_motion_compensation) {
+    camera_motion = valid_camera_transform(camera_transform)
+                        ? camera_transform
+                        : estimate_camera_motion(*impl_, detections, config_, frame_index);
+  }
+  if (valid_camera_transform(camera_motion)) {
+    for (auto& track : impl_->tracks) {
+      transform_track_state(track, camera_motion);
+    }
+  } else {
+    camera_motion = {};
+  }
   impl_->matched_tracks.assign(impl_->tracks.size(), 0);
   impl_->matched_detections.assign(detections.size(), 0);
   impl_->assignments.assign(detections.size(), -1);
@@ -478,8 +739,14 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     track.velocity_y = previous * track.velocity_y + measured * measured_vy;
     track.velocity_w = previous * track.velocity_w + measured * measured_vw;
     track.velocity_h = previous * track.velocity_h + measured * measured_vh;
-    track.filtered_detection =
-        smooth_detection(filtered_prediction, detection, config_.box_smoothing_alpha);
+    float smoothing_alpha = config_.box_smoothing_alpha;
+    if (camera_motion.valid && smoothing_alpha < 1.0f) {
+      const float innovation = normalized_center_distance(filtered_prediction, detection);
+      const float response =
+          std::min(1.0f, innovation / std::max(0.01f, config_.max_center_distance));
+      smoothing_alpha += (1.0f - smoothing_alpha) * response;
+    }
+    track.filtered_detection = smooth_detection(filtered_prediction, detection, smoothing_alpha);
     track.detection = detection;
     track.last_frame_index = frame_index;
     track.missing_frames = 0;
