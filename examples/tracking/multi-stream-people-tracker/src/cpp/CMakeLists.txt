@@ -17,7 +17,8 @@ pkg_check_modules(TRACKER_OPENCV REQUIRED opencv4)
 # unversioned shared-library links are absent.  Prefer the versioned shared
 # objects for the camera-motion path so a transitive -lopencv_* cannot mix a
 # static component with OpenCV DSOs in the same link.
-set(TRACKER_OPENCV_SHARED_LIBRARIES)
+set(TRACKER_OPENCV_LINK_LIBRARIES)
+set(TRACKER_OPENCV_ALL_SHARED TRUE)
 foreach(component IN ITEMS calib3d features2d imgcodecs imgproc core)
   string(TOUPPER "${component}" component_upper)
   find_library(TRACKER_OPENCV_${component_upper}_SHARED
@@ -26,15 +27,53 @@ foreach(component IN ITEMS calib3d features2d imgcodecs imgproc core)
     NO_DEFAULT_PATH
   )
   if (NOT TRACKER_OPENCV_${component_upper}_SHARED)
-    message(FATAL_ERROR
-      "The tracker requires the shared OpenCV ${component} component "
-      "for ABI-safe camera-motion linking."
-    )
+    set(TRACKER_OPENCV_ALL_SHARED FALSE)
   endif()
-  list(APPEND TRACKER_OPENCV_SHARED_LIBRARIES
-    "${TRACKER_OPENCV_${component_upper}_SHARED}"
-  )
 endforeach()
+
+if (TRACKER_OPENCV_ALL_SHARED)
+  foreach(component IN ITEMS calib3d features2d imgcodecs imgproc core)
+    string(TOUPPER "${component}" component_upper)
+    list(APPEND TRACKER_OPENCV_LINK_LIBRARIES
+      "${TRACKER_OPENCV_${component_upper}_SHARED}"
+    )
+  endforeach()
+else()
+  # Some SDK releases intentionally ship features2d only as an archive.  In
+  # that layout, linking the archive after a shared calib3d is invalid because
+  # the DSO cannot bind features2d's hidden C++ symbols.  Keep that dependency
+  # pair and its flann dependency consistently static, then use the independent
+  # imgcodecs/imgproc/core DSOs.  This avoids the larger all-static OpenCV
+  # closure.
+  foreach(component IN ITEMS calib3d features2d flann)
+    string(TOUPPER "${component}" component_upper)
+    find_library(TRACKER_OPENCV_${component_upper}_STATIC
+      NAMES "libopencv_${component}.a"
+      PATHS ${TRACKER_OPENCV_LIBRARY_DIRS}
+      NO_DEFAULT_PATH
+    )
+    if (NOT TRACKER_OPENCV_${component_upper}_STATIC)
+      message(FATAL_ERROR
+        "The tracker requires the OpenCV ${component} archive when shared "
+        "camera-motion components are incomplete."
+      )
+    endif()
+    list(APPEND TRACKER_OPENCV_LINK_LIBRARIES
+      "${TRACKER_OPENCV_${component_upper}_STATIC}"
+    )
+  endforeach()
+  foreach(component IN ITEMS imgcodecs imgproc core)
+    string(TOUPPER "${component}" component_upper)
+    if (NOT TRACKER_OPENCV_${component_upper}_SHARED)
+      message(FATAL_ERROR
+        "The tracker requires the shared OpenCV ${component} component."
+      )
+    endif()
+    list(APPEND TRACKER_OPENCV_LINK_LIBRARIES
+      "${TRACKER_OPENCV_${component_upper}_SHARED}"
+    )
+  endforeach()
+endif()
 
 get_filename_component(APPS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 if (NOT TARGET SimaNeatApps::sima_neat)
@@ -78,7 +117,7 @@ function(link_multi_stream_people_tracker target)
   endif()
   set_property(TARGET "${target}" PROPERTY LINK_LIBRARIES
     multi_stream_people_tracker_lib
-    ${TRACKER_OPENCV_SHARED_LIBRARIES}
+    ${TRACKER_OPENCV_LINK_LIBRARIES}
     ${existing_link_libraries}
   )
 endfunction()
