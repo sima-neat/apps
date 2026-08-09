@@ -1019,6 +1019,38 @@ class TestTracker:
         assert low_only == []
         assert fresh.active_track_count() == 0
 
+    def test_low_score_detection_cannot_confirm_tentative_track(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                high_score_threshold=0.5,
+                new_track_threshold=0.7,
+                min_confirmed_hits=2,
+            )
+        )
+        tentative = tracker.update(
+            [{"x1": 10, "y1": 10, "x2": 14, "y2": 14, "score": 0.9, "class_id": 0}],
+            frame_index=0,
+        )
+        low_score = tracker.update(
+            [
+                {
+                    "x1": 10.5,
+                    "y1": 10,
+                    "x2": 14.5,
+                    "y2": 14,
+                    "score": 0.2,
+                    "class_id": 0,
+                }
+            ],
+            frame_index=1,
+        )
+
+        assert tentative == []
+        assert low_score == []
+        assert tracker.active_track_count() == 0
+
     def test_confirmation_suppresses_single_frame_noise(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 

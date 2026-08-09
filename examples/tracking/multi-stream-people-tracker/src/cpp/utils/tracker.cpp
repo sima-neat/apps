@@ -700,10 +700,11 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     }
   };
 
-  const auto associate = [&](const std::vector<int>& detection_indices) {
+  const auto associate = [&](const std::vector<int>& detection_indices, bool confirmed_only) {
     impl_->track_indices.clear();
     for (std::size_t index = 0; index < impl_->tracks.size(); ++index) {
-      if (impl_->matched_tracks[index] == 0) {
+      if (impl_->matched_tracks[index] == 0 &&
+          (!confirmed_only || impl_->tracks[index].confirmed)) {
         impl_->track_indices.push_back(static_cast<int>(index));
       }
     }
@@ -732,8 +733,8 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
 
   // ByteTrack-style staging lets low-score detections recover established
   // tracks, while only high-score detections may create identities.
-  associate(impl_->high_detections);
-  associate(impl_->low_detections);
+  associate(impl_->high_detections, false);
+  associate(impl_->low_detections, true);
 
   for (std::size_t detection_index = 0; detection_index < detections.size(); ++detection_index) {
     const int track_index = impl_->assignments[detection_index];

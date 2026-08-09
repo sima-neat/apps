@@ -361,12 +361,14 @@ class ObjectTracker:
         matched_tracks: set[int],
         matched_detections: set[int],
         assignments: dict[int, int],
+        confirmed_only: bool = False,
     ) -> None:
         candidates = sorted(
             (
                 track
                 for track in self._tracks.values()
                 if track.track_id not in matched_tracks
+                and (track.confirmed or not confirmed_only)
             ),
             key=lambda track: (-track.last_frame_index, track.track_id),
         )
@@ -537,6 +539,7 @@ class ObjectTracker:
             matched_tracks,
             matched_detections,
             assignments,
+            confirmed_only=True,
         )
 
         for detection_index, track_id in assignments.items():

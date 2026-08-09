@@ -625,6 +625,20 @@ bool test_low_score_detection_recovers_but_does_not_create_track() {
                      "low-score detection cannot create a track");
 }
 
+bool test_low_score_detection_does_not_confirm_tentative_track() {
+  TrackerConfig config;
+  config.high_score_threshold = 0.5f;
+  config.new_track_threshold = 0.7f;
+  config.min_confirmed_hits = 2;
+  ObjectTracker tracker(config);
+  const auto tentative = tracker.update({Detection{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0}}, 0);
+  const auto low_score = tracker.update({Detection{10.5f, 10.0f, 14.5f, 14.0f, 0.2f, 0}}, 1);
+  return expect_true(tentative.empty(), "first hit remains tentative") &&
+         expect_true(low_score.empty(), "low-score hit cannot confirm a tentative track") &&
+         expect_true(tracker.active_track_count() == 0,
+                     "unmatched tentative track expires after the low-score hit");
+}
+
 bool test_tracker_confirmation_suppresses_single_frame_noise() {
   TrackerConfig config;
   config.min_confirmed_hits = 2;
@@ -797,6 +811,7 @@ int main(int argc, char** argv) {
   ok &= test_tracker_can_disable_center_distance_matching();
   ok &= test_iou_only_tracker_does_not_apply_motion_prediction();
   ok &= test_low_score_detection_recovers_but_does_not_create_track();
+  ok &= test_low_score_detection_does_not_confirm_tentative_track();
   ok &= test_tracker_confirmation_suppresses_single_frame_noise();
   ok &= test_global_assignment_avoids_greedy_identity_loss();
   ok &= test_prediction_bridges_one_high_confidence_gap();
