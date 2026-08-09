@@ -19,7 +19,7 @@ pkg_check_modules(TRACKER_OPENCV REQUIRED opencv4)
 # static component with OpenCV DSOs in the same link.
 set(TRACKER_OPENCV_LINK_LIBRARIES)
 set(TRACKER_OPENCV_ALL_SHARED TRUE)
-foreach(component IN ITEMS calib3d features2d imgcodecs imgproc core)
+foreach(component IN ITEMS video calib3d features2d imgcodecs imgproc core)
   string(TOUPPER "${component}" component_upper)
   find_library(TRACKER_OPENCV_${component_upper}_SHARED
     NAMES "libopencv_${component}.so.${TRACKER_OPENCV_VERSION}"
@@ -32,7 +32,7 @@ foreach(component IN ITEMS calib3d features2d imgcodecs imgproc core)
 endforeach()
 
 if (TRACKER_OPENCV_ALL_SHARED)
-  foreach(component IN ITEMS calib3d features2d imgcodecs imgproc core)
+  foreach(component IN ITEMS video calib3d features2d imgcodecs imgproc core)
     string(TOUPPER "${component}" component_upper)
     list(APPEND TRACKER_OPENCV_LINK_LIBRARIES
       "${TRACKER_OPENCV_${component_upper}_SHARED}"
@@ -62,7 +62,7 @@ else()
       "${TRACKER_OPENCV_${component_upper}_STATIC}"
     )
   endforeach()
-  foreach(component IN ITEMS imgcodecs imgproc core)
+  foreach(component IN ITEMS video imgcodecs imgproc core)
     string(TOUPPER "${component}" component_upper)
     if (NOT TRACKER_OPENCV_${component_upper}_SHARED)
       message(FATAL_ERROR
@@ -123,6 +123,18 @@ function(link_multi_stream_people_tracker target)
 endfunction()
 
 link_multi_stream_people_tracker("${MULTI_CAMERA_PEOPLE_TRACKING_TARGET}")
+
+# Keep a production-faithful tracker-only replay executable next to the app.
+# Unlike the Python reference replay, this target exercises the exact C++
+# association and covariance implementation deployed on Modalix.
+add_executable(multi-stream-people-tracker_replay
+  "${CMAKE_CURRENT_LIST_DIR}/replay_tracking.cpp"
+)
+target_link_libraries(multi-stream-people-tracker_replay
+  PRIVATE
+    nlohmann_json::nlohmann_json
+)
+link_multi_stream_people_tracker(multi-stream-people-tracker_replay)
 
 if (TARGET multi-stream-people-tracker_unit_test)
   link_multi_stream_people_tracker(multi-stream-people-tracker_unit_test)

@@ -23,6 +23,8 @@ struct TrackedDetection {
   float score = 0.0f;
   int class_id = -1;
   bool predicted = false;
+  bool occluded = false;
+  float association_confidence = 1.0f;
 };
 
 // Partial-affine transform from the previous decoded frame into the current
@@ -35,6 +37,13 @@ struct CameraTransform {
   float d = 1.0f;
   float ty = 0.0f;
   bool valid = false;
+  // Confidence and residual are optional so existing callers that construct a
+  // seven-field transform retain their previous semantics. A valid transform
+  // with zero confidence is treated as an externally supplied, trusted
+  // transform; frame estimators always populate the diagnostics.
+  float confidence = 0.0f;
+  float reprojection_error = 0.0f;
+  int inliers = 0;
 };
 
 struct TrackerConfig {
@@ -49,6 +58,10 @@ struct TrackerConfig {
   int max_prediction_frames = 0;
   bool center_distance_enabled = true;
   bool camera_motion_compensation = false;
+  bool covariance_motion_enabled = true;
+  float overlap_threshold = 0.20f;
+  int max_occlusion_frames = 0;
+  int max_active_tracks = 128;
 };
 
 // A compact two-stage tracker for detections whose boxes may be only a few

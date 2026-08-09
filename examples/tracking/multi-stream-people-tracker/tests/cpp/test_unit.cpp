@@ -372,9 +372,9 @@ bool test_motion_compensated_box_smoothing_reduces_jitter() {
   tracker.update({Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}}, 0);
   const auto smoothed = tracker.update({Detection{2.0f, 0.0f, 6.0f, 4.0f, 0.9f, 0}}, 1);
   return expect_true(smoothed.size() == 1, "smoothed track remains visible") &&
-         expect_true(std::abs(smoothed.front().x1 - 1.0f) < 1e-4f &&
-                         std::abs(smoothed.front().x2 - 5.0f) < 1e-4f,
-                     "motion-compensated smoothing attenuates detector box jitter");
+         expect_true(smoothed.front().x1 > 0.0f && smoothed.front().x1 < 2.0f &&
+                         smoothed.front().x2 > 4.0f && smoothed.front().x2 < 6.0f,
+                     "presentation-only smoothing attenuates detector box jitter");
 }
 
 bool test_camera_motion_compensation_preserves_ids_across_fast_pan() {
@@ -485,7 +485,7 @@ bool test_repeated_camera_rotation_does_not_inflate_prediction() {
   return true;
 }
 
-bool test_orb_camera_motion_estimator_recovers_translation() {
+bool test_sparse_flow_camera_motion_estimator_recovers_translation() {
   cv::Mat first(256, 320, CV_8UC1);
   cv::RNG rng(12345);
   rng.fill(first, cv::RNG::UNIFORM, 0, 256);
@@ -498,25 +498,195 @@ bool test_orb_camera_motion_estimator_recovers_translation() {
   const auto initial = estimator.update(first);
   const auto motion = estimator.update(second);
   return expect_true(!initial.valid, "first frame does not invent camera motion") &&
-         expect_true(motion.valid, "ORB/RANSAC accepts a coherent frame translation") &&
+         expect_true(motion.valid, "sparse-flow RANSAC accepts a coherent frame translation") &&
          expect_true(std::abs(motion.tx - 18.0f) < 2.0f && std::abs(motion.ty - 7.0f) < 2.0f,
-                     "ORB/RANSAC recovers the frame translation");
+                     "sparse-flow RANSAC recovers the frame translation") &&
+         expect_true(motion.confidence > 0.0f && motion.inliers >= 8 &&
+                         motion.reprojection_error >= 0.0f,
+                     "sparse-flow motion reports usable uncertainty diagnostics");
 }
 
 bool test_recent_track_wins_before_stale_track() {
   TrackerConfig config;
   config.max_center_distance = 2.0f;
   config.velocity_momentum = 0.9f;
+  config.max_occlusion_frames = 10;
   ObjectTracker tracker(config);
   const auto first = tracker.update(
       {Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}, Detection{10.0f, 0.0f, 14.0f, 4.0f, 0.9f, 0}},
       0);
   tracker.update({Detection{6.0f, 0.0f, 10.0f, 4.0f, 0.9f, 0}}, 1);
   const auto recent = tracker.update({Detection{2.0f, 0.0f, 6.0f, 4.0f, 0.9f, 0}}, 2);
-  return expect_true(first.size() == 2 && recent.size() == 1,
-                     "recency scenario produces one active detection") &&
-         expect_true(recent.front().track_id == first[1].track_id,
-                     "active track keeps the detection ahead of a stale track");
+  return expect_true(first.size() == 2 && recent.size() == 2,
+                     "ambiguous recency scenario preserves both identities") &&
+         expect_true(recent[0].predicted && recent[0].occluded && recent[1].predicted &&
+                         recent[1].occluded,
+                     "one merged observation does not force an identity decision") &&
+         expect_true(tracker.active_track_count() == 2,
+                     "merged observation does not create or destroy an identity");
+}
+
+bool test_overlap_component_preserves_crossing_identities() {
+  TrackerConfig config;
+  config.velocity_momentum = 0.0f;
+  config.max_center_distance = 2.5f;
+  config.max_prediction_frames = 1;
+  config.max_occlusion_frames = 4;
+  ObjectTracker tracker(config);
+  const auto initial = tracker.update(
+      {Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}, Detection{20.0f, 0.0f, 24.0f, 4.0f, 0.9f, 0}},
+      0);
+  tracker.update(
+      {Detection{4.0f, 0.0f, 8.0f, 4.0f, 0.9f, 0}, Detection{16.0f, 0.0f, 20.0f, 4.0f, 0.9f, 0}},
+      1);
+  tracker.update(
+      {Detection{8.0f, 0.0f, 12.0f, 4.0f, 0.9f, 0}, Detection{12.0f, 0.0f, 16.0f, 4.0f, 0.9f, 0}},
+      2);
+  const auto merged = tracker.update({Detection{10.0f, 0.0f, 14.0f, 4.0f, 0.9f, 0}}, 3);
+  const auto separated = tracker.update(
+      {Detection{16.0f, 0.0f, 20.0f, 4.0f, 0.9f, 0}, Detection{4.0f, 0.0f, 8.0f, 4.0f, 0.9f, 0}},
+      4);
+  if (merged.size() != 2 || !merged[0].predicted || !merged[0].occluded || !merged[1].predicted ||
+      !merged[1].occluded) {
+    std::cerr << "[INFO] merged tracks=" << merged.size();
+    for (const auto& track : merged) {
+      std::cerr << " id=" << track.track_id << " x=" << track.x1 << " predicted=" << track.predicted
+                << " occluded=" << track.occluded;
+    }
+    std::cerr << "\n";
+  }
+  return expect_true(initial.size() == 2, "crossing test creates two identities") &&
+         expect_true(merged.size() == 2 && merged[0].predicted && merged[0].occluded &&
+                         merged[1].predicted && merged[1].occluded,
+                     "merged observation coasts both overlap identities") &&
+         expect_true(tracker.active_track_count() == 2,
+                     "crossing does not create a duplicate identity") &&
+         expect_true(separated.size() == 2 && separated[0].track_id == initial[0].track_id &&
+                         separated[1].track_id == initial[1].track_id,
+                     "post-overlap direction restores the correct identity permutation");
+}
+
+bool test_three_track_overlap_component_coasts_all_identities() {
+  TrackerConfig config;
+  config.max_center_distance = 3.0f;
+  config.max_occlusion_frames = 4;
+  ObjectTracker tracker(config);
+  const auto initial = tracker.update({Detection{0.0f, 0.0f, 6.0f, 4.0f, 0.9f, 0},
+                                       Detection{5.0f, 0.0f, 11.0f, 4.0f, 0.9f, 0},
+                                       Detection{10.0f, 0.0f, 16.0f, 4.0f, 0.9f, 0}},
+                                      0);
+  const auto deficient = tracker.update(
+      {Detection{3.0f, 0.0f, 9.0f, 4.0f, 0.9f, 0}, Detection{7.0f, 0.0f, 13.0f, 4.0f, 0.9f, 0}}, 1);
+  return expect_true(initial.size() == 3, "three-way overlap test creates three identities") &&
+         expect_true(deficient.size() == 3,
+                     "three tracks competing for two observations remain published") &&
+         expect_true(
+             std::all_of(deficient.begin(), deficient.end(),
+                         [](const auto& track) { return track.predicted && track.occluded; }),
+             "deficient overlap component coasts every affected identity");
+}
+
+bool test_covariance_size_state_rejects_explosive_scale_velocity() {
+  TrackerConfig config;
+  config.max_center_distance = 1000.0f;
+  config.max_prediction_frames = 1;
+  ObjectTracker tracker(config);
+  tracker.update({Detection{0.0f, 0.0f, 1.0f, 1.0f, 0.9f, 0}}, 0);
+  tracker.update({Detection{-499.5f, -499.5f, 500.5f, 500.5f, 0.9f, 0}}, 1);
+  const auto predicted = tracker.update({}, 2);
+  if (predicted.empty()) {
+    return expect_true(false, "scale outlier keeps a bounded one-frame prediction");
+  }
+  const float predicted_width = predicted.front().x2 - predicted.front().x1;
+  return expect_true(std::isfinite(predicted_width) && predicted_width < 256.0f,
+                     "scale outlier cannot create an explosive predicted box");
+}
+
+bool test_unobserved_prediction_freezes_last_reliable_size() {
+  TrackerConfig config;
+  config.max_center_distance = 1000.0f;
+  config.max_prediction_frames = 3;
+  ObjectTracker tracker(config);
+  tracker.update({Detection{0.0f, 0.0f, 8.0f, 8.0f, 0.9f, 0}}, 0);
+  const auto observed = tracker.update({Detection{-4.0f, 0.0f, 12.0f, 8.0f, 0.9f, 0}}, 1);
+  const auto predicted = tracker.update({}, 2);
+  if (!expect_true(observed.size() == 1 && predicted.size() == 1 && predicted.front().predicted,
+                   "a missing observation emits one bounded prediction")) {
+    return false;
+  }
+  const float observed_width = observed.front().x2 - observed.front().x1;
+  const float observed_height = observed.front().y2 - observed.front().y1;
+  const float predicted_width = predicted.front().x2 - predicted.front().x1;
+  const float predicted_height = predicted.front().y2 - predicted.front().y1;
+  return expect_true(std::abs(predicted_width - observed_width) < 1.0e-3f &&
+                         std::abs(predicted_height - observed_height) < 1.0e-3f,
+                     "an unobserved box keeps the last reliable filtered size");
+}
+
+bool test_ambiguous_assignment_respects_occlusion_publication_horizon() {
+  TrackerConfig config;
+  config.velocity_momentum = 0.0f;
+  config.max_center_distance = 2.5f;
+  config.max_prediction_frames = 1;
+  config.max_occlusion_frames = 2;
+  config.max_missing_frames = 10;
+  ObjectTracker tracker(config);
+  tracker.update(
+      {Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}, Detection{20.0f, 0.0f, 24.0f, 4.0f, 0.9f, 0}},
+      0);
+  tracker.update(
+      {Detection{4.0f, 0.0f, 8.0f, 4.0f, 0.9f, 0}, Detection{16.0f, 0.0f, 20.0f, 4.0f, 0.9f, 0}},
+      1);
+  tracker.update(
+      {Detection{8.0f, 0.0f, 12.0f, 4.0f, 0.9f, 0}, Detection{12.0f, 0.0f, 16.0f, 4.0f, 0.9f, 0}},
+      2);
+  const auto first_merged = tracker.update({Detection{10.0f, 0.0f, 14.0f, 4.0f, 0.9f, 0}}, 3);
+  const auto second_merged = tracker.update({Detection{10.0f, 0.0f, 14.0f, 4.0f, 0.9f, 0}}, 4);
+  const auto expired_merged = tracker.update({Detection{10.0f, 0.0f, 14.0f, 4.0f, 0.9f, 0}}, 5);
+  return expect_true(first_merged.size() == 2 && second_merged.size() == 2,
+                     "overlap identities remain visible inside the occlusion horizon") &&
+         expect_true(expired_merged.empty(),
+                     "an ambiguous assignment cannot publish predictions beyond its horizon");
+}
+
+bool test_tracker_capacity_replaces_only_unmatched_stale_tracks() {
+  TrackerConfig config;
+  config.max_active_tracks = 3;
+  config.max_center_distance = 0.5f;
+  ObjectTracker tracker(config);
+  const auto initial = tracker.update({Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0},
+                                       Detection{10.0f, 0.0f, 14.0f, 4.0f, 0.9f, 0},
+                                       Detection{20.0f, 0.0f, 24.0f, 4.0f, 0.9f, 0}},
+                                      0);
+  const auto after_cut = tracker.update({Detection{100.0f, 100.0f, 104.0f, 104.0f, 0.9f, 0},
+                                         Detection{110.0f, 100.0f, 114.0f, 104.0f, 0.9f, 0},
+                                         Detection{120.0f, 100.0f, 124.0f, 104.0f, 0.9f, 0}},
+                                        1);
+  return expect_true(initial.size() == 3 && after_cut.size() == 3,
+                     "bounded tracker accepts a full replacement scene") &&
+         expect_true(tracker.active_track_count() == 3,
+                     "active track count never exceeds the configured capacity") &&
+         expect_true(std::none_of(after_cut.begin(), after_cut.end(),
+                                  [&](const auto& track) {
+                                    return std::any_of(initial.begin(), initial.end(),
+                                                       [&](const auto& old) {
+                                                         return old.track_id == track.track_id;
+                                                       });
+                                  }),
+                     "scene-cut births replace only unmatched retained identities");
+}
+
+bool test_disabled_covariance_retains_legacy_raw_box_output() {
+  TrackerConfig config;
+  config.center_distance_enabled = false;
+  config.covariance_motion_enabled = false;
+  config.max_occlusion_frames = 0;
+  ObjectTracker tracker(config);
+  tracker.update({Detection{0.0f, 0.0f, 10.0f, 10.0f, 0.9f, 0}}, 0);
+  const auto second = tracker.update({Detection{1.0f, 2.0f, 11.0f, 12.0f, 0.8f, 0}}, 1);
+  return expect_true(second.size() == 1 && second.front().x1 == 1.0f && second.front().y1 == 2.0f &&
+                         second.front().x2 == 11.0f && second.front().y2 == 12.0f,
+                     "disabled covariance preserves the legacy alpha-one detector box");
 }
 
 bool test_tracker_drops_track_after_missing_budget() {
@@ -684,8 +854,8 @@ bool test_prediction_bridges_one_high_confidence_gap() {
          expect_true(bridged.front().track_id == observed.front().track_id &&
                          bridged.front().predicted,
                      "bridged box keeps the identity and is marked predicted") &&
-         expect_true(std::abs(bridged.front().x1 - 2.0f) < 1e-4f,
-                     "bridged box follows the velocity estimate") &&
+         expect_true(bridged.front().x1 > 1.5f && bridged.front().x1 < 2.1f,
+                     "bridged box follows the covariance-aware velocity estimate") &&
          expect_true(beyond_horizon.empty(), "prediction stops at the configured horizon");
 }
 
@@ -802,8 +972,15 @@ int main(int argc, char** argv) {
   ok &= test_camera_motion_compensation_does_not_bridge_scene_cut();
   ok &= test_external_camera_transform_is_not_learned_as_object_velocity();
   ok &= test_repeated_camera_rotation_does_not_inflate_prediction();
-  ok &= test_orb_camera_motion_estimator_recovers_translation();
+  ok &= test_sparse_flow_camera_motion_estimator_recovers_translation();
   ok &= test_recent_track_wins_before_stale_track();
+  ok &= test_overlap_component_preserves_crossing_identities();
+  ok &= test_three_track_overlap_component_coasts_all_identities();
+  ok &= test_covariance_size_state_rejects_explosive_scale_velocity();
+  ok &= test_unobserved_prediction_freezes_last_reliable_size();
+  ok &= test_ambiguous_assignment_respects_occlusion_publication_horizon();
+  ok &= test_tracker_capacity_replaces_only_unmatched_stale_tracks();
+  ok &= test_disabled_covariance_retains_legacy_raw_box_output();
   ok &= test_tracker_drops_track_after_missing_budget();
   ok &= test_zero_missing_budget_keeps_continuous_track();
   ok &= test_tracker_recovers_after_exact_missing_budget();

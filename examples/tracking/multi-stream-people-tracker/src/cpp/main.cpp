@@ -30,7 +30,9 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <csignal>
@@ -40,8 +42,11 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -101,12 +106,17 @@ struct AppConfig {
   int tracker_max_prediction_frames = 0;
   bool tracker_center_distance_enabled = false;
   bool tracker_camera_motion_compensation = false;
+  bool tracker_covariance_motion_enabled = true;
+  float tracker_overlap_threshold = 0.20f;
+  int tracker_max_occlusion_frames = 10;
+  int tracker_max_active_tracks = 128;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
   bool video_enabled = true;
   fs::path save_dir;
   int save_every = 0;
+  fs::path replay_dir;
 };
 
 class DebugFrameWriter {
@@ -178,6 +188,113 @@ private:
   std::thread worker_;
 };
 
+struct CameraMotionResult {
+  multi_stream_people_tracker::CameraTransform transform;
+  double compute_ms = 0.0;
+};
+
+// Camera motion is ordered within a stream, but independent of MLA inference.
+// Submitting decoded frames here hides sparse-flow work under the detector
+// branch without racing the estimator's previous-frame state.
+class AsyncCameraMotionEstimator {
+public:
+  AsyncCameraMotionEstimator() : worker_([this] { run(); }) {}
+
+  ~AsyncCameraMotionEstimator() {
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+    }
+    ready_.notify_one();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+  AsyncCameraMotionEstimator(const AsyncCameraMotionEstimator&) = delete;
+  AsyncCameraMotionEstimator& operator=(const AsyncCameraMotionEstimator&) = delete;
+
+  std::future<CameraMotionResult> submit(cv::Mat gray, std::vector<Detection> object_mask) {
+    Task task;
+    task.gray = std::move(gray);
+    task.object_mask = std::move(object_mask);
+    auto result = task.result.get_future();
+    {
+      std::lock_guard lock(mutex_);
+      if (stopping_) {
+        throw std::runtime_error("camera-motion worker is stopping");
+      }
+      queue_.push_back(std::move(task));
+    }
+    ready_.notify_one();
+    return result;
+  }
+
+  void reset() {
+    Task task;
+    task.reset = true;
+    auto result = task.result.get_future();
+    {
+      std::lock_guard lock(mutex_);
+      if (stopping_) {
+        return;
+      }
+      queue_.push_back(std::move(task));
+    }
+    ready_.notify_one();
+    // A missing side-branch frame breaks the transform chain. This uncommon
+    // path waits for earlier work before returning, so no stale transform can
+    // be consumed by a later frame.
+    (void)result.get();
+  }
+
+private:
+  struct Task {
+    cv::Mat gray;
+    std::vector<Detection> object_mask;
+    bool reset = false;
+    std::promise<CameraMotionResult> result;
+  };
+
+  void run() {
+    while (true) {
+      Task task;
+      {
+        std::unique_lock lock(mutex_);
+        ready_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+        if (queue_.empty()) {
+          if (stopping_) {
+            return;
+          }
+          continue;
+        }
+        task = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      try {
+        CameraMotionResult result;
+        if (task.reset) {
+          estimator_.reset();
+        } else {
+          const double start = sima_examples::time_ms();
+          result.transform = estimator_.update(task.gray, task.object_mask);
+          result.compute_ms = sima_examples::time_ms() - start;
+        }
+        task.result.set_value(result);
+      } catch (...) {
+        task.result.set_exception(std::current_exception());
+      }
+    }
+  }
+
+  FrameCameraMotionEstimator estimator_;
+  std::mutex mutex_;
+  std::condition_variable ready_;
+  std::deque<Task> queue_;
+  bool stopping_ = false;
+  std::thread worker_;
+};
+
 std::string lower_copy(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -224,12 +341,16 @@ struct ProfileWindow {
   double start_ms = 0.0;
   double detection_pull_ms = 0.0;
   double box_parse_ms = 0.0;
+  double debug_frame_wait_ms = 0.0;
+  double camera_motion_compute_ms = 0.0;
+  double camera_motion_wait_ms = 0.0;
   double tracker_ms = 0.0;
   double metadata_send_ms = 0.0;
   double overlay_ms = 0.0;
 
-  void add(double detection_pull, double box_parse, double tracker, double metadata_send,
-           double overlay, int box_count) {
+  void add(double detection_pull, double box_parse, double debug_frame_wait,
+           double camera_motion_compute, double camera_motion_wait, double tracker,
+           double metadata_send, double overlay, int box_count) {
     if (!enabled)
       return;
     if (frames == 0)
@@ -238,6 +359,9 @@ struct ProfileWindow {
     boxes += box_count;
     detection_pull_ms += detection_pull;
     box_parse_ms += box_parse;
+    debug_frame_wait_ms += debug_frame_wait;
+    camera_motion_compute_ms += camera_motion_compute;
+    camera_motion_wait_ms += camera_motion_wait;
     tracker_ms += tracker;
     metadata_send_ms += metadata_send;
     overlay_ms += overlay;
@@ -254,6 +378,9 @@ struct ProfileWindow {
     std::cout << "[profile stream=" << stream_index << "] frames=" << frames
               << " output_fps=" << output_fps << " avg_detection_pull_ms=" << avg(detection_pull_ms)
               << " avg_box_parse_ms=" << avg(box_parse_ms) << " avg_tracker_ms=" << avg(tracker_ms)
+              << " avg_debug_frame_wait_ms=" << avg(debug_frame_wait_ms)
+              << " avg_camera_motion_compute_ms=" << avg(camera_motion_compute_ms)
+              << " avg_camera_motion_wait_ms=" << avg(camera_motion_wait_ms)
               << " avg_metadata_send_ms=" << avg(metadata_send_ms)
               << " avg_overlay_ms=" << avg(overlay_ms)
               << " avg_tracks=" << static_cast<double>(boxes) / static_cast<double>(frames) << "\n";
@@ -262,10 +389,31 @@ struct ProfileWindow {
     start_ms = 0.0;
     detection_pull_ms = 0.0;
     box_parse_ms = 0.0;
+    debug_frame_wait_ms = 0.0;
+    camera_motion_compute_ms = 0.0;
+    camera_motion_wait_ms = 0.0;
     tracker_ms = 0.0;
     metadata_send_ms = 0.0;
     overlay_ms = 0.0;
   }
+};
+
+struct DebugFrameSample {
+  int64_t frame_id = -1;
+  int64_t input_seq = -1;
+  int64_t orig_input_seq = -1;
+  int64_t pts_ns = -1;
+  cv::Mat gray;
+  cv::Mat bgr;
+  std::future<CameraMotionResult> camera_motion;
+};
+
+struct DebugFrameQueue {
+  std::mutex mutex;
+  std::condition_variable ready;
+  std::deque<DebugFrameSample> frames;
+  std::vector<Detection> object_mask;
+  bool chain_discontinuous = false;
 };
 
 struct StreamRuntime {
@@ -274,28 +422,25 @@ struct StreamRuntime {
   simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::unique_ptr<DebugFrameWriter> debug_writer;
+  std::unique_ptr<std::ofstream> replay_writer;
   ObjectTracker tracker;
-  FrameCameraMotionEstimator camera_motion;
+  std::unique_ptr<AsyncCameraMotionEstimator> camera_motion;
   ProfileWindow profile;
   std::vector<std::uint8_t> payload;
   std::vector<objdet::Box> boxes;
   std::vector<Detection> detections;
   std::vector<TrackedDetection> tracks;
   std::vector<sima_examples::MetadataBox> metadata_tracks;
-  struct DebugFrame {
-    int64_t frame_id = -1;
-    int64_t input_seq = -1;
-    int64_t orig_input_seq = -1;
-    int64_t pts_ns = -1;
-    cv::Mat gray;
-    cv::Mat bgr;
-  };
-  std::deque<DebugFrame> debug_frames;
+  std::unique_ptr<DebugFrameQueue> debug_frames;
   int frame_w = 0;
   int frame_h = 0;
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
+  int tracking_frame_index = -1;
+  int64_t last_source_sequence = -1;
+  int64_t last_tracking_pts_ns = -1;
+  bool has_processed_debug_frame = false;
   bool closed = false;
 };
 
@@ -461,6 +606,15 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.tracker_max_prediction_frames >= 0 &&
                              cfg.tracker_max_prediction_frames <= cfg.tracker_max_missing,
                          "tracking.max_prediction_frames must be in [0, max_missing_frames]");
+  sima_examples::require(std::isfinite(cfg.tracker_overlap_threshold) &&
+                             cfg.tracker_overlap_threshold >= 0.0f &&
+                             cfg.tracker_overlap_threshold <= 1.0f,
+                         "tracking.overlap_threshold must be between 0 and 1");
+  sima_examples::require(cfg.tracker_max_occlusion_frames >= 0 &&
+                             cfg.tracker_max_occlusion_frames <= cfg.tracker_max_missing,
+                         "tracking.max_occlusion_frames must be in [0, max_missing_frames]");
+  sima_examples::require(cfg.tracker_max_active_tracks >= cfg.max_detections,
+                         "tracking.max_active_tracks must be >= inference.max_detections");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0,
                          "output.insight.metadata_port_base must be > 0");
@@ -512,12 +666,21 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.tracker_max_prediction_frames = raw.int_or("tracking.max_prediction_frames", 0);
   cfg.tracker_camera_motion_compensation =
       raw.bool_or("tracking.camera_motion_compensation", false);
+  cfg.tracker_covariance_motion_enabled =
+      raw.bool_or("tracking.covariance_motion_enabled", cfg.tracker_center_distance_enabled);
+  cfg.tracker_overlap_threshold =
+      static_cast<float>(raw.double_or("tracking.overlap_threshold", 0.20));
+  cfg.tracker_max_occlusion_frames =
+      raw.int_or("tracking.max_occlusion_frames", cfg.tracker_center_distance_enabled ? 10 : 0);
+  cfg.tracker_max_active_tracks =
+      raw.int_or("tracking.max_active_tracks", std::max(128, cfg.max_detections));
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
   cfg.video_enabled = raw.bool_or("output.video_enabled", true);
   cfg.save_dir = raw.string_or("output.debug_dir", "");
   cfg.save_every = raw.int_or("output.save_every", 0);
+  cfg.replay_dir = raw.string_or("output.replay_dir", "");
   validate_config(cfg);
   return cfg;
 }
@@ -826,6 +989,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   StreamRuntime runtime;
   runtime.index = stream_index;
   runtime.url = url;
+  runtime.debug_frames = std::make_unique<DebugFrameQueue>();
   runtime.tracker = ObjectTracker(TrackerConfig{
       static_cast<float>(cfg.tracker_high_score),
       static_cast<float>(cfg.tracker_new_track_score),
@@ -838,7 +1002,22 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
       cfg.tracker_max_prediction_frames,
       cfg.tracker_center_distance_enabled,
       cfg.tracker_camera_motion_compensation,
+      cfg.tracker_covariance_motion_enabled,
+      cfg.tracker_overlap_threshold,
+      cfg.tracker_max_occlusion_frames,
+      cfg.tracker_max_active_tracks,
   });
+  if (cfg.tracker_camera_motion_compensation) {
+    runtime.camera_motion = std::make_unique<AsyncCameraMotionEstimator>();
+  }
+  if (!cfg.replay_dir.empty()) {
+    const fs::path replay_path =
+        cfg.replay_dir / ("stream_" + std::to_string(stream_index) + ".jsonl");
+    runtime.replay_writer =
+        std::make_unique<std::ofstream>(replay_path, std::ios::out | std::ios::trunc);
+    sima_examples::require(runtime.replay_writer->is_open(),
+                           "failed to open output.replay_dir file: " + replay_path.string());
+  }
   const auto source_options =
       build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
@@ -925,6 +1104,52 @@ void send_metadata(StreamRuntime& stream, const AppConfig& cfg, const simaai::ne
   }
 }
 
+void write_replay_record(StreamRuntime& stream, int tracking_frame_index,
+                         const simaai::neat::Sample& sample,
+                         const multi_stream_people_tracker::CameraTransform& camera_transform) {
+  if (stream.replay_writer == nullptr) {
+    return;
+  }
+  auto& output = *stream.replay_writer;
+  output << std::setprecision(9) << "{\"frame_index\":" << tracking_frame_index
+         << ",\"processed_index\":" << stream.processed << ",\"frame_id\":" << sample.frame_id
+         << ",\"pts_ns\":" << sample.pts_ns << ",\"camera_transform\":";
+  if (camera_transform.valid) {
+    output << '[' << camera_transform.a << ',' << camera_transform.b << ',' << camera_transform.tx
+           << ',' << camera_transform.c << ',' << camera_transform.d << ',' << camera_transform.ty
+           << ']';
+  } else {
+    output << "null";
+  }
+  output << ",\"camera_diagnostics\":{\"valid\":" << (camera_transform.valid ? "true" : "false")
+         << ",\"confidence\":" << camera_transform.confidence
+         << ",\"reprojection_error\":" << camera_transform.reprojection_error
+         << ",\"inliers\":" << camera_transform.inliers << "},\"detections\":[";
+  for (std::size_t index = 0; index < stream.detections.size(); ++index) {
+    const auto& detection = stream.detections[index];
+    if (index != 0) {
+      output << ',';
+    }
+    output << "{\"x1\":" << detection.x1 << ",\"y1\":" << detection.y1 << ",\"x2\":" << detection.x2
+           << ",\"y2\":" << detection.y2 << ",\"score\":" << detection.score
+           << ",\"class_id\":" << detection.class_id << '}';
+  }
+  output << "],\"tracks\":[";
+  for (std::size_t index = 0; index < stream.tracks.size(); ++index) {
+    const auto& track = stream.tracks[index];
+    if (index != 0) {
+      output << ',';
+    }
+    output << "{\"id\":\"" << track.track_id << "\",\"bbox\":[" << track.x1 << ',' << track.y1
+           << ',' << track.x2 - track.x1 << ',' << track.y2 - track.y1
+           << "],\"confidence\":" << track.score << ",\"class_id\":" << track.class_id
+           << ",\"predicted\":" << (track.predicted ? "true" : "false")
+           << ",\"occluded\":" << (track.occluded ? "true" : "false")
+           << ",\"association_confidence\":" << track.association_confidence << '}';
+  }
+  output << "]}\n";
+}
+
 void maybe_save_debug_frame(const AppConfig& cfg, StreamRuntime& stream, const cv::Mat* frame,
                             const std::vector<TrackedDetection>& tracks) {
   if (cfg.save_dir.empty() || cfg.save_every <= 0 || stream.processed % cfg.save_every != 0) {
@@ -953,7 +1178,7 @@ bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit
 }
 
 bool samples_identify_same_frame(const simaai::neat::Sample& sample,
-                                 const StreamRuntime::DebugFrame& frame) {
+                                 const DebugFrameSample& frame) {
   if (sample.pts_ns >= 0 && frame.pts_ns >= 0) {
     return sample.pts_ns == frame.pts_ns;
   }
@@ -966,11 +1191,60 @@ bool samples_identify_same_frame(const simaai::neat::Sample& sample,
   return sample.frame_id >= 0 && frame.frame_id >= 0 && sample.frame_id == frame.frame_id;
 }
 
-bool has_matching_debug_frame(const StreamRuntime& stream, const simaai::neat::Sample& sample) {
-  return std::any_of(stream.debug_frames.begin(), stream.debug_frames.end(),
-                     [&sample](const StreamRuntime::DebugFrame& frame) {
-                       return samples_identify_same_frame(sample, frame);
-                     });
+int tracker_frame_index(StreamRuntime& stream, const simaai::neat::Sample& sample) {
+  const int64_t source_sequence = sample.frame_id >= 0         ? sample.frame_id
+                                  : sample.orig_input_seq >= 0 ? sample.orig_input_seq
+                                  : sample.input_seq >= 0      ? sample.input_seq
+                                                               : -1;
+  if (stream.tracking_frame_index < 0) {
+    stream.tracking_frame_index = 0;
+  } else {
+    int64_t elapsed_frames = 1;
+    if (source_sequence >= 0 && stream.last_source_sequence >= 0 &&
+        source_sequence > stream.last_source_sequence) {
+      elapsed_frames = source_sequence - stream.last_source_sequence;
+    } else if (sample.pts_ns >= 0 && stream.last_tracking_pts_ns >= 0 &&
+               sample.pts_ns > stream.last_tracking_pts_ns && stream.output_fps > 0) {
+      const double elapsed = static_cast<double>(sample.pts_ns - stream.last_tracking_pts_ns) *
+                             static_cast<double>(stream.output_fps) / 1.0e9;
+      elapsed_frames = std::max<int64_t>(1, static_cast<int64_t>(std::llround(elapsed)));
+    }
+    const int64_t available =
+        static_cast<int64_t>(std::numeric_limits<int>::max()) - stream.tracking_frame_index;
+    sima_examples::require(elapsed_frames <= available, "tracker frame index overflow");
+    stream.tracking_frame_index += static_cast<int>(elapsed_frames);
+  }
+  if (source_sequence >= 0) {
+    stream.last_source_sequence = source_sequence;
+  }
+  if (sample.pts_ns >= 0) {
+    stream.last_tracking_pts_ns = sample.pts_ns;
+  }
+  return stream.tracking_frame_index;
+}
+
+multi_stream_people_tracker::CameraTransform
+compose_camera_transforms(const multi_stream_people_tracker::CameraTransform& previous_to_middle,
+                          const multi_stream_people_tracker::CameraTransform& middle_to_current) {
+  using multi_stream_people_tracker::CameraTransform;
+  if (!previous_to_middle.valid || !middle_to_current.valid) {
+    return {};
+  }
+  const float confidence = std::clamp(previous_to_middle.confidence, 0.0f, 1.0f) *
+                           std::clamp(middle_to_current.confidence, 0.0f, 1.0f);
+  return CameraTransform{
+      middle_to_current.a * previous_to_middle.a + middle_to_current.b * previous_to_middle.c,
+      middle_to_current.a * previous_to_middle.b + middle_to_current.b * previous_to_middle.d,
+      middle_to_current.a * previous_to_middle.tx + middle_to_current.b * previous_to_middle.ty +
+          middle_to_current.tx,
+      middle_to_current.c * previous_to_middle.a + middle_to_current.d * previous_to_middle.c,
+      middle_to_current.c * previous_to_middle.b + middle_to_current.d * previous_to_middle.d,
+      middle_to_current.c * previous_to_middle.tx + middle_to_current.d * previous_to_middle.ty +
+          middle_to_current.ty,
+      true,
+      confidence,
+      std::hypot(previous_to_middle.reprojection_error, middle_to_current.reprojection_error),
+      std::min(previous_to_middle.inliers, middle_to_current.inliers)};
 }
 
 void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
@@ -990,24 +1264,76 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
   filter_target_class_into(stream.boxes, cfg.target_class_id, stream.detections);
   const double box_parse_end = sima_examples::time_ms();
 
-  const auto frame = std::find_if(stream.debug_frames.begin(), stream.debug_frames.end(),
-                                  [&sample](const StreamRuntime::DebugFrame& candidate) {
-                                    return samples_identify_same_frame(sample, candidate);
-                                  });
-  const double tracker_start = sima_examples::time_ms();
-  multi_stream_people_tracker::CameraTransform camera_transform;
-  if (cfg.tracker_camera_motion_compensation) {
-    if (frame != stream.debug_frames.end()) {
-      camera_transform = stream.camera_motion.update(frame->gray, stream.detections);
-    } else {
-      // Never estimate a multi-frame transform after a missing side-branch
-      // sample: the tracker may already have compensated the intervening frame
-      // from its detection consensus.
-      stream.camera_motion.reset();
+  std::optional<DebugFrameSample> frame;
+  std::vector<std::future<CameraMotionResult>> camera_motion_chain;
+  bool camera_motion_chain_discontinuous = false;
+  const double debug_frame_wait_start = sima_examples::time_ms();
+  if (tracking_frames_enabled(cfg)) {
+    auto& frames = *stream.debug_frames;
+    std::unique_lock lock(frames.mutex);
+    frames.object_mask = stream.detections;
+    const auto find_matching = [&] {
+      return std::find_if(frames.frames.begin(), frames.frames.end(),
+                          [&sample](const DebugFrameSample& candidate) {
+                            return samples_identify_same_frame(sample, candidate);
+                          });
+    };
+    constexpr auto kMaximumSideBranchWait = std::chrono::milliseconds(50);
+    frames.ready.wait_for(lock, kMaximumSideBranchWait,
+                          [&] { return find_matching() != frames.frames.end(); });
+    const auto matching = find_matching();
+    if (matching != frames.frames.end()) {
+      camera_motion_chain.reserve(
+          static_cast<std::size_t>(std::distance(frames.frames.begin(), std::next(matching))));
+      for (auto current = frames.frames.begin(); current != std::next(matching); ++current) {
+        if (current->camera_motion.valid()) {
+          camera_motion_chain.push_back(std::move(current->camera_motion));
+        }
+      }
+      frame.emplace(std::move(*matching));
+      frames.frames.erase(frames.frames.begin(), std::next(matching));
+      camera_motion_chain_discontinuous = frames.chain_discontinuous;
+      frames.chain_discontinuous = false;
     }
   }
-  stream.tracker.update_into(stream.detections, stream.processed, stream.tracks, camera_transform);
+  const double debug_frame_wait_ms = sima_examples::time_ms() - debug_frame_wait_start;
+  double camera_motion_compute_ms = 0.0;
+  double camera_motion_wait_ms = 0.0;
+  multi_stream_people_tracker::CameraTransform camera_transform;
+  if (cfg.tracker_camera_motion_compensation) {
+    if (frame.has_value()) {
+      const double camera_wait_start = sima_examples::time_ms();
+      bool complete_chain = !camera_motion_chain_discontinuous;
+      bool have_transform = false;
+      for (auto& future : camera_motion_chain) {
+        CameraMotionResult result = future.get();
+        camera_motion_compute_ms += result.compute_ms;
+        if (!result.transform.valid) {
+          complete_chain = false;
+          continue;
+        }
+        camera_transform = have_transform
+                               ? compose_camera_transforms(camera_transform, result.transform)
+                               : result.transform;
+        have_transform = true;
+      }
+      camera_motion_wait_ms = sima_examples::time_ms() - camera_wait_start;
+      if (!stream.has_processed_debug_frame || !complete_chain || !have_transform) {
+        camera_transform = {};
+      }
+      stream.has_processed_debug_frame = true;
+    } else {
+      // The estimator remains ordered independently. Mark the next matched
+      // decoded frame as a new baseline; detection consensus handles this
+      // isolated gap without consuming a stale one-frame transform.
+      stream.has_processed_debug_frame = false;
+    }
+  }
+  const int tracking_frame = tracker_frame_index(stream, sample);
+  const double tracker_start = sima_examples::time_ms();
+  stream.tracker.update_into(stream.detections, tracking_frame, stream.tracks, camera_transform);
   const double tracker_end = sima_examples::time_ms();
+  write_replay_record(stream, tracking_frame, sample, camera_transform);
 
   ++stream.processed;
   const bool warming_up = stream.processed <= cfg.warmup_frames;
@@ -1018,7 +1344,7 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
     double overlay_ms = 0.0;
     if (save_frames_enabled(cfg)) {
       const double overlay_start = sima_examples::time_ms();
-      if (frame != stream.debug_frames.end()) {
+      if (frame.has_value()) {
         maybe_save_debug_frame(cfg, stream, &frame->bgr, stream.tracks);
       } else {
         std::cerr << "[warn] stream " << stream.index << " has no decoded frame matching detection"
@@ -1026,12 +1352,10 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
       }
       overlay_ms = sima_examples::time_ms() - overlay_start;
     }
-    stream.profile.add(detection_pull_ms, box_parse_end - box_parse_start,
-                       tracker_end - tracker_start, metadata_end - metadata_start, overlay_ms,
+    stream.profile.add(detection_pull_ms, box_parse_end - box_parse_start, debug_frame_wait_ms,
+                       camera_motion_compute_ms, camera_motion_wait_ms, tracker_end - tracker_start,
+                       metadata_end - metadata_start, overlay_ms,
                        static_cast<int>(stream.tracks.size()));
-  }
-  if (frame != stream.debug_frames.end()) {
-    stream.debug_frames.erase(stream.debug_frames.begin(), std::next(frame));
   }
 }
 
@@ -1073,47 +1397,35 @@ bool pull_debug_frame(AppRuntime& app, StreamRuntime& stream, const AppConfig& c
   if (save_frames_enabled(cfg)) {
     cv::cvtColor(yuv, bgr, cv::COLOR_YUV2BGR_NV12);
   }
-  constexpr std::size_t kMaxBufferedDebugFrames = 16;
-  if (stream.debug_frames.size() >= kMaxBufferedDebugFrames) {
-    stream.debug_frames.pop_front();
+  std::vector<Detection> object_mask;
+  {
+    std::lock_guard lock(stream.debug_frames->mutex);
+    object_mask = stream.debug_frames->object_mask;
   }
-  stream.debug_frames.push_back(StreamRuntime::DebugFrame{sample.frame_id, sample.input_seq,
-                                                          sample.orig_input_seq, sample.pts_ns,
-                                                          std::move(gray), std::move(bgr)});
+  std::future<CameraMotionResult> camera_motion;
+  if (cfg.tracker_camera_motion_compensation) {
+    // The latest accepted detections are a conservative foreground mask. The
+    // targets occupy very little of this scene, and the sparse-flow estimator
+    // still validates every point forward and backward before RANSAC.
+    camera_motion = stream.camera_motion->submit(gray, std::move(object_mask));
+  }
+  {
+    std::lock_guard lock(stream.debug_frames->mutex);
+    constexpr std::size_t kMaxBufferedDebugFrames = 16;
+    if (stream.debug_frames->frames.size() >= kMaxBufferedDebugFrames) {
+      stream.debug_frames->frames.pop_front();
+      stream.debug_frames->chain_discontinuous = true;
+    }
+    stream.debug_frames->frames.push_back(
+        DebugFrameSample{sample.frame_id, sample.input_seq, sample.orig_input_seq, sample.pts_ns,
+                         std::move(gray), std::move(bgr), std::move(camera_motion)});
+  }
+  stream.debug_frames->ready.notify_one();
   return true;
-}
-
-void drain_debug_frames(AppRuntime& app, const AppConfig& cfg) {
-  if (!tracking_frames_enabled(cfg)) {
-    return;
-  }
-
-  for (auto& stream : app.streams) {
-    while (pull_debug_frame(app, stream, cfg, 0)) {
-    }
-  }
-}
-
-void await_matching_debug_frame(AppRuntime& app, const AppConfig& cfg, int stream_index,
-                                const simaai::neat::Sample& detection) {
-  if (!tracking_frames_enabled(cfg)) {
-    return;
-  }
-  auto& stream = app.streams[static_cast<std::size_t>(stream_index)];
-  constexpr double kMaxWaitMs = 50.0;
-  const double deadline = sima_examples::time_ms() + kMaxWaitMs;
-  while (!has_matching_debug_frame(stream, detection)) {
-    const int remaining_ms =
-        std::max(0, static_cast<int>(std::ceil(deadline - sima_examples::time_ms())));
-    if (remaining_ms == 0 || !pull_debug_frame(app, stream, cfg, remaining_ms)) {
-      return;
-    }
-  }
 }
 
 bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& output_name) {
   constexpr int kPullTimeoutMs = 50;
-  drain_debug_frames(app, cfg);
   const double pull_start = sima_examples::time_ms();
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;
@@ -1126,8 +1438,6 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
     throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
   }
   const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
-  drain_debug_frames(app, cfg);
-  await_matching_debug_frame(app, cfg, stream_index, sample);
   process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,
                         pull_end - pull_start);
   return true;
@@ -1143,6 +1453,9 @@ void run_app(const AppConfig& cfg) {
   }
   if (save_frames_enabled(cfg)) {
     fs::create_directories(cfg.save_dir);
+  }
+  if (!cfg.replay_dir.empty()) {
+    fs::create_directories(cfg.replay_dir);
   }
 
   AppRuntime app;
@@ -1161,10 +1474,56 @@ void run_app(const AppConfig& cfg) {
   }
 
   app.run = app.graph.build(build_run_options());
-  while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
-    (void)process_run_once(app, cfg, "detections");
+  std::atomic_bool stop_debug_pullers = false;
+  std::mutex debug_error_mutex;
+  std::exception_ptr debug_error;
+  std::vector<std::thread> debug_pullers;
+  if (tracking_frames_enabled(cfg)) {
+    debug_pullers.reserve(app.streams.size());
+    for (auto& stream : app.streams) {
+      StreamRuntime* const stream_ptr = &stream;
+      debug_pullers.emplace_back(
+          [&app, &cfg, stream_ptr, &stop_debug_pullers, &debug_error_mutex, &debug_error] {
+            try {
+              while (!stop_debug_pullers.load(std::memory_order_relaxed)) {
+                (void)pull_debug_frame(app, *stream_ptr, cfg, 50);
+              }
+            } catch (...) {
+              {
+                std::lock_guard lock(debug_error_mutex);
+                if (debug_error == nullptr) {
+                  debug_error = std::current_exception();
+                }
+              }
+              stop_debug_pullers.store(true, std::memory_order_relaxed);
+            }
+          });
+    }
+  }
+  try {
+    while (g_stop_requested == 0 && !stop_debug_pullers.load(std::memory_order_relaxed) &&
+           !all_streams_done(app.streams, cfg.frames)) {
+      (void)process_run_once(app, cfg, "detections");
+    }
+  } catch (...) {
+    stop_debug_pullers.store(true, std::memory_order_relaxed);
+    for (auto& puller : debug_pullers) {
+      puller.join();
+    }
+    app.run.close();
+    throw;
+  }
+  stop_debug_pullers.store(true, std::memory_order_relaxed);
+  for (auto& puller : debug_pullers) {
+    puller.join();
   }
   app.run.close();
+  {
+    std::lock_guard lock(debug_error_mutex);
+    if (debug_error != nullptr) {
+      std::rethrow_exception(debug_error);
+    }
+  }
 
   for (auto& stream : app.streams) {
     stream.profile.flush();

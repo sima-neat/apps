@@ -65,12 +65,17 @@ class AppConfig:
     tracker_max_prediction_frames: int = 0
     tracker_center_distance_enabled: bool = False
     tracker_camera_motion_compensation: bool = False
+    tracker_covariance_motion_enabled: bool = True
+    tracker_overlap_threshold: float = 0.20
+    tracker_max_occlusion_frames: int = 10
+    tracker_max_active_tracks: int = 128
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
     video_enabled: bool = True
     save_dir: str = ""
     save_every: int = 0
+    replay_dir: str = ""
 
 
 @dataclass
@@ -87,10 +92,14 @@ class StreamRuntime:
     output_fps: int
     video_port: int
     processed: int = 0
+    tracking_frame_index: int = -1
+    last_source_sequence: int = -1
+    last_tracking_pts_ns: int = -1
     closed: bool = False
     camera_motion: FrameCameraMotionEstimator | None = None
     debug_writer: DebugFrameWriter | None = None
     save_bgr: bool = False
+    replay_writer: object | None = None
 
 
 @dataclass
@@ -372,6 +381,16 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(
             "tracking.max_prediction_frames must be in [0, max_missing_frames]"
         )
+    if not 0.0 <= cfg.tracker_overlap_threshold <= 1.0:
+        raise ValueError("tracking.overlap_threshold must be between 0 and 1")
+    if not 0 <= cfg.tracker_max_occlusion_frames <= cfg.tracker_max_missing:
+        raise ValueError(
+            "tracking.max_occlusion_frames must be in [0, max_missing_frames]"
+        )
+    if cfg.tracker_max_active_tracks < cfg.max_detections:
+        raise ValueError(
+            "tracking.max_active_tracks must be >= inference.max_detections"
+        )
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.metadata_port_base <= 0:
@@ -452,12 +471,27 @@ def load_app_config(config_path: Path) -> AppConfig:
         tracker_camera_motion_compensation=bool_or(
             tracking, "camera_motion_compensation", False
         ),
+        tracker_covariance_motion_enabled=bool_or(
+            tracking, "covariance_motion_enabled", tracker_center_distance_enabled
+        ),
+        tracker_overlap_threshold=float_or(tracking, "overlap_threshold", 0.20),
+        tracker_max_occlusion_frames=int_or(
+            tracking,
+            "max_occlusion_frames",
+            10 if tracker_center_distance_enabled else 0,
+        ),
+        tracker_max_active_tracks=int_or(
+            tracking,
+            "max_active_tracks",
+            max(128, int_or(inference, "max_detections", 50)),
+        ),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
         metadata_port_base=int_or(insight, "metadata_port_base", 9100),
         video_enabled=bool_or(output, "video_enabled", True),
         save_dir=string_or(output, "debug_dir"),
         save_every=int_or(output, "save_every", 0),
+        replay_dir=string_or(output, "replay_dir"),
     )
     validate_config(cfg)
     return cfg
@@ -834,6 +868,10 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
                 max_prediction_frames=cfg.tracker_max_prediction_frames,
                 center_distance_enabled=cfg.tracker_center_distance_enabled,
                 camera_motion_compensation=cfg.tracker_camera_motion_compensation,
+                covariance_motion_enabled=cfg.tracker_covariance_motion_enabled,
+                overlap_threshold=cfg.tracker_overlap_threshold,
+                max_occlusion_frames=cfg.tracker_max_occlusion_frames,
+                max_active_tracks=cfg.tracker_max_active_tracks,
             )
         ),
         camera_motion=(
@@ -849,6 +887,13 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
         output_fps=output_fps,
         video_port=video_port,
         save_bgr=save_frames_enabled(cfg),
+        replay_writer=(
+            (Path(cfg.replay_dir) / f"stream_{stream_index}.jsonl").open(
+                "w", encoding="utf-8"
+            )
+            if cfg.replay_dir
+            else None
+        ),
     )
 
 
@@ -913,6 +958,83 @@ def send_metadata(
         timestamp_ms,
         frame_id,
     )
+
+
+def write_replay_record(
+    stream: StreamRuntime,
+    tracking_frame_index: int,
+    sample,
+    detections: list[dict],
+    camera_transform,
+    tracks: list[TrackedDetection],
+) -> None:
+    if stream.replay_writer is None:
+        return
+    record = {
+        "frame_index": tracking_frame_index,
+        "processed_index": stream.processed,
+        "frame_id": int(getattr(sample, "frame_id", -1)),
+        "pts_ns": int(getattr(sample, "pts_ns", -1)),
+        "camera_transform": (
+            [float(value) for value in camera_transform]
+            if camera_transform is not None
+            else None
+        ),
+        "detections": detections,
+        "tracks": [
+            {
+                "id": str(track.track_id),
+                "bbox": [
+                    track.x1,
+                    track.y1,
+                    track.x2 - track.x1,
+                    track.y2 - track.y1,
+                ],
+                "confidence": track.score,
+                "class_id": track.class_id,
+                "predicted": track.predicted,
+                "occluded": track.occluded,
+                "association_confidence": track.association_confidence,
+            }
+            for track in tracks
+        ],
+    }
+    stream.replay_writer.write(
+        json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
+    )
+
+
+def tracker_frame_index(stream: StreamRuntime, sample) -> int:
+    source_sequence = next(
+        (
+            int(value)
+            for value in (
+                getattr(sample, "frame_id", -1),
+                getattr(sample, "orig_input_seq", -1),
+                getattr(sample, "input_seq", -1),
+            )
+            if int(value) >= 0
+        ),
+        -1,
+    )
+    pts_ns = int(getattr(sample, "pts_ns", -1))
+    if stream.tracking_frame_index < 0:
+        stream.tracking_frame_index = 0
+    else:
+        elapsed_frames = 1
+        if source_sequence >= 0 and source_sequence > stream.last_source_sequence >= 0:
+            elapsed_frames = source_sequence - stream.last_source_sequence
+        elif pts_ns >= 0 and pts_ns > stream.last_tracking_pts_ns >= 0:
+            elapsed_frames = max(
+                1,
+                round((pts_ns - stream.last_tracking_pts_ns) * stream.output_fps / 1e9),
+            )
+        stream.tracking_frame_index += elapsed_frames
+    if source_sequence >= 0:
+        stream.last_source_sequence = source_sequence
+    if pts_ns >= 0:
+        stream.last_tracking_pts_ns = pts_ns
+    return stream.tracking_frame_index
 
 
 def tensor_dim(tensor, name: str) -> int:
@@ -1049,10 +1171,17 @@ def process_output_sample(
         # Avoid applying a transform spanning an already compensated missing
         # side-branch frame when image samples resume.
         stream.camera_motion.reset()
-    tracks = stream.tracker.update(
-        target_detections, stream.processed, camera_transform
-    )
+    tracking_frame = tracker_frame_index(stream, sample)
+    tracks = stream.tracker.update(target_detections, tracking_frame, camera_transform)
     tracker_end = time_ms()
+    write_replay_record(
+        stream,
+        tracking_frame,
+        sample,
+        target_detections,
+        camera_transform,
+        tracks,
+    )
 
     stream.processed += 1
     warming_up = stream.processed <= cfg.warmup_frames
@@ -1175,6 +1304,8 @@ def run_app(cfg: AppConfig) -> None:
         os.environ.setdefault("SIMA_GST_BOUNDARY_PROBES", "1")
     if save_frames_enabled(cfg):
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
+    if cfg.replay_dir:
+        Path(cfg.replay_dir).mkdir(parents=True, exist_ok=True)
 
     model, detector_graph = build_detector_graph(cfg)
     detections_graph = build_detections_graph()
@@ -1199,6 +1330,8 @@ def run_app(cfg: AppConfig) -> None:
         for stream in app.streams:
             if stream.debug_writer is not None:
                 stream.debug_writer.close()
+            if stream.replay_writer is not None:
+                stream.replay_writer.close()
             stream.profile.flush()
             print(f"[stream {stream.index}] processed={stream.processed}")
 

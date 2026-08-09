@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 import textwrap
@@ -30,6 +31,12 @@ ACCURACY_SPEC = importlib.util.spec_from_file_location(
 assert ACCURACY_SPEC and ACCURACY_SPEC.loader
 evaluate_tracking = importlib.util.module_from_spec(ACCURACY_SPEC)
 ACCURACY_SPEC.loader.exec_module(evaluate_tracking)
+
+REPLAY_PATH = PYTHON_DIR / "replay_tracking.py"
+REPLAY_SPEC = importlib.util.spec_from_file_location("replay_tracking", REPLAY_PATH)
+assert REPLAY_SPEC and REPLAY_SPEC.loader
+replay_tracking = importlib.util.module_from_spec(REPLAY_SPEC)
+REPLAY_SPEC.loader.exec_module(replay_tracking)
 
 
 def write_config(
@@ -310,6 +317,8 @@ class TestConfigLoading:
 
         assert cfg.tracker_iou_threshold == 0.50
         assert cfg.tracker_center_distance_enabled is False
+        assert cfg.tracker_covariance_motion_enabled is False
+        assert cfg.tracker_max_occlusion_frames == 0
 
     def test_omitted_tracking_thresholds_follow_decoder_floor(self, tmp_path: Path):
         from main import load_app_config
@@ -529,6 +538,43 @@ class FakeSample:
 
 
 class TestMetadata:
+    def test_tracker_timebase_preserves_source_frame_gaps(self):
+        from main import ProfileWindow, StreamRuntime, tracker_frame_index
+        from utils.tracker import ObjectTracker
+
+        runtime = StreamRuntime(
+            index=0,
+            url="rtsp://127.0.0.1:8554/src1",
+            source_options=None,
+            metadata_sender=FakeMetadataSender(),
+            tracker=ObjectTracker(),
+            profile=ProfileWindow(False, 0),
+            debug_frames=deque(),
+            frame_w=640,
+            frame_h=512,
+            output_fps=30,
+            video_port=9000,
+        )
+
+        assert (
+            tracker_frame_index(
+                runtime, SimpleNamespace(frame_id=0, pts_ns=1_000_000_000)
+            )
+            == 0
+        )
+        assert (
+            tracker_frame_index(
+                runtime, SimpleNamespace(frame_id=10, pts_ns=1_333_333_333)
+            )
+            == 10
+        )
+        assert (
+            tracker_frame_index(
+                runtime, SimpleNamespace(frame_id=11, pts_ns=1_366_666_666)
+            )
+            == 11
+        )
+
     def test_send_metadata_uses_tracking_contract(self):
         from main import AppConfig, ProfileWindow, StreamRuntime, send_metadata
         from utils.tracker import ObjectTracker, TrackedDetection
@@ -727,8 +773,8 @@ class TestTracker:
             frame_index=1,
         )
 
-        assert smoothed[0].x1 == pytest.approx(1.0)
-        assert smoothed[0].x2 == pytest.approx(5.0)
+        assert 0.0 < smoothed[0].x1 < 2.0
+        assert 4.0 < smoothed[0].x2 < 6.0
 
     def test_camera_motion_compensation_preserves_ids_across_fast_pan(self):
         from utils.tracker import ObjectTracker, TrackerConfig
@@ -819,7 +865,16 @@ class TestTracker:
         for frame in range(1, 13):
             x = 20 * frame
             tracked = tracker.update(
-                [{"x1": x, "y1": 20, "x2": x + 4, "y2": 24, "score": 0.9, "class_id": 0}],
+                [
+                    {
+                        "x1": x,
+                        "y1": 20,
+                        "x2": x + 4,
+                        "y2": 24,
+                        "score": 0.9,
+                        "class_id": 0,
+                    }
+                ],
                 frame,
                 pan,
             )
@@ -871,7 +926,7 @@ class TestTracker:
                 expected_extent, abs=1e-4
             )
 
-    def test_orb_camera_motion_estimator_recovers_translation(self):
+    def test_sparse_flow_camera_motion_estimator_recovers_translation(self):
         from utils.tracker import FrameCameraMotionEstimator
 
         cv2 = pytest.importorskip("cv2")
@@ -893,11 +948,15 @@ class TestTracker:
         assert motion[2] == pytest.approx(18, abs=2)
         assert motion[5] == pytest.approx(7, abs=2)
 
-    def test_recent_track_wins_before_stale_track(self):
+    def test_ambiguous_recency_preserves_both_tracks(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 
         tracker = ObjectTracker(
-            TrackerConfig(max_center_distance=2.0, velocity_momentum=0.9)
+            TrackerConfig(
+                max_center_distance=2.0,
+                velocity_momentum=0.9,
+                max_occlusion_frames=10,
+            )
         )
         first = tracker.update(
             [
@@ -915,7 +974,264 @@ class TestTracker:
             frame_index=2,
         )
 
-        assert recent[0].track_id == first[1].track_id
+        assert len(first) == 2
+        assert len(recent) == 2
+        assert all(track.predicted and track.occluded for track in recent)
+        assert tracker.active_track_count() == 2
+
+    def test_overlap_component_preserves_crossing_identities(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                velocity_momentum=0.0,
+                max_center_distance=2.5,
+                max_prediction_frames=1,
+                max_occlusion_frames=4,
+            )
+        )
+        initial = tracker.update(
+            [
+                {"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 20, "y1": 0, "x2": 24, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            0,
+        )
+        tracker.update(
+            [
+                {"x1": 4, "y1": 0, "x2": 8, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 16, "y1": 0, "x2": 20, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            1,
+        )
+        tracker.update(
+            [
+                {"x1": 8, "y1": 0, "x2": 12, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 12, "y1": 0, "x2": 16, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            2,
+        )
+        merged = tracker.update(
+            [{"x1": 10, "y1": 0, "x2": 14, "y2": 4, "score": 0.9, "class_id": 0}],
+            3,
+        )
+        separated = tracker.update(
+            [
+                {"x1": 16, "y1": 0, "x2": 20, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 4, "y1": 0, "x2": 8, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            4,
+        )
+
+        assert len(merged) == 2
+        assert all(track.predicted and track.occluded for track in merged)
+        assert tracker.active_track_count() == 2
+        assert separated[0].track_id == initial[0].track_id
+        assert separated[1].track_id == initial[1].track_id
+
+    def test_three_track_overlap_component_coasts_all_identities(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(max_center_distance=3.0, max_occlusion_frames=4)
+        )
+        tracker.update(
+            [
+                {"x1": 0, "y1": 0, "x2": 6, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 5, "y1": 0, "x2": 11, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 10, "y1": 0, "x2": 16, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            0,
+        )
+        deficient = tracker.update(
+            [
+                {"x1": 3, "y1": 0, "x2": 9, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 7, "y1": 0, "x2": 13, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            1,
+        )
+
+        assert len(deficient) == 3
+        assert all(track.predicted and track.occluded for track in deficient)
+
+    def test_covariance_size_state_rejects_explosive_scale_velocity(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(max_center_distance=1000.0, max_prediction_frames=1)
+        )
+        tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 1, "y2": 1, "score": 0.9, "class_id": 0}],
+            0,
+        )
+        tracker.update(
+            [
+                {
+                    "x1": -499.5,
+                    "y1": -499.5,
+                    "x2": 500.5,
+                    "y2": 500.5,
+                    "score": 0.9,
+                    "class_id": 0,
+                }
+            ],
+            1,
+        )
+        predicted = tracker.update([], 2)
+
+        assert len(predicted) == 1
+        assert math.isfinite(predicted[0].x2 - predicted[0].x1)
+        assert predicted[0].x2 - predicted[0].x1 < 256
+
+    def test_unobserved_prediction_freezes_last_reliable_size(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(max_center_distance=1000.0, max_prediction_frames=3)
+        )
+        tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 8, "y2": 8, "score": 0.9, "class_id": 0}],
+            0,
+        )
+        observed = tracker.update(
+            [
+                {
+                    "x1": -4,
+                    "y1": 0,
+                    "x2": 12,
+                    "y2": 8,
+                    "score": 0.9,
+                    "class_id": 0,
+                }
+            ],
+            1,
+        )
+        predicted = tracker.update([], 2)
+
+        assert len(observed) == len(predicted) == 1
+        assert predicted[0].predicted
+        assert predicted[0].x2 - predicted[0].x1 == pytest.approx(
+            observed[0].x2 - observed[0].x1
+        )
+        assert predicted[0].y2 - predicted[0].y1 == pytest.approx(
+            observed[0].y2 - observed[0].y1
+        )
+
+    def test_ambiguous_assignment_respects_occlusion_publication_horizon(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                velocity_momentum=0.0,
+                max_center_distance=2.5,
+                max_prediction_frames=1,
+                max_occlusion_frames=2,
+                max_missing_frames=10,
+            )
+        )
+        tracker.update(
+            [
+                {"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 20, "y1": 0, "x2": 24, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            0,
+        )
+        tracker.update(
+            [
+                {"x1": 4, "y1": 0, "x2": 8, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 16, "y1": 0, "x2": 20, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            1,
+        )
+        tracker.update(
+            [
+                {"x1": 8, "y1": 0, "x2": 12, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 12, "y1": 0, "x2": 16, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            2,
+        )
+        merged = [{"x1": 10, "y1": 0, "x2": 14, "y2": 4, "score": 0.9, "class_id": 0}]
+        first_merged = tracker.update(merged, 3)
+        second_merged = tracker.update(merged, 4)
+        expired_merged = tracker.update(merged, 5)
+
+        assert len(first_merged) == len(second_merged) == 2
+        assert expired_merged == []
+
+    def test_tracker_capacity_replaces_only_unmatched_stale_tracks(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(max_active_tracks=3, max_center_distance=0.5)
+        )
+        initial = tracker.update(
+            [
+                {"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 10, "y1": 0, "x2": 14, "y2": 4, "score": 0.9, "class_id": 0},
+                {"x1": 20, "y1": 0, "x2": 24, "y2": 4, "score": 0.9, "class_id": 0},
+            ],
+            0,
+        )
+        after_cut = tracker.update(
+            [
+                {
+                    "x1": 100,
+                    "y1": 100,
+                    "x2": 104,
+                    "y2": 104,
+                    "score": 0.9,
+                    "class_id": 0,
+                },
+                {
+                    "x1": 110,
+                    "y1": 100,
+                    "x2": 114,
+                    "y2": 104,
+                    "score": 0.9,
+                    "class_id": 0,
+                },
+                {
+                    "x1": 120,
+                    "y1": 100,
+                    "x2": 124,
+                    "y2": 104,
+                    "score": 0.9,
+                    "class_id": 0,
+                },
+            ],
+            1,
+        )
+
+        assert tracker.active_track_count() == 3
+        assert {track.track_id for track in initial}.isdisjoint(
+            track.track_id for track in after_cut
+        )
+
+    def test_disabled_covariance_retains_legacy_raw_box_output(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                center_distance_enabled=False,
+                covariance_motion_enabled=False,
+                max_occlusion_frames=0,
+            )
+        )
+        tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 10, "y2": 10, "score": 0.9, "class_id": 0}],
+            0,
+        )
+        second = tracker.update(
+            [{"x1": 1, "y1": 2, "x2": 11, "y2": 12, "score": 0.8, "class_id": 0}],
+            1,
+        )
+
+        assert (second[0].x1, second[0].y1, second[0].x2, second[0].y2) == (
+            1,
+            2,
+            11,
+            12,
+        )
 
     def test_tracker_drops_track_after_missing_budget(self):
         from utils.tracker import ObjectTracker, TrackerConfig
@@ -1162,7 +1478,7 @@ class TestTracker:
 
         assert bridged[0].track_id == observed[0].track_id
         assert bridged[0].predicted is True
-        assert bridged[0].x1 == pytest.approx(2.0)
+        assert 1.5 < bridged[0].x1 < 2.1
         assert beyond_horizon == []
 
     def test_unconfirmed_track_expires_on_first_miss(self):
@@ -1219,6 +1535,61 @@ class TestTracker:
 
         with pytest.raises(ValueError, match="box_smoothing_alpha"):
             ObjectTracker(TrackerConfig(box_smoothing_alpha=0.0))
+
+
+class TestTrackerReplay:
+    def test_crossing_replay_is_deterministic_and_preserves_ids(self, tmp_path: Path):
+        from utils.tracker import TrackerConfig
+
+        frames = [
+            {
+                "frame_index": index,
+                "detections": [
+                    {
+                        "bbox": [x, 0, 4, 4],
+                        "score": 0.9,
+                        "class_id": 0,
+                    }
+                    for x in positions
+                ],
+            }
+            for index, positions in enumerate(
+                ([0, 20], [4, 16], [8, 12], [10], [16, 4])
+            )
+        ]
+        input_path = tmp_path / "detections.jsonl"
+        input_path.write_text(
+            "\n".join(json.dumps(frame) for frame in frames) + "\n",
+            encoding="utf-8",
+        )
+
+        parsed = replay_tracking.read_frames(input_path)
+        config = TrackerConfig(
+            velocity_momentum=0.0,
+            max_prediction_frames=1,
+            max_occlusion_frames=4,
+        )
+        first = replay_tracking.replay(parsed, config)
+        second = replay_tracking.replay(parsed, config)
+
+        assert first == second
+        initial = json.loads(first[0])["tracks"]
+        merged = json.loads(first[3])["tracks"]
+        separated = json.loads(first[4])["tracks"]
+        assert len(merged) == 2
+        assert all(track["predicted"] and track["occluded"] for track in merged)
+        assert separated[0]["id"] == initial[0]["id"]
+        assert separated[1]["id"] == initial[1]["id"]
+
+    def test_replay_rejects_non_monotonic_frames(self, tmp_path: Path):
+        input_path = tmp_path / "detections.jsonl"
+        input_path.write_text(
+            '{"frame_index":2,"detections":[]}\n' '{"frame_index":2,"detections":[]}\n',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="strictly increasing"):
+            replay_tracking.read_frames(input_path)
 
 
 class TestAccuracyEvaluation:

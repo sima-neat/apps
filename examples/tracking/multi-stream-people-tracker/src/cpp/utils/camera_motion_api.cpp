@@ -8,12 +8,11 @@
 
 namespace multi_stream_people_tracker {
 
-// Estimates a partial-affine transform between consecutive decoded frames.
-// ORB is deliberately computed on a downscaled luminance image so this can run
-// on the board CPU without adding another model or color conversion.
+// Estimates a confidence-bearing partial-affine transform between consecutive
+// decoded frames using sparse pyramidal optical flow on luminance.
 class FrameCameraMotionEstimator {
 public:
-  explicit FrameCameraMotionEstimator(int downscale = 2, int max_features = 500);
+  explicit FrameCameraMotionEstimator(int downscale = 4, int max_features = 200);
   ~FrameCameraMotionEstimator();
 
   FrameCameraMotionEstimator(FrameCameraMotionEstimator&&) noexcept;

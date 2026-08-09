@@ -119,6 +119,10 @@ tracking:
   velocity_momentum: 0.80
   box_smoothing_alpha: 1.0
   camera_motion_compensation: false
+  covariance_motion_enabled: true
+  overlap_threshold: 0.20
+  max_occlusion_frames: 10
+  max_active_tracks: 128
   max_missing_frames: 15
   max_prediction_frames: 0
 
@@ -134,17 +138,38 @@ without `tracking.max_center_distance`, matching remains IoU-only; set the
 center-distance value explicitly or use `match_iou_threshold` to enable the
 motion-aware OR gate.
 
-`box_smoothing_alpha` blends an observation with its motion-predicted box.
-`1.0` publishes raw detector geometry; lower values reduce localization jitter.
-Association is recency-cascaded so retained stale tracks cannot steal a
-detection from a track observed on the immediately preceding frame.
+The default covariance tracker estimates center, velocity, width, and height
+with uncertainty-aware constant-velocity filters. `velocity_momentum` controls
+how quickly velocity adapts; the covariance path bounds excessive inertia so a
+high legacy value cannot make a track lag for many frames.
+
+`box_smoothing_alpha` affects only the presented box. Association always uses
+the covariance posterior, so lowering this value reduces visible localization
+jitter without feeding the delayed display geometry back into matching.
+`overlap_threshold` identifies ambiguous track intersections. When fewer
+detections than identities survive an overlap, the affected tracks coast on
+their independent predictions instead of both consuming the same noisy merged
+box. `max_occlusion_frames` bounds how long these explicitly occluded tracks
+are published; it must not exceed `max_missing_frames`.
+`max_active_tracks` bounds association memory and worst-case work after scene
+cuts or false-positive bursts. When full, a new high-confidence observation
+may replace only an unmatched, least-reliable retained track; it never evicts a
+match from the current frame.
+
+Association solves one deterministic global pool per confidence pass.
+Mahalanobis feasibility, covariance, missing-frame cost, and observation
+direction express recency without allowing an earlier cascade group to commit
+a match before the full feasible component is considered.
 `camera_motion_compensation` estimates a partial-affine frame transform with
-downscaled ORB features and RANSAC, then transforms every retained track before
-prediction and association. If the image has too little texture for a reliable
-estimate, the tracker may fall back to a robust shared translation from the
-detection cloud. It is useful for moving-camera scenes and is disabled by
-default so fixed-camera and legacy profiles retain their exact matching
-behavior.
+masked, downscaled Shi-Tomasi features, forward/backward pyramidal Lucas-Kanade
+flow, and RANSAC. The estimator reports inlier, residual, and spatial-coverage
+confidence; the tracker uses that confidence to scale motion uncertainty before
+association. Tracker time follows source-frame sequence/PTS rather than output
+count, and intermediate decoded-frame transforms are composed when inference
+skips frames. If the image has too little texture for a reliable estimate, the
+tracker may fall back to a conservative shared translation from the detection
+cloud. It is useful for moving-camera scenes and is disabled by default so
+fixed-camera and legacy profiles retain their exact matching behavior.
 
 For the one-class drone candidate, copy
 `src/common/tiny-drone.yaml`, then set its model path, RTSP URL, and Insight
@@ -246,6 +271,33 @@ Tiny/small/medium/large buckets are measured after the configured model input
 scale (`640` by default). Pass the deployed model's input size, such as `1600`
 for the tiny-drone profile, so the tiny-object recall gate reflects what the
 detector sees.
+
+For tracker-only regression work, replay recorded detector output without the
+decoder, MLA, or network timing. Input JSONL contains a strictly increasing
+`frame_index`, a `detections` array, and an optional six-value partial-affine
+`camera_transform`. `--verify-determinism` repeats the run with fresh tracker
+state and fails if any output byte differs. Use the C++ executable for release
+qualification because it exercises the exact implementation deployed on the
+board; the Python command remains a readable reference implementation.
+
+Set `output.replay_dir` on either app implementation to record one
+`stream_<index>.jsonl` file containing the exact filtered detections, camera
+transform and diagnostics, and produced tracks. The option is disabled by
+default and does not affect the live profile when omitted.
+
+```bash
+./multi-stream-people-tracker_replay \
+  --detections <detector-output.jsonl> \
+  --output <tracking-output.jsonl> \
+  --camera-motion-compensation \
+  --verify-recorded \
+  --verify-determinism
+
+python3 examples/tracking/multi-stream-people-tracker/src/python/replay_tracking.py \
+  --detections <detector-output.jsonl> \
+  --output <tracking-output.jsonl> \
+  --verify-determinism
+```
 
 ## Development From Source
 

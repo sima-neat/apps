@@ -34,8 +34,12 @@ tracking:                    # Per-stream tracker settings.
   new_track_threshold: 0.30  # Minimum score allowed to establish a track.
   match_iou_threshold: 0.10  # Accept a match at or above this IoU.
   max_center_distance: 2.5   # Or accept by center distance, normalized by box diagonal.
-  velocity_momentum: 0.80    # Constant-velocity estimate smoothing.
-  box_smoothing_alpha: 1.0   # Observation weight after motion prediction. 1 disables smoothing.
+  velocity_momentum: 0.80    # Velocity adaptation; covariance mode bounds excessive inertia.
+  box_smoothing_alpha: 1.0   # Presentation-only smoothing. 1 publishes the filter posterior.
+  covariance_motion_enabled: true # Use covariance-aware center/size motion and gating.
+  overlap_threshold: 0.20    # Overlap coefficient that begins ambiguous-occlusion handling.
+  max_occlusion_frames: 10   # Publish an occluded identity while it coasts; <= max_missing_frames.
+  max_active_tracks: 128     # Hard bound for association memory and worst-case runtime.
   max_missing_frames: 15     # Frames to keep a missing track alive.
   min_confirmed_hits: 1      # Matches required before publishing a track.
   max_prediction_frames: 0   # Publish motion prediction over short detector gaps. 0 disables it.
@@ -48,6 +52,7 @@ output:                      # Insight output plus optional local debug saves.
   video_enabled: true        # Disable to publish metadata only.
   debug_dir: null            # Optional directory for periodic debug frame saves.
   save_every: 0              # Save every Nth debug frame. 0 disables saving.
+  replay_dir: null           # Optional exact detector/transform/tracker JSONL capture directory.
 
 # Test harness settings only. Normal example runs ignore this section.
 testing:
