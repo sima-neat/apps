@@ -10,6 +10,8 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc features2d calib3d)
+
 get_filename_component(APPS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
 if (NOT TARGET SimaNeatApps::sima_neat)
   _sima_neat_apps_ensure_neat_target("${APPS_ROOT}")
@@ -27,6 +29,11 @@ target_link_libraries(multi_stream_people_tracker_lib
   PUBLIC
     SimaNeatApps::sima_neat
     SimaNeatApps::support_runtime
+    opencv_core
+    opencv_imgcodecs
+    opencv_imgproc
+    opencv_features2d
+    opencv_calib3d
 )
 target_include_directories(multi_stream_people_tracker_lib
   PUBLIC
