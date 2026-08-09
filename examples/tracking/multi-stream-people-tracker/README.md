@@ -154,7 +154,8 @@ The tiny-drone profile enables camera-motion compensation and publishes at most
 one motion-compensated prediction for an isolated detector miss. Low-confidence
 detections may recover a confirmed identity, but cannot create one.
 When `output.save_dir` is enabled, annotated JPEGs are encoded by a bounded
-background writer so debug rendering does not serialize the inference loop.
+background writer. If storage falls behind, it drops the oldest queued debug
+frame instead of applying backpressure to live inference.
 `inference.num_classes` is part of the detector contract and must match the
 YOLO26 class-head depth (`1` for the tiny-drone model and `80` for COCO). The
 application rejects non-positive class counts and target class IDs outside

@@ -119,7 +119,6 @@ public:
       stopping_ = true;
     }
     ready_.notify_one();
-    space_.notify_all();
     if (worker_.joinable()) {
       worker_.join();
     }
@@ -129,13 +128,18 @@ public:
   DebugFrameWriter& operator=(const DebugFrameWriter&) = delete;
 
   void enqueue(fs::path path, cv::Mat frame) {
-    std::unique_lock lock(mutex_);
-    space_.wait(lock, [this] { return stopping_ || queue_.size() < kMaximumQueuedFrames; });
-    if (stopping_) {
-      return;
+    {
+      std::lock_guard lock(mutex_);
+      if (stopping_) {
+        return;
+      }
+      // Debug capture must never apply backpressure to live inference. Keep
+      // the freshest bounded sample when storage cannot keep up.
+      if (queue_.size() >= kMaximumQueuedFrames) {
+        queue_.pop_front();
+      }
+      queue_.push_back(Task{std::move(path), std::move(frame)});
     }
-    queue_.push_back(Task{std::move(path), std::move(frame)});
-    lock.unlock();
     ready_.notify_one();
   }
 
@@ -160,7 +164,6 @@ private:
         task = std::move(queue_.front());
         queue_.pop_front();
       }
-      space_.notify_one();
       if (!cv::imwrite(task.path.string(), task.frame)) {
         std::cerr << "[warn] failed to write output frame: " << task.path << "\n";
       }
@@ -170,7 +173,6 @@ private:
   static constexpr std::size_t kMaximumQueuedFrames = 16;
   std::mutex mutex_;
   std::condition_variable ready_;
-  std::condition_variable space_;
   std::deque<Task> queue_;
   bool stopping_ = false;
   std::thread worker_;

@@ -114,7 +114,25 @@ class DebugFrameWriter:
         self._worker.start()
 
     def enqueue(self, path: Path, frame) -> None:
-        self._tasks.put((path, frame))
+        task = (path, frame)
+        try:
+            self._tasks.put_nowait(task)
+            return
+        except queue.Full:
+            pass
+
+        # Debug capture must never apply backpressure to live inference. Keep
+        # the freshest bounded sample when storage cannot keep up.
+        try:
+            self._tasks.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._tasks.put_nowait(task)
+        except queue.Full:
+            # Another producer won the slot. Dropping debug output is still
+            # preferable to stalling the detection path.
+            pass
 
     def close(self) -> None:
         if self._worker.is_alive():

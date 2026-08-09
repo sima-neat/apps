@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import textwrap
+import threading
 from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
@@ -570,6 +571,49 @@ class TestMetadata:
                 }
             ]
         }
+
+
+class TestDebugFrameWriter:
+    def test_queue_overflow_keeps_latest_without_blocking_inference(
+        self, monkeypatch, tmp_path: Path
+    ):
+        import main
+
+        first_started = threading.Event()
+        release_first = threading.Event()
+        enqueued_latest = threading.Event()
+        writes = []
+
+        def controlled_imwrite(path, _frame):
+            writes.append(Path(path).name)
+            if Path(path).name == "first.jpg":
+                first_started.set()
+                assert release_first.wait(timeout=2.0)
+            return True
+
+        monkeypatch.setattr(main, "cv2", SimpleNamespace(imwrite=controlled_imwrite))
+        writer = main.DebugFrameWriter(maximum_queued_frames=1)
+        latest_thread = None
+
+        def enqueue_latest():
+            writer.enqueue(tmp_path / "latest.jpg", object())
+            enqueued_latest.set()
+
+        try:
+            writer.enqueue(tmp_path / "first.jpg", object())
+            assert first_started.wait(timeout=1.0)
+            writer.enqueue(tmp_path / "stale.jpg", object())
+
+            latest_thread = threading.Thread(target=enqueue_latest)
+            latest_thread.start()
+            assert enqueued_latest.wait(timeout=0.5)
+        finally:
+            release_first.set()
+            if latest_thread is not None:
+                latest_thread.join(timeout=1.0)
+            writer.close()
+
+        assert writes == ["first.jpg", "latest.jpg"]
 
 
 class TestDebugFrameSynchronization:
