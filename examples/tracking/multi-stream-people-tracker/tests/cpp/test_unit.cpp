@@ -455,6 +455,36 @@ bool test_external_camera_transform_is_not_learned_as_object_velocity() {
   return true;
 }
 
+bool test_repeated_camera_rotation_does_not_inflate_prediction() {
+  TrackerConfig config;
+  config.max_prediction_frames = 12;
+  config.camera_motion_compensation = true;
+  ObjectTracker tracker(config);
+  tracker.update({Detection{-5.0f, -5.0f, 5.0f, 5.0f, 0.9f, 0}}, 0);
+
+  constexpr float angle = 0.1f;
+  const float cosine = std::cos(angle);
+  const float sine = std::sin(angle);
+  const multi_stream_people_tracker::CameraTransform rotation{cosine, -sine, 0.0f, sine,
+                                                              cosine, 0.0f,  true};
+  for (int frame = 1; frame <= 12; ++frame) {
+    const auto tracked = tracker.update({}, frame, rotation);
+    if (!expect_true(tracked.size() == 1 && tracked.front().predicted,
+                     "camera rotation keeps the gap prediction visible")) {
+      return false;
+    }
+    const float cumulative_angle = angle * static_cast<float>(frame);
+    const float expected_extent =
+        10.0f * (std::abs(std::cos(cumulative_angle)) + std::abs(std::sin(cumulative_angle)));
+    const float actual_extent = tracked.front().x2 - tracked.front().x1;
+    if (!expect_true(std::abs(actual_extent - expected_extent) < 1e-3f,
+                     "camera rotation preserves oriented track geometry")) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool test_orb_camera_motion_estimator_recovers_translation() {
   cv::Mat first(256, 320, CV_8UC1);
   cv::RNG rng(12345);
@@ -757,6 +787,7 @@ int main(int argc, char** argv) {
   ok &= test_camera_motion_compensation_preserves_ids_across_fast_pan();
   ok &= test_camera_motion_compensation_does_not_bridge_scene_cut();
   ok &= test_external_camera_transform_is_not_learned_as_object_velocity();
+  ok &= test_repeated_camera_rotation_does_not_inflate_prediction();
   ok &= test_orb_camera_motion_estimator_recovers_translation();
   ok &= test_recent_track_wins_before_stale_track();
   ok &= test_tracker_drops_track_after_missing_budget();

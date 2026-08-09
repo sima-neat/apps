@@ -782,6 +782,51 @@ class TestTracker:
             assert tracked[0].track_id == track_id
             assert tracked[0].x1 == pytest.approx(x)
 
+    def test_repeated_camera_rotation_does_not_inflate_prediction(self):
+        import math
+
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                max_prediction_frames=12,
+                camera_motion_compensation=True,
+            )
+        )
+        tracker.update(
+            [
+                {
+                    "x1": -5,
+                    "y1": -5,
+                    "x2": 5,
+                    "y2": 5,
+                    "score": 0.9,
+                    "class_id": 0,
+                }
+            ],
+            0,
+        )
+
+        angle = 0.1
+        rotation = (
+            math.cos(angle),
+            -math.sin(angle),
+            0.0,
+            math.sin(angle),
+            math.cos(angle),
+            0.0,
+        )
+        for frame in range(1, 13):
+            tracked = tracker.update([], frame, rotation)
+            expected_extent = 10.0 * (
+                abs(math.cos(frame * angle)) + abs(math.sin(frame * angle))
+            )
+            assert len(tracked) == 1
+            assert tracked[0].predicted
+            assert tracked[0].x2 - tracked[0].x1 == pytest.approx(
+                expected_extent, abs=1e-4
+            )
+
     def test_orb_camera_motion_estimator_recovers_translation(self):
         from utils.tracker import FrameCameraMotionEstimator
 

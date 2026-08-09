@@ -1,6 +1,7 @@
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <limits>
@@ -19,10 +20,14 @@ namespace {
 constexpr float kBlockedCost = 1.0e6f;
 constexpr float kUnmatchedCost = 1.0e3f;
 
+using BoxCorners = std::array<float, 8>;
+
 struct TrackState {
   int track_id = 0;
   Detection detection;
   Detection filtered_detection;
+  BoxCorners detection_corners{};
+  BoxCorners filtered_detection_corners{};
   float velocity_x = 0.0f;
   float velocity_y = 0.0f;
   float velocity_w = 0.0f;
@@ -114,26 +119,36 @@ bool valid_camera_transform(const CameraTransform& transform) {
   return std::abs(determinant) > 0.01f;
 }
 
-Detection transform_detection(const Detection& detection, const CameraTransform& transform) {
-  const auto transform_point = [&](float x, float y) {
-    return std::pair{transform.a * x + transform.b * y + transform.tx,
-                     transform.c * x + transform.d * y + transform.ty};
-  };
-  const auto p0 = transform_point(detection.x1, detection.y1);
-  const auto p1 = transform_point(detection.x2, detection.y1);
-  const auto p2 = transform_point(detection.x1, detection.y2);
-  const auto p3 = transform_point(detection.x2, detection.y2);
-  return Detection{std::min({p0.first, p1.first, p2.first, p3.first}),
-                   std::min({p0.second, p1.second, p2.second, p3.second}),
-                   std::max({p0.first, p1.first, p2.first, p3.first}),
-                   std::max({p0.second, p1.second, p2.second, p3.second}),
-                   detection.score,
-                   detection.class_id};
+BoxCorners box_corners(const Detection& detection) {
+  return BoxCorners{detection.x1, detection.y1, detection.x2, detection.y1,
+                    detection.x1, detection.y2, detection.x2, detection.y2};
+}
+
+void transform_track_box(Detection& detection, BoxCorners& corners,
+                         const CameraTransform& transform) {
+  float x1 = std::numeric_limits<float>::max();
+  float y1 = std::numeric_limits<float>::max();
+  float x2 = std::numeric_limits<float>::lowest();
+  float y2 = std::numeric_limits<float>::lowest();
+  for (std::size_t index = 0; index < corners.size(); index += 2) {
+    const float x = corners[index];
+    const float y = corners[index + 1];
+    corners[index] = transform.a * x + transform.b * y + transform.tx;
+    corners[index + 1] = transform.c * x + transform.d * y + transform.ty;
+    x1 = std::min(x1, corners[index]);
+    y1 = std::min(y1, corners[index + 1]);
+    x2 = std::max(x2, corners[index]);
+    y2 = std::max(y2, corners[index + 1]);
+  }
+  detection.x1 = x1;
+  detection.y1 = y1;
+  detection.x2 = x2;
+  detection.y2 = y2;
 }
 
 void transform_track_state(TrackState& track, const CameraTransform& transform) {
-  track.detection = transform_detection(track.detection, transform);
-  track.filtered_detection = transform_detection(track.filtered_detection, transform);
+  transform_track_box(track.detection, track.detection_corners, transform);
+  transform_track_box(track.filtered_detection, track.filtered_detection_corners, transform);
   const float velocity_x = transform.a * track.velocity_x + transform.b * track.velocity_y;
   const float velocity_y = transform.c * track.velocity_x + transform.d * track.velocity_y;
   track.velocity_x = velocity_x;
@@ -748,6 +763,8 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     }
     track.filtered_detection = smooth_detection(filtered_prediction, detection, smoothing_alpha);
     track.detection = detection;
+    track.filtered_detection_corners = box_corners(track.filtered_detection);
+    track.detection_corners = box_corners(track.detection);
     track.last_frame_index = frame_index;
     track.missing_frames = 0;
     ++track.hits;
@@ -761,8 +778,15 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
     }
     const Detection& detection = detections[static_cast<std::size_t>(detection_index)];
     const int track_index = static_cast<int>(impl_->tracks.size());
-    impl_->tracks.push_back(TrackState{next_track_id_++, detection, detection, 0.0f, 0.0f, 0.0f,
-                                       0.0f, frame_index, 0, 1, config_.min_confirmed_hits <= 1});
+    TrackState track;
+    track.track_id = next_track_id_++;
+    track.detection = detection;
+    track.filtered_detection = detection;
+    track.detection_corners = box_corners(detection);
+    track.filtered_detection_corners = track.detection_corners;
+    track.last_frame_index = frame_index;
+    track.confirmed = config_.min_confirmed_hits <= 1;
+    impl_->tracks.push_back(track);
     impl_->matched_tracks.push_back(1);
     impl_->matched_detections[static_cast<std::size_t>(detection_index)] = 1;
     impl_->assignments[static_cast<std::size_t>(detection_index)] = track_index;

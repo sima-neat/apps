@@ -6,6 +6,12 @@ import math
 from dataclasses import dataclass
 
 BBox = tuple[float, float, float, float]
+BoxCorners = tuple[
+    tuple[float, float],
+    tuple[float, float],
+    tuple[float, float],
+    tuple[float, float],
+]
 CameraTransform = tuple[float, float, float, float, float, float]
 _BLOCKED_COST = 1.0e6
 _UNMATCHED_COST = 1.0e3
@@ -28,19 +34,30 @@ def _translate(box: BBox, motion: tuple[float, float]) -> BBox:
     return box[0] + x, box[1] + y, box[2] + x, box[3] + y
 
 
-def _transform_bbox(box: BBox, transform: CameraTransform) -> BBox:
-    a, b, tx, c, d, ty = transform
-    points = (
-        (a * box[0] + b * box[1] + tx, c * box[0] + d * box[1] + ty),
-        (a * box[2] + b * box[1] + tx, c * box[2] + d * box[1] + ty),
-        (a * box[0] + b * box[3] + tx, c * box[0] + d * box[3] + ty),
-        (a * box[2] + b * box[3] + tx, c * box[2] + d * box[3] + ty),
-    )
+def _box_corners(box: BBox) -> BoxCorners:
     return (
-        min(point[0] for point in points),
-        min(point[1] for point in points),
-        max(point[0] for point in points),
-        max(point[1] for point in points),
+        (box[0], box[1]),
+        (box[2], box[1]),
+        (box[0], box[3]),
+        (box[2], box[3]),
+    )
+
+
+def _transform_corners(
+    corners: BoxCorners, transform: CameraTransform
+) -> BoxCorners:
+    a, b, tx, c, d, ty = transform
+    return tuple(
+        (a * x + b * y + tx, c * x + d * y + ty) for x, y in corners
+    )
+
+
+def _corners_bbox(corners: BoxCorners) -> BBox:
+    return (
+        min(point[0] for point in corners),
+        min(point[1] for point in corners),
+        max(point[0] for point in corners),
+        max(point[1] for point in corners),
     )
 
 
@@ -187,10 +204,18 @@ class TrackState:
     class_id: int
     last_frame_index: int
     filtered_bbox: BBox | None = None
+    bbox_corners: BoxCorners | None = None
+    filtered_bbox_corners: BoxCorners | None = None
     velocity: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     missing_frames: int = 0
     hits: int = 1
     confirmed: bool = True
+
+    def __post_init__(self) -> None:
+        self.bbox_corners = self.bbox_corners or _box_corners(self.bbox)
+        self.filtered_bbox_corners = self.filtered_bbox_corners or _box_corners(
+            self.filtered_bbox or self.bbox
+        )
 
     def predict(self, frame_index: int) -> BBox:
         elapsed = max(0, frame_index - self.last_frame_index)
@@ -476,12 +501,17 @@ class ObjectTracker:
         if applied_camera_transform is not None:
             a, b, _, c, d, _ = applied_camera_transform
             for track in self._tracks.values():
-                bbox = track.bbox
-                filtered_bbox = track.filtered_bbox or bbox
-                track.bbox = _transform_bbox(bbox, applied_camera_transform)
-                track.filtered_bbox = _transform_bbox(
-                    filtered_bbox, applied_camera_transform
+                track.bbox_corners = _transform_corners(
+                    track.bbox_corners or _box_corners(track.bbox),
+                    applied_camera_transform,
                 )
+                track.filtered_bbox_corners = _transform_corners(
+                    track.filtered_bbox_corners
+                    or _box_corners(track.filtered_bbox or track.bbox),
+                    applied_camera_transform,
+                )
+                track.bbox = _corners_bbox(track.bbox_corners)
+                track.filtered_bbox = _corners_bbox(track.filtered_bbox_corners)
                 vx, vy, vw, vh = track.velocity
                 track.velocity = (
                     a * vx + b * vy,
@@ -554,6 +584,8 @@ class ObjectTracker:
                 filtered_center[1] + filtered_height * 0.5,
             )
             track.bbox = bbox
+            track.filtered_bbox_corners = _box_corners(track.filtered_bbox)
+            track.bbox_corners = _box_corners(track.bbox)
             track.score = float(detection["score"])
             track.last_frame_index = frame_index
             track.missing_frames = 0
