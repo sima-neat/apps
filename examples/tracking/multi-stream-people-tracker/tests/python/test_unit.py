@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import math
 import subprocess
@@ -538,6 +539,37 @@ class FakeSample:
 
 
 class TestMetadata:
+    def test_replay_record_preserves_camera_motion_diagnostics(self):
+        from main import write_replay_record
+        from utils.tracker import CameraMotionEstimate
+
+        output = io.StringIO()
+        stream = SimpleNamespace(replay_writer=output, processed=3)
+        motion = CameraMotionEstimate(
+            (1.0, 0.0, 2.0, 0.0, 1.0, 3.0),
+            confidence=0.4,
+            reprojection_error=1.5,
+            inliers=12,
+        )
+
+        write_replay_record(
+            stream,
+            7,
+            SimpleNamespace(frame_id=42, pts_ns=1_234_000_000),
+            [],
+            motion,
+            [],
+        )
+
+        record = json.loads(output.getvalue())
+        assert record["camera_transform"] == [1.0, 0.0, 2.0, 0.0, 1.0, 3.0]
+        assert record["camera_diagnostics"] == {
+            "valid": True,
+            "confidence": 0.4,
+            "reprojection_error": 1.5,
+            "inliers": 12,
+        }
+
     def test_tracker_timebase_preserves_source_frame_gaps(self):
         from main import ProfileWindow, StreamRuntime, tracker_frame_index
         from utils.tracker import ObjectTracker
@@ -925,6 +957,9 @@ class TestTracker:
             assert tracked[0].x2 - tracked[0].x1 == pytest.approx(
                 expected_extent, abs=1e-4
             )
+        corners = next(iter(tracker._tracks.values())).filtered_bbox_corners
+        assert corners is not None
+        assert corners[0][1] != pytest.approx(corners[1][1])
 
     def test_sparse_flow_camera_motion_estimator_recovers_translation(self):
         from utils.tracker import FrameCameraMotionEstimator
@@ -947,6 +982,46 @@ class TestTracker:
         assert motion is not None
         assert motion[2] == pytest.approx(18, abs=2)
         assert motion[5] == pytest.approx(7, abs=2)
+        assert 0.0 < motion.confidence <= 1.0
+        assert motion.reprojection_error >= 0.0
+        assert motion.inliers >= 8
+
+    def test_camera_motion_diagnostics_inflate_prediction_uncertainty(self):
+        from utils.tracker import CameraMotionEstimate, ObjectTracker, TrackerConfig
+
+        config = TrackerConfig(
+            max_prediction_frames=1,
+            camera_motion_compensation=True,
+        )
+        trusted = ObjectTracker(config)
+        uncertain = ObjectTracker(config)
+        detection = {
+            "x1": 10,
+            "y1": 10,
+            "x2": 14,
+            "y2": 14,
+            "score": 0.9,
+            "class_id": 0,
+        }
+        trusted.update([detection], 0)
+        uncertain.update([detection], 0)
+        identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+        trusted.update([], 1, identity)
+        uncertain.update(
+            [],
+            1,
+            CameraMotionEstimate(
+                identity,
+                confidence=0.25,
+                reprojection_error=2.0,
+                inliers=8,
+            ),
+        )
+
+        trusted_variance = next(iter(trusted._tracks.values())).center_x_filter.p00
+        uncertain_variance = next(iter(uncertain._tracks.values())).center_x_filter.p00
+        assert uncertain_variance > trusted_variance
 
     def test_ambiguous_recency_preserves_both_tracks(self):
         from utils.tracker import ObjectTracker, TrackerConfig
@@ -1538,6 +1613,36 @@ class TestTracker:
 
 
 class TestTrackerReplay:
+    def test_replay_preserves_camera_motion_diagnostics(self, tmp_path: Path):
+        from utils.tracker import CameraMotionEstimate
+
+        input_path = tmp_path / "diagnostics.jsonl"
+        input_path.write_text(
+            json.dumps(
+                {
+                    "frame_index": 0,
+                    "camera_transform": [1, 0, 2, 0, 1, 3],
+                    "camera_diagnostics": {
+                        "valid": True,
+                        "confidence": 0.4,
+                        "reprojection_error": 1.5,
+                        "inliers": 12,
+                    },
+                    "detections": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        motion = replay_tracking.read_frames(input_path)[0]["camera_transform"]
+
+        assert isinstance(motion, CameraMotionEstimate)
+        assert motion.transform == (1.0, 0.0, 2.0, 0.0, 1.0, 3.0)
+        assert motion.confidence == pytest.approx(0.4)
+        assert motion.reprojection_error == pytest.approx(1.5)
+        assert motion.inliers == 12
+
     def test_crossing_replay_is_deterministic_and_preserves_ids(self, tmp_path: Path):
         from utils.tracker import TrackerConfig
 

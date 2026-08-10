@@ -409,7 +409,7 @@ void validate_config(const TrackerConfig& config) {
       !probability(config.box_smoothing_alpha) || !probability(config.overlap_threshold)) {
     fail("probability and smoothing options must be in [0, 1]");
   }
-  if (config.max_center_distance <= 0.0f || config.max_missing_frames < 0 ||
+  if (config.max_center_distance < 0.0f || config.max_missing_frames < 0 ||
       config.min_confirmed_hits <= 0 || config.max_prediction_frames < 0 ||
       config.max_occlusion_frames < 0 || config.max_occlusion_frames > config.max_missing_frames ||
       config.max_active_tracks < 1) {

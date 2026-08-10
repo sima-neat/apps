@@ -13,6 +13,28 @@ BoxCorners = tuple[
     tuple[float, float],
 ]
 CameraTransform = tuple[float, float, float, float, float, float]
+
+
+@dataclass(frozen=True)
+class CameraMotionEstimate:
+    """Affine camera motion together with the estimator's reliability signals."""
+
+    transform: CameraTransform
+    confidence: float = 1.0
+    reprojection_error: float = 0.0
+    inliers: int = 0
+
+    def __iter__(self):
+        return iter(self.transform)
+
+    def __len__(self) -> int:
+        return len(self.transform)
+
+    def __getitem__(self, index: int) -> float:
+        return self.transform[index]
+
+
+CameraMotionInput = CameraTransform | CameraMotionEstimate
 _BLOCKED_COST = 1.0e6
 _UNMATCHED_COST = 1.0e3
 _MAXIMUM_LOG_SIZE = math.log(16384.0)
@@ -76,10 +98,40 @@ def _corners_bbox(corners: BoxCorners) -> BBox:
     )
 
 
-def _valid_camera_transform(transform: CameraTransform | None) -> bool:
-    if transform is None or not all(math.isfinite(value) for value in transform):
+def _recenter_corners(corners: BoxCorners, target: BBox) -> BoxCorners:
+    source = _corners_bbox(corners)
+    if (
+        not all(math.isfinite(value) for value in source)
+        or _width(source) <= 1.0e-6
+        or _height(source) <= 1.0e-6
+    ):
+        return _box_corners(target)
+    source_center_x, source_center_y = _center(source)
+    target_center_x, target_center_y = _center(target)
+    return tuple(
+        (
+            x + target_center_x - source_center_x,
+            y + target_center_y - source_center_y,
+        )
+        for x, y in corners
+    )
+
+
+def _camera_transform_values(transform: CameraMotionInput) -> CameraTransform:
+    return (
+        transform.transform
+        if isinstance(transform, CameraMotionEstimate)
+        else transform
+    )
+
+
+def _valid_camera_transform(transform: CameraMotionInput | None) -> bool:
+    if transform is None:
         return False
-    a, b, _, c, d, _ = transform
+    values = _camera_transform_values(transform)
+    if not all(math.isfinite(value) for value in values):
+        return False
+    a, b, _, c, d, _ = values
     return abs(a * d - b * c) > 0.01
 
 
@@ -473,7 +525,12 @@ class TrackState:
             center_x + width * 0.5,
             center_y + height * 0.5,
         )
-        self.filtered_bbox_corners = _box_corners(self.filtered_bbox)
+        self.filtered_bbox_corners = _recenter_corners(
+            self.display_bbox_corners
+            or self.filtered_bbox_corners
+            or _box_corners(current),
+            self.filtered_bbox,
+        )
         self.velocity = (
             self.center_x_filter.velocity if self.center_x_filter else 0.0,
             self.center_y_filter.velocity if self.center_y_filter else 0.0,
@@ -631,14 +688,14 @@ class ObjectTracker:
 
     def _estimate_camera_motion(
         self, detections: list[dict], high: list[int], frame_index: int
-    ) -> tuple[tuple[float, float], bool]:
+    ) -> CameraMotionEstimate | None:
         recent = [
             track
             for track in self._tracks.values()
             if track.last_frame_index == frame_index - 1
         ]
         if len(recent) < 3 or len(high) < 3:
-            return (0.0, 0.0), False
+            return None
 
         predictions = [track.predict(frame_index) for track in recent]
         boxes = [_bbox(detections[index]) for index in high]
@@ -666,7 +723,7 @@ class ObjectTracker:
                 votes.append((x, y, *bin_xy))
                 histogram[bin_xy] = histogram.get(bin_xy, 0) + 1
         if len(votes) < 3:
-            return (0.0, 0.0), False
+            return None
 
         def neighborhood_support(bin_xy: tuple[int, int]) -> int:
             return sum(
@@ -727,11 +784,19 @@ class ObjectTracker:
         possible = min(len(recent), len(high))
         required = max(3, (possible + 2) // 3)
         if len(offsets) < required:
-            return (0.0, 0.0), False
-        return (
+            return None
+        motion = (
             _median([offset[0] for offset in offsets]),
             _median([offset[1] for offset in offsets]),
-        ), False
+        )
+        if motion == (0.0, 0.0):
+            return None
+        return CameraMotionEstimate(
+            transform=(1.0, 0.0, motion[0], 0.0, 1.0, motion[1]),
+            confidence=0.25,
+            reprojection_error=typical_diagonal * 0.10,
+            inliers=len(offsets),
+        )
 
     def _associate(
         self,
@@ -866,7 +931,7 @@ class ObjectTracker:
         self,
         detections: list[dict],
         frame_index: int,
-        camera_transform: CameraTransform | None = None,
+        camera_transform: CameraMotionInput | None = None,
     ) -> list[TrackedDetection]:
         if frame_index < 0:
             raise ValueError("frame_index must be >= 0")
@@ -889,23 +954,20 @@ class ObjectTracker:
             if float(detection["score"]) >= self.config.high_score_threshold
         ]
         low = [index for index in range(len(detections)) if index not in high]
-        applied_camera_transform: CameraTransform | None = None
+        camera_motion: CameraMotionEstimate | None = None
         if self.config.camera_motion_compensation:
             if _valid_camera_transform(camera_transform):
-                applied_camera_transform = camera_transform
+                assert camera_transform is not None
+                camera_motion = (
+                    camera_transform
+                    if isinstance(camera_transform, CameraMotionEstimate)
+                    else CameraMotionEstimate(camera_transform)
+                )
             else:
-                camera_motion, _ = self._estimate_camera_motion(
+                camera_motion = self._estimate_camera_motion(
                     detections, high, frame_index
                 )
-                if camera_motion != (0.0, 0.0):
-                    applied_camera_transform = (
-                        1.0,
-                        0.0,
-                        camera_motion[0],
-                        0.0,
-                        1.0,
-                        camera_motion[1],
-                    )
+        applied_camera_transform = camera_motion.transform if camera_motion else None
         if applied_camera_transform is not None:
             a, b, tx, c, d, ty = applied_camera_transform
             for track in self._tracks.values():
@@ -960,8 +1022,9 @@ class ObjectTracker:
             track_id: track.occluded for track_id, track in self._tracks.items()
         }
         camera_uncertainty = (
-            0.0
-            if applied_camera_transform is not None
+            max(0.0, camera_motion.reprojection_error**2)
+            + 4.0 * (1.0 - min(1.0, max(0.0, camera_motion.confidence)))
+            if camera_motion is not None
             else (4.0 if self.config.camera_motion_compensation else 0.0)
         )
         for track in self._tracks.values():
@@ -1375,7 +1438,7 @@ class FrameCameraMotionEstimator:
 
     def update(
         self, gray_frame, detections: list[dict] | None = None
-    ) -> CameraTransform | None:
+    ) -> CameraMotionEstimate | None:
         cv2 = self._cv2
         np = self._np
         if gray_frame is None or gray_frame.ndim != 2 or gray_frame.dtype != np.uint8:
@@ -1467,13 +1530,30 @@ class FrameCameraMotionEstimator:
                     residual,
                 ):
                     scale = float(self._downscale)
-                    result = (
-                        float(affine[0, 0]),
-                        float(affine[0, 1]),
-                        scale * float(affine[0, 2]),
-                        float(affine[1, 0]),
-                        float(affine[1, 1]),
-                        scale * float(affine[1, 2]),
+                    coverage = self._spatial_coverage(
+                        previous, inlier_flags, gray.shape[1], gray.shape[0]
+                    )
+                    confidence = min(
+                        1.0,
+                        max(
+                            0.0,
+                            (inliers / len(previous))
+                            * min(1.0, coverage / 0.25)
+                            * math.exp(-0.5 * residual),
+                        ),
+                    )
+                    result = CameraMotionEstimate(
+                        transform=(
+                            float(affine[0, 0]),
+                            float(affine[0, 1]),
+                            scale * float(affine[0, 2]),
+                            float(affine[1, 0]),
+                            float(affine[1, 1]),
+                            scale * float(affine[1, 2]),
+                        ),
+                        confidence=confidence,
+                        reprojection_error=scale * residual,
+                        inliers=inliers,
                     )
 
         self._previous_points = cv2.goodFeaturesToTrack(
@@ -1498,6 +1578,14 @@ class FrameCameraMotionEstimator:
         return float(
             np.linalg.norm(projected[inliers] - current[inliers], axis=1).mean()
         )
+
+    @staticmethod
+    def _spatial_coverage(points, inliers, width: int, height: int) -> float:
+        if width <= 0 or height <= 0 or not inliers.any():
+            return 0.0
+        selected = points[inliers]
+        extent = selected.max(axis=0) - selected.min(axis=0)
+        return min(1.0, max(0.0, float(extent[0] * extent[1]) / (width * height)))
 
     @staticmethod
     def _plausible(

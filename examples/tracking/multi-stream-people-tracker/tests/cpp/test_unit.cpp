@@ -506,6 +506,19 @@ bool test_sparse_flow_camera_motion_estimator_recovers_translation() {
                      "sparse-flow motion reports usable uncertainty diagnostics");
 }
 
+bool test_zero_center_distance_is_a_valid_exact_match_gate() {
+  TrackerConfig config;
+  config.max_center_distance = 0.0f;
+  ObjectTracker tracker(config);
+  const Detection detection{10.0f, 20.0f, 14.0f, 24.0f, 0.9f, 0};
+  const auto first = tracker.update({detection}, 0);
+  const auto second = tracker.update({detection}, 1);
+  return expect_true(first.size() == 1 && second.size() == 1,
+                     "zero center-distance gate accepts exact-center detections") &&
+         expect_true(first.front().track_id == second.front().track_id,
+                     "zero center-distance gate preserves the exact-match identity");
+}
+
 bool test_recent_track_wins_before_stale_track() {
   TrackerConfig config;
   config.max_center_distance = 2.0f;
@@ -973,6 +986,7 @@ int main(int argc, char** argv) {
   ok &= test_external_camera_transform_is_not_learned_as_object_velocity();
   ok &= test_repeated_camera_rotation_does_not_inflate_prediction();
   ok &= test_sparse_flow_camera_motion_estimator_recovers_translation();
+  ok &= test_zero_center_distance_is_a_valid_exact_match_gate();
   ok &= test_recent_track_wins_before_stale_track();
   ok &= test_overlap_component_preserves_crossing_identities();
   ok &= test_three_track_overlap_component_coasts_all_identities();

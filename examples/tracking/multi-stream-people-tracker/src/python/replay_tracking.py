@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from utils.tracker import ObjectTracker, TrackerConfig
+from utils.tracker import CameraMotionEstimate, ObjectTracker, TrackerConfig
 
 
 def _finite_number(value: Any, name: str) -> float:
@@ -92,6 +92,33 @@ def read_frames(path: Path) -> list[dict[str, Any]]:
                     _finite_number(value, f"{location}.camera_transform[{index}]")
                     for index, value in enumerate(camera_transform)
                 )
+                diagnostics = frame.get("camera_diagnostics")
+                if diagnostics is not None:
+                    if not isinstance(diagnostics, dict):
+                        raise ValueError(
+                            f"{location}: camera_diagnostics must be an object"
+                        )
+                    inliers = diagnostics.get("inliers")
+                    if (
+                        isinstance(inliers, bool)
+                        or not isinstance(inliers, int)
+                        or inliers < 0
+                    ):
+                        raise ValueError(
+                            f"{location}.camera_diagnostics.inliers must be a non-negative integer"
+                        )
+                    camera_transform = CameraMotionEstimate(
+                        transform=camera_transform,
+                        confidence=_finite_number(
+                            diagnostics.get("confidence"),
+                            f"{location}.camera_diagnostics.confidence",
+                        ),
+                        reprojection_error=_finite_number(
+                            diagnostics.get("reprojection_error"),
+                            f"{location}.camera_diagnostics.reprojection_error",
+                        ),
+                        inliers=inliers,
+                    )
             frames.append(
                 {
                     "frame_index": frame_index,

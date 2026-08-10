@@ -19,6 +19,7 @@ from pathlib import Path
 
 import yaml
 from utils.tracker import (
+    CameraMotionEstimate,
     FrameCameraMotionEstimator,
     ObjectTracker,
     TrackedDetection,
@@ -970,16 +971,39 @@ def write_replay_record(
 ) -> None:
     if stream.replay_writer is None:
         return
+    transform_values = (
+        camera_transform.transform
+        if isinstance(camera_transform, CameraMotionEstimate)
+        else camera_transform
+    )
     record = {
         "frame_index": tracking_frame_index,
         "processed_index": stream.processed,
         "frame_id": int(getattr(sample, "frame_id", -1)),
         "pts_ns": int(getattr(sample, "pts_ns", -1)),
         "camera_transform": (
-            [float(value) for value in camera_transform]
-            if camera_transform is not None
+            [float(value) for value in transform_values]
+            if transform_values is not None
             else None
         ),
+        "camera_diagnostics": {
+            "valid": transform_values is not None,
+            "confidence": (
+                camera_transform.confidence
+                if isinstance(camera_transform, CameraMotionEstimate)
+                else (1.0 if transform_values is not None else 0.0)
+            ),
+            "reprojection_error": (
+                camera_transform.reprojection_error
+                if isinstance(camera_transform, CameraMotionEstimate)
+                else 0.0
+            ),
+            "inliers": (
+                camera_transform.inliers
+                if isinstance(camera_transform, CameraMotionEstimate)
+                else 0
+            ),
+        },
         "detections": detections,
         "tracks": [
             {

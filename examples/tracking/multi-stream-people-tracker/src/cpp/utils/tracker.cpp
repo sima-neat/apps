@@ -211,6 +211,34 @@ Detection filter_box(const TrackState& track) {
 
 BoxCorners box_corners(const Detection& detection);
 
+BoxCorners recenter_corners(const BoxCorners& corners, const Detection& target) {
+  float source_x1 = std::numeric_limits<float>::max();
+  float source_y1 = std::numeric_limits<float>::max();
+  float source_x2 = std::numeric_limits<float>::lowest();
+  float source_y2 = std::numeric_limits<float>::lowest();
+  for (std::size_t index = 0; index < corners.size(); index += 2) {
+    source_x1 = std::min(source_x1, corners[index]);
+    source_y1 = std::min(source_y1, corners[index + 1]);
+    source_x2 = std::max(source_x2, corners[index]);
+    source_y2 = std::max(source_y2, corners[index + 1]);
+  }
+  if (!std::isfinite(source_x1) || !std::isfinite(source_y1) || !std::isfinite(source_x2) ||
+      !std::isfinite(source_y2) || source_x2 <= source_x1 || source_y2 <= source_y1) {
+    return box_corners(target);
+  }
+
+  const float source_center_x = 0.5f * (source_x1 + source_x2);
+  const float source_center_y = 0.5f * (source_y1 + source_y2);
+  const float dx = center_x(target) - source_center_x;
+  const float dy = center_y(target) - source_center_y;
+  BoxCorners fitted = corners;
+  for (std::size_t index = 0; index < fitted.size(); index += 2) {
+    fitted[index] += dx;
+    fitted[index + 1] += dy;
+  }
+  return fitted;
+}
+
 void freeze_unobserved_size(TrackState& track) {
   // A missed/ambiguous observation contains no evidence that an object's
   // apparent size changed.  Keep coasting the center, but anchor scale to the
@@ -228,7 +256,8 @@ void freeze_unobserved_size(TrackState& track) {
   track.log_height_filter.p01 = 0.0f;
   track.log_height_filter.p10 = 0.0f;
   track.filtered_detection = filter_box(track);
-  track.filtered_detection_corners = box_corners(track.filtered_detection);
+  track.filtered_detection_corners =
+      recenter_corners(track.display_detection_corners, track.filtered_detection);
 }
 
 int prediction_horizon(const TrackState& track, const TrackerConfig& config) {

@@ -191,6 +191,7 @@ private:
 struct CameraMotionResult {
   multi_stream_people_tracker::CameraTransform transform;
   double compute_ms = 0.0;
+  bool chain_discontinuous = false;
 };
 
 // Camera motion is ordered within a stream, but independent of MLA inference.
@@ -224,6 +225,10 @@ public:
       if (stopping_) {
         throw std::runtime_error("camera-motion worker is stopping");
       }
+      if (queue_.size() >= kMaximumQueuedFrames) {
+        discard_pending_locked();
+        task.reset_before_update = true;
+      }
       queue_.push_back(std::move(task));
     }
     ready_.notify_one();
@@ -239,6 +244,7 @@ public:
       if (stopping_) {
         return;
       }
+      discard_pending_locked();
       queue_.push_back(std::move(task));
     }
     ready_.notify_one();
@@ -253,8 +259,18 @@ private:
     cv::Mat gray;
     std::vector<Detection> object_mask;
     bool reset = false;
+    bool reset_before_update = false;
     std::promise<CameraMotionResult> result;
   };
+
+  void discard_pending_locked() {
+    for (auto& pending : queue_) {
+      CameraMotionResult discarded;
+      discarded.chain_discontinuous = true;
+      pending.result.set_value(discarded);
+    }
+    queue_.clear();
+  }
 
   void run() {
     while (true) {
@@ -276,6 +292,10 @@ private:
         if (task.reset) {
           estimator_.reset();
         } else {
+          if (task.reset_before_update) {
+            estimator_.reset();
+            result.chain_discontinuous = true;
+          }
           const double start = sima_examples::time_ms();
           result.transform = estimator_.update(task.gray, task.object_mask);
           result.compute_ms = sima_examples::time_ms() - start;
@@ -291,6 +311,10 @@ private:
   std::mutex mutex_;
   std::condition_variable ready_;
   std::deque<Task> queue_;
+  // At most one not-yet-started full-resolution frame is retained. If newer
+  // input overtakes it, submit() replaces it and makes the replacement a new
+  // optical-flow baseline instead of estimating across a missing frame.
+  static constexpr std::size_t kMaximumQueuedFrames = 1;
   bool stopping_ = false;
   std::thread worker_;
 };
@@ -1308,6 +1332,9 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
       for (auto& future : camera_motion_chain) {
         CameraMotionResult result = future.get();
         camera_motion_compute_ms += result.compute_ms;
+        if (result.chain_discontinuous) {
+          complete_chain = false;
+        }
         if (!result.transform.valid) {
           complete_chain = false;
           continue;
