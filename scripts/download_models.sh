@@ -318,9 +318,15 @@ download_vulcan_model() {
         return 1
     fi
 
-    installed_path="$tmpdir/$variant/$expected_file"
+    # sima-cli verifies the variant-relative metadata resource, extracts MPKs,
+    # and preserves the original archive at the install root. Older clients
+    # may leave a non-extracted resource at its metadata-relative path.
+    installed_path="$tmpdir/$expected_file"
     if [[ ! -f "$installed_path" ]]; then
-        echo "[error] $model_id: Vulcan package did not contain $variant/$expected_file" >&2
+        installed_path="$tmpdir/$variant/$expected_file"
+    fi
+    if [[ ! -f "$installed_path" ]]; then
+        echo "[error] $model_id: Vulcan package did not install $variant/$expected_file" >&2
         find "$tmpdir" -maxdepth 3 -type f -print >&2
         rm -rf "$tmpdir"
         return 1

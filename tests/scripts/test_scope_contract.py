@@ -294,8 +294,7 @@ def test_download_models_installs_exact_vulcan_variant(tmp_path):
         "while [[ $# -gt 0 ]]; do\n"
         "  if [[ \"$1\" == '--install-dir' ]]; then install_dir=\"$2\"; shift 2; else shift; fi\n"
         "done\n"
-        f"mkdir -p \"$install_dir/{variant}\"\n"
-        f"printf 'mpk' > \"$install_dir/{variant}/{file_name}\"\n",
+        f"printf 'mpk' > \"$install_dir/{file_name}\"\n",
         encoding="utf-8",
     )
     fake_sima_cli.chmod(0o755)
