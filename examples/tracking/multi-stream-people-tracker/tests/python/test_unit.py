@@ -695,6 +695,129 @@ class TestDebugFrameWriter:
 
 
 class TestDebugFrameSynchronization:
+    def test_composes_every_camera_transform_before_matching_frame(self):
+        from main import (
+            DebugFrame,
+            compose_debug_frame_camera_motion,
+            take_matching_debug_frames,
+        )
+        from utils.tracker import CameraMotionEstimate, ObjectTracker, TrackerConfig
+
+        def translated(frame_id: int, x: float, confidence: float) -> DebugFrame:
+            return DebugFrame(
+                frame_id,
+                frame_id,
+                frame_id,
+                frame_id * 1_000,
+                object(),
+                camera_motion=CameraMotionEstimate(
+                    (1.0, 0.0, x, 0.0, 1.0, 0.0),
+                    confidence=confidence,
+                    reprojection_error=0.5,
+                    inliers=20,
+                ),
+            )
+
+        stream = SimpleNamespace(
+            debug_frames=deque(
+                [
+                    translated(1, 4.0, 0.9),
+                    translated(2, 5.0, 0.8),
+                    translated(3, 6.0, 0.7),
+                ]
+            ),
+            debug_frame_chain_discontinuous=False,
+        )
+        sample = SimpleNamespace(
+            pts_ns=3_000, orig_input_seq=3, input_seq=3, frame_id=3
+        )
+
+        frames, discontinuous = take_matching_debug_frames(stream, sample)
+        motion = compose_debug_frame_camera_motion(frames, discontinuous)
+
+        assert [frame.frame_id for frame in frames] == [1, 2, 3]
+        assert not stream.debug_frames
+        assert motion is not None
+        assert motion.transform[2] == pytest.approx(15.0)
+        assert motion.confidence == pytest.approx(0.9 * 0.8 * 0.7)
+        assert motion.reprojection_error == pytest.approx(math.sqrt(0.75))
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                max_center_distance=0.5,
+                camera_motion_compensation=True,
+            )
+        )
+        first = tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 4, "y2": 4, "score": 0.9, "class_id": 0}],
+            0,
+        )
+        after_skip = tracker.update(
+            [{"x1": 15, "y1": 0, "x2": 19, "y2": 4, "score": 0.9, "class_id": 0}],
+            3,
+            motion,
+        )
+        assert after_skip[0].track_id == first[0].track_id
+
+    def test_rejects_camera_transform_chain_after_a_debug_frame_drop(self):
+        from main import DebugFrame, compose_debug_frame_camera_motion
+        from utils.tracker import CameraMotionEstimate
+
+        frame = DebugFrame(
+            1,
+            1,
+            1,
+            1_000,
+            object(),
+            camera_motion=CameraMotionEstimate((1.0, 0.0, 4.0, 0.0, 1.0, 0.0)),
+        )
+
+        assert compose_debug_frame_camera_motion([frame], True) is None
+
+    def test_debug_frame_overflow_resets_camera_motion_baseline(self, monkeypatch):
+        import main
+        from utils.tracker import CameraMotionEstimate
+
+        class FakeEstimator:
+            def __init__(self):
+                self.reset_count = 0
+                self.updates = []
+
+            def reset(self):
+                self.reset_count += 1
+
+            def update(self, gray, detections):
+                self.updates.append((gray, detections))
+                return CameraMotionEstimate((1.0, 0.0, 0.0, 0.0, 1.0, 0.0))
+
+        estimator = FakeEstimator()
+        stream = SimpleNamespace(
+            index=0,
+            frame_w=640,
+            frame_h=512,
+            save_bgr=False,
+            debug_frames=deque(
+                main.DebugFrame(index, index, index, index, object())
+                for index in range(16)
+            ),
+            camera_motion=estimator,
+            camera_motion_mask=[{"x1": 1}],
+            debug_frame_chain_discontinuous=False,
+        )
+        sample = SimpleNamespace(
+            frame_id=16, input_seq=16, orig_input_seq=16, pts_ns=16
+        )
+        app = SimpleNamespace(run=SimpleNamespace(pull=lambda *_: sample))
+        monkeypatch.setattr(main, "first_tensor_from_sample", lambda _: object())
+        monkeypatch.setattr(main, "tensor_tracking_frame", lambda *_: ("gray", "bgr"))
+
+        assert main.pull_debug_frame(app, stream, 0)
+        assert estimator.reset_count == 1
+        assert estimator.updates == [("gray", [{"x1": 1}])]
+        assert len(stream.debug_frames) == 16
+        assert stream.debug_frames[-1].camera_motion is not None
+        assert stream.debug_frame_chain_discontinuous
+
     def test_pts_matches_across_different_segment_frame_ids(self):
         from main import DebugFrame, samples_identify_same_frame
 

@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -101,6 +101,8 @@ class StreamRuntime:
     debug_writer: DebugFrameWriter | None = None
     save_bgr: bool = False
     replay_writer: object | None = None
+    camera_motion_mask: list[dict] = field(default_factory=list)
+    debug_frame_chain_discontinuous: bool = False
 
 
 @dataclass
@@ -111,6 +113,7 @@ class DebugFrame:
     pts_ns: int
     bgr: object
     gray: object = None
+    camera_motion: CameraMotionEstimate | None = None
 
 
 class DebugFrameWriter:
@@ -1180,21 +1183,28 @@ def process_output_sample(
         payload, stream.frame_w, stream.frame_h, cfg.max_detections
     )
     target_detections = filter_target_class(boxes, cfg.target_class_id)
-    frame = take_matching_debug_frame(stream, sample)
+    debug_frames, camera_motion_chain_discontinuous = take_matching_debug_frames(
+        stream, sample
+    )
+    frame = debug_frames[-1] if debug_frames else None
     tracker_start = time_ms()
     if cfg.tracker_camera_motion_compensation and stream.camera_motion is None:
         stream.camera_motion = FrameCameraMotionEstimator()
+        for debug_frame in debug_frames:
+            debug_frame.camera_motion = stream.camera_motion.update(
+                debug_frame.gray, stream.camera_motion_mask
+            )
     camera_transform = None
-    if (
-        cfg.tracker_camera_motion_compensation
-        and stream.camera_motion is not None
-        and frame is not None
-    ):
-        camera_transform = stream.camera_motion.update(frame.gray, target_detections)
+    if cfg.tracker_camera_motion_compensation and frame is not None:
+        camera_transform = compose_debug_frame_camera_motion(
+            debug_frames, camera_motion_chain_discontinuous
+        )
     elif cfg.tracker_camera_motion_compensation and stream.camera_motion is not None:
         # Avoid applying a transform spanning an already compensated missing
         # side-branch frame when image samples resume.
         stream.camera_motion.reset()
+        stream.debug_frame_chain_discontinuous = True
+    stream.camera_motion_mask = target_detections
     tracking_frame = tracker_frame_index(stream, sample)
     tracks = stream.tracker.update(target_detections, tracking_frame, camera_transform)
     tracker_end = time_ms()
@@ -1243,14 +1253,61 @@ def samples_identify_same_frame(sample, frame: DebugFrame) -> bool:
     return False
 
 
-def take_matching_debug_frame(stream: StreamRuntime, sample):
+def compose_camera_motion(
+    previous_to_middle: CameraMotionEstimate,
+    middle_to_current: CameraMotionEstimate,
+) -> CameraMotionEstimate:
+    previous = previous_to_middle.transform
+    current = middle_to_current.transform
+    a0, b0, tx0, c0, d0, ty0 = previous
+    a1, b1, tx1, c1, d1, ty1 = current
+    return CameraMotionEstimate(
+        transform=(
+            a1 * a0 + b1 * c0,
+            a1 * b0 + b1 * d0,
+            a1 * tx0 + b1 * ty0 + tx1,
+            c1 * a0 + d1 * c0,
+            c1 * b0 + d1 * d0,
+            c1 * tx0 + d1 * ty0 + ty1,
+        ),
+        confidence=max(0.0, min(1.0, previous_to_middle.confidence))
+        * max(0.0, min(1.0, middle_to_current.confidence)),
+        reprojection_error=math.hypot(
+            previous_to_middle.reprojection_error,
+            middle_to_current.reprojection_error,
+        ),
+        inliers=min(previous_to_middle.inliers, middle_to_current.inliers),
+    )
+
+
+def compose_debug_frame_camera_motion(
+    frames: list[DebugFrame], chain_discontinuous: bool
+) -> CameraMotionEstimate | None:
+    if chain_discontinuous:
+        return None
+    result = None
+    for frame in frames:
+        if frame.camera_motion is None:
+            return None
+        result = (
+            compose_camera_motion(result, frame.camera_motion)
+            if result is not None
+            else frame.camera_motion
+        )
+    return result
+
+
+def take_matching_debug_frames(
+    stream: StreamRuntime, sample
+) -> tuple[list[DebugFrame], bool]:
     for index, frame in enumerate(stream.debug_frames):
         if not samples_identify_same_frame(sample, frame):
             continue
-        for _ in range(index + 1):
-            stream.debug_frames.popleft()
-        return frame
-    return None
+        frames = [stream.debug_frames.popleft() for _ in range(index + 1)]
+        chain_discontinuous = stream.debug_frame_chain_discontinuous
+        stream.debug_frame_chain_discontinuous = False
+        return frames, chain_discontinuous
+    return [], False
 
 
 def pull_debug_frame(app: AppRuntime, stream: StreamRuntime, timeout_ms: int) -> bool:
@@ -1267,6 +1324,14 @@ def pull_debug_frame(app: AppRuntime, stream: StreamRuntime, timeout_ms: int) ->
     gray, bgr = tensor_tracking_frame(tensor, bool(getattr(stream, "save_bgr", False)))
     if len(stream.debug_frames) >= 16:
         stream.debug_frames.popleft()
+        stream.debug_frame_chain_discontinuous = True
+        if stream.camera_motion is not None:
+            stream.camera_motion.reset()
+    camera_motion = (
+        stream.camera_motion.update(gray, stream.camera_motion_mask)
+        if stream.camera_motion is not None
+        else None
+    )
     stream.debug_frames.append(
         DebugFrame(
             frame_id=int(getattr(sample, "frame_id", -1)),
@@ -1275,6 +1340,7 @@ def pull_debug_frame(app: AppRuntime, stream: StreamRuntime, timeout_ms: int) ->
             pts_ns=int(getattr(sample, "pts_ns", -1)),
             gray=gray,
             bgr=bgr,
+            camera_motion=camera_motion,
         )
     )
     return True
