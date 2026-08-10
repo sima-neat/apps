@@ -63,7 +63,7 @@ mkdir -p models
 install_dir="$(mktemp -d)"
 sima-cli neat install --stg \
   --install-dir "$install_dir" \
-  models/yolo26_tiny_drone@feat/yolo26-p2-tiny-drone-qat:latest
+  models/yolo26_tiny_drone@feat/yolo26-p2-tiny-drone-qat:c54a3d12c52b
 mpk="$install_dir/modalix_int8_tessellation_mla/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz"
 mv "$mpk" models/
 rmdir "$install_dir/modalix_int8_tessellation_mla" "$install_dir"
