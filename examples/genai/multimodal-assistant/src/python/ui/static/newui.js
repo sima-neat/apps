@@ -30,7 +30,10 @@ let isPlaying = false;
 let currentAudioContext = null;
 let receivedEndSignal = false;
 let shouldPlayAudio = true;
-let currentSourceNode = null;
+// Chunks are scheduled ahead of playback, so several sources can be live at once.
+let scheduledSources = [];
+// Playback cursor for the shared AudioContext, so chunks are queued back to back.
+let nextStartTime = 0;
 let activeGeneration = false;
 let pendingNewGenerationAudio = false;
 let requestQueue = Promise.resolve();
@@ -1277,26 +1280,17 @@ function stopAudio() {
   shouldPlayAudio = false;
   isPlaying = false;
   audioQueue.length = 0;
+  nextStartTime = 0;
 
   try {
-    if (currentSourceNode) {
-      currentSourceNode.stop(0);
-      currentSourceNode.disconnect();
-    }
+    scheduledSources.forEach(source => {
+      source.stop(0);
+      source.disconnect();
+    });
   } catch (e) {
     console.warn("Error stopping source node:", e);
   } finally {
-    currentSourceNode = null;
-  }
-
-  try {
-    if (currentAudioContext) {
-      currentAudioContext.close();
-    }
-  } catch (e) {
-    console.warn("Error closing audio context:", e);
-  } finally {
-    currentAudioContext = null;
+    scheduledSources = [];
   }
 
   console.log("🧹 Audio playback completely stopped and cleaned up.");
@@ -1525,6 +1519,14 @@ socket.on('context_full', (data) => {
   window.pendingContextClear = true;
 });
 
+// One AudioContext for the page; creating one per chunk would start an audio device each time.
+function ensureAudioContext() {
+  if (!currentAudioContext) {
+    currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  currentAudioContext.resume();
+}
+
 async function processAudioQueue() {
   console.log(`Processing audio queue... Current queue length: ${audioQueue.length}`);
   const conditions = [];
@@ -1556,18 +1558,13 @@ async function processAudioQueue() {
   }
 
   try {
-    if (currentAudioContext) {
-      currentAudioContext.close();
-    }
-
-    currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    ensureAudioContext();
     const audioBuffer = await currentAudioContext.decodeAudioData(arrayBuffer);
 
     // Final check before starting playback
     if (!shouldPlayAudio) {
       console.log('Audio playback cancelled before starting');
       isPlaying = false;
-      currentAudioContext.close();
       return;
     }
 
@@ -1576,13 +1573,17 @@ async function processAudioQueue() {
     const gainNode = currentAudioContext.createGain();
 
     source.buffer = audioBuffer;
+    gainNode.gain.value = 2.0;  // makeup for the peak normalization a stream cannot do
     source.connect(analyser);
     analyser.connect(gainNode);
     gainNode.connect(currentAudioContext.destination);
 
-    currentSourceNode = source;
+    scheduledSources.push(source);
 
-    source.start();
+    // Queue after the previous chunk; Math.max re-anchors to "now" after stopAudio reset it.
+    const startAt = Math.max(currentAudioContext.currentTime, nextStartTime);
+    source.start(startAt);
+    nextStartTime = startAt + audioBuffer.duration;
 
     // Track First Audio timing (only for the very first audio chunk)
     if (!firstAudioStarted && userInputStartTime) {
@@ -1592,8 +1593,7 @@ async function processAudioQueue() {
     }
 
     source.onended = () => {
-      isPlaying = false;
-      currentSourceNode = null;
+      scheduledSources = scheduledSources.filter(s => s !== source);
 
       // Disconnect and clean up
       try {
@@ -1608,13 +1608,8 @@ async function processAudioQueue() {
 
       // Check if we should hide the abort button
       // Hide it only if text streaming has ended AND no more audio in queue
-      if (receivedEndSignal && audioQueue.length === 0) {
+      if (receivedEndSignal && audioQueue.length === 0 && scheduledSources.length === 0) {
         hideAbortButton();
-      }
-
-      // Only continue processing if audio should still play
-      if (shouldPlayAudio) {
-        setTimeout(() => processAudioQueue(), 250);
       }
     };
   } catch (err) {
@@ -1622,10 +1617,12 @@ async function processAudioQueue() {
     isPlaying = false;
 
     // Hide abort button if text streaming ended and this was the last audio
-    if (receivedEndSignal && audioQueue.length === 0) {
+    if (receivedEndSignal && audioQueue.length === 0 && scheduledSources.length === 0) {
       hideAbortButton();
     }
   }
+  isPlaying = false;
+  processAudioQueue();
 }
 
 async function processSystemAudioOnce(data) {
@@ -1633,10 +1630,7 @@ async function processSystemAudioOnce(data) {
     const blob = new Blob([data], { type: 'audio/wav' });
     const arrayBuffer = await blob.arrayBuffer();
 
-    if (currentAudioContext) {
-      currentAudioContext.close();
-    }
-    currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    ensureAudioContext();
     const audioBuffer = await currentAudioContext.decodeAudioData(arrayBuffer);
 
     const source = currentAudioContext.createBufferSource();

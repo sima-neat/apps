@@ -31,7 +31,7 @@ Environment:
                                 default: /media/nvme/llima/models
   CHAT_MODEL_REPO               Hugging Face repo for the default chat/VLM model
                                 default: simaai/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-  INSTALL_TTS_VOICES            Download Piper TTS voices, 1 or 0
+  INSTALL_TTS_VOICES            Download and split Piper TTS voices, 1 or 0
                                 default: 1
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
                                 default: 2.8.0+cpu
@@ -180,7 +180,7 @@ if [[ "${INSTALL_TTS_VOICES}" == "1" ]]; then
   echo "Installing Piper TTS voices..."
   (
     cd "${EXAMPLE_DIR}/src/python"
-    bash voice_install.sh
+    PYTHON="${APP_VENV}/bin/python" bash voice_install.sh
   )
 fi
 

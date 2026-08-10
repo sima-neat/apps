@@ -1,8 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Directory where voices are stored
 ASSETS_DIR="ui/assets"
+
+# Interpreter used to split voices for streaming synthesis. setup.sh passes the
+# app virtual environment; a manual run falls back to whatever python3 is on PATH.
+PYTHON="${PYTHON:-python3}"
 
 # Edit this list with the voices you want to install.
 # Use the format: "<lang_COUNTRY>-<voice>-<quality>"
@@ -70,5 +76,19 @@ for entry in "${VOICES[@]}"; do
   fi
 
 done
+
+# PiperTTS decodes the latent in slices so playback starts before the sentence is
+# finished, which means it loads an encoder/decoder pair rather than the whole
+# voice. Split every voice here so the app never sees one it cannot load.
+if ! "${PYTHON}" -c "import onnx" >/dev/null 2>&1; then
+  echo ""
+  echo "❌ Cannot split voices: '${PYTHON}' has no 'onnx' package."
+  echo "   Use the app environment, or point PYTHON at one:"
+  echo "     PYTHON=/path/to/.venv/bin/python bash voice_install.sh"
+  exit 1
+fi
+
+printf "\n🔪 Splitting voices for streaming synthesis\n"
+"${PYTHON}" "${SCRIPT_DIR}/split_voices.py" "${ASSETS_DIR}"
 
 printf "\n✅ Done. Voices are available in '%s/'.\n" "${ASSETS_DIR}"

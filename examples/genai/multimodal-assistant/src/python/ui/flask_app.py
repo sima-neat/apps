@@ -343,21 +343,26 @@ class TalkController:
                     if piper is None:
                         self._warn_missing_voice_once(self.current_language)
                     else:
-                        buffer = piper.synthesize(sanitized_sentence)
-                        if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                            return
                         self.full_response.append(sanitized_sentence)
+                        audio_duration = 0.0
+                        elapsed_time = 0.0
 
-                        elapsed_time = time.time() - start_time
-                        audio_duration = self._get_wav_duration(buffer)
-                        rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                        # Emit each piece as it is synthesized so playback can start early.
+                        for buffer in piper.synthesize_stream(sanitized_sentence):
+                            if generation_id is not None and not genai_app.is_generation_current(generation_id):
+                                return
+
+                            elapsed_time = time.time() - start_time
+                            audio_duration += self._get_wav_duration(buffer)
+                            rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                            genai_app.emit('audio_chunk', {
+                                'text': sanitized_sentence.strip(),
+                                'audio': buffer.getvalue(),
+                                'tps': round(self.tps, 2),
+                                'rtf': round(rtf, 2)
+                            })
+
                         logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                        genai_app.emit('audio_chunk', {
-                            'text': sanitized_sentence.strip(),
-                            'audio': buffer.getvalue(),
-                            'tps': round(self.tps, 2),
-                            'rtf': round(rtf, 2)
-                        })
                         self.chunk_count += 1
 
                 self.talk = []
