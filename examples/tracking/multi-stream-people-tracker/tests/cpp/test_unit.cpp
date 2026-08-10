@@ -111,7 +111,7 @@ bool test_validate_config_only_accepts_block_overflow_policy(const std::string& 
   const fs::path config_path =
       write_config("test_validate_config_only_accepts_block_overflow_policy",
                    "model:\n"
-                   "  path: models/yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz\n"
+                   "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
                    "streams:\n"
                    "  - rtsp://127.0.0.1:8554/src1\n"
                    "runtime:\n"
@@ -250,7 +250,7 @@ bool test_validate_config_only_rejects_target_outside_class_count(const std::str
   const fs::path config_path =
       write_config("test_validate_config_only_rejects_target_outside_class_count",
                    "model:\n"
-                   "  path: models/yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz\n"
+                   "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
                    "streams:\n"
                    "  - rtsp://127.0.0.1:8554/src1\n"
                    "inference:\n"

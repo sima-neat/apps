@@ -171,6 +171,42 @@ def test_scoped_models_keeps_per_example_model_id_local():
     ]
 
 
+def test_validate_scope_accepts_complete_vulcan_model(tmp_path):
+    example_key = _write_example(tmp_path)
+    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_unit.cpp").write_text("int main() {}\n", encoding="utf-8")
+    (tests_dir / "test_e2e.cpp").write_text("int main() {}\n", encoding="utf-8")
+    scope = _scope(example_key)
+    scope["examples"][example_key]["models"]["demo-model"] = {
+        "source": "vulcan",
+        "target": "models/demo@feature/demo:latest",
+        "environment": "staging",
+        "variant": "modalix_int8_tessellation_mla",
+        "file": "demo_mpk.tar.gz",
+    }
+
+    assert validate_scope(scope, tmp_path) == []
+
+
+def test_validate_scope_rejects_incomplete_vulcan_model(tmp_path):
+    example_key = _write_example(tmp_path)
+    scope = _scope(example_key)
+    scope["examples"][example_key]["models"]["demo-model"] = {
+        "source": "vulcan",
+        "environment": "test",
+        "variant": "../escape",
+        "file": "nested/demo_mpk.tar.gz",
+    }
+
+    errors = validate_scope(scope, tmp_path)
+
+    assert f"{example_key}: vulcan model demo-model needs target" in errors
+    assert any("needs environment" in error for error in errors)
+    assert f"{example_key}: vulcan model demo-model needs a safe variant" in errors
+    assert f"{example_key}: vulcan model demo-model needs a basename file" in errors
+
+
 def test_download_models_fails_when_scope_resolution_fails(tmp_path):
     bad_scope = tmp_path / "bad-scope.yaml"
     bad_scope.write_text("examples: []\n", encoding="utf-8")
@@ -233,6 +269,62 @@ def test_download_models_preserves_empty_url_model_name(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "[skip] url-demo already exists" in result.stdout
+
+
+def test_download_models_installs_exact_vulcan_variant(tmp_path):
+    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+    file_name = "demo_mpk.tar.gz"
+    variant = "modalix_int8_tessellation_mla"
+    target = "models/demo@feature/demo:0123456789abcdef"
+    fake_scope_python = tmp_path / "fake_scope_python"
+    fake_scope_python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf 'vulcan-demo\\tvulcan\\t\\t\\t{file_name}\\t\\t\\t{target}\\tstaging\\t{variant}\\n'\n",
+        encoding="utf-8",
+    )
+    fake_scope_python.chmod(0o755)
+
+    sima_cli_args = tmp_path / "sima-cli-args.txt"
+    fake_sima_cli = tmp_path / "sima-cli"
+    fake_sima_cli.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" > \"$NEAT_APPS_TEST_SIMA_CLI_ARGS\"\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  if [[ \"$1\" == '--install-dir' ]]; then install_dir=\"$2\"; shift 2; else shift; fi\n"
+        "done\n"
+        f"mkdir -p \"$install_dir/{variant}\"\n"
+        f"printf 'mpk' > \"$install_dir/{variant}/{file_name}\"\n",
+        encoding="utf-8",
+    )
+    fake_sima_cli.chmod(0o755)
+    models_dir = tmp_path / "models"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
+            "SIMA_CLI_BIN": str(fake_sima_cli),
+            "NEAT_APPS_TEST_SIMA_CLI_ARGS": str(sima_cli_args),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (models_dir / file_name).read_text(encoding="utf-8") == "mpk"
+    command = sima_cli_args.read_text(encoding="utf-8")
+    assert command.startswith("neat install --stg --install-dir ")
+    assert command.endswith(f" {target}\n")
 
 
 def test_download_models_expands_modelzoo_version_placeholder(tmp_path):

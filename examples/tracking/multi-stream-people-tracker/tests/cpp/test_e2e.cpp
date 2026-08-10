@@ -54,7 +54,11 @@ int run_source_case(const std::string& binary, const std::string& model_path,
                     {"output.insight.host", kE2eInsightHost},
                     {"output.insight.video_port_base", std::to_string(video_port_base)},
                     {"output.insight.metadata_port_base", std::to_string(metadata_port_base)},
-                    {"inference.frames", "140"}},
+                    {"inference.frames", "140"},
+                    {"inference.num_classes", "1"},
+                    {"inference.target_class_id", "0"},
+                    {"inference.target_label", "drone"},
+                    {"inference.min_score", "0.05"}},
                    {{"streams", {source_case.urls[0], source_case.urls[1]}}});
 
   MetadataJsonListenerOptions metadata_options;

@@ -284,6 +284,53 @@ download_huggingface_model() {
     return 1
 }
 
+download_vulcan_model() {
+    local model_id="$1"
+    local target="$2"
+    local environment="$3"
+    local variant="$4"
+    local expected_file="$5"
+    local tmpdir installed_path
+    local environment_args=()
+
+    if model_exists "$model_id" "$expected_file"; then
+        echo "[skip] $model_id already exists"
+        return 0
+    fi
+    ensure_sima_cli_bin
+
+    case "$environment" in
+        development) environment_args=(--dev) ;;
+        staging) environment_args=(--stg) ;;
+        production) environment_args=(--prd) ;;
+        *)
+            echo "[error] $model_id has unsupported Vulcan environment: $environment" >&2
+            return 1
+            ;;
+    esac
+
+    tmpdir="$(mktemp -d)"
+    echo "[download] $model_id (vulcan: $target, environment: $environment)"
+    if ! "$SIMA_CLI_BIN" neat install "${environment_args[@]}" \
+        --install-dir "$tmpdir" "$target"; then
+        rm -rf "$tmpdir"
+        echo "[error] $model_id: Vulcan install failed" >&2
+        return 1
+    fi
+
+    installed_path="$tmpdir/$variant/$expected_file"
+    if [[ ! -f "$installed_path" ]]; then
+        echo "[error] $model_id: Vulcan package did not contain $variant/$expected_file" >&2
+        find "$tmpdir" -maxdepth 3 -type f -print >&2
+        rm -rf "$tmpdir"
+        return 1
+    fi
+
+    mv "$installed_path" "$MODELS_DIR/$expected_file"
+    rm -rf "$tmpdir"
+    echo "[ok] $model_id"
+}
+
 split_tsv_row() {
     local row="$1"
     local -n out="$2"
@@ -326,7 +373,7 @@ download_scoped_models() {
     acquire_lock
 
     local failed=0
-    local row model_id source name url expected_file repo path fields
+    local row model_id source name url expected_file repo path target environment variant fields
     for row in "${rows[@]}"; do
         fields=()
         split_tsv_row "$row" fields
@@ -337,6 +384,9 @@ download_scoped_models() {
         expected_file="${fields[4]:-}"
         repo="${fields[5]:-}"
         path="${fields[6]:-}"
+        target="${fields[7]:-}"
+        environment="${fields[8]:-}"
+        variant="${fields[9]:-}"
         case "$source" in
             modelzoo)
                 download_modelzoo_model "$model_id" "${name:-$model_id}" "$expected_file" || failed=1
@@ -346,6 +396,10 @@ download_scoped_models() {
                 ;;
             huggingface)
                 download_huggingface_model "$model_id" "$repo" "$path" || failed=1
+                ;;
+            vulcan)
+                download_vulcan_model \
+                    "$model_id" "$target" "$environment" "$variant" "$expected_file" || failed=1
                 ;;
             *)
                 echo "[error] $model_id has unsupported source: $source" >&2

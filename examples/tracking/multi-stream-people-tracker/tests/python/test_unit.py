@@ -596,7 +596,7 @@ class TestMetadata:
         tracks = [TrackedDetection(7, 10.0, 20.0, 40.0, 60.0, 0.75, 0)]
 
         cfg = AppConfig(
-            model_path="models/yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz",
+            model_path="models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz",
             rtsp_urls=[runtime.url],
             target_label="drone",
         )

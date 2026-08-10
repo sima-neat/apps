@@ -1,4 +1,10 @@
 models:
+  yolo26-tiny-drone-int8-qat-mla-tess:
+    source: vulcan
+    target: models/yolo26_tiny_drone@feat/yolo26-p2-tiny-drone-qat:latest
+    environment: staging
+    variant: modalix_int8_tessellation_mla
+    file: yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
   yolo26m-det-bf16-mla_tess-b1:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
@@ -34,8 +40,8 @@ e2e:
   python:
     enabled: true
     models:
-    - yolo26m-det-int8-b1
+    - yolo26-tiny-drone-int8-qat-mla-tess
   cpp:
     enabled: true
     models:
-    - yolo26m-det-int8-b1
+    - yolo26-tiny-drone-int8-qat-mla-tess

@@ -12,7 +12,8 @@ import yaml
 
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
-VALID_SOURCES = {"modelzoo", "url", "huggingface"}
+VALID_SOURCES = {"modelzoo", "url", "huggingface", "vulcan"}
+VALID_VULCAN_ENVIRONMENTS = {"development", "staging", "production"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
 SCOPE_FILE_NAME = "test-scope.yaml"
@@ -189,6 +190,22 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                 errors.append(f"{example_key}: modelzoo model {model_id} needs name")
             if source == "url" and not str(model.get("url", "")).strip():
                 errors.append(f"{example_key}: url model {model_id} needs url")
+            if source == "vulcan":
+                target = str(model.get("target", "")).strip()
+                environment = str(model.get("environment", "")).strip()
+                variant = str(model.get("variant", "")).strip()
+                file_name = str(model.get("file", "")).strip()
+                if not target:
+                    errors.append(f"{example_key}: vulcan model {model_id} needs target")
+                if environment not in VALID_VULCAN_ENVIRONMENTS:
+                    errors.append(
+                        f"{example_key}: vulcan model {model_id} needs environment in "
+                        f"{sorted(VALID_VULCAN_ENVIRONMENTS)}"
+                    )
+                if not variant or "/" in variant or variant in {".", ".."}:
+                    errors.append(f"{example_key}: vulcan model {model_id} needs a safe variant")
+                if not file_name or Path(file_name).name != file_name:
+                    errors.append(f"{example_key}: vulcan model {model_id} needs a basename file")
         for language in sorted(VALID_LANGUAGES):
             for kind in sorted(VALID_KINDS):
                 try:
@@ -250,7 +267,7 @@ def scoped_models(
     if kind == "unit":
         return []
 
-    result: dict[tuple[str, str, str, str, str, str, str], tuple[str, dict[str, Any]]] = {}
+    result: dict[tuple[str, ...], tuple[str, dict[str, Any]]] = {}
     for example_key, entry in sorted(scope["examples"].items()):
         models = entry.get("models", {})
         for language in languages:
@@ -266,6 +283,9 @@ def scoped_models(
                     model_field(model, "file"),
                     model_field(model, "repo"),
                     model_field(model, "path"),
+                    model_field(model, "target"),
+                    model_field(model, "environment"),
+                    model_field(model, "variant"),
                 )
                 result.setdefault(identity, (model_id, model))
     return [item for _, item in sorted(result.items())]
@@ -358,6 +378,9 @@ def main() -> int:
                 model_field(model, "file"),
                 model_field(model, "repo"),
                 model_field(model, "path"),
+                model_field(model, "target"),
+                model_field(model, "environment"),
+                model_field(model, "variant"),
             ]
             print("\t".join(fields))
         return 0

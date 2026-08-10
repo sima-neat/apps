@@ -73,6 +73,10 @@ class TestE2E:
                 },
                 "inference": {
                     "frames": 140,
+                    "num_classes": 1,
+                    "target_class_id": 0,
+                    "target_label": "drone",
+                    "min_score": 0.05,
                 },
             }
         )

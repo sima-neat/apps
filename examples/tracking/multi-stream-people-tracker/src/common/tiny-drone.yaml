@@ -1,7 +1,7 @@
 model:
   # Custom one-class YOLO26n-P2 INT8 QAT pack. It must expose grouped raw
   # bbox heads followed by class-logit heads for P2, P3, P4, and P5.
-  path: models/yolo26n-p2-tiny-drone-int8-qat-b1.tar.gz
+  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
 
 streams:
   - <tiny-drone-rtsp-url>
