@@ -27,6 +27,7 @@ from utils.tracker import (
 )
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+_MAXIMUM_DEBUG_FRAMES_PER_DRAIN = 2
 
 cv2 = None
 np = None
@@ -1350,8 +1351,12 @@ def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
     if not tracking_frames_enabled(cfg):
         return
     for stream in app.streams:
-        while pull_debug_frame(app, stream, 0):
-            pass
+        # Zero-timeout side output can remain continuously ready. Bound each
+        # cooperative pass so synchronous optical flow cannot starve detector
+        # pulls when decoded frames arrive faster than they are consumed.
+        for _ in range(_MAXIMUM_DEBUG_FRAMES_PER_DRAIN):
+            if not pull_debug_frame(app, stream, 0):
+                break
 
 
 def await_matching_debug_frame(

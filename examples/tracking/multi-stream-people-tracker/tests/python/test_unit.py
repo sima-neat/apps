@@ -695,6 +695,32 @@ class TestDebugFrameWriter:
 
 
 class TestDebugFrameSynchronization:
+    def test_debug_frame_drain_is_bounded_when_side_output_stays_ready(
+        self, monkeypatch
+    ):
+        import main
+
+        calls = {0: 0, 1: 0}
+        app = SimpleNamespace(
+            streams=[SimpleNamespace(index=0), SimpleNamespace(index=1)]
+        )
+        cfg = main.AppConfig(
+            model_path="model.tar.gz",
+            rtsp_urls=["rtsp://127.0.0.1/src0", "rtsp://127.0.0.1/src1"],
+            tracker_camera_motion_compensation=True,
+        )
+
+        def always_ready(_app, stream, timeout_ms):
+            assert timeout_ms == 0
+            calls[stream.index] += 1
+            return True
+
+        monkeypatch.setattr(main, "pull_debug_frame", always_ready)
+
+        main.drain_debug_frames(app, cfg)
+
+        assert calls == {0: 2, 1: 2}
+
     def test_composes_every_camera_transform_before_matching_frame(self):
         from main import (
             DebugFrame,

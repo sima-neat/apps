@@ -64,9 +64,13 @@ install_dir="$(mktemp -d)"
 sima-cli neat install --stg \
   --install-dir "$install_dir" \
   models/yolo26_tiny_drone@feat/yolo26-p2-tiny-drone-qat:c54a3d12c52b
-mpk="$install_dir/modalix_int8_tessellation_mla/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz"
-mv "$mpk" models/
-rmdir "$install_dir/modalix_int8_tessellation_mla" "$install_dir"
+mpk_name="yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz"
+mpk="$install_dir/$mpk_name"
+if [[ ! -f "$mpk" ]]; then
+  mpk="$install_dir/modalix_int8_tessellation_mla/$mpk_name"
+fi
+install -m 0644 "$mpk" "models/$mpk_name"
+rm -rf "$install_dir"
 ```
 
 The package exposes four raw bbox heads followed by four class-logit heads for
@@ -298,16 +302,33 @@ transform and diagnostics, and produced tracks. The option is disabled by
 default and does not affect the live profile when omitted.
 
 ```bash
+tiny_drone_tracker_args=(
+  --high-score-threshold 0.20
+  --new-track-threshold 0.30
+  --match-iou-threshold 0.05
+  --max-center-distance 0.50
+  --velocity-momentum 0.90
+  --box-smoothing-alpha 0.50
+  --max-missing-frames 30
+  --min-confirmed-hits 2
+  --max-prediction-frames 1
+  --overlap-threshold 0.20
+  --max-occlusion-frames 10
+  --max-active-tracks 128
+  --camera-motion-compensation
+)
+
 ./multi-stream-people-tracker_replay \
   --detections <detector-output.jsonl> \
   --output <tracking-output.jsonl> \
-  --camera-motion-compensation \
+  "${tiny_drone_tracker_args[@]}" \
   --verify-recorded \
   --verify-determinism
 
 python3 examples/tracking/multi-stream-people-tracker/src/python/replay_tracking.py \
   --detections <detector-output.jsonl> \
   --output <tracking-output.jsonl> \
+  "${tiny_drone_tracker_args[@]}" \
   --verify-determinism
 ```
 
