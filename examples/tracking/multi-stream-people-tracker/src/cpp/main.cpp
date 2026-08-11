@@ -17,6 +17,7 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/camera_motion_api.cpp"
+#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/debug_frame_wait.hpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_overlay_api.cpp"
 #include "support/object_detection/obj_detection_utils.h"
@@ -1361,9 +1362,15 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
                             return samples_identify_same_frame(sample, candidate);
                           });
     };
-    constexpr auto kMaximumSideBranchWait = std::chrono::milliseconds(50);
-    frames.ready.wait_for(lock, kMaximumSideBranchWait,
-                          [&] { return find_matching() != frames.frames.end(); });
+    const bool matching_frame_ready = multi_stream_people_tracker::wait_for_matching_side_frame(
+        frames.ready, lock, stream.benchmark_mode,
+        [&] { return find_matching() != frames.frames.end(); });
+    if (stream.benchmark_mode && !matching_frame_ready) {
+      throw std::runtime_error(
+          "benchmark timed out waiting for the decoded side frame matching detection" +
+          std::string(" frame_id=") + std::to_string(sample.frame_id) +
+          " pts_ns=" + std::to_string(sample.pts_ns));
+    }
     const auto matching = find_matching();
     if (matching != frames.frames.end()) {
       camera_motion_chain.reserve(

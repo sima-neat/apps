@@ -1,15 +1,20 @@
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/camera_motion_api.cpp"
+#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/debug_frame_wait.hpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_overlay_api.cpp"
 #include "support/testing/test_process.h"
 
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include <opencv2/imgproc.hpp>
 
@@ -91,6 +96,27 @@ bool test_benchmark_image_must_exist(const std::string& binary) {
                                   "missing benchmark image has a focused error");
   remove_dir(config_path.parent_path().string());
   return ok;
+}
+
+bool test_benchmark_waits_for_delayed_side_frame() {
+  std::condition_variable ready;
+  std::mutex mutex;
+  bool matching_frame_ready = false;
+  std::thread producer([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(75));
+    {
+      std::lock_guard lock(mutex);
+      matching_frame_ready = true;
+    }
+    ready.notify_one();
+  });
+
+  std::unique_lock lock(mutex);
+  const bool matched = multi_stream_people_tracker::wait_for_matching_side_frame(
+      ready, lock, true, [&] { return matching_frame_ready; });
+  lock.unlock();
+  producer.join();
+  return expect_true(matched, "benchmark waits beyond the realtime side-frame timeout");
 }
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
@@ -1000,6 +1026,7 @@ int main(int argc, char** argv) {
   ok &= test_help_runs(binary);
   ok &= test_benchmark_image_requires_path(binary);
   ok &= test_benchmark_image_must_exist(binary);
+  ok &= test_benchmark_waits_for_delayed_side_frame();
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_accepts_block_overflow_policy(binary);
