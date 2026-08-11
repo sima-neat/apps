@@ -34,5 +34,5 @@ app:                         # Assistant web app settings.
     embedding_model_dir: <path-to-embedding-model-dir> # Embedding model directory.
 
   tts:                       # Text-to-speech settings.
-    streaming: false          # Start playback before a sentence finishes synthesizing.
+    streaming: true          # Start playback before a sentence finishes synthesizing.
 
