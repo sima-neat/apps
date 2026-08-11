@@ -17,6 +17,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <string>
 #include <utility>
 
 namespace multi_stream_people_tracker {
@@ -30,6 +31,15 @@ bool wait_for_matching_side_frame(std::condition_variable& ready,
                                   Predicate&& has_matching_frame) {
   const auto timeout = benchmark_mode ? kBenchmarkSideFrameDeadline : kRealtimeSideFrameWait;
   return ready.wait_for(lock, timeout, std::forward<Predicate>(has_matching_frame));
+}
+
+inline std::string benchmark_route(bool camera_motion_enabled) {
+  std::string route = "NV12->Preprocess->MLA->BoxDecode";
+  if (camera_motion_enabled) {
+    route += "->CameraMotion";
+  }
+  route += "->Tracker";
+  return route;
 }
 
 } // namespace multi_stream_people_tracker

@@ -1,5 +1,5 @@
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/camera_motion_api.cpp"
-#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/debug_frame_wait.hpp"
+#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/benchmark_support.hpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_overlay_api.cpp"
 #include "support/testing/test_process.h"
@@ -117,6 +117,15 @@ bool test_benchmark_waits_for_delayed_side_frame() {
   lock.unlock();
   producer.join();
   return expect_true(matched, "benchmark waits beyond the realtime side-frame timeout");
+}
+
+bool test_benchmark_route_reports_optional_camera_motion() {
+  return expect_true(multi_stream_people_tracker::benchmark_route(false) ==
+                         "NV12->Preprocess->MLA->BoxDecode->Tracker",
+                     "benchmark route omits disabled camera motion") &&
+         expect_true(multi_stream_people_tracker::benchmark_route(true) ==
+                         "NV12->Preprocess->MLA->BoxDecode->CameraMotion->Tracker",
+                     "benchmark route includes enabled camera motion");
 }
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
@@ -1068,6 +1077,7 @@ int main(int argc, char** argv) {
   ok &= test_benchmark_image_requires_path(binary);
   ok &= test_benchmark_image_must_exist(binary);
   ok &= test_benchmark_waits_for_delayed_side_frame();
+  ok &= test_benchmark_route_reports_optional_camera_motion();
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_accepts_block_overflow_policy(binary);

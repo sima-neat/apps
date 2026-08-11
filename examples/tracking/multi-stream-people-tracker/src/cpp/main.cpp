@@ -17,7 +17,7 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/camera_motion_api.cpp"
-#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/debug_frame_wait.hpp"
+#include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/benchmark_support.hpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_api.cpp"
 #include "examples/tracking/multi-stream-people-tracker/src/cpp/utils/tracker_overlay_api.cpp"
 #include "support/object_detection/obj_detection_utils.h"
@@ -1839,9 +1839,12 @@ void run_app(AppConfig cfg, const std::optional<fs::path>& benchmark_image) {
           elapsed_ms > 0.0 ? static_cast<double>(intervals) * 1000.0 / elapsed_ms : 0.0;
       std::cout << std::fixed << std::setprecision(3)
                 << "[benchmark] measured_frames=" << stream.benchmark_completed_frames
-                << " elapsed_ms=" << elapsed_ms << " throughput_fps=" << throughput_fps
-                << " route=NV12->Preprocess->MLA->BoxDecode->CameraMotion->Tracker"
-                   " video=off metadata=off overlay=off\n";
+                << " elapsed_ms=" << elapsed_ms << " throughput_fps=" << throughput_fps << " route="
+                << multi_stream_people_tracker::benchmark_route(
+                       cfg.tracker_camera_motion_compensation)
+                << " camera_motion="
+                << (cfg.tracker_camera_motion_compensation ? "enabled" : "disabled")
+                << " video=off metadata=off overlay=off\n";
     }
   }
 
