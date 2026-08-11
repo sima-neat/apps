@@ -8,6 +8,7 @@ from collections import Counter
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,22 @@ from typing import Any, Sequence
 
 SUPPORTED_FPS = (30, 60)
 SUPPORTED_SUFFIXES = {".jpeg", ".jpg", ".pgm", ".png", ".ppm"}
+# H.264 Annex A maximum macroblocks per second and per frame. Keep level 3.1
+# as the Insight-compatible floor, then raise it only when the input requires
+# more decoder capacity.
+H264_LEVEL_LIMITS = (
+    ("3.1", 31, 108_000, 3_600),
+    ("3.2", 32, 216_000, 5_120),
+    ("4.0", 40, 245_760, 8_192),
+    ("4.1", 41, 245_760, 8_192),
+    ("4.2", 42, 522_240, 8_704),
+    ("5.0", 50, 589_824, 22_080),
+    ("5.1", 51, 983_040, 36_864),
+    ("5.2", 52, 2_073_600, 36_864),
+    ("6.0", 60, 4_177_920, 139_264),
+    ("6.1", 61, 8_355_840, 139_264),
+    ("6.2", 62, 16_711_680, 139_264),
+)
 JPEG_SOF_MARKERS = {
     0xC0,
     0xC1,
@@ -82,9 +99,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _last_numeric_index(path: Path) -> int:
     matches = list(re.finditer(r"\d+", path.stem))
     if not matches:
-        raise VideoPreparationError(
-            f"frame filename has no numeric index: {path.name}"
-        )
+        raise VideoPreparationError(f"frame filename has no numeric index: {path.name}")
     return int(matches[-1].group())
 
 
@@ -130,8 +145,7 @@ def discover_frames(frames_dir: Path) -> tuple[list[Path], int]:
     }
     if len(formats) != 1:
         raise VideoPreparationError(
-            "all frames must use one image format; found: "
-            + ", ".join(sorted(formats))
+            "all frames must use one image format; found: " + ", ".join(sorted(formats))
         )
     return candidates, indices[0]
 
@@ -255,6 +269,26 @@ def ordered_frames_sha256(frames: Sequence[Path]) -> str:
     return digest.hexdigest()
 
 
+def select_h264_level(width: int, height: int, fps: int) -> tuple[str, int]:
+    width_in_macroblocks = (width + 15) // 16
+    height_in_macroblocks = (height + 15) // 16
+    frame_macroblocks = width_in_macroblocks * height_in_macroblocks
+    macroblocks_per_second = frame_macroblocks * fps
+
+    for name, level_idc, maximum_rate, maximum_frame_size in H264_LEVEL_LIMITS:
+        maximum_dimension = math.isqrt(maximum_frame_size * 8)
+        if (
+            frame_macroblocks <= maximum_frame_size
+            and macroblocks_per_second <= maximum_rate
+            and width_in_macroblocks <= maximum_dimension
+            and height_in_macroblocks <= maximum_dimension
+        ):
+            return name, level_idc
+    raise VideoPreparationError(
+        f"{width}x{height} at {fps} FPS exceeds the supported H.264 level 6.2 limits"
+    )
+
+
 def _required_executable(name: str) -> str:
     executable = shutil.which(name)
     if executable is None:
@@ -335,8 +369,10 @@ def _probe_video(
             str(video),
         ]
     )
-    return streams[0], frame_document.get("frames", []), packet_document.get(
-        "packets", []
+    return (
+        streams[0],
+        frame_document.get("frames", []),
+        packet_document.get("packets", []),
     )
 
 
@@ -361,9 +397,7 @@ def _annex_b_nal_types(ffmpeg: str, video: Path) -> list[int]:
     result = subprocess.run(command, capture_output=True)
     if result.returncode != 0:
         detail = result.stderr.decode(errors="replace")
-        raise VideoPreparationError(
-            f"could not inspect H.264 access units: {detail}"
-        )
+        raise VideoPreparationError(f"could not inspect H.264 access units: {detail}")
 
     data = result.stdout
     starts: list[tuple[int, int]] = []
@@ -408,6 +442,7 @@ def validate_encoded_video(
     frame_count: int,
     width: int,
     height: int,
+    level_idc: int,
 ) -> dict[str, Any]:
     stream, frames, packets = _probe_video(ffprobe, video)
     expected_rate = f"{fps}/1"
@@ -420,7 +455,7 @@ def validate_encoded_video(
 
     requirements = {
         "codec_name": "h264",
-        "level": 31,
+        "level": level_idc,
         "pix_fmt": "yuv420p",
         "r_frame_rate": expected_rate,
         "avg_frame_rate": expected_rate,
@@ -498,7 +533,7 @@ def validate_encoded_video(
     }
 
 
-def _encoder_arguments(fps: int) -> list[str]:
+def _encoder_arguments(fps: int, h264_level: str) -> list[str]:
     bitrate = "2M" if fps == 30 else "4M"
     x264_parameters = (
         f"keyint={fps}:min-keyint={fps}:no-scenecut=1:"
@@ -515,7 +550,7 @@ def _encoder_arguments(fps: int) -> list[str]:
         "-profile:v",
         "baseline",
         "-level:v",
-        "3.1",
+        h264_level,
         "-pix_fmt",
         "yuv420p",
         "-b:v",
@@ -555,6 +590,7 @@ def prepare_video(args: argparse.Namespace) -> tuple[Path, Path]:
 
     frames, first_index = discover_frames(frames_dir)
     width, height = validate_dimensions(frames)
+    h264_level, level_idc = select_h264_level(width, height, args.fps)
     frame_digest = ordered_frames_sha256(frames)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -563,7 +599,7 @@ def prepare_video(args: argparse.Namespace) -> tuple[Path, Path]:
         if frames[0].suffix.lower() in {".jpg", ".jpeg"}
         else frames[0].suffix.lower()
     )
-    encoder_arguments = _encoder_arguments(args.fps)
+    encoder_arguments = _encoder_arguments(args.fps, h264_level)
     with tempfile.TemporaryDirectory(
         prefix=f".{output.stem}.prepare-", dir=output.parent
     ) as temporary_directory:
@@ -611,6 +647,7 @@ def prepare_video(args: argparse.Namespace) -> tuple[Path, Path]:
             frame_count=len(frames),
             width=width,
             height=height,
+            level_idc=level_idc,
         )
         ffmpeg_version = subprocess.run(
             [ffmpeg, "-version"], capture_output=True, text=True, check=True
@@ -635,6 +672,7 @@ def prepare_video(args: argparse.Namespace) -> tuple[Path, Path]:
             },
             "encoding": {
                 "fps": args.fps,
+                "h264_level": h264_level,
                 "duration_seconds": len(frames) / args.fps,
                 "ffmpeg_version": ffmpeg_version,
                 "arguments": encoder_arguments,

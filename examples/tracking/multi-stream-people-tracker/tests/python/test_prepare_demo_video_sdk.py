@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -13,6 +14,11 @@ import unittest
 
 EXAMPLE_ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = EXAMPLE_ROOT / "tools" / "prepare_demo_video.py"
+
+GENERATOR_SPEC = importlib.util.spec_from_file_location("prepare_demo_video", GENERATOR)
+assert GENERATOR_SPEC and GENERATOR_SPEC.loader
+prepare_demo_video = importlib.util.module_from_spec(GENERATOR_SPEC)
+GENERATOR_SPEC.loader.exec_module(prepare_demo_video)
 
 
 def write_pgm_frame(
@@ -25,10 +31,21 @@ def write_pgm_frame(
     path.write_bytes(f"P5\n{width} {height}\n255\n".encode() + pixels)
 
 
-def write_pgm_sequence(directory: Path, frame_count: int = 121) -> None:
+def write_pgm_sequence(
+    directory: Path,
+    frame_count: int = 121,
+    *,
+    width: int = 96,
+    height: int = 64,
+) -> None:
     directory.mkdir()
     for frame_index in range(frame_count):
-        write_pgm_frame(directory / f"frame_{frame_index:06d}.pgm", frame_index)
+        write_pgm_frame(
+            directory / f"frame_{frame_index:06d}.pgm",
+            frame_index,
+            width=width,
+            height=height,
+        )
 
 
 def ffprobe_json(video: Path, *, frames: bool = False, packets: bool = False) -> dict:
@@ -59,6 +76,47 @@ def ffprobe_json(video: Path, *, frames: bool = False, packets: bool = False) ->
 
 
 class TestPrepareDemoVideoSdk(unittest.TestCase):
+    def test_selects_a_conformant_h264_level(self) -> None:
+        cases = {
+            (640, 512, 30): ("3.1", 31),
+            (1280, 720, 30): ("3.1", 31),
+            (1280, 720, 60): ("3.2", 32),
+            (1920, 1080, 30): ("4.0", 40),
+            (1920, 1080, 60): ("4.2", 42),
+            (1600, 1600, 60): ("5.1", 51),
+        }
+        for dimensions, expected in cases.items():
+            with self.subTest(dimensions=dimensions):
+                self.assertEqual(
+                    prepare_demo_video.select_h264_level(*dimensions), expected
+                )
+
+    def test_encodes_720p60_at_level_3_2(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="prepare-demo-video-720p60-") as root:
+            root_path = Path(root)
+            frames_dir = root_path / "frames"
+            write_pgm_sequence(frames_dir, frame_count=2, width=1280, height=720)
+            video = root_path / "demo-720p60.mp4"
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(GENERATOR),
+                    "--frames-dir",
+                    str(frames_dir),
+                    "--fps",
+                    "60",
+                    "--output",
+                    str(video),
+                ],
+                check=True,
+            )
+
+            stream = ffprobe_json(video)["streams"][0]
+            self.assertEqual(stream["level"], 32)
+            self.assertEqual(stream["r_frame_rate"], "60/1")
+            self.assertEqual(stream["has_b_frames"], 0)
+
     def test_rejects_a_frame_index_gap_before_encoding(self) -> None:
         with tempfile.TemporaryDirectory(prefix="prepare-demo-video-gap-") as root:
             root_path = Path(root)
@@ -148,9 +206,7 @@ class TestPrepareDemoVideoSdk(unittest.TestCase):
                     self.assertEqual(provenance["validation"]["aud_count"], 121)
                     self.assertEqual(provenance["validation"]["idr_indices"], keyframes)
                     self.assertEqual(provenance["validation"]["has_b_frames"], 0)
-                    self.assertFalse(
-                        provenance["validation"]["timestamps_reordered"]
-                    )
+                    self.assertFalse(provenance["validation"]["timestamps_reordered"])
 
 
 if __name__ == "__main__":

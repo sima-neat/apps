@@ -1461,7 +1461,7 @@ std::string debug_frame_output_name(int stream_index) {
 }
 
 bool pull_debug_frame(AppRuntime& app, StreamRuntime& stream, const AppConfig& cfg,
-                      int timeout_ms) {
+                      int timeout_ms, const std::atomic_bool& stop_requested) {
   const std::string output_name = debug_frame_output_name(stream.index);
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;
@@ -1511,11 +1511,15 @@ bool pull_debug_frame(AppRuntime& app, StreamRuntime& stream, const AppConfig& c
     constexpr std::size_t kMaxBufferedDebugFrames = 16;
     if (stream.benchmark_mode) {
       // An uncapped image source can outrun MLA on the side branch. Preserve
-      // frame pairing by applying bounded backpressure instead of evicting the
+      // frame pairing by applying lossless backpressure instead of evicting the
       // exact frames whose detections are still in flight.
-      stream.debug_frames->space_available.wait_for(lock, std::chrono::milliseconds(100), [&] {
-        return stream.debug_frames->frames.size() < kMaxBufferedDebugFrames;
+      stream.debug_frames->space_available.wait(lock, [&] {
+        return stop_requested.load(std::memory_order_acquire) ||
+               stream.debug_frames->frames.size() < kMaxBufferedDebugFrames;
       });
+      if (stop_requested.load(std::memory_order_acquire)) {
+        return false;
+      }
     }
     if (stream.debug_frames->frames.size() >= kMaxBufferedDebugFrames) {
       stream.debug_frames->frames.pop_front();
@@ -1695,7 +1699,7 @@ void run_app(AppConfig cfg, const std::optional<fs::path>& benchmark_image) {
           [&app, &cfg, stream_ptr, &stop_debug_pullers, &debug_error_mutex, &debug_error] {
             try {
               while (!stop_debug_pullers.load(std::memory_order_relaxed)) {
-                (void)pull_debug_frame(app, *stream_ptr, cfg, 50);
+                (void)pull_debug_frame(app, *stream_ptr, cfg, 50, stop_debug_pullers);
               }
             } catch (...) {
               {
@@ -1756,6 +1760,19 @@ void run_app(AppConfig cfg, const std::optional<fs::path>& benchmark_image) {
       input_producer.join();
     }
   };
+  const auto stop_and_join_debug_pullers = [&] {
+    stop_debug_pullers.store(true, std::memory_order_release);
+    for (auto& stream : app.streams) {
+      if (stream.debug_frames != nullptr) {
+        stream.debug_frames->space_available.notify_all();
+      }
+    }
+    for (auto& puller : debug_pullers) {
+      if (puller.joinable()) {
+        puller.join();
+      }
+    }
+  };
   try {
     while (g_stop_requested == 0 && !stop_debug_pullers.load(std::memory_order_relaxed) &&
            !input_producer_failed.load(std::memory_order_relaxed) &&
@@ -1764,18 +1781,12 @@ void run_app(AppConfig cfg, const std::optional<fs::path>& benchmark_image) {
     }
   } catch (...) {
     stop_and_join_input();
-    stop_debug_pullers.store(true, std::memory_order_relaxed);
-    for (auto& puller : debug_pullers) {
-      puller.join();
-    }
+    stop_and_join_debug_pullers();
     app.run.close();
     throw;
   }
   stop_and_join_input();
-  stop_debug_pullers.store(true, std::memory_order_relaxed);
-  for (auto& puller : debug_pullers) {
-    puller.join();
-  }
+  stop_and_join_debug_pullers();
   app.run.close();
   {
     std::lock_guard lock(debug_error_mutex);

@@ -139,9 +139,10 @@ python3 examples/tracking/multi-stream-people-tracker/tools/prepare_demo_video.p
 `--fps` accepts `30` or `60`. Every source image becomes exactly one video
 frame, so the output duration is `image_count / fps` and a frame keeps the same
 ordinal as its annotation. The encoder matches Insight's low-latency H.264
-contract: constrained-baseline YUV420P, a fixed one-second GOP, no scene-cut
-keyframes, repeated SPS/PPS headers, AUD delimiters, and no B-frames or packet
-reordering. The tool validates those properties after encoding and writes a
+contract: constrained-baseline YUV420P, the minimum conformant H.264 level with
+3.1 as its floor, a fixed one-second GOP, no scene-cut keyframes, repeated
+SPS/PPS headers, AUD delimiters, and no B-frames or packet reordering. The tool
+validates those properties after encoding and writes a
 checksum-bearing `<stem>.provenance.json` beside the MP4. It rejects missing
 or duplicate frame indices, mixed image formats or dimensions, odd dimensions,
 and existing output unless `--force` is explicit.
