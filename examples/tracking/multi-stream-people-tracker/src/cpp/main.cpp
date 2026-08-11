@@ -201,7 +201,8 @@ struct CameraMotionResult {
 // branch without racing the estimator's previous-frame state.
 class AsyncCameraMotionEstimator {
 public:
-  AsyncCameraMotionEstimator() : worker_([this] { run(); }) {}
+  explicit AsyncCameraMotionEstimator(bool lossless_submission)
+      : lossless_submission_(lossless_submission), worker_([this] { run(); }) {}
 
   ~AsyncCameraMotionEstimator() {
     {
@@ -209,6 +210,7 @@ public:
       stopping_ = true;
     }
     ready_.notify_one();
+    space_available_.notify_all();
     if (worker_.joinable()) {
       worker_.join();
     }
@@ -223,11 +225,15 @@ public:
     task.object_mask = std::move(object_mask);
     auto result = task.result.get_future();
     {
-      std::lock_guard lock(mutex_);
+      std::unique_lock lock(mutex_);
+      if (lossless_submission_) {
+        space_available_.wait(lock,
+                              [this] { return stopping_ || queue_.size() < kMaximumQueuedFrames; });
+      }
       if (stopping_) {
         throw std::runtime_error("camera-motion worker is stopping");
       }
-      if (queue_.size() >= kMaximumQueuedFrames) {
+      if (!lossless_submission_ && queue_.size() >= kMaximumQueuedFrames) {
         discard_pending_locked();
         task.reset_before_update = true;
       }
@@ -289,6 +295,7 @@ private:
         task = std::move(queue_.front());
         queue_.pop_front();
       }
+      space_available_.notify_one();
       try {
         CameraMotionResult result;
         if (task.reset) {
@@ -312,11 +319,13 @@ private:
   FrameCameraMotionEstimator estimator_;
   std::mutex mutex_;
   std::condition_variable ready_;
+  std::condition_variable space_available_;
   std::deque<Task> queue_;
-  // At most one not-yet-started full-resolution frame is retained. If newer
-  // input overtakes it, submit() replaces it and makes the replacement a new
-  // optical-flow baseline instead of estimating across a missing frame.
+  // At most one not-yet-started full-resolution frame is retained. Real-time
+  // streams coalesce overtaken work and reset the optical-flow baseline;
+  // benchmark mode applies backpressure so every advertised task is measured.
   static constexpr std::size_t kMaximumQueuedFrames = 1;
+  bool lossless_submission_ = false;
   bool stopping_ = false;
   std::thread worker_;
 };
@@ -1027,7 +1036,8 @@ simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConf
   return video_options;
 }
 
-StreamRuntime make_stream_runtime(const AppConfig& cfg, int stream_index, std::string url) {
+StreamRuntime make_stream_runtime(const AppConfig& cfg, int stream_index, std::string url,
+                                  bool lossless_camera_motion) {
   StreamRuntime runtime;
   runtime.index = stream_index;
   runtime.url = std::move(url);
@@ -1050,7 +1060,7 @@ StreamRuntime make_stream_runtime(const AppConfig& cfg, int stream_index, std::s
       cfg.tracker_max_active_tracks,
   });
   if (cfg.tracker_camera_motion_compensation) {
-    runtime.camera_motion = std::make_unique<AsyncCameraMotionEstimator>();
+    runtime.camera_motion = std::make_unique<AsyncCameraMotionEstimator>(lossless_camera_motion);
   }
   if (!cfg.replay_dir.empty()) {
     const fs::path replay_path =
@@ -1069,7 +1079,7 @@ StreamRuntime make_stream_runtime(const AppConfig& cfg, int stream_index, std::s
 }
 
 StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url) {
-  StreamRuntime runtime = make_stream_runtime(cfg, stream_index, url);
+  StreamRuntime runtime = make_stream_runtime(cfg, stream_index, url, false);
   const auto source_options =
       build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
@@ -1107,7 +1117,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
 
 StreamRuntime build_benchmark_stream_runtime(const AppConfig& cfg, int width, int height,
                                              const fs::path& image_path) {
-  StreamRuntime runtime = make_stream_runtime(cfg, 0, "image:" + image_path.string());
+  StreamRuntime runtime = make_stream_runtime(cfg, 0, "image:" + image_path.string(), true);
   runtime.frame_w = width;
   runtime.frame_h = height;
   // PTS expresses a stable logical frame interval to the tracker. It does not
@@ -1385,6 +1395,11 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
       frames.space_available.notify_one();
       camera_motion_chain_discontinuous = frames.chain_discontinuous;
       frames.chain_discontinuous = false;
+      if (stream.benchmark_mode && camera_motion_chain_discontinuous) {
+        throw std::runtime_error(
+            "benchmark decoded side-frame chain became discontinuous before detection" +
+            std::string(" frame_id=") + std::to_string(sample.frame_id));
+      }
     }
   }
   const double debug_frame_wait_ms = sima_examples::time_ms() - debug_frame_wait_start;
@@ -1400,6 +1415,11 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
         CameraMotionResult result = future.get();
         camera_motion_compute_ms += result.compute_ms;
         if (result.chain_discontinuous) {
+          if (stream.benchmark_mode) {
+            throw std::runtime_error(
+                "benchmark camera-motion task chain became discontinuous before detection" +
+                std::string(" frame_id=") + std::to_string(sample.frame_id));
+          }
           complete_chain = false;
         }
         if (!result.transform.valid) {
@@ -1467,8 +1487,8 @@ std::string debug_frame_output_name(int stream_index) {
   return "debug_frame_" + std::to_string(stream_index);
 }
 
-bool pull_debug_frame(AppRuntime& app, StreamRuntime& stream, const AppConfig& cfg,
-                      int timeout_ms, const std::atomic_bool& stop_requested) {
+bool pull_debug_frame(AppRuntime& app, StreamRuntime& stream, const AppConfig& cfg, int timeout_ms,
+                      const std::atomic_bool& stop_requested) {
   const std::string output_name = debug_frame_output_name(stream.index);
   simaai::neat::Sample sample;
   simaai::neat::PullError pull_error;

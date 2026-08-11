@@ -1469,9 +1469,9 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
         }
         const auto& candidate = impl_->tracks[index];
         const auto& current = impl_->tracks[static_cast<std::size_t>(replacement)];
-        const auto candidate_priority = std::tuple{candidate.occluded, candidate.confirmed,
+        const auto candidate_priority = std::tuple{candidate.confirmed, candidate.occluded,
                                                    candidate.last_frame_index, candidate.track_id};
-        const auto current_priority = std::tuple{current.occluded, current.confirmed,
+        const auto current_priority = std::tuple{current.confirmed, current.occluded,
                                                  current.last_frame_index, current.track_id};
         if (candidate_priority < current_priority) {
           replacement = static_cast<int>(index);

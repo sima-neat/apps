@@ -1437,6 +1437,43 @@ class TestTracker:
             track.track_id for track in after_cut
         )
 
+    def test_tracker_capacity_evicts_doomed_tentative_before_confirmed_track(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(
+            TrackerConfig(
+                max_active_tracks=3,
+                min_confirmed_hits=3,
+                max_center_distance=3.0,
+                max_prediction_frames=1,
+                max_occlusion_frames=4,
+                velocity_momentum=0.0,
+            )
+        )
+
+        def detection(x1, x2):
+            return {
+                "x1": x1,
+                "y1": 0,
+                "x2": x2,
+                "y2": 4,
+                "score": 0.9,
+                "class_id": 0,
+            }
+
+        tracker.update([detection(0, 4), detection(100, 104)], 0)
+        tracker.update([detection(0, 4), detection(100, 104)], 1)
+        confirmed = tracker.update(
+            [detection(0, 4), detection(100, 104), detection(112, 116)], 2
+        )
+        tracker.update([detection(0, 4), detection(100, 104), detection(107, 111)], 3)
+        retained = tracker.update([detection(101, 105), detection(200, 204)], 4)
+
+        confirmed_ids = {track.track_id for track in confirmed}
+        assert len(confirmed_ids) == 2
+        assert {track.track_id for track in retained} == confirmed_ids
+        assert tracker.active_track_count() == 3
+
     def test_disabled_covariance_retains_legacy_raw_box_output(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 

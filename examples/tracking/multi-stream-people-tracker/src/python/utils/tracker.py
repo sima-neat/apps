@@ -1309,8 +1309,8 @@ class ObjectTracker:
                 replacement = min(
                     replacements,
                     key=lambda track: (
-                        track.occluded,
                         track.confirmed,
+                        track.occluded,
                         track.last_frame_index,
                         track.track_id,
                     ),

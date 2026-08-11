@@ -747,6 +747,47 @@ bool test_tracker_capacity_replaces_only_unmatched_stale_tracks() {
                      "scene-cut births replace only unmatched retained identities");
 }
 
+bool test_tracker_capacity_evicts_doomed_tentative_before_confirmed_track() {
+  TrackerConfig config;
+  config.max_active_tracks = 3;
+  config.min_confirmed_hits = 3;
+  config.max_center_distance = 3.0f;
+  config.max_prediction_frames = 1;
+  config.max_occlusion_frames = 4;
+  config.velocity_momentum = 0.0f;
+  ObjectTracker tracker(config);
+  tracker.update(
+      {Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}, Detection{100.0f, 0.0f, 104.0f, 4.0f, 0.9f, 0}},
+      0);
+  tracker.update(
+      {Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0}, Detection{100.0f, 0.0f, 104.0f, 4.0f, 0.9f, 0}},
+      1);
+  const auto confirmed = tracker.update({Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0},
+                                         Detection{100.0f, 0.0f, 104.0f, 4.0f, 0.9f, 0},
+                                         Detection{112.0f, 0.0f, 116.0f, 4.0f, 0.9f, 0}},
+                                        2);
+  tracker.update({Detection{0.0f, 0.0f, 4.0f, 4.0f, 0.9f, 0},
+                  Detection{100.0f, 0.0f, 104.0f, 4.0f, 0.9f, 0},
+                  Detection{107.0f, 0.0f, 111.0f, 4.0f, 0.9f, 0}},
+                 3);
+  const auto retained = tracker.update({Detection{101.0f, 0.0f, 105.0f, 4.0f, 0.9f, 0},
+                                        Detection{200.0f, 0.0f, 204.0f, 4.0f, 0.9f, 0}},
+                                       4);
+  return expect_true(confirmed.size() == 2, "capacity test confirms two stable identities") &&
+         expect_true(retained.size() == 2,
+                     "capacity insertion retains both confirmed identities") &&
+         expect_true(std::all_of(confirmed.begin(), confirmed.end(),
+                                 [&](const auto& original) {
+                                   return std::any_of(
+                                       retained.begin(), retained.end(), [&](const auto& current) {
+                                         return current.track_id == original.track_id;
+                                       });
+                                 }),
+                     "doomed tentative track is evicted before a confirmed identity") &&
+         expect_true(tracker.active_track_count() == 3,
+                     "capacity insertion removes only the doomed tentative track");
+}
+
 bool test_disabled_covariance_retains_legacy_raw_box_output() {
   TrackerConfig config;
   config.center_distance_enabled = false;
@@ -1055,6 +1096,7 @@ int main(int argc, char** argv) {
   ok &= test_unobserved_prediction_freezes_last_reliable_size();
   ok &= test_ambiguous_assignment_respects_occlusion_publication_horizon();
   ok &= test_tracker_capacity_replaces_only_unmatched_stale_tracks();
+  ok &= test_tracker_capacity_evicts_doomed_tentative_before_confirmed_track();
   ok &= test_disabled_covariance_retains_legacy_raw_box_output();
   ok &= test_tracker_drops_track_after_missing_budget();
   ok &= test_zero_missing_budget_keeps_continuous_track();
