@@ -1076,9 +1076,16 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
   } else {
     camera_motion = {};
   }
-  const float camera_confidence = camera_motion.valid && camera_motion.confidence > 0.0f
-                                      ? std::clamp(camera_motion.confidence, 0.0f, 1.0f)
-                                      : (camera_motion.valid ? 1.0f : 0.0f);
+  // Seven-field aggregate initializers predate reliability diagnostics and
+  // retain trusted-transform semantics. Estimator results always carry a
+  // positive inlier count, so their confidence remains authoritative even
+  // when spatial coverage legitimately drives it to zero.
+  const bool has_camera_diagnostics = camera_motion.inliers > 0;
+  const float camera_confidence = !camera_motion.valid
+                                      ? 0.0f
+                                      : (has_camera_diagnostics || camera_motion.confidence > 0.0f
+                                             ? std::clamp(camera_motion.confidence, 0.0f, 1.0f)
+                                             : 1.0f);
   const float camera_uncertainty =
       camera_motion.valid
           ? std::max(0.0f, camera_motion.reprojection_error * camera_motion.reprojection_error) +

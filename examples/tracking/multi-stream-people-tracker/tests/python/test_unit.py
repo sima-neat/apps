@@ -1150,6 +1150,7 @@ class TestTracker:
         )
         trusted = ObjectTracker(config)
         uncertain = ObjectTracker(config)
+        zero_coverage = ObjectTracker(config)
         detection = {
             "x1": 10,
             "y1": 10,
@@ -1160,6 +1161,7 @@ class TestTracker:
         }
         trusted.update([detection], 0)
         uncertain.update([detection], 0)
+        zero_coverage.update([detection], 0)
         identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 
         trusted.update([], 1, identity)
@@ -1173,10 +1175,24 @@ class TestTracker:
                 inliers=8,
             ),
         )
+        zero_coverage.update(
+            [],
+            1,
+            CameraMotionEstimate(
+                identity,
+                confidence=0.0,
+                reprojection_error=0.0,
+                inliers=8,
+            ),
+        )
 
         trusted_variance = next(iter(trusted._tracks.values())).center_x_filter.p00
         uncertain_variance = next(iter(uncertain._tracks.values())).center_x_filter.p00
+        zero_coverage_variance = next(
+            iter(zero_coverage._tracks.values())
+        ).center_x_filter.p00
         assert uncertain_variance > trusted_variance
+        assert zero_coverage_variance > trusted_variance
 
     def test_ambiguous_recency_preserves_both_tracks(self):
         from utils.tracker import ObjectTracker, TrackerConfig

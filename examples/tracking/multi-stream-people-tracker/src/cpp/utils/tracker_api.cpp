@@ -39,8 +39,9 @@ struct CameraTransform {
   bool valid = false;
   // Confidence and residual are optional so existing callers that construct a
   // seven-field transform retain their previous semantics. A valid transform
-  // with zero confidence is treated as an externally supplied, trusted
-  // transform; frame estimators always populate the diagnostics.
+  // with zero confidence and no inliers is treated as an externally supplied,
+  // trusted transform; frame estimators always populate the inlier count even
+  // when their derived confidence is zero.
   float confidence = 0.0f;
   float reprojection_error = 0.0f;
   int inliers = 0;

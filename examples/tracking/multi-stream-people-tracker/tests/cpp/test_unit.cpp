@@ -522,6 +522,34 @@ bool test_external_camera_transform_is_not_learned_as_object_velocity() {
   return true;
 }
 
+bool test_zero_confidence_camera_diagnostics_preserve_uncertainty() {
+  TrackerConfig config;
+  config.max_center_distance = 2.5f;
+  config.max_prediction_frames = 1;
+  config.camera_motion_compensation = true;
+  ObjectTracker trusted(config);
+  ObjectTracker uncertain(config);
+  const Detection initial{10.0f, 10.0f, 14.0f, 14.0f, 0.9f, 0};
+  const int trusted_id = trusted.update({initial}, 0).front().track_id;
+  const int uncertain_id = uncertain.update({initial}, 0).front().track_id;
+  const multi_stream_people_tracker::CameraTransform legacy_identity{1.0f, 0.0f, 0.0f, 0.0f,
+                                                                     1.0f, 0.0f, true};
+  const multi_stream_people_tracker::CameraTransform zero_confidence_estimate{
+      1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, true, 0.0f, 0.0f, 8};
+  trusted.update({}, 1, legacy_identity);
+  uncertain.update({}, 1, zero_confidence_estimate);
+
+  const Detection displaced{20.0f, 10.0f, 24.0f, 14.0f, 0.9f, 0};
+  const auto trusted_recovery = trusted.update({displaced}, 2, legacy_identity);
+  const auto uncertain_recovery = uncertain.update({displaced}, 2, legacy_identity);
+  return expect_true(trusted_recovery.size() == 1 && uncertain_recovery.size() == 1,
+                     "camera uncertainty test publishes both observations") &&
+         expect_true(trusted_recovery.front().track_id != trusted_id,
+                     "trusted transform retains the tight covariance gate") &&
+         expect_true(uncertain_recovery.front().track_id == uncertain_id,
+                     "zero-confidence estimator diagnostics inflate covariance");
+}
+
 bool test_repeated_camera_rotation_does_not_inflate_prediction() {
   TrackerConfig config;
   config.max_prediction_frames = 12;
@@ -1116,6 +1144,7 @@ int main(int argc, char** argv) {
   ok &= test_camera_motion_compensation_preserves_ids_across_fast_pan();
   ok &= test_camera_motion_compensation_does_not_bridge_scene_cut();
   ok &= test_external_camera_transform_is_not_learned_as_object_velocity();
+  ok &= test_zero_confidence_camera_diagnostics_preserve_uncertainty();
   ok &= test_repeated_camera_rotation_does_not_inflate_prediction();
   ok &= test_sparse_flow_camera_motion_estimator_recovers_translation();
   ok &= test_zero_center_distance_is_a_valid_exact_match_gate();
