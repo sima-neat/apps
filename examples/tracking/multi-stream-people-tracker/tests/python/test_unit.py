@@ -1999,6 +1999,18 @@ class TestAccuracyEvaluation:
         ):
             evaluate_tracking.read_jsonl(path, "tracks")
 
+    def test_ground_truth_reader_rejects_frame_gaps(self, tmp_path: Path):
+        path = tmp_path / "ground-truth.jsonl"
+        path.write_text(
+            '{"frame_index":0,"objects":[]}\n' '{"frame_index":2,"objects":[]}\n',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="contiguous; missing 1"):
+            evaluate_tracking.read_jsonl(path, "objects", require_contiguous=True)
+
+        assert set(evaluate_tracking.read_jsonl(path, "objects")) == {0, 2}
+
     @pytest.mark.parametrize("fps", [float("nan"), float("inf")])
     def test_nonfinite_fps_is_rejected(self, fps: float):
         truth = {

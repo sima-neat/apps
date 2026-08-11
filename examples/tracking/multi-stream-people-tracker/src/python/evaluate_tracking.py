@@ -39,7 +39,13 @@ def iou(a: tuple[float, float, float, float], b: tuple[float, float, float, floa
     return intersection / union_area if union_area > 0 else 0.0
 
 
-def read_jsonl(path: Path, array_key: str, *, allow_empty: bool = False) -> dict[int, dict[str, Any]]:
+def read_jsonl(
+    path: Path,
+    array_key: str,
+    *,
+    allow_empty: bool = False,
+    require_contiguous: bool = False,
+) -> dict[int, dict[str, Any]]:
     frames: dict[int, dict[str, Any]] = {}
     with path.open(encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, start=1):
@@ -77,6 +83,13 @@ def read_jsonl(path: Path, array_key: str, *, allow_empty: bool = False) -> dict
             frames[frame_index] = document
     if not frames and not allow_empty:
         raise ValueError(f"{path}: no frames found")
+    if require_contiguous:
+        frame_indices = sorted(frames)
+        for previous, current in zip(frame_indices, frame_indices[1:]):
+            if current != previous + 1:
+                raise ValueError(
+                    f"{path}: frame indices must be contiguous; missing {previous + 1}"
+                )
     return frames
 
 
@@ -493,7 +506,7 @@ def main() -> int:
         parser.error("tracking count gates must be >= 0")
 
     report = evaluate(
-        read_jsonl(args.ground_truth, "objects"),
+        read_jsonl(args.ground_truth, "objects", require_contiguous=True),
         read_jsonl(args.predictions, "tracks", allow_empty=True),
         iou_threshold=args.iou_threshold,
         fps=args.fps,
