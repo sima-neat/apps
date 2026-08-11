@@ -37,6 +37,7 @@
 #include <condition_variable>
 #include <csignal>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <deque>
 #include <exception>
@@ -353,6 +354,7 @@ const char* overflow_policy_name(RuntimeOverflowPolicy policy) {
 
 struct CliOptions {
   fs::path config_path;
+  std::optional<fs::path> benchmark_image;
   bool validate_config_only = false;
 };
 
@@ -435,6 +437,7 @@ struct DebugFrameSample {
 struct DebugFrameQueue {
   std::mutex mutex;
   std::condition_variable ready;
+  std::condition_variable space_available;
   std::deque<DebugFrameSample> frames;
   std::vector<Detection> object_mask;
   bool chain_discontinuous = false;
@@ -464,6 +467,10 @@ struct StreamRuntime {
   int tracking_frame_index = -1;
   int64_t last_source_sequence = -1;
   int64_t last_tracking_pts_ns = -1;
+  double benchmark_first_completed_ms = 0.0;
+  double benchmark_last_completed_ms = 0.0;
+  int benchmark_completed_frames = 0;
+  bool benchmark_mode = false;
   bool has_processed_debug_frame = false;
   bool closed = false;
 };
@@ -485,10 +492,20 @@ CliOptions parse_args(int argc, char** argv) {
         throw std::runtime_error("--config requires a path");
       }
       options.config_path = argv[++i];
+    } else if (arg == "--benchmark-image") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--benchmark-image requires a path");
+      }
+      options.benchmark_image = fs::path(argv[++i]);
     } else if (arg == "--validate-config-only") {
       options.validate_config_only = true;
     } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: " << argv[0] << " [--config <path>] [--validate-config-only]\n";
+      std::cout << "Usage: " << argv[0]
+                << " [--config <path>] [--benchmark-image <path>]"
+                   " [--validate-config-only]\n"
+                << "  --benchmark-image  Repeatedly feed one image without pacing or Insight"
+                   " output. Preprocess, MLA inference, BoxDecode, camera motion, and tracking"
+                   " remain enabled.\n";
       std::exit(0);
     } else {
       throw std::runtime_error("unknown argument: " + arg);
@@ -1009,10 +1026,10 @@ simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConf
   return video_options;
 }
 
-StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url) {
+StreamRuntime make_stream_runtime(const AppConfig& cfg, int stream_index, std::string url) {
   StreamRuntime runtime;
   runtime.index = stream_index;
-  runtime.url = url;
+  runtime.url = std::move(url);
   runtime.debug_frames = std::make_unique<DebugFrameQueue>();
   runtime.tracker = ObjectTracker(TrackerConfig{
       static_cast<float>(cfg.tracker_high_score),
@@ -1042,6 +1059,16 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     sima_examples::require(runtime.replay_writer->is_open(),
                            "failed to open output.replay_dir file: " + replay_path.string());
   }
+  runtime.profile.enabled = cfg.profile;
+  runtime.profile.stream_index = stream_index;
+  if (save_frames_enabled(cfg)) {
+    runtime.debug_writer = std::make_unique<DebugFrameWriter>();
+  }
+  return runtime;
+}
+
+StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url) {
+  StreamRuntime runtime = make_stream_runtime(cfg, stream_index, url);
   const auto source_options =
       build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
@@ -1051,14 +1078,9 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     runtime.output_fps = cfg.fps;
   }
 
-  runtime.profile.enabled = cfg.profile;
-  runtime.profile.stream_index = stream_index;
   runtime.source_options = source_options;
   if (cfg.video_enabled) {
     runtime.video_port = make_video_options(cfg, stream_index).video_port();
-  }
-  if (save_frames_enabled(cfg)) {
-    runtime.debug_writer = std::make_unique<DebugFrameWriter>();
   }
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -1079,6 +1101,21 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
     std::cout << "disabled";
   }
   std::cout << " metadata=" << runtime.metadata_sender->metadata_port() << "\n";
+  return runtime;
+}
+
+StreamRuntime build_benchmark_stream_runtime(const AppConfig& cfg, int width, int height,
+                                             const fs::path& image_path) {
+  StreamRuntime runtime = make_stream_runtime(cfg, 0, "image:" + image_path.string());
+  runtime.frame_w = width;
+  runtime.frame_h = height;
+  // PTS expresses a stable logical frame interval to the tracker. It does not
+  // pace input; the producer is governed only by graph backpressure.
+  runtime.output_fps = cfg.fps > 0 ? cfg.fps : 30;
+  runtime.benchmark_mode = true;
+  std::cout << "[stream 0] benchmark_image=" << image_path << " stream=" << width << "x" << height
+            << " logical_fps=" << runtime.output_fps
+            << " pacing=disabled video=disabled metadata=disabled overlay=disabled\n";
   return runtime;
 }
 
@@ -1111,6 +1148,28 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
   if (save_debug_frames) {
     app.graph.connect(decoded_branch, build_debug_frame_graph(stream.index),
                       stream_link(cfg, stream.index, 4));
+  }
+}
+
+void connect_benchmark_image_graph(AppRuntime& app, const AppConfig& cfg,
+                                   const StreamRuntime& stream,
+                                   const simaai::neat::Graph& detector_graph) {
+  auto input_options = app.model->input_appsrc_options(false);
+  input_options.block = true;
+  simaai::neat::Graph source("benchmark_image");
+  source.add(simaai::neat::nodes::Input("benchmark_frame", input_options));
+
+  const bool tracking_frames = tracking_frames_enabled(cfg);
+  auto branch =
+      tracking_frames
+          ? simaai::neat::graphs::Branch("benchmark_decoded", {"detector_frame", "debug_frame"})
+          : simaai::neat::graphs::Branch("benchmark_decoded", {"detector_frame"});
+  app.graph.connect(source, branch);
+  app.graph.connect(
+      branch, detector_graph,
+      stream_link(cfg, stream.index, 4, cfg.max_inflight_per_stream, cfg.max_inflight_total));
+  if (tracking_frames) {
+    app.graph.connect(branch, build_debug_frame_graph(stream.index), stream_link(cfg, 0, 4));
   }
 }
 
@@ -1316,6 +1375,7 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
       }
       frame.emplace(std::move(*matching));
       frames.frames.erase(frames.frames.begin(), std::next(matching));
+      frames.space_available.notify_one();
       camera_motion_chain_discontinuous = frames.chain_discontinuous;
       frames.chain_discontinuous = false;
     }
@@ -1365,9 +1425,12 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
   ++stream.processed;
   const bool warming_up = stream.processed <= cfg.warmup_frames;
   if (!warming_up) {
-    const double metadata_start = sima_examples::time_ms();
-    send_metadata(stream, cfg, sample, stream.tracks);
-    const double metadata_end = sima_examples::time_ms();
+    double metadata_ms = 0.0;
+    if (stream.metadata_sender != nullptr) {
+      const double metadata_start = sima_examples::time_ms();
+      send_metadata(stream, cfg, sample, stream.tracks);
+      metadata_ms = sima_examples::time_ms() - metadata_start;
+    }
     double overlay_ms = 0.0;
     if (save_frames_enabled(cfg)) {
       const double overlay_start = sima_examples::time_ms();
@@ -1381,8 +1444,15 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
     }
     stream.profile.add(detection_pull_ms, box_parse_end - box_parse_start, debug_frame_wait_ms,
                        camera_motion_compute_ms, camera_motion_wait_ms, tracker_end - tracker_start,
-                       metadata_end - metadata_start, overlay_ms,
-                       static_cast<int>(stream.tracks.size()));
+                       metadata_ms, overlay_ms, static_cast<int>(stream.tracks.size()));
+    if (stream.benchmark_mode) {
+      const double completed_ms = sima_examples::time_ms();
+      if (stream.benchmark_completed_frames == 0) {
+        stream.benchmark_first_completed_ms = completed_ms;
+      }
+      stream.benchmark_last_completed_ms = completed_ms;
+      ++stream.benchmark_completed_frames;
+    }
   }
 }
 
@@ -1437,8 +1507,16 @@ bool pull_debug_frame(AppRuntime& app, StreamRuntime& stream, const AppConfig& c
     camera_motion = stream.camera_motion->submit(gray, std::move(object_mask));
   }
   {
-    std::lock_guard lock(stream.debug_frames->mutex);
+    std::unique_lock lock(stream.debug_frames->mutex);
     constexpr std::size_t kMaxBufferedDebugFrames = 16;
+    if (stream.benchmark_mode) {
+      // An uncapped image source can outrun MLA on the side branch. Preserve
+      // frame pairing by applying bounded backpressure instead of evicting the
+      // exact frames whose detections are still in flight.
+      stream.debug_frames->space_available.wait_for(lock, std::chrono::milliseconds(100), [&] {
+        return stream.debug_frames->frames.size() < kMaxBufferedDebugFrames;
+      });
+    }
     if (stream.debug_frames->frames.size() >= kMaxBufferedDebugFrames) {
       stream.debug_frames->frames.pop_front();
       stream.debug_frames->chain_discontinuous = true;
@@ -1470,7 +1548,101 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
   return true;
 }
 
-void run_app(const AppConfig& cfg) {
+simaai::neat::Tensor load_benchmark_image_nv12(const fs::path& image_path) {
+  const cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+  sima_examples::require(!bgr.empty(), "failed to read benchmark image: " + image_path.string());
+  sima_examples::require(bgr.cols > 0 && bgr.rows > 0 && bgr.cols % 2 == 0 && bgr.rows % 2 == 0,
+                         "benchmark image width and height must be positive even values");
+
+  cv::Mat i420;
+  cv::cvtColor(bgr, i420, cv::COLOR_BGR2YUV_I420);
+  sima_examples::require(i420.isContinuous(), "benchmark image conversion is not contiguous");
+
+  const int width = bgr.cols;
+  const int height = bgr.rows;
+  const std::size_t y_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+  const std::size_t chroma_plane_bytes = y_bytes / 4U;
+  std::vector<std::uint8_t> nv12(y_bytes + chroma_plane_bytes * 2U);
+
+  const auto* source = i420.ptr<std::uint8_t>();
+  auto* destination = nv12.data();
+  std::memcpy(destination, source, y_bytes);
+  const auto* source_u = source + y_bytes;
+  const auto* source_v = source_u + chroma_plane_bytes;
+  auto* destination_uv = destination + y_bytes;
+  for (std::size_t index = 0; index < chroma_plane_bytes; ++index) {
+    destination_uv[index * 2U] = source_u[index];
+    destination_uv[index * 2U + 1U] = source_v[index];
+  }
+
+  // Transfer once before timing. Reusing an EV74-backed tensor keeps the
+  // producer loop free of the compatibility CPU-to-device copy that the
+  // production device-visible input route deliberately rejects.
+  simaai::neat::Tensor tensor = simaai::neat::Tensor::from_vector(nv12, {height * 3 / 2, width},
+                                                                  simaai::neat::TensorMemory::EV74);
+  tensor.dtype = simaai::neat::TensorDType::UInt8;
+  tensor.layout = simaai::neat::TensorLayout::HW;
+  tensor.shape = {height, width};
+  tensor.axis_semantics = {simaai::neat::TensorAxisSemantic::H,
+                           simaai::neat::TensorAxisSemantic::W};
+  tensor.read_only = true;
+  tensor.semantic.image = simaai::neat::ImageSpec{simaai::neat::ImageSpec::PixelFormat::NV12, ""};
+
+  simaai::neat::Plane y;
+  y.role = simaai::neat::PlaneRole::Y;
+  y.shape = {height, width};
+  y.strides_bytes = {width, 1};
+  y.byte_offset = 0;
+  simaai::neat::Plane uv;
+  uv.role = simaai::neat::PlaneRole::UV;
+  uv.shape = {height / 2, width};
+  uv.strides_bytes = {width, 1};
+  uv.byte_offset = static_cast<int64_t>(y_bytes);
+  tensor.planes = {std::move(y), std::move(uv)};
+  return tensor;
+}
+
+simaai::neat::Sample make_benchmark_sample(const simaai::neat::Tensor& tensor, int64_t frame_id,
+                                           int logical_fps) {
+  simaai::neat::Sample sample;
+  sample.kind = simaai::neat::SampleKind::TensorSet;
+  sample.tensors = {tensor};
+  sample.payload_type = simaai::neat::PayloadType::Image;
+  sample.media_type = "video/x-raw";
+  sample.payload_tag = "NV12";
+  sample.format = "NV12";
+  sample.frame_id = frame_id;
+  sample.stream_id = stream_id_for(0);
+  sample.stream_label = sample.stream_id;
+  const int64_t frame_duration_ns = 1'000'000'000LL / std::max(logical_fps, 1);
+  sample.pts_ns = frame_id * frame_duration_ns;
+  sample.duration_ns = frame_duration_ns;
+  return sample;
+}
+
+void run_app(AppConfig cfg, const std::optional<fs::path>& benchmark_image) {
+  const bool benchmark_mode = benchmark_image.has_value();
+  if (benchmark_mode) {
+    sima_examples::require(cfg.rtsp_urls.size() == 1,
+                           "--benchmark-image requires a single-stream configuration");
+    sima_examples::require(cfg.frames > cfg.warmup_frames + 1,
+                           "--benchmark-image requires inference.frames to exceed "
+                           "runtime.warmup_frames by at least two frames");
+    // The benchmark measures every submitted frame and intentionally performs
+    // no visualization or output I/O. Keep the detector and tracker settings
+    // identical while making admission lossless.
+    cfg.overflow_policy = RuntimeOverflowPolicy::Block;
+    cfg.video_enabled = false;
+    cfg.save_dir.clear();
+    cfg.save_every = 0;
+    cfg.replay_dir.clear();
+    // The source tensor is immutable and already device-backed. Keep Graph's
+    // defensive queue fallback from trying to clone the shared NV12 holder to
+    // CPU, which is both invalid for this route and outside the workload being
+    // measured. GStreamer creates writable metadata-only views per push while
+    // retaining the same device payload.
+    setenv("SIMA_GRAPH_ZERO_COPY_BACKPRESSURE_CAP", "0", 1);
+  }
   g_stop_requested = 0;
   auto previous_sigint = std::signal(SIGINT, request_stop);
   if (cfg.profile) {
@@ -1486,13 +1658,23 @@ void run_app(const AppConfig& cfg) {
   }
 
   AppRuntime app;
-  app.streams.reserve(cfg.rtsp_urls.size());
+  app.streams.reserve(benchmark_mode ? 1U : cfg.rtsp_urls.size());
   auto detector_graph = build_detector_graph(cfg, app.model);
   auto detections_graph = build_detections_graph();
+  std::optional<simaai::neat::Tensor> benchmark_tensor;
 
-  for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
-    app.streams.push_back(build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index]));
-    connect_stream_graph(app, cfg, app.streams.back(), detector_graph);
+  if (benchmark_mode) {
+    benchmark_tensor = load_benchmark_image_nv12(*benchmark_image);
+    const int height = static_cast<int>(benchmark_tensor->shape.at(0));
+    const int width = static_cast<int>(benchmark_tensor->shape.at(1));
+    app.streams.push_back(build_benchmark_stream_runtime(cfg, width, height, *benchmark_image));
+    connect_benchmark_image_graph(app, cfg, app.streams.back(), detector_graph);
+  } else {
+    for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
+      app.streams.push_back(
+          build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index]));
+      connect_stream_graph(app, cfg, app.streams.back(), detector_graph);
+    }
   }
   app.graph.connect(detector_graph, detections_graph);
 
@@ -1527,12 +1709,61 @@ void run_app(const AppConfig& cfg) {
           });
     }
   }
+
+  std::atomic_bool stop_input_producer = false;
+  std::atomic_bool input_producer_failed = false;
+  std::mutex input_error_mutex;
+  std::exception_ptr input_error;
+  std::thread input_producer;
+  if (benchmark_mode) {
+    const int logical_fps = app.streams.front().output_fps;
+    input_producer = std::thread([&app, &cfg, &benchmark_tensor, logical_fps, &stop_input_producer,
+                                  &input_producer_failed, &input_error_mutex, &input_error] {
+      try {
+        for (int64_t frame_id = 0;
+             frame_id < cfg.frames && !stop_input_producer.load(std::memory_order_relaxed) &&
+             g_stop_requested == 0;
+             ++frame_id) {
+          auto sample = make_benchmark_sample(*benchmark_tensor, frame_id, logical_fps);
+          if (!app.run.push("benchmark_frame", sample)) {
+            if (!stop_input_producer.load(std::memory_order_relaxed)) {
+              throw std::runtime_error("benchmark image input closed before all frames were sent");
+            }
+            break;
+          }
+        }
+      } catch (...) {
+        {
+          std::lock_guard lock(input_error_mutex);
+          input_error = std::current_exception();
+        }
+        input_producer_failed.store(true, std::memory_order_relaxed);
+      }
+    });
+  }
+
+  const auto stop_and_join_input = [&] {
+    stop_input_producer.store(true, std::memory_order_relaxed);
+    if (benchmark_mode) {
+      try {
+        app.run.close_input();
+      } catch (...) {
+        // Preserve the workload failure, if any. Run::close() below remains
+        // the final unconditional shutdown boundary.
+      }
+    }
+    if (input_producer.joinable()) {
+      input_producer.join();
+    }
+  };
   try {
     while (g_stop_requested == 0 && !stop_debug_pullers.load(std::memory_order_relaxed) &&
+           !input_producer_failed.load(std::memory_order_relaxed) &&
            !all_streams_done(app.streams, cfg.frames)) {
       (void)process_run_once(app, cfg, "detections");
     }
   } catch (...) {
+    stop_and_join_input();
     stop_debug_pullers.store(true, std::memory_order_relaxed);
     for (auto& puller : debug_pullers) {
       puller.join();
@@ -1540,6 +1771,7 @@ void run_app(const AppConfig& cfg) {
     app.run.close();
     throw;
   }
+  stop_and_join_input();
   stop_debug_pullers.store(true, std::memory_order_relaxed);
   for (auto& puller : debug_pullers) {
     puller.join();
@@ -1551,10 +1783,28 @@ void run_app(const AppConfig& cfg) {
       std::rethrow_exception(debug_error);
     }
   }
+  {
+    std::lock_guard lock(input_error_mutex);
+    if (input_error != nullptr) {
+      std::rethrow_exception(input_error);
+    }
+  }
 
   for (auto& stream : app.streams) {
     stream.profile.flush();
     std::cout << "[stream " << stream.index << "] processed=" << stream.processed << "\n";
+    if (stream.benchmark_mode) {
+      const int intervals = std::max(0, stream.benchmark_completed_frames - 1);
+      const double elapsed_ms =
+          stream.benchmark_last_completed_ms - stream.benchmark_first_completed_ms;
+      const double throughput_fps =
+          elapsed_ms > 0.0 ? static_cast<double>(intervals) * 1000.0 / elapsed_ms : 0.0;
+      std::cout << std::fixed << std::setprecision(3)
+                << "[benchmark] measured_frames=" << stream.benchmark_completed_frames
+                << " elapsed_ms=" << elapsed_ms << " throughput_fps=" << throughput_fps
+                << " route=NV12->Preprocess->MLA->BoxDecode->CameraMotion->Tracker"
+                   " video=off metadata=off overlay=off\n";
+    }
   }
 
   std::signal(SIGINT, previous_sigint);
@@ -1571,6 +1821,10 @@ int main(int argc, char** argv) {
     }
 
     const AppConfig cfg = load_app_config(cli.config_path);
+    if (cli.benchmark_image.has_value() && !fs::is_regular_file(*cli.benchmark_image)) {
+      std::cerr << "Error: benchmark image not found: " << *cli.benchmark_image << "\n";
+      return 2;
+    }
     if (cli.validate_config_only) {
       std::cout << "Config validated: " << cli.config_path << " (streams=" << cfg.rtsp_urls.size()
                 << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
@@ -1585,7 +1839,7 @@ int main(int argc, char** argv) {
                 << ", max_prediction_frames=" << cfg.tracker_max_prediction_frames << ")\n";
       return 0;
     }
-    run_app(cfg);
+    run_app(cfg, cli.benchmark_image);
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "[ERR] " << e.what() << "\n";

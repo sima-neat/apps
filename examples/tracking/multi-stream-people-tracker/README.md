@@ -21,6 +21,13 @@ constant-velocity matching for boxes that may move far enough to have zero IoU
 between frames. Track IDs remain local to each stream, and live video plus
 metadata is published to Insight.
 
+For throughput and power characterization, `--benchmark-image` replaces the
+paced RTSP source with one decoded-equivalent NV12 image submitted repeatedly
+under blocking backpressure. The production preprocessing, MLA inference,
+BoxDecode, camera-motion compensation, and tracker remain in the route, while
+video, metadata, and overlay output are disabled so visualization cannot cap or
+distort the result.
+
 ## Preview
 
 ![Multi-stream people tracker preview](../../../portal/assets/examples/tracking/multi-stream-people-tracker/image.png)
@@ -93,6 +100,25 @@ cd ..
 ```
 
 Set `model.path` in the config to the downloaded package.
+
+## Measure Uncapped Pipeline Throughput
+
+Set a finite `inference.frames` larger than `runtime.warmup_frames`, then feed
+an even-sized JPEG or PNG as fast as graph backpressure permits:
+
+```bash
+./multi-stream-people-tracker \
+  --config examples/tracking/multi-stream-people-tracker/src/common/tiny-drone.yaml \
+  --benchmark-image <representative-frame.jpg>
+```
+
+The command prints a final `[benchmark]` record whose `throughput_fps` excludes
+the configured warmup. The image is decoded and converted to NV12 only once,
+before timing begins; every measured frame still executes the production
+NV12→Preprocess→MLA→BoxDecode→camera-motion→tracker route. `inference.fps`
+controls logical frame timestamps only and does not pace submission. The mode
+requires a single-stream configuration and disables Insight video/metadata,
+debug overlays, and replay writes for the run.
 
 ## Prepare Insight
 

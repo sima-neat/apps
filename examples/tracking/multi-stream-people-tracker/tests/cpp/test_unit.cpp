@@ -57,8 +57,40 @@ bool test_help_runs(const std::string& binary) {
   const auto result = spawn_and_wait(binary, {"--help"}, 20000);
   return expect_true(result.exit_code == 0, "help exits with code 0") &&
          expect_contains(result.stdout_text, "--config", "help mentions --config") &&
+         expect_contains(result.stdout_text, "--benchmark-image",
+                         "help mentions uncapped image benchmark mode") &&
          expect_contains(result.stdout_text, "--validate-config-only",
                          "help mentions --validate-config-only");
+}
+
+bool test_benchmark_image_requires_path(const std::string& binary) {
+  const auto result = spawn_and_wait(binary, {"--benchmark-image"}, 20000);
+  return expect_true(result.exit_code == 1, "benchmark image without a path is rejected") &&
+         expect_contains(result.stderr_text, "--benchmark-image requires a path",
+                         "missing benchmark image path has a focused error");
+}
+
+bool test_benchmark_image_must_exist(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_benchmark_image_must_exist",
+                   "model:\n"
+                   "  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "inference:\n"
+                   "  num_classes: 1\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+  const fs::path missing_image = config_path.parent_path() / "does-not-exist.jpg";
+  const auto result = spawn_and_wait(
+      binary, {"--config", config_path.string(), "--benchmark-image", missing_image.string()},
+      20000);
+  const bool ok = expect_true(result.exit_code == 2, "missing benchmark image is rejected") &&
+                  expect_contains(result.stderr_text, "benchmark image not found",
+                                  "missing benchmark image has a focused error");
+  remove_dir(config_path.parent_path().string());
+  return ok;
 }
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
@@ -966,6 +998,8 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
   bool ok = true;
   ok &= test_help_runs(binary);
+  ok &= test_benchmark_image_requires_path(binary);
+  ok &= test_benchmark_image_must_exist(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_accepts_block_overflow_policy(binary);
