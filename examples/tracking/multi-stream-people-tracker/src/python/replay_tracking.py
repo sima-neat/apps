@@ -167,7 +167,7 @@ def replay(frames: list[dict[str, Any]], config: TrackerConfig) -> list[str]:
     return records
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--detections", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -184,16 +184,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-occlusion-frames", type=int, default=10)
     parser.add_argument("--max-active-tracks", type=int, default=128)
     parser.add_argument("--camera-motion-compensation", action="store_true")
+    parser.add_argument("--disable-center-distance", action="store_true")
+    parser.add_argument("--disable-covariance-motion", action="store_true")
     parser.add_argument(
         "--verify-determinism",
         action="store_true",
         help="Run a second independent replay and fail if any output byte differs.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = parse_args()
+def tracker_config(args: argparse.Namespace) -> TrackerConfig:
     config = TrackerConfig(
         high_score_threshold=args.high_score_threshold,
         new_track_threshold=args.new_track_threshold,
@@ -208,8 +209,16 @@ def main() -> int:
         overlap_threshold=args.overlap_threshold,
         max_occlusion_frames=args.max_occlusion_frames,
         max_active_tracks=args.max_active_tracks,
+        center_distance_enabled=not args.disable_center_distance,
+        covariance_motion_enabled=not args.disable_covariance_motion,
     )
     config.validate()
+    return config
+
+
+def main() -> int:
+    args = parse_args()
+    config = tracker_config(args)
     frames = read_frames(args.detections)
     records = replay(frames, config)
     if args.verify_determinism and replay(frames, config) != records:

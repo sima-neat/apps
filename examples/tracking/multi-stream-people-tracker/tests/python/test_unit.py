@@ -1842,6 +1842,23 @@ class TestTracker:
 
 
 class TestTrackerReplay:
+    def test_cli_can_disable_motion_association_modes(self, tmp_path: Path):
+        args = replay_tracking.parse_args(
+            [
+                "--detections",
+                str(tmp_path / "detections.jsonl"),
+                "--output",
+                str(tmp_path / "tracks.jsonl"),
+                "--disable-center-distance",
+                "--disable-covariance-motion",
+            ]
+        )
+
+        config = replay_tracking.tracker_config(args)
+
+        assert not config.center_distance_enabled
+        assert not config.covariance_motion_enabled
+
     def test_replay_preserves_camera_motion_diagnostics(self, tmp_path: Path):
         from utils.tracker import CameraMotionEstimate
 
@@ -1927,6 +1944,24 @@ class TestTrackerReplay:
 
 
 class TestAccuracyEvaluation:
+    @pytest.mark.parametrize(
+        ("frame_field", "frame_value"),
+        [("frame_index", True), ("frame_id", False)],
+    )
+    def test_reader_rejects_boolean_frame_indices(
+        self, tmp_path: Path, frame_field: str, frame_value: bool
+    ):
+        path = tmp_path / "predictions.jsonl"
+        path.write_text(
+            json.dumps({frame_field: frame_value, "tracks": []}) + "\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            ValueError, match="frame_index must be a non-negative integer"
+        ):
+            evaluate_tracking.read_jsonl(path, "tracks")
+
     @pytest.mark.parametrize("fps", [float("nan"), float("inf")])
     def test_nonfinite_fps_is_rejected(self, fps: float):
         truth = {

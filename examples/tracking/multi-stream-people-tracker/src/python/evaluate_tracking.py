@@ -48,7 +48,7 @@ def read_jsonl(path: Path, array_key: str, *, allow_empty: bool = False) -> dict
                 frame_id = document.get("frame_id")
                 if isinstance(frame_id, str) and frame_id.isdigit():
                     frame_index = int(frame_id)
-                elif isinstance(frame_id, int):
+                elif isinstance(frame_id, int) and not isinstance(frame_id, bool):
                     frame_index = frame_id
             data = document.get("data")
             if isinstance(data, str):
@@ -58,7 +58,11 @@ def read_jsonl(path: Path, array_key: str, *, allow_empty: bool = False) -> dict
                     raise ValueError(f"{path}:{line_number}: data is not valid JSON") from exc
             if array_key not in document and isinstance(data, dict) and array_key in data:
                 document = {**document, array_key: data[array_key]}
-            if not isinstance(frame_index, int) or frame_index < 0:
+            if (
+                isinstance(frame_index, bool)
+                or not isinstance(frame_index, int)
+                or frame_index < 0
+            ):
                 raise ValueError(f"{path}:{line_number}: frame_index must be a non-negative integer")
             if frame_index in frames:
                 raise ValueError(f"{path}:{line_number}: duplicate frame_index {frame_index}")
