@@ -74,6 +74,7 @@ class AppConfig:
     request: RequestConfig
     web: WebConfig
     rag: RagConfig
+    tts_streaming: bool = True
 
 
 def load_config(path: Path = DEFAULT_CONFIG, apps_root: Path = PATH_ROOT) -> AppConfig:
@@ -123,6 +124,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
     request = raw.get("request", {})
     web = raw.get("web", {})
     rag = raw.get("rag", {})
+    tts = raw.get("tts", {})
     chat_models = _load_chat_model_names(server_models, apps_root)
 
     return AppConfig(
@@ -144,6 +146,7 @@ def load_ui_config(path: Path = DEFAULT_UI_CONFIG, apps_root: Path = PATH_ROOT) 
             https=_load_bool(web.get("https", True)),
         ),
         rag=_load_rag_config(rag, apps_root),
+        tts_streaming=_load_bool(tts.get("streaming", True)),
     )
 
 

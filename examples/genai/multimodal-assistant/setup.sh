@@ -12,6 +12,7 @@ ASR_MODEL_REPO="simaai/whisper-small-a16w8"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-$(basename "${CHAT_MODEL_REPO}")}"
 INSTALL_TTS_VOICES="${INSTALL_TTS_VOICES:-1}"
+SPLIT_VOICES="${SPLIT_VOICES:-1}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
 
@@ -31,7 +32,9 @@ Environment:
                                 default: /media/nvme/llima/models
   CHAT_MODEL_REPO               Hugging Face repo for the default chat/VLM model
                                 default: simaai/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-  INSTALL_TTS_VOICES            Download and split Piper TTS voices, 1 or 0
+  INSTALL_TTS_VOICES            Download Piper TTS voices, 1 or 0
+                                default: 1
+  SPLIT_VOICES                  Split voices for streaming synthesis, 1 or 0
                                 default: 1
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
                                 default: 2.8.0+cpu
@@ -128,6 +131,9 @@ else
   echo "Skipping model downloads because SKIP_MODEL_DOWNLOAD=1."
 fi
 
+# Streaming needs the split voices.
+TTS_STREAMING_SETTING=$([[ "${SPLIT_VOICES}" == "1" ]] && echo true || echo false)
+
 mkdir -p "$(dirname "${CONFIG_PATH}")"
 cat > "${CONFIG_PATH}" <<YAML
 server:
@@ -161,6 +167,9 @@ app:
   rag:
     enabled: true
     embedding_model_dir: ${RAG_EMBEDDING_DIR}
+
+  tts:
+    streaming: ${TTS_STREAMING_SETTING}
 YAML
 
 if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
@@ -180,7 +189,7 @@ if [[ "${INSTALL_TTS_VOICES}" == "1" ]]; then
   echo "Installing Piper TTS voices..."
   (
     cd "${EXAMPLE_DIR}/src/python"
-    PYTHON="${APP_VENV}/bin/python" bash voice_install.sh
+    PYTHON="${APP_VENV}/bin/python" SPLIT_VOICES="${SPLIT_VOICES}" bash voice_install.sh
   )
 fi
 

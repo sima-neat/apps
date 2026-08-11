@@ -8,11 +8,12 @@ in slices and start playing audio while the rest of the sentence is still being
 generated, instead of waiting for the whole sentence to finish.
 
 Each `<voice>.onnx` produces `<voice>.enc.onnx` and `<voice>.dec.onnx` beside it.
-PiperTTS loads that pair, so every voice under `ui/assets/` needs one: a voice
-missing its halves fails to load and that language ends up with no speech.
+PiperTTS streams from the pair where it exists and synthesizes a whole sentence
+at a time where it does not, so a voice that cannot be split still speaks.
 
-`voice_install.sh` runs this after downloading, so `setup.sh` already covers it.
-Run it by hand only after dropping a voice into the assets directory yourself:
+`voice_install.sh` runs this after downloading, so `setup.sh` covers it unless it
+ran with `SPLIT_VOICES=0`. Run it by hand after dropping a voice into the assets
+directory yourself, or to add streaming to an install without it:
 
     python split_voices.py ui/assets
 
@@ -108,12 +109,10 @@ def main():
             print(f"❌ Split failed for {model_path.name}: {e}", file=sys.stderr)
             failed.append(model_path.name)
 
-    # A voice without both halves cannot be loaded at all, so say so plainly
-    # rather than letting the traceback scroll past in the middle of setup.
     if failed:
         sys.stdout.flush()
-        print(f"\n⚠️  {len(failed)} of {len(voices)} voices could not be split "
-              f"and will not be available: {', '.join(failed)}", file=sys.stderr)
+        print(f"\n⚠️  {len(failed)} of {len(voices)} voices could not be split and will be "
+              f"spoken a whole sentence at a time: {', '.join(failed)}", file=sys.stderr)
 
     return 0
 

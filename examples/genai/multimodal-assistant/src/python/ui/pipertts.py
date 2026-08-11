@@ -3,7 +3,8 @@ PiperTTS - A wrapper class for Piper TTS model to synthesize speech from text.
 
 This module provides an interface to load a Piper ONNX model and generate speech audio:
 - Supports WAV audio generation as a memory buffer
-- Streams audio in chunks so playback can start before synthesis finishes
+- Streams audio in chunks so playback can start before synthesis finishes, or
+  synthesizes whole sentences for voices without an encoder/decoder pair
 - Encodes audio as Base64 for WebSocket or network transmission
 - Saves generated audio to disk as a standard WAV file
 
@@ -37,7 +38,7 @@ class PiperTTS:
     CHUNK_FRAMES = 45         # latent frames per streaming step, about 0.5 s of audio
     CHUNK_PADDING = 10        # context frames decoded either side, then trimmed off
 
-    def __init__(self, model_path=None, sample_rate=DEFAULT_SAMPLE_RATE, config=None):
+    def __init__(self, model_path=None, sample_rate=DEFAULT_SAMPLE_RATE, config=None, streaming=True):
         """
         Initialize the Piper TTS engine.
 
@@ -45,6 +46,7 @@ class PiperTTS:
             model_path (str, optional): Path to the Piper ONNX model file.
             sample_rate (int): Desired sample rate in Hz (used for playback/export). Actual model rate may differ.
             config (SynthesisConfig, optional): Custom synthesis config.
+            streaming (bool): Decode the sentence in slices so playback can start early.
         """
         self.model_path = model_path or self.DEFAULT_MODEL_PATH
         self.sample_rate = sample_rate
@@ -58,17 +60,21 @@ class PiperTTS:
             normalize_audio=True
         )
 
-        # Encoder/decoder pair for streaming synthesis, produced by split_voices.py
         base_path = os.path.splitext(self.model_path)[0]
-        self.enc_session = self._make_session(f"{base_path}.enc.onnx")
-        self.dec_session = self._make_session(f"{base_path}.dec.onnx")
-        self.dec_input_name = self.dec_session.get_inputs()[0].name
+        encoder_path = f"{base_path}.enc.onnx"
+        decoder_path = f"{base_path}.dec.onnx"
+        self.streaming = (streaming and os.path.exists(encoder_path)
+                          and os.path.exists(decoder_path))
+        if self.streaming:
+            self.enc_session = self._make_session(encoder_path)
+            self.dec_session = self._make_session(decoder_path)
+            self.dec_input_name = self.dec_session.get_inputs()[0].name
 
-        # Trial run: warms both sessions and gives the samples-per-frame ratio
-        phoneme_ids = self.voice.phonemes_to_ids(self.voice.phonemize("Ready.")[0])
-        latent = self.enc_session.run(None, self._encoder_args(phoneme_ids))[0]
-        audio = self.dec_session.run(None, {self.dec_input_name: latent})[0].squeeze()
-        self.upsample_factor = round(audio.shape[0] / latent.shape[2])
+            # Trial run: warms both sessions and gives the samples-per-frame ratio
+            phoneme_ids = self.voice.phonemes_to_ids(self.voice.phonemize("Ready.")[0])
+            latent = self.enc_session.run(None, self._encoder_args(phoneme_ids))[0]
+            audio = self.dec_session.run(None, {self.dec_input_name: latent})[0].squeeze()
+            self.upsample_factor = round(audio.shape[0] / latent.shape[2])
 
     def _make_session(self, model_path):
         """Create an ONNX Runtime session with the thread count tuned for this CPU."""
@@ -115,8 +121,13 @@ class PiperTTS:
 
     def synthesize_stream(self, text):
         """
-        Synthesize speech and yield a WAV buffer per piece as soon as it is ready.
+        Synthesize speech and yield a WAV buffer per piece as soon as it is ready,
+        or the whole utterance as a single buffer when not streaming.
         """
+        if not self.streaming:
+            yield self.synthesize(text)
+            return
+
         for phonemes in self.voice.phonemize(text):
             phoneme_ids = self.voice.phonemes_to_ids(phonemes)
             latent = self.enc_session.run(None, self._encoder_args(phoneme_ids))[0]

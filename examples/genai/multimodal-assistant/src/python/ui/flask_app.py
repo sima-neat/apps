@@ -117,7 +117,7 @@ class AppConstants:
     DEFAULT_UPLOADS_DIR = 'uploads'
 
 class TalkController:
-    def __init__(self, supported_langs=None):
+    def __init__(self, supported_langs=None, streaming=True):
         self._next = None
         self.prefix = ''
         self.totalk = ''
@@ -125,6 +125,7 @@ class TalkController:
         self.pipers = {}
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
+        self.streaming = streaming
         self._init_pipers_threaded(supported_langs or ['en'])
         
         self.lock = threading.Lock()
@@ -165,11 +166,13 @@ class TalkController:
             from pipertts import PiperTTS # import here if needed locally
             try:
                 piper = PiperTTS(
-                    model_path=str(onnx_file)
+                    model_path=str(onnx_file),
+                    streaming=self.streaming
                 )
                 piper.set_utterance_speed(self.utterance_speed)
                 self.pipers[lang_code] = piper
-                logging.info(f"Loaded Piper model for {lang_code}")
+                logging.info(f"Loaded Piper model for {lang_code}"
+                             f"{' (streaming)' if piper.streaming else ''}")
             except Exception as e:
                 logging.warning(f"Failed to load Piper model for {lang_code}: {e}")
 
@@ -468,6 +471,7 @@ class AppContext:
         self.web_port = 5000
         self.rag_enabled = True
         self.rag_embedding_model_dir = ""
+        self.tts_streaming = True
         self.vision_image_size = None
 
         # Conversation history for OpenAI-style chat
@@ -647,7 +651,8 @@ class AppContext:
             self.set_system_prompt(self.system_prompt)
 
         if not self.apionly:
-            self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh', 'vi'])
+            self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh', 'vi'],
+                                            streaming=self.tts_streaming)
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
@@ -667,6 +672,7 @@ class AppContext:
         self.web_port = app_cfg.web.port
         self.rag_enabled = app_cfg.rag.enabled
         self.rag_embedding_model_dir = app_cfg.rag.embedding_model_dir
+        self.tts_streaming = app_cfg.tts_streaming
         if self.rag_embedding_model_dir:
             os.environ["VDB_EMBED_MODEL_DIR"] = self.rag_embedding_model_dir
         self.update_settings(
@@ -829,7 +835,8 @@ class AppContext:
                 from pipertts import PiperTTS
                 with self.talk_ctrl.lock:
                     old = self.talk_ctrl.pipers.get(lang)
-                    new_voice = PiperTTS(model_path=str(candidate))
+                    new_voice = PiperTTS(model_path=str(candidate),
+                                         streaming=self.talk_ctrl.streaming)
                     new_voice.set_utterance_speed(self.talk_ctrl.utterance_speed)
                     self.talk_ctrl.pipers[lang] = new_voice
                     self.current_voice_by_lang[lang] = candidate.name

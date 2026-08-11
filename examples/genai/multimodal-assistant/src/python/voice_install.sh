@@ -10,6 +10,10 @@ ASSETS_DIR="ui/assets"
 # app virtual environment; a manual run falls back to whatever python3 is on PATH.
 PYTHON="${PYTHON:-python3}"
 
+# Streaming synthesis decodes a sentence in slices, which needs an encoder/decoder
+# pair beside each voice. SPLIT_VOICES=0 skips it.
+SPLIT_VOICES="${SPLIT_VOICES:-1}"
+
 # Edit this list with the voices you want to install.
 # Use the format: "<lang_COUNTRY>-<voice>-<quality>"
 # Examples:
@@ -77,18 +81,20 @@ for entry in "${VOICES[@]}"; do
 
 done
 
-# PiperTTS decodes the latent in slices so playback starts before the sentence is
-# finished, which means it loads an encoder/decoder pair rather than the whole
-# voice. Split every voice here so the app never sees one it cannot load.
-if ! "${PYTHON}" -c "import onnx" >/dev/null 2>&1; then
-  echo ""
-  echo "❌ Cannot split voices: '${PYTHON}' has no 'onnx' package."
-  echo "   Use the app environment, or point PYTHON at one:"
-  echo "     PYTHON=/path/to/.venv/bin/python bash voice_install.sh"
-  exit 1
-fi
+if [[ "${SPLIT_VOICES}" == "1" ]]; then
+  if ! "${PYTHON}" -c "import onnx" >/dev/null 2>&1; then
+    echo ""
+    echo "❌ Cannot split voices: '${PYTHON}' has no 'onnx' package."
+    echo "   Use the app environment, or point PYTHON at one:"
+    echo "     PYTHON=/path/to/.venv/bin/python bash voice_install.sh"
+    echo "   Or skip streaming synthesis: SPLIT_VOICES=0 bash voice_install.sh"
+    exit 1
+  fi
 
-printf "\n🔪 Splitting voices for streaming synthesis\n"
-"${PYTHON}" "${SCRIPT_DIR}/split_voices.py" "${ASSETS_DIR}"
+  printf "\n🔪 Splitting voices for streaming synthesis\n"
+  "${PYTHON}" "${SCRIPT_DIR}/split_voices.py" "${ASSETS_DIR}"
+else
+  printf "\n⏭️  Skipping the split: voices are synthesized a whole sentence at a time.\n"
+fi
 
 printf "\n✅ Done. Voices are available in '%s/'.\n" "${ASSETS_DIR}"

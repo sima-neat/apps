@@ -258,6 +258,20 @@ What is the canonical RAG validation phrase?
 
 The RAG status area should report whether RAG was used and how many hits were retrieved.
 
+## Text to Speech
+`./setup.sh` downloads the Piper voices listed in `src/python/voice_install.sh` and splits
+each into an encoder/decoder pair, which lets playback start before a sentence finishes
+synthesizing. To turn that off, edit `config.local.yaml`:
+
+```yaml
+app:
+  tts:
+    streaming: true
+```
+
+Voices without a pair, including multi-speaker ones that cannot be split, are spoken a
+whole sentence at a time. `SPLIT_VOICES=0 ./setup.sh` skips splitting.
+
 ## Verify
 Use these checks after the model server and Flask UI are running.
 

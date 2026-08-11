@@ -32,3 +32,7 @@ app:                         # Assistant web app settings.
   rag:                       # Retrieval-augmented generation settings.
     enabled: false                             # Enable document retrieval.
     embedding_model_dir: <path-to-embedding-model-dir> # Embedding model directory.
+
+  tts:                       # Text-to-speech settings.
+    streaming: false          # Start playback before a sentence finishes synthesizing.
+
