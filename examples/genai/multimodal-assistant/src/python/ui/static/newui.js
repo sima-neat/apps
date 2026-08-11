@@ -1570,13 +1570,10 @@ async function processAudioQueue() {
 
     const source = currentAudioContext.createBufferSource();
     const analyser = currentAudioContext.createAnalyser();
-    const gainNode = currentAudioContext.createGain();
 
     source.buffer = audioBuffer;
-    gainNode.gain.value = 2.0;  // makeup for the peak normalization a stream cannot do
     source.connect(analyser);
-    analyser.connect(gainNode);
-    gainNode.connect(currentAudioContext.destination);
+    analyser.connect(currentAudioContext.destination);
 
     scheduledSources.push(source);
 
@@ -1599,7 +1596,6 @@ async function processAudioQueue() {
       try {
         source.disconnect();
         analyser.disconnect();
-        gainNode.disconnect();
       } catch (e) {
         console.warn('Error disconnecting nodes:', e);
       }

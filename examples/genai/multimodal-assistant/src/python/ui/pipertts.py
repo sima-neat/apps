@@ -37,6 +37,7 @@ class PiperTTS:
     DEFAULT_NUM_THREADS = 8   # ONNX Runtime's own default oversubscribes this CPU
     CHUNK_FRAMES = 45         # latent frames per streaming step, about 0.5 s of audio
     CHUNK_PADDING = 10        # context frames decoded either side, then trimmed off
+    STREAM_GAIN = 2.0         # makeup for the peak normalization a stream cannot do
 
     def __init__(self, model_path=None, sample_rate=DEFAULT_SAMPLE_RATE, config=None, streaming=True):
         """
@@ -145,7 +146,8 @@ class PiperTTS:
                 # Drop the padding; a relative -0 tail index would slice the last chunk away.
                 head = (start - padded_start) * self.upsample_factor
                 tail = audio.shape[0] - (padded_end - end) * self.upsample_factor
-                chunk = AudioChunk(self.voice.config.sample_rate, 2, 1, audio[head:tail])
+                samples = np.clip(audio[head:tail] * self.STREAM_GAIN, -1.0, 1.0)
+                chunk = AudioChunk(self.voice.config.sample_rate, 2, 1, samples)
 
                 buffer = io.BytesIO()
                 with wave.open(buffer, 'wb') as wav_file:
