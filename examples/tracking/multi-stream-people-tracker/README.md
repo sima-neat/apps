@@ -243,7 +243,7 @@ threshold may recover an existing track but cannot create a new one.
 The tiny-drone profile enables camera-motion compensation and publishes at most
 one motion-compensated prediction for an isolated detector miss. Low-confidence
 detections may recover a confirmed identity, but cannot create one.
-When `output.save_dir` is enabled, annotated JPEGs are encoded by a bounded
+When `output.debug_dir` is enabled, annotated JPEGs are encoded by a bounded
 background writer. If storage falls behind, it drops the oldest queued debug
 frame instead of applying backpressure to live inference.
 `inference.num_classes` is part of the detector contract and must match the
