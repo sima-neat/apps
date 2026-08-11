@@ -43,6 +43,7 @@ struct ReplayFrame {
   int frame_index = 0;
   std::vector<Detection> detections;
   CameraTransform camera_transform;
+  bool has_recorded_tracks = false;
   std::vector<ExpectedTrack> recorded_tracks;
 };
 
@@ -332,6 +333,7 @@ std::vector<ReplayFrame> read_frames(const fs::path& path) {
       if (!tracks.is_array()) {
         fail(location + ".tracks must be an array");
       }
+      frame.has_recorded_tracks = true;
       frame.recorded_tracks.reserve(tracks.size());
       for (std::size_t index = 0; index < tracks.size(); ++index) {
         frame.recorded_tracks.push_back(parse_expected_track(
@@ -367,6 +369,10 @@ std::string record_json(int frame_index, const std::vector<TrackedDetection>& tr
 
 void verify_tracks(const ReplayFrame& frame, const std::vector<TrackedDetection>& tracks,
                    float tolerance) {
+  if (!frame.has_recorded_tracks) {
+    fail("frame " + std::to_string(frame.frame_index) +
+         ": tracks array is required with --verify-recorded");
+  }
   if (frame.recorded_tracks.size() != tracks.size()) {
     fail("frame " + std::to_string(frame.frame_index) + ": replay produced " +
          std::to_string(tracks.size()) + " tracks but the board recorded " +

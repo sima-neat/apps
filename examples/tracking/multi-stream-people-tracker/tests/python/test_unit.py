@@ -1967,6 +1967,20 @@ class TestAccuracyEvaluation:
         with pytest.raises(ValueError, match="bbox values must be numbers"):
             evaluate_tracking.xywh_to_xyxy([0, 0, value, 1])
 
+    @pytest.mark.parametrize("side", ["truth", "predictions"])
+    @pytest.mark.parametrize(
+        "bbox",
+        [[0, 0, True, 1], [0, 0, float("nan"), 1], [0, 0, -1, 1]],
+    )
+    def test_matching_validates_boxes_without_candidates(
+        self, side: str, bbox: list[float]
+    ):
+        truth = [{"bbox": bbox}] if side == "truth" else []
+        predictions = [{"bbox": bbox}] if side == "predictions" else []
+
+        with pytest.raises(ValueError, match="bbox"):
+            evaluate_tracking.optimal_matches(truth, predictions, 0.3)
+
     @pytest.mark.parametrize(
         ("frame_field", "frame_value"),
         [("frame_index", True), ("frame_id", False)],

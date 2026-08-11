@@ -127,12 +127,13 @@ def optimal_matches(
     for prediction_index in range(prediction_count):
         add_edge(first_prediction + prediction_index, sink, 1, (0, 0))
 
+    truth_boxes = [xywh_to_xyxy(item["bbox"]) for item in truth]
+    prediction_boxes = [xywh_to_xyxy(item["bbox"]) for item in predictions]
     candidates: list[tuple[int, int, float, _FlowEdge]] = []
     overlap_candidates: list[tuple[int, int, float]] = []
-    for truth_index, truth_object in enumerate(truth):
-        truth_box = xywh_to_xyxy(truth_object["bbox"])
-        for prediction_index, prediction in enumerate(predictions):
-            overlap = iou(truth_box, xywh_to_xyxy(prediction["bbox"]))
+    for truth_index, truth_box in enumerate(truth_boxes):
+        for prediction_index, prediction_box in enumerate(prediction_boxes):
+            overlap = iou(truth_box, prediction_box)
             if overlap >= threshold:
                 overlap_candidates.append((truth_index, prediction_index, overlap))
 
