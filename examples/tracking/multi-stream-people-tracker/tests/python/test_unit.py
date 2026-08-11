@@ -16,6 +16,12 @@ from types import SimpleNamespace
 
 import pytest
 
+
+def test_prepare_demo_video_sdk_contract() -> None:
+    test_script = Path(__file__).with_name("test_prepare_demo_video_sdk.py")
+    subprocess.run([sys.executable, str(test_script)], check=True)
+
+
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"

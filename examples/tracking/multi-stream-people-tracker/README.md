@@ -124,6 +124,28 @@ debug overlays, and replay writes for the run.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render tracking metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
+If a dataset sequence is available only as numbered images, create the MP4
+using only Python and FFmpeg already included in the SDK:
+
+```bash
+python3 examples/tracking/multi-stream-people-tracker/tools/prepare_demo_video.py \
+  --frames-dir <sequence-frames-directory> \
+  --fps 30 \
+  --source-id <dataset-sequence-id> \
+  --source-reference <dataset-url-or-citation> \
+  --output build/tracker-demo-30fps.mp4
+```
+
+`--fps` accepts `30` or `60`. Every source image becomes exactly one video
+frame, so the output duration is `image_count / fps` and a frame keeps the same
+ordinal as its annotation. The encoder matches Insight's low-latency H.264
+contract: constrained-baseline YUV420P, a fixed one-second GOP, no scene-cut
+keyframes, repeated SPS/PPS headers, AUD delimiters, and no B-frames or packet
+reordering. The tool validates those properties after encoding and writes a
+checksum-bearing `<stem>.provenance.json` beside the MP4. It rejects missing
+or duplicate frame indices, mixed image formats or dimensions, odd dimensions,
+and existing output unless `--force` is explicit.
+
 In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure

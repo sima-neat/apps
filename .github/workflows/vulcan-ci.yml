@@ -78,6 +78,8 @@ jobs:
           bash -lc '
             set -euo pipefail
             export SIMA_CLI_CHECK_FOR_UPDATE=0
+            cd /workspace
+            python3 examples/tracking/multi-stream-people-tracker/tests/python/test_prepare_demo_video_sdk.py
             curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
             python3 sima-cli-install.py main latest --noninteractive
             rm -f sima-cli-install.py
@@ -106,7 +108,6 @@ jobs:
               fi
             fi
 
-            cd /workspace
             echo "SDK release:"
             cat /etc/sdk-release || true
             echo "Build compiler environment:"
