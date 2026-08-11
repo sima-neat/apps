@@ -1828,6 +1828,24 @@ class TestTracker:
         with pytest.raises(ValueError, match="max_center_distance"):
             ObjectTracker(TrackerConfig(max_center_distance=float("nan")))
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "high_score_threshold",
+            "new_track_threshold",
+            "match_iou_threshold",
+            "velocity_momentum",
+            "box_smoothing_alpha",
+            "overlap_threshold",
+        ],
+    )
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+    def test_tracker_rejects_non_finite_thresholds(self, field: str, value: float):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        with pytest.raises(ValueError, match=field):
+            ObjectTracker(TrackerConfig(**{field: value}))
+
     def test_tracker_rejects_excessive_prediction_horizon(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 

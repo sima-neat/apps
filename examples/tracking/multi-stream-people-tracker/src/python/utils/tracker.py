@@ -256,16 +256,25 @@ class TrackerConfig:
     max_active_tracks: int = 128
 
     def validate(self) -> None:
+        finite_thresholds = {
+            "high_score_threshold": self.high_score_threshold,
+            "new_track_threshold": self.new_track_threshold,
+            "match_iou_threshold": self.match_iou_threshold,
+            "max_center_distance": self.max_center_distance,
+            "velocity_momentum": self.velocity_momentum,
+            "box_smoothing_alpha": self.box_smoothing_alpha,
+            "overlap_threshold": self.overlap_threshold,
+        }
+        for name, value in finite_thresholds.items():
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
         if not 0.0 <= self.high_score_threshold <= 1.0:
             raise ValueError("high_score_threshold must be in [0, 1]")
         if not self.high_score_threshold <= self.new_track_threshold <= 1.0:
             raise ValueError("new_track_threshold must be in [high_score_threshold, 1]")
         if not 0.0 <= self.match_iou_threshold <= 1.0:
             raise ValueError("match_iou_threshold must be in [0, 1]")
-        if (
-            not math.isfinite(self.max_center_distance)
-            or self.max_center_distance < 0.0
-        ):
+        if self.max_center_distance < 0.0:
             raise ValueError("max_center_distance must be >= 0")
         if not 0.0 <= self.velocity_momentum < 1.0:
             raise ValueError("velocity_momentum must be in [0, 1)")

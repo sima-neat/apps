@@ -326,6 +326,67 @@ def test_download_models_installs_exact_vulcan_variant(tmp_path):
     assert command.endswith(f" {target}\n")
 
 
+def test_download_models_reports_vulcan_move_failure(tmp_path):
+    if (
+        subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode
+        != 0
+    ):
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+    file_name = "demo_mpk.tar.gz"
+    variant = "modalix_int8_tessellation_mla"
+    target = "models/demo@feature/demo:0123456789abcdef"
+    fake_scope_python = tmp_path / "fake_scope_python"
+    fake_scope_python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf 'vulcan-demo\\tvulcan\\t\\t\\t{file_name}\\t\\t\\t{target}\\tstaging\\t{variant}\\n'\n",
+        encoding="utf-8",
+    )
+    fake_scope_python.chmod(0o755)
+
+    fake_sima_cli = tmp_path / "sima-cli"
+    fake_sima_cli.write_text(
+        "#!/usr/bin/env bash\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        '  if [[ "$1" == \'--install-dir\' ]]; then install_dir="$2"; shift 2; else shift; fi\n'
+        "done\n"
+        f"printf 'mpk' > \"$install_dir/{file_name}\"\n",
+        encoding="utf-8",
+    )
+    fake_sima_cli.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_mv = fake_bin / "mv"
+    fake_mv.write_text("#!/usr/bin/env bash\nexit 73\n", encoding="utf-8")
+    fake_mv.chmod(0o755)
+    models_dir = tmp_path / "models"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(fake_scope_python),
+            "SIMA_CLI_BIN": str(fake_sima_cli),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "[error] vulcan-demo: failed to install" in result.stderr
+    assert "[ok] vulcan-demo" not in result.stdout
+    assert not (models_dir / file_name).exists()
+
+
 def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
     if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
         pytest.skip("download_models.sh requires bash with mapfile support")

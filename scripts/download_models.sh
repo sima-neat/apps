@@ -332,7 +332,11 @@ download_vulcan_model() {
         return 1
     fi
 
-    mv "$installed_path" "$MODELS_DIR/$expected_file"
+    if ! mv "$installed_path" "$MODELS_DIR/$expected_file"; then
+        rm -rf "$tmpdir"
+        echo "[error] $model_id: failed to install $expected_file in $MODELS_DIR" >&2
+        return 1
+    fi
     rm -rf "$tmpdir"
     echo "[ok] $model_id"
 }
