@@ -14,6 +14,11 @@ from typing import Any
 def xywh_to_xyxy(box: list[float]) -> tuple[float, float, float, float]:
     if len(box) != 4:
         raise ValueError(f"bbox must contain four values, got {box!r}")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in box
+    ):
+        raise ValueError(f"bbox values must be numbers, got {box!r}")
     x, y, width, height = (float(value) for value in box)
     if not all(math.isfinite(value) for value in (x, y, width, height)):
         raise ValueError(f"bbox values must be finite, got {box!r}")

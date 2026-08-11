@@ -1944,6 +1944,11 @@ class TestTrackerReplay:
 
 
 class TestAccuracyEvaluation:
+    @pytest.mark.parametrize("value", [True, False])
+    def test_bbox_rejects_boolean_coordinates(self, value: bool):
+        with pytest.raises(ValueError, match="bbox values must be numbers"):
+            evaluate_tracking.xywh_to_xyxy([0, 0, value, 1])
+
     @pytest.mark.parametrize(
         ("frame_field", "frame_value"),
         [("frame_index", True), ("frame_id", False)],
