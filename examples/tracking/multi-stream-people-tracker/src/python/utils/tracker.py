@@ -1289,15 +1289,9 @@ class ObjectTracker:
             if float(detection["score"]) < self.config.new_track_threshold:
                 continue
             bbox = _bbox(detection)
-            if self.config.center_distance_enabled and any(
-                track.confirmed
-                and track.class_id == int(detection["class_id"])
-                and _overlap_coefficient(track.predict(frame_index), bbox)
-                >= max(0.50, self.config.overlap_threshold)
-                for track in self._tracks.values()
-            ):
-                matched_detections.add(detection_index)
-                continue
+            # Inputs are post-NMS. An unmatched high-confidence detection is
+            # evidence for a distinct object even when it overlaps an existing
+            # prediction; crowded objects must be allowed to establish tracks.
             if len(self._tracks) >= self.config.max_active_tracks:
                 replacements = [
                     track

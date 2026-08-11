@@ -1442,20 +1442,9 @@ void ObjectTracker::update_into(const std::vector<Detection>& detections, int fr
       continue;
     }
     const Detection& detection = detections[static_cast<std::size_t>(detection_index)];
-    const bool shadows_active_track =
-        config_.center_distance_enabled &&
-        std::any_of(impl_->tracks.begin(), impl_->tracks.end(), [&](const TrackState& track) {
-          if (!track.confirmed || track.detection.class_id != detection.class_id) {
-            return false;
-          }
-          const Detection prediction = predict(track, frame_index);
-          return overlap_coefficient(prediction, detection) >=
-                 std::max(0.50f, config_.overlap_threshold);
-        });
-    if (shadows_active_track) {
-      impl_->matched_detections[static_cast<std::size_t>(detection_index)] = 1;
-      continue;
-    }
+    // Inputs are post-NMS. An unmatched high-confidence detection is evidence
+    // for a distinct object even when it overlaps an existing prediction;
+    // crowded objects must be allowed to establish tracks.
     int track_index = static_cast<int>(impl_->tracks.size());
     if (track_index >= config_.max_active_tracks) {
       int replacement = -1;

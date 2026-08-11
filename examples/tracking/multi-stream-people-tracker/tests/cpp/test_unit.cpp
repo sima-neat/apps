@@ -797,6 +797,26 @@ bool test_tracker_capacity_evicts_doomed_tentative_before_confirmed_track() {
                      "capacity insertion removes only the doomed tentative track");
 }
 
+bool test_tracker_births_distinct_post_nms_overlapping_detection() {
+  TrackerConfig config;
+  config.max_center_distance = 3.0f;
+  ObjectTracker tracker(config);
+  const auto first = tracker.update({Detection{0.0f, 0.0f, 10.0f, 10.0f, 0.9f, 0}}, 0);
+  const auto crowded = tracker.update(
+      {Detection{0.0f, 0.0f, 10.0f, 10.0f, 0.9f, 0}, Detection{4.0f, 0.0f, 14.0f, 10.0f, 0.9f, 0}},
+      1);
+  return expect_true(first.size() == 1, "crowded birth test creates the initial identity") &&
+         expect_true(crowded.size() == 2,
+                     "distinct overlapping post-NMS detection creates a second identity") &&
+         expect_true(std::any_of(crowded.begin(), crowded.end(),
+                                 [&](const auto& track) {
+                                   return track.track_id == first.front().track_id;
+                                 }),
+                     "crowded birth preserves the existing identity") &&
+         expect_true(tracker.active_track_count() == 2,
+                     "crowded birth retains both active identities");
+}
+
 bool test_disabled_covariance_retains_legacy_raw_box_output() {
   TrackerConfig config;
   config.center_distance_enabled = false;
@@ -1107,6 +1127,7 @@ int main(int argc, char** argv) {
   ok &= test_ambiguous_assignment_respects_occlusion_publication_horizon();
   ok &= test_tracker_capacity_replaces_only_unmatched_stale_tracks();
   ok &= test_tracker_capacity_evicts_doomed_tentative_before_confirmed_track();
+  ok &= test_tracker_births_distinct_post_nms_overlapping_detection();
   ok &= test_disabled_covariance_retains_legacy_raw_box_output();
   ok &= test_tracker_drops_track_after_missing_budget();
   ok &= test_zero_missing_budget_keeps_continuous_track();

@@ -1474,6 +1474,27 @@ class TestTracker:
         assert {track.track_id for track in retained} == confirmed_ids
         assert tracker.active_track_count() == 3
 
+    def test_tracker_births_distinct_post_nms_overlapping_detection(self):
+        from utils.tracker import ObjectTracker, TrackerConfig
+
+        tracker = ObjectTracker(TrackerConfig(max_center_distance=3.0))
+        first = tracker.update(
+            [{"x1": 0, "y1": 0, "x2": 10, "y2": 10, "score": 0.9, "class_id": 0}],
+            0,
+        )
+        crowded = tracker.update(
+            [
+                {"x1": 0, "y1": 0, "x2": 10, "y2": 10, "score": 0.9, "class_id": 0},
+                {"x1": 4, "y1": 0, "x2": 14, "y2": 10, "score": 0.9, "class_id": 0},
+            ],
+            1,
+        )
+
+        assert len(first) == 1
+        assert len(crowded) == 2
+        assert first[0].track_id in {track.track_id for track in crowded}
+        assert tracker.active_track_count() == 2
+
     def test_disabled_covariance_retains_legacy_raw_box_output(self):
         from utils.tracker import ObjectTracker, TrackerConfig
 
