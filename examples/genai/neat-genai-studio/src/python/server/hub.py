@@ -151,7 +151,8 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
             models = None
             last_exc: Exception | None = None
             for expand in (
-                ["pipeline_tag", "tags", "downloads", "likes", "usedStorage"],
+                ["pipeline_tag", "tags", "downloads", "likes", "siblings", "usedStorage"],
+                ["pipeline_tag", "tags", "downloads", "likes", "siblings"],
                 ["pipeline_tag", "tags", "downloads", "likes"],
                 None,
             ):
@@ -170,6 +171,18 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
                 if not repo_id or repo_id in seen:
                     continue
                 seen.add(repo_id)
+                # Only precompiled repos (with a devkit/ folder) can run on the
+                # board. The org's *-Safetensors repos are quantized compile
+                # sources — downloading one wastes gigabytes and then fails
+                # classification — so keep them out of the catalog. Fall back
+                # to the naming convention when file lists weren't returned.
+                siblings = getattr(m, "siblings", None)
+                if siblings:
+                    if not any((getattr(s, "rfilename", "") or "").startswith("devkit/")
+                               for s in siblings):
+                        continue
+                elif "safetensors" in repo_id.rsplit("/", 1)[-1].lower():
+                    continue
                 local = catalog_dir / safe_name(repo_id) if catalog_dir else None
                 in_catalog = bool(local and local.is_dir())
                 results.append({
