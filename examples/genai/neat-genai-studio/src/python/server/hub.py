@@ -327,6 +327,19 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
     except Exception:  # noqa: BLE001 - repair is best-effort
         pass
 
+    # The download succeeded, so any leftover hf temp files are orphans from
+    # earlier interrupted attempts (partials are keyed by etag, so a retry
+    # after the repo changed upstream strands them). Sweep them so the model
+    # never reads as incomplete and the dead bytes don't count against disk.
+    try:
+        for leftover in (target / ".cache" / "huggingface").rglob("*.incomplete"):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
     # Mark the download complete so completeness checks trust it definitively.
     try:
         (target / ".neat-complete").write_text("ok\n")

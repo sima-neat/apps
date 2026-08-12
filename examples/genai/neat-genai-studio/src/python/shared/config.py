@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -344,10 +345,21 @@ def model_dir_complete(path) -> tuple[bool, str]:
     # Definitive: marker written only after a fully successful download.
     if (p / ".neat-complete").exists():
         return True, ""
-    # An interrupted huggingface_hub download leaves .incomplete temp files.
+    # A running huggingface_hub download keeps .incomplete temp files. Finished
+    # models can carry orphaned ones forever, though: partials are keyed by the
+    # file's etag (a hash under .cache/huggingface/, unmappable to its target),
+    # so retrying after the repo changed upstream strands the old temp file.
+    # Only a *fresh* temp file — a download plausibly still in flight — marks
+    # the model incomplete; stale orphans don't, and truly damaged compiled
+    # models are still caught by the .elf weight check below.
     try:
-        for _ in p.rglob("*.incomplete"):
-            return False, "download is incomplete (partial files present)"
+        now = time.time()
+        for f in p.rglob("*.incomplete"):
+            try:
+                if (now - f.stat().st_mtime) < 300:
+                    return False, "download is incomplete (a download is still in progress)"
+            except OSError:
+                continue
     except OSError:
         pass
     # A compiled model needs its ELF weight files, none of them zero-byte.
