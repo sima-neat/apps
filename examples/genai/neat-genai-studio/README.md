@@ -248,7 +248,7 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
                  asks to confirm (irreversible; /rm, /remove)
 /image [path]    attach an image to the next message (VLM only; no path prompts)
 /camera [device] arm the board camera — every message then auto-sends a fresh
-                 frame to the VLM (/camera off to stop; /dev/video0 — /cam, /webcam)
+                 frame to the VLM (/camera off to stop; /dev/video16 — /cam, /webcam)
 /benchmark …     TTFT/TPS benchmark — see the Benchmark section below
 /system <text>   set a system prompt (empty clears it)
 /new             clear the conversation

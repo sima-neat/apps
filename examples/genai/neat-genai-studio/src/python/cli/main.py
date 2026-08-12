@@ -24,7 +24,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Board-camera capture is shared with the Flask UI backend.
-from shared.board_camera import capture_camera_frame, cam_label as _cam_label  # noqa: E402
+from shared.board_camera import capture_camera_frame, default_camera_device, cam_label as _cam_label  # noqa: E402
 
 
 # ---- colour (matches run.sh; degrades on non-TTY / NO_COLOR / dumb) ----------
@@ -522,7 +522,7 @@ HELP = f"""{MUTED}Commands:
   /image [path]      attach an image to your next message (VLM only; no path → prompt)
   /camera [device]   arm the board camera: every message then auto-sends a fresh
                      frame to the VLM. /camera off to stop; device defaults to
-                     /dev/video0 (aliases /cam, /webcam)
+                     /dev/video16 (aliases /cam, /webcam)
   /system <text>     set a system prompt (empty clears it)
   /new               clear the conversation history
   /export [file]     save this chat to a .log file (default neat-chat-<time>.log)
@@ -1835,7 +1835,7 @@ def main():
                     camera_device = None
                     print(f"{OK}✔ live camera off.{RESET}")
                     continue
-                target = arg if arg else (os.environ.get("NEAT_CAMERA_DEVICE") or "0")
+                target = arg if arg else default_camera_device()
                 print(f"{MUTED}  testing camera on {_cam_label(target)}…{RESET}")
                 try:
                     jpeg, tool = capture_camera_frame(target)   # validate before arming

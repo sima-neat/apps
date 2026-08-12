@@ -17,7 +17,8 @@ import shutil
 import subprocess
 import tempfile
 
-DEFAULT_DEVICE = "/dev/video0"
+# Modalix devkits enumerate the directly-attached webcam at /dev/video16.
+DEFAULT_DEVICE = "/dev/video16"
 
 
 def cam_label(device):
@@ -27,7 +28,7 @@ def cam_label(device):
 
 
 def default_camera_device():
-    """The device used when none is given: $NEAT_CAMERA_DEVICE or /dev/video0."""
+    """The device used when none is given: $NEAT_CAMERA_DEVICE or /dev/video16."""
     return (os.environ.get("NEAT_CAMERA_DEVICE") or "").strip() or DEFAULT_DEVICE
 
 
@@ -92,7 +93,7 @@ def capture_camera_frame(device=None, timeout=12):
     grab a frame.
 
     ``device`` may be an index (``0`` → ``/dev/video0``) or a node path; it
-    defaults to ``$NEAT_CAMERA_DEVICE`` or ``/dev/video0``.
+    defaults to ``$NEAT_CAMERA_DEVICE`` or ``/dev/video16``.
     """
     dev = (str(device).strip() if device is not None else "") or default_camera_device()
     dev_node = f"/dev/video{dev}" if dev.isdigit() else dev
