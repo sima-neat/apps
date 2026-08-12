@@ -355,6 +355,14 @@ body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
 .input-button:hover { background: var(--surface-2); }
 .input-button img { width: 22px; height: 22px; opacity: .78; }
 :root[data-theme="dark"] .input-button img { filter: invert(1) brightness(1.5); }
+/* "+" that expands Snap/Upload on small phones; hidden on larger screens
+   (and in LLM-only mode, where those buttons are unusable anyway). */
+.attach-toggle { display: none; }
+.attach-toggle .attach-plus {
+  display: block; font-size: 24px; line-height: 1; color: var(--text-2);
+  transition: transform .18s ease;
+}
+.input-container.attach-open .attach-toggle .attach-plus { transform: rotate(45deg); }
 #sendButton { background: var(--accent); }
 #sendButton:hover { background: var(--accent-strong); }
 #sendButton img { opacity: 1; filter: brightness(0) invert(1); }
@@ -390,13 +398,18 @@ body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
 .camera-section.logo-mode { background: var(--surface-2); }
 .camera-section.logo-mode #topCenterIcon { position: static; transform: none; width: auto; height: auto; max-width: 55%; max-height: 55%; opacity: .8; }
 .camera-preview-container {
+  /* Follow the (16:9) camera frame instead of the dock's tall shape — the dock
+     column is much taller than wide, and a fixed 88%×74% box cropped the feed
+     to a vertical slice. max-height keeps it inside short docks; object-fit:
+     contain below guarantees the full frame is always visible. */
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: 88%; height: 74%; min-width: 160px; min-height: 120px;
+  width: 92%; aspect-ratio: 16 / 9; height: auto; max-height: 90%;
+  min-width: 160px; min-height: 120px;
   border-radius: var(--radius-sm); overflow: hidden; background: #000;
 }
 .camera-section.logo-mode .camera-preview-container { display: none; }
-#cameraPreview { width: 100%; height: 100%; object-fit: cover; }
-#snapAnimation { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 5; animation: snapAndShrink 1.5s ease forwards; }
+#cameraPreview { width: 100%; height: 100%; object-fit: contain; background: #000; }
+#snapAnimation { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 5; animation: snapAndShrink 1.5s ease forwards; }
 @keyframes snapAndShrink { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(.1); opacity: 0; } }
 .camera-badge { position: absolute; bottom: 8px; left: 8px; z-index: 3; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); background: color-mix(in srgb, var(--surface) 80%, transparent); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; }
 
@@ -993,6 +1006,7 @@ body.solutions-open { overflow: hidden; }
 .hub-badges { display: inline-flex; flex-wrap: wrap; gap: 5px; margin: 3px 0; }
 .hub-badge { font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 1px 7px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--text-2); }
 .hub-badge-vlm { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); color: var(--accent-strong); }
+.hub-badge-asr { background: color-mix(in srgb, #0d9488 14%, var(--surface)); border-color: color-mix(in srgb, #0d9488 40%, var(--border)); color: #0d9488; }
 .hub-badge-fam { color: var(--text-3); }
 .hub-badge-warn { background: color-mix(in srgb, var(--warn, #d98324) 18%, var(--surface)); border-color: color-mix(in srgb, var(--warn, #d98324) 45%, var(--border)); color: var(--warn, #d98324); }
 .hub-results { display: flex; flex-direction: column; gap: 7px; max-height: 220px; overflow-y: auto; margin-top: 4px; }
@@ -1216,6 +1230,7 @@ body.solutions-open { overflow: hidden; }
   /* Larger tap targets in the drawer */
   .panel > summary { padding: 14px; }
   .setting-button, .setting-select, .setting-input { padding: 11px 12px; }
+  .camera-tool-btn { width: 36px; height: 36px; font-size: 15px; }
 }
 
 /* Very small phones: drop the header model pill (it's in the drawer anyway) */
@@ -1223,6 +1238,16 @@ body.solutions-open { overflow: hidden; }
   .model-name-pill.header-pill { display: none; }
   .chat-section { padding: 10px 10px max(10px, env(safe-area-inset-bottom)); }
   .metric-label { display: none; }
+
+  /* Declutter the header: benchmark moves to the drawer; full screen is
+     redundant on phones (browser chrome auto-hides; unsupported on iOS). */
+  #benchmarkButton, #fullscreenButton { display: none; }
+  .header-actions { gap: 8px; }
+
+  /* Composer: tuck Snap + Upload behind the "+" so the text field keeps room. */
+  body:not(.llm-only) .attach-toggle { display: grid; }
+  .input-container:not(.attach-open) #snapChatButton,
+  .input-container:not(.attach-open) #uploadButton { display: none; }
 }
 
 /* Ensure the rail is always docked on desktop, whatever the toggle did */
@@ -1288,7 +1313,7 @@ body.solutions-open { overflow: hidden; }
   position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 150px;
   background: #000; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
 }
-.device-preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.device-preview video { width: 100%; height: 100%; object-fit: contain; display: block; }
 .device-preview-off {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   text-align: center; padding: 0 14px; color: var(--text-3); font-size: 12.5px;
@@ -1315,6 +1340,9 @@ body.solutions-open { overflow: hidden; }
 .rail-settings-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .rail-settings-btn .gear { font-size: 15px; }
 @media (max-width: 760px) { .rail-settings-btn { display: flex; } }
+/* Benchmark entry sits right under Settings; phones only (header has it above 480px) */
+.rail-benchmark-btn { margin-top: -6px; }
+@media (min-width: 481px) { .rail-benchmark-btn { display: none; } }
 
 /* Shut-down control in the sidebar footer + the post-shutdown overlay. */
 .rail-shutdown-btn {
@@ -1452,7 +1480,12 @@ body.solutions-open { overflow: hidden; }
 }
 .rail-resizer:hover .rail-collapse-btn { opacity: 1; }
 .rail-collapse-btn:hover { color: var(--accent); border-color: var(--accent); }
-body.rail-collapsed .side-rail { flex-basis: 0 !important; width: 0 !important; border-left: none; overflow: hidden; }
+/* Desktop only: on phones the rail is the off-canvas drawer (the only way to
+   reach Settings), and a persisted collapsed state would zero its width and
+   make the drawer — and Settings — unreachable. */
+@media (min-width: 761px) {
+  body.rail-collapsed .side-rail { flex-basis: 0 !important; width: 0 !important; border-left: none; overflow: hidden; }
+}
 body.rail-collapsed .rail-collapse-btn { opacity: 1; }
 body.resizing { cursor: col-resize; user-select: none; }
 body.resizing video { pointer-events: none; }

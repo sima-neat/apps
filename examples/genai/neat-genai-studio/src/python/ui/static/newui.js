@@ -235,9 +235,21 @@ async function startAudioOnly() {
   }
 }
 
-// ---- Camera / microphone device selection ----
+// ---- Camera / microphone / speaker device selection ----
 let selectedVideoDeviceId = localStorage.getItem('studioCameraId') || '';
 let selectedAudioDeviceId = localStorage.getItem('studioMicId') || '';
+let selectedSpeakerDeviceId = localStorage.getItem('studioSpeakerId') || '';
+
+// Route an AudioContext's output to the chosen speaker. Chromium 110+ only;
+// elsewhere (and for the built-in browser voice) audio stays on the default.
+function speakerRoutingSupported() {
+  return typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
+}
+async function applySpeakerSink(ctx) {
+  if (!ctx || !selectedSpeakerDeviceId || typeof ctx.setSinkId !== 'function') return;
+  try { await ctx.setSinkId(selectedSpeakerDeviceId); }
+  catch (e) { console.warn('Could not route audio to the selected speaker:', e); }
+}
 
 function buildVideoConstraint() {
   const c = { width: { ideal: 1920 }, height: { ideal: 1080 } };
@@ -254,6 +266,13 @@ async function refreshDeviceLists() {
   try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
   populateDeviceSelect('cameraSelect', devices.filter(d => d.kind === 'videoinput'), selectedVideoDeviceId, 'Camera');
   populateDeviceSelect('micSelect', devices.filter(d => d.kind === 'audioinput'), selectedAudioDeviceId, 'Microphone');
+  const speakerSel = document.getElementById('speakerSelect');
+  if (speakerSel && !speakerRoutingSupported()) {
+    speakerSel.innerHTML = '<option value="">System default (this browser cannot switch outputs)</option>';
+    speakerSel.disabled = true;
+  } else {
+    populateDeviceSelect('speakerSelect', devices.filter(d => d.kind === 'audiooutput'), selectedSpeakerDeviceId, 'Speaker');
+  }
 }
 
 function populateDeviceSelect(id, devices, selectedId, kind) {
@@ -301,6 +320,12 @@ function initDeviceControls() {
     localStorage.setItem('studioMicId', selectedAudioDeviceId);
     await restartCapture();
     if (_micTest) { stopMicTest(); toggleMicTest(); }   // re-test with the new mic
+  });
+  const speaker = document.getElementById('speakerSelect');
+  if (speaker) speaker.addEventListener('change', () => {
+    selectedSpeakerDeviceId = speaker.value;
+    localStorage.setItem('studioSpeakerId', selectedSpeakerDeviceId);
+    applySpeakerSink(currentAudioContext);   // reroute anything already speaking
   });
   const micTest = document.getElementById('micTestButton');
   if (micTest) micTest.addEventListener('click', toggleMicTest);
@@ -516,15 +541,20 @@ function setupCameraContainer() {
 
   if (!container || !cameraSection || !cameraPreview) return;
 
-  // Fill the camera dock with the live feed (the video is object-fit: cover),
-  // so the camera is the prominent element in the rail rather than a small
-  // letterboxed thumbnail. The snap capture still uses the full video frame.
+  // Size the dock to the video's own aspect ratio, as large as fits. Filling
+  // the (tall, narrow) dock outright cropped a 16:9 feed to a vertical slice —
+  // the user must always see the full camera frame.
   const fillDock = () => {
-    if (cameraPreview.videoWidth === 0) return;
+    if (cameraPreview.videoWidth === 0 || cameraPreview.videoHeight === 0) return;
     const rect = cameraSection.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    container.style.width = `${Math.max(200, Math.round(rect.width - 20))}px`;
-    container.style.height = `${Math.max(150, Math.round(rect.height - 20))}px`;
+    const availW = Math.max(200, Math.round(rect.width - 20));
+    const availH = Math.max(150, Math.round(rect.height - 20));
+    const aspect = cameraPreview.videoWidth / cameraPreview.videoHeight;
+    let w = availW, h = Math.round(availW / aspect);
+    if (h > availH) { h = availH; w = Math.round(availH * aspect); }
+    container.style.width = `${w}px`;
+    container.style.height = `${h}px`;
   };
   cameraPreview.addEventListener('loadedmetadata', fillDock);
   window.addEventListener('resize', fillDock);
@@ -751,6 +781,7 @@ window.onload = function () {
   initModelManage();
   initRailResizer();
   initCameraCollapse();
+  initAttachToggle();
   initVision();
   initBenchmark();
   initShowcase();
@@ -1948,6 +1979,26 @@ function loadChatImageFile(file) {
   reader.readAsDataURL(file);
 }
 
+// Small phones collapse Snap + Upload behind a "+" in the composer to keep
+// the text field wide; the toggle is display:none everywhere else.
+function initAttachToggle() {
+  const btn = document.getElementById('attachToggleButton');
+  const container = document.querySelector('#chatInput .input-container');
+  if (!btn || !container) return;
+  btn.addEventListener('click', () => {
+    const open = container.classList.toggle('attach-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  // Collapse again once either action is chosen.
+  ['snapChatButton', 'uploadButton'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', () => {
+      container.classList.remove('attach-open');
+      btn.setAttribute('aria-expanded', 'false');
+    });
+  });
+}
+
 function selectImage() {
   // Do nothing in LLM-only mode
   if (isLlmOnlyMode()) return;
@@ -2371,6 +2422,7 @@ async function processAudioQueue() {
     }
 
     currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    await applySpeakerSink(currentAudioContext);
     const audioBuffer = await currentAudioContext.decodeAudioData(arrayBuffer);
 
     // Final check before starting playback
@@ -2452,6 +2504,7 @@ async function processSystemAudioOnce(data) {
       currentAudioContext.close();
     }
     currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    await applySpeakerSink(currentAudioContext);
     const audioBuffer = await currentAudioContext.decodeAudioData(arrayBuffer);
 
     const source = currentAudioContext.createBufferSource();
@@ -4627,7 +4680,10 @@ async function loadHubModels() {
     }
     _hubAllModels = (data.results || []).map(m => {
       const b = hubModelParams(m.repoId);
-      return { ...m, _type: hubModelType(m.repoId), _params: b, _bucket: hubParamsBucket(b), _family: hubModelFamily(m.repoId) };
+      // The server classifies from Hub metadata (pipeline_tag/tags), which is
+      // reliable; the repo-name guess is only for older servers.
+      const t = m.type ? m.type.toUpperCase() : hubModelType(m.repoId);
+      return { ...m, _type: t, _params: b, _bucket: hubParamsBucket(b), _family: hubModelFamily(m.repoId) };
     });
     populateHubFamilyFilter();
     applyHubFilters();
@@ -4638,10 +4694,11 @@ async function loadHubModels() {
 
 // Best-effort LLM vs VLM from the repo name (a true classification needs the
 // model config, which we don't have at list time).
-const HUB_VLM_HINTS = ['-vl', 'vl-', 'vl2', 'vl3', 'vl4', 'vision', 'multimodal',
-  'omni', 'internvl', 'llava', 'pixtral', 'molmo', 'minicpm-v', 'cpm-v', 'idefics', 'paligemma'];
+const HUB_VLM_HINTS = ['vlm', '-vl', 'vl-', '_vl', 'vl2', 'vl3', 'vl4', 'vision', 'multimodal',
+  'omni', 'internvl', 'llava', 'pixtral', 'molmo', 'minicpm-v', 'cpm-v', 'idefics', 'paligemma', 'siglip'];
 function hubModelType(repoId) {
   const n = (repoId.split('/').pop() || repoId).toLowerCase();
+  if (n.includes('whisper')) return 'ASR';
   return HUB_VLM_HINTS.some(k => n.includes(k)) ? 'VLM' : 'LLM';
 }
 function hubModelParams(repoId) {
@@ -5841,6 +5898,16 @@ function initBenchmark() {
   const run = document.getElementById('benchRunBtn');
   const stop = document.getElementById('benchStopBtn');
   if (open) open.addEventListener('click', openBenchmark);
+  // Phone drawer entry (the header button is hidden ≤480px): close the drawer
+  // first so the modal isn't behind it.
+  const openRail = document.getElementById('railBenchmarkButton');
+  if (openRail) openRail.addEventListener('click', () => {
+    const ws = document.querySelector('.workspace');
+    if (ws) ws.classList.remove('rail-open');
+    const rt = document.getElementById('railToggle');
+    if (rt) rt.textContent = '☰';
+    openBenchmark();
+  });
   if (close) close.addEventListener('click', closeBenchmark);
   if (run) run.addEventListener('click', runBenchmark);
   if (stop) stop.addEventListener('click', stopBenchmark);

@@ -140,6 +140,11 @@
               <button id="recordButton" class="input-button" title="Record Audio" disabled>
                 <img id="recordIcon" src="{{ url_for('static', filename='icons/muted.png') }}" alt="Record" width="24" height="24">
               </button>
+              <!-- Small phones only: expands/collapses the Snap + Upload buttons -->
+              <button id="attachToggleButton" class="input-button attach-toggle" type="button"
+                title="Photo &amp; image options" aria-expanded="false" aria-label="Photo and image options">
+                <span class="attach-plus" aria-hidden="true">+</span>
+              </button>
               <button id="snapChatButton" class="input-button" title="Take Photo" disabled>
                 <img src="{{ url_for('static', filename='icons/snap.png') }}" alt="Snap" width="24" height="24">
               </button>
@@ -183,6 +188,12 @@
           <span class="gear">⚙</span> Settings
         </button>
 
+        <!-- Phones hide the header benchmark button; it lives here instead -->
+        <button id="railBenchmarkButton" class="rail-settings-btn rail-benchmark-btn" type="button"
+          title="Performance benchmark (MoLE)">
+          <span class="gear">⏱</span> Benchmark
+        </button>
+
         <button id="shutdownButton" class="rail-shutdown-btn" type="button" title="Stop the studio (both processes) and close the app">
           <span aria-hidden="true">⏻</span> Shutdown
         </button>
@@ -223,7 +234,7 @@
           <button class="settings-tab" type="button" role="tab" data-tab="huggingface" id="tabHuggingface">Add Model</button>
           <button class="settings-tab" type="button" role="tab" data-tab="conversation">Conversation</button>
           <button class="settings-tab" type="button" role="tab" data-tab="generation">Generation</button>
-          <button class="settings-tab" type="button" role="tab" data-tab="devices">Camera &amp; Microphone</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="devices">Camera &amp; Audio</button>
           <button class="settings-tab" type="button" role="tab" data-tab="appearance">Appearance</button>
           <button class="settings-tab" type="button" role="tab" data-tab="rag" id="tabRag">Knowledge (RAG)</button>
         </nav>
@@ -320,6 +331,7 @@
                   <option value="">All types</option>
                   <option value="LLM">LLM</option>
                   <option value="VLM">VLM</option>
+                  <option value="ASR">ASR</option>
                 </select>
                 <select id="hubFilterParams" class="setting-select" title="Parameter count">
                   <option value="">Any size</option>
@@ -469,8 +481,14 @@
                   </div>
                 </div>
               </div>
+              <div class="setting-row">
+                <label for="speakerSelect" class="setting-label">Speaker</label>
+                <select id="speakerSelect" class="setting-select"></select>
+              </div>
               <div class="gen-note">Device names appear after you allow camera/microphone
-                access in the browser.</div>
+                access in the browser. The speaker choice routes the assistant's spoken
+                answers (browser support required; the built-in browser voice always uses
+                the system default output).</div>
           </section>
           <section class="settings-tab-panel" data-tab="appearance" role="tabpanel">
               <div class="setting-row">
