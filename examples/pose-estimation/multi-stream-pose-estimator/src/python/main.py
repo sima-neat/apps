@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from pathlib import Path
 import glob
 import json
 import os
 import sys
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
 import yaml
 
@@ -29,6 +29,8 @@ class AppConfig:
     codec: str = "h264"
     latency_ms: int = 100
     tcp: bool = True
+    input_max_width: int = 1920
+    input_max_height: int = 1080
     frames: int = 0
     fps: int = 0
     max_inflight_per_stream: int = 4
@@ -53,7 +55,7 @@ class StreamRuntime:
     url: str
     source_options: object
     metadata_sender: object
-    profile: "ProfileWindow"
+    profile: ProfileWindow
     latest_debug_frame: object | None
     frame_w: int
     frame_h: int
@@ -82,7 +84,9 @@ class ProfileWindow:
         self.detection_pull_ms = 0.0
         self.metadata_send_ms = 0.0
 
-    def add(self, detection_pull_ms: float, metadata_send_ms: float, pose_count: int) -> None:
+    def add(
+        self, detection_pull_ms: float, metadata_send_ms: float, pose_count: int
+    ) -> None:
         if not self.enabled:
             return
         if self.frames == 0:
@@ -137,7 +141,9 @@ def time_ms() -> float:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Multi-camera RTSP YOLO26 pose Insight example")
+    parser = argparse.ArgumentParser(
+        description="Multi-camera RTSP YOLO26 pose Insight example"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -146,7 +152,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def section(raw: dict, key: str) -> dict:
     value = raw.get(key) or {}
     if not isinstance(value, dict):
-        raise ValueError(f"{key} must be a mapping")
+        raise ValueError(f"{key} must be a mapping")  # noqa: TRY004
     return value
 
 
@@ -155,7 +161,7 @@ def string_or(raw: dict, key: str, default: str = "") -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise ValueError(f"{key} must be a string")
+        raise ValueError(f"{key} must be a string")  # noqa: TRY004
     return value
 
 
@@ -164,7 +170,7 @@ def int_or(raw: dict, key: str, default: int) -> int:
     if value is None:
         return default
     if not isinstance(value, int):
-        raise ValueError(f"{key} must be an integer")
+        raise ValueError(f"{key} must be an integer")  # noqa: TRY004
     return int(value)
 
 
@@ -173,7 +179,7 @@ def float_or(raw: dict, key: str, default: float) -> float:
     if value is None:
         return default
     if not isinstance(value, (int, float)):
-        raise ValueError(f"{key} must be numeric")
+        raise ValueError(f"{key} must be numeric")  # noqa: TRY004
     return float(value)
 
 
@@ -182,7 +188,7 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     if value is None:
         return default
     if not isinstance(value, bool):
-        raise ValueError(f"{key} must be true or false")
+        raise ValueError(f"{key} must be true or false")  # noqa: TRY004
     return value
 
 
@@ -206,6 +212,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.insight.host must be set")
     if cfg.latency_ms < 0:
         raise ValueError("input.latency_ms must be >= 0")
+    if cfg.input_max_width <= 0:
+        raise ValueError("input.max_width must be > 0")
+    if cfg.input_max_height <= 0:
+        raise ValueError("input.max_height must be > 0")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if cfg.fps < 0:
@@ -235,7 +245,7 @@ def validate_config(cfg: AppConfig) -> None:
 def load_app_config(config_path: Path) -> AppConfig:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise ValueError("config root must be a mapping")
+        raise ValueError("config root must be a mapping")  # noqa: TRY004
 
     model = section(raw, "model")
     input_cfg = section(raw, "input")
@@ -259,6 +269,8 @@ def load_app_config(config_path: Path) -> AppConfig:
         codec=parse_input_codec(string_or(input_cfg, "codec", "h264")),
         latency_ms=int_or(input_cfg, "latency_ms", 100),
         tcp=bool_or(input_cfg, "tcp", True),
+        input_max_width=int_or(input_cfg, "max_width", 1920),
+        input_max_height=int_or(input_cfg, "max_height", 1080),
         frames=int_or(inference, "frames", 0),
         fps=int_or(inference, "fps", 0),
         max_inflight_per_stream=int_or(inference, "max_inflight_per_stream", 4),
@@ -307,8 +319,23 @@ so these strings are part of the published metadata contract.
 """
 
 COCO_SKELETON = (
-    (0, 1), (0, 2), (1, 3), (2, 4), (0, 5), (0, 6), (5, 7), (7, 9), (6, 8),
-    (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
+    (0, 1),
+    (0, 2),
+    (1, 3),
+    (2, 4),
+    (0, 5),
+    (0, 6),
+    (5, 7),
+    (7, 9),
+    (6, 8),
+    (8, 10),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
 )
 """Skeleton edges as index pairs into ``COCO_KEYPOINT_NAMES``, matching Insight's topology."""
 
@@ -416,13 +443,15 @@ def rtsp_codec(codec: str):
     return pyneat.RtspCodec.H265 if codec == "h265" else pyneat.RtspCodec.H264
 
 
-def probe_rtsp(url: str) -> tuple[int, int, int]:
+def probe_rtsp(url: str, tcp: bool) -> tuple[int, int, int]:
+    if tcp:
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
         raise RuntimeError(f"failed to open RTSP source for probing: {url}")
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
+    fps = round(cap.get(cv2.CAP_PROP_FPS) or 0)
     cap.release()
     if width <= 0 or height <= 0:
         raise RuntimeError("failed to probe RTSP frame size")
@@ -553,6 +582,8 @@ def build_model(cfg: AppConfig):
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    opt.preprocess.input_max_width = cfg.input_max_width
+    opt.preprocess.input_max_height = cfg.input_max_height
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26Pose
     # YOLO26 pose ships single-class ("person") score heads. The packaged MPK still declares
@@ -632,7 +663,9 @@ def build_debug_frame_graph(stream_index: int) -> pyneat.Graph:
     frames = pyneat.Graph("debug_frame")
     frames.connect(
         pyneat.nodes.input("debug_frame"),
-        pyneat.nodes.output(f"debug_frame_{stream_index}", pyneat.OutputOptions.every_frame(4)),
+        pyneat.nodes.output(
+            f"debug_frame_{stream_index}", pyneat.OutputOptions.every_frame(4)
+        ),
     )
     return frames
 
@@ -647,7 +680,7 @@ def make_video_options(cfg: AppConfig, stream_index: int):
 
 
 def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamRuntime:
-    frame_w, frame_h, fps = probe_rtsp(url)
+    frame_w, frame_h, fps = probe_rtsp(url, cfg.tcp)
     output_fps = cfg.fps if cfg.fps > 0 else fps
 
     source_options = build_source_options(cfg, url, fps, frame_w, frame_h)
@@ -696,14 +729,18 @@ def connect_stream_graph(
         video_options = make_video_options(cfg, stream.index)
         app.graph.connect(
             encoded_branch,
-            build_video_sender_graph("video_h264", rtsp_codec(cfg.codec), video_options),
+            build_video_sender_graph(
+                "video_h264", rtsp_codec(cfg.codec), video_options
+            ),
             realtime_link(stream.index, 3),
         )
     else:
         app.graph.connect(source, decoder, realtime_link(stream.index, 3))
 
     save_debug_frames = save_frames_enabled(cfg)
-    decoded_outputs = ["estimator_frame", "debug_frame"] if save_debug_frames else ["estimator_frame"]
+    decoded_outputs = (
+        ["estimator_frame", "debug_frame"] if save_debug_frames else ["estimator_frame"]
+    )
     decoded_branch = pyneat.graphs.branch("decoded", decoded_outputs)
     app.graph.connect(decoder, decoded_branch)
     app.graph.connect(
@@ -718,11 +755,15 @@ def connect_stream_graph(
     )
     if save_debug_frames:
         app.graph.connect(
-            decoded_branch, build_debug_frame_graph(stream.index), realtime_link(stream.index, 4)
+            decoded_branch,
+            build_debug_frame_graph(stream.index),
+            realtime_link(stream.index, 4),
         )
 
 
-def send_metadata(stream: StreamRuntime, cfg: AppConfig, sample, poses: list[dict]) -> None:
+def send_metadata(
+    stream: StreamRuntime, cfg: AppConfig, sample, poses: list[dict]
+) -> None:
     data = pose_metadata_data(poses, cfg.min_keypoint_visibility)
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
@@ -757,7 +798,9 @@ def tensor_bgr_from_decoded(tensor):
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
+        payload = np.frombuffer(
+            tensor.contiguous().copy_payload_bytes(), dtype=np.uint8
+        )
         expected = width * height * 3 // 2
         if payload.size < expected:
             raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
@@ -786,10 +829,10 @@ def draw_poses(frame, poses: list[dict], min_visibility: float) -> None:
         )
 
     for pose in poses:
-        x1 = max(0, int(round(pose["x1"])))
-        y1 = max(0, int(round(pose["y1"])))
-        x2 = min(width - 1, int(round(pose["x2"])))
-        y2 = min(height - 1, int(round(pose["y2"])))
+        x1 = max(0, round(pose["x1"]))
+        y1 = max(0, round(pose["y1"]))
+        x2 = min(width - 1, round(pose["x2"]))
+        y2 = min(height - 1, round(pose["y2"]))
         if x2 > x1 and y2 > y1:
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
@@ -799,29 +842,39 @@ def draw_poses(frame, poses: list[dict], min_visibility: float) -> None:
             if visible(a) and visible(b):
                 cv2.line(
                     frame,
-                    (int(round(a["x"])), int(round(a["y"]))),
-                    (int(round(b["x"])), int(round(b["y"]))),
+                    (round(a["x"]), round(a["y"])),
+                    (round(b["x"]), round(b["y"])),
                     color,
                     2,
                 )
         for point in keypoints:
             if visible(point):
                 cv2.circle(
-                    frame, (int(round(point["x"])), int(round(point["y"]))), 3, color, -1
+                    frame,
+                    (round(point["x"]), round(point["y"])),
+                    3,
+                    color,
+                    -1,
                 )
 
 
 def maybe_save_debug_frame(
     cfg: AppConfig, stream: StreamRuntime, frame, poses: list[dict]
 ) -> None:
-    if not cfg.save_dir or cfg.save_every <= 0 or stream.processed % cfg.save_every != 0:
+    if (
+        not cfg.save_dir
+        or cfg.save_every <= 0
+        or stream.processed % cfg.save_every != 0
+    ):
         return
     if frame is None:
         return
 
     frame = frame.copy()
     draw_poses(frame, poses, cfg.min_keypoint_visibility)
-    out_path = Path(cfg.save_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
+    out_path = (
+        Path(cfg.save_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
+    )
     if not cv2.imwrite(str(out_path), frame):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
@@ -832,7 +885,9 @@ def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     return all(stream.processed >= frame_limit or stream.closed for stream in streams)
 
 
-def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float) -> None:
+def process_output_sample(
+    stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float
+) -> None:
     if cfg.frames > 0 and stream.processed >= cfg.frames:
         return
 
@@ -909,8 +964,6 @@ def run_app(cfg: AppConfig) -> None:
         app.run = app.graph.build(build_run_options())
         while not all_streams_done(app.streams, cfg.frames):
             process_run_once(app, cfg, "poses")
-    except KeyboardInterrupt:
-        raise
     finally:
         if app.run is not None:
             app.run.close()
@@ -939,7 +992,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except KeyboardInterrupt:
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- CLI boundary reports runtime failures.
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1
 

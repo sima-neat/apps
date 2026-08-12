@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
@@ -26,12 +25,22 @@ def write_config(
     tmp_path: Path,
     streams: list[str],
     codec: str | None = None,
+    max_width: int | None = None,
+    max_height: int | None = None,
     max_inflight_per_stream: int | None = None,
     max_inflight_total: int | None = None,
 ) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
     inference = []
-    input_config = ["input:", f"  codec: {codec}"] if codec else []
+    input_config = []
+    if codec is not None or max_width is not None or max_height is not None:
+        input_config.append("input:")
+        if codec is not None:
+            input_config.append(f"  codec: {codec}")
+        if max_width is not None:
+            input_config.append(f"  max_width: {max_width}")
+        if max_height is not None:
+            input_config.append(f"  max_height: {max_height}")
     if max_inflight_per_stream is not None or max_inflight_total is not None:
         inference.append("inference:")
         if max_inflight_per_stream is not None:
@@ -62,6 +71,7 @@ class TestMainEntrypoint:
     def test_help_runs(self):
         result = subprocess.run(
             [sys.executable, str(MAIN_PY), "--help"],
+            check=False,
             capture_output=True,
             text=True,
             cwd=str(EXAMPLE_DIR),
@@ -75,6 +85,7 @@ class TestMainEntrypoint:
     def test_missing_config_file_fails_cleanly(self):
         result = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", "does-not-exist.yaml"],
+            check=False,
             capture_output=True,
             text=True,
             cwd=str(EXAMPLE_DIR),
@@ -105,11 +116,30 @@ class TestConfigLoading:
         assert len(cfg.rtsp_urls) == 4
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.warmup_frames == 30
+        assert cfg.input_max_width == 1920
+        assert cfg.input_max_height == 1080
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
 
+    def test_load_app_config_accepts_custom_input_capacity(self, tmp_path: Path):
+        from main import load_app_config
+
+        cfg = load_app_config(
+            write_config(
+                tmp_path,
+                ["rtsp://127.0.0.1:8554/src1"],
+                max_width=2560,
+                max_height=1440,
+            )
+        )
+
+        assert cfg.input_max_width == 2560
+        assert cfg.input_max_height == 1440
+
     @pytest.mark.parametrize(("codec", "expected"), [("avc", "h264"), ("hevc", "h265")])
-    def test_load_app_config_accepts_codec_alias(self, tmp_path: Path, codec: str, expected: str):
+    def test_load_app_config_accepts_codec_alias(
+        self, tmp_path: Path, codec: str, expected: str
+    ):
         from main import load_app_config
 
         cfg = load_app_config(
@@ -141,7 +171,9 @@ class TestConfigLoading:
             max_inflight_per_stream=0,
         )
 
-        with pytest.raises(ValueError, match="max_inflight_per_stream must be -1 or > 0"):
+        with pytest.raises(
+            ValueError, match="max_inflight_per_stream must be -1 or > 0"
+        ):
             load_app_config(config_path)
 
     def test_load_app_config_rejects_too_many_streams(self, tmp_path: Path):
@@ -192,7 +224,14 @@ class TestConfigLoading:
         )
 
         result = subprocess.run(
-            [sys.executable, str(MAIN_PY), "--config", str(config_path), "--validate-config-only"],
+            [
+                sys.executable,
+                str(MAIN_PY),
+                "--config",
+                str(config_path),
+                "--validate-config-only",
+            ],
+            check=False,
             capture_output=True,
             text=True,
             cwd=str(EXAMPLE_DIR),
@@ -206,6 +245,74 @@ class TestConfigLoading:
 
 
 class TestRuntimeOptions:
+    def test_probe_rtsp_forces_tcp_when_enabled(self, monkeypatch):
+        import main
+
+        class FakeCapture:
+            def isOpened(self):
+                return True
+
+            def get(self, prop):
+                return {1: 2560, 2: 1440, 3: 20}[prop]
+
+            def release(self):
+                pass
+
+        monkeypatch.delenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", raising=False)
+        monkeypatch.setattr(
+            main,
+            "cv2",
+            SimpleNamespace(
+                VideoCapture=lambda _url: FakeCapture(),
+                CAP_PROP_FRAME_WIDTH=1,
+                CAP_PROP_FRAME_HEIGHT=2,
+                CAP_PROP_FPS=3,
+            ),
+        )
+
+        assert main.probe_rtsp("rtsp://camera/stream", True) == (2560, 1440, 20)
+        assert main.os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] == "rtsp_transport;tcp"
+
+    def test_model_preprocess_uses_configured_capacity(self, monkeypatch):
+        import main
+
+        captured = SimpleNamespace(options=None)
+
+        class FakeModelOptions:
+            def __init__(self):
+                self.preprocess = SimpleNamespace(color_convert=SimpleNamespace())
+
+        def fake_model(_path, options):
+            captured.options = options
+            return object()
+
+        monkeypatch.setattr(
+            main,
+            "pyneat",
+            SimpleNamespace(
+                ModelOptions=FakeModelOptions,
+                InputKind=SimpleNamespace(Image="image"),
+                AutoFlag=SimpleNamespace(On="on"),
+                PreprocessColorFormat=SimpleNamespace(NV12="nv12"),
+                NormalizePreset=SimpleNamespace(COCO_YOLO="coco-yolo"),
+                BoxDecodeType=SimpleNamespace(YoloV26Pose="yolo26-pose"),
+                Model=fake_model,
+            ),
+        )
+
+        cfg = SimpleNamespace(
+            model_path="pose.tar.gz",
+            input_max_width=2560,
+            input_max_height=1440,
+            min_score=0.3,
+            nms_iou=0.6,
+            max_poses=50,
+        )
+        main.build_model(cfg)
+
+        assert captured.options.preprocess.input_max_width == 2560
+        assert captured.options.preprocess.input_max_height == 1440
+
     def test_encoded_input_options_carry_codec_format(self, monkeypatch):
         import main
 

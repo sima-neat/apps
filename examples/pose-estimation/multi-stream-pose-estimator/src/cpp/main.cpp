@@ -109,6 +109,8 @@ struct AppConfig {
   simaai::neat::nodes::groups::RtspCodec codec = simaai::neat::nodes::groups::RtspCodec::H264;
   int latency_ms = 100;
   bool tcp = true;
+  int input_max_width = 1920;
+  int input_max_height = 1080;
   int frames = 0;
   int fps = 0;
   int max_inflight_per_stream = 4;
@@ -313,6 +315,8 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.rtsp_urls.size() <= 4, "this phase supports up to four streams");
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.latency_ms >= 0, "input.latency_ms must be >= 0");
+  sima_examples::require(cfg.input_max_width > 0, "input.max_width must be > 0");
+  sima_examples::require(cfg.input_max_height > 0, "input.max_height must be > 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
   sima_examples::require(cfg.fps >= 0, "inference.fps must be >= 0");
   sima_examples::require(cfg.max_inflight_per_stream == -1 || cfg.max_inflight_per_stream > 0,
@@ -342,6 +346,8 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.codec = parse_input_codec(raw.string_or("input.codec", "h264"));
   cfg.tcp = raw.bool_or("input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
+  cfg.input_max_width = raw.int_or("input.max_width", 1920);
+  cfg.input_max_height = raw.int_or("input.max_height", 1080);
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.fps = raw.int_or("inference.fps", 0);
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
@@ -636,6 +642,8 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
   model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
+  model_opt.preprocess.input_max_width = cfg.input_max_width;
+  model_opt.preprocess.input_max_height = cfg.input_max_height;
   model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
   model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26Pose;
   // YOLO26 pose ships single-class ("person") score heads. The packaged MPK still declares

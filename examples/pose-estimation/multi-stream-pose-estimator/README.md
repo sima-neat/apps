@@ -87,6 +87,9 @@ streams:
 
 input:
   codec: h264  # h264/avc or h265/hevc
+  tcp: true
+  max_width: 2560
+  max_height: 1440
 
 inference:
   frames: 0

@@ -11,6 +11,8 @@ input:                       # RTSP input transport settings.
   codec: h264                # h264/avc or h265/hevc.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
+  max_width: 2560            # Largest input width accepted by model preprocessing.
+  max_height: 1440           # Largest input height accepted by model preprocessing.
 
 runtime:                     # Runtime and profiling settings.
   profile: true              # Print per-stream timing summaries.
