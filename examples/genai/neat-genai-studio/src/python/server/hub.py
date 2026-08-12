@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Iterator
 
+from shared.chat_template import repair_chat_template_files
 from shared.config import HubConfig, classify_model_dir, model_dir_complete
 
 
@@ -91,6 +92,36 @@ def hub_enabled(hub: HubConfig) -> bool:
     return bool(hub.allow_download) and internet_reachable()
 
 
+# Hub metadata that identifies a repo's modality. ``pipeline_tag`` is the
+# reliable signal on SiMa precompiled repos (VLMs are ``image-text-to-text``,
+# multimodal Gemma-4 builds are ``any-to-any``); repo-name hints are only a
+# fallback for repos with no metadata at all.
+_VLM_PIPELINES = {"image-text-to-text", "visual-question-answering",
+                  "video-text-to-text", "image-to-text", "any-to-any"}
+_ASR_PIPELINES = {"automatic-speech-recognition"}
+_VLM_NAME_HINTS = ("vlm", "-vl", "vl-", "_vl", "vision", "multimodal", "llava",
+                   "paligemma", "internvl", "pixtral", "molmo", "minicpm-v",
+                   "idefics", "siglip")
+
+
+def classify_hub_repo(repo_id: str, pipeline_tag=None, tags=None) -> str:
+    """Best-effort repo modality: ``"llm"`` | ``"vlm"`` | ``"asr"``."""
+    tag = (pipeline_tag or "").strip().lower()
+    tagset = {str(t).strip().lower() for t in (tags or [])}
+    if tag in _ASR_PIPELINES or tagset & _ASR_PIPELINES:
+        return "asr"
+    if tag in _VLM_PIPELINES or tagset & _VLM_PIPELINES:
+        return "vlm"
+    if tag == "text-generation" or "text-generation" in tagset:
+        return "llm"
+    name = (repo_id.rsplit("/", 1)[-1] or "").lower()
+    if "whisper" in name:
+        return "asr"
+    if any(hint in name for hint in _VLM_NAME_HINTS):
+        return "vlm"
+    return "llm"
+
+
 def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int = 200) -> dict:
     if not hub_enabled(hub):
         return {"enabled": False, "results": []}
@@ -113,12 +144,27 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
                 direction=-1,
                 limit=limit,
             )
-            # Ask for repo storage size in the same call when supported; fall
-            # back gracefully on older huggingface_hub versions.
-            try:
-                models = list(api.list_models(expand=["usedStorage"], **kwargs))
-            except (TypeError, ValueError):
-                models = list(api.list_models(**kwargs))
+            # Ask for the metadata we render (type badge, size, popularity) in
+            # the same call. The Hub API's accepted ``expand`` fields change
+            # over time (``usedStorage`` was retired server-side), so fall back
+            # progressively rather than losing the whole org listing.
+            models = None
+            last_exc: Exception | None = None
+            for expand in (
+                ["pipeline_tag", "tags", "downloads", "likes", "usedStorage"],
+                ["pipeline_tag", "tags", "downloads", "likes"],
+                None,
+            ):
+                try:
+                    if expand is None:
+                        models = list(api.list_models(**kwargs))
+                    else:
+                        models = list(api.list_models(expand=expand, **kwargs))
+                    break
+                except Exception as exc:  # noqa: BLE001 - try the next shape
+                    last_exc = exc
+            if models is None:
+                raise last_exc if last_exc else RuntimeError("model listing failed")
             for m in models:
                 repo_id = getattr(m, "id", None) or getattr(m, "modelId", "")
                 if not repo_id or repo_id in seen:
@@ -129,6 +175,8 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
                 results.append({
                     "repoId": repo_id,
                     "org": author,
+                    "type": classify_hub_repo(repo_id, getattr(m, "pipeline_tag", None),
+                                              getattr(m, "tags", None)),
                     "downloads": getattr(m, "downloads", None),
                     "likes": getattr(m, "likes", None),
                     "sizeBytes": getattr(m, "used_storage", None) or getattr(m, "usedStorage", None),
@@ -269,6 +317,15 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
         yield event(state="error", repoId=repo_id,
                     message="Downloaded repo is not a compatible model (no devkit/ config)")
         return
+
+    # Some repos ship a broken chat_template.jinja (an HTML page) or the new
+    # root-level template layout the runtime doesn't look at — fix that now so
+    # the first load doesn't fail inside minja.
+    try:
+        for fix in repair_chat_template_files(target):
+            yield event(state="repairing", repoId=repo_id, message=fix)
+    except Exception:  # noqa: BLE001 - repair is best-effort
+        pass
 
     # Mark the download complete so completeness checks trust it definitively.
     try:

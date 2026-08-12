@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from shared.chat_template import repair_chat_template_files
 from shared.config import HubConfig, classify_model_dir, model_dir_complete
 from server import hub as hub_helpers
 
@@ -292,6 +293,15 @@ class ModelManager:
                 raise ValueError(
                     f"'{name}' cannot be loaded — {reason}. Re-download it from Add Model."
                 )
+
+            # Self-heal chat-template files (corrupt HTML pages, new root-level
+            # Hub layout) before the runtime's minja parser ever sees them —
+            # this also fixes models downloaded before the repair existed.
+            try:
+                for fix in repair_chat_template_files(path):
+                    logging.info("model '%s': %s", name, fix)
+            except Exception:  # noqa: BLE001 - repair is best-effort
+                pass
 
             with self._lock:
                 # The ASR model is pinned and not tracked in _resident.
