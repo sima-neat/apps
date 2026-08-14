@@ -1,0 +1,79 @@
+model:
+  # Single/fallback model package. Used for any tier that has no dedicated archive
+  # under `tiers` (or whose archive is missing), so the example still runs on one model.
+  path: assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz
+  labels: src/common/coco_label.txt
+
+  # Real per-resolution-tier archives, one MLA-compiled input size each. Build them
+  # with tools/build_yolo26_tiers.sh (validated on Modalix: 320/640/960 do
+  # 0.32M/0.67M/1.24M MLA cycles respectively -> genuinely different compute).
+  # When a tier archive is absent the example falls back to model.path above, so
+  # tier switches become cosmetic until all three exist. Keys MUST match
+  # adaptive.resolutions.
+  tiers:
+    320: assets/models/yolo26n-320-det-int8-mla_tess-b1.tar.gz
+    640: assets/models/yolo26n-640-det-int8-mla_tess-b1.tar.gz
+    960: assets/models/yolo26n-960-det-int8-mla_tess-b1.tar.gz
+
+adaptive:                        # Per-stream MODEL-input tier policy (detection accuracy vs MLA cost).
+  resolutions: [640]             # Single value => the YOLO26n input tensor size is FIXED (no model-tier
+                                 # switching). This build adapts DELIVERED video resolution instead (see
+                                 # output.adaptive below). To also adapt detection accuracy, restore a
+                                 # multi-value ascending list (e.g. [320, 640, 960]) whose keys match
+                                 # model.tiers, and the content-driven policy below becomes active again.
+  confidence_low: 0.40           # (model-tier only) Any object below this confidence steps the stream up.
+  min_object_px: 24              # (model-tier only) An object smaller than this forces a higher tier.
+  hysteresis_frames: 15          # (model-tier only) Frames a new tier must persist before committing.
+  density_high: 20               # (model-tier only) This many detections => crowded scene => step up.
+  budget_units: 12               # (model-tier only) Shared MLA compute budget in tier-cost units.
+
+streams:                         # RTSP inputs. Add/remove entries while running to change stream count.
+  max_streams: 16                # Upper bound on concurrent streams (beyond the 8 validated on hardware;
+                                 # the output-bandwidth budget lowers per-stream resolution to fit).
+  sources:                       # Each source has a stable id (used for add/remove diffing + overlays).
+    - id: cam-1
+      rtsp_url: <first-rtsp-url-copied-from-insight>
+    - id: cam-2
+      rtsp_url: <second-rtsp-url-copied-from-insight>
+
+input:                           # RTSP input transport settings.
+  tcp: true                      # Use TCP for RTSP transport.
+  latency_ms: 100                # RTSP receive latency in milliseconds.
+
+inference:                       # Detection controls.
+  frames: 0                      # Frame limit per stream. 0 means unlimited.
+  fps: 0                         # Max per-stream processing/output FPS. 0 means use source FPS.
+  min_score: 0.30                # Detection score threshold.
+  nms_iou: 0.60                  # NMS IoU threshold.
+  max_detections: 50             # Max detections kept per frame after NMS.
+
+runtime:                         # Runtime, profiling, and control settings.
+  profile: false                 # Print per-stream timing summaries.
+  warmup_frames: 30              # Drain this many frames before metadata/profile output.
+  config_watch_seconds: 1.0      # Poll interval for detecting streams.sources changes at runtime.
+
+output:                          # Insight output plus optional local debug saves.
+  adaptive:                      # DELIVERED-video resolution policy, driven by a shared bandwidth budget.
+    heights: [2160, 1080, 720, 480]  # Candidate delivered heights (px), clamped to each source's native
+                                 # size (never upscaled). Width is derived per source to preserve aspect.
+    budget_megapixels_per_s: 280 # Total output pixel-rate fair-shared across active streams. Each stream
+                                 # gets budget/active_streams and picks the highest height whose
+                                 # width*height*fps fits. So 1 stream -> ~4K, ~4 -> 1080p, ~10 -> 720p,
+                                 # 16 -> 480p. There is no hardware decoder-bandwidth number to query:
+                                 # tune this to your platform's sustainable encode/deliver capacity (raise
+                                 # until frames drop, then back off). It bounds ENCODE/DELIVER load, not raw
+                                 # decode (single-profile sources always decode at native resolution).
+  insight:                       # Live video + metadata destination (per stream = channel index).
+    host: <insight-host-ip>      # Host running the Insight receiver/viewer.
+    video_port: 9000             # Base UDP video port; stream N publishes to video_port + N.
+    metadata_port: 9100          # Base UDP metadata port; stream N publishes to metadata_port + N.
+  video_enabled: true            # Disable to publish metadata only.
+  debug_dir: null                # Optional directory for periodic debug frame saves.
+  save_every: 0                  # Save every Nth debug frame. 0 disables saving.
+
+# Test harness settings only. Normal example runs ignore this section.
+testing:
+  e2e:
+    output:
+      save_every: 10
+      total_saved_frames: 20

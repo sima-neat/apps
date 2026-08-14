@@ -1,0 +1,25 @@
+# Python-only example: the adaptive detector (src/python/main.py) and the fused
+# multi-stream detector (src/python/fused_main.py) are both Python. There is no
+# C++ port, so the C++ lanes are declared off rather than left to fail in CI.
+#
+# adaptive.resolutions is pinned to [640] in src/common/config.yaml, so a single
+# YOLO26n pack covers every run - no model-tier switching, no per-tier archives.
+models:
+  yolo26n-det-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+    file: yolo26n-det-int8-b1.tar.gz
+  yolo26n-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26n-det-bf16-mla_tess-b1.tar.gz
+unit:
+  python: true
+  cpp: false
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo26n-det-bf16-mla_tess-b1
+  cpp:
+    enabled: false

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detection Pipelines</title>
+<style>
+  /* Colour + type tokens taken from Neat Insight's own stylesheet, so the
+     chooser, the panels and the viewer all read as one product. */
+  @font-face { font-family:Inter; font-style:normal; font-weight:400 800;
+    font-display:swap; src:url(/assets/inter.woff2) format("woff2"); }
+  @font-face { font-family:Sora; font-style:normal; font-weight:500 800;
+    font-display:swap; src:url(/assets/sora.woff2) format("woff2"); }
+  @font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:400 700;
+    font-display:swap; src:url(/assets/jetbrains-mono.woff2) format("woff2"); }
+
+  :root {
+    --bg:#f2f4f7; --surface:#ffffff; --surface-soft:#f8fafc; --bg-accent:#e7edf4;
+    --ink:#0f1d2b; --ink-soft:#486176;
+    --line:#d8e0ea; --line-strong:#b8c5d4;
+    --accent:#0e5ab8; --accent-strong:#0a468e; --accent-soft:#e7f0ff;
+    --accent-alt:#0f7a74; --accent-alt-soft:#e4f7f5;
+    --ok:#19713e; --ok-soft:#ecf9f0;
+    --danger:#b3425a; --danger-soft:#fff0f3;
+    --radius-sm:10px; --radius-md:14px; --radius-lg:20px;
+    --shadow-sm:0 8px 18px rgba(14,30,43,.07); --shadow-md:0 20px 40px rgba(14,30,43,.1);
+    --font-sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    --font-display:"Sora",var(--font-sans);
+    --font-mono:"JetBrains Mono","SFMono-Regular",Menlo,Consolas,monospace;
+    /* one accent per pipeline, drawn from the Insight palette */
+    --scale:#0e5ab8; --live:#0f7a74; --group:#7c4bbd;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.6 var(--font-sans); -webkit-font-smoothing:antialiased; }
+
+  header { display:flex; align-items:center; gap:14px; padding:14px 22px;
+    background:var(--surface); border-bottom:1px solid var(--line); box-shadow:var(--shadow-sm); }
+  header img.logo { height:28px; width:auto; display:block; }
+  header h1 { font-family:var(--font-display); font-size:17px; margin:0; font-weight:700;
+    letter-spacing:-0.01em; }
+  header .sep { color:var(--line-strong); }
+  header .sub { color:var(--ink-soft); font-size:13px; }
+
+  main { max-width:1180px; margin:0 auto; padding:24px 22px 60px; }
+
+  .note { background:var(--accent-soft); border:1px solid var(--line);
+    border-left:3px solid var(--accent); border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+    padding:13px 17px; margin-bottom:24px; font-size:13px; color:var(--ink-soft); }
+  .note b { color:var(--ink); font-weight:650; }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(330px, 1fr)); gap:18px; }
+  .card { background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius-md); padding:0; display:flex; flex-direction:column;
+    overflow:hidden; box-shadow:var(--shadow-sm); transition:box-shadow .18s, transform .18s; }
+  .card:hover { box-shadow:var(--shadow-md); transform:translateY(-1px); }
+  .card.on { border-color:var(--ok); box-shadow:0 0 0 1px var(--ok) inset, var(--shadow-sm); }
+  .card-top { padding:17px 19px 0; }
+  .stripe { height:3px; }
+  .c-scale .stripe { background:var(--scale); }
+  .c-live  .stripe { background:var(--live); }
+  .c-group .stripe { background:var(--group); }
+
+  .card h2 { font-family:var(--font-display); font-size:16.5px; margin:0 0 3px; font-weight:700; }
+  .tagline { color:var(--ink-soft); font-size:12.5px; margin:0 0 13px; }
+  .c-scale h2 { color:var(--scale); }
+  .c-live  h2 { color:var(--live); }
+  .c-group h2 { color:var(--group); }
+
+  .pills { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:13px; }
+  .pill { padding:2px 9px; border-radius:999px; background:var(--surface-soft); font-size:11px;
+    border:1px solid var(--line); color:var(--ink-soft); white-space:nowrap; }
+  .pill.live { color:var(--ok); border-color:var(--ok); background:var(--ok-soft); font-weight:600; }
+  .pill.idle { color:var(--ink-soft); }
+
+  .body { padding:0 19px 17px; flex:1; }
+  .sec { margin-bottom:13px; }
+  .sec h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:0 0 5px;
+    font-weight:700; color:var(--ink-soft); }
+  .sec p { margin:0; font-size:13px; }
+  .sec ul { margin:0; padding-left:18px; font-size:13px; }
+  .sec li { margin-bottom:3px; }
+  .good li::marker { color:var(--ok); }
+  .bad li::marker  { color:var(--danger); }
+
+  table.cap { width:100%; border-collapse:collapse; font-size:12.5px; margin-top:2px; }
+  table.cap td { padding:4px 0; border-bottom:1px solid var(--line); }
+  table.cap td:last-child { text-align:right; font-family:var(--font-mono);
+    font-variant-numeric:tabular-nums; color:var(--ink-soft); }
+  table.cap tr:last-child td { border-bottom:none; }
+
+  .actions { padding:15px 19px; border-top:1px solid var(--line);
+    background:var(--surface-soft); display:flex; gap:10px; align-items:center; }
+  button { background:var(--surface); color:var(--ink); border:1px solid var(--line-strong);
+    border-radius:var(--radius-sm); padding:9px 15px; font:500 13.5px var(--font-sans);
+    cursor:pointer; transition:border-color .15s, background .15s; }
+  button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent);
+    background:var(--accent-soft); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.use { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.use:hover:not(:disabled) { background:var(--accent-strong);
+    border-color:var(--accent-strong); color:#fff; }
+  a.open { color:var(--accent); font-size:13px; text-decoration:none; font-weight:500; }
+  a.open:hover { text-decoration:underline; }
+
+  .msg { color:var(--ink-soft); font-size:13px; margin-top:20px; min-height:20px; }
+  .msg.err { color:var(--danger); }
+  .spinner { width:12px; height:12px; border:2px solid var(--line);
+    border-top-color:var(--accent); border-radius:50%; display:inline-block;
+    animation:spin .8s linear infinite; vertical-align:-2px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  footer { max-width:1180px; margin:0 auto; padding:0 22px 44px;
+    color:var(--ink-soft); font-size:12.5px; }
+  footer h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-soft); margin:28px 0 8px; font-weight:700; }
+  footer b { color:var(--ink); }
+  footer code { background:var(--surface); border:1px solid var(--line);
+    border-radius:6px; padding:1px 6px; font:12px var(--font-mono); }
+</style>
+</head>
+<body>
+<header>
+  <img class="logo" src="/assets/sima-logo.png" alt="SiMa.ai">
+  <h1>Adaptive Pipeline</h1>
+</header>
+
+<main>
+
+  <div class="grid" id="grid">
+
+    <!-- SCALE -->
+    <div class="card c-scale" id="card-scale">
+      <div class="stripe"></div>
+      <div class="card-top">
+        <h2>High-Scale</h2>
+        <p class="tagline">One shared detector for every stream</p>
+        <div class="pills" id="pills-scale"></div>
+      </div>
+      <div class="body">
+        <div class="sec">
+          <h3>What it is</h3>
+          <p>All cameras feed <em>one</em> detector graph. Video is forwarded to Insight untouched
+             (no re-encoding), and only a decoded copy goes to the detector.</p>
+        </div>
+        <div class="sec good">
+          <h3>Why use it</h3>
+          <ul>
+            <li>Highest stream count — each extra camera costs only a decoder</li>
+            <li>Boxes stay accurate even at 16 streams</li>
+            <li>Lowest hardware cost per stream of the three</li>
+          </ul>
+        </div>
+        <div class="sec bad">
+          <h3>Trade-off</h3>
+          <ul>
+            <li>Adding or removing <em>any</em> stream restarts <em>all</em> of them (~10–30 s)</li>
+            <li>Not suited to cameras that come and go often</li>
+          </ul>
+        </div>
+        <div class="sec">
+          <h3>Capacity (30 fps)</h3>
+          <table class="cap">
+            <tr><td>720p</td><td>16 streams</td></tr>
+            <tr><td>1080p</td><td>3 streams</td></tr>
+            <tr><td>4K</td><td>1 stream</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="use" onclick="use('scale')">Use this</button>
+        <a class="open" id="link-scale" href="#" target="_blank">open panel ↗</a>
+      </div>
+    </div>
+
+    <!-- LIVE -->
+    <div class="card c-live" id="card-live">
+      <div class="stripe"></div>
+      <div class="card-top">
+        <h2>Live-Add</h2>
+        <p class="tagline">A private pipeline per stream</p>
+        <div class="pills" id="pills-live"></div>
+      </div>
+      <div class="body">
+        <div class="sec">
+          <h3>What it is</h3>
+          <p>Every camera gets its own complete chain — decoder, model, MLA and encoder — so the
+             streams are genuinely independent of one another.</p>
+        </div>
+        <div class="sec good">
+          <h3>Why use it</h3>
+          <ul>
+            <li>Adding a camera does <em>not</em> restart the others — true live add</li>
+            <li>Best when cameras join and leave during a session</li>
+          </ul>
+        </div>
+        <div class="sec bad">
+          <h3>Trade-off</h3>
+          <ul>
+            <li>Most expensive per stream — model + MLA pool + encoder each</li>
+            <li>Around 5–6 streams the shared MLA pool can run out, and that
+                failure kills <em>every</em> running stream, not just the new one</li>
+          </ul>
+        </div>
+        <div class="sec">
+          <h3>Capacity (30 fps)</h3>
+          <table class="cap">
+            <tr><td>720p</td><td>5 streams</td></tr>
+            <tr><td>1080p</td><td>5 streams</td></tr>
+            <tr><td>4K</td><td>1 stream</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="use" onclick="use('live')">Use this</button>
+        <a class="open" id="link-live" href="#" target="_blank">open panel ↗</a>
+      </div>
+    </div>
+
+    <!-- GROUP -->
+    <div class="card c-group" id="card-group">
+      <div class="stripe"></div>
+      <div class="card-top">
+        <h2>Grouped</h2>
+        <p class="tagline">Independent groups of 4 streams</p>
+        <div class="pills" id="pills-group"></div>
+      </div>
+      <div class="body">
+        <div class="sec">
+          <h3>What it is</h3>
+          <p>A middle ground: several independent detectors, each handling 4 streams. One model per
+             <em>group</em> instead of per stream, and each group owns its own Insight channels.</p>
+        </div>
+        <div class="sec good">
+          <h3>Why use it</h3>
+          <ul>
+            <li>Changing a stream rebuilds only its own group of 4 — other groups keep running</li>
+            <li>Far cheaper than Live: 16 streams cost 4 detectors, not 16</li>
+          </ul>
+        </div>
+        <div class="sec bad">
+          <h3>Trade-off</h3>
+          <ul>
+            <li>A change still restarts the other 3 streams sharing that group</li>
+          </ul>
+        </div>
+        <div class="sec">
+          <h3>Capacity (30 fps)</h3>
+          <table class="cap">
+            <tr><td>720p</td><td>8 streams</td></tr>
+            <tr><td>1080p</td><td>3 streams</td></tr>
+            <tr><td>4K</td><td>1 stream</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="use" onclick="use('group')">Use this</button>
+        <a class="open" id="link-group" href="#" target="_blank">open panel ↗</a>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="msg" id="msg"></p>
+</main>
+
+<footer>
+  <h3>Choosing quickly</h3>
+  <p>Many fixed cameras → <b>High-Scale</b>. Cameras that come and go → <b>Live-Add</b>.
+     Many cameras but you still want to edit one without disturbing the rest → <b>Grouped</b>.</p>
+
+</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const HOST = window.location.hostname;
+let busy = false;
+
+function panelUrl(p, port) { return `http://${HOST}:${port}/`; }
+
+function render(st) {
+  for (const [name, info] of Object.entries(st.pipelines)) {
+    const pills = $(`#pills-${name}`);
+    const on = info.detector_running;
+    pills.innerHTML =
+      `<span class="pill ${on ? "live" : "idle"}">${on ? "● running" : "○ idle"}</span>` +
+      `<span class="pill">${info.streams} stream${info.streams === 1 ? "" : "s"} saved</span>` +
+      `<span class="pill">port ${info.port}</span>`;
+    $(`#card-${name}`).classList.toggle("on", on);
+    const link = $(`#link-${name}`);
+    link.href = panelUrl(name, info.port);
+  }
+  document.querySelectorAll("button.use").forEach(b => b.disabled = busy);
+}
+
+// Tolerate a dropped poll. The status endpoint is polled every 4s, so a single
+// blip - the service restarting, a brief network hiccup - would otherwise put a
+// hard error on screen for something that fixes itself on the next tick. Only
+// report after several consecutive failures, and clear it as soon as one works.
+let failCount = 0;
+
+async function refresh() {
+  try {
+    const st = await (await fetch("/api/status")).json();
+    render(st);
+    if (failCount) {
+      failCount = 0;
+      if ($("#msg").dataset.conn) { $("#msg").textContent = ""; $("#msg").className = "msg"; }
+      delete $("#msg").dataset.conn;
+    }
+  } catch (e) {
+    if (++failCount >= 3) {
+      $("#msg").dataset.conn = "1";
+      $("#msg").textContent = "cannot reach the chooser service - is it still running on :8080?";
+      $("#msg").className = "msg err";
+    }
+  }
+}
+
+async function use(name) {
+  if (busy) return;
+  busy = true;
+  $("#msg").innerHTML = `<span class="spinner"></span> switching to ${name} — stopping the other pipelines …`;
+  $("#msg").className = "msg";
+  document.querySelectorAll("button.use").forEach(b => b.disabled = true);
+  try {
+    const r = await (await fetch("/api/activate", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({pipeline: name}),
+    })).json();
+    if (r.error) {
+      $("#msg").textContent = "⚠ " + r.error;
+      $("#msg").className = "msg err";
+    } else {
+      $("#msg").textContent = `${name} is ready — opening its control panel …`;
+      window.open(panelUrl(name, r.port), "_blank");
+    }
+  } catch (e) {
+    $("#msg").textContent = "⚠ " + e;
+    $("#msg").className = "msg err";
+  } finally {
+    busy = false;
+    refresh();
+  }
+}
+
+refresh();
+setInterval(() => { if (!busy) refresh(); }, 4000);
+</script>
+</body>
+</html>
