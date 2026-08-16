@@ -123,6 +123,14 @@ def test_interarrival_stats_use_consecutive_pts() -> None:
 
 
 @pytest.mark.unit
+def test_one_frame_consumes_every_reached_snapshot_target() -> None:
+    module = load_module()
+    targets = (0.01, 0.02, 0.10)
+    assert module.reached_target_indices(targets, 0, 0.035) == range(0, 2)
+    assert module.reached_target_indices(targets, 2, 0.035) == range(2, 2)
+
+
+@pytest.mark.unit
 def test_invalid_output_path_is_rejected_before_graph_build(tmp_path: Path) -> None:
     module = load_module()
     output_file = tmp_path / "not-a-directory"

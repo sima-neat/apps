@@ -182,6 +182,18 @@ def pts_interarrival_stats_ms(pts_values: list[int]) -> tuple[float | None, floa
     return statistics.fmean(intervals), max(intervals)
 
 
+def reached_target_indices(
+    targets: tuple[float, ...],
+    target_index: int,
+    elapsed_seconds: float,
+) -> range:
+    """Return every pending snapshot target reached by the current frame."""
+    end = target_index
+    while end < len(targets) and elapsed_seconds >= targets[end]:
+        end += 1
+    return range(target_index, end)
+
+
 def nv12_contiguous_payload(tensor, width: int, height: int, y_role, uv_role) -> bytes:
     """Copy a possibly strided composite NV12 tensor into a tightly packed byte string."""
     if not tensor.is_nv12():
@@ -325,7 +337,8 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
 
             elapsed = now - started
             targets = config.capture.sample_times_seconds
-            if target_index < len(targets) and elapsed >= targets[target_index]:
+            reached_targets = reached_target_indices(targets, target_index, elapsed)
+            if reached_targets:
                 tensors = list(sample.tensors)
                 if not tensors:
                     raise RuntimeError(f"camera sample at {elapsed:.3f}s contains no tensor")
@@ -341,19 +354,21 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
                     raise RuntimeError(
                         f"NV12 frame has {len(payload)} bytes; expected exactly {expected}"
                     )
-                filename = f"frame_{target_index:02d}_{elapsed:07.3f}s.nv12"
-                with (output_dir / filename).open("wb") as output:
-                    output.write(payload)
-                entry = {
-                    "target_s": targets[target_index],
-                    "elapsed_s": elapsed,
-                    "frame": frames,
-                    "file": filename,
-                    **frame_stats(payload, config.camera.width, config.camera.height),
-                }
-                captures.append(entry)
-                print("CAPTURE " + json.dumps(entry, sort_keys=True), flush=True)
-                target_index += 1
+                stats = frame_stats(payload, config.camera.width, config.camera.height)
+                for capture_index in reached_targets:
+                    filename = f"frame_{capture_index:02d}_{elapsed:07.3f}s.nv12"
+                    with (output_dir / filename).open("wb") as output:
+                        output.write(payload)
+                    entry = {
+                        "target_s": targets[capture_index],
+                        "elapsed_s": elapsed,
+                        "frame": frames,
+                        "file": filename,
+                        **stats,
+                    }
+                    captures.append(entry)
+                    print("CAPTURE " + json.dumps(entry, sort_keys=True), flush=True)
+                target_index = reached_targets.stop
             if frames % 300 == 0:
                 print(f"progress frames={frames} elapsed={elapsed:.3f}", flush=True)
         if target_index != len(config.capture.sample_times_seconds):
