@@ -34,7 +34,7 @@ The three checked-in profiles use the same application and model:
 
 | Config | Streams | Source resolution and FPS | Expected FPS per channel |
 | --- | ---: | --- | ---: |
-| `config.yaml` | 16 | 1280×720 at 25 FPS | 25 FPS |
+| `config.yaml` | 16 | 1280×720 at 30 FPS | 30 FPS |
 | `config-24x720p20fps.yaml` | 24 | 1280×720 at 20 FPS | 20 FPS |
 | `config-48x720p10fps.yaml` | 48 | 1280×720 at 10 FPS | 10 FPS |
 
@@ -172,7 +172,7 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
-- Video and metadata advance at 25 FPS for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
+- Video and metadata advance at 30 FPS for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
 - Final per-stream counters show every stream advancing; the application fails with the missing channel IDs if a stream never starts or later stops.
 - No detection timeout or stalled channel is reported. Metadata sender counters expose any nonblocking UDP drops without stalling inference.
 
