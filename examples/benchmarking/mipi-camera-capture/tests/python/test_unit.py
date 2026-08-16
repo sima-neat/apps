@@ -106,9 +106,10 @@ def test_rejects_non_finite_duration(tmp_path: Path, duration: float) -> None:
 @pytest.mark.unit
 def test_pull_timeout_is_bounded_by_remaining_duration() -> None:
     module = load_module()
-    assert module.bounded_pull_timeout_ms(2000, 10.0) == 2000
-    assert module.bounded_pull_timeout_ms(2000, 0.1251) == 126
-    assert module.bounded_pull_timeout_ms(2000, 0.0001) == 1
+    assert module.bounded_pull(2000, 10.0) == (2000, False)
+    assert module.bounded_pull(2000, 0.1251) == (126, True)
+    assert module.bounded_pull(2000, 0.0001) == (1, True)
+    assert module.bounded_pull(2000, 1.9999) == (2000, True)
 
 
 @pytest.mark.unit

@@ -157,9 +157,17 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("sample times must be unique and in increasing order")
 
 
-def bounded_pull_timeout_ms(configured_timeout_ms: int, remaining_seconds: float) -> int:
-    """Limit a blocking pull to the configured timeout and remaining run time."""
-    return max(1, min(configured_timeout_ms, math.ceil(remaining_seconds * 1000.0)))
+def bounded_pull(
+    configured_timeout_ms: int,
+    remaining_seconds: float,
+) -> tuple[int, bool]:
+    """Return the bounded timeout and whether the run deadline imposed it."""
+    deadline_limited = remaining_seconds * 1000.0 < configured_timeout_ms
+    timeout_ms = max(
+        1,
+        min(configured_timeout_ms, math.ceil(remaining_seconds * 1000.0)),
+    )
+    return timeout_ms, deadline_limited
 
 
 def pts_interarrival_stats_ms(pts_values: list[int]) -> tuple[float | None, float | None]:
@@ -297,11 +305,10 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            pull_timeout_ms = bounded_pull_timeout_ms(
+            pull_timeout_ms, deadline_limited_pull = bounded_pull(
                 config.capture.pull_timeout_ms,
                 remaining,
             )
-            deadline_limited_pull = pull_timeout_ms < config.capture.pull_timeout_ms
             sample = run.pull("frames", pull_timeout_ms)
             now = time.monotonic()
             if sample is None:
@@ -358,34 +365,40 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
         error = repr(exc)
         raise
     finally:
-        elapsed = time.monotonic() - started
-        interarrival_mean_ms, interarrival_max_ms = pts_interarrival_stats_ms(pts_values)
-        summary = {
-            "camera": config.camera.name or "<libcamera-default>",
-            "width": config.camera.width,
-            "height": config.camera.height,
-            "requested_fps": config.camera.fps_num / config.camera.fps_den,
-            "strict_zero_copy": config.camera.strict_zero_copy,
-            "capture_buffers": config.camera.capture_buffers,
-            "elapsed_s": elapsed,
-            "frames_pulled": frames,
-            "pull_fps": frames / elapsed if elapsed else 0.0,
-            "timeouts": timeouts,
-            "captures": captures,
-            "interarrival_mean_ms": interarrival_mean_ms,
-            "interarrival_max_ms": interarrival_max_ms,
-            "pts_span_s": (
-                (pts_values[-1] - pts_values[0]) / 1e9 if len(pts_values) >= 2 else None
-            ),
-            "error": error,
-        }
+        try:
+            elapsed = time.monotonic() - started
+            interarrival_mean_ms, interarrival_max_ms = pts_interarrival_stats_ms(
+                pts_values
+            )
+            summary = {
+                "camera": config.camera.name or "<libcamera-default>",
+                "width": config.camera.width,
+                "height": config.camera.height,
+                "requested_fps": config.camera.fps_num / config.camera.fps_den,
+                "strict_zero_copy": config.camera.strict_zero_copy,
+                "capture_buffers": config.camera.capture_buffers,
+                "elapsed_s": elapsed,
+                "frames_pulled": frames,
+                "pull_fps": frames / elapsed if elapsed else 0.0,
+                "timeouts": timeouts,
+                "captures": captures,
+                "interarrival_mean_ms": interarrival_mean_ms,
+                "interarrival_max_ms": interarrival_max_ms,
+                "pts_span_s": (
+                    (pts_values[-1] - pts_values[0]) / 1e9
+                    if len(pts_values) >= 2
+                    else None
+                ),
+                "error": error,
+            }
+        finally:
+            try:
+                run.close()
+            finally:
+                del run
+                gc.collect()
         write_json(output_dir / "summary.json", summary)
         print("SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
-        try:
-            run.close()
-        finally:
-            del run
-            gc.collect()
     return summary
 
 
