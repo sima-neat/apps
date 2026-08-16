@@ -7,6 +7,7 @@ import argparse
 from dataclasses import dataclass
 import gc
 import json
+import math
 from pathlib import Path
 import statistics
 import sys
@@ -96,6 +97,10 @@ def load_config(path: Path) -> AppConfig:
     ):
         raise ValueError("capture.sample_times_seconds must be a list of numbers")
 
+    output_directory = string(output_raw, "directory", "sandbox/mipi-camera-capture")
+    if not output_directory.strip():
+        raise ValueError("output.directory must not be empty")
+
     config = AppConfig(
         camera=CameraConfig(
             name=string(camera_raw, "name", ""),
@@ -113,7 +118,7 @@ def load_config(path: Path) -> AppConfig:
             sample_times_seconds=tuple(float(value) for value in sample_times),
             pull_timeout_ms=integer(capture_raw, "pull_timeout_ms", 2000),
         ),
-        output_directory=Path(string(output_raw, "directory", "sandbox/mipi-camera-capture")),
+        output_directory=Path(output_directory),
     )
     validate_config(config)
     return config
@@ -147,8 +152,50 @@ def validate_config(config: AppConfig) -> None:
         )
     if tuple(sorted(set(capture.sample_times_seconds))) != capture.sample_times_seconds:
         raise ValueError("sample times must be unique and in increasing order")
-    if not str(config.output_directory):
-        raise ValueError("output.directory must not be empty")
+
+
+def bounded_pull_timeout_ms(configured_timeout_ms: int, remaining_seconds: float) -> int:
+    """Limit a blocking pull to the configured timeout and remaining run time."""
+    return max(1, min(configured_timeout_ms, math.ceil(remaining_seconds * 1000.0)))
+
+
+def nv12_contiguous_payload(tensor, width: int, height: int, y_role, uv_role) -> bytes:
+    """Copy a possibly strided composite NV12 tensor into a tightly packed byte string."""
+    if not tensor.is_nv12():
+        raise RuntimeError("camera tensor is not NV12")
+    tensor_width = tensor.width()
+    tensor_height = tensor.height()
+    if tensor_width > 0 and tensor_width != width:
+        raise RuntimeError(f"camera tensor width {tensor_width} does not match {width}")
+    if tensor_height > 0 and tensor_height != height:
+        raise RuntimeError(f"camera tensor height {tensor_height} does not match {height}")
+
+    planes = {plane.role: plane for plane in tensor.planes}
+    try:
+        y_plane = planes[y_role]
+        uv_plane = planes[uv_role]
+    except KeyError as exc:
+        raise RuntimeError("NV12 tensor is missing its Y or UV plane") from exc
+
+    raw = tensor.copy_payload_bytes()
+    packed = bytearray(width * height * 3 // 2)
+
+    def copy_plane(plane, rows: int, destination_offset: int) -> None:
+        source_offset = int(plane.byte_offset)
+        stride = int(plane.strides_bytes[0]) if plane.strides_bytes else width
+        if source_offset < 0 or stride < width:
+            raise RuntimeError("NV12 tensor has an invalid plane offset or stride")
+        source_end = source_offset + stride * (rows - 1) + width
+        if source_end > len(raw):
+            raise RuntimeError("NV12 tensor plane exceeds its mapped payload")
+        for row in range(rows):
+            source = source_offset + row * stride
+            destination = destination_offset + row * width
+            packed[destination : destination + width] = raw[source : source + width]
+
+    copy_plane(y_plane, height, 0)
+    copy_plane(uv_plane, height // 2, width * height)
+    return bytes(packed)
 
 
 def frame_stats(payload: bytes, width: int, height: int) -> dict[str, float | int]:
@@ -223,6 +270,7 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
     output_dir = config.output_directory
     output_dir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
+    deadline = started + config.capture.duration_seconds
     previous_arrival = None
     arrivals: list[float] = []
     pts_values: list[int] = []
@@ -232,10 +280,20 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
     target_index = 0
     error = None
     try:
-        while time.monotonic() - started < config.capture.duration_seconds:
-            sample = run.pull("frames", config.capture.pull_timeout_ms)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            pull_timeout_ms = bounded_pull_timeout_ms(
+                config.capture.pull_timeout_ms,
+                remaining,
+            )
+            deadline_limited_pull = pull_timeout_ms < config.capture.pull_timeout_ms
+            sample = run.pull("frames", pull_timeout_ms)
             now = time.monotonic()
             if sample is None:
+                if deadline_limited_pull:
+                    continue
                 timeouts += 1
                 print(f"timeout elapsed={now - started:.3f}", flush=True)
                 continue
@@ -254,7 +312,13 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
                 tensors = list(sample.tensors)
                 if not tensors:
                     raise RuntimeError(f"camera sample at {elapsed:.3f}s contains no tensor")
-                payload = tensors[0].copy_payload_bytes()
+                payload = nv12_contiguous_payload(
+                    tensors[0],
+                    config.camera.width,
+                    config.camera.height,
+                    pyneat.PlaneRole.Y,
+                    pyneat.PlaneRole.UV,
+                )
                 expected = config.camera.width * config.camera.height * 3 // 2
                 if len(payload) != expected:
                     raise RuntimeError(

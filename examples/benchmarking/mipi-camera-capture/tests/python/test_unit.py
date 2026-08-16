@@ -6,6 +6,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -65,6 +66,67 @@ def test_rejects_sample_time_after_duration(tmp_path: Path) -> None:
     )
     assert result.returncode == 2
     assert "sample times must be at least zero" in result.stderr
+
+
+@pytest.mark.unit
+def test_rejects_empty_output_directory(tmp_path: Path) -> None:
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["output"]["directory"] = ""
+    config = tmp_path / "invalid.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--config", str(config), "--validate-config-only"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 2
+    assert "output.directory must not be empty" in result.stderr
+
+
+@pytest.mark.unit
+def test_pull_timeout_is_bounded_by_remaining_duration() -> None:
+    module = load_module()
+    assert module.bounded_pull_timeout_ms(2000, 10.0) == 2000
+    assert module.bounded_pull_timeout_ms(2000, 0.1251) == 126
+    assert module.bounded_pull_timeout_ms(2000, 0.0001) == 1
+
+
+@pytest.mark.unit
+def test_nv12_copy_removes_plane_stride_padding() -> None:
+    module = load_module()
+    y_role = "Y"
+    uv_role = "UV"
+    raw = bytes(
+        [1, 2, 99, 99, 3, 4, 99, 99, 5, 6, 99, 99]
+    )
+
+    class Tensor:
+        planes = [
+            SimpleNamespace(role=y_role, byte_offset=0, strides_bytes=[4]),
+            SimpleNamespace(role=uv_role, byte_offset=8, strides_bytes=[4]),
+        ]
+
+        @staticmethod
+        def is_nv12() -> bool:
+            return True
+
+        @staticmethod
+        def width() -> int:
+            return 2
+
+        @staticmethod
+        def height() -> int:
+            return 2
+
+        @staticmethod
+        def copy_payload_bytes() -> bytes:
+            return raw
+
+    assert module.nv12_contiguous_payload(Tensor(), 2, 2, y_role, uv_role) == bytes(
+        [1, 2, 3, 4, 5, 6]
+    )
 
 
 @pytest.mark.unit
