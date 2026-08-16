@@ -164,7 +164,7 @@ def materialize_repo_paths(config: dict[str, Any]) -> None:
 
     io = config.get("io")
     if isinstance(io, dict):
-        for key in ("image", "image1", "image2", "input_dir", "output", "output_dir"):
+        for key in ("image", "image1", "image2", "input", "input_dir", "output", "output_dir"):
             if key in io:
                 io[key] = _repo_path(io[key])
 

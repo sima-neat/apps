@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -59,6 +60,19 @@ def test_runtime_and_test_coco_datasets_have_expected_images():
 def test_classification_image_is_test_only():
     assert (APPS_ROOT / "assets/datasets-test/imagenet/goldfish.jpeg").is_file()
     assert not (APPS_ROOT / "assets/datasets/imagenet/goldfish.jpeg").exists()
+
+
+def test_superpoint_video_is_a_licensed_runtime_dataset():
+    dataset = APPS_ROOT / "assets" / "datasets" / "tum-rgbd"
+    video = dataset / "freiburg1-desk.mp4"
+    license_file = dataset / "LICENSE.md"
+
+    assert video.is_file()
+    assert license_file.is_file()
+    assert hashlib.sha256(video.read_bytes()).hexdigest() == (
+        "fe6189df4c6f3fa468fea1439a31d2ce306110988cfba4854fb1d24d37a978fe"
+    )
+    assert "CC BY 4.0" in license_file.read_text(encoding="utf-8")
 
 
 def test_direct_pytest_defaults_to_test_assets(monkeypatch):
