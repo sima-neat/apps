@@ -1,0 +1,19 @@
+camera:
+  # Leave empty to select libcamera's default camera. Use `cam -l` to list names.
+  name: ""
+  width: 1920
+  height: 1080
+  fps_num: 30
+  fps_den: 1
+  format: NV12
+  capture_buffers: 32
+  strict_zero_copy: true
+  queue_depth: 2
+
+capture:
+  duration_seconds: 30
+  sample_times_seconds: [3, 15, 27]
+  pull_timeout_ms: 2000
+
+output:
+  directory: sandbox/mipi-camera-capture

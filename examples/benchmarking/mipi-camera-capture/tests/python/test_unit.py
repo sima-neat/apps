@@ -1,0 +1,84 @@
+"""Unit tests for the Python MIPI camera capture example."""
+
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
+MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+DEFAULT_CONFIG = EXAMPLE_DIR / "src" / "common" / "config.yaml"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("mipi_camera_capture", MAIN_PY)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.unit
+def test_help_runs_without_pyneat() -> None:
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0
+    assert "usage" in result.stdout.lower()
+
+
+@pytest.mark.unit
+def test_default_config_validates_without_pyneat() -> None:
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--config", str(DEFAULT_CONFIG), "--validate-config-only"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "config valid" in result.stdout
+
+
+@pytest.mark.unit
+def test_rejects_sample_time_after_duration(tmp_path: Path) -> None:
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["capture"]["duration_seconds"] = 2
+    raw["capture"]["sample_times_seconds"] = [1, 3]
+    config = tmp_path / "invalid.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--config", str(config), "--validate-config-only"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 2
+    assert "sample times must be at least zero" in result.stderr
+
+
+@pytest.mark.unit
+def test_frame_stats_reports_luma_distribution() -> None:
+    module = load_module()
+    payload = bytes([0, 10, 20, 255, 128, 128])
+    stats = module.frame_stats(payload, 2, 2)
+    assert stats == {
+        "y_mean": 71.25,
+        "y_min": 0,
+        "y_max": 255,
+        "y_p01": 0,
+        "y_p50": 10,
+        "y_p99": 255,
+        "y_low_clip_pct": 25.0,
+        "y_high_clip_pct": 25.0,
+    }

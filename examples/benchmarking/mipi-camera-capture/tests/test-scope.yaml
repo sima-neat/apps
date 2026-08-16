@@ -1,0 +1,13 @@
+models: {}
+unit:
+  python: true
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: Requires a Modalix target with a configured MIPI camera and matching libcamera stack.
+    models: []
+  cpp:
+    enabled: false
+    reason: Python-only camera capture example.
+    models: []
