@@ -17,6 +17,7 @@ import yaml
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+MAX_RETAINED_SNAPSHOT_BYTES = 128 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,14 @@ def validate_config(config: AppConfig) -> None:
         )
     if tuple(sorted(set(capture.sample_times_seconds))) != capture.sample_times_seconds:
         raise ValueError("sample times must be unique and in increasing order")
+    retained_snapshot_bytes = (
+        len(capture.sample_times_seconds) * camera.width * camera.height * 3 // 2
+    )
+    if retained_snapshot_bytes > MAX_RETAINED_SNAPSHOT_BYTES:
+        raise ValueError(
+            f"snapshot schedule may retain {retained_snapshot_bytes} bytes; maximum is "
+            f"{MAX_RETAINED_SNAPSHOT_BYTES}"
+        )
     frame_period_seconds = camera.fps_den / camera.fps_num
     if any(
         value > capture.duration_seconds - frame_period_seconds
