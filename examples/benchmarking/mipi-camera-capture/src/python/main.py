@@ -46,6 +46,15 @@ class AppConfig:
     output_directory: Path
 
 
+@dataclass(frozen=True)
+class PendingCapture:
+    target_seconds: float
+    elapsed_seconds: float
+    frame: int
+    filename: str
+    payload: bytes
+
+
 def section(raw: dict, key: str) -> dict:
     value = raw.get(key, {})
     if not isinstance(value, dict):
@@ -280,6 +289,29 @@ def write_json(path: Path, value: dict) -> None:
         output.write("\n")
 
 
+def write_captures(
+    pending_captures: list[PendingCapture],
+    output_dir: Path,
+    width: int,
+    height: int,
+) -> list[dict]:
+    """Materialize snapshots after the live camera run has stopped."""
+    captures = []
+    for pending in pending_captures:
+        with (output_dir / pending.filename).open("wb") as output:
+            output.write(pending.payload)
+        entry = {
+            "target_s": pending.target_seconds,
+            "elapsed_s": pending.elapsed_seconds,
+            "frame": pending.frame,
+            "file": pending.filename,
+            **frame_stats(pending.payload, width, height),
+        }
+        captures.append(entry)
+        print("CAPTURE " + json.dumps(entry, sort_keys=True), flush=True)
+    return captures
+
+
 def capture_frames(config: AppConfig, pyneat) -> dict:
     camera = pyneat.CameraInputOptions()
     if config.camera.name:
@@ -316,7 +348,7 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
     started = time.monotonic()
     deadline = started + config.capture.duration_seconds
     pts_values: list[int] = []
-    captures: list[dict] = []
+    pending_captures: list[PendingCapture] = []
     frames = 0
     timeouts = 0
     target_index = 0
@@ -363,20 +395,17 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
                     raise RuntimeError(
                         f"NV12 frame has {len(payload)} bytes; expected exactly {expected}"
                     )
-                stats = frame_stats(payload, config.camera.width, config.camera.height)
                 for capture_index in reached_targets:
                     filename = f"frame_{capture_index:02d}_{elapsed:07.3f}s.nv12"
-                    with (output_dir / filename).open("wb") as output:
-                        output.write(payload)
-                    entry = {
-                        "target_s": targets[capture_index],
-                        "elapsed_s": elapsed,
-                        "frame": frames,
-                        "file": filename,
-                        **stats,
-                    }
-                    captures.append(entry)
-                    print("CAPTURE " + json.dumps(entry, sort_keys=True), flush=True)
+                    pending_captures.append(
+                        PendingCapture(
+                            target_seconds=targets[capture_index],
+                            elapsed_seconds=elapsed,
+                            frame=frames,
+                            filename=filename,
+                            payload=payload,
+                        )
+                    )
                 target_index = reached_targets.stop
             if frames % 300 == 0:
                 print(f"progress frames={frames} elapsed={elapsed:.3f}", flush=True)
@@ -405,7 +434,7 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
                 "frames_pulled": frames,
                 "pull_fps": frames / elapsed if elapsed else 0.0,
                 "timeouts": timeouts,
-                "captures": captures,
+                "captures": [],
                 "interarrival_mean_ms": interarrival_mean_ms,
                 "interarrival_max_ms": interarrival_max_ms,
                 "pts_span_s": (
@@ -421,6 +450,12 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
             finally:
                 del run
                 gc.collect()
+        summary["captures"] = write_captures(
+            pending_captures,
+            output_dir,
+            config.camera.width,
+            config.camera.height,
+        )
         write_json(output_dir / "summary.json", summary)
         print("SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
     return summary
