@@ -139,16 +139,19 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("camera.capture_buffers must be between 1 and 128")
     if camera.queue_depth <= 0:
         raise ValueError("camera.queue_depth must be positive")
-    if capture.duration_seconds <= 0:
-        raise ValueError("capture.duration_seconds must be positive")
+    if not math.isfinite(capture.duration_seconds) or capture.duration_seconds <= 0:
+        raise ValueError("capture.duration_seconds must be finite and positive")
     if capture.pull_timeout_ms <= 0:
         raise ValueError("capture.pull_timeout_ms must be positive")
     if any(
-        value < 0 or value >= capture.duration_seconds
+        not math.isfinite(value)
+        or value < 0
+        or value >= capture.duration_seconds
         for value in capture.sample_times_seconds
     ):
         raise ValueError(
-            "sample times must be at least zero and earlier than capture.duration_seconds"
+            "sample times must be finite, at least zero, and earlier than "
+            "capture.duration_seconds"
         )
     if tuple(sorted(set(capture.sample_times_seconds))) != capture.sample_times_seconds:
         raise ValueError("sample times must be unique and in increasing order")
@@ -157,6 +160,18 @@ def validate_config(config: AppConfig) -> None:
 def bounded_pull_timeout_ms(configured_timeout_ms: int, remaining_seconds: float) -> int:
     """Limit a blocking pull to the configured timeout and remaining run time."""
     return max(1, min(configured_timeout_ms, math.ceil(remaining_seconds * 1000.0)))
+
+
+def pts_interarrival_stats_ms(pts_values: list[int]) -> tuple[float | None, float | None]:
+    """Return mean and maximum intervals from consecutive monotonic PTS values."""
+    intervals = [
+        (current - previous) / 1e6
+        for previous, current in zip(pts_values, pts_values[1:])
+        if current >= previous
+    ]
+    if not intervals:
+        return None, None
+    return statistics.fmean(intervals), max(intervals)
 
 
 def nv12_contiguous_payload(tensor, width: int, height: int, y_role, uv_role) -> bytes:
@@ -271,8 +286,6 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     deadline = started + config.capture.duration_seconds
-    previous_arrival = None
-    arrivals: list[float] = []
     pts_values: list[int] = []
     captures: list[dict] = []
     frames = 0
@@ -299,9 +312,6 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
                 continue
 
             frames += 1
-            if previous_arrival is not None:
-                arrivals.append(now - previous_arrival)
-            previous_arrival = now
             pts = getattr(sample, "pts_ns", -1)
             if pts is not None and pts >= 0:
                 pts_values.append(int(pts))
@@ -349,6 +359,7 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
         raise
     finally:
         elapsed = time.monotonic() - started
+        interarrival_mean_ms, interarrival_max_ms = pts_interarrival_stats_ms(pts_values)
         summary = {
             "camera": config.camera.name or "<libcamera-default>",
             "width": config.camera.width,
@@ -361,8 +372,8 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
             "pull_fps": frames / elapsed if elapsed else 0.0,
             "timeouts": timeouts,
             "captures": captures,
-            "interarrival_mean_ms": 1000.0 * statistics.fmean(arrivals) if arrivals else None,
-            "interarrival_max_ms": 1000.0 * max(arrivals) if arrivals else None,
+            "interarrival_mean_ms": interarrival_mean_ms,
+            "interarrival_max_ms": interarrival_max_ms,
             "pts_span_s": (
                 (pts_values[-1] - pts_values[0]) / 1e9 if len(pts_values) >= 2 else None
             ),

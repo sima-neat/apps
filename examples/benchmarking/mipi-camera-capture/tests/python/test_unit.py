@@ -65,7 +65,7 @@ def test_rejects_sample_time_after_duration(tmp_path: Path) -> None:
         timeout=20,
     )
     assert result.returncode == 2
-    assert "sample times must be at least zero" in result.stderr
+    assert "sample times must be finite, at least zero" in result.stderr
 
 
 @pytest.mark.unit
@@ -86,11 +86,39 @@ def test_rejects_empty_output_directory(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("duration", [float("nan"), float("inf"), float("-inf")])
+def test_rejects_non_finite_duration(tmp_path: Path, duration: float) -> None:
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["capture"]["duration_seconds"] = duration
+    config = tmp_path / "invalid.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--config", str(config), "--validate-config-only"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 2
+    assert "capture.duration_seconds must be finite and positive" in result.stderr
+
+
+@pytest.mark.unit
 def test_pull_timeout_is_bounded_by_remaining_duration() -> None:
     module = load_module()
     assert module.bounded_pull_timeout_ms(2000, 10.0) == 2000
     assert module.bounded_pull_timeout_ms(2000, 0.1251) == 126
     assert module.bounded_pull_timeout_ms(2000, 0.0001) == 1
+
+
+@pytest.mark.unit
+def test_interarrival_stats_use_consecutive_pts() -> None:
+    module = load_module()
+    mean_ms, max_ms = module.pts_interarrival_stats_ms(
+        [1_000_000_000, 1_033_333_333, 1_100_000_000]
+    )
+    assert mean_ms == pytest.approx(50.0)
+    assert max_ms == pytest.approx(66.666667)
 
 
 @pytest.mark.unit
