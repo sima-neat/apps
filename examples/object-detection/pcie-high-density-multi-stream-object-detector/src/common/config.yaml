@@ -1,6 +1,6 @@
-# Default PCIe profile: 16 x 720p at 25 FPS.
+# Default PCIe profile: 16 x 720p at 30 FPS.
 profile:
-  name: 16x720p25fps
+  name: 16x720p30fps
   stream_count: 16
 
 model:
@@ -23,7 +23,7 @@ input:
   latency_ms: 100
   width: 1280
   height: 720
-  fps: 25
+  fps: 30
   decoder_buffers: 8
   decoder_input_buffers: 2
   decoder_tuning: throughput-low-latency

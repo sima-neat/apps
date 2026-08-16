@@ -108,7 +108,7 @@ The checked-in profile placeholders are:
 
 | Config | Streams | Source contract |
 | --- | ---: | --- |
-| `src/common/config.yaml` | 16 | 1280x720 at 25 FPS |
+| `src/common/config.yaml` | 16 | 1280x720 at 30 FPS |
 | `src/common/config-24x720p20fps.yaml` | 24 | 1280x720 at 20 FPS |
 | `src/common/config-48x720p10fps.yaml` | 48 | 1280x720 at 10 FPS |
 
