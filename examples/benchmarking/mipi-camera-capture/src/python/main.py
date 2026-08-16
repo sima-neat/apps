@@ -155,6 +155,15 @@ def validate_config(config: AppConfig) -> None:
         )
     if tuple(sorted(set(capture.sample_times_seconds))) != capture.sample_times_seconds:
         raise ValueError("sample times must be unique and in increasing order")
+    frame_period_seconds = camera.fps_den / camera.fps_num
+    if any(
+        value > capture.duration_seconds - frame_period_seconds
+        for value in capture.sample_times_seconds
+    ):
+        raise ValueError(
+            "sample times must leave at least one requested frame period before "
+            "capture.duration_seconds"
+        )
 
 
 def bounded_pull(

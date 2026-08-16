@@ -104,6 +104,24 @@ def test_rejects_non_finite_duration(tmp_path: Path, duration: float) -> None:
 
 
 @pytest.mark.unit
+def test_rejects_snapshot_without_one_frame_of_deadline_margin(tmp_path: Path) -> None:
+    raw = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    raw["capture"]["duration_seconds"] = 2
+    raw["capture"]["sample_times_seconds"] = [1.999]
+    config = tmp_path / "invalid.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(MAIN_PY), "--config", str(config), "--validate-config-only"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 2
+    assert "sample times must leave at least one requested frame period" in result.stderr
+
+
+@pytest.mark.unit
 def test_pull_timeout_is_bounded_by_remaining_duration() -> None:
     module = load_module()
     assert module.bounded_pull(2000, 10.0) == (2000, False)
