@@ -288,10 +288,10 @@ def capture_frames(config: AppConfig, pyneat) -> dict:
     options.output_memory = pyneat.OutputMemory.ZeroCopy
     options.advanced.copy_input = False
 
-    print(graph.describe(), flush=True)
-    run = graph.build(options)
     output_dir = config.output_directory
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(graph.describe(), flush=True)
+    run = graph.build(options)
     started = time.monotonic()
     deadline = started + config.capture.duration_seconds
     pts_values: list[int] = []

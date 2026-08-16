@@ -123,6 +123,49 @@ def test_interarrival_stats_use_consecutive_pts() -> None:
 
 
 @pytest.mark.unit
+def test_invalid_output_path_is_rejected_before_graph_build(tmp_path: Path) -> None:
+    module = load_module()
+    output_file = tmp_path / "not-a-directory"
+    output_file.write_text("occupied", encoding="utf-8")
+    built = False
+
+    class Graph:
+        def __init__(self, _name: str) -> None:
+            pass
+
+        def add(self, _node) -> None:
+            pass
+
+        def build(self, _options):
+            nonlocal built
+            built = True
+            raise AssertionError("graph must not be built")
+
+    pyneat = SimpleNamespace(
+        CameraInputOptions=SimpleNamespace,
+        Graph=Graph,
+        nodes=SimpleNamespace(
+            camera_input=lambda *_args, **_kwargs: None,
+            output=lambda *_args, **_kwargs: None,
+        ),
+        OutputOptions=SimpleNamespace(latest=lambda: None),
+        RunOptions=lambda: SimpleNamespace(advanced=SimpleNamespace()),
+        RunPreset=SimpleNamespace(Realtime="realtime"),
+        OverflowPolicy=SimpleNamespace(KeepLatest="keep-latest"),
+        OutputMemory=SimpleNamespace(ZeroCopy="zero-copy"),
+    )
+    config = module.AppConfig(
+        camera=module.CameraConfig("", 2, 2, 30, 1, "NV12", 8, True, 2),
+        capture=module.CaptureConfig(1.0, (), 100),
+        output_directory=output_file,
+    )
+
+    with pytest.raises(FileExistsError):
+        module.capture_frames(config, pyneat)
+    assert not built
+
+
+@pytest.mark.unit
 def test_nv12_copy_removes_plane_stride_padding() -> None:
     module = load_module()
     y_role = "Y"
