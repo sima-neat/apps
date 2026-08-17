@@ -325,7 +325,10 @@ download_model_registry_group() {
 
     ensure_sima_cli_bin || return 1
     local tmpdir
-    tmpdir="$(mktemp -d)"
+    if ! tmpdir="$(mktemp -d)"; then
+        echo "[error] failed to create temporary directory for $resource" >&2
+        return 1
+    fi
     echo "[download] $resource (model-registry)"
     if ! "$SIMA_CLI_BIN" neat install "$resource" --install-dir "$tmpdir"; then
         rm -rf "$tmpdir"
@@ -334,7 +337,7 @@ download_model_registry_group() {
     fi
 
     local failed=0
-    local installed_file destination
+    local installed_file destination destination_dir staged_file
     for row in "$@"; do
         fields=()
         split_tsv_row "$row" fields
@@ -358,9 +361,26 @@ download_model_registry_group() {
             failed=1
             continue
         fi
-        mkdir -p "$(dirname "$destination")"
-        if ! cp "$installed_file" "$destination"; then
+        destination_dir="$(dirname "$destination")"
+        if ! mkdir -p "$destination_dir"; then
+            echo "[error] $model_id: failed to create model directory $destination_dir" >&2
+            failed=1
+            continue
+        fi
+        if ! staged_file="$(mktemp "${destination}.tmp.XXXXXX")"; then
+            echo "[error] $model_id: failed to stage $expected_file in $destination_dir" >&2
+            failed=1
+            continue
+        fi
+        if ! cp "$installed_file" "$staged_file"; then
+            rm -f "$staged_file"
             echo "[error] $model_id: failed to copy $expected_file into $MODELS_DIR" >&2
+            failed=1
+            continue
+        fi
+        if ! mv -f "$staged_file" "$destination"; then
+            rm -f "$staged_file"
+            echo "[error] $model_id: failed to publish $expected_file into $MODELS_DIR" >&2
             failed=1
             continue
         fi

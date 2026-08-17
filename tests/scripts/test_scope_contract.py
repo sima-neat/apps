@@ -130,7 +130,11 @@ def _write_registry_cli(path: Path, installed_files: list[str]) -> tuple[Path, P
 
 
 def _run_registry_download(
-    models_dir: Path, query: Path, cli: Path, calls: Path
+    models_dir: Path,
+    query: Path,
+    cli: Path,
+    calls: Path,
+    env_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -146,6 +150,7 @@ def _run_registry_download(
             "TEST_SCOPE_PYTHON_BIN": str(query),
             "SIMA_CLI_BIN": str(cli),
             "NEAT_APPS_TEST_SIMA_CLI_CALLS": str(calls),
+            **(env_overrides or {}),
         },
         capture_output=True,
         text=True,
@@ -526,6 +531,65 @@ def test_download_models_reports_missing_registry_file(tmp_path):
         "second: requested file second.tar.gz was not installed by "
         "models/demo-models@main:latest"
     ) in result.stderr
+
+
+def test_download_models_stops_when_registry_temp_directory_fails(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(tmp_path, [("demo", "demo.tar.gz")])
+    cli, calls = _write_registry_cli(tmp_path, ["demo.tar.gz"])
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_mktemp = fake_bin / "mktemp"
+    fake_mktemp.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    fake_mktemp.chmod(0o755)
+
+    result = _run_registry_download(
+        tmp_path / "models",
+        query,
+        cli,
+        calls,
+        {"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "failed to create temporary directory" in result.stderr
+    assert not calls.exists()
+
+
+def test_download_models_retries_after_failed_registry_copy(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(tmp_path, [("demo", "demo.tar.gz")])
+    cli, calls = _write_registry_cli(tmp_path, ["demo.tar.gz"])
+    models_dir = tmp_path / "models"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_cp = fake_bin / "cp"
+    fake_cp.write_text(
+        "#!/usr/bin/env bash\n"
+        'for argument in "$@"; do destination="$argument"; done\n'
+        "printf 'partial' > \"$destination\"\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake_cp.chmod(0o755)
+
+    failed = _run_registry_download(
+        models_dir,
+        query,
+        cli,
+        calls,
+        {"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert failed.returncode != 0
+    assert not (models_dir / "demo.tar.gz").exists()
+    assert list(models_dir.glob("demo.tar.gz.tmp.*")) == []
+
+    retried = _run_registry_download(models_dir, query, cli, calls)
+
+    assert retried.returncode == 0, retried.stderr
+    assert (models_dir / "demo.tar.gz").is_file()
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
 
 
 @pytest.mark.parametrize(
