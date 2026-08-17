@@ -1,5 +1,5 @@
 model:                       # Batched detector selection.
-  path: assets/models/yolo26m-det-int8-b4.tar.gz        # Six-head pack compiled with --batch_size 4.
+  path: <model-path>         # Example: models/yolo26m-det-int8-b4.tar.gz
   labels: examples/object-detection/yolo26-batch4-detector/src/common/coco_label.txt
 
 streams:                     # RTSP inputs from Insight, one entry per batch lane.

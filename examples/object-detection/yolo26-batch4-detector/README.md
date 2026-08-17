@@ -20,10 +20,9 @@ The example exercises batched inference across several streams, per-lane attribu
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix DevKit.
 - A Modalix DevKit with the Neat runtime installed and `simaai-appcomplex` running.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model above, or set `model.path` to another compatible batch-4 six-head package.
+- Model artifacts are user-managed. Download the default model as described below, or set `model.path` to another compatible batch-4 six-head package.
 - Four reachable RTSP H.264 sources, from Insight or from cameras.
 - A runtime containing the multi-output batch layout fix described below.
-- On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting if the runtime has been used by earlier ML/video apps.
 
 ### Runtime requirement
 Older runtimes misaddress multi-output tensors when `batch_size > 1`, producing incorrect results without reporting an error. Use a Neat runtime that includes the batched multi-output OFM layout fix. If lane 0 looks correct while lanes 1–3 contain implausible detections, update the runtime before debugging the application.
@@ -68,15 +67,15 @@ Default model: `yolo26m-det-int8-b4.tar.gz`.
 Download the default model:
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26m-det-int8-b4.tar.gz
 
-cd ../..
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a bundle-local convention. `model.path` can point to any readable model package path.
+The command stores the model under `models/` as a bundle-local convention. `model.path` can point to any readable model package path.
 
 The application requires a batch-4 YOLO26 package with six separate detection heads. It validates this contract at startup and rejects batch-1 or incompatible packages.
 
@@ -86,7 +85,7 @@ Edit `examples/object-detection/yolo26-batch4-detector/src/common/config.yaml`. 
 
 ```yaml
 model:
-  path: assets/models/yolo26m-det-int8-b4.tar.gz         # Batched, six-head pack.
+  path: <model-path>                                     # Example: models/yolo26m-det-int8-b4.tar.gz
 
 streams:
   - <first-rtsp-url-copied-from-insight>
