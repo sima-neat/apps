@@ -43,12 +43,12 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Install its production
+The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Install its staging
 Model Registry package:
 
 ```bash
 mkdir -p models
-sima-cli neat install models/ssd_mobilenet_v2@main:latest \
+sima-cli neat install --stg models/ssd_mobilenet_v2@develop:latest \
   --install-dir ./models
 ```
 
