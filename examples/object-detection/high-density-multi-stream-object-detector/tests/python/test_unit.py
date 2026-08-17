@@ -41,6 +41,7 @@ def write_config(
     decode_type: str | None = None,
     input_extra: str = "",
     inference_extra: str = "",
+    runtime_extra: str = "",
     output_extra: str = "",
 ) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
@@ -62,6 +63,7 @@ def write_config(
             f"  workers: {workers}",
         ]
         + _extra_lines(inference_extra)
+        + (["runtime:"] + _extra_lines(runtime_extra) if runtime_extra else [])
         + [
             "output:",
             "  insight:",
@@ -171,6 +173,8 @@ class TestConfigLoading:
         assert cfg.internal_queue_depth == internal_queue_depth
         assert cfg.max_inflight_per_stream == max_inflight_per_stream
         assert cfg.max_inflight_total == max_inflight_total
+        assert cfg.stream_detection_timeout_ms == 30_000
+        assert cfg.no_detection_timeout_ms == 30_000
         assert effective_insight_visible_streams(cfg) == streams
         assert (cfg.video_port_base, cfg.video_port_base + streams - 1) == (
             9000,
@@ -241,6 +245,32 @@ class TestConfigLoading:
         assert cfg.input_fps == 20
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.warmup_frames == 30
+        assert cfg.stream_detection_timeout_ms == 30_000
+        assert cfg.no_detection_timeout_ms == 30_000
+
+    @pytest.mark.parametrize(
+        ("setting", "message"),
+        [
+            ("no_detection_timeout_ms", "no_detection_timeout_ms must be > 0"),
+            (
+                "stream_detection_timeout_ms",
+                "stream_detection_timeout_ms must be > 0",
+            ),
+        ],
+    )
+    def test_config_rejects_invalid_liveness_settings(
+        self, tmp_path: Path, setting: str, message: str
+    ):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            ["rtsp://127.0.0.1:8554/src1"],
+            runtime_extra=f"{setting}: 0",
+        )
+
+        with pytest.raises(ValueError, match=message):
+            load_app_config(config_path)
 
     def test_config_rejects_legacy_fan_in_policy(self, tmp_path: Path):
         from main import load_app_config
@@ -568,6 +598,8 @@ output:
         assert "queue_depth=4" in result.stdout
         assert "max_inflight_per_stream=4" in result.stdout
         assert "max_inflight_total=8" in result.stdout
+        assert "stream_detection_timeout_ms=30000" in result.stdout
+        assert "no_detection_timeout_ms=30000" in result.stdout
         assert "insight_visible_streams=2" in result.stdout
         assert "decoder_admission=core" in result.stdout
 
@@ -886,24 +918,164 @@ class TestRuntimeDelivery:
             20,
         )
         app = AppRuntime(model=None, graph=None, run=ClosedRun(), sources=[source])
-        cfg = SimpleNamespace(initial_detection_timeout_ms=1000)
+        cfg = SimpleNamespace(
+            initial_detection_timeout_ms=1000,
+            stream_detection_timeout_ms=1000,
+            no_detection_timeout_ms=1000,
+        )
         with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
             pull_detections(app, cfg, AggregateProfile(False, 0))
 
-    def test_detection_watchdog_requires_each_stream_to_remain_live(self):
-        from main import DetectionWatchdog
+    def test_target_completion_cannot_hide_latched_starvation(self, monkeypatch):
+        import main
+        from main import AppRuntime, pull_detections
 
-        watchdog = DetectionWatchdog(3, startup_timeout_s=10.0, cadence_timeout_s=2.0, start=0.0)
+        detections = [0, 0, 1, 1, 0, 1]
+
+        class FakeRun:
+            def pull(self, _name, _timeout_ms):
+                return detections.pop(0)
+
+        target_checks = 0
+
+        def reached_target(_sources):
+            nonlocal target_checks
+            target_checks += 1
+            return not detections
+
+        monkeypatch.setattr(
+            main, "stream_index_from_detection", lambda sample, _count: sample
+        )
+        monkeypatch.setattr(main, "complete_detection", lambda *_args: None)
+        monkeypatch.setattr(main, "target_reached", reached_target)
+        monotonic_values = iter((0.0, 0.0, 0.1, 0.2, 0.3, 0.4, 0.9, 1.4, 1.4))
+        monkeypatch.setattr(main.time, "monotonic", lambda: next(monotonic_values))
+        main._STOP_REQUESTED = False
+        app = AppRuntime(
+            model=None, graph=None, run=FakeRun(), sources=[object(), object()]
+        )
+        cfg = SimpleNamespace(
+            initial_detection_timeout_ms=10_000,
+            stream_detection_timeout_ms=1000,
+            no_detection_timeout_ms=10_000,
+        )
+
+        with pytest.raises(
+            RuntimeError, match="timed out waiting for detector progress from streams: 1"
+        ):
+            pull_detections(app, cfg, object())
+        assert target_checks == 6
+
+    def test_detection_watchdog_tracks_deadlines(self):
+        from main import DetectionFailureKind, DetectionWatchdog
+
+        watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=10.0,
+            stream_timeout_s=20.0,
+            no_progress_timeout_s=50.0,
+            start=0.0,
+        )
         watchdog.observe(0, 1.0)
+        watchdog.observe(0, 1.1)
         watchdog.observe(2, 2.0)
-        assert watchdog.expired_streams(9.99) == []
-        assert watchdog.expired_streams(10.0) == [1]
+        watchdog.observe(1, 3.0)
+        watchdog.observe(1, 3.1)
+        assert not watchdog.check(9.99)
+        startup_failure = watchdog.check(10.0)
+        assert startup_failure.kind is DetectionFailureKind.STARTUP
+        assert startup_failure.streams == (2,)
 
+        watchdog.observe(2, 10.0)
+        assert not watchdog.startup_complete()
+        late_startup_failure = watchdog.check(10.0)
+        assert late_startup_failure.kind is DetectionFailureKind.STARTUP
+        assert late_startup_failure.streams == (2,)
+
+        watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=100.0,
+            stream_timeout_s=5.0,
+            no_progress_timeout_s=50.0,
+            start=0.0,
+        )
+        watchdog.observe(0, 1.0)
+        watchdog.observe(0, 1.1)
+        watchdog.observe(2, 2.0)
         watchdog.observe(1, 10.1)
+        watchdog.observe(1, 10.2)
         watchdog.observe(0, 10.5)
         watchdog.observe(2, 10.5)
         assert watchdog.startup_complete()
-        assert watchdog.expired_streams(12.2) == [1]
+        watchdog.observe(0, 14.0)
+        watchdog.observe(2, 14.1)
+        assert not watchdog.check(15.49)
+        watchdog.observe(0, 15.5)
+        watchdog.observe(1, 15.5)
+        starvation = watchdog.check(15.5)
+        assert starvation.kind is DetectionFailureKind.STREAM_STARVATION
+        assert starvation.streams == (1,)
+
+        global_stall = watchdog.check(65.5)
+        assert global_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert global_stall.streams == ()
+
+        startup_stall_watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=100.0,
+            stream_timeout_s=20.0,
+            no_progress_timeout_s=5.0,
+            start=0.0,
+        )
+        startup_stall_watchdog.observe(0, 1.0)
+        assert not startup_stall_watchdog.check(5.999)
+        startup_stall = startup_stall_watchdog.check(6.0)
+        assert startup_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert startup_stall.streams == ()
+
+        recovered_stall_watchdog = DetectionWatchdog(
+            1,
+            priming_observations=1,
+            startup_timeout_s=100.0,
+            stream_timeout_s=20.0,
+            no_progress_timeout_s=5.0,
+            start=0.0,
+        )
+        recovered_stall_watchdog.observe(0, 5.0)
+        recovered_stall = recovered_stall_watchdog.check(5.0)
+        assert recovered_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert recovered_stall.streams == ()
+
+    def test_detection_watchdog_allows_sustained_48_stream_scheduler_skew(self):
+        from main import DetectionWatchdog
+
+        stream_count = 48
+        watchdog = DetectionWatchdog(
+            stream_count,
+            priming_observations=2,
+            startup_timeout_s=60.0,
+            stream_timeout_s=5.0,
+            no_progress_timeout_s=30.0,
+            start=0.0,
+        )
+        for stream_index in range(stream_count):
+            watchdog.observe(stream_index, stream_index * 0.01)
+            watchdog.observe(stream_index, stream_index * 0.01 + 0.001)
+        assert watchdog.startup_complete()
+
+        now = 1.0
+        for _ in range(10):
+            watchdog.observe(0, now)
+            now += 0.01
+            for _ in range(5):
+                for stream_index in range(1, stream_count):
+                    watchdog.observe(stream_index, now)
+                    now += 0.01
+
+        assert not watchdog.check(now)
 
     def test_source_topology_connects_encoded_video_with_a_distinct_latest_link(
         self, monkeypatch
