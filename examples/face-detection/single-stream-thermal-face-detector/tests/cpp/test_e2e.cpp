@@ -7,6 +7,9 @@
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -62,6 +65,7 @@ int main(int argc, char** argv) {
   metadata_options.metadata_type = "pose-estimation";
   metadata_options.data_array_key = "poses";
   metadata_options.require_all_ports = true;
+  metadata_options.min_object_count = 1;
   MetadataJsonListener metadata_listener(metadata_options);
   if (!metadata_listener.ok()) {
     std::cerr << "[FAIL] metadata listener failed: " << metadata_listener.error() << "\n";
@@ -85,8 +89,22 @@ int main(int argc, char** argv) {
       std::cerr << "[FAIL] pose-estimation metadata was not received: " << metadata.error << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] yolov5s-face published pose-estimation metadata on "
-                << metadata.ports_with_valid_json.size() << " port(s)\n";
+      const auto detected = std::find_if(metadata.messages.begin(), metadata.messages.end(),
+                                         [](const auto& message) { return message.object_count > 0; });
+      const auto payload = nlohmann::json::parse(detected->payload);
+      const auto& poses = payload.at("data").at("poses");
+      const bool all_have_five_keypoints =
+          std::all_of(poses.begin(), poses.end(), [](const auto& pose) {
+            return pose.contains("keypoints") && pose["keypoints"].is_array() &&
+                   pose["keypoints"].size() == 5;
+          });
+      if (!all_have_five_keypoints) {
+        std::cerr << "[FAIL] each detected pose must contain exactly five keypoints\n";
+        rc = 1;
+      } else {
+        std::cout << "[OK] yolov5s-face published pose-estimation metadata on "
+                  << metadata.ports_with_valid_json.size() << " port(s)\n";
+      }
     }
   }
 

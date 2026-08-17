@@ -9,6 +9,7 @@ required -- only an RTSP H.264 source (SIMANEAT_TEST_RTSP_H264_URL) and the mode
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -71,6 +72,7 @@ class TestE2E:
             metadata_type="pose-estimation",
             data_array_key="poses",
             require_all_ports=True,
+            min_object_count=1,
         ) as metadata_listener:
             result = subprocess.run(
                 cmd,
@@ -88,3 +90,8 @@ class TestE2E:
         assert metadata.success, (
             f"pose-estimation metadata was not received: {metadata.error}"
         )
+        detected_message = next(
+            message for message in metadata.messages if message.object_count > 0
+        )
+        poses = json.loads(detected_message.payload)["data"]["poses"]
+        assert all(len(pose.get("keypoints", [])) == 5 for pose in poses)

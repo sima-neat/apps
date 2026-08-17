@@ -36,6 +36,8 @@
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -616,26 +618,23 @@ PipelineRuntime build_pipeline(const AppConfig& cfg) {
 }
 
 // Build the pose-estimation data JSON ({"poses":[{id,label,keypoints:[...]}]}) for
-// the Insight pose overlay. No support helper exists for keypoints, so build it
-// directly. Names are fixed literals; numeric fields are plain floats.
+// the Insight pose overlay.
 std::string build_poses_json(const std::vector<Detection>& dets, const std::string& label) {
-  std::ostringstream out;
-  out << "{\"poses\":[";
+  nlohmann::json poses = nlohmann::json::array();
   for (size_t i = 0; i < dets.size(); ++i) {
     const auto& d = dets[i];
-    if (i)
-      out << ",";
-    out << "{\"id\":\"face_" << (i + 1) << "\",\"label\":\"" << label << "\",\"keypoints\":[";
+    nlohmann::json keypoints = nlohmann::json::array();
     for (int k = 0; k < kNumLandmarks; ++k) {
-      if (k)
-        out << ",";
-      out << "{\"name\":\"" << kLmNames[k] << "\",\"x\":" << d.landmarks[k].x
-          << ",\"y\":" << d.landmarks[k].y << ",\"confidence\":" << d.score << "}";
+      keypoints.push_back({{"name", kLmNames[k]},
+                           {"x", d.landmarks[k].x},
+                           {"y", d.landmarks[k].y},
+                           {"confidence", d.score}});
     }
-    out << "]}";
+    poses.push_back({{"id", "face_" + std::to_string(i + 1)},
+                     {"label", label},
+                     {"keypoints", std::move(keypoints)}});
   }
-  out << "]}";
-  return out.str();
+  return nlohmann::json{{"poses", std::move(poses)}}.dump();
 }
 
 void send_metadata(PipelineRuntime& runtime, const simaai::neat::Sample& sample,
