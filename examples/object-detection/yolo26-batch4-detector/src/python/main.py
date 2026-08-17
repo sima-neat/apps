@@ -113,8 +113,8 @@ def resolve(path_str: str) -> Path:
 
 
 def validate_config(cfg: AppConfig) -> None:
-    if not cfg.model_path:
-        raise ValueError("model.path must be set")
+    if not cfg.model_path or cfg.model_path.startswith("<"):
+        raise ValueError("model.path must be set and must not be a placeholder")
     if not cfg.rtsp_urls:
         raise ValueError("streams must list at least one RTSP URL")
     if len(cfg.rtsp_urls) > MAX_STREAMS:

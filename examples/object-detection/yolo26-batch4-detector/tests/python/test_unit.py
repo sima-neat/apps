@@ -27,7 +27,12 @@ if str(PYTHON_DIR) not in sys.path:
 pytestmark = pytest.mark.unit
 
 
-def write_config(tmp_path: Path, streams: list[str], **overrides) -> Path:
+def write_config(
+    tmp_path: Path,
+    streams: list[str],
+    model_path: str = "assets/models/yolo26m-det-int8-b4.tar.gz",
+    **overrides,
+) -> Path:
     stream_lines = "\n".join(f"  - {url}" for url in streams)
     inference = ""
     if overrides:
@@ -36,7 +41,7 @@ def write_config(tmp_path: Path, streams: list[str], **overrides) -> Path:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "model:\n"
-        "  path: assets/models/yolo26m-det-int8-b4.tar.gz\n"
+        f"  path: {model_path}\n"
         "streams:\n"
         f"{stream_lines}\n"
         f"{inference}"
@@ -104,6 +109,18 @@ class TestConfigLoading:
 
         with pytest.raises(ValueError, match="placeholder"):
             load_app_config(write_config(tmp_path, ["<rtsp-url-1>"]))
+
+    def test_rejects_placeholder_model_path(self, tmp_path: Path):
+        from main import load_app_config
+
+        with pytest.raises(ValueError, match="placeholder"):
+            load_app_config(
+                write_config(
+                    tmp_path,
+                    ["rtsp://127.0.0.1:8554/src1"],
+                    model_path="<model-path>",
+                )
+            )
 
     def test_rejects_out_of_range_score_threshold(self, tmp_path: Path):
         from main import load_app_config

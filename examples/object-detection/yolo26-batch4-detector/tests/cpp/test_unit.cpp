@@ -163,6 +163,26 @@ bool test_validate_config_only_rejects_placeholder_stream(const std::string& bin
   return ok;
 }
 
+bool test_validate_config_only_rejects_placeholder_model(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_rejects_placeholder_model",
+                   "model:\n"
+                   "  path: <model-path>\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 1, "placeholder model path is rejected") &&
+                  expect_contains(result.stderr_text, "placeholder",
+                                  "placeholder model error says so explicitly");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -180,5 +200,6 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_out_of_range_threshold(binary);
   ok &= test_validate_config_only_rejects_placeholder_stream(binary);
+  ok &= test_validate_config_only_rejects_placeholder_model(binary);
   return ok ? 0 : 1;
 }

@@ -183,6 +183,12 @@ struct Geometry {
   int dy = 0;
 };
 
+// Metadata identity retained after the zero-copy decoder Sample is released.
+struct FrameRef {
+  int64_t pts_ns = -1;
+  int64_t frame_id = -1;
+};
+
 // One reusable batch: the MLA input plus what the lanes came from. Two of these
 // alternate so the next batch can be pulled and letterboxed while the current
 // one is still being inferred and decoded.
@@ -190,7 +196,7 @@ struct BatchSlot {
   std::vector<float> data;
   std::vector<cv::Mat> frames;
   std::vector<Geometry> geometry;
-  std::vector<simaai::neat::Sample> samples;
+  std::vector<FrameRef> frame_refs;
   bool ready = false;
 };
 
@@ -294,7 +300,8 @@ std::vector<std::string> parse_streams(const fs::path& config_path) {
 }
 
 void validate_config(const AppConfig& cfg) {
-  sima_examples::require(!cfg.model_path.empty(), "model.path must be set");
+  sima_examples::require(!cfg.model_path.empty() && cfg.model_path.front() != '<',
+                         "model.path must be set and must not be a placeholder");
   sima_examples::require(!cfg.rtsp_urls.empty(), "streams must list at least one RTSP URL");
   sima_examples::require(cfg.rtsp_urls.size() <= kMaxStreams,
                          "this example supports up to 4 streams");
@@ -722,7 +729,7 @@ public:
       slot.data.assign(lane_floats * static_cast<std::size_t>(batch_size), 0.0f);
       slot.frames.resize(streams.size());
       slot.geometry.resize(streams.size());
-      slot.samples.resize(streams.size());
+      slot.frame_refs.resize(streams.size());
     }
     submit(0);
   }
@@ -800,7 +807,7 @@ private:
     }
     slot.geometry[lane] = letterbox_into(bgr, net_, slot.data.data() + lane * lane_floats);
     slot.frames[lane] = std::move(bgr);
-    slot.samples[lane] = std::move(sample);
+    slot.frame_refs[lane] = FrameRef{sample.pts_ns, sample.frame_id};
     return true;
   }
 
@@ -818,7 +825,7 @@ private:
 // --------------------------------------------------------------------------
 // output
 // --------------------------------------------------------------------------
-void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
+void send_metadata(StreamRuntime& stream, const FrameRef& sample,
                    const std::vector<objdet::Box>& boxes,
                    const std::vector<std::string>& labels) {
   std::vector<sima_examples::MetadataBox> metadata_boxes;
@@ -1041,7 +1048,7 @@ void run_app(const AppConfig& cfg) {
         continue;
       }
       const auto lane = static_cast<std::size_t>(stream.index);
-      const auto& sample = batch->samples[lane];
+      const auto& sample = batch->frame_refs[lane];
       const auto& frame = batch->frames[lane];
       send_metadata(stream, sample, detections, labels);
       save_debug_frame(cfg, stream, frame, detections);
