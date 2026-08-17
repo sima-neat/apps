@@ -729,7 +729,8 @@ public:
 
   // Hand back the filled batch and immediately start filling the other.
   BatchSlot* next() {
-    pending_.wait();
+    // get(), unlike wait(), rethrows failures from fill() and its lane tasks.
+    pending_.get();
     BatchSlot* ready = &slots_[static_cast<std::size_t>(slot_)];
     slot_ ^= 1;
     submit(slot_);
@@ -741,12 +742,14 @@ public:
   void close() {
     closed_ = true;
     if (pending_.valid()) {
-      pending_.wait();
+      pending_.get();
     }
   }
 
 private:
   void submit(int slot_index) {
+    // Never leave a previously completed slot publishable if the refill fails.
+    slots_[static_cast<std::size_t>(slot_index)].ready = false;
     pending_ = std::async(std::launch::async, [this, slot_index] {
       fill(slots_[static_cast<std::size_t>(slot_index)]);
     });
