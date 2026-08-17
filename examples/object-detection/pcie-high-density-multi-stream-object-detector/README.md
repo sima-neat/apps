@@ -138,7 +138,13 @@ encoded access units through a bounded latest-frame PCIe branch. Up to
 returned BBOX buffers are matched with their original stream and frame before
 metadata is emitted. Missing entries expire after `pcie.result_timeout_ms`;
 unknown or late results increment `correlation_misses`. The original encoded
-Insight video branch remains independent.
+Insight video branch remains independent. The host records the RTP timestamp
+actually produced by each `rtph264pay` instance and associates it with the
+correlated frame PTS. Detection metadata is sent only when that exact outgoing
+RTP timestamp is available; `metadata_without_rtp_timestamp` counts results
+whose video frame was not transmitted by the independent latest-video branch.
+Each PCIe result branch is bounded and downstream-leaky, so a stalled metadata
+consumer discards stale results instead of blocking the shared PCIe receiver.
 
 `pcie.pool_size` independently controls the card-side encoded-input pool for
 each stream. Buffer capacity is derived from the first per-stream CAPS and

@@ -17,6 +17,7 @@
 
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
+#include <gst/rtp/gstrtpbuffer.h>
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -106,14 +107,6 @@ std::string gst_quote(std::string_view value) {
 
 std::int64_t time_ns(GstClockTime value) {
   return GST_CLOCK_TIME_IS_VALID(value) ? static_cast<std::int64_t>(value) : -1;
-}
-
-std::uint32_t rtp_timestamp_from_pts(std::int64_t pts_ns) {
-  if (pts_ns < 0) {
-    return 0;
-  }
-  const auto ticks = (static_cast<__int128>(pts_ns) * 90000) / GST_SECOND;
-  return static_cast<std::uint32_t>(static_cast<std::uint64_t>(ticks));
 }
 
 struct Box {
@@ -227,7 +220,13 @@ struct FrameContext {
   std::int64_t pts_ns = -1;
   std::int64_t dts_ns = -1;
   std::int64_t duration_ns = -1;
+  std::optional<std::uint32_t> rtp_timestamp;
   std::chrono::steady_clock::time_point admitted_at;
+};
+
+struct RtpTimestampContext {
+  std::uint32_t timestamp = 0;
+  std::chrono::steady_clock::time_point observed_at;
 };
 
 struct SharedState {
@@ -253,8 +252,10 @@ struct StreamRuntime {
 
   std::atomic<std::uint32_t> next_frame_id{0};
   std::atomic<bool> waiting_for_random_access{true};
+  std::atomic<std::int64_t> last_rtp_pts{-1};
   std::mutex frame_mutex;
   std::unordered_map<std::uint32_t, FrameContext> frames;
+  std::unordered_map<std::int64_t, RtpTimestampContext> rtp_timestamps_by_pts;
 
   std::atomic<std::uint64_t> received{0};
   std::atomic<std::uint64_t> admitted{0};
@@ -262,9 +263,86 @@ struct StreamRuntime {
   std::atomic<std::uint64_t> result_timeouts{0};
   std::atomic<std::uint64_t> correlation_misses{0};
   std::atomic<std::uint64_t> returned{0};
+  std::atomic<std::uint64_t> rtp_timestamps_recorded{0};
+  std::atomic<std::uint64_t> metadata_without_rtp_timestamp{0};
   std::atomic<std::uint64_t> metadata_sent{0};
   std::atomic<std::uint64_t> metadata_dropped{0};
 };
+
+bool read_rtp_timestamp(GstBuffer* buffer, std::uint32_t* timestamp) {
+  if (!buffer || !timestamp) {
+    return false;
+  }
+
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  if (!gst_rtp_buffer_map(buffer, GST_MAP_READ, &rtp)) {
+    return false;
+  }
+  *timestamp = gst_rtp_buffer_get_timestamp(&rtp);
+  gst_rtp_buffer_unmap(&rtp);
+  return true;
+}
+
+void record_rtp_timestamp(StreamRuntime* stream, GstBuffer* buffer) {
+  const std::int64_t pts_ns = buffer ? time_ns(GST_BUFFER_PTS(buffer)) : -1;
+  if (pts_ns < 0 || stream->last_rtp_pts.load() == pts_ns) {
+    return;
+  }
+  std::uint32_t timestamp = 0;
+  if (!read_rtp_timestamp(buffer, &timestamp)) {
+    return;
+  }
+  stream->last_rtp_pts = pts_ns;
+
+  std::lock_guard lock(stream->frame_mutex);
+  bool matched = false;
+  for (auto& [frame_id, frame] : stream->frames) {
+    (void)frame_id;
+    if (frame.pts_ns == pts_ns) {
+      frame.rtp_timestamp = timestamp;
+      matched = true;
+    }
+  }
+  if (!matched) {
+    stream->rtp_timestamps_by_pts.insert_or_assign(
+        pts_ns, RtpTimestampContext{timestamp, std::chrono::steady_clock::now()});
+    const auto capacity = static_cast<std::size_t>(stream->config->correlation_cache_size);
+    while (stream->rtp_timestamps_by_pts.size() > capacity) {
+      const auto oldest = std::min_element(stream->rtp_timestamps_by_pts.begin(),
+                                           stream->rtp_timestamps_by_pts.end(),
+                                           [](const auto& lhs, const auto& rhs) {
+                                             return lhs.second.observed_at < rhs.second.observed_at;
+                                           });
+      if (oldest == stream->rtp_timestamps_by_pts.end()) {
+        break;
+      }
+      stream->rtp_timestamps_by_pts.erase(oldest);
+    }
+  }
+  ++stream->rtp_timestamps_recorded;
+}
+
+GstPadProbeReturn capture_rtp_timestamp(GstPad*, GstPadProbeInfo* info, gpointer user_data) {
+  auto* stream = static_cast<StreamRuntime*>(user_data);
+  const GstPadProbeType type = GST_PAD_PROBE_INFO_TYPE(info);
+  if ((type & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM) != 0) {
+    GstEvent* event = GST_PAD_PROBE_INFO_EVENT(info);
+    if (event && (GST_EVENT_TYPE(event) == GST_EVENT_SEGMENT ||
+                  GST_EVENT_TYPE(event) == GST_EVENT_FLUSH_START)) {
+      stream->last_rtp_pts = -1;
+      std::lock_guard lock(stream->frame_mutex);
+      stream->rtp_timestamps_by_pts.clear();
+    }
+  } else if ((type & GST_PAD_PROBE_TYPE_BUFFER) != 0) {
+    record_rtp_timestamp(stream, GST_PAD_PROBE_INFO_BUFFER(info));
+  } else if ((type & GST_PAD_PROBE_TYPE_BUFFER_LIST) != 0) {
+    GstBufferList* list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
+    if (list && gst_buffer_list_length(list) > 0) {
+      record_rtp_timestamp(stream, gst_buffer_list_get(list, 0));
+    }
+  }
+  return GST_PAD_PROBE_OK;
+}
 
 GstPadProbeReturn stamp_input(GstPad*, GstPadProbeInfo* info, gpointer user_data) {
   auto* stream = static_cast<StreamRuntime*>(user_data);
@@ -320,6 +398,11 @@ GstPadProbeReturn stamp_input(GstPad*, GstPadProbeInfo* info, gpointer user_data
   frame.dts_ns = time_ns(GST_BUFFER_DTS(buffer));
   frame.duration_ns = time_ns(GST_BUFFER_DURATION(buffer));
   frame.admitted_at = std::chrono::steady_clock::now();
+  const auto rtp_timestamp = stream->rtp_timestamps_by_pts.find(frame.pts_ns);
+  if (rtp_timestamp != stream->rtp_timestamps_by_pts.end()) {
+    frame.rtp_timestamp = rtp_timestamp->second.timestamp;
+    stream->rtp_timestamps_by_pts.erase(rtp_timestamp);
+  }
   const auto insertion = stream->frames.emplace(frame_id, frame);
   if (!insertion.second) {
     stream->shared->fail("stream " + std::to_string(stream->index) +
@@ -413,8 +496,21 @@ GstFlowReturn consume_result(GstAppSink* sink, gpointer user_data) {
       output.duration_ns = frame.duration_ns;
       output.input_seq = static_cast<std::int64_t>(frame.identifier);
       output.orig_input_seq = static_cast<std::int64_t>(frame.identifier);
-      if (frame.pts_ns >= 0) {
-        output.rtp_timestamp = rtp_timestamp_from_pts(frame.pts_ns);
+      if (!frame.rtp_timestamp.has_value() && stream->config->video_enabled) {
+        std::lock_guard lock(stream->frame_mutex);
+        const auto rtp_timestamp = stream->rtp_timestamps_by_pts.find(frame.pts_ns);
+        if (rtp_timestamp != stream->rtp_timestamps_by_pts.end()) {
+          frame.rtp_timestamp = rtp_timestamp->second.timestamp;
+          stream->rtp_timestamps_by_pts.erase(rtp_timestamp);
+        }
+      }
+      if (frame.rtp_timestamp.has_value()) {
+        output.rtp_timestamp = frame.rtp_timestamp;
+      } else if (stream->config->video_enabled) {
+        ++stream->metadata_without_rtp_timestamp;
+        ++stream->metadata_dropped;
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
       }
       const std::string payload = sima_examples::detection_egress::serialize(
           boxes, *stream->labels, stream->config->input_width, stream->config->input_height,
@@ -465,15 +561,16 @@ std::string make_pipeline(const pcie_high_density::AppConfig& config) {
     if (config.video_enabled) {
       pipeline << " encoded_" << stream
                << ". ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
-               << " ! rtph264pay pt=96 config-interval=1 timestamp-offset=0"
+               << " ! rtph264pay name=insight_pay_" << stream
+               << " pt=96 config-interval=1 timestamp-offset=0"
                << " ! udpsink host=" << gst_quote(config.insight_host)
                << " port=" << config.video_port_base + stream << " sync=false async=false";
     }
 
     pipeline << " pcie.src_" << stream
-             << " ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0"
+             << " ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream"
              << " ! appsink name=result_" << stream
-             << " emit-signals=true sync=false async=false max-buffers=2 drop=false";
+             << " emit-signals=true sync=false async=false max-buffers=1 drop=true";
   }
   return pipeline.str();
 }
@@ -542,6 +639,25 @@ public:
       }
       g_signal_connect(input_queue, "overrun", G_CALLBACK(input_queue_overrun), stream.get());
       gst_object_unref(input_queue);
+
+      if (config_.video_enabled) {
+        const std::string payloader_name = "insight_pay_" + std::to_string(index);
+        GstElement* payloader = gst_bin_get_by_name(GST_BIN(pipeline_), payloader_name.c_str());
+        if (!payloader) {
+          throw std::runtime_error("pipeline is missing " + payloader_name);
+        }
+        GstPad* payloader_src = gst_element_get_static_pad(payloader, "src");
+        gst_object_unref(payloader);
+        if (!payloader_src) {
+          throw std::runtime_error(payloader_name + " has no src pad");
+        }
+        gst_pad_add_probe(payloader_src,
+                          static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER |
+                                                       GST_PAD_PROBE_TYPE_BUFFER_LIST |
+                                                       GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM),
+                          capture_rtp_timestamp, stream.get(), nullptr);
+        gst_object_unref(payloader_src);
+      }
 
       const std::string result_name = "result_" + std::to_string(index);
       GstElement* result = gst_bin_get_by_name(GST_BIN(pipeline_), result_name.c_str());
@@ -618,6 +734,8 @@ public:
     std::uint64_t result_timeouts = 0;
     std::uint64_t correlation_misses = 0;
     std::uint64_t returned = 0;
+    std::uint64_t rtp_timestamps_recorded = 0;
+    std::uint64_t metadata_without_rtp_timestamp = 0;
     std::size_t outstanding = 0;
     std::uint64_t metadata_sent = 0;
     std::uint64_t metadata_dropped = 0;
@@ -628,6 +746,8 @@ public:
       result_timeouts += stream->result_timeouts;
       correlation_misses += stream->correlation_misses;
       returned += stream->returned;
+      rtp_timestamps_recorded += stream->rtp_timestamps_recorded;
+      metadata_without_rtp_timestamp += stream->metadata_without_rtp_timestamp;
       {
         std::lock_guard lock(stream->frame_mutex);
         outstanding += stream->frames.size();
@@ -639,8 +759,10 @@ public:
               << " admitted=" << admitted << " dropped_before_admission=" << dropped
               << " result_timeouts=" << result_timeouts
               << " correlation_misses=" << correlation_misses << " outstanding=" << outstanding
-              << " returned=" << returned << " metadata_sent=" << metadata_sent
-              << " metadata_dropped=" << metadata_dropped << "\n";
+              << " returned=" << returned << " rtp_timestamps_recorded=" << rtp_timestamps_recorded
+              << " metadata_without_rtp_timestamp=" << metadata_without_rtp_timestamp
+              << " metadata_sent=" << metadata_sent << " metadata_dropped=" << metadata_dropped
+              << "\n";
   }
 
   void expire_results() {

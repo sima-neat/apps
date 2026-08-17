@@ -13,6 +13,7 @@ find_package(nlohmann_json REQUIRED)
 pkg_check_modules(GST REQUIRED IMPORTED_TARGET
   gstreamer-1.0
   gstreamer-app-1.0
+  gstreamer-rtp-1.0
   gstreamer-rtsp-1.0
   glib-2.0
 )
