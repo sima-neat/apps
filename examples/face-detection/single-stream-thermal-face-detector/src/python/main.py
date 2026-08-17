@@ -173,7 +173,7 @@ def parse_args(argv):
 def section(raw: dict, key: str) -> dict:
     value = raw.get(key) or {}
     if not isinstance(value, dict):
-        raise ValueError(f"{key} must be a mapping")
+        raise TypeError(f"{key} must be a mapping")
     return value
 
 
@@ -182,7 +182,7 @@ def string_or(raw: dict, key: str, default: str = "") -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise ValueError(f"{key} must be a string")
+        raise TypeError(f"{key} must be a string")
     return value
 
 
@@ -191,7 +191,7 @@ def int_or(raw: dict, key: str, default: int) -> int:
     if value is None:
         return default
     if not isinstance(value, int):
-        raise ValueError(f"{key} must be an integer")
+        raise TypeError(f"{key} must be an integer")
     return value
 
 
@@ -200,7 +200,7 @@ def float_or(raw: dict, key: str, default: float) -> float:
     if value is None:
         return default
     if not isinstance(value, (int, float)):
-        raise ValueError(f"{key} must be numeric")
+        raise TypeError(f"{key} must be numeric")
     return float(value)
 
 
@@ -209,7 +209,7 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     if value is None:
         return default
     if not isinstance(value, bool):
-        raise ValueError(f"{key} must be true or false")
+        raise TypeError(f"{key} must be true or false")
     return value
 
 
@@ -243,7 +243,7 @@ def validate_config(cfg: AppConfig) -> None:
 def load_app_config(config_path: Path) -> AppConfig:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise ValueError("config root must be a mapping")
+        raise TypeError("config root must be a mapping")
 
     model = section(raw, "model")
     source = section(raw, "source")
@@ -287,8 +287,8 @@ def load_labels(labels_path: Path) -> list:
 
 def letterbox_params(orig_w: int, orig_h: int, target_w: int, target_h: int):
     scale = min(target_w / orig_w, target_h / orig_h)
-    nw = int(round(orig_w * scale))
-    nh = int(round(orig_h * scale))
+    nw = round(orig_w * scale)
+    nh = round(orig_h * scale)
     pad_l = (target_w - nw) // 2
     pad_t = (target_h - nh) // 2
     return scale, pad_l, pad_t
@@ -464,7 +464,7 @@ def probe_rtsp(url: str):
         raise RuntimeError(f"failed to open RTSP source for probing: {url}")
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
+    fps = round(cap.get(cv2.CAP_PROP_FPS) or 0)
     cap.release()
     if width <= 0 or height <= 0:
         raise RuntimeError("failed to probe RTSP frame size")
@@ -685,7 +685,7 @@ def main(argv=None) -> int:
         return 0
     except KeyboardInterrupt:
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI boundary reports runtime failures.
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1
 
