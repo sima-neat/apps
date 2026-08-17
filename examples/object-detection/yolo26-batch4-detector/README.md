@@ -1,6 +1,7 @@
 # YOLO26 Batch-4 Detector
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | object-detection |
@@ -12,6 +13,7 @@
 | Model | yolo26m-det-int8-b4 |
 
 ## Concept
+
 Four RTSP streams hosted by Insight are decoded, one frame is taken from each, and all four are submitted to the MLA as a single `[4, 640, 640, 3]` batch — one dispatch instead of four. The model returns the six YOLO26 heads, which are decoded on the CPU (A65) per batch lane, so each stream keeps its own detections. The analysed frame is published to Insight with its detections beside it as metadata.
 
 The example exercises batched inference across several streams, per-lane attribution of results, and a pipeline shaped so that ingest overlaps inference rather than queueing behind it.
@@ -24,10 +26,27 @@ The example exercises batched inference across several streams, per-lane attribu
 - Four reachable RTSP H.264 sources, from Insight or from cameras.
 - A runtime containing the multi-output batch layout fix described below.
 
-### Runtime requirement
+### Runtime Requirement
+
 Older runtimes misaddress multi-output tensors when `batch_size > 1`, producing incorrect results without reporting an error. Use a Neat runtime that includes the batched multi-output OFM layout fix. If lane 0 looks correct while lanes 1–3 contain implausible detections, update the runtime before debugging the application.
 
+This example was validated on Modalix DevKit SDK 2.1.3. Before the dependent changes are merged, use the matching branch in all three repositories:
+
+```text
+fix/processmla-batched-multi-output-ofm-layout
+```
+
+The Apps CI resolves Core and Internals from the identically named branch. For a manual pre-merge run on the DevKit, install compatible branch artifacts before installing the app:
+
+```bash
+sima-cli neat install core@fix/processmla-batched-multi-output-ofm-layout
+sima-cli neat install apps@fix/processmla-batched-multi-output-ofm-layout
+```
+
+Run `neat` and confirm that Neat Core, PyNeat, and `neat-runtime` report the branch build. Do not test the six-head batch-4 model against a `develop` runtime that predates the fix. After the dependent PRs merge, the normal `develop` or release artifacts replace this pre-merge setup.
+
 ## Insight Setup
+
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host RTSP streams, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and render the overlays in the browser.
 
 In the Neat Development Environment, install the sample video assets:
@@ -37,6 +56,7 @@ sima-cli install assets/multi-video-sources
 ```
 
 Then create the inputs:
+
 1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
 2. In Insight, open `RTSP Source`.
 3. Use the sample videos or upload your own.
@@ -56,21 +76,24 @@ sima-cli neat install apps
 cd prebuilt-apps
 ```
 
+For pre-merge validation, use the branch-specific Apps installation from the Runtime Requirement section instead of reinstalling the latest Apps runtime here, then enter its `prebuilt-apps/` directory.
+
 Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Use the Model Zoo release version wherever `<modelzoo-version>` appears. It can differ from the installed platform version.
+The validated model comes from Model Zoo 2.1.2. This version can differ from the installed SDK version.
 
 Default model: `yolo26m-det-int8-b4.tar.gz`.
 
 Download the default model:
 
 ```bash
+export MODELZOO_VERSION="2.1.2"
 mkdir -p models
 cd models
 
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26m-det-int8-b4.tar.gz
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26m-det-int8-b4.tar.gz"
 
 cd ..
 ```
@@ -140,6 +163,30 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 \
 ```
 
 Open the Insight Web UI to watch the four channels with detection overlays.
+
+### Verify the Run
+
+A successful startup reports:
+
+- `batch=4`, an input size of 640, and six output heads;
+- four stream mappings with consecutive video and metadata ports;
+- increasing and similar processed-frame counts for all four streams.
+
+To verify every lane without depending on the Insight UI, temporarily set:
+
+```yaml
+inference:
+  frames: 40
+
+output:
+  debug_dir: sandbox/yolo26-batch4-detector
+  save_every: 10
+
+runtime:
+  profile: true
+```
+
+The output directory should contain non-empty JPEGs named `stream_0_...` through `stream_3_...`. On the validated 1280×720@30 FPS setup, C++ and Python completed about 18–20 batch dispatches per second; this number is informational and depends on the streams and platform load.
 
 ## How It Works
 
