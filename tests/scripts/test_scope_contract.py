@@ -284,6 +284,58 @@ def test_validate_scope_requires_model_registry_fields(tmp_path, missing_field):
     )
 
 
+@pytest.mark.parametrize(
+    "file_name",
+    ["..", "../outside.tar.gz", "/tmp/outside.tar.gz", "nested/model.tar.gz"],
+)
+def test_validate_scope_rejects_model_registry_file_paths(tmp_path, file_name):
+    example_key = _write_example(tmp_path)
+    _write_cpp_tests(tmp_path, example_key)
+    scope = _registry_scope(example_key)
+    scope["examples"][example_key]["models"]["demo-model"]["file"] = file_name
+
+    errors = validate_scope(scope, tmp_path)
+
+    assert (
+        f"{example_key}: model-registry model demo-model file must be a filename "
+        "without directory components"
+    ) in errors
+
+
+def test_validate_scope_rejects_registry_destination_conflicts(tmp_path):
+    example_key = _write_example(tmp_path)
+    _write_cpp_tests(tmp_path, example_key)
+    scope = _registry_scope(example_key)
+    entry = scope["examples"][example_key]
+    entry["models"]["other-model"] = {
+        "source": "model-registry",
+        "name": "other-models",
+        "ref": "release",
+        "spec": "latest",
+        "file": "demo-model.tar.gz",
+    }
+    entry["e2e"]["cpp"]["models"].append("other-model")
+
+    errors = validate_scope(scope, tmp_path)
+
+    assert (
+        f"{example_key}: model other-model conflicts with {example_key}: model "
+        "demo-model: model-registry file 'demo-model.tar.gz' maps to different "
+        "name/ref/spec"
+    ) in errors
+
+
+def test_validate_scope_allows_shared_destination_for_same_registry_resource(tmp_path):
+    example_key = _write_example(tmp_path)
+    _write_cpp_tests(tmp_path, example_key)
+    scope = _registry_scope(example_key)
+    entry = scope["examples"][example_key]
+    entry["models"]["model-alias"] = dict(entry["models"]["demo-model"])
+    entry["e2e"]["cpp"]["models"].append("model-alias")
+
+    assert validate_scope(scope, tmp_path) == []
+
+
 def test_models_command_exports_model_registry_ref_and_spec(monkeypatch, capsys):
     example_key = "classification/demo-example"
     scope = _registry_scope(example_key)
@@ -523,6 +575,21 @@ def test_download_models_reports_missing_registry_file(tmp_path):
         "second: requested file second.tar.gz was not installed by "
         "models/demo-models@main:latest"
     ) in result.stderr
+
+
+def test_download_models_rejects_unsafe_registry_file(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(tmp_path, [("demo", "../outside.tar.gz")])
+    cli, calls = _write_registry_cli(tmp_path, ["../outside.tar.gz"])
+    outside = tmp_path / "outside.tar.gz"
+    outside.write_text("keep", encoding="utf-8")
+
+    result = _run_registry_download(tmp_path / "models", query, cli, calls)
+
+    assert result.returncode != 0
+    assert "demo has unsafe model-registry file: ../outside.tar.gz" in result.stderr
+    assert outside.read_text(encoding="utf-8") == "keep"
+    assert not calls.exists()
 
 
 def test_download_models_stops_when_registry_temp_directory_fails(tmp_path):

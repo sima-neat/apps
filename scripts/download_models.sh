@@ -397,6 +397,11 @@ split_tsv_row() {
     IFS=$'\x1f' read -r -a out <<<"$normalized"
 }
 
+model_registry_file_is_safe() {
+    local file="$1"
+    [[ -n "$file" && "$file" != "." && "$file" != ".." && "$file" != */* ]]
+}
+
 download_scoped_models() {
     if [[ "${#LANGUAGES[@]}" -eq 0 ]]; then
         LANGUAGES=(python cpp)
@@ -455,7 +460,12 @@ download_scoped_models() {
                 download_huggingface_model "$model_id" "$repo" "$path" || failed=1
                 ;;
             model-registry)
-                registry_rows+=("$row")
+                if ! model_registry_file_is_safe "$expected_file"; then
+                    echo "[error] $model_id has unsafe model-registry file: $expected_file" >&2
+                    failed=1
+                else
+                    registry_rows+=("$row")
+                fi
                 ;;
             *)
                 echo "[error] $model_id has unsupported source: $source" >&2

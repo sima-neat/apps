@@ -175,6 +175,7 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
     errors: list[str] = []
     scoped_examples = set(scope["examples"])
     actual_examples = example_paths(apps_root)
+    registry_destinations: dict[str, tuple[tuple[str, str, str], str]] = {}
 
     for missing in sorted(actual_examples - scoped_examples):
         errors.append(f"missing scope entry for examples/{missing}")
@@ -208,6 +209,17 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         errors.append(
                             f"{example_key}: model-registry model {model_id} needs {field}"
                         )
+                file_name = str(model.get("file", "") or "")
+                if file_name and (
+                    file_name in {".", ".."}
+                    or Path(file_name).is_absolute()
+                    or len(Path(file_name).parts) != 1
+                ):
+                    errors.append(
+                        f"{example_key}: model-registry model {model_id} file must "
+                        "be a filename without directory components"
+                    )
+        selected_registry_models: set[str] = set()
         for language in sorted(VALID_LANGUAGES):
             for kind in sorted(VALID_KINDS):
                 try:
@@ -225,19 +237,41 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         f"{format_expected_paths(apps_root, artifact_paths)}"
                     )
             try:
-                for model_id in enabled_models(entry, language):
+                selected_models = enabled_models(entry, language)
+                for model_id in selected_models:
                     if model_id not in models:
                         errors.append(
                             f"{example_key}: e2e.{language} references undefined model {model_id}"
                         )
-                if is_enabled(entry, language, "e2e") and not enabled_models(
-                    entry, language
-                ):
+                if is_enabled(entry, language, "e2e") and not selected_models:
                     errors.append(
                         f"{example_key}: e2e.{language} is enabled but models is empty"
                     )
+                if is_enabled(entry, language, "e2e"):
+                    for model_id in selected_models:
+                        model = models.get(model_id)
+                        if (
+                            isinstance(model, dict)
+                            and model.get("source") == "model-registry"
+                        ):
+                            selected_registry_models.add(model_id)
             except ValueError as exc:
                 errors.append(f"{example_key}: {exc}")
+        for model_id in sorted(selected_registry_models):
+            model = models[model_id]
+            file_name = str(model.get("file", "") or "")
+            if not file_name:
+                continue
+            identity = tuple(
+                str(model.get(field, "") or "") for field in ("name", "ref", "spec")
+            )
+            owner = f"{example_key}: model {model_id}"
+            previous = registry_destinations.setdefault(file_name, (identity, owner))
+            if previous[0] != identity:
+                errors.append(
+                    f"{owner} conflicts with {previous[1]}: model-registry file "
+                    f"{file_name!r} maps to different name/ref/spec"
+                )
     return errors
 
 
