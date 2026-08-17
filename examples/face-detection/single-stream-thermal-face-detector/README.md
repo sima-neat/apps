@@ -56,11 +56,52 @@ raw FP32 heads directly:
   math and drive the same on-device graph.
 
 ## Preview
-Open the Insight video viewer for the app's channel to see live thermal or
-visible-light faces with five labeled landmark dots per detected face (eyes,
-nose tip, mouth corners).
+![Thermal face detector reference preview](../../../portal/assets/examples/face-detection/single-stream-thermal-face-detector/image.png)
 
-## Insight Setup
+The reference visualization pairs a thermal stream with its visible-light
+source and shows face, eye, and mouth regions. This example currently publishes
+the five facial landmarks to Insight as labeled dots; it does not publish the
+reference visualization's boxes.
+
+## Prerequisites
+
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/))
+  on a supported Modalix or DevKit target.
+- A running [Neat Insight](https://developer.sima.ai/software/tools/insight/)
+  instance reachable from the target, with an RTSP source containing faces.
+- The model expects an 800x800 compiled canvas; its on-device preprocess accepts
+  NV12, BGR, RGB, I420, or grayscale input up to 4096x4096.
+
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
+
+```bash
+sima-cli neat install apps
+cd prebuilt-apps
+```
+
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+Primary model: `yolov5s_face_raw_split`
+
+Model packages come from the Model Zoo release below, which can differ from the
+installed platform version.
+
+```bash
+export MODELZOO_VERSION="2.1.2"
+mkdir -p models
+cd models
+sima-cli modelzoo -v "${MODELZOO_VERSION}" get yolov5s_face_raw_split
+cd ..
+```
+
+The command stores the package under `models/`; set `model.path` to the
+downloaded `yolov5s_face_raw_split_mpk.tar.gz` file.
+
+## Prepare Insight
 [Neat Insight](https://developer.sima.ai/software/tools/insight/) can host an RTSP source, receive video from `VideoSender`, receive landmark metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
 
 In the Neat Development Environment, install the sample video assets:
@@ -96,48 +137,6 @@ assume the defaults:
 | Metadata UDP | 9100 | `metadataUDP` → `hostPortStart` |
 
 Keep video and metadata on the same channel (0).
-
-## Supported Models
-Primary model: `yolov5s_face_raw_split`
-
-Model packages come from the Model Zoo release below, which can differ from the
-installed platform version.
-
-Download the model:
-
-```bash
-export MODELZOO_VERSION="2.1.2"
-mkdir -p models
-cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get yolov5s_face_raw_split
-cd ..
-```
-
-The command stores the model under `models/` as a repo-local convention. `model.path` can point to any readable model package path.
-
-## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `models/`.
-  Download the model with the command above.
-- A running neat-insight instance reachable from the board, plus an RTSP source.
-  In the SDK, upload a video through Insight and start a media source to get an
-  RTSP URL; see [Use Insight](https://developer.sima.ai/software/tools/insight/).
-- The model expects an 800x800 compiled canvas; the on-device preproc accepts
-  NV12/BGR/RGB/I420/GRAY input up to 4096x4096.
-- Labels file: `examples/face-detection/single-stream-thermal-face-detector/src/common/face_label.txt`
-
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
-
-Clone and build the apps repo inside the Neat Development Environment:
-
-```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
-```
-
-After building, run the example commands below on the Modalix/DevKit board.
 
 ## Configure
 Edit `examples/face-detection/single-stream-thermal-face-detector/src/common/config.yaml`.
@@ -177,7 +176,7 @@ base ports. Keep video and metadata on the same channel (0).
 ## Run
 ### C++
 ```bash
-./build/examples/face-detection/single-stream-thermal-face-detector_cpp/single-stream-thermal-face-detector \
+./examples/face-detection/single-stream-thermal-face-detector/src/cpp/pre-built/single-stream-thermal-face-detector \
   --config examples/face-detection/single-stream-thermal-face-detector/src/common/config.yaml
 ```
 
@@ -216,3 +215,11 @@ watch the annotated stream.
 - Python source: `src/python/main.py`
 - Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
 - Shared assets: `src/common/face_label.txt`
+
+The packaged C++ source is an implementation reference. Run the executable
+under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the
+[Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

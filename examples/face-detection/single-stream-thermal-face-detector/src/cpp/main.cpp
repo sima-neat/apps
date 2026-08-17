@@ -258,7 +258,9 @@ void letterbox_params(int orig_w, int orig_h, int target_w, int target_h, float&
   pad_t = (target_h - nh) / 2;
 }
 
-inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
+inline float sigmoid(float x) {
+  return 1.0f / (1.0f + std::exp(-x));
+}
 
 // Owns the runtime's dense tensor bytes as a channels-last (h, w, c) float32
 // buffer. The bytes are copied into a std::vector<float> (naturally aligned)
@@ -269,7 +271,9 @@ struct HwcTensor {
   int w = 0;
   int c = 0;
   std::vector<float> data;
-  const float* floats() const { return data.data(); }
+  const float* floats() const {
+    return data.data();
+  }
 };
 
 // Mirrors decode_yolov5face_split() in the Python path: the channel axis is
@@ -391,7 +395,8 @@ std::vector<Detection> decode_yolov5face_split(const simaai::neat::TensorList& t
 
   std::vector<int> sizes;
   sizes.reserve(groups.size());
-  for (const auto& kv : groups) sizes.push_back(kv.first);
+  for (const auto& kv : groups)
+    sizes.push_back(kv.first);
   std::sort(sizes.begin(), sizes.end(), std::greater<int>());
 
   std::vector<Detection> candidates;
@@ -419,7 +424,8 @@ std::vector<Detection> decode_yolov5face_split(const simaai::neat::TensorList& t
           const float obj = sigmoid(bp[4]);
           const float cls = sigmoid(bp[5]);
           const float score = obj * cls;
-          if (score < min_score) continue;
+          if (score <= min_score)
+            continue;
 
           const float aw = kAnchors[lvl][a][0];
           const float ah = kAnchors[lvl][a][1];
@@ -617,10 +623,12 @@ std::string build_poses_json(const std::vector<Detection>& dets, const std::stri
   out << "{\"poses\":[";
   for (size_t i = 0; i < dets.size(); ++i) {
     const auto& d = dets[i];
-    if (i) out << ",";
+    if (i)
+      out << ",";
     out << "{\"id\":\"face_" << (i + 1) << "\",\"label\":\"" << label << "\",\"keypoints\":[";
     for (int k = 0; k < kNumLandmarks; ++k) {
-      if (k) out << ",";
+      if (k)
+        out << ",";
       out << "{\"name\":\"" << kLmNames[k] << "\",\"x\":" << d.landmarks[k].x
           << ",\"y\":" << d.landmarks[k].y << ",\"confidence\":" << d.score << "}";
     }

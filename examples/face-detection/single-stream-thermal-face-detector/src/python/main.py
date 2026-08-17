@@ -105,7 +105,9 @@ class ProfileWindow:
         self.decode_ms = 0.0
         self.metadata_ms = 0.0
 
-    def add(self, pull_ms: float, decode_ms: float, metadata_ms: float, face_count: int) -> None:
+    def add(
+        self, pull_ms: float, decode_ms: float, metadata_ms: float, face_count: int
+    ) -> None:
         if not self.enabled:
             return
         if self.frames == 0:
@@ -160,7 +162,9 @@ def time_ms() -> float:
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser(description="Single-camera RTSP yolov5s-face Insight example")
+    parser = argparse.ArgumentParser(
+        description="Single-camera RTSP yolov5s-face Insight example"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -272,7 +276,9 @@ def load_app_config(config_path: Path) -> AppConfig:
 def load_labels(labels_path: Path) -> list:
     if not labels_path.is_file():
         raise RuntimeError(f"labels file does not exist: {labels_path}")
-    labels = [line.strip() for line in labels_path.read_text(encoding="utf-8").splitlines()]
+    labels = [
+        line.strip() for line in labels_path.read_text(encoding="utf-8").splitlines()
+    ]
     labels = [label for label in labels if label]
     if not labels:
         raise RuntimeError(f"labels file is empty: {labels_path}")
@@ -355,8 +361,9 @@ def _decode_level(box_nhwc, lm_nhwc, stride: int, anchors, conf_threshold: float
     return boxes_xyxy, scores_all[yy, xx, aa].astype(np.float32, copy=False), lms
 
 
-def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float,
-                            max_detections: int):
+def decode_yolov5face_split(
+    outputs, conf_threshold: float, iou_threshold: float, max_detections: int
+):
     pairs = {}
     for o in outputs:
         a = np.asarray(o)
@@ -382,7 +389,8 @@ def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float
         else:
             raise ValueError(
                 f"Unrecognized split output shape {a.shape}; expected channel dim "
-                f"{BOX_CHANNELS} or {LM_CHANNELS}")
+                f"{BOX_CHANNELS} or {LM_CHANNELS}"
+            )
         pairs.setdefault(max(ny, nx), {})[ch] = arr
 
     sizes = sorted(pairs.keys(), reverse=True)
@@ -396,7 +404,12 @@ def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float
         if BOX_CHANNELS not in heads or LM_CHANNELS not in heads:
             raise ValueError(f"Level (size={size}) missing box or landmark head")
         result = _decode_level(
-            heads[BOX_CHANNELS], heads[LM_CHANNELS], _STRIDES[lvl], anchors[lvl], conf_threshold)
+            heads[BOX_CHANNELS],
+            heads[LM_CHANNELS],
+            _STRIDES[lvl],
+            anchors[lvl],
+            conf_threshold,
+        )
         if result is None:
             continue
         b, s, l = result
@@ -405,9 +418,11 @@ def decode_yolov5face_split(outputs, conf_threshold: float, iou_threshold: float
         out_lms.append(l)
 
     if not out_boxes:
-        return (np.empty((0, 4), dtype=np.float32),
-                np.empty((0,), dtype=np.float32),
-                np.empty((0, NUM_LANDMARKS, 2), dtype=np.float32))
+        return (
+            np.empty((0, 4), dtype=np.float32),
+            np.empty((0,), dtype=np.float32),
+            np.empty((0, NUM_LANDMARKS, 2), dtype=np.float32),
+        )
 
     boxes = np.concatenate(out_boxes, axis=0)
     scores = np.concatenate(out_scores, axis=0)
@@ -499,23 +514,31 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     labels = load_labels(cfg.labels_path)
     scale, pad_l, pad_t = letterbox_params(frame_w, frame_h, INFER_SIZE, INFER_SIZE)
 
-    source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, fps, frame_w, frame_h))
+    source = pyneat.groups.rtsp_decoded_input(
+        make_source_options(cfg, fps, frame_w, frame_h)
+    )
     branch = pyneat.graphs.branch("source", ["video", "model"])
 
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
+    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(
+        frame_w, frame_h, fps
+    )
     video_options.host = cfg.insight_host
     video_options.channel = 0
     video_options.video_port_base = cfg.video_port
     video_options.encoder.bitrate_kbps = 4000
 
     video_graph = pyneat.Graph("video")
-    video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options))
+    video_graph.connect(
+        pyneat.nodes.input("video"), pyneat.groups.video_sender(video_options)
+    )
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
 
     detections_graph = pyneat.Graph("detections")
-    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+    detections_graph.add(
+        pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4))
+    )
 
     graph = pyneat.Graph()
     live_link_options = pyneat.GraphLinkOptions()
@@ -601,23 +624,39 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         sample = runtime.run.pull("detections", 20000)
         pull_end = time_ms()
         if sample is None:
+            pull_error = str(runtime.run.last_error() or "")
+            if pull_error:
+                raise RuntimeError(f"failed to pull detections: {pull_error}")
+            if not runtime.run.running():
+                break
             print("[warn] timed out waiting for detections", file=sys.stderr)
             continue
 
         outputs = sample_to_outputs(sample)
         boxes_xyxy, scores, landmarks = decode_yolov5face_split(
-            outputs, cfg.min_score, cfg.nms_iou, cfg.max_detections)
+            outputs, cfg.min_score, cfg.nms_iou, cfg.max_detections
+        )
         boxes_xyxy, landmarks = unletterbox(
-            boxes_xyxy, landmarks, runtime.scale, runtime.pad_l, runtime.pad_t,
-            runtime.frame_w, runtime.frame_h)
+            boxes_xyxy,
+            landmarks,
+            runtime.scale,
+            runtime.pad_l,
+            runtime.pad_t,
+            runtime.frame_w,
+            runtime.frame_h,
+        )
         decode_end = time_ms()
 
         send_metadata(runtime, sample, scores, landmarks)
         metadata_end = time_ms()
 
         processed += 1
-        profile.add(pull_end - pull_start, decode_end - pull_end,
-                    metadata_end - decode_end, len(boxes_xyxy))
+        profile.add(
+            pull_end - pull_start,
+            decode_end - pull_end,
+            metadata_end - decode_end,
+            len(boxes_xyxy),
+        )
 
     profile.flush()
     print(f"processed={processed} video_sender={cfg.insight_host}:{runtime.video_port}")
