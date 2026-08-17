@@ -1,0 +1,39 @@
+model:                       # Batched detector selection.
+  path: assets/models/yolo26m-det-int8-b4.tar.gz        # Six-head pack compiled with --batch_size 4.
+  labels: examples/object-detection/yolo26-batch4-detector/src/common/coco_label.txt
+
+streams:                     # RTSP inputs from Insight, one entry per batch lane.
+  - <first-rtsp-url-copied-from-insight>
+  - <second-rtsp-url-copied-from-insight>
+  - <third-rtsp-url-copied-from-insight>
+  - <fourth-rtsp-url-copied-from-insight>
+
+input:                       # RTSP input transport settings.
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
+
+inference:                   # Detection controls. No NMS: the YOLO26 head is end-to-end.
+  frames: 0                  # Frame limit per stream. 0 runs continuously.
+  score_threshold: 0.35      # Minimum class confidence. int8 score granularity is ~0.06.
+  max_detections: 100        # Keep at most this many detections per frame.
+
+output:                      # Insight output plus optional local debug saves.
+  insight:                   # Live video and metadata destination.
+    host: <insight-host-ip>   # Host running the Insight receiver/viewer.
+    video_port_base: 9000    # Base UDP port for video channels (videoUDP start port).
+    metadata_port_base: 9100 # Base UDP port for metadata channels (metadataUDP start port).
+  video_enabled: true        # Disable to publish metadata only.
+  debug_dir: null            # Optional directory for periodic annotated frame saves.
+  save_every: 0              # Save every Nth frame per stream. 0 disables saving.
+
+runtime:                     # Runtime settings.
+  timeout_ms: 20000          # Frame pull and inference timeout in milliseconds.
+  warmup_frames: 10          # Drain this many frames per stream before publishing.
+  profile: false             # Print throughput and a phase breakdown periodically.
+  profile_interval: 50       # Dispatches between profile lines.
+
+testing:                     # Values the e2e tests override this config with.
+  e2e:
+    output:
+      save_every: 10         # Save every Nth frame per stream during the test.
+      total_saved_frames: 20 # Stop once this many sampled frames exist.
