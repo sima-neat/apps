@@ -94,7 +94,8 @@ installed platform version.
 export MODELZOO_VERSION="2.1.2"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${MODELZOO_VERSION}" get yolov5s_face_raw_split
+sima-cli download \
+  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolov5s_face_raw_split_mpk.tar.gz"
 cd ..
 ```
 

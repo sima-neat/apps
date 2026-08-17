@@ -1,7 +1,7 @@
 models:
   yolov5s_face_raw_split:
-    source: modelzoo
-    name: yolov5s_face_raw_split
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolov5s_face_raw_split_mpk.tar.gz
     file: yolov5s_face_raw_split_mpk.tar.gz
 unit:
   python: true
