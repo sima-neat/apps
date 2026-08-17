@@ -734,6 +734,19 @@ public:
     submit(0);
   }
 
+  ~BatchPrefetcher() {
+    // Exceptions elsewhere in run_app skip the explicit close(). Join here
+    // before closed_ and the other captured members begin destruction.
+    closed_ = true;
+    if (pending_.valid()) {
+      try {
+        pending_.get();
+      } catch (...) {
+        // A destructor must not replace the exception already unwinding.
+      }
+    }
+  }
+
   // Hand back the filled batch and immediately start filling the other.
   BatchSlot* next() {
     // get(), unlike wait(), rethrows failures from fill() and its lane tasks.
