@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 import os
@@ -87,14 +88,21 @@ class TestE2E:
             num_ports=REQUIRED_STREAMS,
             require_all_ports=True,
         ) as metadata_listener:
-            result = run_until_output_files(
-                cmd,
-                tmp_output_dir,
-                total_saved_frames,
-                test_timeout_ms / 1000,
-                cwd=str(EXAMPLE_DIR),
-            )
-            metadata = metadata_listener.wait_for_messages(5.0)
+            # Drain UDP while the application runs. Waiting until process exit
+            # can overflow receive buffers when four lanes publish at once.
+            with ThreadPoolExecutor(max_workers=1) as listener_pool:
+                metadata_future = listener_pool.submit(
+                    metadata_listener.wait_for_messages,
+                    min(test_timeout_ms / 1000, 30.0),
+                )
+                result = run_until_output_files(
+                    cmd,
+                    tmp_output_dir,
+                    total_saved_frames,
+                    test_timeout_ms / 1000,
+                    cwd=str(EXAMPLE_DIR),
+                )
+                metadata = metadata_future.result()
 
         assert result.returncode == 0, (
             f"main.py exited with code {result.returncode}\n"

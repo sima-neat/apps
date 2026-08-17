@@ -7,7 +7,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -58,6 +60,7 @@ int main(int argc, char** argv) {
   const int video_port_base = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port_base =
       env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
+  const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   const int save_every = e2e_int(kExample, "testing.e2e.output", "save_every");
   const int total_saved_frames = e2e_int(kExample, "testing.e2e.output", "total_saved_frames");
   write_e2e_config(kExample, config_path,
@@ -72,12 +75,11 @@ int main(int argc, char** argv) {
                    {{"streams",
                      {rtsp_urls[0], rtsp_urls[1], rtsp_urls[2], rtsp_urls[3]}}});
 
-  const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = kE2eInsightHost;
   metadata_options.base_port = metadata_port_base;
   metadata_options.num_ports = static_cast<int>(kRequiredStreams);
-  metadata_options.timeout_ms = 5000;
+  metadata_options.timeout_ms = std::min(timeout_ms, 30000);
   metadata_options.require_all_ports = true;
   MetadataJsonListener metadata_listener(metadata_options);
   if (!metadata_listener.ok()) {
@@ -86,8 +88,14 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // Drain UDP while the application runs. Waiting until process exit can
+  // overflow receive buffers when four lanes publish at once.
+  auto metadata_future = std::async(std::launch::async, [&metadata_listener] {
+    return metadata_listener.wait_for_messages();
+  });
   const ProcessResult result = spawn_until_output_files(binary, {"--config", config_path.string()},
                                                         output_dir, total_saved_frames, timeout_ms);
+  const MetadataJsonListenerResult metadata = metadata_future.get();
 
   int rc = 0;
   if (result.exit_code != 0) {
@@ -109,7 +117,6 @@ int main(int argc, char** argv) {
     }
   }
   if (rc == 0) {
-    const MetadataJsonListenerResult metadata = metadata_listener.wait_for_messages();
     if (!metadata.success) {
       std::cerr << "[FAIL] object-detection metadata was not received on all lanes: "
                 << metadata.error << "\n";
