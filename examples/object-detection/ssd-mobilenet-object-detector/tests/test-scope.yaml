@@ -1,0 +1,18 @@
+models:
+  ssd_v2_int8_tess_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/feat%252Fssd-mobilenet-v1-model-matrix/195615d2856e/ssd_mobilenet_v2/modalix_int8_tess_mla/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+    file: ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+    sha256: df63802305fffa634bb6368a9e3e964c54cdf249e7226e6c336f1994f1d13752
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+      - ssd_v2_int8_tess_mla
+  cpp:
+    enabled: true
+    models:
+      - ssd_v2_int8_tess_mla
