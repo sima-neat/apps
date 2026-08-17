@@ -10,9 +10,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.utils.test_scope import load_scope
-from tests.utils.test_scope import scoped_model_files, scoped_models, validate_scope
-
+from tests.utils import test_scope
+from tests.utils.test_scope import (
+    load_scope,
+    scoped_model_files,
+    scoped_models,
+    validate_scope,
+)
 
 APPS_ROOT = Path(__file__).resolve().parents[2]
 
@@ -50,22 +54,115 @@ def _scope_entry(example_key: str) -> dict:
     return _scope(example_key)["examples"][example_key]
 
 
+def _write_cpp_tests(root: Path, example_key: str) -> None:
+    tests_dir = root / "examples" / example_key / "tests" / "cpp"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_unit.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+    (tests_dir / "test_e2e.cpp").write_text(
+        "int main() { return 0; }\n", encoding="utf-8"
+    )
+
+
+def _registry_scope(example_key: str) -> dict:
+    scope = _scope(example_key)
+    scope["examples"][example_key]["models"] = {
+        "demo-model": {
+            "source": "model-registry",
+            "name": "demo-models",
+            "ref": "main",
+            "spec": "latest",
+            "file": "demo-model.tar.gz",
+        }
+    }
+    return scope
+
+
+def _require_modern_bash() -> None:
+    if (
+        subprocess.run(
+            ["bash", "-lc", "type mapfile"], capture_output=True, check=False
+        ).returncode
+        != 0
+    ):
+        pytest.skip("download_models.sh requires bash with mapfile support")
+
+
+def _write_registry_scope_query(path: Path, rows: list[tuple[str, str]]) -> Path:
+    query = path / "fake_scope_python"
+    output = "".join(
+        f"{model_id}\\tmodel-registry\\tdemo-models\\t\\t{file_name}\\t\\t\\tmain\\tlatest\\n"
+        for model_id, file_name in rows
+    )
+    query.write_text(
+        f"#!/usr/bin/env bash\nprintf '{output}'\n",
+        encoding="utf-8",
+    )
+    query.chmod(0o755)
+    return query
+
+
+def _write_registry_cli(path: Path, installed_files: list[str]) -> tuple[Path, Path]:
+    calls = path / "sima-cli-calls.txt"
+    cli = path / "sima-cli"
+    touch_commands = "".join(
+        f'touch "$install_dir/{file_name}"\n' for file_name in installed_files
+    )
+    cli.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "$*" >> "$NEAT_APPS_TEST_SIMA_CLI_CALLS"\n'
+        "install_dir=''\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  if [[ \"$1\" == '--install-dir' ]]; then\n"
+        '    install_dir="$2"\n'
+        "    shift 2\n"
+        "  else\n"
+        "    shift\n"
+        "  fi\n"
+        "done\n"
+        'mkdir -p "$install_dir"\n'
+        f"{touch_commands}",
+        encoding="utf-8",
+    )
+    cli.chmod(0o755)
+    return cli, calls
+
+
+def _run_registry_download(
+    models_dir: Path, query: Path, cli: Path, calls: Path
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "bash",
+            str(APPS_ROOT / "scripts" / "download_models.sh"),
+            "--language",
+            "python",
+        ],
+        cwd=APPS_ROOT,
+        env={
+            **os.environ,
+            "MODELS_DIR": str(models_dir),
+            "TEST_SCOPE_PYTHON_BIN": str(query),
+            "SIMA_CLI_BIN": str(cli),
+            "NEAT_APPS_TEST_SIMA_CLI_CALLS": str(calls),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_validate_scope_accepts_cpp_source_tests(tmp_path):
     example_key = _write_example(tmp_path)
-    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
-    tests_dir.mkdir(parents=True)
-    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    _write_cpp_tests(tmp_path, example_key)
 
     assert validate_scope(_scope(example_key), tmp_path) == []
 
 
 def test_load_scope_discovers_per_example_scope_files(tmp_path):
     example_key = _write_example(tmp_path)
-    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
-    tests_dir.mkdir(parents=True)
-    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    _write_cpp_tests(tmp_path, example_key)
     scope_file = tmp_path / "examples" / example_key / "tests" / "test-scope.yaml"
     scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
 
@@ -77,10 +174,7 @@ def test_load_scope_discovers_per_example_scope_files(tmp_path):
 
 def test_load_scope_accepts_single_per_example_scope_file(tmp_path):
     example_key = _write_example(tmp_path)
-    tests_dir = tmp_path / "examples" / example_key / "tests" / "cpp"
-    tests_dir.mkdir(parents=True)
-    (tests_dir / "test_unit.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
-    (tests_dir / "test_e2e.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    _write_cpp_tests(tmp_path, example_key)
     scope_file = tmp_path / "examples" / example_key / "tests" / "test-scope.yaml"
     scope_file.write_text(yaml.safe_dump(_scope_entry(example_key)), encoding="utf-8")
 
@@ -171,6 +265,53 @@ def test_scoped_models_keeps_per_example_model_id_local():
     ]
 
 
+def test_validate_scope_accepts_model_registry_source(tmp_path):
+    example_key = _write_example(tmp_path)
+    _write_cpp_tests(tmp_path, example_key)
+
+    assert validate_scope(_registry_scope(example_key), tmp_path) == []
+
+
+@pytest.mark.parametrize("missing_field", ["name", "ref", "spec", "file"])
+def test_validate_scope_requires_model_registry_fields(tmp_path, missing_field):
+    example_key = _write_example(tmp_path)
+    _write_cpp_tests(tmp_path, example_key)
+    scope = _registry_scope(example_key)
+    scope["examples"][example_key]["models"]["demo-model"][missing_field] = " "
+
+    errors = validate_scope(scope, tmp_path)
+
+    assert (
+        f"{example_key}: model-registry model demo-model needs {missing_field}"
+        in errors
+    )
+
+
+def test_models_command_exports_model_registry_ref_and_spec(monkeypatch, capsys):
+    example_key = "classification/demo-example"
+    scope = _registry_scope(example_key)
+    monkeypatch.setattr(test_scope, "load_scope", lambda *_: scope)
+    monkeypatch.setattr(test_scope, "validate_scope", lambda *_: [])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["test_scope.py", "models", "--kind", "e2e", "--language", "cpp"],
+    )
+
+    assert test_scope.main() == 0
+    assert capsys.readouterr().out.rstrip("\n").split("\t") == [
+        "demo-model",
+        "model-registry",
+        "demo-models",
+        "",
+        "demo-model.tar.gz",
+        "",
+        "",
+        "main",
+        "latest",
+    ]
+
+
 def test_download_models_fails_when_scope_resolution_fails(tmp_path):
     bad_scope = tmp_path / "bad-scope.yaml"
     bad_scope.write_text("examples: []\n", encoding="utf-8")
@@ -192,6 +333,7 @@ def test_download_models_fails_when_scope_resolution_fails(tmp_path):
         },
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert result.returncode != 0
@@ -200,8 +342,7 @@ def test_download_models_fails_when_scope_resolution_fails(tmp_path):
 
 
 def test_download_models_preserves_empty_url_model_name(tmp_path):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
-        pytest.skip("download_models.sh requires bash with mapfile support")
+    _require_modern_bash()
 
     fake_scope_python = tmp_path / "fake_scope_python"
     fake_scope_python.write_text(
@@ -212,7 +353,9 @@ def test_download_models_preserves_empty_url_model_name(tmp_path):
     fake_scope_python.chmod(0o755)
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    (models_dir / "demo-file.tar.gz").write_text("already downloaded\n", encoding="utf-8")
+    (models_dir / "demo-file.tar.gz").write_text(
+        "already downloaded\n", encoding="utf-8"
+    )
 
     result = subprocess.run(
         [
@@ -229,6 +372,7 @@ def test_download_models_preserves_empty_url_model_name(tmp_path):
         },
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert result.returncode == 0, result.stderr
@@ -236,8 +380,7 @@ def test_download_models_preserves_empty_url_model_name(tmp_path):
 
 
 def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
-        pytest.skip("download_models.sh requires bash with mapfile support")
+    _require_modern_bash()
 
     fake_scope_python = tmp_path / "fake_scope_python"
     fake_scope_python.write_text(
@@ -251,7 +394,7 @@ def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
     fake_sima_cli = tmp_path / "sima-cli"
     fake_sima_cli.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" > \"$NEAT_APPS_TEST_SIMA_CLI_ARGS\"\n"
+        'printf \'%s\\n\' "$*" > "$NEAT_APPS_TEST_SIMA_CLI_ARGS"\n'
         "touch demo-file.tar.gz\n",
         encoding="utf-8",
     )
@@ -275,6 +418,7 @@ def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
         },
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert result.returncode == 0, result.stderr
@@ -284,8 +428,7 @@ def test_download_models_expands_modelzoo_version_placeholder(tmp_path):
 
 
 def test_download_models_rejects_unknown_url_placeholder(tmp_path):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
-        pytest.skip("download_models.sh requires bash with mapfile support")
+    _require_modern_bash()
 
     fake_scope_python = tmp_path / "fake_scope_python"
     fake_scope_python.write_text(
@@ -316,10 +459,73 @@ def test_download_models_rejects_unknown_url_placeholder(tmp_path):
         },
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert result.returncode != 0
     assert "unsupported URL placeholder" in result.stderr
+
+
+def test_download_models_installs_registry_resource_once_for_multiple_files(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("first", "first.tar.gz"), ("second", "second.tar.gz")],
+    )
+    cli, calls = _write_registry_cli(tmp_path, ["first.tar.gz", "second.tar.gz"])
+    models_dir = tmp_path / "models"
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode == 0, result.stderr
+    call_lines = calls.read_text(encoding="utf-8").splitlines()
+    assert len(call_lines) == 1
+    assert call_lines[0].split()[:4] == [
+        "neat",
+        "install",
+        "models/demo-models@main:latest",
+        "--install-dir",
+    ]
+    assert len(call_lines[0].split()) == 5
+    assert (models_dir / "first.tar.gz").is_file()
+    assert (models_dir / "second.tar.gz").is_file()
+
+
+def test_download_models_skips_complete_registry_resource(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("first", "first.tar.gz"), ("second", "second.tar.gz")],
+    )
+    cli, calls = _write_registry_cli(tmp_path, [])
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "first.tar.gz").touch()
+    (models_dir / "second.tar.gz").touch()
+
+    result = _run_registry_download(models_dir, query, cli, calls)
+
+    assert result.returncode == 0, result.stderr
+    assert not calls.exists()
+    assert "[skip] first already exists" in result.stdout
+    assert "[skip] second already exists" in result.stdout
+
+
+def test_download_models_reports_missing_registry_file(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("first", "first.tar.gz"), ("second", "second.tar.gz")],
+    )
+    cli, calls = _write_registry_cli(tmp_path, ["first.tar.gz"])
+
+    result = _run_registry_download(tmp_path / "models", query, cli, calls)
+
+    assert result.returncode != 0
+    assert (
+        "second: requested file second.tar.gz was not installed by "
+        "models/demo-models@main:latest"
+    ) in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -333,8 +539,7 @@ def test_download_models_rejects_unknown_url_placeholder(tmp_path):
 def test_download_models_resolves_modelzoo_version_from_manifest(
     tmp_path, manifest_json, expected_version
 ):
-    if subprocess.run(["bash", "-lc", "type mapfile"], capture_output=True).returncode != 0:
-        pytest.skip("download_models.sh requires bash with mapfile support")
+    _require_modern_bash()
 
     root = tmp_path / "apps"
     script = root / "scripts" / "download_models.sh"
@@ -352,7 +557,7 @@ def test_download_models_resolves_modelzoo_version_from_manifest(
     fake_sima_cli = tmp_path / "sima-cli"
     fake_sima_cli.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" > \"$NEAT_APPS_TEST_SIMA_CLI_ARGS\"\n",
+        'printf \'%s\\n\' "$*" > "$NEAT_APPS_TEST_SIMA_CLI_ARGS"\n',
         encoding="utf-8",
     )
     fake_sima_cli.chmod(0o755)
@@ -369,6 +574,7 @@ def test_download_models_resolves_modelzoo_version_from_manifest(
         },
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert result.returncode == 0, result.stderr
