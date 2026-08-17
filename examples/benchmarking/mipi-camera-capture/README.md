@@ -18,6 +18,10 @@ Capture NV12 frames directly from a MIPI/libcamera camera with the Neat Library 
 
 The camera-to-Neat path remains zero-copy. Copying occurs only for the explicitly selected snapshots written by the Python application.
 
+## Preview
+
+![MIPI camera capture preview](../../../portal/assets/examples/benchmarking/mipi-camera-capture/image.png)
+
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
