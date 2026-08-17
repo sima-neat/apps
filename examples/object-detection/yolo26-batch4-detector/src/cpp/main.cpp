@@ -984,7 +984,7 @@ void run_app(const AppConfig& cfg) {
     if (batch == nullptr) {
       const auto last_error = run.last_error();
       if (!last_error.empty()) {
-        break;
+        throw std::runtime_error("runtime graph error: " + last_error);
       }
       std::cerr << "[warn] timed out waiting for frames\n";
       continue;

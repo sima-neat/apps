@@ -701,7 +701,8 @@ def send_metadata(stream: Stream, sample, detections: list[dict], labels: list[s
     }
     if sample.pts_ns >= 0:
         message["_insight"] = {
-            "rtp_timestamp": (sample.pts_ns * 90_000) // 1_000_000_000
+            "rtp_timestamp": ((sample.pts_ns * 90_000) // 1_000_000_000)
+            & 0xFFFFFFFF
         }
     stream.metadata_sender.send_raw_json(json.dumps(message, separators=(",", ":")))
 

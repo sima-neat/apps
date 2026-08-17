@@ -289,6 +289,27 @@ class TestMetadata:
             sample.pts_ns * 90_000
         ) // 1_000_000_000
 
+    def test_wraps_rtp_timestamp_to_32_bits(self):
+        import main
+
+        class Sender:
+            payload = ""
+
+            def send_raw_json(self, payload):
+                self.payload = payload
+                return True
+
+        class Stream:
+            metadata_sender = Sender()
+
+        sample = main.FrameRef(pts_ns=50_000_000_000_000, frame_id=1)
+        main.send_metadata(Stream(), sample, [], ["person"])
+        payload = json.loads(Stream.metadata_sender.payload)
+
+        expected = ((sample.pts_ns * 90_000) // 1_000_000_000) & 0xFFFFFFFF
+        assert payload["_insight"]["rtp_timestamp"] == expected
+        assert 0 <= payload["_insight"]["rtp_timestamp"] <= 0xFFFFFFFF
+
 
 class TestLetterbox:
     """The batch lane is filled in place, so geometry and padding must be exact."""
