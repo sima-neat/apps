@@ -141,3 +141,16 @@ class TestArgParsing:
         )
         assert r.returncode != 0
         assert "model.labels must be set" in r.stderr
+
+
+@pytest.mark.unit
+def test_single_frame_profile_includes_frame_elapsed_time(monkeypatch, capsys):
+    example = load_example()
+    timestamps = iter((100.0, 110.0))
+    monkeypatch.setattr(example, "time_ms", lambda: next(timestamps))
+
+    profile = example.ProfileWindow(enabled=True, interval=1)
+    profile.start_frame()
+    profile.add(pull_ms=6.0, decode_ms=3.0, metadata_ms=1.0, face_count=1)
+
+    assert "output_fps=100.0" in capsys.readouterr().out

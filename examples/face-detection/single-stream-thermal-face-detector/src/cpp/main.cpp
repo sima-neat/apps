@@ -120,11 +120,14 @@ struct ProfileWindow {
   double decode_ms = 0.0;
   double metadata_ms = 0.0;
 
+  void start_frame() {
+    if (enabled && frames == 0)
+      start_ms = sima_examples::time_ms();
+  }
+
   void add(double pull, double decode, double metadata, int face_count) {
     if (!enabled)
       return;
-    if (frames == 0)
-      start_ms = sima_examples::time_ms();
     ++frames;
     faces += face_count;
     pull_ms += pull;
@@ -663,6 +666,7 @@ void run_pipeline(PipelineRuntime& runtime, const AppConfig& cfg) {
 
   int processed = 0;
   while (cfg.frames <= 0 || processed < cfg.frames) {
+    profile.start_frame();
     simaai::neat::Sample sample;
     simaai::neat::PullError pull_error;
     const double pull_start = sima_examples::time_ms();

@@ -105,13 +105,15 @@ class ProfileWindow:
         self.decode_ms = 0.0
         self.metadata_ms = 0.0
 
+    def start_frame(self) -> None:
+        if self.enabled and self.frames == 0:
+            self.start_ms = time_ms()
+
     def add(
         self, pull_ms: float, decode_ms: float, metadata_ms: float, face_count: int
     ) -> None:
         if not self.enabled:
             return
-        if self.frames == 0:
-            self.start_ms = time_ms()
         self.frames += 1
         self.faces += face_count
         self.pull_ms += pull_ms
@@ -623,6 +625,7 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
     while cfg.frames <= 0 or processed < cfg.frames:
+        profile.start_frame()
         pull_start = time_ms()
         sample = runtime.run.pull("detections", 20000)
         pull_end = time_ms()
