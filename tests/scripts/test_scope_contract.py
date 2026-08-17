@@ -112,15 +112,7 @@ def _write_registry_cli(path: Path, installed_files: list[str]) -> tuple[Path, P
     cli.write_text(
         "#!/usr/bin/env bash\n"
         'printf \'%s\\n\' "$*" >> "$NEAT_APPS_TEST_SIMA_CLI_CALLS"\n'
-        "install_dir=''\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  if [[ \"$1\" == '--install-dir' ]]; then\n"
-        '    install_dir="$2"\n'
-        "    shift 2\n"
-        "  else\n"
-        "    shift\n"
-        "  fi\n"
-        "done\n"
+        'install_dir="${5:?missing install directory}"\n'
         'mkdir -p "$install_dir"\n'
         f"{touch_commands}",
         encoding="utf-8",

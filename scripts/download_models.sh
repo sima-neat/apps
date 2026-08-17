@@ -433,7 +433,7 @@ download_scoped_models() {
 
     local failed=0
     local registry_rows=()
-    local row model_id source name url expected_file repo path ref spec fields
+    local row model_id source name url expected_file repo path fields
     for row in "${rows[@]}"; do
         fields=()
         split_tsv_row "$row" fields
@@ -444,8 +444,6 @@ download_scoped_models() {
         expected_file="${fields[4]:-}"
         repo="${fields[5]:-}"
         path="${fields[6]:-}"
-        ref="${fields[7]:-}"
-        spec="${fields[8]:-}"
         case "$source" in
             modelzoo)
                 download_modelzoo_model "$model_id" "${name:-$model_id}" "$expected_file" || failed=1
@@ -469,7 +467,7 @@ download_scoped_models() {
     local registry_names=()
     local registry_refs=()
     local registry_specs=()
-    local seen index
+    local ref spec seen index
     for row in "${registry_rows[@]}"; do
         fields=()
         split_tsv_row "$row" fields
