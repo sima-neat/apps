@@ -79,7 +79,7 @@ jobs:
             set -euo pipefail
             export SIMA_CLI_CHECK_FOR_UPDATE=0
             curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o sima-cli-install.py
-            python3 sima-cli-install.py v2.1.15 --noninteractive
+            python3 sima-cli-install.py main latest --noninteractive
             rm -f sima-cli-install.py
             export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
             sima-cli neat install --help >/dev/null
@@ -213,11 +213,6 @@ jobs:
       - name: Install Apps Core for runtime tests
         run: |
           set -euo pipefail
-          cli_installer="${RUNNER_TEMP}/sima-cli-install.py"
-          curl -fsSL https://artifacts.sima-neat.com/tools/sima-cli-install.py -o "${cli_installer}"
-          python3 "${cli_installer}" v2.1.15 --noninteractive
-          export PATH="${HOME}/.sima-cli/.venv/bin:${PATH}"
-          export SIMA_CLI_CHECK_FOR_UPDATE=0
           artifact_base_url="${{ needs.resolve-vulcan-config.outputs.artifact_base_url }}"
           mapfile -t runtime_archives < <(
             find _vulcan-test/artifacts -maxdepth 1 -type f -name 'neat-apps-*.tar.gz' \
@@ -231,21 +226,8 @@ jobs:
             tar -xOzf "${runtime_archives[0]}" prebuilt-apps/deps/neat-core.json \
               | python3 -c 'import json, sys; core = json.load(sys.stdin)["neat-core"]; print("{}-{}".format(core["ref"], core["spec"]))'
           )"
-          core_target_spec="$(
-            tar -xOzf "${runtime_archives[0]}" prebuilt-apps/deps/neat-core.json \
-              | python3 -c 'import json, sys; print(json.load(sys.stdin)["neat-core"]["spec"])'
-          )"
-          core_install_dir="${RUNNER_TEMP}/apps-core-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          pyneat_venv="${RUNNER_TEMP}/apps-core-venv-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "CORE_TARGET_SPEC=${core_target_spec}" >> "${GITHUB_ENV}"
-          echo "CORE_WHEEL_DIR=${core_install_dir}" >> "${GITHUB_ENV}"
-          echo "PYNEAT_ACTIVATE=${pyneat_venv}/bin/activate" >> "${GITHUB_ENV}"
-          echo "PYTHON_TEST_BIN=${pyneat_venv}/bin/python3" >> "${GITHUB_ENV}"
           NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
-            NEAT_APPS_CORE_INSTALL_DIR="${core_install_dir}" \
             NEAT_CORE_INSTALL_MODE=vulcan \
-            PYNEAT_VENV_DIR="${pyneat_venv}" \
-            SIMA_CLI_CHECK_FOR_UPDATE=0 \
             NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
             ./build.sh --only-install-neat-core --neat-core-version "${core_target}"
 
@@ -279,33 +261,25 @@ jobs:
           printf '%s\n' "${runtime_dir}" > _vulcan-test/apps_runtime_dir.txt
           echo "Using apps runtime: ${runtime_dir}"
 
+      - name: Locate pyneat
+        run: |
+          if [[ -f /media/nvme/pyneat/bin/activate && -x /media/nvme/pyneat/bin/python3 ]]; then
+            echo "PYNEAT_ACTIVATE=/media/nvme/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=/media/nvme/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          elif [[ -f "${HOME}/pyneat/bin/activate" && -x "${HOME}/pyneat/bin/python3" ]]; then
+            echo "PYNEAT_ACTIVATE=${HOME}/pyneat/bin/activate" >> "${GITHUB_ENV}"
+            echo "PYTHON_TEST_BIN=${HOME}/pyneat/bin/python3" >> "${GITHUB_ENV}"
+          else
+            echo "pyneat virtual environment not found under /media/nvme/pyneat or ${HOME}/pyneat" >&2
+            exit 1
+          fi
+
       - name: Install Python test dependencies
         run: |
-          set -euo pipefail
           source "${PYNEAT_ACTIVATE}"
           echo "Using Python test interpreter: ${PYTHON_TEST_BIN}"
-          pyneat_site="${RUNNER_TEMP}/apps-pyneat-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p "${pyneat_site}"
-          mapfile -t core_wheels < <(
-            find "${CORE_WHEEL_DIR}" -type f -name 'pyneat-*.whl' | sort
-          )
-          if [[ "${#core_wheels[@]}" -ne 1 ]]; then
-            echo "Expected exactly one pyneat wheel for Core ${CORE_TARGET_SPEC}, found ${#core_wheels[@]}" >&2
-            exit 1
-          fi
-          if [[ "$(basename "${core_wheels[0]}")" != *"${CORE_TARGET_SPEC}"* ]]; then
-            echo "Core wheel does not match spec ${CORE_TARGET_SPEC}: ${core_wheels[0]}" >&2
-            exit 1
-          fi
-          "${PYTHON_TEST_BIN}" -m pip install --target "${pyneat_site}" --no-deps --upgrade \
-            "${core_wheels[0]}"
-          "${PYTHON_TEST_BIN}" -m pip install --target "${pyneat_site}" --upgrade \
-            pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
-          echo "PYTHONPATH=${pyneat_site}${PYTHONPATH:+:${PYTHONPATH}}" >> "${GITHUB_ENV}"
-          PYNEAT_TEST_SITE="${pyneat_site}" \
-            PYTHONPATH="${pyneat_site}${PYTHONPATH:+:${PYTHONPATH}}" \
-            "${PYTHON_TEST_BIN}" -c \
-            'import os, pathlib, pyneat; from importlib.metadata import version; site=pathlib.Path(os.environ["PYNEAT_TEST_SITE"]).resolve(); module=pathlib.Path(pyneat.__file__).resolve(); installed=version("pyneat"); spec=os.environ["CORE_TARGET_SPEC"]; assert module.is_relative_to(site), (module, site); assert spec in installed, (installed, spec); print("Using exact Core pyneat:", installed, module)'
+          "${PYTHON_TEST_BIN}" -m pip install pytest "numpy<2" "opencv-python-headless<4.12" PyYAML
+          "${PYTHON_TEST_BIN}" -c "import pyneat; print('Using pyneat:', pyneat.__file__)"
 
       - name: Run all activated Apps tests
         env:

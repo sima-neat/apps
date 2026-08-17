@@ -7,25 +7,19 @@ Runs TensorFlow SSD-MobileNet v1/v2 (300x300) and TorchVision SSDlite-MobileNetV
 from __future__ import annotations
 
 import argparse
-from bisect import bisect_right
 import json
 import logging
 import math
-import struct
 import sys
-import time
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 import yaml
 
-
-VERBOSE = False
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_PATH = "models/ssd_mobilenet_v2_heads_mpk.tar.gz"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 COMMON_DIR = Path(__file__).resolve().parents[1] / "common"
 DEFAULT_LABELS_PATH = Path(
@@ -34,7 +28,6 @@ DEFAULT_LABELS_PATH = Path(
 
 DEFAULT_PREPROCESSING_PROFILE = "tensorflow_ssd"
 NUM_CLASSES = 91  # index 0 = background, 1..90 = COCO ids.
-BBOX_RECORD_SIZE = 24  # int32 x, y, w, h + float32 score + int32 class_id
 
 BOX_COLORS = [
     (0, 255, 0),
@@ -48,16 +41,6 @@ BOX_COLORS = [
 ]
 
 
-class AggregateSuppressionOptions(NamedTuple):
-    """Application policy for hiding same-class crowd regions after model-managed decode."""
-
-    enabled: bool = False
-    min_parent_area_fraction: float = 0.20
-    min_child_containment: float = 0.90
-    max_child_area_ratio: float = 0.25
-    min_children: int = 2
-
-
 def config_value_or(section: Mapping[str, Any], key: str, default: Any) -> Any:
     """Return a scalar config value, treating YAML null as an omitted setting."""
     value = section.get(key)
@@ -69,7 +52,7 @@ def config_mapping_or_empty(value: Any, qualified_key: str) -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ValueError(f"{qualified_key} must be a mapping")
+        raise ValueError(f"{qualified_key} must be a mapping")  # noqa: TRY004
     return value
 
 
@@ -79,24 +62,8 @@ def config_string_or(
     """Parse a YAML string without coercing collections, numbers, or Booleans."""
     value = config_value_or(section, key, default)
     if not isinstance(value, str):
-        raise ValueError(f"{qualified_key} must be a string")
+        raise ValueError(f"{qualified_key} must be a string")  # noqa: TRY004
     return value
-
-
-def config_bool_or(
-    section: Mapping[str, Any], key: str, default: bool, qualified_key: str
-) -> bool:
-    """Parse a YAML Boolean with the same null/default and string rules as C++."""
-    value = config_value_or(section, key, default)
-    if value is True or value is False:
-        return value
-    if isinstance(value, str):
-        lowered = value.lower()
-        if lowered == "true":
-            return True
-        if lowered == "false":
-            return False
-    raise ValueError(f"{qualified_key} must be true or false")
 
 
 def config_float_or(
@@ -105,7 +72,7 @@ def config_float_or(
     """Parse a numeric scalar without accepting Python's Boolean-as-integer coercion."""
     value = config_value_or(section, key, default)
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        raise ValueError(f"{qualified_key} must be a number")
+        raise ValueError(f"{qualified_key} must be a number")  # noqa: TRY004
     try:
         return float(value)
     except ValueError as exc:
@@ -118,7 +85,7 @@ def config_int_or(
     """Parse an integer-valued scalar without truncating fractions or Booleans."""
     value = config_value_or(section, key, default)
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        raise ValueError(f"{qualified_key} must be an integer")
+        raise ValueError(f"{qualified_key} must be an integer")  # noqa: TRY004
     if isinstance(value, int):
         return value
     if isinstance(value, float):
@@ -142,37 +109,6 @@ def output_stem(image_path: Path) -> str:
     """Output stem keeping the (case-preserved) source extension so frame.jpg/frame.png don't collide."""
     ext = image_path.suffix.lstrip(".")
     return f"{image_path.stem}_{ext}" if ext else image_path.stem
-
-
-def paths_alias(lhs: Path, rhs: Path) -> bool:
-    """Return true for canonical-path aliases and existing hard-link aliases."""
-    if lhs.resolve() == rhs.resolve():
-        return True
-    try:
-        return lhs.samefile(rhs)
-    except OSError:
-        return False
-
-
-def clear_output_images(output_dir: Path, expected_names: set[str]) -> int:
-    """Remove expected output entries by pathname without following symlinks."""
-    removed = 0
-    for name in expected_names:
-        path = output_dir / name
-        # exists() follows symlinks and is false for dangling links; is_symlink() closes that gap.
-        if path.is_symlink() or path.exists():
-            if path.is_dir() and not path.is_symlink():
-                raise IsADirectoryError(
-                    f"generated overlay path is a directory: {path}"
-                )
-            path.unlink()
-            removed += 1
-    return removed
-
-
-def _log(msg: str) -> None:
-    if VERBOSE:
-        print(f"[ssd-debug] {msg}", flush=True)
 
 
 def _resolve_asset(configured: str, default_name: str) -> Path:
@@ -221,35 +157,7 @@ def normalization_for_profile(profile: str) -> tuple[list[float], list[float]]:
     )
 
 
-def make_model_options(
-    score_threshold: float,
-    nms_iou: float,
-    max_detections: int,
-    preprocessing_profile: str = DEFAULT_PREPROCESSING_PROFILE,
-) -> "pyneat.ModelOptions":
-    """Model-managed SSD decode with an explicit source-model preprocessing profile."""
-    mean, stddev = normalization_for_profile(preprocessing_profile)
-    opt = pyneat.ModelOptions()
-    opt.preprocess.kind = pyneat.InputKind.Image
-    opt.preprocess.enable = pyneat.AutoFlag.On
-    # Core infers the target W/H from the MPK's MLA input contract, as it does for YOLO.
-    opt.preprocess.resize.enable = pyneat.AutoFlag.On
-    opt.preprocess.resize.mode = pyneat.ResizeMode.Stretch
-    opt.preprocess.normalize.enable = pyneat.AutoFlag.On
-    opt.preprocess.normalize.mean = mean
-    opt.preprocess.normalize.stddev = stddev
-    opt.preprocess.normalize.has_explicit_stats = True
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
-    opt.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
-    opt.decode_type = pyneat.BoxDecodeType.Ssd
-    opt.num_classes = NUM_CLASSES
-    opt.score_threshold = score_threshold
-    opt.nms_iou_threshold = nms_iou
-    opt.top_k = max_detections
-    return opt
-
-
-def image_to_tensor(image_bgr: "np.ndarray") -> "pyneat.Tensor":
+def image_to_tensor(image_bgr: np.ndarray) -> pyneat.Tensor:
     return pyneat.Tensor.from_numpy(
         np.ascontiguousarray(image_bgr, dtype=np.uint8),
         copy=True,
@@ -258,118 +166,33 @@ def image_to_tensor(image_bgr: "np.ndarray") -> "pyneat.Tensor":
     )
 
 
-def extract_bbox_payload(tensors) -> bytes | None:
-    if len(tensors) != 1:
-        return None
-    payload = tensors[0].copy_payload_bytes()
-    return payload or None
-
-
-def parse_bbox_payload(payload: bytes, img_w: int, img_h: int) -> list[dict[str, Any]]:
-    """Parse the packed BBOX records emitted by the model-managed BoxDecode stage."""
-    if len(payload) < 4:
-        return []
-    count = min(
-        struct.unpack_from("<I", payload, 0)[0], (len(payload) - 4) // BBOX_RECORD_SIZE
-    )
-    detections: list[dict[str, Any]] = []
-    off = 4
-    for _ in range(count):
-        x, y, w, h, score, cls_id = struct.unpack_from("<iiiifi", payload, off)
-        off += BBOX_RECORD_SIZE
-        x1 = max(0.0, min(float(img_w), float(x)))
-        y1 = max(0.0, min(float(img_h), float(y)))
-        x2 = max(0.0, min(float(img_w), float(x + w)))
-        y2 = max(0.0, min(float(img_h), float(y + h)))
-        if x2 <= x1 or y2 <= y1:
-            continue
-        detections.append(
-            {"box": [x1, y1, x2, y2], "score": float(score), "class_id": int(cls_id)}
-        )
-    return detections
-
-
-def suppress_aggregate_detections(
-    detections: list[dict[str, Any]],
-    image_width: int,
-    image_height: int,
-    options: AggregateSuppressionOptions,
+def decode_detections(
+    tensors, image_width: int, image_height: int, max_detections: int
 ) -> list[dict[str, Any]]:
-    """Remove a large region only when it contains multiple smaller same-class objects.
-
-    COCO-trained detectors can emit an ``iscrowd`` training region as an ordinary class box;
-    the packed runtime output has no crowd flag. This optional app policy leaves Core's faithful
-    SSD decode/NMS and raw output untouched and suppresses only the aggregate visualization.
-    """
-    if (
-        not options.enabled
-        or len(detections) < options.min_children + 1
-        or image_width <= 0
-        or image_height <= 0
-    ):
-        return detections
-
-    image_area = float(image_width * image_height)
-    # Parsed detections already own numeric coordinates; keep references instead of rebuilding
-    # four-float tuples on every frame.
-    coords = [det["box"] for det in detections]
-    areas = [max(0.0, x2 - x1) * max(0.0, y2 - y1) for x1, y1, x2, y2 in coords]
-    by_class: dict[int, list[int]] = {}
-    for index, det in enumerate(detections):
-        by_class.setdefault(int(det["class_id"]), []).append(index)
-
-    # Sort once by area so each parent considers only candidates small enough to be children.
-    # This preserves the policy while avoiding the quadratic scan when many similarly sized
-    # detections are present (the common worst case for max_detections=100).
-    class_candidates: dict[int, tuple[list[float], list[int]]] = {}
-    for class_id, indices in by_class.items():
-        ordered_indices = sorted(indices, key=areas.__getitem__)
-        class_candidates[class_id] = (
-            [areas[index] for index in ordered_indices],
-            ordered_indices,
-        )
-
-    suppressed = [False] * len(detections)
-    for parent_index, (px1, py1, px2, py2) in enumerate(coords):
-        parent_area = areas[parent_index]
-        if parent_area < image_area * options.min_parent_area_fraction:
-            continue
-
-        children = 0
-        max_child_area = parent_area * options.max_child_area_ratio
-        class_id = int(detections[parent_index]["class_id"])
-        candidate_areas, candidate_indices = class_candidates[class_id]
-        eligible_count = bisect_right(candidate_areas, max_child_area)
-        for candidate_position in range(eligible_count):
-            child_index = candidate_indices[candidate_position]
-            if child_index == parent_index:
-                continue
-            child_area = areas[child_index]
-            if child_area <= 0.0 or child_area > max_child_area:
-                continue
-            cx1, cy1, cx2, cy2 = coords[child_index]
-            intersection_width = max(0.0, min(px2, cx2) - max(px1, cx1))
-            intersection_height = max(0.0, min(py2, cy2) - max(py1, cy1))
-            if (
-                intersection_width * intersection_height / child_area
-                >= options.min_child_containment
-            ):
-                children += 1
-                if children >= options.min_children:
-                    suppressed[parent_index] = True
-                    break
-
-    return [det for index, det in enumerate(detections) if not suppressed[index]]
+    """Decode the single BBOX tensor through Core's public detection API."""
+    if len(tensors) != 1:
+        raise RuntimeError(f"expected one BBOX tensor, got {len(tensors)}")
+    result = pyneat.detections.decode_bbox_tensor(
+        tensors[0], image_width, image_height, max_detections, False
+    )
+    return [
+        {
+            "box": [box.x1, box.y1, box.x2, box.y2],
+            "score": float(box.score),
+            "class_id": int(box.class_id),
+        }
+        for box in result.boxes
+    ]
 
 
 def visualize_detections(
-    image_bgr: "np.ndarray",
+    image_bgr: np.ndarray,
     detections: list[dict[str, Any]],
     labels: list[str],
-) -> "np.ndarray":
+) -> np.ndarray:
     image_copy = image_bgr.copy()
     for det in detections:
-        x1, y1, x2, y2 = (int(round(v)) for v in det["box"])
+        x1, y1, x2, y2 = (round(v) for v in det["box"])
         color = class_color(det["class_id"])
         text = f"{class_name(labels, det['class_id'])} {det['score']:.2f}"
         cv2.rectangle(image_copy, (x1, y1), (x2, y2), color, 2)
@@ -387,14 +210,12 @@ def visualize_detections(
 
 def detections_record(
     image_path: Path,
-    image_bgr: "np.ndarray",
+    image_bgr: np.ndarray,
     detections: list[dict[str, Any]],
-    displayed_detections: list[dict[str, Any]],
     labels: list[str],
 ) -> dict[str, Any]:
     """Machine-readable detection record, written when io.detections_json is set."""
     height, width = image_bgr.shape[:2]
-    displayed_ids = {id(det) for det in displayed_detections}
     return {
         "image": image_path.name,
         "width": int(width),
@@ -405,20 +226,10 @@ def detections_record(
                 "label": class_name(labels, det["class_id"]),
                 "score": det["score"],
                 "box": det["box"],
-                "displayed": id(det) in displayed_ids,
             }
             for det in detections
         ],
     }
-
-
-def format_profile_stats(name: str, values: list[float]) -> str:
-    arr = np.array(values, dtype=np.float64)
-    fps = float(len(arr)) / arr.sum() if arr.sum() > 0 else 0.0
-    return (
-        f"  {name}: mean={arr.mean():.8f}s, min={arr.min():.8f}s, "
-        f"max={arr.max():.8f}s, FPS={fps:.3f}"
-    )
 
 
 def main() -> int:
@@ -449,15 +260,15 @@ def main() -> int:
         io_cfg = config_mapping_or_empty(raw.get("io"), "io")
         decode_cfg = config_mapping_or_empty(raw.get("decode"), "decode")
         runtime_cfg = config_mapping_or_empty(raw.get("runtime"), "runtime")
-        output_cfg = config_mapping_or_empty(raw.get("output"), "output")
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
 
     try:
-        model_path = Path(
-            config_string_or(model_cfg, "path", DEFAULT_MODEL_PATH, "model.path")
-        )
+        model_path_value = config_string_or(model_cfg, "path", "", "model.path")
+        if not model_path_value.strip():
+            raise ValueError("model.path must be a nonempty path")
+        model_path = Path(model_path_value)
         preprocessing_profile = config_string_or(
             model_cfg,
             "preprocessing_profile",
@@ -491,52 +302,12 @@ def main() -> int:
         max_detections = config_int_or(
             decode_cfg, "max_detections", 100, "decode.max_detections"
         )
-        aggregate_suppression_enabled = config_bool_or(
-            output_cfg,
-            "aggregate_suppression",
-            False,
-            "output.aggregate_suppression",
-        )
-        profile = config_bool_or(runtime_cfg, "profile", False, "runtime.profile")
-        overlay = config_bool_or(output_cfg, "overlay", True, "output.overlay")
-        verbose = config_bool_or(runtime_cfg, "verbose", False, "runtime.verbose")
-        aggregate_suppression = AggregateSuppressionOptions(
-            enabled=aggregate_suppression_enabled,
-            min_parent_area_fraction=config_float_or(
-                output_cfg,
-                "aggregate_min_parent_area_fraction",
-                0.20,
-                "output.aggregate_min_parent_area_fraction",
-            ),
-            min_child_containment=config_float_or(
-                output_cfg,
-                "aggregate_min_child_containment",
-                0.90,
-                "output.aggregate_min_child_containment",
-            ),
-            max_child_area_ratio=config_float_or(
-                output_cfg,
-                "aggregate_max_child_area_ratio",
-                0.25,
-                "output.aggregate_max_child_area_ratio",
-            ),
-            min_children=config_int_or(
-                output_cfg,
-                "aggregate_min_children",
-                2,
-                "output.aggregate_min_children",
-            ),
-        )
-        num_runs = config_int_or(runtime_cfg, "num_runs", 1, "runtime.num_runs")
         timeout_ms = config_int_or(
             runtime_cfg, "timeout_ms", 20000, "runtime.timeout_ms"
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-
-    global VERBOSE
-    VERBOSE = verbose
 
     if not math.isfinite(score_threshold) or not 0.0 <= score_threshold <= 1.0:
         print("decode.score_threshold must be in [0.0, 1.0]", file=sys.stderr)
@@ -547,41 +318,8 @@ def main() -> int:
     if max_detections < 1:
         print("decode.max_detections must be >= 1", file=sys.stderr)
         return 2
-    if (
-        not math.isfinite(aggregate_suppression.min_parent_area_fraction)
-        or not 0.0 <= aggregate_suppression.min_parent_area_fraction <= 1.0
-    ):
-        print(
-            "output.aggregate_min_parent_area_fraction must be in [0.0, 1.0]",
-            file=sys.stderr,
-        )
-        return 2
-    if (
-        not math.isfinite(aggregate_suppression.min_child_containment)
-        or not 0.0 < aggregate_suppression.min_child_containment <= 1.0
-    ):
-        print(
-            "output.aggregate_min_child_containment must be in (0.0, 1.0]",
-            file=sys.stderr,
-        )
-        return 2
-    if (
-        not math.isfinite(aggregate_suppression.max_child_area_ratio)
-        or not 0.0 < aggregate_suppression.max_child_area_ratio <= 1.0
-    ):
-        print(
-            "output.aggregate_max_child_area_ratio must be in (0.0, 1.0]",
-            file=sys.stderr,
-        )
-        return 2
-    if aggregate_suppression.min_children < 2:
-        print("output.aggregate_min_children must be >= 2", file=sys.stderr)
-        return 2
     if timeout_ms <= 0:
         print("runtime.timeout_ms must be > 0", file=sys.stderr)
-        return 2
-    if num_runs < 1:
-        print("runtime.num_runs must be >= 1", file=sys.stderr)
         return 2
     try:
         normalization_for_profile(preprocessing_profile)
@@ -594,14 +332,13 @@ def main() -> int:
     if not input_dir.is_dir():
         print(f"Input directory does not exist: {input_dir}", file=sys.stderr)
         return 2
-    # Only overlay runs write into output_dir, so only they must not alias input_dir.
-    if not profile and overlay and paths_alias(output_dir, input_dir):
+    if output_dir.resolve() == input_dir.resolve():
         print("io.output_dir must differ from io.input_dir", file=sys.stderr)
         return 2
 
     try:
         labels = load_labels(labels_path)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         print(f"Error loading assets: {exc}", file=sys.stderr)
         return 2
 
@@ -609,69 +346,33 @@ def main() -> int:
     if not image_paths:
         print(f"No images found in {input_dir}", file=sys.stderr)
         return 3
-    if not profile and overlay:
-        consumed_paths = (args.config, model_path, labels_path, *image_paths)
-        for image_path in image_paths:
-            overlay_path = output_dir / f"{output_stem(image_path)}.png"
-            if overlay_path.is_dir() and not overlay_path.is_symlink():
-                print(
-                    f"generated overlay path must not be a directory: {overlay_path}",
-                    file=sys.stderr,
-                )
-                return 2
-            if any(paths_alias(overlay_path, consumed) for consumed in consumed_paths):
-                print(
-                    f"generated overlay must not overwrite a consumed input: {overlay_path}",
-                    file=sys.stderr,
-                )
-                return 2
-    if not profile and detections_json:
-        report_path = Path(detections_json)
-        for consumed_path in (args.config, model_path, labels_path):
-            if paths_alias(consumed_path, report_path):
-                print(
-                    f"io.detections_json must not overwrite a consumed input: {consumed_path}",
-                    file=sys.stderr,
-                )
-                return 2
-        for image_path in image_paths:
-            if paths_alias(image_path, report_path):
-                print(
-                    f"io.detections_json must not overwrite an input image: {image_path}",
-                    file=sys.stderr,
-                )
-                return 2
-            overlay_path = output_dir / f"{output_stem(image_path)}.png"
-            if overlay and paths_alias(overlay_path, report_path):
-                print(
-                    f"io.detections_json must not overwrite a generated overlay: {overlay_path}",
-                    file=sys.stderr,
-                )
-                return 2
-        if is_image(report_path) and paths_alias(report_path.parent, input_dir):
-            print(
-                "io.detections_json must not use an image filename inside io.input_dir: "
-                f"{report_path}",
-                file=sys.stderr,
-            )
-            return 2
-
     # Imported after config validation so config errors are reported without a runtime install.
     global cv2, np, pyneat
-    import cv2  # noqa: F401
-    import numpy as np  # noqa: F401
-    import pyneat  # noqa: F401
+    import cv2
+    import numpy as np
+    import pyneat
 
     try:
-        model = pyneat.Model(
-            str(model_path),
-            make_model_options(
-                score_threshold,
-                nms_iou,
-                max_detections,
-                preprocessing_profile,
-            ),
+        mean, stddev = normalization_for_profile(preprocessing_profile)
+        options = pyneat.ModelOptions()
+        options.preprocess.kind = pyneat.InputKind.Image
+        options.preprocess.enable = pyneat.AutoFlag.On
+        options.preprocess.resize.enable = pyneat.AutoFlag.On
+        options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
+        options.preprocess.normalize.enable = pyneat.AutoFlag.On
+        options.preprocess.normalize.mean = mean
+        options.preprocess.normalize.stddev = stddev
+        options.preprocess.normalize.has_explicit_stats = True
+        options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+        options.preprocess.color_convert.output_format = (
+            pyneat.PreprocessColorFormat.RGB
         )
+        options.decode_type = pyneat.BoxDecodeType.Ssd
+        options.num_classes = NUM_CLASSES
+        options.score_threshold = score_threshold
+        options.nms_iou_threshold = nms_iou
+        options.top_k = max_detections
+        model = pyneat.Model(str(model_path), options)
         seed_bgr = cv2.imread(str(image_paths[0]), cv2.IMREAD_COLOR)
         if seed_bgr is None:
             print(f"Failed to read build seed image: {image_paths[0]}", file=sys.stderr)
@@ -679,7 +380,6 @@ def main() -> int:
         seed_tensor = image_to_tensor(seed_bgr)
         runner = model.build([seed_tensor], route_options=pyneat.ModelRouteOptions())
         runner.run([seed_tensor], timeout_ms=timeout_ms)
-        _log("warmup done")
     except Exception as exc:
         logger.debug("Model/pipeline build failure", exc_info=exc)
         # Core resolves the preprocess frame from the MPK and validates the SSD recipe.
@@ -691,87 +391,17 @@ def main() -> int:
         )
         return 3
 
-    if profile:
-        try:
-            image_path = image_paths[0]
-            bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-            if bgr is None:
-                print(f"Failed to read image: {image_path}", file=sys.stderr)
-                return 4
-            tensor = image_to_tensor(bgr)
-            infer_times: list[float] = []
-            parse_times: list[float] = []
-            last_detections: list[dict[str, Any]] = []
-            last_displayed_detections: list[dict[str, Any]] = []
-
-            for _ in range(num_runs):
-                t0 = time.perf_counter()
-                out = runner.run([tensor], timeout_ms=timeout_ms)
-                t1 = time.perf_counter()
-                payload = extract_bbox_payload(out)
-                # Any missing run makes the reported stats incomplete, so fail the whole profile.
-                if not payload:
-                    print(
-                        "Profiling failed: model returned no BBOX payload",
-                        file=sys.stderr,
-                    )
-                    return 4
-                last_detections = parse_bbox_payload(
-                    payload, bgr.shape[1], bgr.shape[0]
-                )
-                last_displayed_detections = suppress_aggregate_detections(
-                    last_detections,
-                    bgr.shape[1],
-                    bgr.shape[0],
-                    aggregate_suppression,
-                )
-                t2 = time.perf_counter()
-                infer_times.append(t1 - t0)
-                parse_times.append(t2 - t1)
-
-            print(f"Profiling over {len(infer_times)} runs (image='{image_path}'):")
-            print(
-                format_profile_stats(
-                    "Pipeline run (preprocess+infer+decode)", infer_times
-                )
-            )
-            print(format_profile_stats("Output parsing + display policy", parse_times))
-            print(
-                f"Last run detections: {len(last_detections)} raw, "
-                f"{len(last_displayed_detections)} displayed"
-            )
-            for i, det in enumerate(last_detections[:20]):
-                box = det["box"]
-                print(
-                    f"  [{i}] class={class_name(labels, det['class_id'])}({det['class_id']}) "
-                    f"score={det['score']:.4f} box=[{box[0]:.1f},{box[1]:.1f},{box[2]:.1f},{box[3]:.1f}]"
-                )
-            return 0
-        except Exception as exc:
-            logger.debug("Profiling failure", exc_info=exc)
-            print(f"Error during profiling: {exc}", file=sys.stderr)
-            return 4
-        finally:
-            runner.close()
-
-    # Only overlay runs touch output_dir, so a JSON-only run leaves it alone.
-    if overlay:
-        try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            expected_outputs = {f"{output_stem(p)}.png" for p in image_paths}
-            removed_outputs = clear_output_images(output_dir, expected_outputs)
-        except OSError as exc:
-            runner.close()
-            print(f"Failed to prepare output directory: {exc}", file=sys.stderr)
-            return 4
-        if removed_outputs:
-            print(f"Cleared {removed_outputs} stale output images")
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        runner.close()
+        print(f"Failed to prepare output directory: {exc}", file=sys.stderr)
+        return 4
 
     records: list[dict[str, Any]] = []
     processed = 0
     try:
         for image_path in image_paths:
-            _log(f"Reading image: {image_path}")
             orig_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
             if orig_bgr is None:
                 print(f"Failed to read image: {image_path}", file=sys.stderr)
@@ -786,48 +416,26 @@ def main() -> int:
                 )
                 return 3
 
-            payload = extract_bbox_payload(out)
-            if not payload:
-                print(
-                    f"Model returned no BBOX payload for {image_path}", file=sys.stderr
-                )
-                return 4
-            detections = parse_bbox_payload(
-                payload, orig_bgr.shape[1], orig_bgr.shape[0]
-            )
-            displayed_detections = suppress_aggregate_detections(
-                detections,
-                orig_bgr.shape[1],
-                orig_bgr.shape[0],
-                aggregate_suppression,
+            detections = decode_detections(
+                out, orig_bgr.shape[1], orig_bgr.shape[0], max_detections
             )
 
-            output_name = ""
-            if overlay:
-                output_path = output_dir / f"{output_stem(image_path)}.png"
-                out_img = visualize_detections(orig_bgr, displayed_detections, labels)
-                # imwrite returns False (never raises) on failure; a failed overlay fails the run.
-                if not cv2.imwrite(str(output_path), out_img):
-                    print(f"Failed to write: {output_path}", file=sys.stderr)
-                    return 4
-                output_name = output_path.name
+            output_path = output_dir / f"{output_stem(image_path)}.png"
+            out_img = visualize_detections(orig_bgr, detections, labels)
+            if not cv2.imwrite(str(output_path), out_img):
+                print(f"Failed to write: {output_path}", file=sys.stderr)
+                return 4
 
             if detections_json:
                 records.append(
-                    detections_record(
-                        image_path, orig_bgr, detections, displayed_detections, labels
-                    )
+                    detections_record(image_path, orig_bgr, detections, labels)
                 )
             processed += 1
-            det_str = (
-                f"({len(detections)} detections, {len(displayed_detections)} displayed)"
+            det_str = f"({len(detections)} detections)"
+            print(
+                f"[{processed}/{len(image_paths)}] {image_path.name} -> "
+                f"{output_path.name} {det_str}"
             )
-            if overlay:
-                print(
-                    f"[{processed}/{len(image_paths)}] {image_path.name} -> {output_name} {det_str}"
-                )
-            else:
-                print(f"[{processed}/{len(image_paths)}] {image_path.name} {det_str}")
     finally:
         runner.close()
 

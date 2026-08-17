@@ -849,18 +849,9 @@ cleanup_vulcan_core_install_dir() {
 run_sima_cli_core_install() {
   local sima_cli_bin="$1"
   shift
-  local -a install_cmd=("${sima_cli_bin}" neat install)
   local log_path
-  case "${NEAT_INSTALLER_SKIP_PLATFORM_CHECK:-}" in
-    1|ON|on|TRUE|true|YES|yes)
-      # sima-cli does not consume the legacy installer environment variable.
-      # Translate the CI-only override to its explicit compatibility option.
-      install_cmd+=(--force)
-      ;;
-  esac
-  install_cmd+=("$@")
   log_path="$(mktemp /tmp/neat-apps-sima-cli-install.XXXXXX.log)"
-  if ! "${install_cmd[@]}" 2>&1 | tee "${log_path}"; then
+  if ! "${sima_cli_bin}" neat install "$@" 2>&1 | tee "${log_path}"; then
     rm -f "${log_path}"
     return 1
   fi
@@ -898,9 +889,7 @@ ensure_neat_core() {
   write_neat_core_metadata "${branch}" "${version}"
 
   local expected_tag="${branch}/${version}"
-  if [[ -n "${NEAT_APPS_CORE_INSTALL_DIR:-}" || -n "${PYNEAT_VENV_DIR:-}" ]]; then
-    echo "Job-local Core outputs requested; staging ${expected_tag} even if it is installed."
-  elif neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
+  if neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
     echo "NEAT core already installed (${expected_tag}). Skipping install."
     return 0
   fi

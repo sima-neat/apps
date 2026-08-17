@@ -44,34 +44,6 @@ std::string unquote(std::string value) {
   return value;
 }
 
-std::size_t find_mapping_separator(const std::string& line) {
-  bool in_single = false;
-  bool in_double = false;
-  bool escaped = false;
-  for (std::size_t index = 0; index < line.size(); ++index) {
-    const char c = line[index];
-    if (in_double && c == '\\' && !escaped) {
-      escaped = true;
-      continue;
-    }
-    if (c == '"' && !in_single && !escaped) {
-      in_double = !in_double;
-    } else if (c == '\'' && !in_double) {
-      if (in_single && index + 1 < line.size() && line[index + 1] == '\'') {
-        ++index;
-      } else {
-        in_single = !in_single;
-      }
-    } else if (c == ':' && !in_single && !in_double &&
-               (index + 1 == line.size() ||
-                std::isspace(static_cast<unsigned char>(line[index + 1])) != 0)) {
-      return index;
-    }
-    escaped = false;
-  }
-  return std::string::npos;
-}
-
 std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
   std::ostringstream out;
   bool first = true;
@@ -87,8 +59,7 @@ std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
 }
 
 bool is_nullish(const std::string& value) {
-  const std::string normalized = lower_copy(trim_copy(value));
-  return normalized == "null" || normalized == "~";
+  return lower_copy(trim_copy(value)) == "null";
 }
 
 int parse_int(const std::string& value, const std::string& key) {
@@ -129,18 +100,6 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 
   ScalarConfig config;
   std::vector<std::pair<int, std::string>> stack;
-  const auto promote_stack_mappings = [&config, &stack](std::size_t count) {
-    std::string path;
-    for (std::size_t index = 0; index < count; ++index) {
-      if (!path.empty()) {
-        path += '.';
-      }
-      path += stack[index].second;
-      if (config.node_kinds_[path] == ConfigNodeKind::Null) {
-        config.node_kinds_[path] = ConfigNodeKind::Mapping;
-      }
-    }
-  };
   int list_block_indent = -1;
   std::string raw_line;
   while (std::getline(input, raw_line)) {
@@ -157,9 +116,6 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     }
 
     const std::string line = trim_copy(without_comment);
-    if (indent == 0 && !line.empty() && (line.front() == '{' || line.front() == '[')) {
-      throw std::runtime_error("config root must be a block mapping");
-    }
     if (list_block_indent >= 0) {
       if (indent > list_block_indent) {
         continue;
@@ -167,77 +123,31 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
       list_block_indent = -1;
     }
     if (line.rfind("- ", 0) == 0) {
-      while (!stack.empty() && indent <= stack.back().first) {
-        stack.pop_back();
-      }
-      if (!stack.empty()) {
-        promote_stack_mappings(stack.size() - 1);
-      }
-      const std::string sequence_key = join_stack(stack);
-      if (sequence_key.empty()) {
-        if (config.root_kind_ == ConfigNodeKind::Mapping) {
-          throw std::runtime_error("config root must be a mapping");
-        }
-        config.root_kind_ = ConfigNodeKind::Sequence;
-      } else {
-        config.node_kinds_[sequence_key] = ConfigNodeKind::Sequence;
-      }
       list_block_indent = indent;
       continue;
     }
 
-    const std::size_t colon = find_mapping_separator(line);
+    const std::size_t colon = line.find(':');
     if (colon == std::string::npos) {
-      if (indent == 0) {
-        throw std::runtime_error("config root must be a mapping");
-      }
       throw std::runtime_error("invalid config line: " + line);
     }
 
-    if (indent == 0) {
-      if (config.root_kind_ == ConfigNodeKind::Sequence) {
-        throw std::runtime_error("config root must be a mapping");
-      }
-      config.root_kind_ = ConfigNodeKind::Mapping;
-    }
-
-    const std::string key = unquote(line.substr(0, colon));
+    const std::string key = trim_copy(line.substr(0, colon));
     std::string value = trim_copy(line.substr(colon + 1));
     while (!stack.empty() && indent <= stack.back().first) {
       stack.pop_back();
     }
-    promote_stack_mappings(stack.size());
+
+    if (value.empty() || value == "{}") {
+      stack.emplace_back(indent, key);
+      continue;
+    }
 
     std::string full_key = join_stack(stack);
     if (!full_key.empty()) {
       full_key += '.';
     }
     full_key += key;
-
-    if (value.empty()) {
-      config.node_kinds_[full_key] = ConfigNodeKind::Null;
-      stack.emplace_back(indent, key);
-      continue;
-    }
-    if (value == "{}") {
-      config.node_kinds_[full_key] = ConfigNodeKind::Mapping;
-      stack.emplace_back(indent, key);
-      continue;
-    }
-
-    const bool quoted = value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
-                                              (value.front() == '\'' && value.back() == '\''));
-    if (!quoted && is_nullish(value)) {
-      config.node_kinds_[full_key] = ConfigNodeKind::Null;
-      continue;
-    }
-    if (!quoted && value.size() >= 2 && value.front() == '[' && value.back() == ']') {
-      config.node_kinds_[full_key] = ConfigNodeKind::Sequence;
-    } else if (!quoted && value.size() >= 2 && value.front() == '{' && value.back() == '}') {
-      throw std::runtime_error("inline mappings are not supported for " + full_key);
-    } else {
-      config.node_kinds_[full_key] = ConfigNodeKind::Scalar;
-    }
     config.scalars_[full_key] = unquote(value);
   }
 
@@ -245,27 +155,11 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
 }
 
 std::optional<std::string> ScalarConfig::string_value(const std::string& key) const {
-  const ConfigNodeKind kind = node_kind(key);
-  if (kind == ConfigNodeKind::Missing || kind == ConfigNodeKind::Null) {
-    return std::nullopt;
-  }
-  if (kind == ConfigNodeKind::Mapping || kind == ConfigNodeKind::Sequence) {
-    throw std::runtime_error(key + " must be a scalar value");
-  }
   const auto it = scalars_.find(key);
-  if (it == scalars_.end()) {
+  if (it == scalars_.end() || is_nullish(it->second)) {
     return std::nullopt;
   }
   return it->second;
-}
-
-ConfigNodeKind ScalarConfig::node_kind(const std::string& key) const {
-  const auto it = node_kinds_.find(key);
-  return it == node_kinds_.end() ? ConfigNodeKind::Missing : it->second;
-}
-
-ConfigNodeKind ScalarConfig::root_kind() const {
-  return root_kind_;
 }
 
 std::string ScalarConfig::string_or(const std::string& key,
