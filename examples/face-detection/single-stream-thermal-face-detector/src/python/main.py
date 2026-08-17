@@ -252,10 +252,13 @@ def load_app_config(config_path: Path) -> AppConfig:
     output = section(raw, "output")
     insight = section(output, "insight")
     default_labels = Path(__file__).resolve().parents[1] / "common" / "face_label.txt"
+    labels_path = string_or(model, "labels", str(default_labels))
+    if not labels_path:
+        raise ValueError("model.labels must be set")
 
     cfg = AppConfig(
         model_path=string_or(model, "path"),
-        labels_path=Path(string_or(model, "labels", str(default_labels))),
+        labels_path=Path(labels_path),
         rtsp_url=string_or(source, "rtsp_url"),
         latency_ms=int_or(source, "latency_ms", 200),
         tcp=bool_or(source, "tcp", True),

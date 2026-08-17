@@ -122,3 +122,22 @@ class TestArgParsing:
         )
         assert r.returncode == 0
         assert "validated" in r.stdout.lower()
+
+    def test_validate_config_rejects_empty_labels_path(self, tmp_path):
+        """An explicit empty path must not be normalized to the current directory."""
+        config = COMMON_CONFIG.read_text(encoding="utf-8")
+        config = config.replace(
+            "labels: examples/face-detection/single-stream-thermal-face-detector/src/common/face_label.txt",
+            'labels: ""',
+        )
+        config_path = tmp_path / "empty-labels.yaml"
+        config_path.write_text(config, encoding="utf-8")
+
+        r = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path), "--validate-config-only"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert r.returncode != 0
+        assert "model.labels must be set" in r.stderr
