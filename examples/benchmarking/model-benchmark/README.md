@@ -89,6 +89,8 @@ python3 examples/benchmarking/model-benchmark/src/python/main.py \
 
 The command prints headline metrics and writes the complete report to the selected JSON path.
 
+Without `--decode-type`, the model runs through the route its package declares. Add `--decode-type yolo26-det` or `--decode-type yolo26-seg` to benchmark a YOLO26 package through its BoxDecode route instead. Every report records the requested decode type and the postprocess Core resolved, so the two routes stay distinguishable.
+
 ## Benchmark Results
 
 See the maintained [benchmark results](https://github.com/sima-neat/apps/blob/main/examples/benchmarking/model-benchmark/BENCHMARK_RESULTS.md) for measurements from Apps-supported packages.

@@ -1,5 +1,8 @@
 """Validate and query the apps test-scope contract."""
 
+# Scope parsing reports malformed values consistently as ValueError.
+# ruff: noqa: TRY004
+
 from __future__ import annotations
 
 import argparse
@@ -10,11 +13,11 @@ from typing import Any
 
 import yaml
 
-
 APPS_ROOT = Path(__file__).resolve().parents[2]
-VALID_SOURCES = {"modelzoo", "url", "huggingface"}
+VALID_SOURCES = {"modelzoo", "url", "huggingface", "model-registry"}
 VALID_LANGUAGES = {"python", "cpp"}
 VALID_KINDS = {"unit", "e2e"}
+MODEL_FIELDS = ("source", "name", "url", "file", "repo", "path", "ref", "spec")
 SCOPE_FILE_NAME = "test-scope.yaml"
 SCOPE_FILE_SUBPATH = Path("tests") / SCOPE_FILE_NAME
 
@@ -44,11 +47,15 @@ def example_key_from_scope_file(path: Path, examples_root: Path) -> str:
         raise ValueError(f"{path} is not under {examples_root}") from exc
     parts = relative.parts
     if len(parts) != 2:
-        raise ValueError(f"{path} must be at examples/<category>/<example>/{SCOPE_FILE_SUBPATH}")
+        raise ValueError(
+            f"{path} must be at examples/<category>/<example>/{SCOPE_FILE_SUBPATH}"
+        )
     return str(relative)
 
 
-def scope_entry_from_file(path: Path, examples_root: Path) -> tuple[str, dict[str, Any]]:
+def scope_entry_from_file(
+    path: Path, examples_root: Path
+) -> tuple[str, dict[str, Any]]:
     payload = load_yaml_mapping(path)
     example_key = example_key_from_scope_file(path, examples_root)
     if "examples" in payload:
@@ -69,7 +76,9 @@ def discover_scope(scope_source: Path, apps_root: Path = APPS_ROOT) -> dict[str,
     examples_root = examples_root_from_source(scope_source, apps_root)
     scope_files = sorted(examples_root.glob(f"*/*/{SCOPE_FILE_SUBPATH}"))
     if not scope_files:
-        raise FileNotFoundError(f"no {SCOPE_FILE_SUBPATH} files found under {examples_root}")
+        raise FileNotFoundError(
+            f"no {SCOPE_FILE_SUBPATH} files found under {examples_root}"
+        )
 
     examples: dict[str, Any] = {}
     for scope_file in scope_files:
@@ -106,7 +115,9 @@ def example_name(example_key: str) -> str:
     return example_key.split("/", 1)[1]
 
 
-def test_source_path(apps_root: Path, example_key: str, language: str, kind: str) -> Path:
+def test_source_path(
+    apps_root: Path, example_key: str, language: str, kind: str
+) -> Path:
     if language == "python":
         filename = "test_unit.py" if kind == "unit" else "test_e2e.py"
         return apps_root / "examples" / example_key / "tests" / "python" / filename
@@ -164,6 +175,7 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
     errors: list[str] = []
     scoped_examples = set(scope["examples"])
     actual_examples = example_paths(apps_root)
+    registry_destinations: dict[str, tuple[tuple[str, str, str], str]] = {}
 
     for missing in sorted(actual_examples - scoped_examples):
         errors.append(f"missing scope entry for examples/{missing}")
@@ -184,11 +196,30 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                 continue
             source = model.get("source")
             if source not in VALID_SOURCES:
-                errors.append(f"{example_key}: model {model_id} has invalid source {source!r}")
+                errors.append(
+                    f"{example_key}: model {model_id} has invalid source {source!r}"
+                )
             if source == "modelzoo" and not str(model.get("name", "")).strip():
                 errors.append(f"{example_key}: modelzoo model {model_id} needs name")
             if source == "url" and not str(model.get("url", "")).strip():
                 errors.append(f"{example_key}: url model {model_id} needs url")
+            if source == "model-registry":
+                for field in ("name", "ref", "spec", "file"):
+                    if not str(model.get(field, "") or "").strip():
+                        errors.append(
+                            f"{example_key}: model-registry model {model_id} needs {field}"
+                        )
+                file_name = str(model.get("file", "") or "")
+                if file_name and (
+                    file_name in {".", ".."}
+                    or Path(file_name).is_absolute()
+                    or len(Path(file_name).parts) != 1
+                ):
+                    errors.append(
+                        f"{example_key}: model-registry model {model_id} file must "
+                        "be a filename without directory components"
+                    )
+        selected_registry_models: set[str] = set()
         for language in sorted(VALID_LANGUAGES):
             for kind in sorted(VALID_KINDS):
                 try:
@@ -196,7 +227,9 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                 except ValueError as exc:
                     errors.append(f"{example_key}: {exc}")
                     continue
-                artifact_paths = test_artifact_paths(apps_root, example_key, language, kind)
+                artifact_paths = test_artifact_paths(
+                    apps_root, example_key, language, kind
+                )
                 if enabled and not any(path.exists() for path in artifact_paths):
                     errors.append(
                         f"{example_key}: {language} {kind} is enabled but no test "
@@ -204,15 +237,41 @@ def validate_scope(scope: dict[str, Any], apps_root: Path) -> list[str]:
                         f"{format_expected_paths(apps_root, artifact_paths)}"
                     )
             try:
-                for model_id in enabled_models(entry, language):
+                selected_models = enabled_models(entry, language)
+                for model_id in selected_models:
                     if model_id not in models:
                         errors.append(
                             f"{example_key}: e2e.{language} references undefined model {model_id}"
                         )
-                if is_enabled(entry, language, "e2e") and not enabled_models(entry, language):
-                    errors.append(f"{example_key}: e2e.{language} is enabled but models is empty")
+                if is_enabled(entry, language, "e2e") and not selected_models:
+                    errors.append(
+                        f"{example_key}: e2e.{language} is enabled but models is empty"
+                    )
+                if is_enabled(entry, language, "e2e"):
+                    for model_id in selected_models:
+                        model = models.get(model_id)
+                        if (
+                            isinstance(model, dict)
+                            and model.get("source") == "model-registry"
+                        ):
+                            selected_registry_models.add(model_id)
             except ValueError as exc:
                 errors.append(f"{example_key}: {exc}")
+        for model_id in sorted(selected_registry_models):
+            model = models[model_id]
+            file_name = str(model.get("file", "") or "")
+            if not file_name:
+                continue
+            identity = tuple(
+                str(model.get(field, "") or "") for field in ("name", "ref", "spec")
+            )
+            owner = f"{example_key}: model {model_id}"
+            previous = registry_destinations.setdefault(file_name, (identity, owner))
+            if previous[0] != identity:
+                errors.append(
+                    f"{owner} conflicts with {previous[1]}: model-registry file "
+                    f"{file_name!r} maps to different name/ref/spec"
+                )
     return errors
 
 
@@ -250,7 +309,7 @@ def scoped_models(
     if kind == "unit":
         return []
 
-    result: dict[tuple[str, str, str, str, str, str, str], tuple[str, dict[str, Any]]] = {}
+    result: dict[tuple[str, ...], tuple[str, dict[str, Any]]] = {}
     for example_key, entry in sorted(scope["examples"].items()):
         models = entry.get("models", {})
         for language in languages:
@@ -258,20 +317,14 @@ def scoped_models(
                 continue
             for model_id in enabled_models(entry, language):
                 model = models[model_id]
-                identity = (
-                    model_id,
-                    model_field(model, "source"),
-                    model_field(model, "name"),
-                    model_field(model, "url"),
-                    model_field(model, "file"),
-                    model_field(model, "repo"),
-                    model_field(model, "path"),
-                )
+                identity = (model_id, *model_fields(model))
                 result.setdefault(identity, (model_id, model))
     return [item for _, item in sorted(result.items())]
 
 
-def scoped_model_files(scope: dict[str, Any], language: str, kind: str) -> list[tuple[str, str]]:
+def scoped_model_files(
+    scope: dict[str, Any], language: str, kind: str
+) -> list[tuple[str, str]]:
     if kind == "unit":
         return []
 
@@ -292,6 +345,10 @@ def scoped_model_files(scope: dict[str, Any], language: str, kind: str) -> list[
 
 def model_field(model: dict[str, Any], key: str) -> str:
     return str(model.get(key, "") or "").replace("\t", " ")
+
+
+def model_fields(model: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(model_field(model, field) for field in MODEL_FIELDS)
 
 
 def main() -> int:
@@ -316,11 +373,15 @@ def main() -> int:
 
     models = sub.add_parser("models")
     models.add_argument("--kind", choices=sorted(VALID_KINDS), default="e2e")
-    models.add_argument("--language", choices=sorted(VALID_LANGUAGES), action="append", required=True)
+    models.add_argument(
+        "--language", choices=sorted(VALID_LANGUAGES), action="append", required=True
+    )
 
     model_files = sub.add_parser("model-files")
     model_files.add_argument("--kind", choices=sorted(VALID_KINDS), default="e2e")
-    model_files.add_argument("--language", choices=sorted(VALID_LANGUAGES), required=True)
+    model_files.add_argument(
+        "--language", choices=sorted(VALID_LANGUAGES), required=True
+    )
 
     args = parser.parse_args()
     scope = load_scope(args.scope_file, APPS_ROOT)
@@ -350,19 +411,13 @@ def main() -> int:
         return 0
     if args.command == "models":
         for model_id, model in scoped_models(scope, args.language, args.kind):
-            fields = [
-                model_id,
-                model_field(model, "source"),
-                model_field(model, "name"),
-                model_field(model, "url"),
-                model_field(model, "file"),
-                model_field(model, "repo"),
-                model_field(model, "path"),
-            ]
+            fields = [model_id, *model_fields(model)]
             print("\t".join(fields))
         return 0
     if args.command == "model-files":
-        for example_key, file_name in scoped_model_files(scope, args.language, args.kind):
+        for example_key, file_name in scoped_model_files(
+            scope, args.language, args.kind
+        ):
             print(f"{example_key}\t{file_name}")
         return 0
     raise AssertionError(args.command)

@@ -1,0 +1,31 @@
+models:
+  superpoint_int8_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/codex%252Fsuperpoint-model-matrix/1ce89061ecc1/superpoint/modalix_int8_tessellation_mla/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz
+    file: superpoint_modalix_int8_tessellation_mla_mpk.tar.gz
+  superpoint_int8_ev74:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/codex%252Fsuperpoint-model-matrix/1ce89061ecc1/superpoint/modalix_int8_tessellation_ev74/superpoint_modalix_int8_tessellation_ev74_mpk.tar.gz
+    file: superpoint_modalix_int8_tessellation_ev74_mpk.tar.gz
+  superpoint_bf16_mla:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/codex%252Fsuperpoint-model-matrix/1ce89061ecc1/superpoint/modalix_bf16_tessellation_mla/superpoint_modalix_bf16_tessellation_mla_mpk.tar.gz
+    file: superpoint_modalix_bf16_tessellation_mla_mpk.tar.gz
+  superpoint_bf16_ev74:
+    source: url
+    url: https://artifacts.stg.neat.sima.ai/models/codex%252Fsuperpoint-model-matrix/1ce89061ecc1/superpoint/modalix_bf16_tessellation_ev74/superpoint_modalix_bf16_tessellation_ev74_mpk.tar.gz
+    file: superpoint_modalix_bf16_tessellation_ev74_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+      - superpoint_int8_mla
+      - superpoint_int8_ev74
+      - superpoint_bf16_mla
+      - superpoint_bf16_ev74
+  cpp:
+    enabled: true
+    models: [superpoint_int8_mla]

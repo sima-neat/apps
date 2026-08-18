@@ -16,6 +16,8 @@
 
 This focused example ingests one RTSP H.264/H.265/MJPEG or HTTP MJPEG stream, decodes it, runs YOLO26 detection, and sends H.264 video plus detection metadata to Insight.
 
+The decoded frame branches inside a single graph to the detector and to the H.264 sender. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from. Setting `output.save_dir` adds a third branch that returns the decoded frame to the application so it can write annotated JPEGs.
+
 ## Preview
 
 ![Single-stream object detector preview](../../../portal/assets/examples/object-detection/single-stream-object-detector/image.png)
