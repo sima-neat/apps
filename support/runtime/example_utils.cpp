@@ -129,10 +129,11 @@ void fill_missing_stream_info(RtspStreamInfo& dst, const RtspStreamInfo& src) {
     dst.fps = src.fps;
 }
 
-RtspStreamInfo probe_ffprobe_rtsp_stream_info(const std::string& url) {
+RtspStreamInfo probe_ffprobe_rtsp_stream_info(const std::string& url, bool rtsp_tcp) {
   RtspStreamInfo info;
   const std::string command =
-      "ffprobe -v error -rw_timeout 5000000 -select_streams v:0 "
+      "ffprobe -v error " + std::string(rtsp_tcp ? "-rtsp_transport tcp " : "") +
+      "-rw_timeout 5000000 -select_streams v:0 "
       "-show_entries stream=width,height,r_frame_rate,avg_frame_rate -of default=nw=1 " +
       shell_quote(url) + " 2>/dev/null";
 
@@ -351,9 +352,8 @@ bool parse_fps_from_caps(const std::string& caps, int& fps_out) {
 
 bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
                             RtspStreamInfo& out) {
-  (void)opt;
   out = RtspStreamInfo{};
-  fill_missing_stream_info(out, probe_ffprobe_rtsp_stream_info(url));
+  fill_missing_stream_info(out, probe_ffprobe_rtsp_stream_info(url, opt.rtsp_tcp));
   fill_missing_stream_info(out, probe_opencv_rtsp_stream_info(url));
 
   return out.width > 0 && out.height > 0;
