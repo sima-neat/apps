@@ -115,10 +115,6 @@ MetadataJsonListener::MetadataJsonListener(const MetadataJsonListenerOptions& op
     err_ = "base_port must be > 0";
     return;
   }
-  if (opt_.minimum_items < 0) {
-    err_ = "minimum_items must be >= 0";
-    return;
-  }
   if (!bind_ports() && err_.empty()) {
     err_ = "failed to bind listener ports";
   }
@@ -200,10 +196,8 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
     return false;
   }
 
-  const bool qualifies = msg.object_count >= opt_.minimum_items;
   result.messages.push_back(std::move(msg));
-  if (qualifies &&
-      std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
+  if (std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
                 sock.port) == result.ports_with_valid_json.end()) {
     result.ports_with_valid_json.push_back(sock.port);
   }

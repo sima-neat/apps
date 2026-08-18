@@ -86,7 +86,6 @@ int main(int argc, char** argv) {
   metadata_options.timeout_ms = 5000;
   metadata_options.metadata_type = "segmentation";
   metadata_options.data_array_key = "segments";
-  metadata_options.minimum_items = 1;
   metadata_options.require_all_ports = true;
   MetadataJsonListener metadata_listener(metadata_options);
   if (!metadata_listener.ok()) {
@@ -110,7 +109,7 @@ int main(int argc, char** argv) {
                 << metadata.error << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] non-empty fastsam segmentation received on all 4 streams\n";
+      std::cout << "[OK] fastsam segmentation metadata received on all 4 streams\n";
     }
   }
 

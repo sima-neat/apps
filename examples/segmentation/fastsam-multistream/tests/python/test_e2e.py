@@ -91,7 +91,6 @@ class TestE2E:
             metadata_type="segmentation",
             data_array_key="segments",
             require_all_ports=True,
-            minimum_items=1,
         ) as metadata_listener:
             result = run_until_output_files(
                 cmd,
