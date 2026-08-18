@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -108,6 +109,10 @@ class TestE2E:
             "pose-estimation metadata was not received on all streams: "
             f"{metadata.error}"
         )
+        for message in metadata.messages:
+            poses = json.loads(message.payload)["data"]["poses"]
+            assert poses, f"pose metadata on port {message.port} contained no poses"
+            assert all(len(pose.get("keypoints", [])) == 17 for pose in poses)
 
         files = [
             path

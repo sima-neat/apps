@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import subprocess
 import sys
 import textwrap
@@ -10,6 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from tests.utils.metadata_json_listener import _MetadataReassembler
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
@@ -19,6 +22,10 @@ if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
 pytestmark = pytest.mark.unit
+
+
+def metadata_chunk(message_id: int, index: int, count: int, payload: bytes) -> bytes:
+    return bytes((0x4E, 0x01)) + struct.pack(">QBB", message_id, index, count) + payload
 
 
 def write_config(
@@ -347,13 +354,45 @@ class TestRuntimeOptions:
         )
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
 
-        link = main.realtime_link(2, 4, 3, 12)
+        link = main.realtime_link(2, 3, 12)
 
         assert link.policy == "latest-by-stream"
-        assert link.queue_depth == 4
         assert link.stream_id == "stream2"
         assert link.max_inflight_per_stream == 3
         assert link.max_inflight_total == 12
+
+
+class TestMetadataReassembly:
+    def test_passes_legacy_json_unchanged(self):
+        payload = b'{"type":"pose-estimation"}'
+
+        assert _MetadataReassembler().accept(payload) == (payload, "")
+
+    def test_joins_out_of_order_chunks(self):
+        reassembler = _MetadataReassembler()
+
+        assert reassembler.accept(metadata_chunk(7, 1, 2, b"42}")) == (None, "")
+        assert reassembler.accept(metadata_chunk(7, 0, 2, b'{"value":')) == (
+            b'{"value":42}',
+            "",
+        )
+
+    def test_ignores_identical_duplicate_chunks(self):
+        reassembler = _MetadataReassembler()
+        first = metadata_chunk(8, 0, 2, b'{"value":')
+
+        assert reassembler.accept(first) == (None, "")
+        assert reassembler.accept(first) == (None, "")
+        assert reassembler.accept(metadata_chunk(8, 1, 2, b"42}")) == (
+            b'{"value":42}',
+            "",
+        )
+
+    def test_rejects_malformed_chunks(self):
+        payload, error = _MetadataReassembler().accept(bytes((0x4E, 0x01)))
+
+        assert payload is None
+        assert error == "invalid metadata chunk header"
 
 
 class FakeMetadataSender:
@@ -377,18 +416,13 @@ class TestMetadata:
         sender = FakeMetadataSender()
         runtime = StreamRuntime(
             index=0,
-            url="rtsp://127.0.0.1:8554/src1",
             source_options=None,
             metadata_sender=sender,
             profile=ProfileWindow(False, 0),
             latest_debug_frame=None,
             frame_w=100,
             frame_h=100,
-            output_fps=30,
-            video_port=9000,
         )
-        # Only the nose clears the visibility floor, so the published payload must
-        # carry that one joint and drop the other sixteen.
         poses = [
             {
                 "x1": 10.0,
@@ -403,25 +437,49 @@ class TestMetadata:
             }
         ]
 
-        send_metadata(
-            runtime, SimpleNamespace(min_keypoint_visibility=0.30), FakeSample(), poses
-        )
+        send_metadata(runtime, FakeSample(), poses)
 
         assert len(sender.calls) == 1
         metadata_type, data_json, timestamp_ms, frame_id = sender.calls[0]
         assert metadata_type == "pose-estimation"
         assert timestamp_ms == 1234
         assert frame_id == "42"
-        assert json.loads(data_json) == {
-            "poses": [
-                {
-                    "id": "pose_1",
-                    "label": "person",
-                    "confidence": 0.75,
-                    "bbox": [10.0, 20.0, 30.0, 40.0],
-                    "keypoints": [
-                        {"name": "nose", "x": 11.0, "y": 21.0, "confidence": 0.9}
-                    ],
-                }
-            ]
+        payload = json.loads(data_json)
+        assert len(payload["poses"]) == 1
+        pose = payload["poses"][0]
+        assert pose["id"] == "pose_1"
+        assert pose["label"] == "person"
+        assert pose["confidence"] == 0.75
+        assert pose["bbox"] == [10, 20, 30, 40]
+        assert len(pose["keypoints"]) == 17
+        assert pose["keypoints"][0] == {
+            "name": "nose",
+            "x": 11,
+            "y": 21,
+            "confidence": 0.9,
         }
+        assert pose["keypoints"][-1]["name"] == "right_ankle"
+
+    def test_max_pose_metadata_fits_core_message_limit(self):
+        from main import pose_metadata_data
+
+        points = [
+            {"x": 1234.56789, "y": 1234.56789, "visibility": 0.987654321}
+            for _ in range(17)
+        ]
+        poses = [
+            {
+                "x1": 1234.56789,
+                "y1": 1234.56789,
+                "x2": 2469.13578,
+                "y2": 2469.13578,
+                "score": 0.987654321,
+                "keypoints": points,
+            }
+            for _ in range(50)
+        ]
+
+        payload = json.dumps(pose_metadata_data(poses), separators=(",", ":"))
+
+        assert len(payload.encode("utf-8")) <= 65507
+        assert all(len(pose["keypoints"]) == 17 for pose in json.loads(payload)["poses"])

@@ -71,7 +71,7 @@ These pose packages are published as direct download artifacts and are not index
 
 In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
-Insight renders the skeleton from the published `pose-estimation` metadata and hides any joint at or below `0.3` confidence, so keep `output.min_keypoint_visibility` aligned with what you expect to see.
+Insight renders the skeleton from the published `pose-estimation` metadata and hides any joint at or below `0.3` confidence. Published metadata always carries all 17 keypoints; `output.min_keypoint_visibility` only controls saved debug overlays.
 
 ## Configure
 

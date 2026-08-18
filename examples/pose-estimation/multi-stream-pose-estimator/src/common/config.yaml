@@ -20,7 +20,6 @@ runtime:                     # Runtime and profiling settings.
 
 inference:                   # Pose estimation controls.
   frames: 0                  # Frame limit per stream. 0 means unlimited.
-  fps: 0                     # Max per-stream processing and output FPS. 0 means use source FPS.
   max_inflight_per_stream: 4 # Raw decoder-backed frames admitted per stream to the shared model.
   max_inflight_total: 16     # Raw decoder-backed frames admitted across all pose streams.
   min_score: 0.30            # Person score threshold.
@@ -33,7 +32,7 @@ output:                      # Insight output plus optional local debug saves.
     video_port_base: 9000    # Base UDP port for video channels.
     metadata_port_base: 9100 # Base UDP port for metadata channels.
   video_enabled: true        # Disable to publish metadata only.
-  min_keypoint_visibility: 0.30 # Drop joints below this confidence. Insight also hides <= 0.3.
+  min_keypoint_visibility: 0.30 # Hide lower-confidence joints on saved debug overlays.
   debug_dir: null            # Optional directory for periodic debug frame saves.
   save_every: 0              # Save every Nth debug frame. 0 disables saving.
 

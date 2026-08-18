@@ -4,6 +4,8 @@
 #include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -21,6 +23,30 @@ struct SourceCase {
   std::string codec;
   std::vector<std::string> urls;
 };
+
+bool has_complete_poses(const MetadataJsonListenerResult& metadata, std::string& error) {
+  try {
+    for (const auto& message : metadata.messages) {
+      const auto parsed = nlohmann::json::parse(message.payload);
+      const auto& poses = parsed.at("data").at("poses");
+      if (poses.empty()) {
+        error = "pose metadata on port " + std::to_string(message.port) + " contained no poses";
+        return false;
+      }
+      for (const auto& pose : poses) {
+        if (!pose.contains("keypoints") || !pose["keypoints"].is_array() ||
+            pose["keypoints"].size() != 17) {
+          error = "pose metadata did not carry exactly 17 keypoints";
+          return false;
+        }
+      }
+    }
+  } catch (const std::exception& ex) {
+    error = std::string("failed to validate pose metadata: ") + ex.what();
+    return false;
+  }
+  return true;
+}
 
 void record_unavailable_source(const std::string& fail_reason, const std::string& skip_reason,
                                int& rc) {
@@ -92,8 +118,8 @@ int run_source_case(const std::string& binary, const std::string& model_path,
       std::cerr << "[FAIL] " << source_case.codec << " some sampled output files are empty\n";
       rc = 1;
     } else {
-      std::cout << "[OK] " << source_case.codec << " multi-camera pose estimator produced "
-                << files << " sampled output files\n";
+      std::cout << "[OK] " << source_case.codec << " multi-camera pose estimator produced " << files
+                << " sampled output files\n";
     }
   }
   if (rc == 0) {
@@ -104,8 +130,14 @@ int run_source_case(const std::string& binary, const std::string& model_path,
                 << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] " << source_case.codec << " pose-estimation metadata received on "
-                << metadata.ports_with_valid_json.size() << " streams\n";
+      std::string pose_error;
+      if (!has_complete_poses(metadata, pose_error)) {
+        std::cerr << "[FAIL] " << source_case.codec << " " << pose_error << "\n";
+        rc = 1;
+      } else {
+        std::cout << "[OK] " << source_case.codec << " pose-estimation metadata received on "
+                  << metadata.ports_with_valid_json.size() << " streams\n";
+      }
     }
   }
 

@@ -4,11 +4,15 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <map>
 #include <netdb.h>
+#include <optional>
 #include <poll.h>
 #include <set>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
@@ -17,6 +21,121 @@ namespace sima_examples::testing {
 namespace {
 
 using json = nlohmann::json;
+
+constexpr uint8_t kMetadataChunkMagic = 0x4e;
+constexpr uint8_t kMetadataChunkVersion = 0x01;
+constexpr size_t kMetadataChunkHeaderSize = 12;
+constexpr size_t kMetadataMaxDatagramSize = 1200;
+constexpr size_t kMetadataMaxLogicalMessageSize = 65507;
+constexpr size_t kMetadataMaxChunkCount = 56;
+constexpr size_t kMetadataReassemblyCapacity = 4;
+constexpr auto kMetadataReassemblyMaxAge = std::chrono::milliseconds(250);
+
+struct MetadataReassemblyResult {
+  std::string payload;
+  bool complete = false;
+  std::string error;
+};
+
+class MetadataReassembler {
+public:
+  MetadataReassemblyResult accept(std::string_view datagram) {
+    const auto now = std::chrono::steady_clock::now();
+    drop_expired(now);
+    if (datagram.empty() || static_cast<uint8_t>(datagram[0]) != kMetadataChunkMagic) {
+      return {std::string(datagram), true, {}};
+    }
+    if (datagram.size() < kMetadataChunkHeaderSize || datagram.size() > kMetadataMaxDatagramSize ||
+        static_cast<uint8_t>(datagram[1]) != kMetadataChunkVersion) {
+      return {{}, false, "invalid metadata chunk header"};
+    }
+
+    uint64_t message_id = 0;
+    for (size_t i = 2; i < 10; ++i) {
+      message_id = (message_id << 8) | static_cast<uint8_t>(datagram[i]);
+    }
+    const size_t index = static_cast<uint8_t>(datagram[10]);
+    const size_t count = static_cast<uint8_t>(datagram[11]);
+    if (count == 0 || count > kMetadataMaxChunkCount || index >= count ||
+        datagram.size() == kMetadataChunkHeaderSize) {
+      return {{}, false, "invalid metadata chunk fields"};
+    }
+
+    auto it = assemblies_.find(message_id);
+    if (it == assemblies_.end()) {
+      if (assemblies_.size() == kMetadataReassemblyCapacity) {
+        drop_oldest();
+      }
+      Assembly assembly;
+      assembly.chunks.resize(count);
+      assembly.started = now;
+      it = assemblies_.emplace(message_id, std::move(assembly)).first;
+    }
+
+    Assembly& assembly = it->second;
+    if (assembly.chunks.size() != count) {
+      assemblies_.erase(it);
+      return {{}, false, "metadata chunk count changed"};
+    }
+
+    const std::string fragment(datagram.substr(kMetadataChunkHeaderSize));
+    if (!assembly.chunks[index].has_value()) {
+      if (assembly.size + fragment.size() > kMetadataMaxLogicalMessageSize) {
+        assemblies_.erase(it);
+        return {{}, false, "metadata message exceeds maximum size"};
+      }
+      assembly.chunks[index] = fragment;
+      assembly.size += fragment.size();
+      ++assembly.received;
+    } else if (*assembly.chunks[index] != fragment) {
+      assemblies_.erase(it);
+      return {{}, false, "metadata chunk contents changed"};
+    }
+
+    if (assembly.received != assembly.chunks.size()) {
+      return {};
+    }
+
+    std::string payload;
+    payload.reserve(assembly.size);
+    for (const auto& chunk : assembly.chunks) {
+      payload += *chunk;
+    }
+    assemblies_.erase(it);
+    return {std::move(payload), true, {}};
+  }
+
+private:
+  using TimePoint = std::chrono::steady_clock::time_point;
+
+  struct Assembly {
+    std::vector<std::optional<std::string>> chunks;
+    size_t received = 0;
+    size_t size = 0;
+    TimePoint started;
+  };
+
+  void drop_expired(TimePoint now) {
+    for (auto it = assemblies_.begin(); it != assemblies_.end();) {
+      if (now - it->second.started > kMetadataReassemblyMaxAge) {
+        it = assemblies_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  void drop_oldest() {
+    const auto oldest = std::min_element(
+        assemblies_.begin(), assemblies_.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.second.started < rhs.second.started; });
+    if (oldest != assemblies_.end()) {
+      assemblies_.erase(oldest);
+    }
+  }
+
+  std::map<uint64_t, Assembly> assemblies_;
+};
 
 // Resolve the bind address for a local UDP listener used by tests.
 bool resolve_bind_addr(const std::string& host, int port, sockaddr_storage& out, socklen_t& out_len,
@@ -104,6 +223,7 @@ bool is_valid_metadata_json(const std::string& payload, const std::string& metad
 struct MetadataJsonListener::SocketState {
   int fd = -1;
   int port = -1;
+  MetadataReassembler reassembler;
 };
 
 MetadataJsonListener::MetadataJsonListener(const MetadataJsonListenerOptions& opt) : opt_(opt) {
@@ -168,7 +288,7 @@ bool MetadataJsonListener::bind_ports() {
       return false;
     }
 
-    sockets_.push_back(SocketState{fd, port});
+    sockets_.push_back(SocketState{fd, port, {}});
   }
 
   return true;
@@ -185,11 +305,23 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
     return false;
   }
 
+  const auto reassembled = sock.reassembler.accept(std::string_view(buf, static_cast<size_t>(n)));
+  if (!reassembled.error.empty()) {
+    if (result.error.empty()) {
+      result.error =
+          "invalid metadata on port " + std::to_string(sock.port) + ": " + reassembled.error;
+    }
+    return false;
+  }
+  if (!reassembled.complete) {
+    return false;
+  }
+
   MetadataJsonMessage msg;
   msg.port = sock.port;
   std::string parse_err;
-  const std::string payload(buf, static_cast<size_t>(n));
-  if (!is_valid_metadata_json(payload, opt_.metadata_type, opt_.data_array_key, msg, parse_err)) {
+  if (!is_valid_metadata_json(reassembled.payload, opt_.metadata_type, opt_.data_array_key, msg,
+                              parse_err)) {
     if (result.error.empty()) {
       result.error = "invalid json on port " + std::to_string(sock.port) + ": " + parse_err;
     }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import sys
 import time
@@ -32,7 +33,6 @@ class AppConfig:
     input_max_width: int = 1920
     input_max_height: int = 1080
     frames: int = 0
-    fps: int = 0
     max_inflight_per_stream: int = 4
     max_inflight_total: int = 16
     min_score: float = 0.55
@@ -52,17 +52,13 @@ class AppConfig:
 @dataclass
 class StreamRuntime:
     index: int
-    url: str
     source_options: object
     metadata_sender: object
     profile: ProfileWindow
     latest_debug_frame: object | None
     frame_w: int
     frame_h: int
-    output_fps: int
-    video_port: int
     processed: int = 0
-    closed: bool = False
 
 
 @dataclass
@@ -218,8 +214,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("input.max_height must be > 0")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
-    if cfg.fps < 0:
-        raise ValueError("inference.fps must be >= 0")
     if cfg.max_inflight_per_stream != -1 and cfg.max_inflight_per_stream <= 0:
         raise ValueError("inference.max_inflight_per_stream must be -1 or > 0")
     if cfg.max_inflight_total != -1 and cfg.max_inflight_total <= 0:
@@ -272,7 +266,6 @@ def load_app_config(config_path: Path) -> AppConfig:
         input_max_width=int_or(input_cfg, "max_width", 1920),
         input_max_height=int_or(input_cfg, "max_height", 1080),
         frames=int_or(inference, "frames", 0),
-        fps=int_or(inference, "fps", 0),
         max_inflight_per_stream=int_or(inference, "max_inflight_per_stream", 4),
         max_inflight_total=int_or(inference, "max_inflight_total", 16),
         min_score=float_or(inference, "min_score", 0.55),
@@ -387,6 +380,8 @@ def decode_poses(sample, frame_w: int, frame_h: int, max_poses: int) -> list[dic
         for box, points in zip(boxes, keypoints):
             if len(poses) >= max_poses:
                 return poses
+            if round(float(box[5])) != 0:
+                raise RuntimeError("pose decode returned a non-person class id")
             poses.append(
                 {
                     "x1": float(box[0]),
@@ -403,34 +398,39 @@ def decode_poses(sample, frame_w: int, frame_h: int, max_poses: int) -> list[dic
     return poses
 
 
-def pose_metadata_data(poses: list[dict], min_visibility: float) -> dict:
+def pose_metadata_data(poses: list[dict]) -> dict:
     """Build the ``data`` object Insight's ``pose-estimation`` overlay consumes.
 
-    Insight joins skeleton edges by keypoint name and independently hides joints at or below
-    0.3 confidence, so publishing below ``min_visibility`` only inflates the datagram.
+    Pixel rounding and three-decimal confidence preserve overlay precision while keeping the
+    configured 50-pose maximum within Core's logical metadata-message limit.
     """
+    def round_pixel(value: float) -> int:
+        return math.floor(value + 0.5) if value >= 0 else math.ceil(value - 0.5)
+
+    def round_confidence(value: float) -> float:
+        return math.floor(value * 1000.0 + 0.5) / 1000.0
+
     published = []
     for index, pose in enumerate(poses, start=1):
         keypoints = [
             {
                 "name": COCO_KEYPOINT_NAMES[k],
-                "x": point["x"],
-                "y": point["y"],
-                "confidence": point["visibility"],
+                "x": round_pixel(point["x"]),
+                "y": round_pixel(point["y"]),
+                "confidence": round_confidence(point["visibility"]),
             }
             for k, point in enumerate(pose["keypoints"])
-            if point["visibility"] >= min_visibility
         ]
         published.append(
             {
                 "id": f"pose_{index}",
                 "label": "person",
-                "confidence": pose["score"],
+                "confidence": round_confidence(pose["score"]),
                 "bbox": [
-                    pose["x1"],
-                    pose["y1"],
-                    max(0.0, pose["x2"] - pose["x1"]),
-                    max(0.0, pose["y2"] - pose["y1"]),
+                    round_pixel(pose["x1"]),
+                    round_pixel(pose["y1"]),
+                    round_pixel(max(0.0, pose["x2"] - pose["x1"])),
+                    round_pixel(max(0.0, pose["y2"] - pose["y1"])),
                 ],
                 "keypoints": keypoints,
             }
@@ -598,8 +598,6 @@ def build_model(cfg: AppConfig):
 def build_run_options() -> pyneat.RunOptions:
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 4
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     return run_options
 
@@ -630,33 +628,15 @@ def stream_index_from_sample(sample, stream_count: int) -> int:
 
 def realtime_link(
     stream_index: int,
-    queue_depth: int,
     max_inflight_per_stream: int = -1,
     max_inflight_total: int = -1,
 ):
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    link.queue_depth = queue_depth
     link.max_inflight_per_stream = max_inflight_per_stream
     link.max_inflight_total = max_inflight_total
     link.stream_id = stream_id_for(stream_index)
     return link
-
-
-def build_estimator_graph(cfg: AppConfig):
-    model = build_model(cfg)
-    input_options = model.input_appsrc_options(False)
-    input_options.block = True
-
-    estimator = pyneat.Graph("estimator")
-    estimator.connect(pyneat.nodes.input("estimator_frame", input_options), model)
-    return model, estimator
-
-
-def build_poses_graph() -> pyneat.Graph:
-    poses = pyneat.Graph("poses")
-    poses.add(pyneat.nodes.output("poses", pyneat.OutputOptions.every_frame(4)))
-    return poses
 
 
 def build_debug_frame_graph(stream_index: int) -> pyneat.Graph:
@@ -681,7 +661,6 @@ def make_video_options(cfg: AppConfig, stream_index: int):
 
 def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamRuntime:
     frame_w, frame_h, fps = probe_rtsp(url, cfg.tcp)
-    output_fps = cfg.fps if cfg.fps > 0 else fps
 
     source_options = build_source_options(cfg, url, fps, frame_w, frame_h)
 
@@ -696,22 +675,19 @@ def build_stream_runtime(cfg: AppConfig, stream_index: int, url: str) -> StreamR
     metadata_sender = pyneat.MetadataSender(metadata_options)
 
     print(
-        f"[stream {stream_index}] rtsp={url} stream={frame_w}x{frame_h}@{output_fps} "
+        f"[stream {stream_index}] rtsp={url} stream={frame_w}x{frame_h}@{fps} "
         f"insight={cfg.insight_host} "
         f"video={video_port if cfg.video_enabled else 'disabled'} "
         f"metadata={metadata_sender.metadata_port()}"
     )
     return StreamRuntime(
         index=stream_index,
-        url=url,
         source_options=source_options,
         metadata_sender=metadata_sender,
         profile=ProfileWindow(cfg.profile, stream_index),
         latest_debug_frame=None,
         frame_w=frame_w,
         frame_h=frame_h,
-        output_fps=output_fps,
-        video_port=video_port,
     )
 
 
@@ -724,7 +700,7 @@ def connect_stream_graph(
     if cfg.video_enabled:
         encoded_branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
         app.graph.connect(source, encoded_branch)
-        app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3))
+        app.graph.connect(encoded_branch, decoder, realtime_link(stream.index))
 
         video_options = make_video_options(cfg, stream.index)
         app.graph.connect(
@@ -732,10 +708,10 @@ def connect_stream_graph(
             build_video_sender_graph(
                 "video_h264", rtsp_codec(cfg.codec), video_options
             ),
-            realtime_link(stream.index, 3),
+            realtime_link(stream.index),
         )
     else:
-        app.graph.connect(source, decoder, realtime_link(stream.index, 3))
+        app.graph.connect(source, decoder, realtime_link(stream.index))
 
     save_debug_frames = save_frames_enabled(cfg)
     decoded_outputs = (
@@ -748,7 +724,6 @@ def connect_stream_graph(
         estimator_graph,
         realtime_link(
             stream.index,
-            4,
             cfg.max_inflight_per_stream,
             cfg.max_inflight_total,
         ),
@@ -757,14 +732,12 @@ def connect_stream_graph(
         app.graph.connect(
             decoded_branch,
             build_debug_frame_graph(stream.index),
-            realtime_link(stream.index, 4),
+            realtime_link(stream.index),
         )
 
 
-def send_metadata(
-    stream: StreamRuntime, cfg: AppConfig, sample, poses: list[dict]
-) -> None:
-    data = pose_metadata_data(poses, cfg.min_keypoint_visibility)
+def send_metadata(stream: StreamRuntime, sample, poses: list[dict]) -> None:
+    data = pose_metadata_data(poses)
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     stream.metadata_sender.send_metadata(
@@ -882,7 +855,7 @@ def maybe_save_debug_frame(
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     if frame_limit <= 0:
         return False
-    return all(stream.processed >= frame_limit or stream.closed for stream in streams)
+    return all(stream.processed >= frame_limit for stream in streams)
 
 
 def process_output_sample(
@@ -897,7 +870,7 @@ def process_output_sample(
     warming_up = stream.processed <= cfg.warmup_frames
     if not warming_up:
         metadata_start = time_ms()
-        send_metadata(stream, cfg, sample, poses)
+        send_metadata(stream, sample, poses)
         metadata_end = time_ms()
         if save_frames_enabled(cfg):
             maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, poses)
@@ -922,35 +895,21 @@ def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
                 stream.latest_debug_frame = tensor_bgr_from_decoded(tensor)
 
 
-def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
-    drain_debug_frames(app, cfg)
-    pull_start = time_ms()
-    sample = app.run.pull(output_name, 50)
-    pull_end = time_ms()
-    if sample is None:
-        last_error_fn = getattr(app.run, "last_error", None)
-        last_error = last_error_fn() if callable(last_error_fn) else ""
-        if last_error:
-            raise RuntimeError(f"runtime error: {last_error}")
-        return False
-    stream_index = stream_index_from_sample(sample, len(app.streams))
-    process_output_sample(app.streams[stream_index], cfg, sample, pull_end - pull_start)
-    drain_debug_frames(app, cfg)
-    return True
-
-
 def run_app(cfg: AppConfig) -> None:
-    if cfg.profile:
-        os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
-        os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
-        os.environ.setdefault("SIMA_GST_BOUNDARY_PROBES", "1")
     if save_frames_enabled(cfg):
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
     # One model, shared by every stream: the estimator graph is built once here and each
     # stream's decoded branch links into it below.
-    model, estimator_graph = build_estimator_graph(cfg)
-    poses_graph = build_poses_graph()
+    model = build_model(cfg)
+    input_options = model.input_appsrc_options(False)
+    input_options.block = True
+    estimator_graph = pyneat.Graph("estimator")
+    estimator_graph.connect(pyneat.nodes.input("estimator_frame", input_options), model)
+
+    poses_graph = pyneat.Graph("poses")
+    poses_graph.add(pyneat.nodes.output("poses", pyneat.OutputOptions.every_frame(4)))
+
     app = AppRuntime(graph=pyneat.Graph(), run=None, model=model, streams=[])
     for index, url in enumerate(cfg.rtsp_urls):
         stream = build_stream_runtime(cfg, index, url)
@@ -963,7 +922,21 @@ def run_app(cfg: AppConfig) -> None:
             print(f"Backend:\n{app.graph.describe_backend()}")
         app.run = app.graph.build(build_run_options())
         while not all_streams_done(app.streams, cfg.frames):
-            process_run_once(app, cfg, "poses")
+            drain_debug_frames(app, cfg)
+            pull_start = time_ms()
+            sample = app.run.pull("poses", 50)
+            pull_end = time_ms()
+            if sample is None:
+                last_error_fn = getattr(app.run, "last_error", None)
+                last_error = last_error_fn() if callable(last_error_fn) else ""
+                if last_error:
+                    raise RuntimeError(f"runtime error: {last_error}")
+                continue
+            stream_index = stream_index_from_sample(sample, len(app.streams))
+            process_output_sample(
+                app.streams[stream_index], cfg, sample, pull_end - pull_start
+            )
+            drain_debug_frames(app, cfg)
     finally:
         if app.run is not None:
             app.run.close()

@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <functional>
 #include <numeric>
 #include <csignal>
@@ -85,7 +86,7 @@ constexpr std::array<std::pair<int, int>, 17> kCocoSkeleton = {{{0, 1},
                                                                 {14, 16}}};
 
 /// One keypoint in source-frame pixel space. `visibility` is the decoder's per-joint
-/// confidence in [0, 1]; joints below the configured floor are neither drawn nor published.
+/// confidence in [0, 1]; the debug overlay uses it to hide uncertain joints.
 struct Keypoint {
   float x = 0.0f;
   float y = 0.0f;
@@ -112,7 +113,6 @@ struct AppConfig {
   int input_max_width = 1920;
   int input_max_height = 1080;
   int frames = 0;
-  int fps = 0;
   int max_inflight_per_stream = 4;
   int max_inflight_total = 16;
   double min_score = 0.55;
@@ -194,17 +194,13 @@ struct ProfileWindow {
 
 struct StreamRuntime {
   int index = 0;
-  std::string url;
   simaai::neat::nodes::groups::RtspDecodedInputOptions source_options;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   ProfileWindow profile;
   std::optional<cv::Mat> latest_debug_frame;
   int frame_w = 0;
   int frame_h = 0;
-  int output_fps = 0;
-  int video_port = 0;
   int processed = 0;
-  bool closed = false;
 };
 
 struct AppRuntime {
@@ -318,7 +314,6 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.input_max_width > 0, "input.max_width must be > 0");
   sima_examples::require(cfg.input_max_height > 0, "input.max_height must be > 0");
   sima_examples::require(cfg.frames >= 0, "inference.frames must be >= 0");
-  sima_examples::require(cfg.fps >= 0, "inference.fps must be >= 0");
   sima_examples::require(cfg.max_inflight_per_stream == -1 || cfg.max_inflight_per_stream > 0,
                          "inference.max_inflight_per_stream must be -1 or > 0");
   sima_examples::require(cfg.max_inflight_total == -1 || cfg.max_inflight_total > 0,
@@ -349,7 +344,6 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.input_max_width = raw.int_or("input.max_width", 1920);
   cfg.input_max_height = raw.int_or("input.max_height", 1080);
   cfg.frames = raw.int_or("inference.frames", 0);
-  cfg.fps = raw.int_or("inference.fps", 0);
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
   cfg.max_inflight_total = raw.int_or("inference.max_inflight_total", 16);
   cfg.min_score = raw.double_or("inference.min_score", 0.55);
@@ -403,6 +397,9 @@ std::vector<Pose> decode_poses(const simaai::neat::Sample& sample, int frame_w, 
   for (const auto& item : decoded) {
     const auto boxes = tensor_floats(item.boxes);
     const auto keypoints = tensor_floats(item.keypoints);
+    if (boxes.size() % 6U != 0 || keypoints.size() % (17U * 3U) != 0) {
+      throw std::runtime_error("pose decode returned malformed tensor sizes");
+    }
     const std::size_t box_count = boxes.size() / 6U;
     const std::size_t keypoint_count = keypoints.size() / (17U * 3U);
     if (box_count != keypoint_count) {
@@ -419,6 +416,9 @@ std::vector<Pose> decode_poses(const simaai::neat::Sample& sample, int frame_w, 
       pose.x2 = box[2];
       pose.y2 = box[3];
       pose.score = box[4];
+      if (std::lround(box[5]) != 0) {
+        throw std::runtime_error("pose decode returned a non-person class id");
+      }
 
       const float* points = keypoints.data() + i * 17U * 3U;
       for (std::size_t k = 0; k < 17U; ++k) {
@@ -432,9 +432,9 @@ std::vector<Pose> decode_poses(const simaai::neat::Sample& sample, int frame_w, 
 
 /// Serialize poses into the `data` object Insight's `pose-estimation` overlay consumes.
 ///
-/// Insight joins skeleton edges by keypoint name and independently hides joints at or below
-/// 0.3 confidence, so publishing below `min_visibility` only inflates the datagram.
-std::string pose_metadata_data_json(const std::vector<Pose>& poses, double min_visibility) {
+/// Pixel rounding and three-decimal confidence preserve overlay precision while keeping the
+/// configured 50-pose maximum within Core's logical metadata-message limit.
+std::string pose_metadata_data_json(const std::vector<Pose>& poses) {
   nlohmann::json data;
   data["poses"] = nlohmann::json::array();
   int pose_index = 1;
@@ -442,21 +442,19 @@ std::string pose_metadata_data_json(const std::vector<Pose>& poses, double min_v
     nlohmann::json keypoints = nlohmann::json::array();
     for (std::size_t k = 0; k < pose.keypoints.size(); ++k) {
       const Keypoint& point = pose.keypoints[k];
-      if (point.visibility < min_visibility) {
-        continue;
-      }
       keypoints.push_back({{"name", kCocoKeypointNames[k]},
-                           {"x", point.x},
-                           {"y", point.y},
-                           {"confidence", point.visibility}});
+                           {"x", std::lround(point.x)},
+                           {"y", std::lround(point.y)},
+                           {"confidence", std::round(point.visibility * 1000.0f) / 1000.0f}});
     }
-    data["poses"].push_back(
-        {{"id", "pose_" + std::to_string(pose_index++)},
-         {"label", "person"},
-         {"confidence", pose.score},
-         {"bbox",
-          {pose.x1, pose.y1, std::max(0.0f, pose.x2 - pose.x1), std::max(0.0f, pose.y2 - pose.y1)}},
-         {"keypoints", std::move(keypoints)}});
+    data["poses"].push_back({{"id", "pose_" + std::to_string(pose_index++)},
+                             {"label", "person"},
+                             {"confidence", std::round(pose.score * 1000.0f) / 1000.0f},
+                             {"bbox",
+                              {std::lround(pose.x1), std::lround(pose.y1),
+                               std::lround(std::max(0.0f, pose.x2 - pose.x1)),
+                               std::lround(std::max(0.0f, pose.y2 - pose.y1))}},
+                             {"keypoints", std::move(keypoints)}});
   }
   return data.dump();
 }
@@ -658,8 +656,6 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
 simaai::neat::RunOptions build_run_options() {
   simaai::neat::RunOptions run_options;
   run_options.preset = simaai::neat::RunPreset::Realtime;
-  run_options.queue_depth = 4;
-  run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   return run_options;
 }
@@ -692,33 +688,14 @@ int stream_index_from_sample(const simaai::neat::Sample& sample, int stream_coun
   return index;
 }
 
-simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth,
-                                             int max_inflight_per_stream = -1,
+simaai::neat::GraphLinkOptions realtime_link(int stream_index, int max_inflight_per_stream = -1,
                                              int max_inflight_total = -1) {
   simaai::neat::GraphLinkOptions link;
   link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-  link.queue_depth = queue_depth;
   link.max_inflight_per_stream = max_inflight_per_stream;
   link.max_inflight_total = max_inflight_total;
   link.stream_id = stream_id_for(stream_index);
   return link;
-}
-
-simaai::neat::Graph build_estimator_graph(const AppConfig& cfg,
-                                          std::unique_ptr<simaai::neat::Model>& model) {
-  model = build_model(cfg);
-  auto input_options = model->input_appsrc_options(false);
-  input_options.block = true;
-
-  simaai::neat::Graph estimator("estimator");
-  estimator.connect(simaai::neat::nodes::Input("estimator_frame", input_options), *model);
-  return estimator;
-}
-
-simaai::neat::Graph build_poses_graph() {
-  simaai::neat::Graph poses("poses");
-  poses.add(simaai::neat::nodes::Output("poses", simaai::neat::OutputOptions::EveryFrame(4)));
-  return poses;
 }
 
 simaai::neat::Graph build_debug_frame_graph(int stream_index) {
@@ -742,21 +719,19 @@ simaai::neat::nodes::groups::VideoSenderOptions make_video_options(const AppConf
 StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url) {
   StreamRuntime runtime;
   runtime.index = stream_index;
-  runtime.url = url;
+  int output_fps = 0;
   const auto source_options =
-      build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
+      build_source_options(cfg, url, output_fps, runtime.frame_w, runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
                          "failed to probe RTSP frame dimensions");
-  sima_examples::require(runtime.output_fps > 0, "failed to probe RTSP frame rate");
-  if (cfg.fps > 0) {
-    runtime.output_fps = cfg.fps;
-  }
+  sima_examples::require(output_fps > 0, "failed to probe RTSP frame rate");
 
   runtime.profile.enabled = cfg.profile;
   runtime.profile.stream_index = stream_index;
   runtime.source_options = source_options;
+  int video_port = 0;
   if (cfg.video_enabled) {
-    runtime.video_port = make_video_options(cfg, stream_index).video_port();
+    video_port = make_video_options(cfg, stream_index).video_port();
   }
 
   simaai::neat::MetadataSenderOptions metadata_options;
@@ -769,10 +744,10 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
   sima_examples::require(runtime.metadata_sender->ok(), metadata_err);
 
   std::cout << "[stream " << stream_index << "] rtsp=" << url << " stream=" << runtime.frame_w
-            << "x" << runtime.frame_h << "@" << runtime.output_fps
-            << " insight=" << cfg.insight_host << " video=";
+            << "x" << runtime.frame_h << "@" << output_fps << " insight=" << cfg.insight_host
+            << " video=";
   if (cfg.video_enabled) {
-    std::cout << runtime.video_port;
+    std::cout << video_port;
   } else {
     std::cout << "disabled";
   }
@@ -788,14 +763,14 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
   if (cfg.video_enabled) {
     auto encoded_branch = simaai::neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
     app.graph.connect(source, encoded_branch);
-    app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3));
+    app.graph.connect(encoded_branch, decoder, realtime_link(stream.index));
 
     const auto video_options = make_video_options(cfg, stream.index);
     app.graph.connect(encoded_branch,
                       build_video_sender_graph("video_h264", cfg.codec, video_options),
-                      realtime_link(stream.index, 3));
+                      realtime_link(stream.index));
   } else {
-    app.graph.connect(source, decoder, realtime_link(stream.index, 3));
+    app.graph.connect(source, decoder, realtime_link(stream.index));
   }
 
   const bool save_debug_frames = save_frames_enabled(cfg);
@@ -806,16 +781,16 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
   app.graph.connect(decoder, decoded_branch);
   app.graph.connect(
       decoded_branch, estimator_graph,
-      realtime_link(stream.index, 4, cfg.max_inflight_per_stream, cfg.max_inflight_total));
+      realtime_link(stream.index, cfg.max_inflight_per_stream, cfg.max_inflight_total));
   if (save_debug_frames) {
     app.graph.connect(decoded_branch, build_debug_frame_graph(stream.index),
-                      realtime_link(stream.index, 4));
+                      realtime_link(stream.index));
   }
 }
 
-void send_metadata(StreamRuntime& stream, const AppConfig& cfg, const simaai::neat::Sample& sample,
+void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
                    const std::vector<Pose>& poses) {
-  const std::string data_json = pose_metadata_data_json(poses, cfg.min_keypoint_visibility);
+  const std::string data_json = pose_metadata_data_json(poses);
   const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
   const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
@@ -848,7 +823,7 @@ bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit
     return false;
   }
   return std::all_of(streams.begin(), streams.end(), [frame_limit](const StreamRuntime& stream) {
-    return stream.processed >= frame_limit || stream.closed;
+    return stream.processed >= frame_limit;
   });
 }
 
@@ -864,7 +839,7 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
   const bool warming_up = stream.processed <= cfg.warmup_frames;
   if (!warming_up) {
     const double metadata_start = sima_examples::time_ms();
-    send_metadata(stream, cfg, sample, poses);
+    send_metadata(stream, sample, poses);
     const double metadata_end = sima_examples::time_ms();
     if (save_frames_enabled(cfg)) {
       maybe_save_debug_frame(
@@ -912,35 +887,9 @@ void drain_debug_frames(AppRuntime& app, const AppConfig& cfg) {
   }
 }
 
-bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& output_name) {
-  constexpr int kPullTimeoutMs = 50;
-  drain_debug_frames(app, cfg);
-  const double pull_start = sima_examples::time_ms();
-  simaai::neat::Sample sample;
-  simaai::neat::PullError pull_error;
-  const auto status = app.run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
-  const double pull_end = sima_examples::time_ms();
-  if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
-    return false;
-  }
-  if (status != simaai::neat::PullStatus::Ok) {
-    throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
-  }
-  const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
-  process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,
-                        pull_end - pull_start);
-  drain_debug_frames(app, cfg);
-  return true;
-}
-
 void run_app(const AppConfig& cfg) {
   g_stop_requested = 0;
   auto previous_sigint = std::signal(SIGINT, request_stop);
-  if (cfg.profile) {
-    setenv("SIMA_GST_ELEMENT_TIMINGS", "1", 0);
-    setenv("SIMA_GST_FLOW_DEBUG", "1", 0);
-    setenv("SIMA_GST_BOUNDARY_PROBES", "1", 0);
-  }
   if (save_frames_enabled(cfg)) {
     fs::create_directories(cfg.save_dir);
   }
@@ -949,8 +898,14 @@ void run_app(const AppConfig& cfg) {
   app.streams.reserve(cfg.rtsp_urls.size());
   // One model, shared by every stream: the estimator graph is built once here and each
   // stream's decoded branch links into it below.
-  auto estimator_graph = build_estimator_graph(cfg, app.model);
-  auto poses_graph = build_poses_graph();
+  app.model = build_model(cfg);
+  auto input_options = app.model->input_appsrc_options(false);
+  input_options.block = true;
+  simaai::neat::Graph estimator_graph("estimator");
+  estimator_graph.connect(simaai::neat::nodes::Input("estimator_frame", input_options), *app.model);
+
+  simaai::neat::Graph poses_graph("poses");
+  poses_graph.add(simaai::neat::nodes::Output("poses", simaai::neat::OutputOptions::EveryFrame(4)));
 
   for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
     app.streams.push_back(build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index]));
@@ -964,7 +919,23 @@ void run_app(const AppConfig& cfg) {
 
   app.run = app.graph.build(build_run_options());
   while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
-    (void)process_run_once(app, cfg, "poses");
+    constexpr int kPullTimeoutMs = 50;
+    drain_debug_frames(app, cfg);
+    const double pull_start = sima_examples::time_ms();
+    simaai::neat::Sample sample;
+    simaai::neat::PullError pull_error;
+    const auto status = app.run.pull("poses", kPullTimeoutMs, sample, &pull_error);
+    const double pull_end = sima_examples::time_ms();
+    if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
+      continue;
+    }
+    if (status != simaai::neat::PullStatus::Ok) {
+      throw std::runtime_error("failed to pull poses: " + pull_error.message);
+    }
+    const int stream_index = stream_index_from_sample(sample, static_cast<int>(app.streams.size()));
+    process_output_sample(app.streams[static_cast<std::size_t>(stream_index)], cfg, sample,
+                          pull_end - pull_start);
+    drain_debug_frames(app, cfg);
   }
   app.run.close();
 
