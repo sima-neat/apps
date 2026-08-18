@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-
 APPS_ROOT = Path(__file__).resolve().parents[2]
 BUILD_SH = APPS_ROOT / "build.sh"
 ARCHIVE_INSTALLER = APPS_ROOT / "scripts/install-neat-apps.sh"
@@ -506,7 +505,7 @@ def _run_build(
             "NEAT_APPS_TEST_DEPS_DIR": str(deps_dir),
             "NEAT_ARTIFACTS_BASE_URL": "https://core.test",
             "NEAT_APPS_TEST_CURL_LOG": str(log_path),
-            "NEAT_APPS_TEST_LATEST_TAGS": "\n".join(
+            "NEAT_APPS_TEST_LATEST_TAGS": "\n".join(  # noqa: FLY002
                 [
                     "develop=devsha1",
                     "main=mainsha1",
@@ -515,7 +514,7 @@ def _run_build(
                     "scratch-core-for-test=scratchsha1",
                 ]
             ),
-            "NEAT_APPS_TEST_METADATA": "\n".join(
+            "NEAT_APPS_TEST_METADATA": "\n".join(  # noqa: FLY002
                 [
                     "main:mainsha1",
                     "feature%252Fcore-artifact:pinnedsha2",
@@ -533,8 +532,7 @@ def _run_build(
         cwd=APPS_ROOT,
         env=run_env,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 
@@ -901,8 +899,10 @@ def test_vulcan_core_install_repairs_mixed_runtime_branch(tmp_path):
 
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "NEAT core already installed" not in proc.stdout
-    assert sima_cli_args.read_text(encoding="utf-8").strip().endswith(
-        "core@scratch-core-for-test:scratchsha1"
+    assert (
+        sima_cli_args.read_text(encoding="utf-8")
+        .strip()
+        .endswith("core@scratch-core-for-test:scratchsha1")
     )
 
 

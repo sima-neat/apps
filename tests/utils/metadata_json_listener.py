@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import json
 import select
 import socket
+import struct
 import time
 
 
@@ -24,6 +25,92 @@ class MetadataJsonResult:
     ports_with_valid_json: set[int] = field(default_factory=set)
     messages: list[MetadataJsonMessage] = field(default_factory=list)
     error: str = ""
+
+
+_CHUNK_MAGIC = 0x4E
+_CHUNK_VERSION = 0x01
+_CHUNK_HEADER_SIZE = 12
+_MAX_DATAGRAM_SIZE = 1200
+_MAX_LOGICAL_MESSAGE_SIZE = 65507
+_MAX_CHUNK_COUNT = 56
+_REASSEMBLY_MAX_AGE_S = 0.25
+_REASSEMBLY_CAPACITY = 4
+
+
+@dataclass
+class _Assembly:
+    chunks: list[bytes | None]
+    started: float
+    received: int = 0
+    size: int = 0
+
+
+class _MetadataReassembler:
+    def __init__(self) -> None:
+        self._assemblies: dict[int, _Assembly] = {}
+
+    def accept(self, datagram: bytes) -> tuple[bytes | None, str]:
+        now = time.monotonic()
+        self._drop_expired(now)
+        if not datagram or datagram[0] != _CHUNK_MAGIC:
+            return datagram, ""
+        if (
+            len(datagram) < _CHUNK_HEADER_SIZE
+            or len(datagram) > _MAX_DATAGRAM_SIZE
+            or datagram[1] != _CHUNK_VERSION
+        ):
+            return None, "invalid metadata chunk header"
+
+        message_id, index, count = struct.unpack(">QBB", datagram[2:_CHUNK_HEADER_SIZE])
+        if (
+            count == 0
+            or count > _MAX_CHUNK_COUNT
+            or index >= count
+            or len(datagram) == _CHUNK_HEADER_SIZE
+        ):
+            return None, "invalid metadata chunk fields"
+
+        assembly = self._assemblies.get(message_id)
+        if assembly is None:
+            if len(self._assemblies) == _REASSEMBLY_CAPACITY:
+                oldest = min(
+                    self._assemblies, key=lambda key: self._assemblies[key].started
+                )
+                del self._assemblies[oldest]
+            assembly = _Assembly([None] * count, now)
+            self._assemblies[message_id] = assembly
+        if len(assembly.chunks) != count:
+            del self._assemblies[message_id]
+            return None, "metadata chunk count changed"
+
+        fragment = datagram[_CHUNK_HEADER_SIZE:]
+        existing = assembly.chunks[index]
+        if existing is None:
+            if assembly.size + len(fragment) > _MAX_LOGICAL_MESSAGE_SIZE:
+                del self._assemblies[message_id]
+                return None, "metadata message exceeds maximum size"
+            assembly.chunks[index] = fragment
+            assembly.received += 1
+            assembly.size += len(fragment)
+        elif existing != fragment:
+            del self._assemblies[message_id]
+            return None, "metadata chunk contents changed"
+
+        if assembly.received != len(assembly.chunks):
+            return None, ""
+
+        payload = b"".join(chunk for chunk in assembly.chunks if chunk is not None)
+        del self._assemblies[message_id]
+        return payload, ""
+
+    def _drop_expired(self, now: float) -> None:
+        expired = [
+            message_id
+            for message_id, assembly in self._assemblies.items()
+            if now - assembly.started > _REASSEMBLY_MAX_AGE_S
+        ]
+        for message_id in expired:
+            del self._assemblies[message_id]
 
 
 class MetadataJsonListener:
@@ -51,6 +138,7 @@ class MetadataJsonListener:
         self._require_all_ports = require_all_ports
         self._min_object_count = min_object_count
         self._sockets: dict[socket.socket, int] = {}
+        self._reassemblers: dict[socket.socket, _MetadataReassembler] = {}
         try:
             for offset in range(num_ports):
                 port = base_port + offset
@@ -59,6 +147,7 @@ class MetadataJsonListener:
                 sock.bind((host, port))
                 sock.setblocking(False)
                 self._sockets[sock] = port
+                self._reassemblers[sock] = _MetadataReassembler()
         except Exception:
             self.close()
             raise
@@ -67,6 +156,7 @@ class MetadataJsonListener:
         for sock in self._sockets:
             sock.close()
         self._sockets.clear()
+        self._reassemblers.clear()
 
     def __enter__(self) -> "MetadataJsonListener":
         return self
@@ -84,8 +174,13 @@ class MetadataJsonListener:
             remaining = max(0.0, deadline - time.monotonic())
             readable, _, _ = select.select(list(self._sockets.keys()), [], [], min(0.2, remaining))
             for sock in readable:
-                payload, _ = sock.recvfrom(65536)
+                datagram, _ = sock.recvfrom(65536)
                 port = self._sockets[sock]
+                payload, error = self._reassemblers[sock].accept(datagram)
+                if payload is None:
+                    if error:
+                        last_error = error
+                    continue
                 message, error = self._parse_message(port, payload)
                 if message is None:
                     last_error = error

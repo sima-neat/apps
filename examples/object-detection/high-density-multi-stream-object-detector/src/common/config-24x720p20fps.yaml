@@ -46,7 +46,9 @@ input:                       # RTSP input transport settings.
 runtime:                     # Runtime and profiling settings.
   profile: false             # Leave hot-path profiling off for the live visualizer run.
   warmup_frames: 30          # Drain this many frames before metadata/profile output.
-  initial_detection_timeout_ms: 90000 # First detection wait before treating startup as stalled.
+  initial_detection_timeout_ms: 90000 # Wait for two completions from every stream at startup.
+  stream_detection_timeout_ms: 30000 # Each live stream must keep producing detections.
+  no_detection_timeout_ms: 30000 # Fail only when the entire detector stops completing work.
 
 inference:                   # Detection controls.
   workers: 1                 # One shared detector graph avoids dispatcher/resource contention.
