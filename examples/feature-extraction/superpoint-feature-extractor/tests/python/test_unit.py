@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 
@@ -22,6 +21,7 @@ def load_example():
     return module
 
 
+@pytest.mark.unit
 def test_draw_points_marks_the_requested_coordinate():
     class FakeCv2:
         LINE_AA = 16
@@ -45,6 +45,7 @@ def test_draw_points_marks_the_requested_coordinate():
     assert cv2.circles == [(40, 50)]
 
 
+@pytest.mark.unit
 def test_feature_points_uses_source_coordinates_from_boxdecode_unchanged():
     example = load_example()
     keypoints = SimpleNamespace(
@@ -66,6 +67,32 @@ def test_feature_points_uses_source_coordinates_from_boxdecode_unchanged():
     np.testing.assert_array_equal(actual, [[900.0, 500.0]])
 
 
+@pytest.mark.unit
+def test_feature_points_discards_coordinates_outside_the_source_frame():
+    example = load_example()
+    keypoints = SimpleNamespace(
+        dtype="fp32",
+        to_numpy=lambda copy: np.asarray(
+            [[900.0, 500.0], [960.0, 200.0], [20.0, 540.0], [np.nan, 10.0]],
+            dtype=np.float32,
+        ),
+    )
+    features = SimpleNamespace(
+        keypoints=keypoints,
+        scores=SimpleNamespace(shape=(4,), dtype="fp32"),
+        descriptors=SimpleNamespace(shape=(4, 256), dtype="fp32"),
+    )
+    pyneat = SimpleNamespace(
+        TensorDType=SimpleNamespace(Float32="fp32"),
+        decode_superpoint=lambda _output: [features],
+    )
+
+    actual = example.feature_points([object()], 960, 540, np, pyneat)
+
+    np.testing.assert_array_equal(actual, [[900.0, 500.0]])
+
+
+@pytest.mark.unit
 def test_model_options_delegate_image_geometry_to_core_preproc():
     class FakePyneat:
         AutoFlag = SimpleNamespace(On="on")
@@ -122,11 +149,9 @@ def test_model_options_delegate_image_geometry_to_core_preproc():
     assert options.preprocess.normalize.mean == (0.0, 0.0, 0.0)
     assert options.preprocess.normalize.stddev == (1.0, 1.0, 1.0)
     assert options.preprocess.normalize.has_explicit_stats is True
-    assert not hasattr(options, "boxdecode_original_width")
-    assert not hasattr(options, "boxdecode_original_height")
-    assert not hasattr(options, "boxdecode_resize_mode")
 
 
+@pytest.mark.unit
 def test_validate_frame_accepts_any_stable_bgr_resolution():
     example = load_example()
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -146,6 +171,7 @@ class TestCli:
             capture_output=True,
             text=True,
             timeout=20,
+            check=False,
         )
 
     def test_help(self):

@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -132,15 +131,21 @@ std::vector<float> keypoints(const neat::FeaturePointTensors& features,
   if (points.size() != static_cast<std::size_t>(count) * 2U) {
     throw std::runtime_error("SuperPoint keypoint data does not match its shape");
   }
+  std::vector<float> drawable_points;
+  drawable_points.reserve(points.size());
   for (std::size_t i = 0; i < points.size(); i += 2) {
     const float x = points[i];
     const float y = points[i + 1];
+    // The frame edges are exclusive coordinates. Discard isolated decoder outliers instead of
+    // aborting the stream when inverse-affine rounding places a point on or beyond an edge.
     if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F || x >= source_size.width ||
         y >= source_size.height) {
-      throw std::runtime_error("SuperPoint returned an invalid keypoint coordinate");
+      continue;
     }
+    drawable_points.push_back(x);
+    drawable_points.push_back(y);
   }
-  return points;
+  return drawable_points;
 }
 
 void draw_points(cv::Mat& frame, const std::vector<float>& points) {
@@ -274,7 +279,7 @@ int main(int argc, char** argv) {
       if (decoded.size() != 1) {
         throw std::runtime_error("SuperPoint must return one feature set per frame");
       }
-      const auto points = keypoints(decoded.front(), FrameSize{frame.cols, frame.rows});
+      const auto points = keypoints(decoded.front(), FrameSize{input_width, input_height});
       total_points += points.size() / 2;
       draw_points(frame, points);
       stream_frame(video_sender.run, frame);

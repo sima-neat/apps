@@ -51,21 +51,21 @@ Run the remaining commands from `prebuilt-apps/`.
 ## Prepare the Model
 
 The [Neat Model Registry](https://github.com/sima-neat/models/issues/24) publishes SuperPoint
-through the Vulcan artifact registry. Install the production package and select the INT8 variant
-that keeps tessellation inside the MLA:
+through the staging Vulcan artifact registry. Install the current develop package and select the
+INT8 variant that keeps tessellation inside the MLA:
 
 ```bash
 mkdir -p models/superpoint
-sima-cli neat install models/superpoint@main:latest --install-dir models/superpoint
+sima-cli neat install --stg \
+  models/superpoint@develop:latest \
+  --install-dir models/superpoint
 
-model="$(find models/superpoint/modalix_int8_tessellation_mla -type f -name '*_mpk.tar.gz' -print -quit)"
-test -n "$model"
-cp "$model" models/superpoint_mpk.tar.gz
+cp models/superpoint/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz \
+  models/superpoint_mpk.tar.gz
 ```
 
-Use `--stg models/superpoint@develop:latest` instead while validating a staging publication. Do not
-download the model from an ad hoc attachment or copy; the registry package supplies the immutable
-artifact and verifies its published checksum.
+Do not download the model from an ad hoc attachment or copy; the registry package supplies the
+immutable artifact and verifies its published checksum.
 
 The default CI pipeline test uses `modalix_int8_tessellation_mla`, while the accuracy matrix covers
 all four INT8/BF16 and MLA/EV74 tessellation combinations. The INT8 MLA archive was calibrated with

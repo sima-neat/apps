@@ -8,7 +8,6 @@ from pathlib import Path
 
 import yaml
 
-
 DESCRIPTOR_DIM = 256
 MAX_POINTS = 600
 
@@ -98,15 +97,20 @@ def feature_points(output, source_width, source_height, np, pyneat):
         or features.descriptors.dtype != pyneat.TensorDType.Float32
     ):
         raise RuntimeError("invalid SuperPoint output contract")
-    if points.size and (
-        not np.all(np.isfinite(points))
-        or np.any(points[:, 0] < 0)
-        or np.any(points[:, 0] >= source_width)
-        or np.any(points[:, 1] < 0)
-        or np.any(points[:, 1] >= source_height)
-    ):
-        raise RuntimeError("SuperPoint returned an invalid keypoint coordinate")
-    return points
+    if not points.size:
+        return points
+
+    # The frame edges are exclusive coordinates. Discard isolated decoder outliers
+    # instead of aborting the stream when inverse-affine rounding places a point on
+    # or beyond an edge.
+    drawable = (
+        np.all(np.isfinite(points), axis=1)
+        & (points[:, 0] >= 0)
+        & (points[:, 0] < source_width)
+        & (points[:, 1] >= 0)
+        & (points[:, 1] < source_height)
+    )
+    return points[drawable]
 
 
 def input_tensor(frame, np, pyneat):
@@ -122,7 +126,7 @@ def draw_points(frame, points, cv2) -> None:
     for x, y in points:
         cv2.circle(
             frame,
-            (int(round(float(x))), int(round(float(y)))),
+            (round(float(x)), round(float(y))),
             2,
             (0, 255, 0),
             -1,
@@ -141,7 +145,7 @@ def draw_points(frame, points, cv2) -> None:
 
 
 def build_video_sender(config, fps, width, height, np, pyneat):
-    output_fps = max(1, int(round(fps)))
+    output_fps = max(1, round(fps))
     input_options = pyneat.InputOptions()
     input_options.payload_type = pyneat.PayloadType.Image
     input_options.format = pyneat.Format.RGB
@@ -253,8 +257,8 @@ def main() -> int:
             output = runner.run([model_input], timeout_ms=config.timeout_ms)
             points = feature_points(
                 output,
-                frame.shape[1],
-                frame.shape[0],
+                input_width,
+                input_height,
                 np,
                 pyneat,
             )
@@ -278,7 +282,7 @@ def main() -> int:
             f"video_sender={config.insight_host}:{video_port}"
         )
         return 0
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         print(f"Error: {error}", file=sys.stderr)
         return 2
     finally:

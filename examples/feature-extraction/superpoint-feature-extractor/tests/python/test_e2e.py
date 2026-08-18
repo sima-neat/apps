@@ -11,7 +11,6 @@ import pytest
 
 from tests.utils.test_scope import enabled_models, load_scope
 
-
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 APPS_ROOT = EXAMPLE_DIR.parents[2]
 EXAMPLE_KEY = "feature-extraction/superpoint-feature-extractor"
@@ -133,6 +132,7 @@ def test_insight_pipeline(
         text=True,
         timeout=test_timeout_ms / 1000,
         cwd=apps_root,
+        check=False,
     )
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
@@ -161,9 +161,13 @@ def test_non_model_resolution_runs_through_core_preproc(
 
     frame = cv2.resize(source, (960, 540), interpolation=cv2.INTER_LINEAR)
     example = load_example()
+    options = example.model_options(pyneat, frame.shape[1], frame.shape[0])
+    assert options.boxdecode_original_width == 0
+    assert options.boxdecode_original_height == 0
+    assert options.boxdecode_resize_mode is None
     model = pyneat.Model(
         str(e2e_model_path),
-        example.model_options(pyneat, frame.shape[1], frame.shape[0]),
+        options,
     )
     model_input = example.input_tensor(frame, np, pyneat)
     runner = model.build(
@@ -272,9 +276,9 @@ def test_fp32_a65_accuracy(
     )
     assert recall >= 0.90, f"{model_file}: keypoint recall {recall:.6f}"
     assert precision >= 0.90, f"{model_file}: keypoint precision {precision:.6f}"
-    assert (
-        descriptor_coverage >= 0.70
-    ), f"{model_file}: descriptor coverage {descriptor_coverage:.6f}"
+    assert descriptor_coverage >= 0.70, (
+        f"{model_file}: descriptor coverage {descriptor_coverage:.6f}"
+    )
     assert descriptor_cosine >= min_descriptor_cosine, (
         f"{model_file}: descriptor cosine {descriptor_cosine:.6f} "
         f"is below {min_descriptor_cosine:.3f}"
