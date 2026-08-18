@@ -331,7 +331,7 @@ download_model_registry_group() {
     fi
     echo "[download] $resource (model-registry)"
     local environment_args=()
-    if [[ "$registry_ref" == "develop" ]]; then
+    if [[ "$registry_ref" != "main" ]]; then
         environment_args+=(--stg)
     fi
     if ! "$SIMA_CLI_BIN" neat install "${environment_args[@]}" "$resource" --install-dir "$tmpdir"; then
