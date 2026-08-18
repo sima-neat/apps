@@ -51,13 +51,13 @@ Run the remaining commands from `prebuilt-apps/`.
 ## Prepare the Model
 
 The [Neat Model Registry](https://github.com/sima-neat/models/issues/24) publishes SuperPoint
-through the staging Vulcan artifact registry. Install the current develop package and select the
-INT8 variant that keeps tessellation inside the MLA:
+through the staging Vulcan artifact registry. Install the current model-matrix package and select
+the INT8 variant that keeps tessellation inside the MLA:
 
 ```bash
 mkdir -p models/superpoint
 sima-cli neat install --stg \
-  models/superpoint@develop:latest \
+  models/superpoint@codex/superpoint-model-matrix:latest \
   --install-dir models/superpoint
 
 cp models/superpoint/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz \
