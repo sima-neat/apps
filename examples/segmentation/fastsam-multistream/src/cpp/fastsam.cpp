@@ -17,8 +17,8 @@ namespace neat = simaai::neat;
 namespace app {
 namespace {
 
-constexpr double kMaskStride = 4.0;  // proto grid is stride-4, so one mask cell = 4 model px
-constexpr int kProtoMaskSide = 160;  // proto-mask grid side (infer_size / kMaskStride)
+constexpr double kMaskStride = 4.0; // proto grid is stride-4, so one mask cell = 4 model px
+constexpr int kProtoMaskSide = 160; // proto-mask grid side (infer_size / kMaskStride)
 
 std::vector<float> tensor_to_floats(const neat::Tensor& tensor) {
   if (tensor.dtype != neat::TensorDType::Float32) {
@@ -40,7 +40,8 @@ std::vector<std::uint8_t> tensor_to_u8(const neat::Tensor& tensor) {
 }
 
 neat::Tensor ev74_input_tensor(const cv::Mat& rgb) {
-  return neat::Tensor::from_cv_mat(rgb, neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74);
+  return neat::Tensor::from_cv_mat(rgb, neat::ImageSpec::PixelFormat::RGB,
+                                   neat::TensorMemory::EV74);
 }
 
 neat::Model::Options make_model_options(const AppConfig& cfg, int frame_w, int frame_h) {
@@ -69,14 +70,15 @@ neat::Model::Runner build_runner(neat::Model& model, const neat::RunOptions& run
                      run_opt);
 }
 
-}  // namespace
+} // namespace
 
 Fastsam::Fastsam(const AppConfig& cfg, const neat::RunOptions& run_opt, int frame_w, int frame_h)
-    : model_(std::make_unique<neat::Model>(cfg.model_path, make_model_options(cfg, frame_w, frame_h))),
+    : model_(
+          std::make_unique<neat::Model>(cfg.model_path, make_model_options(cfg, frame_w, frame_h))),
       runner_(build_runner(*model_, run_opt, frame_w, frame_h)) {}
 
 neat::TensorList Fastsam::run(const cv::Mat& rgb, int timeout_ms) {
-  neat::TensorList input{ev74_input_tensor(rgb)};  // built outside the lock
+  neat::TensorList input{ev74_input_tensor(rgb)}; // built outside the lock
   std::lock_guard<std::mutex> lock(mu_);
   return runner_.run(input, timeout_ms);
 }
@@ -108,9 +110,9 @@ Fastsam::Segmentation Fastsam::decode(const neat::TensorList& model_out, int top
       seg.boxes.push_back({row[0], row[1], row[2], row[3], row[4], row[5]});
       // mask buffer may be short; blank fallback avoids an OOB read and keeps masks 1:1 with boxes.
       if (masks.size() >= (static_cast<std::size_t>(i) + 1U) * kMaskBytes) {
-        const cv::Mat view(kProtoMaskSide, kProtoMaskSide, CV_8UC1,
-                           const_cast<std::uint8_t*>(masks.data() +
-                                                     static_cast<std::size_t>(i) * kMaskBytes));
+        const cv::Mat view(
+            kProtoMaskSide, kProtoMaskSide, CV_8UC1,
+            const_cast<std::uint8_t*>(masks.data() + static_cast<std::size_t>(i) * kMaskBytes));
         seg.masks.push_back(view.clone());
       } else {
         seg.masks.push_back(cv::Mat::zeros(kProtoMaskSide, kProtoMaskSide, CV_8UC1));
@@ -147,7 +149,7 @@ std::vector<cv::Point> Fastsam::mask_polygon(const cv::Mat& mask, const Geometry
   if (static_cast<int>(approx.size()) > max_points) {
     for (int k = 0; k < max_points; ++k) {
       const double t =
-          static_cast<double>(k) * (approx.size() - 1) / (max_points - 1);  // np.linspace + int()
+          static_cast<double>(k) * (approx.size() - 1) / (max_points - 1); // np.linspace + int()
       pts.push_back(approx[static_cast<std::size_t>(t)]);
     }
   } else {
@@ -160,19 +162,18 @@ std::vector<cv::Point> Fastsam::mask_polygon(const cv::Mat& mask, const Geometry
   std::vector<cv::Point> out;
   out.reserve(pts.size());
   for (const auto& p : pts) {
-    out.emplace_back(
-        static_cast<int>(std::lround((p.x * kMaskStride - geom.pad_x) / geom.scale)),
-        static_cast<int>(std::lround((p.y * kMaskStride - geom.pad_y) / geom.scale)));
+    out.emplace_back(static_cast<int>(std::lround((p.x * kMaskStride - geom.pad_x) / geom.scale)),
+                     static_cast<int>(std::lround((p.y * kMaskStride - geom.pad_y) / geom.scale)));
   }
   return out;
 }
 
-std::optional<Fastsam::Crop> Fastsam::object_crop(const cv::Mat& proto_mask, const cv::Mat& frame_rgb,
-                                                  const Geometry& geom, double min_area,
-                                                  double max_frac, double max_box_frac,
-                                                  double margin) {
+std::optional<Fastsam::Crop> Fastsam::object_crop(const cv::Mat& proto_mask,
+                                                  const cv::Mat& frame_rgb, const Geometry& geom,
+                                                  double min_area, double max_frac,
+                                                  double max_box_frac, double margin) {
   std::vector<cv::Point> nz;
-  cv::findNonZero(proto_mask, nz);  // points as (x=col, y=row)
+  cv::findNonZero(proto_mask, nz); // points as (x=col, y=row)
   if (nz.empty()) {
     return std::nullopt;
   }
@@ -181,7 +182,7 @@ std::optional<Fastsam::Crop> Fastsam::object_crop(const cv::Mat& proto_mask, con
   const int mh = proto_mask.rows;
   const int mw = proto_mask.cols;
   const double cnt = static_cast<double>(nz.size());
-  if (cnt * orig_w * orig_h < min_area * mw * mh) {  // proto pixels -> frame-area threshold
+  if (cnt * orig_w * orig_h < min_area * mw * mh) { // proto pixels -> frame-area threshold
     return std::nullopt;
   }
   if (cnt > max_frac * mw * mh) {
@@ -201,7 +202,7 @@ std::optional<Fastsam::Crop> Fastsam::object_crop(const cv::Mat& proto_mask, con
   px2 += 1;
   py2 += 1;
 
-  const double fx1 = (px1 * kMaskStride - geom.pad_x) / geom.scale;  // square -> original frame
+  const double fx1 = (px1 * kMaskStride - geom.pad_x) / geom.scale; // square -> original frame
   const double fy1 = (py1 * kMaskStride - geom.pad_y) / geom.scale;
   const double fx2 = (px2 * kMaskStride - geom.pad_x) / geom.scale;
   const double fy2 = (py2 * kMaskStride - geom.pad_y) / geom.scale;
@@ -213,7 +214,7 @@ std::optional<Fastsam::Crop> Fastsam::object_crop(const cv::Mat& proto_mask, con
   }
   const double dw = (fx2 - fx1) * margin;
   const double dh = (fy2 - fy1) * margin;
-  const int x1 = std::max(0, static_cast<int>(fx1 - dw));  // int() truncates toward zero
+  const int x1 = std::max(0, static_cast<int>(fx1 - dw)); // int() truncates toward zero
   const int y1 = std::max(0, static_cast<int>(fy1 - dh));
   const int x2 = std::min(orig_w, static_cast<int>(std::lround(fx2 + dw)));
   const int y2 = std::min(orig_h, static_cast<int>(std::lround(fy2 + dh)));
@@ -222,9 +223,15 @@ std::optional<Fastsam::Crop> Fastsam::object_crop(const cv::Mat& proto_mask, con
   }
 
   Crop crop;
-  crop.window = frame_rgb(cv::Rect(x1, y1, x2 - x1, y2 - y1));  // ROI view
-  crop.submask = proto_mask(cv::Rect(px1, py1, px2 - px1, py2 - py1)).clone();
+  crop.window = frame_rgb(cv::Rect(x1, y1, x2 - x1, y2 - y1)); // ROI view
+  const double proto_to_frame = kMaskStride / geom.scale;
+  const double center_offset = (proto_to_frame - 1.0) / 2.0;
+  const cv::Mat transform =
+      (cv::Mat_<double>(2, 3) << proto_to_frame, 0.0, -geom.pad_x / geom.scale - x1 + center_offset,
+       0.0, proto_to_frame, -geom.pad_y / geom.scale - y1 + center_offset);
+  cv::warpAffine(proto_mask, crop.submask, transform, crop.window.size(), cv::INTER_NEAREST,
+                 cv::BORDER_CONSTANT, cv::Scalar(0));
   return crop;
 }
 
-}  // namespace app
+} // namespace app

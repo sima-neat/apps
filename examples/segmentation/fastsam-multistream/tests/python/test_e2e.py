@@ -48,7 +48,7 @@ class TestE2E:
             "python runtime dependencies (cv2, numpy, pyneat) are not available",
         )
         skip_unless_e2e_ready(
-            len(rtsp_h264_urls) >= 2, "need at least two RTSP H.264 URLs for multistream e2e"
+            len(rtsp_h264_urls) >= 4, "need four RTSP H.264 URLs for multistream e2e"
         )
 
         clip_image = models_dir / CLIP_IMAGE_ENCODER_FILE
@@ -61,7 +61,7 @@ class TestE2E:
             )
 
         metadata_port_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
-        streams = rtsp_h264_urls[:2]
+        streams = rtsp_h264_urls[:4]
 
         config_path = e2e_config_writer(
             {
@@ -91,6 +91,7 @@ class TestE2E:
             metadata_type="segmentation",
             data_array_key="segments",
             require_all_ports=True,
+            minimum_items=1,
         ) as metadata_listener:
             result = run_until_output_files(
                 cmd,

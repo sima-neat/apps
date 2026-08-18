@@ -166,4 +166,20 @@ def object_crop(proto_mask, frame_rgb, geom, max_box_frac=1.0,
     if x2 <= x1 or y2 <= y1:
         return None
 
-    return Crop(window=frame_rgb[y1:y2, x1:x2], submask=proto_mask[py1:py2, px1:px2].copy())
+    # Map the proto mask into the exact frame ROI. Keeping window and submask
+    # pixel-aligned is important because CLIP resizes and crops both together.
+    proto_to_frame = MASK_STRIDE / geom.scale
+    center_offset = (proto_to_frame - 1.0) / 2.0
+    transform = np.array([
+        [proto_to_frame, 0.0, -geom.pad_x / geom.scale - x1 + center_offset],
+        [0.0, proto_to_frame, -geom.pad_y / geom.scale - y1 + center_offset],
+    ], dtype=np.float32)
+    submask = cv2.warpAffine(
+        proto_mask,
+        transform,
+        (x2 - x1, y2 - y1),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    return Crop(window=frame_rgb[y1:y2, x1:x2], submask=submask)

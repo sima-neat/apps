@@ -14,6 +14,7 @@
 #include <exception>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,9 +22,11 @@
 namespace {
 
 volatile std::sig_atomic_t g_stop = 0;
-void on_sigint(int) { g_stop = 1; }
+void on_sigint(int) {
+  g_stop = 1;
+}
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv) {
   std::signal(SIGINT, on_sigint);
@@ -31,18 +34,16 @@ int main(int argc, char** argv) {
   try {
     // Load the config.
     const std::string config_path =
-        argc > 1 ? argv[1]
-                 : sima_examples::default_config_path(FASTSAM_CPP_SOURCE_DIR).string();
+        argc > 1 ? argv[1] : sima_examples::default_config_path(FASTSAM_CPP_SOURCE_DIR).string();
     const app::AppConfig cfg = app::load_config(config_path);
 
     const auto run_opt = app::make_run_options(cfg.queue_depth);
     const std::string label = cfg.text;
 
     // Load the precomputed CLIP text features.
-    std::cout << "[build] loading precomputed CLIP text features ("
-              << cfg.clip_text_features_path << ")" << std::endl;
-    const auto text_features =
-        app::clip::load_text_features(cfg.clip_text_features_path, cfg.text);
+    std::cout << "[build] loading precomputed CLIP text features (" << cfg.clip_text_features_path
+              << ")" << std::endl;
+    const auto text_features = app::clip::load_text_features(cfg.clip_text_features_path, cfg.text);
 
     // Probe every RTSP stream for its resolution.
     std::vector<app::StreamInfo> stream_infos;
@@ -81,8 +82,10 @@ int main(int argc, char** argv) {
     // Spawn one frame-reader thread per stream: pull frames until it closes or we stop.
     std::vector<std::thread> source_threads;
     source_threads.reserve(streams.size());
+    std::exception_ptr source_error;
+    std::mutex source_error_mu;
     for (auto& s : streams) {
-      source_threads.emplace_back([&stream = *s] {
+      source_threads.emplace_back([&stream = *s, &source_error, &source_error_mu] {
         try {
           while (g_stop == 0) {
             if (stream.pull_frame() == app::Stream::Pull::Closed) {
@@ -91,6 +94,10 @@ int main(int argc, char** argv) {
           }
         } catch (const std::exception& ex) {
           std::cerr << "stream " << stream.index() << ": " << ex.what() << "\n";
+          std::lock_guard<std::mutex> lock(source_error_mu);
+          if (!source_error) {
+            source_error = std::current_exception();
+          }
           g_stop = 1;
         }
         stream.close_source();
@@ -117,8 +124,12 @@ int main(int argc, char** argv) {
           break;
         }
       }
-      if (all_done) { break; }
-      if (!did_work) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+      if (all_done) {
+        break;
+      }
+      if (!did_work) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
     }
 
     // Stop and join the frame-reader threads.
@@ -128,7 +139,12 @@ int main(int argc, char** argv) {
         source_thread.join();
       }
     }
-    if (process_error) { std::rethrow_exception(process_error); }
+    if (process_error) {
+      std::rethrow_exception(process_error);
+    }
+    if (source_error) {
+      std::rethrow_exception(source_error);
+    }
 
     // Flush profiling and close every stream.
     for (auto& s : streams) {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -62,7 +63,7 @@ class TestConfigLoading:
         assert cfg.score_threshold == 0.7
         assert cfg.nms_iou == 0.9
         assert cfg.max_detections == 300
-        assert cfg.min_score == 0.65
+        assert cfg.min_score == 0.2
         assert cfg.max_box_frac == 0.8
         assert cfg.queue_depth == 8
         assert cfg.latency_ms == 200
@@ -79,6 +80,13 @@ class TestConfigLoading:
         cfg = config.load_config(_write_config(tmp_path, raw))
 
         assert cfg.rtsp_urls == ["rtsp://x/src1", "rtsp://x/src2"]
+
+    def test_rejects_more_than_four_streams(self, tmp_path: Path):
+        raw = _base_config()
+        raw["source"]["rtsp_urls"] = [f"rtsp://x/src{i}" for i in range(5)]
+
+        with pytest.raises(RuntimeError, match="supports up to four streams"):
+            config.load_config(_write_config(tmp_path, raw))
 
     def test_missing_file_raises(self, tmp_path: Path):
         with pytest.raises(RuntimeError, match="config file not found"):
@@ -141,20 +149,21 @@ class TestClipScores:
     def test_empty_returns_size_zero(self):
         assert clip._scores([], [1.0, 0.0]).size == 0
 
-    def test_softmax_sums_to_one(self):
+    def test_returns_absolute_cosine_similarity(self):
         scores = clip._scores([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]], [1.0, 0.0])
-        assert scores.sum() == pytest.approx(1.0)
-        assert np.all(scores >= 0.0)
-        assert np.all(np.isfinite(scores))
+        assert scores.tolist() == pytest.approx([1.0, 0.0, 2 ** -0.5])
 
     def test_argmax_picks_aligned_feature(self):
         scores = clip._scores([[1.0, 0.0], [0.0, 1.0]], [1.0, 0.0])
         assert int(np.argmax(scores)) == 0
 
-    def test_zero_norm_query_is_uniform(self):
+    def test_zero_norm_query_returns_zero_scores(self):
         scores = clip._scores([[1.0, 0.0], [0.0, 1.0]], [0.0, 0.0])
-        assert scores.tolist() == pytest.approx([0.5, 0.5])
-        assert scores.sum() == pytest.approx(1.0)
+        assert scores.tolist() == pytest.approx([0.0, 0.0])
+
+    def test_single_unrelated_candidate_stays_below_threshold(self):
+        scores = clip._scores([[0.0, 1.0]], [1.0, 0.0])
+        assert scores.tolist() == pytest.approx([0.0])
 
 
 class TestFastsamGeometry:
@@ -223,7 +232,9 @@ class TestObjectCrop:
 
         assert isinstance(crop, fastsam.Crop)
         assert crop.window.shape == (192, 192, 3)
-        assert crop.submask.shape == (40, 40)
+        assert crop.submask.shape == (192, 192)
+        ys, xs = np.nonzero(crop.submask)
+        assert (xs.min(), ys.min(), xs.max(), ys.max()) == (16, 16, 175, 175)
 
 
 class TestSegmentsJson:
@@ -249,3 +260,25 @@ class TestSegmentsJson:
     def test_float_polygon_is_int_cast(self):
         payload = json.loads(main._segments_json((0.5, [(10.9, 20.1)]), "x"))
         assert payload["segments"][0]["mask"] == [[10, 20]]
+
+
+def test_process_frame_preserves_sample_timestamp(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(main, "_frame_rgb", lambda *_: np.zeros((2, 2, 3), np.uint8))
+    monkeypatch.setattr(main, "_detect", lambda *_: None)
+    monkeypatch.setattr(
+        main,
+        "_send_metadata",
+        lambda sender, payload, frame_id, timestamp_ms: sent.update(
+            frame_id=frame_id, timestamp_ms=timestamp_ms
+        ),
+    )
+    cfg = SimpleNamespace(text="dog")
+    stream = SimpleNamespace(width=2, height=2, video_run=None, geom=None, sender=object())
+    sample = SimpleNamespace(
+        tensors=[object()], pts_ns=1_234_567_890, frame_id=42
+    )
+
+    main._process_frame(cfg, stream, sample, object(), object(), object())
+
+    assert sent == {"frame_id": "42", "timestamp_ms": 1234}

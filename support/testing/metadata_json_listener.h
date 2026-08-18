@@ -14,6 +14,8 @@ struct MetadataJsonListenerOptions {
   int timeout_ms = 20000;
   std::string metadata_type = "object-detection";
   std::string data_array_key = "objects";
+  // A port qualifies only after its data array contains at least this many items.
+  int minimum_items = 0;
   // When false, any valid JSON message on any configured port is enough.
   // When true, each configured port must receive at least one valid message.
   bool require_all_ports = false;

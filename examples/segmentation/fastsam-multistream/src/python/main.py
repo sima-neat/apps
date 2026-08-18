@@ -203,7 +203,8 @@ def _process_frame(cfg, stream, sample, fastsam_model, image_encoder, text_query
     if stream.video_run is not None:
         _push_video(stream.video_run, rgb, sample)
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
-    _send_metadata(stream.sender, _segments_json(match, cfg.text), frame_id, timestamp_ms=-1)
+    timestamp_ms = sample.pts_ns // 1_000_000 if sample.pts_ns >= 0 else -1
+    _send_metadata(stream.sender, _segments_json(match, cfg.text), frame_id, timestamp_ms)
 
 
 def main():

@@ -20,7 +20,8 @@ inline void verify_prompt_sidecar(const std::string& features_path, const std::s
       in.good(),
       "text features prompt sidecar not found: " + sidecar +
           "\n  Cannot confirm the features match prompt.text. Regenerate them for the current prompt:"
-          "\n    python3 src/tools/precompute_text_features.py");
+          "\n    python3 examples/segmentation/fastsam-multistream/src/python/"
+          "precompute_text_features.py");
   std::string saved((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   // sidecar is written verbatim; drop a trailing newline before comparing.
   while (!saved.empty() && (saved.back() == '\n' || saved.back() == '\r')) {
@@ -32,7 +33,8 @@ inline void verify_prompt_sidecar(const std::string& features_path, const std::s
       "\n  config prompt.text : \"" + prompt + "\""
       "\n  features built for : \"" + saved + "\""
       "\n  Regenerate the features for the current prompt:"
-      "\n    examples/segmentation/fastsam-multistream/src/tools/precompute_text_features.py");
+      "\n    python3 examples/segmentation/fastsam-multistream/src/python/"
+      "precompute_text_features.py");
 }
 
 // Read a 2-D [rows,cols] float32 matrix from a .npy file (C-order, '<f4'), one row per vector.

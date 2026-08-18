@@ -44,10 +44,7 @@ def _scores(image_features, text_query):
     inorms = np.linalg.norm(images, axis=1, keepdims=True)
     unit = np.divide(images, inorms, out=np.zeros_like(images), where=inorms > 0.0)
 
-    logits = 100.0 * (unit @ q)
-    probs = np.exp(logits - logits.max())
-    total = probs.sum()
-    return probs / total if total > 0.0 else probs
+    return unit @ q
 
 
 class ImageEncoder:

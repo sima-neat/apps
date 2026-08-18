@@ -25,8 +25,8 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const std::vector<std::string> rtsp_urls = rtsp_h264_urls_from_env();
-  if (rtsp_urls.size() < 2) {
-    return skip_or_fail("need at least two RTSP URLs for fastsam-multistream e2e");
+  if (rtsp_urls.size() < 4) {
+    return skip_or_fail("need four RTSP URLs for fastsam-multistream e2e");
   }
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
@@ -65,26 +65,28 @@ int main(int argc, char** argv) {
   const int video_port_base = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port_base =
       env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
-  write_e2e_config("fastsam-multistream", config_path,
-                   {{"model.path", model_path},
-                    {"clip.image_encoder_path", clip_image.string()},
-                    {"clip.text_encoder_path", clip_text.string()},
-                    {"clip.text_host_consts", clip_consts.string()},
-                    {"clip.text_features_path", text_features.string()},
-                    {"runtime.frames", "90"},
-                    {"output.insight.host", kE2eInsightHost},
-                    {"output.insight.video_port_base", std::to_string(video_port_base)},
-                    {"output.insight.metadata_port_base", std::to_string(metadata_port_base)}},
-                   {{"source.rtsp_urls", {rtsp_urls[0], rtsp_urls[1]}}});
+  write_e2e_config(
+      "fastsam-multistream", config_path,
+      {{"model.path", model_path},
+       {"clip.image_encoder_path", clip_image.string()},
+       {"clip.text_encoder_path", clip_text.string()},
+       {"clip.text_host_consts", clip_consts.string()},
+       {"clip.text_features_path", text_features.string()},
+       {"runtime.frames", "90"},
+       {"output.insight.host", kE2eInsightHost},
+       {"output.insight.video_port_base", std::to_string(video_port_base)},
+       {"output.insight.metadata_port_base", std::to_string(metadata_port_base)}},
+      {{"source.rtsp_urls", {rtsp_urls[0], rtsp_urls[1], rtsp_urls[2], rtsp_urls[3]}}});
 
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = kE2eInsightHost;
   metadata_options.base_port = metadata_port_base;
-  metadata_options.num_ports = 2;
+  metadata_options.num_ports = 4;
   metadata_options.timeout_ms = 5000;
   metadata_options.metadata_type = "segmentation";
   metadata_options.data_array_key = "segments";
+  metadata_options.minimum_items = 1;
   metadata_options.require_all_ports = true;
   MetadataJsonListener metadata_listener(metadata_options);
   if (!metadata_listener.ok()) {
@@ -108,8 +110,7 @@ int main(int argc, char** argv) {
                 << metadata.error << "\n";
       rc = 1;
     } else {
-      std::cout << "[OK] fastsam multistream segmentation metadata received on "
-                << metadata.ports_with_valid_json.size() << " streams\n";
+      std::cout << "[OK] non-empty fastsam segmentation received on all 4 streams\n";
     }
   }
 

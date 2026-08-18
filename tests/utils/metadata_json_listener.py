@@ -37,15 +37,19 @@ class MetadataJsonListener:
         metadata_type: str = "object-detection",
         data_array_key: str = "objects",
         require_all_ports: bool = False,
+        minimum_items: int = 0,
     ) -> None:
         if num_ports <= 0:
             raise ValueError("num_ports must be > 0")
         if base_port <= 0:
             raise ValueError("base_port must be > 0")
+        if minimum_items < 0:
+            raise ValueError("minimum_items must be >= 0")
 
         self._metadata_type = metadata_type
         self._data_array_key = data_array_key
         self._require_all_ports = require_all_ports
+        self._minimum_items = minimum_items
         self._sockets: dict[socket.socket, int] = {}
         try:
             for offset in range(num_ports):
@@ -87,7 +91,8 @@ class MetadataJsonListener:
                     last_error = error
                     continue
                 messages.append(message)
-                ports_with_valid_json.add(port)
+                if message.object_count >= self._minimum_items:
+                    ports_with_valid_json.add(port)
                 if self._success_reached(ports_with_valid_json):
                     return MetadataJsonResult(True, ports_with_valid_json, messages)
 

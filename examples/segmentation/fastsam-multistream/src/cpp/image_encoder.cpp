@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -43,13 +42,13 @@ void crop_into(cv::Mat& dst, const cv::Mat& window_rgb, const cv::Mat& submask,
   dst.setTo(cv::Scalar(bg, bg, bg), keep_full(roi) == 0);
 }
 
-// Softmax over 100 * cosine(image, text[0]) -- the single-query CLIP retrieval score.
+// Absolute cosine similarity with the single text query.
 std::vector<double> retrieve_scores(const std::vector<std::vector<float>>& image_features,
                                     const std::vector<std::vector<float>>& text_features) {
   const std::size_t n = image_features.size();
-  std::vector<double> probs(n, 0.0);
+  std::vector<double> scores(n, 0.0);
   if (n == 0 || text_features.empty()) {
-    return probs;
+    return scores;
   }
 
   const auto& query = text_features.front();
@@ -59,11 +58,9 @@ std::vector<double> retrieve_scores(const std::vector<std::vector<float>>& image
   }
   qnorm = std::sqrt(qnorm);
   if (qnorm == 0.0) {
-    return probs;
+    return scores;
   }
 
-  std::vector<double> logits(n, 0.0);
-  double max_logit = -std::numeric_limits<double>::infinity();
   for (std::size_t i = 0; i < n; ++i) {
     const auto& im = image_features[i];
     const std::size_t dim = std::min(im.size(), query.size());
@@ -74,24 +71,12 @@ std::vector<double> retrieve_scores(const std::vector<std::vector<float>>& image
       inorm += static_cast<double>(im[k]) * im[k];
     }
     inorm = std::sqrt(inorm);
-    logits[i] = inorm > 0.0 ? 100.0 * dot / (inorm * qnorm) : 0.0;
-    max_logit = std::max(max_logit, logits[i]);
+    scores[i] = inorm > 0.0 ? dot / (inorm * qnorm) : 0.0;
   }
-
-  double sum = 0.0;
-  for (std::size_t i = 0; i < n; ++i) {
-    probs[i] = std::exp(logits[i] - max_logit);
-    sum += probs[i];
-  }
-  if (sum > 0.0) {
-    for (std::size_t i = 0; i < n; ++i) {
-      probs[i] /= sum;
-    }
-  }
-  return probs;
+  return scores;
 }
 
-}  // namespace
+} // namespace
 
 ImageEncoder::ImageEncoder(const std::string& model_path, const neat::RunOptions& run_opt)
     : stack_(static_cast<std::size_t>(kClipBatch) * kClipImagePx * kClipImagePx * 3, 0.0f),
@@ -182,4 +167,4 @@ ImageEncoder::best_match(const std::vector<std::pair<int, Fastsam::Crop>>& candi
   return {};
 }
 
-}  // namespace app::clip
+} // namespace app::clip

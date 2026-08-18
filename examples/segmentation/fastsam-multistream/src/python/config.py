@@ -19,7 +19,7 @@ class Config:
     nms_iou: float = 0.9
     max_detections: int = 300
     max_crops: int = 0
-    min_score: float = 0.65
+    min_score: float = 0.2
     max_box_frac: float = 0.8
     latency_ms: int = 200
     tcp: bool = True
@@ -59,7 +59,7 @@ def load_config(path):
         nms_iou=float(_get(raw, "decode.nms_iou", 0.9)),
         max_detections=int(_get(raw, "decode.max_detections", 300)),
         max_crops=int(_get(raw, "clip.max_crops", 0)),
-        min_score=float(_get(raw, "clip.min_score", 0.65)),
+        min_score=float(_get(raw, "clip.min_score", 0.2)),
         max_box_frac=float(_get(raw, "clip.max_box_frac", 0.8)),
         latency_ms=int(_get(raw, "source.latency_ms", 200)),
         tcp=bool(_get(raw, "source.tcp", True)),
@@ -83,4 +83,6 @@ def load_config(path):
     for ok, message in required:
         if not ok:
             raise RuntimeError(message)
+    if len(cfg.rtsp_urls) > 4:
+        raise RuntimeError("this example supports up to four streams")
     return cfg
