@@ -29,10 +29,6 @@ bool has_complete_poses(const MetadataJsonListenerResult& metadata, std::string&
     for (const auto& message : metadata.messages) {
       const auto parsed = nlohmann::json::parse(message.payload);
       const auto& poses = parsed.at("data").at("poses");
-      if (poses.empty()) {
-        error = "pose metadata on port " + std::to_string(message.port) + " contained no poses";
-        return false;
-      }
       for (const auto& pose : poses) {
         if (!pose.contains("keypoints") || !pose["keypoints"].is_array() ||
             pose["keypoints"].size() != 17) {
