@@ -1,0 +1,31 @@
+camera:
+  # Leave empty to select libcamera's default camera. Use `cam -l` to list names.
+  name: ""
+  # Requested frame width in pixels; the camera and ISP must support it.
+  width: 1920
+  # Requested frame height in pixels; the camera and ISP must support it.
+  height: 1080
+  # Numerator of the requested camera frame rate.
+  fps_num: 30
+  # Denominator of the requested camera frame rate.
+  fps_den: 1
+  # Camera pixel format. This example supports NV12 only.
+  format: NV12
+  # Number of application-owned DMA-BUFs requested for camera capture.
+  capture_buffers: 32
+  # Fail instead of copying when strict DMA-BUF negotiation is unavailable.
+  strict_zero_copy: true
+  # Depth used for the camera's live queue and the terminal output queue.
+  queue_depth: 2
+
+capture:
+  # Total wall-clock capture duration in seconds.
+  duration_seconds: 30
+  # Elapsed times, in seconds, at which to retain NV12 snapshots.
+  sample_times_seconds: [3, 15, 27]
+  # Maximum wait for each frame; the deadline may shorten this timeout.
+  pull_timeout_ms: 2000
+
+output:
+  # Directory for sampled NV12 frames and summary.json.
+  directory: sandbox/mipi-camera-capture

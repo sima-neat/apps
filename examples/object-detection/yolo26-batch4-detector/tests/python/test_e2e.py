@@ -93,7 +93,7 @@ class TestE2E:
                 metadata_port_base,
                 num_ports=REQUIRED_STREAMS,
                 require_all_ports=True,
-                min_data_items_per_port=1,
+                min_object_count=1,
             ) as metadata_listener,
             ThreadPoolExecutor(max_workers=1) as listener_pool,
         ):

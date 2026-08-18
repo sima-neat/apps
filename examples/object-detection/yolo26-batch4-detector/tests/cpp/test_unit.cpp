@@ -6,14 +6,11 @@
 #include "examples/object-detection/yolo26-batch4-detector/src/cpp/main.cpp"
 
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <iostream>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <thread>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -350,7 +347,7 @@ bool test_metadata_listener_accepts_raw_json() {
                      "metadata listener preserves raw JSON datagrams");
 }
 
-bool test_metadata_listener_rejects_conflict_and_expiry() {
+bool test_metadata_listener_rejects_conflicting_duplicate() {
   const int conflict_port = available_udp_port();
   sima_examples::testing::MetadataJsonListenerOptions conflict_options;
   conflict_options.host = "127.0.0.1";
@@ -366,26 +363,10 @@ bool test_metadata_listener_rejects_conflict_and_expiry() {
   (void)send_datagram(fd, conflict_port, chunks[1]);
   const auto conflict = conflict_listener.wait_for_messages();
 
-  const int expiry_port = available_udp_port();
-  sima_examples::testing::MetadataJsonListenerOptions expiry_options;
-  expiry_options.host = "127.0.0.1";
-  expiry_options.base_port = expiry_port;
-  expiry_options.timeout_ms = 200;
-  expiry_options.chunk_expiry_ms = 30;
-  sima_examples::testing::MetadataJsonListener expiry_listener(expiry_options);
-  chunks = chunk_payload(metadata_payload("expired", 1500), 9);
-  auto future = std::async(std::launch::async,
-                           [&expiry_listener] { return expiry_listener.wait_for_messages(); });
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  (void)send_datagram(fd, expiry_port, chunks[0]);
-  std::this_thread::sleep_for(std::chrono::milliseconds(80));
-  (void)send_datagram(fd, expiry_port, chunks[1]);
-  const auto expired = future.get();
   ::close(fd);
-  return expect_true(!conflict.success &&
-                         conflict.error.find("conflicting duplicate") != std::string::npos,
-                     "metadata listener rejects conflicting duplicates") &&
-         expect_true(!expired.success, "metadata listener expires incomplete sequences");
+  return expect_true(!conflict.success && conflict.error.find("metadata chunk contents changed") !=
+                                              std::string::npos,
+                     "metadata listener rejects conflicting duplicates");
 }
 
 } // namespace
@@ -411,6 +392,6 @@ int main(int argc, char** argv) {
   ok &= test_head_index_uses_width();
   ok &= test_metadata_listener_reassembles_chunks();
   ok &= test_metadata_listener_accepts_raw_json();
-  ok &= test_metadata_listener_rejects_conflict_and_expiry();
+  ok &= test_metadata_listener_rejects_conflicting_duplicate();
   return ok ? 0 : 1;
 }

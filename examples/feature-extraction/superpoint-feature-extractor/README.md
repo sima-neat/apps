@@ -14,9 +14,11 @@
 
 ## Concept
 
-`superpoint-feature-extractor` runs SuperPoint on a 640x480 video and streams the feature-point
-overlay to Insight. The example demonstrates grayscale normalization, MLA inference, A65
-SuperPoint BoxDecode, and the typed `FEATURE_POINTS_V1` result.
+`superpoint-feature-extractor` runs SuperPoint on a video and streams the feature-point overlay
+to Insight. Like the YOLO examples, it feeds BGR image tensors into Core preprocessing. Preproc
+owns resize, BGR-to-grayscale conversion, normalization, and the original/model geometry metadata
+consumed by A65 SuperPoint BoxDecode. BoxDecode applies the inverse Preproc affine to feature
+coordinates, so the app does not duplicate W/H, resize-mode, or coordinate-remap logic.
 
 The application selects the A65V1 numerical profile explicitly. Tensor roles, output dtypes, and
 storage layouts come from the MPK contract rather than being inferred from tensor order or values.
@@ -49,21 +51,21 @@ Run the remaining commands from `prebuilt-apps/`.
 ## Prepare the Model
 
 The [Neat Model Registry](https://github.com/sima-neat/models/issues/24) publishes SuperPoint
-through the Vulcan artifact registry. Install the production package and select the INT8 variant
-that keeps tessellation inside the MLA:
+through the staging Vulcan artifact registry. Install the current model-matrix package and select
+the INT8 variant that keeps tessellation inside the MLA:
 
 ```bash
 mkdir -p models/superpoint
-sima-cli neat install models/superpoint@main:latest --install-dir models/superpoint
+sima-cli neat install --stg \
+  models/superpoint@codex/superpoint-model-matrix:latest \
+  --install-dir models/superpoint
 
-model="$(find models/superpoint/modalix_int8_tessellation_mla -type f -name '*_mpk.tar.gz' -print -quit)"
-test -n "$model"
-cp "$model" models/superpoint_mpk.tar.gz
+cp models/superpoint/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz \
+  models/superpoint_mpk.tar.gz
 ```
 
-Use `--stg models/superpoint@develop:latest` instead while validating a staging publication. Do not
-download the model from an ad hoc attachment or copy; the registry package supplies the immutable
-artifact and verifies its published checksum.
+Do not download the model from an ad hoc attachment or copy; the registry package supplies the
+immutable artifact and verifies its published checksum.
 
 The default CI pipeline test uses `modalix_int8_tessellation_mla`, while the accuracy matrix covers
 all four INT8/BF16 and MLA/EV74 tessellation combinations. The INT8 MLA archive was calibrated with
@@ -108,8 +110,11 @@ runtime:
   timeout_ms: 20000
 ```
 
-`runtime.frames: 0` processes the complete video. The application rejects other frame sizes rather
-than silently resizing them, preserving the model's coordinate system.
+`runtime.frames: 0` processes the complete video. Any stable input resolution supported by the
+hardware may be used. Core Preproc stretches each frame to the model's 640x480 input and publishes
+the resize geometry; BoxDecode returns source-space feature coordinates for the Insight overlay. A
+mid-stream resolution change is rejected because the model and video-sender graphs are built once
+from the first frame.
 
 Set `output.insight.host` to the host running Insight. The application sends the annotated stream
 as H.264 over RTP/UDP using the configured base port and channel.
@@ -144,7 +149,7 @@ average feature count, descriptor dimension, and selected video endpoint.
 
 - Confirm `model.path` points to the qualified SuperPoint package.
 - A missing or incompatible typed SuperPoint contract fails during model construction.
-- Confirm the input is a 640x480 BGR video.
+- Confirm the input is a stable-resolution BGR video supported by the target hardware.
 - Confirm Insight is reachable at the configured host and UDP video port.
 - Set `runtime.frames: 30` for a short smoke run.
 

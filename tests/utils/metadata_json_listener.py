@@ -5,23 +5,10 @@ from __future__ import annotations
 import json
 import select
 import socket
+import struct
 import time
 from dataclasses import dataclass, field
 from typing import Self
-
-_MAX_DATAGRAM_PAYLOAD = 1200
-_CHUNK_HEADER_SIZE = 12
-_MAX_CHUNK_PAYLOAD = _MAX_DATAGRAM_PAYLOAD - _CHUNK_HEADER_SIZE
-_MAX_LOGICAL_PAYLOAD = 65507
-_MAX_CHUNK_COUNT = 56
-
-
-@dataclass
-class _PartialMessage:
-    chunk_count: int
-    chunks: dict[int, bytes]
-    size: int
-    updated_at: float
 
 
 @dataclass(frozen=True)
@@ -41,6 +28,92 @@ class MetadataJsonResult:
     error: str = ""
 
 
+_CHUNK_MAGIC = 0x4E
+_CHUNK_VERSION = 0x01
+_CHUNK_HEADER_SIZE = 12
+_MAX_DATAGRAM_SIZE = 1200
+_MAX_LOGICAL_MESSAGE_SIZE = 65507
+_MAX_CHUNK_COUNT = 56
+_REASSEMBLY_MAX_AGE_S = 0.25
+_REASSEMBLY_CAPACITY = 4
+
+
+@dataclass
+class _Assembly:
+    chunks: list[bytes | None]
+    started: float
+    received: int = 0
+    size: int = 0
+
+
+class _MetadataReassembler:
+    def __init__(self) -> None:
+        self._assemblies: dict[int, _Assembly] = {}
+
+    def accept(self, datagram: bytes) -> tuple[bytes | None, str]:
+        now = time.monotonic()
+        self._drop_expired(now)
+        if not datagram or datagram[0] != _CHUNK_MAGIC:
+            return datagram, ""
+        if (
+            len(datagram) < _CHUNK_HEADER_SIZE
+            or len(datagram) > _MAX_DATAGRAM_SIZE
+            or datagram[1] != _CHUNK_VERSION
+        ):
+            return None, "invalid metadata chunk header"
+
+        message_id, index, count = struct.unpack(">QBB", datagram[2:_CHUNK_HEADER_SIZE])
+        if (
+            count == 0
+            or count > _MAX_CHUNK_COUNT
+            or index >= count
+            or len(datagram) == _CHUNK_HEADER_SIZE
+        ):
+            return None, "invalid metadata chunk fields"
+
+        assembly = self._assemblies.get(message_id)
+        if assembly is None:
+            if len(self._assemblies) == _REASSEMBLY_CAPACITY:
+                oldest = min(
+                    self._assemblies, key=lambda key: self._assemblies[key].started
+                )
+                del self._assemblies[oldest]
+            assembly = _Assembly([None] * count, now)
+            self._assemblies[message_id] = assembly
+        if len(assembly.chunks) != count:
+            del self._assemblies[message_id]
+            return None, "metadata chunk count changed"
+
+        fragment = datagram[_CHUNK_HEADER_SIZE:]
+        existing = assembly.chunks[index]
+        if existing is None:
+            if assembly.size + len(fragment) > _MAX_LOGICAL_MESSAGE_SIZE:
+                del self._assemblies[message_id]
+                return None, "metadata message exceeds maximum size"
+            assembly.chunks[index] = fragment
+            assembly.received += 1
+            assembly.size += len(fragment)
+        elif existing != fragment:
+            del self._assemblies[message_id]
+            return None, "metadata chunk contents changed"
+
+        if assembly.received != len(assembly.chunks):
+            return None, ""
+
+        payload = b"".join(chunk for chunk in assembly.chunks if chunk is not None)
+        del self._assemblies[message_id]
+        return payload, ""
+
+    def _drop_expired(self, now: float) -> None:
+        expired = [
+            message_id
+            for message_id, assembly in self._assemblies.items()
+            if now - assembly.started > _REASSEMBLY_MAX_AGE_S
+        ]
+        for message_id in expired:
+            del self._assemblies[message_id]
+
+
 class MetadataJsonListener:
     """Receive metadata JSON emitted by e2e examples."""
 
@@ -52,29 +125,21 @@ class MetadataJsonListener:
         metadata_type: str = "object-detection",
         data_array_key: str = "objects",
         require_all_ports: bool = False,
-        min_data_items_per_port: int = 0,
-        chunk_expiry_s: float = 1.0,
-        max_inflight_messages: int = 128,
+        min_object_count: int = 0,
     ) -> None:
         if num_ports <= 0:
             raise ValueError("num_ports must be > 0")
         if base_port <= 0:
             raise ValueError("base_port must be > 0")
-        if (
-            chunk_expiry_s <= 0
-            or max_inflight_messages <= 0
-            or min_data_items_per_port < 0
-        ):
-            raise ValueError("chunk reassembly limits must be > 0")
+        if min_object_count < 0:
+            raise ValueError("min_object_count must be >= 0")
 
         self._metadata_type = metadata_type
         self._data_array_key = data_array_key
         self._require_all_ports = require_all_ports
-        self._min_data_items_per_port = min_data_items_per_port
-        self._chunk_expiry_s = chunk_expiry_s
-        self._max_inflight_messages = max_inflight_messages
-        self._partial: dict[tuple[int, tuple, int], _PartialMessage] = {}
+        self._min_object_count = min_object_count
         self._sockets: dict[socket.socket, int] = {}
+        self._reassemblers: dict[socket.socket, _MetadataReassembler] = {}
         try:
             for offset in range(num_ports):
                 port = base_port + offset
@@ -83,6 +148,7 @@ class MetadataJsonListener:
                 sock.bind((host, port))
                 sock.setblocking(False)
                 self._sockets[sock] = port
+                self._reassemblers[sock] = _MetadataReassembler()
         except Exception:
             self.close()
             raise
@@ -91,6 +157,7 @@ class MetadataJsonListener:
         for sock in self._sockets:
             sock.close()
         self._sockets.clear()
+        self._reassemblers.clear()
 
     def __enter__(self) -> Self:
         return self
@@ -110,9 +177,9 @@ class MetadataJsonListener:
                 list(self._sockets.keys()), [], [], min(0.2, remaining)
             )
             for sock in readable:
-                payload, sender = sock.recvfrom(65536)
+                datagram, _ = sock.recvfrom(65536)
                 port = self._sockets[sock]
-                payload, error = self._accept_datagram(port, sender, payload)
+                payload, error = self._reassemblers[sock].accept(datagram)
                 if payload is None:
                     if error:
                         last_error = error
@@ -122,8 +189,13 @@ class MetadataJsonListener:
                     last_error = error
                     continue
                 messages.append(message)
-                if message.object_count >= self._min_data_items_per_port:
-                    ports_with_valid_json.add(port)
+                if message.object_count < self._min_object_count:
+                    last_error = (
+                        f"data.{self._data_array_key} contains {message.object_count} objects; "
+                        f"expected at least {self._min_object_count}"
+                    )
+                    continue
+                ports_with_valid_json.add(port)
                 if self._success_reached(ports_with_valid_json):
                     return MetadataJsonResult(True, ports_with_valid_json, messages)
 
@@ -131,71 +203,6 @@ class MetadataJsonListener:
         if missing:
             last_error = f"missing metadata on ports {missing}; last_error={last_error}"
         return MetadataJsonResult(False, ports_with_valid_json, messages, last_error)
-
-    def _expire_partial(self, now: float) -> None:
-        expired = [
-            key
-            for key, state in self._partial.items()
-            if now - state.updated_at >= self._chunk_expiry_s
-        ]
-        for key in expired:
-            del self._partial[key]
-
-    def _accept_datagram(
-        self, port: int, sender: tuple, datagram: bytes
-    ) -> tuple[bytes | None, str]:
-        now = time.monotonic()
-        self._expire_partial(now)
-        if not datagram or datagram[0] != 0x4E:
-            return datagram, ""
-        if len(datagram) < _CHUNK_HEADER_SIZE:
-            return None, "invalid chunk header: datagram is too short"
-        if datagram[1] != 0x01:
-            return None, "invalid chunk header: unsupported version"
-
-        message_id = int.from_bytes(datagram[2:10], byteorder="big")
-        chunk_index = datagram[10]
-        chunk_count = datagram[11]
-        chunk = datagram[_CHUNK_HEADER_SIZE:]
-        if not 2 <= chunk_count <= _MAX_CHUNK_COUNT or chunk_index >= chunk_count:
-            return None, "invalid chunk header: index or count is out of range"
-        if chunk_index + 1 < chunk_count and len(chunk) != _MAX_CHUNK_PAYLOAD:
-            return None, "invalid chunk: non-final payload has the wrong size"
-        if chunk_index + 1 == chunk_count and not 0 < len(chunk) <= _MAX_CHUNK_PAYLOAD:
-            return None, "invalid chunk: final payload has the wrong size"
-
-        key = (port, sender, message_id)
-        state = self._partial.get(key)
-        if state is None:
-            if len(self._partial) >= self._max_inflight_messages:
-                return None, "chunk reassembly state limit reached"
-            state = _PartialMessage(chunk_count, {}, 0, now)
-            self._partial[key] = state
-        elif state.chunk_count != chunk_count:
-            del self._partial[key]
-            return None, "invalid chunk: inconsistent chunk count"
-
-        previous = state.chunks.get(chunk_index)
-        if previous is not None:
-            if previous != chunk:
-                del self._partial[key]
-                return None, "invalid chunk: conflicting duplicate"
-            state.updated_at = now
-            return None, ""
-        if state.size + len(chunk) > _MAX_LOGICAL_PAYLOAD:
-            del self._partial[key]
-            return None, "chunked message exceeds the logical payload limit"
-        state.chunks[chunk_index] = chunk
-        state.size += len(chunk)
-        state.updated_at = now
-        if len(state.chunks) != state.chunk_count:
-            return None, ""
-
-        payload = b"".join(state.chunks[index] for index in range(state.chunk_count))
-        del self._partial[key]
-        if not _MAX_DATAGRAM_PAYLOAD < len(payload) <= _MAX_LOGICAL_PAYLOAD:
-            return None, "chunked message has an invalid logical payload size"
-        return payload, ""
 
     def _success_reached(self, ports_with_valid_json: set[int]) -> bool:
         if self._require_all_ports:

@@ -2,6 +2,7 @@ foreach(example IN ITEMS
     high-density-multi-stream-object-detector
     detr-object-detector
     single-stream-object-detector
+    ssd-mobilenet-object-detector
     yolo26-object-detector
     yolo26-batch4-detector
 )

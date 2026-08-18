@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
   metadata_options.num_ports = static_cast<int>(kRequiredStreams);
   metadata_options.timeout_ms = std::min(timeout_ms, 30000);
   metadata_options.require_all_ports = true;
-  metadata_options.min_data_items_per_port = 1;
+  metadata_options.min_object_count = 1;
   MetadataJsonListener metadata_listener(metadata_options);
   if (!metadata_listener.ok()) {
     std::cerr << "[FAIL] metadata listener failed: " << metadata_listener.error() << "\n";

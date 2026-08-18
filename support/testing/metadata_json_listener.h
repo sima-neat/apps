@@ -17,9 +17,8 @@ struct MetadataJsonListenerOptions {
   // When false, any valid JSON message on any configured port is enough.
   // When true, each configured port must receive at least one valid message.
   bool require_all_ports = false;
-  int min_data_items_per_port = 0;
-  int chunk_expiry_ms = 1000;
-  int max_inflight_messages = 128;
+  // Ignore otherwise valid messages until the data array contains at least this many objects.
+  int min_object_count = 0;
 };
 
 struct MetadataJsonMessage {

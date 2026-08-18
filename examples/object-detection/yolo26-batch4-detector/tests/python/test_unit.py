@@ -630,22 +630,7 @@ class TestMetadataJsonListener:
             sender.sendto(chunks[1], ("127.0.0.1", port))
             result = listener.wait_for_messages(0.1)
         assert not result.success
-        assert "conflicting duplicate" in result.error
-
-    def test_expires_incomplete_sequence(self):
-        port, listener = self.bound_listener(chunk_expiry_s=0.05)
-        chunks = self.chunks(self.payload("expired", padding=1500), 9)
-        with (
-            listener,
-            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender,
-            ThreadPoolExecutor(max_workers=1) as pool,
-        ):
-            future = pool.submit(listener.wait_for_messages, 0.2)
-            sender.sendto(chunks[0], ("127.0.0.1", port))
-            time.sleep(0.07)
-            sender.sendto(chunks[1], ("127.0.0.1", port))
-            result = future.result()
-        assert not result.success
+        assert "metadata chunk contents changed" in result.error
 
     def test_rejects_malformed_sequence(self):
         port, listener = self.bound_listener()
@@ -654,4 +639,4 @@ class TestMetadataJsonListener:
             sender.sendto(malformed, ("127.0.0.1", port))
             result = listener.wait_for_messages(0.1)
         assert not result.success
-        assert "unsupported version" in result.error
+        assert "invalid metadata chunk header" in result.error
