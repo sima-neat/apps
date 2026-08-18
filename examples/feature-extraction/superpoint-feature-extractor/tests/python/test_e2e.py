@@ -11,7 +11,6 @@ import pytest
 
 from tests.utils.test_scope import enabled_models, load_scope
 
-
 EXAMPLE_DIR = Path(__file__).resolve().parents[2]
 APPS_ROOT = EXAMPLE_DIR.parents[2]
 EXAMPLE_KEY = "feature-extraction/superpoint-feature-extractor"
@@ -133,6 +132,7 @@ def test_insight_pipeline(
         text=True,
         timeout=test_timeout_ms / 1000,
         cwd=apps_root,
+        check=False,
     )
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
@@ -146,9 +146,55 @@ def test_insight_pipeline(
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize(
-    "model_file,min_descriptor_cosine", scoped_accuracy_models()
-)
+def test_non_model_resolution_runs_through_core_preproc(
+    apps_root, e2e_model_path, test_timeout_ms
+):
+    import cv2
+    import numpy as np
+    import pyneat
+
+    input_video = apps_root / "assets" / "datasets" / "tum-rgbd" / "freiburg1-desk.mp4"
+    video = cv2.VideoCapture(str(input_video))
+    ok, source = video.read()
+    video.release()
+    assert ok
+
+    frame = cv2.resize(source, (960, 540), interpolation=cv2.INTER_LINEAR)
+    example = load_example()
+    options = example.model_options(pyneat, frame.shape[1], frame.shape[0])
+    assert options.boxdecode_original_width == 0
+    assert options.boxdecode_original_height == 0
+    assert options.boxdecode_resize_mode is None
+    model = pyneat.Model(
+        str(e2e_model_path),
+        options,
+    )
+    model_input = example.input_tensor(frame, np, pyneat)
+    runner = model.build(
+        [model_input],
+        route_options=pyneat.ModelRouteOptions(),
+        run_options=pyneat.RunOptions(),
+    )
+    try:
+        output = runner.run([model_input], timeout_ms=test_timeout_ms)
+        points = example.feature_points(
+            output,
+            frame.shape[1],
+            frame.shape[0],
+            np,
+            pyneat,
+        )
+    finally:
+        runner.close()
+
+    assert points.ndim == 2 and points.shape[1:] == (2,)
+    assert len(points) > 0
+    assert np.all(points[:, 0] >= 0) and np.all(points[:, 0] < frame.shape[1])
+    assert np.all(points[:, 1] >= 0) and np.all(points[:, 1] < frame.shape[0])
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("model_file,min_descriptor_cosine", scoped_accuracy_models())
 def test_fp32_a65_accuracy(
     models_dir, skip_unless_e2e_ready, model_file, min_descriptor_cosine
 ):
@@ -169,11 +215,11 @@ def test_fp32_a65_accuracy(
         sample_descriptors = reference["sample_descriptors"]
 
         first_frame = cv2.cvtColor(images[0], cv2.COLOR_GRAY2BGR)
-        model = pyneat.Model(str(model_path), example.model_options(pyneat))
-        input_specs = model.input_specs()
-        assert len(input_specs) == 1
-        input_dtype = example.select_input_dtype(input_specs[0], pyneat)
-        model_input = example.input_tensor(first_frame, input_dtype, cv2, np, pyneat)
+        model = pyneat.Model(
+            str(model_path),
+            example.model_options(pyneat, first_frame.shape[1], first_frame.shape[0]),
+        )
+        model_input = example.input_tensor(first_frame, np, pyneat)
         runner = model.build(
             [model_input],
             route_options=pyneat.ModelRouteOptions(),
@@ -187,7 +233,7 @@ def test_fp32_a65_accuracy(
         try:
             for index, gray in enumerate(images):
                 frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                model_input = example.input_tensor(frame, input_dtype, cv2, np, pyneat)
+                model_input = example.input_tensor(frame, np, pyneat)
                 output = runner.run([model_input], timeout_ms=20000)
                 decoded = pyneat.decode_superpoint(list(output))
                 assert len(decoded) == 1
@@ -230,9 +276,9 @@ def test_fp32_a65_accuracy(
     )
     assert recall >= 0.90, f"{model_file}: keypoint recall {recall:.6f}"
     assert precision >= 0.90, f"{model_file}: keypoint precision {precision:.6f}"
-    assert (
-        descriptor_coverage >= 0.70
-    ), f"{model_file}: descriptor coverage {descriptor_coverage:.6f}"
+    assert descriptor_coverage >= 0.70, (
+        f"{model_file}: descriptor coverage {descriptor_coverage:.6f}"
+    )
     assert descriptor_cosine >= min_descriptor_cosine, (
         f"{model_file}: descriptor cosine {descriptor_cosine:.6f} "
         f"is below {min_descriptor_cosine:.3f}"

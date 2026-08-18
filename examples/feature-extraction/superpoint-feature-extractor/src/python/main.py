@@ -8,9 +8,6 @@ from pathlib import Path
 
 import yaml
 
-
-WIDTH = 640
-HEIGHT = 480
 DESCRIPTOR_DIM = 256
 MAX_POINTS = 600
 
@@ -56,21 +53,31 @@ def load_config(path: Path) -> argparse.Namespace:
     return config
 
 
-def model_options(pyneat):
+def model_options(pyneat, input_width, input_height):
     options = pyneat.ModelOptions()
-    options.preprocess.enable = pyneat.AutoFlag.Off
+    options.preprocess.kind = pyneat.InputKind.Image
+    options.preprocess.enable = pyneat.AutoFlag.On
+    options.preprocess.input_max_width = input_width
+    options.preprocess.input_max_height = input_height
+    options.preprocess.input_max_depth = 3
+    options.preprocess.resize.enable = pyneat.AutoFlag.On
+    options.preprocess.resize.mode = pyneat.ResizeMode.Stretch
+    options.preprocess.color_convert.enable = pyneat.AutoFlag.On
+    options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    options.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.GRAY8
+    options.preprocess.normalize.enable = pyneat.AutoFlag.On
+    options.preprocess.normalize.mean = (0.0, 0.0, 0.0)
+    options.preprocess.normalize.stddev = (1.0, 1.0, 1.0)
+    options.preprocess.normalize.has_explicit_stats = True
     options.decode_type = pyneat.BoxDecodeType.SuperPoint
     options.superpoint.profile = pyneat.SuperPointProfile.A65V1
     options.superpoint.output_format = pyneat.SuperPointOutputFormat.FeaturePointsV1
     options.superpoint.descriptor_output_dtype = pyneat.TensorDType.Float32
-    options.boxdecode_original_width = WIDTH
-    options.boxdecode_original_height = HEIGHT
-    options.boxdecode_resize_mode = pyneat.ResizeMode.Stretch
     options.processcvu.post_run_target = "A65"
     return options
 
 
-def feature_points(output, np, pyneat):
+def feature_points(output, source_width, source_height, np, pyneat):
     decoded = pyneat.decode_superpoint(list(output))
     if len(decoded) != 1:
         raise RuntimeError("SuperPoint must return one feature set per frame")
@@ -90,56 +97,36 @@ def feature_points(output, np, pyneat):
         or features.descriptors.dtype != pyneat.TensorDType.Float32
     ):
         raise RuntimeError("invalid SuperPoint output contract")
-    if points.size and (
-        not np.all(np.isfinite(points))
-        or np.any(points[:, 0] < 0)
-        or np.any(points[:, 0] >= WIDTH)
-        or np.any(points[:, 1] < 0)
-        or np.any(points[:, 1] >= HEIGHT)
-    ):
-        raise RuntimeError("SuperPoint returned an invalid keypoint coordinate")
-    return points
+    if not points.size:
+        return points
+
+    # The frame edges are exclusive coordinates. Discard isolated decoder outliers
+    # instead of aborting the stream when inverse-affine rounding places a point on
+    # or beyond an edge.
+    drawable = (
+        np.all(np.isfinite(points), axis=1)
+        & (points[:, 0] >= 0)
+        & (points[:, 0] < source_width)
+        & (points[:, 1] >= 0)
+        & (points[:, 1] < source_height)
+    )
+    return points[drawable]
 
 
-def input_tensor(frame, dtype, cv2, np, pyneat):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    values = np.ascontiguousarray(gray[:, :, None], dtype=np.float32)
-    values *= np.float32(1.0 / 255.0)
-    if dtype == pyneat.TensorDType.Float32:
-        return pyneat.Tensor.from_numpy(
-            values,
-            copy=True,
-            layout=pyneat.TensorLayout.HWC,
-            memory=pyneat.TensorMemory.EV74,
-        )
-    if dtype == pyneat.TensorDType.BFloat16:
-        bits = values.view(np.uint32)
-        rounded = ((bits + np.uint32(0x7FFF) + ((bits >> 16) & 1)) >> 16).astype(
-            np.uint16
-        )
-        tensor = pyneat.Tensor.from_numpy(
-            rounded,
-            copy=True,
-            layout=pyneat.TensorLayout.HWC,
-            memory=pyneat.TensorMemory.EV74,
-        )
-        tensor.dtype = pyneat.TensorDType.BFloat16
-        return tensor
-    raise RuntimeError("SuperPoint model input must be Float32 or BFloat16")
-
-
-def select_input_dtype(spec, pyneat):
-    for dtype in spec.dtypes:
-        if dtype in (pyneat.TensorDType.Float32, pyneat.TensorDType.BFloat16):
-            return dtype
-    raise RuntimeError("SuperPoint model input must support Float32 or BFloat16")
+def input_tensor(frame, np, pyneat):
+    return pyneat.Tensor.from_numpy(
+        np.ascontiguousarray(frame, dtype=np.uint8),
+        copy=True,
+        image_format=pyneat.PixelFormat.BGR,
+        memory=pyneat.TensorMemory.EV74,
+    )
 
 
 def draw_points(frame, points, cv2) -> None:
     for x, y in points:
         cv2.circle(
             frame,
-            (int(round(float(x))), int(round(float(y)))),
+            (round(float(x)), round(float(y))),
             2,
             (0, 255, 0),
             -1,
@@ -157,20 +144,20 @@ def draw_points(frame, points, cv2) -> None:
     )
 
 
-def build_video_sender(config, fps, np, pyneat):
-    output_fps = max(1, int(round(fps)))
+def build_video_sender(config, fps, width, height, np, pyneat):
+    output_fps = max(1, round(fps))
     input_options = pyneat.InputOptions()
     input_options.payload_type = pyneat.PayloadType.Image
     input_options.format = pyneat.Format.RGB
-    input_options.width = WIDTH
-    input_options.height = HEIGHT
+    input_options.width = width
+    input_options.height = height
     input_options.depth = 3
     input_options.fps_n = output_fps
     input_options.fps_d = 1
     input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
 
     sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(
-        WIDTH, HEIGHT, output_fps
+        width, height, output_fps
     )
     sender_options.host = config.insight_host
     sender_options.channel = config.channel
@@ -181,7 +168,7 @@ def build_video_sender(config, fps, np, pyneat):
     graph.add(pyneat.nodes.input(input_options))
     graph.add(pyneat.groups.video_sender(sender_options))
     seed = pyneat.Tensor.from_numpy(
-        np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8),
+        np.zeros((height, width, 3), dtype=np.uint8),
         copy=True,
         image_format=pyneat.PixelFormat.RGB,
         memory=pyneat.TensorMemory.EV74,
@@ -201,9 +188,20 @@ def stream_frame(run, frame, cv2, pyneat) -> None:
         raise RuntimeError("Insight video push failed")
 
 
-def validate_frame(frame, np) -> None:
-    if frame.shape != (HEIGHT, WIDTH, 3) or frame.dtype != np.uint8:
-        raise RuntimeError("SuperPoint input must be 640x480 BGR video")
+def validate_frame(frame, np, expected_shape=None) -> None:
+    if (
+        frame is None
+        or frame.ndim != 3
+        or frame.shape[0] <= 0
+        or frame.shape[1] <= 0
+        or frame.shape[2] != 3
+        or frame.dtype != np.uint8
+    ):
+        raise RuntimeError("SuperPoint input must be a non-empty BGR video frame")
+    if expected_shape is not None and frame.shape != expected_shape:
+        raise RuntimeError(
+            "SuperPoint input resolution changed after pipeline construction"
+        )
 
 
 def main() -> int:
@@ -238,26 +236,32 @@ def main() -> int:
     video_run = None
     try:
         validate_frame(frame, np)
-        model = pyneat.Model(str(config.model), model_options(pyneat))
-        input_specs = model.input_specs()
-        if len(input_specs) != 1:
-            raise RuntimeError("SuperPoint model must expose exactly one input")
-        input_dtype = select_input_dtype(input_specs[0], pyneat)
-        model_input = input_tensor(frame, input_dtype, cv2, np, pyneat)
+        input_shape = frame.shape
+        input_height, input_width = input_shape[:2]
+        model = pyneat.Model(
+            str(config.model), model_options(pyneat, input_width, input_height)
+        )
+        model_input = input_tensor(frame, np, pyneat)
         runner = model.build(
             [model_input],
             route_options=pyneat.ModelRouteOptions(),
             run_options=pyneat.RunOptions(),
         )
         _video_graph, video_run, video_port = build_video_sender(
-            config, fps, np, pyneat
+            config, fps, input_width, input_height, np, pyneat
         )
 
         processed = 0
         total_points = 0
         while True:
             output = runner.run([model_input], timeout_ms=config.timeout_ms)
-            points = feature_points(output, np, pyneat)
+            points = feature_points(
+                output,
+                input_width,
+                input_height,
+                np,
+                pyneat,
+            )
             total_points += len(points)
             draw_points(frame, points, cv2)
             stream_frame(video_run, frame, cv2, pyneat)
@@ -268,8 +272,8 @@ def main() -> int:
             ok, frame = video.read()
             if not ok:
                 break
-            validate_frame(frame, np)
-            model_input = input_tensor(frame, input_dtype, cv2, np, pyneat)
+            validate_frame(frame, np, input_shape)
+            model_input = input_tensor(frame, np, pyneat)
 
         average = total_points / processed
         print(
@@ -278,7 +282,7 @@ def main() -> int:
             f"video_sender={config.insight_host}:{video_port}"
         )
         return 0
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         print(f"Error: {error}", file=sys.stderr)
         return 2
     finally:
