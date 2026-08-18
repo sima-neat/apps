@@ -89,10 +89,12 @@ def _require_modern_bash() -> None:
         pytest.skip("download_models.sh requires bash with mapfile support")
 
 
-def _write_registry_scope_query(path: Path, rows: list[tuple[str, str]]) -> Path:
+def _write_registry_scope_query(
+    path: Path, rows: list[tuple[str, str]], ref: str = "main"
+) -> Path:
     query = path / "fake_scope_python"
     output = "".join(
-        f"{model_id}\\tmodel-registry\\tdemo-models\\t\\t{file_name}\\t\\t\\tmain\\tlatest\\n"
+        f"{model_id}\\tmodel-registry\\tdemo-models\\t\\t{file_name}\\t\\t\\t{ref}\\tlatest\\n"
         for model_id, file_name in rows
     )
     query.write_text(
@@ -112,7 +114,7 @@ def _write_registry_cli(path: Path, installed_files: list[str]) -> tuple[Path, P
     cli.write_text(
         "#!/usr/bin/env bash\n"
         'printf \'%s\\n\' "$*" >> "$NEAT_APPS_TEST_SIMA_CLI_CALLS"\n'
-        'install_dir="${5:?missing install directory}"\n'
+        'install_dir="${!#:?missing install directory}"\n'
         'mkdir -p "$install_dir"\n'
         f"{touch_commands}",
         encoding="utf-8",
@@ -538,6 +540,27 @@ def test_download_models_installs_registry_resource_once_for_multiple_files(tmp_
     assert len(call_lines[0].split()) == 5
     assert (models_dir / "first.tar.gz").is_file()
     assert (models_dir / "second.tar.gz").is_file()
+
+
+def test_download_models_uses_staging_registry_for_non_main_ref(tmp_path):
+    _require_modern_bash()
+    query = _write_registry_scope_query(
+        tmp_path,
+        [("demo", "demo.tar.gz")],
+        ref="codex/model-branch",
+    )
+    cli, calls = _write_registry_cli(tmp_path, ["demo.tar.gz"])
+
+    result = _run_registry_download(tmp_path / "models", query, cli, calls)
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text(encoding="utf-8").split()[:5] == [
+        "neat",
+        "install",
+        "--stg",
+        "models/demo-models@codex/model-branch:latest",
+        "--install-dir",
+    ]
 
 
 def test_download_models_skips_complete_registry_resource(tmp_path):

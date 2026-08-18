@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -26,8 +25,6 @@ namespace neat = simaai::neat;
 
 namespace {
 
-constexpr int kWidth = 640;
-constexpr int kHeight = 480;
 constexpr int kDescriptorDim = 256;
 constexpr int kMaxPoints = 600;
 
@@ -108,7 +105,13 @@ std::vector<float> tensor_floats(const neat::Tensor& tensor) {
   return values;
 }
 
-std::vector<float> keypoints(const neat::FeaturePointTensors& features) {
+struct FrameSize {
+  int width = 0;
+  int height = 0;
+};
+
+std::vector<float> keypoints(const neat::FeaturePointTensors& features,
+                             const FrameSize& source_size) {
   if (features.keypoints.shape.size() != 2 || features.keypoints.shape[1] != 2 ||
       features.scores.shape.size() != 1 || features.descriptors.shape.size() != 2) {
     throw std::runtime_error("invalid SuperPoint output ranks");
@@ -128,15 +131,21 @@ std::vector<float> keypoints(const neat::FeaturePointTensors& features) {
   if (points.size() != static_cast<std::size_t>(count) * 2U) {
     throw std::runtime_error("SuperPoint keypoint data does not match its shape");
   }
+  std::vector<float> drawable_points;
+  drawable_points.reserve(points.size());
   for (std::size_t i = 0; i < points.size(); i += 2) {
     const float x = points[i];
     const float y = points[i + 1];
-    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F || x >= kWidth ||
-        y >= kHeight) {
-      throw std::runtime_error("SuperPoint returned an invalid keypoint coordinate");
+    // The frame edges are exclusive coordinates. Discard isolated decoder outliers instead of
+    // aborting the stream when inverse-affine rounding places a point on or beyond an edge.
+    if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0F || y < 0.0F || x >= source_size.width ||
+        y >= source_size.height) {
+      continue;
     }
+    drawable_points.push_back(x);
+    drawable_points.push_back(y);
   }
-  return points;
+  return drawable_points;
 }
 
 void draw_points(cv::Mat& frame, const std::vector<float>& points) {
@@ -148,58 +157,31 @@ void draw_points(cv::Mat& frame, const std::vector<float>& points) {
               cv::FONT_HERSHEY_SIMPLEX, 0.65, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
 }
 
-std::uint16_t to_bfloat16(float value) {
-  std::uint32_t bits = 0;
-  std::memcpy(&bits, &value, sizeof(bits));
-  bits += 0x7fffU + ((bits >> 16U) & 1U);
-  return static_cast<std::uint16_t>(bits >> 16U);
+neat::Tensor prepare_input(const cv::Mat& frame) {
+  return neat::Tensor::from_cv_mat(frame, neat::ImageSpec::PixelFormat::BGR,
+                                   neat::TensorMemory::EV74);
 }
 
-neat::Tensor prepare_input(const cv::Mat& frame, neat::TensorDType dtype) {
-  cv::Mat gray;
-  cv::Mat input;
-  cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-  gray.convertTo(input, CV_32FC1, 1.0 / 255.0);
-  const float* begin = input.ptr<float>();
-
-  if (dtype == neat::TensorDType::Float32) {
-    auto tensor = neat::Tensor::from_vector(std::vector<float>(begin, begin + input.total()),
-                                            {kHeight, kWidth, 1}, neat::TensorMemory::EV74);
-    tensor.layout = neat::TensorLayout::HWC;
-    return tensor;
-  }
-  if (dtype == neat::TensorDType::BFloat16) {
-    std::vector<std::uint16_t> values(input.total());
-    for (std::size_t i = 0; i < values.size(); ++i) {
-      values[i] = to_bfloat16(begin[i]);
-    }
-    auto tensor = neat::Tensor::from_vector(values, {kHeight, kWidth, 1}, neat::TensorMemory::EV74);
-    tensor.dtype = neat::TensorDType::BFloat16;
-    tensor.layout = neat::TensorLayout::HWC;
-    return tensor;
-  }
-  throw std::runtime_error("SuperPoint model input must be Float32 or BFloat16");
-}
-
-neat::TensorDType select_input_dtype(const neat::TensorConstraint& spec) {
-  for (const auto dtype : spec.dtypes) {
-    if (dtype == neat::TensorDType::Float32 || dtype == neat::TensorDType::BFloat16) {
-      return dtype;
-    }
-  }
-  throw std::runtime_error("SuperPoint model input must support Float32 or BFloat16");
-}
-
-neat::Model::Options model_options() {
+neat::Model::Options model_options(int input_width, int input_height) {
   neat::Model::Options options;
-  options.preprocess.enable = neat::AutoFlag::Off;
+  options.preprocess.kind = neat::InputKind::Image;
+  options.preprocess.enable = neat::AutoFlag::On;
+  options.preprocess.input_max_width = input_width;
+  options.preprocess.input_max_height = input_height;
+  options.preprocess.input_max_depth = 3;
+  options.preprocess.resize.enable = neat::AutoFlag::On;
+  options.preprocess.resize.mode = neat::ResizeMode::Stretch;
+  options.preprocess.color_convert.enable = neat::AutoFlag::On;
+  options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::BGR;
+  options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::GRAY8;
+  options.preprocess.normalize.enable = neat::AutoFlag::On;
+  options.preprocess.normalize.mean = {0.0F, 0.0F, 0.0F};
+  options.preprocess.normalize.stddev = {1.0F, 1.0F, 1.0F};
+  options.preprocess.normalize.has_explicit_stats = true;
   options.decode_type = neat::BoxDecodeType::SuperPoint;
   options.superpoint.profile = neat::SuperPointProfile::A65V1;
   options.superpoint.output_format = neat::SuperPointOutputFormat::FeaturePointsV1;
   options.superpoint.descriptor_output_dtype = neat::TensorDType::Float32;
-  options.boxdecode_original_width = kWidth;
-  options.boxdecode_original_height = kHeight;
-  options.boxdecode_resize_mode = neat::ResizeMode::Stretch;
   options.processcvu.post_run_target = "A65";
   return options;
 }
@@ -210,20 +192,20 @@ struct VideoSender {
   int port = 0;
 };
 
-VideoSender build_video_sender(const Config& cfg, double fps) {
+VideoSender build_video_sender(const Config& cfg, double fps, int width, int height) {
   const int output_fps = std::max(1, cvRound(fps));
   neat::InputOptions input_options;
   input_options.payload_type = neat::PayloadType::Image;
   input_options.format = "RGB";
-  input_options.width = kWidth;
-  input_options.height = kHeight;
+  input_options.width = width;
+  input_options.height = height;
   input_options.depth = 3;
   input_options.fps_n = output_fps;
   input_options.fps_d = 1;
   input_options.memory_policy = neat::InputMemoryPolicy::Ev74;
 
   auto sender_options =
-      neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(kWidth, kHeight, output_fps);
+      neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(width, height, output_fps);
   sender_options.host = cfg.insight_host;
   sender_options.channel = cfg.channel;
   sender_options.video_port_base = cfg.video_port;
@@ -233,7 +215,7 @@ VideoSender build_video_sender(const Config& cfg, double fps) {
   sender.port = sender_options.video_port();
   sender.graph.add(neat::nodes::Input(input_options));
   sender.graph.add(neat::nodes::groups::VideoSender(sender_options));
-  cv::Mat seed(kHeight, kWidth, CV_8UC3, cv::Scalar(0, 0, 0));
+  cv::Mat seed(height, width, CV_8UC3, cv::Scalar(0, 0, 0));
   const auto tensor =
       neat::Tensor::from_cv_mat(seed, neat::ImageSpec::PixelFormat::RGB, neat::TensorMemory::EV74);
   sender.run = sender.graph.build(neat::TensorList{tensor});
@@ -250,9 +232,13 @@ void stream_frame(neat::Run& run, const cv::Mat& frame) {
   }
 }
 
-void validate_frame(const cv::Mat& frame) {
-  if (frame.cols != kWidth || frame.rows != kHeight || frame.type() != CV_8UC3) {
-    throw std::runtime_error("SuperPoint input must be 640x480 BGR video");
+void validate_frame(const cv::Mat& frame, int expected_width = 0, int expected_height = 0) {
+  if (frame.empty() || frame.cols <= 0 || frame.rows <= 0 || frame.type() != CV_8UC3) {
+    throw std::runtime_error("SuperPoint input must be a non-empty BGR video frame");
+  }
+  if ((expected_width > 0 && frame.cols != expected_width) ||
+      (expected_height > 0 && frame.rows != expected_height)) {
+    throw std::runtime_error("SuperPoint input resolution changed after pipeline construction");
   }
 }
 
@@ -274,19 +260,16 @@ int main(int argc, char** argv) {
       throw std::runtime_error("failed to read input video: " + cfg.input.string());
     }
     validate_frame(frame);
+    const int input_width = frame.cols;
+    const int input_height = frame.rows;
 
     const double input_fps = video.get(cv::CAP_PROP_FPS);
     const double fps = std::isfinite(input_fps) && input_fps > 0.0 ? input_fps : 30.0;
 
-    neat::Model model(cfg.model.string(), model_options());
-    const auto input_specs = model.input_specs();
-    if (input_specs.size() != 1) {
-      throw std::runtime_error("SuperPoint model must expose exactly one input");
-    }
-    const auto input_dtype = select_input_dtype(input_specs.front());
-    auto input = prepare_input(frame, input_dtype);
+    neat::Model model(cfg.model.string(), model_options(input_width, input_height));
+    auto input = prepare_input(frame);
     auto runner = model.build(neat::TensorList{input});
-    auto video_sender = build_video_sender(cfg, fps);
+    auto video_sender = build_video_sender(cfg, fps, input_width, input_height);
 
     std::size_t total_points = 0;
     int processed = 0;
@@ -296,7 +279,7 @@ int main(int argc, char** argv) {
       if (decoded.size() != 1) {
         throw std::runtime_error("SuperPoint must return one feature set per frame");
       }
-      const auto points = keypoints(decoded.front());
+      const auto points = keypoints(decoded.front(), FrameSize{input_width, input_height});
       total_points += points.size() / 2;
       draw_points(frame, points);
       stream_frame(video_sender.run, frame);
@@ -305,8 +288,8 @@ int main(int argc, char** argv) {
       if ((cfg.frames > 0 && processed >= cfg.frames) || !video.read(frame)) {
         break;
       }
-      validate_frame(frame);
-      input = prepare_input(frame, input_dtype);
+      validate_frame(frame, input_width, input_height);
+      input = prepare_input(frame);
     }
 
     runner.close();
