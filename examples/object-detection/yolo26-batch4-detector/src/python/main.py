@@ -32,7 +32,7 @@ LEVELS = 3
 EXPECTED_OUTPUTS = 2 * LEVELS
 BBOX_CHANNELS = 4
 PAD_VALUE = 114
-MAX_STREAMS = 4
+BATCH_SIZE = 4
 
 cv2 = None
 np = None
@@ -69,6 +69,8 @@ class ModelContract:
     net: int
     class_count: int
     grids: tuple[tuple[int, int], ...]
+    bbox_indices: tuple[int, ...]
+    class_indices: tuple[int, ...]
 
 
 def section(raw: dict, key: str) -> dict:
@@ -122,10 +124,8 @@ def resolve(path_str: str) -> Path:
 def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path or cfg.model_path.startswith("<"):
         raise ValueError("model.path must be set and must not be a placeholder")
-    if not cfg.rtsp_urls:
-        raise ValueError("streams must list at least one RTSP URL")
-    if len(cfg.rtsp_urls) > MAX_STREAMS:
-        raise ValueError(f"this example supports up to {MAX_STREAMS} streams")
+    if len(cfg.rtsp_urls) != BATCH_SIZE:
+        raise ValueError(f"this example requires exactly {BATCH_SIZE} streams")
     if any(not url or url.startswith("<") for url in cfg.rtsp_urls):
         raise ValueError("streams still contains a placeholder URL")
     if not cfg.insight_host or cfg.insight_host.startswith("<"):
@@ -249,47 +249,33 @@ def letterbox_into(rgb, lane, net: int):
 # --------------------------------------------------------------------------
 # postprocessing
 # --------------------------------------------------------------------------
-def heads_from_outputs(arrays: list, lane: int, class_count: int) -> dict:
-    """Six `[N, H, W, C]` outputs -> `{head_name: [H, W, C]}` for one lane.
+def heads_from_outputs(arrays: list, lane: int, contract: ModelContract) -> dict:
+    """Take one lane using the output mapping validated at startup."""
+    if len(arrays) != EXPECTED_OUTPUTS:
+        raise RuntimeError(f"expected {EXPECTED_OUTPUTS} YOLO26 output tensors")
 
-    Heads are matched by shape, not by output order: 4 channels is a bbox head,
-    `class_count` channels is a class head, and the grid size orders the three levels. Sorted by
-    descending grid so level 0 is the 80x80 map, matching the strides
-    `decode_heads` derives from the grid size.
-    """
-    bbox, cls = [], []
-    for array in arrays:
+    def plane(index: int, grid: tuple[int, int], channels: int):
+        array = arrays[index]
         if array.ndim != 4:
             raise RuntimeError(f"expected [N,H,W,C] outputs, got {array.shape}")
         if lane >= array.shape[0]:
             raise RuntimeError(f"lane {lane} out of range for output {array.shape}")
-        plane = array[lane]
-        channels = plane.shape[2]
-        if channels == BBOX_CHANNELS:
-            bbox.append(plane)
-        elif channels == class_count:
-            cls.append(plane)
-        else:
+        expected = (BATCH_SIZE, *grid, channels)
+        if array.shape != expected:
             raise RuntimeError(
-                f"output with {channels} channels is neither a bbox head "
-                f"({BBOX_CHANNELS}) nor a class head ({class_count})"
+                f"runtime output shape {array.shape} does not match model contract {expected}"
             )
-    if len(bbox) != LEVELS or len(cls) != LEVELS:
-        raise RuntimeError(
-            f"expected {LEVELS} bbox and {LEVELS} class heads, got {len(bbox)} and {len(cls)}"
-        )
-    bbox.sort(key=lambda plane: (-plane.shape[0], -plane.shape[1]))
-    cls.sort(key=lambda plane: (-plane.shape[0], -plane.shape[1]))
+        return array[lane]
 
     heads = {}
     for level in range(LEVELS):
-        if bbox[level].shape[:2] != cls[level].shape[:2]:
-            raise RuntimeError(
-                f"level {level} bbox grid {bbox[level].shape[:2]} does not match "
-                f"class grid {cls[level].shape[:2]}"
-            )
-        heads[f"bbox_{level}"] = bbox[level]
-        heads[f"class_logit_{level}"] = cls[level]
+        grid = contract.grids[level]
+        heads[f"bbox_{level}"] = plane(
+            contract.bbox_indices[level], grid, BBOX_CHANNELS
+        )
+        heads[f"class_logit_{level}"] = plane(
+            contract.class_indices[level], grid, contract.class_count
+        )
     return heads
 
 
@@ -468,121 +454,15 @@ def build_source_options(cfg: AppConfig, url: str, width: int, height: int, fps:
     return opt
 
 
-def build_encoded_source_graph(index: int, opt):
-    """RTSP pulled as encoded H.264, decoded by the graph below."""
-    encoded = pyneat.RtspEncodedInputOptions()
-    encoded.url = opt.url
-    encoded.codec = pyneat.RtspCodec.H264
-    encoded.latency_ms = opt.latency_ms
-    encoded.tcp = opt.tcp
-    encoded.source_fps = opt.source_fps
-    encoded.fallback_h264_width = opt.fallback_h264_width
-    encoded.fallback_h264_height = opt.fallback_h264_height
-
-    source = pyneat.Graph(f"rtsp_source_{index}")
-    source.add(pyneat.groups.rtsp_encoded_input(encoded))
-    return source
-
-
-def encoded_input_options():
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = pyneat.Format.H264
-    opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
-    return opt
-
-
-def build_decode_graph(index: int, opt):
-    """Hardware decode to NV12, published as this stream's `frame_N` output.
-
-    `OutputOptions.latest()` keeps the newest frame rather than a backlog, so a
-    dispatch always batches current pictures.
-    """
-    decode = pyneat.Graph(f"decode_{index}")
-    dec = pyneat.SimaDecodeOptions()
-    dec.type = pyneat.SimaDecodeType.H264
-    dec.sima_allocator_type = opt.sima_allocator_type
-    dec.out_format = pyneat.Format.NV12
-    dec.decoder_name = opt.decoder_name
-    dec.raw_output = opt.decoder_raw_output
-    dec.dec_width = opt.fallback_h264_width
-    dec.dec_height = opt.fallback_h264_height
-    dec.dec_fps = opt.source_fps
-    decode.connect(
-        pyneat.nodes.input("decode_h264", encoded_input_options()),
-        pyneat.nodes.sima_decode(dec),
-    )
-    decode.add(
-        pyneat.nodes.caps_raw(
-            "NV12",
-            opt.output_caps.width,
-            opt.output_caps.height,
-            opt.output_caps.fps,
-            opt.output_caps.memory,
-        )
-    )
-    decode.add(pyneat.nodes.output(f"frame_{index}", pyneat.OutputOptions.latest()))
-    return decode
-
-
-def build_run_options():
-    run_options = pyneat.RunOptions()
-    run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 4
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    return run_options
-
-
-def h264_video_input_options():
-    opt = pyneat.InputOptions()
-    opt.payload_type = pyneat.PayloadType.Encoded
-    opt.format = pyneat.Format.H264
-    opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    return opt
-
-
-def build_video_sender_graph(cfg: AppConfig, index: int):
-    """Forward the source H.264 to Insight without re-encoding it.
-
-    The stream arrives already compressed, so the cheap thing to do is hand
-    those bytes straight to the sender. Decoding, converting to RGB and running
-    a hardware encoder per channel to rebuild an equivalent stream costs four
-    encoders and a full-frame copy per channel, and it was the largest single
-    item in the publish path.
-
-    The trade is that the picture reaches the viewer as soon as it arrives while
-    its detections only exist an inference later, so overlays lag the video
-    slightly and refresh at the dispatch rate rather than the source rate. The
-    metadata carries the source `pts_ns`/`frame_id`, so a viewer that aligns on
-    those can still pair them up.
-    """
-    options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.H264)
-    options.host = cfg.insight_host
-    options.channel = index
-    options.video_port_base = cfg.video_port_base
-    options.async_ = True
-
-    video = pyneat.Graph(f"video_sender_{index}")
-    video.connect(
-        pyneat.nodes.input("video_h264", h264_video_input_options()),
-        pyneat.groups.video_sender(options),
-    )
-    return video, options.video_port
-
-
 # --------------------------------------------------------------------------
 # streams and batching
 # --------------------------------------------------------------------------
 @dataclass
 class Stream:
     index: int
-    url: str
     frame_w: int
     frame_h: int
-    fps: int
     metadata_sender: object
-    video_port: int = 0
     processed: int = 0
 
 
@@ -596,11 +476,7 @@ class FrameRef:
 
 @dataclass
 class BatchSlot:
-    """One reusable batch: the MLA input plus what the lanes came from.
-
-    Two of these rotate between ingest and synchronous MLA/decode/publish.
-    Keeping those phases on separate slots lets ingest overlap processing.
-    """
+    """One reusable batch: the MLA input plus what the lanes came from."""
 
     tensor: object
     rgb: list = field(default_factory=list)
@@ -609,9 +485,9 @@ class BatchSlot:
     ready: bool = False
 
 
-def make_batch_slot(batch_size: int, net: int, streams: list[Stream]) -> BatchSlot:
+def make_batch_slot(net: int, streams: list[Stream]) -> BatchSlot:
     return BatchSlot(
-        tensor=np.empty((batch_size, net, net, 3), dtype=np.float32),
+        tensor=np.empty((BATCH_SIZE, net, net, 3), dtype=np.float32),
         rgb=[np.empty((s.frame_h, s.frame_w, 3), dtype=np.uint8) for s in streams],
         geometry=[(1.0, 0, 0)] * len(streams),
         samples=[None] * len(streams),
@@ -619,46 +495,33 @@ def make_batch_slot(batch_size: int, net: int, streams: list[Stream]) -> BatchSl
 
 
 class BatchPrefetcher:
-    """Keeps one batch in flight so ingest overlaps inference.
+    """Overlap the next four-lane ingest with the current model dispatch."""
 
-    A frame pull blocks until the source produces its next picture — about
-    33 ms at 30 fps — and the letterbox costs another few ms per lane. Doing
-    that between dispatches would serialize it with the MLA and the decode.
-    Instead the lanes for the next batch are filled on worker threads while the
-    caller works on the current one, and both cv2 and the pull release the GIL.
-    """
-
-    def __init__(
-        self, run, streams: list[Stream], net: int, batch_size: int, timeout_ms: int
-    ):
+    def __init__(self, run, streams: list[Stream], net: int, timeout_ms: int):
         self.run = run
         self.streams = streams
         self.net = net
-        self.batch_size = batch_size
         self.timeout_ms = timeout_ms
         self.closed = False
-        self.lane_pool = ThreadPoolExecutor(max_workers=max(1, len(streams)))
+        self.lane_pool = ThreadPoolExecutor(max_workers=len(streams))
         self.fill_pool = ThreadPoolExecutor(max_workers=1)
-        self.slots = [make_batch_slot(batch_size, net, streams) for _ in range(2)]
+        self.slots = [make_batch_slot(net, streams) for _ in range(2)]
         self.slot = 0
         self.pending = self.fill_pool.submit(self._fill, self.slots[0])
 
     def next(self) -> BatchSlot | None:
-        """Hand back the filled batch and immediately start filling the other."""
         slot = self.pending.result()
-        self.slot = (self.slot + 1) % len(self.slots)
+        self.slot ^= 1
         self.pending = self.fill_pool.submit(self._fill, self.slots[self.slot])
         return slot if slot.ready else None
 
     def _fill(self, slot: BatchSlot) -> BatchSlot:
         results = list(
-            self.lane_pool.map(lambda s: self._fill_lane(slot, s), self.streams)
+            self.lane_pool.map(
+                lambda stream: self._fill_lane(slot, stream), self.streams
+            )
         )
         slot.ready = all(results)
-        # Fewer streams than the compiled batch: repeat the last lane so the MLA
-        # still runs exactly one dispatch.
-        for lane in range(len(self.streams), self.batch_size):
-            slot.tensor[lane] = slot.tensor[len(self.streams) - 1]
         return slot
 
     def _fill_lane(self, slot: BatchSlot, stream: Stream) -> bool:
@@ -686,11 +549,6 @@ class BatchPrefetcher:
         return True
 
     def close(self) -> None:
-        """Let the in-flight fill finish before the caller closes the Run.
-
-        Its lane threads are inside `run.pull`, so tearing the Run down first
-        would pull the runtime out from under them.
-        """
         self.closed = True
         try:
             self.pending.result(timeout=self.timeout_ms / 1000.0 + 1.0)
@@ -846,7 +704,7 @@ def validate_model_contract(
     if len(input_shape) != 4 or any(dim <= 0 for dim in input_shape):
         raise RuntimeError("model input must be a concrete positive [4,N,N,3] tensor")
     if (
-        input_shape[0] != MAX_STREAMS
+        input_shape[0] != BATCH_SIZE
         or input_shape[1] != input_shape[2]
         or input_shape[3] != 3
     ):
@@ -854,14 +712,14 @@ def validate_model_contract(
     if len(output_shapes) != EXPECTED_OUTPUTS:
         raise RuntimeError("expected exactly six YOLO26 output tensors")
 
-    bbox_grids: list[tuple[int, int]] = []
-    class_grids: list[tuple[int, int]] = []
+    bbox: list[tuple[tuple[int, int], int]] = []
+    classes: list[tuple[tuple[int, int], int]] = []
     class_count = 0
-    for shape in output_shapes:
+    for index, shape in enumerate(output_shapes):
         if (
             len(shape) != 4
             or any(dim <= 0 for dim in shape)
-            or shape[0] != MAX_STREAMS
+            or shape[0] != BATCH_SIZE
             or shape[1] != shape[2]
         ):
             raise RuntimeError(
@@ -870,7 +728,7 @@ def validate_model_contract(
         grid = (shape[1], shape[2])
         channels = shape[3]
         if channels == BBOX_CHANNELS:
-            bbox_grids.append(grid)
+            bbox.append((grid, index))
         else:
             if class_count == 0:
                 class_count = channels
@@ -878,22 +736,28 @@ def validate_model_contract(
                 raise RuntimeError(
                     "YOLO26 class heads must have one common class count"
                 )
-            class_grids.append(grid)
+            classes.append((grid, index))
 
-    if len(bbox_grids) != LEVELS or len(class_grids) != LEVELS:
+    if len(bbox) != LEVELS or len(classes) != LEVELS:
         raise RuntimeError(
             "expected three bbox heads and three class heads; four-class models are ambiguous"
         )
     if label_count != class_count:
         raise RuntimeError("label count must match the model class-head channel count")
-    bbox_grids.sort(reverse=True)
-    class_grids.sort(reverse=True)
+    bbox.sort(reverse=True)
+    classes.sort(reverse=True)
+    bbox_grids = tuple(grid for grid, _ in bbox)
+    class_grids = tuple(grid for grid, _ in classes)
     if bbox_grids != class_grids or len(set(bbox_grids)) != LEVELS:
         raise RuntimeError(
             "bbox and class heads must form three distinct matching grids"
         )
     return ModelContract(
-        net=input_shape[1], class_count=class_count, grids=tuple(bbox_grids)
+        net=input_shape[1],
+        class_count=class_count,
+        grids=bbox_grids,
+        bbox_indices=tuple(index for _, index in bbox),
+        class_indices=tuple(index for _, index in classes),
     )
 
 
@@ -908,9 +772,48 @@ def build_streams(cfg: AppConfig, graph) -> list[Stream]:
         metadata_options.metadata_port_base = cfg.metadata_port_base
         metadata_sender = pyneat.MetadataSender(metadata_options)
 
-        options = build_source_options(cfg, url, width, height, fps)
-        source = build_encoded_source_graph(index, options)
-        decoder = build_decode_graph(index, options)
+        source_options = build_source_options(cfg, url, width, height, fps)
+        encoded = pyneat.RtspEncodedInputOptions()
+        encoded.url = source_options.url
+        encoded.codec = pyneat.RtspCodec.H264
+        encoded.latency_ms = source_options.latency_ms
+        encoded.tcp = source_options.tcp
+        encoded.source_fps = source_options.source_fps
+        encoded.fallback_h264_width = source_options.fallback_h264_width
+        encoded.fallback_h264_height = source_options.fallback_h264_height
+        source = pyneat.Graph(f"rtsp_source_{index}")
+        source.add(pyneat.groups.rtsp_encoded_input(encoded))
+
+        decode_input = pyneat.InputOptions()
+        decode_input.payload_type = pyneat.PayloadType.Encoded
+        decode_input.format = pyneat.Format.H264
+        decode_input.memory_policy = pyneat.InputMemoryPolicy.Ev74
+        decode_options = pyneat.SimaDecodeOptions()
+        decode_options.type = pyneat.SimaDecodeType.H264
+        decode_options.sima_allocator_type = source_options.sima_allocator_type
+        decode_options.out_format = pyneat.Format.NV12
+        decode_options.decoder_name = source_options.decoder_name
+        decode_options.raw_output = source_options.decoder_raw_output
+        decode_options.dec_width = source_options.fallback_h264_width
+        decode_options.dec_height = source_options.fallback_h264_height
+        decode_options.dec_fps = source_options.source_fps
+        decoder = pyneat.Graph(f"decode_{index}")
+        decoder.connect(
+            pyneat.nodes.input("decode_h264", decode_input),
+            pyneat.nodes.sima_decode(decode_options),
+        )
+        decoder.add(
+            pyneat.nodes.caps_raw(
+                "NV12",
+                source_options.output_caps.width,
+                source_options.output_caps.height,
+                source_options.output_caps.fps,
+                source_options.output_caps.memory,
+            )
+        )
+        decoder.add(
+            pyneat.nodes.output(f"frame_{index}", pyneat.OutputOptions.latest())
+        )
 
         video_port = 0
         if cfg.video_enabled:
@@ -921,23 +824,34 @@ def build_streams(cfg: AppConfig, graph) -> list[Stream]:
             )
             graph.connect(source, branch)
             graph.connect(branch, decoder)
-            sender, video_port = build_video_sender_graph(cfg, index)
+            video_options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.H264)
+            video_options.host = cfg.insight_host
+            video_options.channel = index
+            video_options.video_port_base = cfg.video_port_base
+            video_options.async_ = True
+            video_port = video_options.video_port
+            video_input = pyneat.InputOptions()
+            video_input.payload_type = pyneat.PayloadType.Encoded
+            video_input.format = pyneat.Format.H264
+            video_input.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
+            sender = pyneat.Graph(f"video_sender_{index}")
+            sender.connect(
+                pyneat.nodes.input("video_h264", video_input),
+                pyneat.groups.video_sender(video_options),
+            )
             graph.connect(branch, sender)
         else:
             graph.connect(source, decoder)
 
         stream = Stream(
             index=index,
-            url=url,
             frame_w=width,
             frame_h=height,
-            fps=fps,
             metadata_sender=metadata_sender,
-            video_port=video_port,
         )
         print(
             f"[stream {index}] rtsp={url} {width}x{height}@{fps} "
-            f"video={stream.video_port if cfg.video_enabled else 'disabled'} "
+            f"video={video_port if cfg.video_enabled else 'disabled'} "
             f"metadata={metadata_sender.metadata_port()}",
             flush=True,
         )
@@ -955,23 +869,27 @@ def run_app(cfg: AppConfig) -> None:
     output_shapes = [[int(x) for x in spec.shape] for spec in model.output_specs()]
     contract = validate_model_contract(input_shapes, output_shapes, len(labels))
     print(
-        f"Model loaded: batch={MAX_STREAMS} net={contract.net} "
+        f"Model loaded: batch={BATCH_SIZE} net={contract.net} "
         f"classes={contract.class_count} heads={output_shapes}",
         flush=True,
     )
-    batch_size = MAX_STREAMS
     net = contract.net
 
     graph = pyneat.Graph()
     streams = build_streams(cfg, graph)
-    run = graph.build(build_run_options())
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 4
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run = graph.build(run_options)
     profile = ProfileWindow(cfg, len(streams))
-    prefetcher = BatchPrefetcher(run, streams, net, batch_size, cfg.timeout_ms)
+    prefetcher = BatchPrefetcher(run, streams, net, cfg.timeout_ms)
     decode_pool = ThreadPoolExecutor(max_workers=len(streams))
 
     def decode_lane(stream: Stream, head_arrays: list, slot: BatchSlot):
         """One lane's heads -> detections in that stream's source coordinates."""
-        heads = heads_from_outputs(head_arrays, stream.index, contract.class_count)
+        heads = heads_from_outputs(head_arrays, stream.index, contract)
         detections = decode_heads(heads, net, cfg.score_threshold, cfg.max_detections)
         scale, dx, dy = slot.geometry[stream.index]
         return to_original(detections, scale, dx, dy, stream.frame_w, stream.frame_h)

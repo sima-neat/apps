@@ -24,6 +24,7 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 PYTHON_DIR = EXAMPLE_DIR / "src" / "python"
 MAIN_PY = PYTHON_DIR / "main.py"
+FOUR_STREAMS = [f"rtsp://127.0.0.1:8554/src{i}" for i in range(1, 5)]
 
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
@@ -84,9 +85,7 @@ class TestMainEntrypoint:
         assert "config file not found" in result.stderr
 
     def test_validate_config_only_reports_stream_count(self, tmp_path: Path):
-        config_path = write_config(
-            tmp_path, ["rtsp://127.0.0.1:8554/src1", "rtsp://127.0.0.1:8554/src2"]
-        )
+        config_path = write_config(tmp_path, FOUR_STREAMS)
         result = subprocess.run(
             [
                 sys.executable,
@@ -102,35 +101,34 @@ class TestMainEntrypoint:
             timeout=20,
         )
         assert result.returncode == 0
-        assert "streams=2" in result.stdout
+        assert "streams=4" in result.stdout
 
 
 class TestConfigLoading:
     def test_accepts_four_streams(self, tmp_path: Path):
         from main import load_app_config
 
-        cfg = load_app_config(
-            write_config(tmp_path, [f"rtsp://127.0.0.1:8554/src{i}" for i in range(4)])
-        )
+        cfg = load_app_config(write_config(tmp_path, FOUR_STREAMS))
         assert len(cfg.rtsp_urls) == 4
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.score_threshold == 0.35
         assert cfg.max_detections == 100
 
-    def test_rejects_more_than_four_streams(self, tmp_path: Path):
+    @pytest.mark.parametrize("count", [1, 3, 5])
+    def test_rejects_wrong_stream_count(self, tmp_path: Path, count: int):
         from main import load_app_config
 
         config_path = write_config(
-            tmp_path, [f"rtsp://127.0.0.1:8554/src{i}" for i in range(5)]
+            tmp_path, [f"rtsp://127.0.0.1:8554/src{i}" for i in range(count)]
         )
-        with pytest.raises(ValueError, match="up to 4 streams"):
+        with pytest.raises(ValueError, match="exactly 4 streams"):
             load_app_config(config_path)
 
     def test_rejects_placeholder_stream(self, tmp_path: Path):
         from main import load_app_config
 
         with pytest.raises(ValueError, match="placeholder"):
-            load_app_config(write_config(tmp_path, ["<rtsp-url-1>"]))
+            load_app_config(write_config(tmp_path, ["<rtsp-url-1>", *FOUR_STREAMS[1:]]))
 
     def test_rejects_placeholder_model_path(self, tmp_path: Path):
         from main import load_app_config
@@ -139,7 +137,7 @@ class TestConfigLoading:
             load_app_config(
                 write_config(
                     tmp_path,
-                    ["rtsp://127.0.0.1:8554/src1"],
+                    FOUR_STREAMS,
                     model_path="<model-path>",
                 )
             )
@@ -147,9 +145,7 @@ class TestConfigLoading:
     def test_rejects_out_of_range_score_threshold(self, tmp_path: Path):
         from main import load_app_config
 
-        config_path = write_config(
-            tmp_path, ["rtsp://127.0.0.1:8554/src1"], score_threshold=1.5
-        )
+        config_path = write_config(tmp_path, FOUR_STREAMS, score_threshold=1.5)
         with pytest.raises(ValueError, match="score_threshold"):
             load_app_config(config_path)
 
@@ -175,7 +171,7 @@ class TestConfigLoading:
 
 
 class TestHeadMapping:
-    """The six model outputs must be sorted into levels by shape alone."""
+    """Startup resolves the six outputs once; each lane follows that mapping."""
 
     GRIDS = (80, 40, 20)
 
@@ -193,10 +189,19 @@ class TestHeadMapping:
             arrays = [arrays[i] for i in (4, 0, 5, 2, 3, 1)]
         return arrays
 
+    @staticmethod
+    def contract(main, arrays):
+        return main.validate_model_contract(
+            [[4, 640, 640, 3]], [list(array.shape) for array in arrays], 80
+        )
+
     def test_maps_heads_to_levels(self):
         import main
 
-        heads = main.heads_from_outputs(self.outputs(), lane=0, class_count=80)
+        arrays = self.outputs()
+        heads = main.heads_from_outputs(
+            arrays, lane=0, contract=self.contract(main, arrays)
+        )
         assert set(heads) == {f"bbox_{lv}" for lv in range(3)} | {
             f"class_logit_{lv}" for lv in range(3)
         }
@@ -207,11 +212,13 @@ class TestHeadMapping:
     def test_output_order_does_not_matter(self):
         import main
 
+        ordered_arrays = self.outputs(shuffle=False)
+        shuffled_arrays = self.outputs(shuffle=True)
         ordered = main.heads_from_outputs(
-            self.outputs(shuffle=False), lane=0, class_count=80
+            ordered_arrays, lane=0, contract=self.contract(main, ordered_arrays)
         )
         shuffled = main.heads_from_outputs(
-            self.outputs(shuffle=True), lane=0, class_count=80
+            shuffled_arrays, lane=0, contract=self.contract(main, shuffled_arrays)
         )
         for name, plane in ordered.items():
             assert np.array_equal(shuffled[name], plane)
@@ -220,43 +227,82 @@ class TestHeadMapping:
         import main
 
         arrays = self.outputs()
+        contract = self.contract(main, arrays)
         arrays[0][2] = 7.0  # bbox level 0, lane 2 only
         assert (
-            main.heads_from_outputs(arrays, lane=2, class_count=80)["bbox_0"][0, 0, 0]
+            main.heads_from_outputs(arrays, lane=2, contract=contract)["bbox_0"][
+                0, 0, 0
+            ]
             == 7.0
         )
         assert (
-            main.heads_from_outputs(arrays, lane=1, class_count=80)["bbox_0"][0, 0, 0]
+            main.heads_from_outputs(arrays, lane=1, contract=contract)["bbox_0"][
+                0, 0, 0
+            ]
             == 0.0
         )
 
     def test_rejects_unbatched_output(self):
         import main
 
+        arrays = self.outputs()
+        contract = self.contract(main, arrays)
+        arrays[0] = np.zeros((80, 80, 4), dtype=np.float32)
         with pytest.raises(RuntimeError, match=r"\[N,H,W,C\]"):
-            main.heads_from_outputs(
-                [np.zeros((80, 80, 4), dtype=np.float32)], lane=0, class_count=80
-            )
+            main.heads_from_outputs(arrays, lane=0, contract=contract)
 
     def test_rejects_lane_out_of_range(self):
         import main
 
+        arrays = self.outputs(batch=4)
         with pytest.raises(RuntimeError, match="out of range"):
-            main.heads_from_outputs(self.outputs(batch=4), lane=4, class_count=80)
+            main.heads_from_outputs(
+                arrays, lane=4, contract=self.contract(main, arrays)
+            )
 
-    def test_rejects_unknown_channel_count(self):
+    def test_rejects_runtime_shape_drift(self):
         import main
 
         arrays = self.outputs()
+        contract = self.contract(main, arrays)
         arrays[0] = np.zeros((4, 80, 80, 7), dtype=np.float32)
-        with pytest.raises(RuntimeError, match="neither a bbox head"):
-            main.heads_from_outputs(arrays, lane=0, class_count=80)
+        with pytest.raises(RuntimeError, match="does not match model contract"):
+            main.heads_from_outputs(arrays, lane=0, contract=contract)
 
     def test_rejects_wrong_head_count(self):
         import main
 
-        with pytest.raises(RuntimeError, match="expected 3 bbox and 3 class heads"):
-            main.heads_from_outputs(self.outputs()[:4], lane=0, class_count=80)
+        arrays = self.outputs()
+        with pytest.raises(RuntimeError, match="expected 6 YOLO26 output tensors"):
+            main.heads_from_outputs(
+                arrays[:4], lane=0, contract=self.contract(main, arrays)
+            )
+
+
+class TestBatchPrefetcher:
+    def test_waits_for_every_lane_after_one_times_out(self):
+        import main
+
+        prefetcher = main.BatchPrefetcher.__new__(main.BatchPrefetcher)
+        prefetcher.streams = list(range(4))
+        prefetcher.lane_pool = ThreadPoolExecutor(max_workers=4)
+        completed = []
+
+        def fill_lane(_slot, stream):
+            if stream == 0:
+                return False
+            time.sleep(0.05)
+            completed.append(stream)
+            return True
+
+        prefetcher._fill_lane = fill_lane
+        slot = type("Slot", (), {"ready": True})()
+        try:
+            assert prefetcher._fill(slot) is slot
+            assert sorted(completed) == [1, 2, 3]
+            assert slot.ready is False
+        finally:
+            prefetcher.lane_pool.shutdown(wait=True, cancel_futures=True)
 
 
 class TestModelContract:
@@ -276,6 +322,8 @@ class TestModelContract:
         assert contract.net == 640
         assert contract.class_count == 6
         assert contract.grids == ((80, 80), (40, 40), (20, 20))
+        assert contract.bbox_indices == (1, 5, 3)
+        assert contract.class_indices == (4, 0, 2)
 
     @pytest.mark.parametrize(
         ("inputs", "outputs", "labels", "message"),

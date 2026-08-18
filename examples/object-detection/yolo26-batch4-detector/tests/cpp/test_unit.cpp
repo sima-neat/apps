@@ -2,7 +2,8 @@
 // Cover the parts that need no hardware: CLI handling and config validation.
 #include "support/testing/test_process.h"
 #include "support/testing/metadata_json_listener.h"
-#include "examples/object-detection/yolo26-batch4-detector/src/cpp/yolo26_batch4_contract.h"
+#define YOLO26_BATCH4_CONTRACT_ONLY
+#include "examples/object-detection/yolo26-batch4-detector/src/cpp/main.cpp"
 
 #include <algorithm>
 #include <chrono>
@@ -92,8 +93,8 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
   return ok;
 }
 
-bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
-  const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
+bool test_validate_config_only_rejects_wrong_stream_count(const std::string& binary) {
+  const fs::path config_path = write_config("test_validate_config_only_rejects_wrong_stream_count",
                                             std::string("model:\n") + kModelLine +
                                                 "streams:\n"
                                                 "  - rtsp://127.0.0.1:8554/src1\n"
@@ -108,8 +109,8 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok = expect_true(result.exit_code == 1, "five-stream config is rejected") &&
-                  expect_contains(result.stderr_text, "up to 4 streams",
-                                  "too-many-stream error names the batch limit");
+                  expect_contains(result.stderr_text, "exactly 4 streams",
+                                  "wrong-stream-count error names the batch contract");
   remove_dir(config_path.parent_path().string());
   return ok;
 }
@@ -137,6 +138,9 @@ bool test_validate_config_only_rejects_out_of_range_threshold(const std::string&
                    std::string("model:\n") + kModelLine +
                        "streams:\n"
                        "  - rtsp://127.0.0.1:8554/src1\n"
+                       "  - rtsp://127.0.0.1:8554/src2\n"
+                       "  - rtsp://127.0.0.1:8554/src3\n"
+                       "  - rtsp://127.0.0.1:8554/src4\n"
                        "inference:\n"
                        "  score_threshold: 1.5\n"
                        "output:\n"
@@ -157,6 +161,9 @@ bool test_validate_config_only_rejects_placeholder_stream(const std::string& bin
                                             std::string("model:\n") + kModelLine +
                                                 "streams:\n"
                                                 "  - <rtsp-url-1>\n"
+                                                "  - rtsp://127.0.0.1:8554/src2\n"
+                                                "  - rtsp://127.0.0.1:8554/src3\n"
+                                                "  - rtsp://127.0.0.1:8554/src4\n"
                                                 "output:\n"
                                                 "  insight:\n"
                                                 "    host: 127.0.0.1\n");
@@ -176,6 +183,9 @@ bool test_validate_config_only_rejects_placeholder_model(const std::string& bina
                                             "  path: <model-path>\n"
                                             "streams:\n"
                                             "  - rtsp://127.0.0.1:8554/src1\n"
+                                            "  - rtsp://127.0.0.1:8554/src2\n"
+                                            "  - rtsp://127.0.0.1:8554/src3\n"
+                                            "  - rtsp://127.0.0.1:8554/src4\n"
                                             "output:\n"
                                             "  insight:\n"
                                             "    host: 127.0.0.1\n");
@@ -201,7 +211,10 @@ bool test_model_contract_accepts_reordered_non80_heads() {
   return expect_true(contract.net == 640 && contract.class_count == 6,
                      "model contract accepts reordered non-80 heads") &&
          expect_true(contract.grids[0].height == 80 && contract.grids[2].width == 20,
-                     "model contract orders matched grid pairs");
+                     "model contract orders matched grid pairs") &&
+         expect_true(contract.bbox_indices == std::array<std::size_t, 3>{1, 5, 3} &&
+                         contract.class_indices == std::array<std::size_t, 3>{4, 0, 2},
+                     "model contract resolves shuffled output indices once");
 }
 
 bool rejects_contract(const std::vector<std::vector<std::int64_t>>& inputs,
@@ -388,7 +401,7 @@ int main(int argc, char** argv) {
   ok &= test_help_runs(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_config_only_accepts_four_streams(binary);
-  ok &= test_validate_config_only_rejects_too_many_streams(binary);
+  ok &= test_validate_config_only_rejects_wrong_stream_count(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
   ok &= test_validate_config_only_rejects_out_of_range_threshold(binary);
   ok &= test_validate_config_only_rejects_placeholder_stream(binary);

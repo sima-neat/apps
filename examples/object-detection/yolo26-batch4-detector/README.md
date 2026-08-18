@@ -16,7 +16,7 @@
 
 Four RTSP streams hosted by Insight are decoded, one frame is taken from each, and all four are submitted to the MLA as a single `[4, 640, 640, 3]` batch — one dispatch instead of four. The model returns the six YOLO26 heads, which are decoded on the CPU (A65) per batch lane, so each stream keeps its own detections. The analysed frame is published to Insight with its detections beside it as metadata.
 
-The example exercises batched inference across several streams, per-lane attribution of results, and a pipeline shaped so that ingest overlaps inference rather than queueing behind it.
+The example exercises batched inference across four streams and preserves per-lane attribution of results.
 
 ## Prerequisites
 
@@ -117,7 +117,7 @@ output:
     metadata_port_base: <metadataUDP start port from neat>
 ```
 
-Fewer than four streams is allowed; the batch is filled by repeating the last frame, so the MLA still runs one dispatch.
+Exactly four streams are required because every dispatch fills the model's four batch lanes.
 
 ## Run
 
