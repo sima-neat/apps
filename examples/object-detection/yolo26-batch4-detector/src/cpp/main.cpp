@@ -34,9 +34,9 @@
 //   per lane is what keeps detections attributed to the frame they came from.
 //
 // Heads are matched by shape, not by output order
-//   A bbox head carries 4 channels and a class head 80, and the grid size (80,
-//   40, 20) orders the three levels. Nothing depends on the order in which the
-//   compiler happens to emit the outputs.
+//   A bbox head carries 4 channels and a class head carries the validated class
+//   count. Grid size orders the three levels, so nothing depends on the order
+//   in which the compiler happens to emit the outputs.
 
 #include "neat.h"
 #include "neat/models.h"
@@ -45,6 +45,7 @@
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
+#include "yolo26_batch4_contract.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -80,11 +81,10 @@ void request_stop(int) {
 
 // The YOLO26 head set: three detection levels, each a bbox head and a class
 // head. Channel count tells the two apart, grid size orders the levels.
-constexpr int kBboxChannels = 4;
-constexpr int kClassChannels = 80;
-constexpr int kLevels = 3;
-constexpr int kExpectedOutputs = 2 * kLevels;
-constexpr int kMaxStreams = 4;
+constexpr int kBboxChannels = yolo26_batch4::kBboxChannels;
+constexpr int kLevels = yolo26_batch4::kLevels;
+constexpr int kExpectedOutputs = yolo26_batch4::kExpectedOutputs;
+constexpr int kMaxStreams = yolo26_batch4::kBatchSize;
 constexpr int kPadValue = 114;
 
 struct AppConfig {
@@ -404,13 +404,12 @@ Geometry letterbox_into(const cv::Mat& bgr, int net, float* dst) {
 // A single head plane for one lane: a dense [H, W, C] view over the output.
 struct HeadPlane {
   const float* data = nullptr;
-  int grid = 0;
+  int height = 0;
+  int width = 0;
   int channels = 0;
 
   const float* cell(int row, int col) const {
-    return data + (static_cast<std::size_t>(row) * static_cast<std::size_t>(grid) +
-                   static_cast<std::size_t>(col)) *
-                      static_cast<std::size_t>(channels);
+    return data + yolo26_batch4::head_cell_offset(row, col, width, channels);
   }
 };
 
@@ -429,7 +428,7 @@ struct HeadTensor {
 
 // Six [N,H,W,C] outputs -> the head planes of one lane, sorted by descending
 // grid so level 0 is the 80x80 map, matching the strides decode_lane derives.
-LaneHeads heads_from_outputs(const std::vector<HeadTensor>& outputs, int lane) {
+LaneHeads heads_from_outputs(const std::vector<HeadTensor>& outputs, int lane, int class_count) {
   std::vector<HeadPlane> bbox;
   std::vector<HeadPlane> cls;
   for (const auto& tensor : outputs) {
@@ -442,23 +441,25 @@ LaneHeads heads_from_outputs(const std::vector<HeadTensor>& outputs, int lane) {
       throw std::runtime_error("lane " + std::to_string(lane) + " out of range for batch " +
                                std::to_string(batch));
     }
-    const int grid = static_cast<int>(tensor.shape[1]);
+    const int height = static_cast<int>(tensor.shape[1]);
+    const int width = static_cast<int>(tensor.shape[2]);
     const int channels = static_cast<int>(tensor.shape[3]);
-    const std::size_t lane_stride =
-        static_cast<std::size_t>(grid) * static_cast<std::size_t>(tensor.shape[2]) *
-        static_cast<std::size_t>(channels);
+    const std::size_t lane_stride = static_cast<std::size_t>(height) *
+                                    static_cast<std::size_t>(width) *
+                                    static_cast<std::size_t>(channels);
     if (tensor.data.size() < (static_cast<std::size_t>(lane) + 1) * lane_stride) {
       throw std::runtime_error("output smaller than its declared shape");
     }
 
     HeadPlane plane;
     plane.data = tensor.data.data() + static_cast<std::size_t>(lane) * lane_stride;
-    plane.grid = grid;
+    plane.height = height;
+    plane.width = width;
     plane.channels = channels;
 
     if (channels == kBboxChannels) {
       bbox.push_back(plane);
-    } else if (channels == kClassChannels) {
+    } else if (channels == class_count) {
       cls.push_back(plane);
     } else {
       throw std::runtime_error("output with " + std::to_string(channels) +
@@ -471,14 +472,19 @@ LaneHeads heads_from_outputs(const std::vector<HeadTensor>& outputs, int lane) {
   }
 
   const auto by_descending_grid = [](const HeadPlane& a, const HeadPlane& b) {
-    return a.grid > b.grid;
+    if (a.height != b.height) {
+      return a.height > b.height;
+    }
+    return a.width > b.width;
   };
   std::sort(bbox.begin(), bbox.end(), by_descending_grid);
   std::sort(cls.begin(), cls.end(), by_descending_grid);
 
   LaneHeads heads;
   for (int level = 0; level < kLevels; ++level) {
-    if (bbox[static_cast<std::size_t>(level)].grid != cls[static_cast<std::size_t>(level)].grid) {
+    if (bbox[static_cast<std::size_t>(level)].height !=
+            cls[static_cast<std::size_t>(level)].height ||
+        bbox[static_cast<std::size_t>(level)].width != cls[static_cast<std::size_t>(level)].width) {
       throw std::runtime_error("bbox and class grids disagree at level " + std::to_string(level));
     }
     heads.bbox[static_cast<std::size_t>(level)] = bbox[static_cast<std::size_t>(level)];
@@ -505,10 +511,11 @@ std::vector<objdet::Box> decode_lane(const LaneHeads& heads, int net, double sco
   for (int level = 0; level < kLevels; ++level) {
     const HeadPlane& box = heads.bbox[static_cast<std::size_t>(level)];
     const HeadPlane& cls = heads.cls[static_cast<std::size_t>(level)];
-    const float stride = static_cast<float>(net) / static_cast<float>(box.grid);
+    const float stride_x = static_cast<float>(net) / static_cast<float>(box.width);
+    const float stride_y = static_cast<float>(net) / static_cast<float>(box.height);
 
-    for (int row = 0; row < cls.grid; ++row) {
-      for (int col = 0; col < cls.grid; ++col) {
+    for (int row = 0; row < cls.height; ++row) {
+      for (int col = 0; col < cls.width; ++col) {
         const float* logits = cls.cell(row, col);
         int best_class = 0;
         float best_logit = logits[0];
@@ -529,10 +536,10 @@ std::vector<objdet::Box> decode_lane(const LaneHeads& heads, int net, double sco
         objdet::Box det;
         det.score = 1.0f / (1.0f + std::exp(-std::clamp(best_logit, -30.0f, 30.0f)));
         det.class_id = best_class;
-        det.x1 = (anchor_x - ltrb[0]) * stride;
-        det.y1 = (anchor_y - ltrb[1]) * stride;
-        det.x2 = (anchor_x + ltrb[2]) * stride;
-        det.y2 = (anchor_y + ltrb[3]) * stride;
+        det.x1 = (anchor_x - ltrb[0]) * stride_x;
+        det.y1 = (anchor_y - ltrb[1]) * stride_y;
+        det.x2 = (anchor_x + ltrb[2]) * stride_x;
+        det.y2 = (anchor_y + ltrb[3]) * stride_y;
         detections.push_back(det);
       }
     }
@@ -573,9 +580,10 @@ std::vector<objdet::Box> to_original(const std::vector<objdet::Box>& detections,
 // --------------------------------------------------------------------------
 // RTSP source, depayload, parse and hardware H.264 decode to NV12, in one
 // group. The frames leave here and the batch is assembled by the app.
-simaai::neat::nodes::groups::RtspDecodedInputOptions
-build_source_options(const AppConfig& cfg, const std::string& url, int& width, int& height,
-                     int& fps) {
+simaai::neat::nodes::groups::RtspDecodedInputOptions build_source_options(const AppConfig& cfg,
+                                                                          const std::string& url,
+                                                                          int& width, int& height,
+                                                                          int& fps) {
   sima_examples::RtspStreamInfo probe;
   sima_examples::RtspProbeOptions probe_options;
   probe_options.payload_type = 96;
@@ -625,8 +633,9 @@ simaai::neat::InputOptions h264_video_input_options() {
   return options;
 }
 
-simaai::neat::Graph build_encoded_source_graph(
-    int index, const simaai::neat::nodes::groups::RtspDecodedInputOptions& options) {
+simaai::neat::Graph
+build_encoded_source_graph(int index,
+                           const simaai::neat::nodes::groups::RtspDecodedInputOptions& options) {
   simaai::neat::nodes::groups::RtspEncodedInputOptions encoded;
   encoded.url = options.url;
   encoded.codec = simaai::neat::nodes::groups::RtspCodec::H264;
@@ -641,8 +650,8 @@ simaai::neat::Graph build_encoded_source_graph(
   return source;
 }
 
-simaai::neat::Graph build_decode_graph(
-    int index, const simaai::neat::nodes::groups::RtspDecodedInputOptions& options) {
+simaai::neat::Graph
+build_decode_graph(int index, const simaai::neat::nodes::groups::RtspDecodedInputOptions& options) {
   simaai::neat::SimaDecodeOptions decode_options;
   decode_options.type = simaai::neat::SimaDecodeType::H264;
   decode_options.sima_allocator_type = options.sima_allocator_type;
@@ -656,28 +665,21 @@ simaai::neat::Graph build_decode_graph(
   simaai::neat::Graph decode("decode_" + std::to_string(index));
   decode.connect(simaai::neat::nodes::Input("decode_h264", h264_decode_input_options()),
                  simaai::neat::nodes::SimaDecode(decode_options));
-  decode.add(simaai::neat::nodes::CapsRaw(
-      "NV12", options.output_caps.width, options.output_caps.height, options.output_caps.fps,
-      options.output_caps.memory));
+  decode.add(simaai::neat::nodes::CapsRaw("NV12", options.output_caps.width,
+                                          options.output_caps.height, options.output_caps.fps,
+                                          options.output_caps.memory));
   decode.add(simaai::neat::nodes::Output("frame_" + std::to_string(index),
                                          simaai::neat::OutputOptions::Latest()));
   return decode;
 }
 
-simaai::neat::Graph build_video_sender_graph(
-    int index, const simaai::neat::nodes::groups::VideoSenderOptions& options) {
+simaai::neat::Graph
+build_video_sender_graph(int index,
+                         const simaai::neat::nodes::groups::VideoSenderOptions& options) {
   simaai::neat::Graph video("video_sender_" + std::to_string(index));
   video.connect(simaai::neat::nodes::Input("video_h264", h264_video_input_options()),
                 simaai::neat::nodes::groups::VideoSender(options));
   return video;
-}
-
-simaai::neat::GraphLinkOptions realtime_link(int index, int queue_depth = 3) {
-  simaai::neat::GraphLinkOptions link;
-  link.policy = simaai::neat::GraphLinkPolicy::RealtimeLatestByStream;
-  link.queue_depth = queue_depth;
-  link.stream_id = "stream" + std::to_string(index);
-  return link;
 }
 
 simaai::neat::RunOptions build_run_options() {
@@ -694,9 +696,11 @@ bool pull_latest(simaai::neat::Run& run, const std::string& output_name, int tim
                  simaai::neat::Sample& out) {
   simaai::neat::PullError pull_error;
   auto status = run.pull(output_name, timeout_ms, out, &pull_error);
-  if (status == simaai::neat::PullStatus::Timeout ||
-      status == simaai::neat::PullStatus::Closed) {
+  if (status == simaai::neat::PullStatus::Timeout) {
     return false;
+  }
+  if (status == simaai::neat::PullStatus::Closed) {
+    throw std::runtime_error("output closed while pulling " + output_name);
   }
   if (status != simaai::neat::PullStatus::Ok) {
     throw std::runtime_error("failed to pull " + output_name + ": " + pull_error.message);
@@ -704,8 +708,14 @@ bool pull_latest(simaai::neat::Run& run, const std::string& output_name, int tim
   for (;;) {
     simaai::neat::Sample newer;
     status = run.pull(output_name, 0, newer, &pull_error);
-    if (status != simaai::neat::PullStatus::Ok) {
+    if (status == simaai::neat::PullStatus::Timeout) {
       return true;
+    }
+    if (status == simaai::neat::PullStatus::Closed) {
+      throw std::runtime_error("output closed while draining " + output_name);
+    }
+    if (status != simaai::neat::PullStatus::Ok) {
+      throw std::runtime_error("failed to drain " + output_name + ": " + pull_error.message);
     }
     out = std::move(newer);
   }
@@ -811,7 +821,8 @@ private:
     }
     const auto tensors = simaai::neat::tensors_from_sample(sample, false);
     if (tensors.empty()) {
-      return false;
+      throw std::runtime_error("decoded output has no tensor payload for stream " +
+                               std::to_string(stream.index));
     }
     cv::Mat bgr;
     std::string err;
@@ -839,8 +850,7 @@ private:
 // output
 // --------------------------------------------------------------------------
 void send_metadata(StreamRuntime& stream, const FrameRef& sample,
-                   const std::vector<objdet::Box>& boxes,
-                   const std::vector<std::string>& labels) {
+                   const std::vector<objdet::Box>& boxes, const std::vector<std::string>& labels) {
   std::vector<sima_examples::MetadataBox> metadata_boxes;
   metadata_boxes.reserve(boxes.size());
   int object_index = 1;
@@ -866,8 +876,7 @@ void send_metadata(StreamRuntime& stream, const FrameRef& sample,
   message["timestamp"] = timestamp_ms;
   message["frame_id"] = frame_id;
   if (sample.pts_ns >= 0) {
-    const auto ticks =
-        (static_cast<__int128>(sample.pts_ns) * 90'000) / 1'000'000'000;
+    const auto ticks = (static_cast<__int128>(sample.pts_ns) * 90'000) / 1'000'000'000;
     message["_insight"]["rtp_timestamp"] =
         static_cast<std::uint32_t>(static_cast<std::uint64_t>(ticks));
   }
@@ -915,23 +924,21 @@ void build_streams(const AppConfig& cfg, simaai::neat::Graph& graph,
     auto source = build_encoded_source_graph(stream.index, stream.source_options);
     auto decoder = build_decode_graph(stream.index, stream.source_options);
     if (cfg.video_enabled) {
-      auto branch = simaai::neat::graphs::Branch(
-          "encoded_" + std::to_string(stream.index), {"decode_h264", "video_h264"});
+      auto branch = simaai::neat::graphs::Branch("encoded_" + std::to_string(stream.index),
+                                                 {"decode_h264", "video_h264"});
       graph.connect(source, branch);
-      graph.connect(branch, decoder, realtime_link(stream.index));
+      graph.connect(branch, decoder);
 
-      auto video_options =
-          simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
-              simaai::neat::nodes::groups::RtspCodec::H264);
+      auto video_options = simaai::neat::nodes::groups::VideoSenderOptions::Passthrough(
+          simaai::neat::nodes::groups::RtspCodec::H264);
       video_options.host = cfg.insight_host;
       video_options.channel = stream.index;
       video_options.video_port_base = cfg.video_port_base;
       video_options.async = true;
       stream.video_port = video_options.video_port();
-      graph.connect(branch, build_video_sender_graph(stream.index, video_options),
-                    realtime_link(stream.index));
+      graph.connect(branch, build_video_sender_graph(stream.index, video_options));
     } else {
-      graph.connect(source, decoder, realtime_link(stream.index));
+      graph.connect(source, decoder);
     }
 
     std::cout << "[stream " << stream.index << "] rtsp=" << stream.url << " " << stream.frame_w
@@ -966,27 +973,23 @@ void run_app(const AppConfig& cfg) {
   simaai::neat::Model model(cfg.model_path);
 
   const auto input_specs = model.input_specs();
-  sima_examples::require(!input_specs.empty(), "model exposes no inputs");
-  const auto& input_shape = input_specs.front().shape;
-  if (input_shape.size() != 4) {
-    throw std::runtime_error("this example needs a batched model; compile with --batch_size 4");
+  std::vector<std::vector<std::int64_t>> input_shapes;
+  input_shapes.reserve(input_specs.size());
+  for (const auto& spec : input_specs) {
+    input_shapes.emplace_back(spec.shape.begin(), spec.shape.end());
   }
-  const int batch_size = static_cast<int>(input_shape[0]);
-  const int net = static_cast<int>(input_shape[1]);
-  if (batch_size != kMaxStreams) {
-    throw std::runtime_error("model batch size is " + std::to_string(batch_size) +
-                             "; this example requires batch size " +
-                             std::to_string(kMaxStreams));
-  }
-
   const auto output_specs = model.output_specs();
-  if (static_cast<int>(output_specs.size()) != kExpectedOutputs) {
-    throw std::runtime_error("expected " + std::to_string(kExpectedOutputs) +
-                             " YOLO26 head tensors, model has " +
-                             std::to_string(output_specs.size()));
+  std::vector<std::vector<std::int64_t>> output_shapes;
+  output_shapes.reserve(output_specs.size());
+  for (const auto& spec : output_specs) {
+    output_shapes.emplace_back(spec.shape.begin(), spec.shape.end());
   }
+  const auto contract =
+      yolo26_batch4::validate_model_contract(input_shapes, output_shapes, labels.size());
+  const int batch_size = kMaxStreams;
+  const int net = contract.net;
   std::cout << "Model loaded: batch=" << batch_size << " net=" << net
-            << " heads=" << output_specs.size() << "\n";
+            << " classes=" << contract.class_count << " heads=" << output_specs.size() << "\n";
 
   simaai::neat::Graph graph;
   std::vector<StreamRuntime> streams;
@@ -1015,8 +1018,8 @@ void run_app(const AppConfig& cfg) {
     const double batched = sima_examples::time_ms();
 
     // One dispatch for all lanes.
-    const auto input = simaai::neat::Tensor::from_vector(
-        batch->data, {batch_size, net, net, 3}, simaai::neat::TensorMemory::EV74);
+    const auto input = simaai::neat::Tensor::from_vector(batch->data, {batch_size, net, net, 3},
+                                                         simaai::neat::TensorMemory::EV74);
     const auto outputs = model.run(simaai::neat::TensorList{input}, cfg.timeout_ms);
     if (static_cast<int>(outputs.size()) != kExpectedOutputs) {
       throw std::runtime_error("expected " + std::to_string(kExpectedOutputs) +
@@ -1038,7 +1041,7 @@ void run_app(const AppConfig& cfg) {
       const int frame_w = stream.frame_w;
       const int frame_h = stream.frame_h;
       lanes.push_back(std::async(std::launch::async, [&, index, frame_w, frame_h] {
-        const auto lane_heads = heads_from_outputs(heads, index);
+        const auto lane_heads = heads_from_outputs(heads, index, contract.class_count);
         auto detections = decode_lane(lane_heads, net, cfg.score_threshold, cfg.max_detections);
         return to_original(detections, batch->geometry[static_cast<std::size_t>(index)], frame_w,
                            frame_h);

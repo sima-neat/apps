@@ -3,13 +3,16 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <netdb.h>
 #include <poll.h>
 #include <set>
 #include <string>
 #include <sys/socket.h>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
@@ -17,6 +20,12 @@ namespace sima_examples::testing {
 namespace {
 
 using json = nlohmann::json;
+
+constexpr size_t kMaxDatagramPayload = 1200;
+constexpr size_t kChunkHeaderSize = 12;
+constexpr size_t kMaxChunkPayload = kMaxDatagramPayload - kChunkHeaderSize;
+constexpr size_t kMaxLogicalPayload = 65507;
+constexpr uint8_t kMaxChunkCount = 56;
 
 // Resolve the bind address for a local UDP listener used by tests.
 bool resolve_bind_addr(const std::string& host, int port, sockaddr_storage& out, socklen_t& out_len,
@@ -102,8 +111,17 @@ bool is_valid_metadata_json(const std::string& payload, const std::string& metad
 } // namespace
 
 struct MetadataJsonListener::SocketState {
+  struct PartialMessage {
+    uint8_t chunk_count = 0;
+    std::vector<std::string> chunks;
+    std::vector<bool> present;
+    size_t size = 0;
+    std::chrono::steady_clock::time_point updated_at;
+  };
+
   int fd = -1;
   int port = -1;
+  std::unordered_map<std::string, PartialMessage> partial;
 };
 
 MetadataJsonListener::MetadataJsonListener(const MetadataJsonListenerOptions& opt) : opt_(opt) {
@@ -113,6 +131,11 @@ MetadataJsonListener::MetadataJsonListener(const MetadataJsonListenerOptions& op
   }
   if (opt_.base_port <= 0) {
     err_ = "base_port must be > 0";
+    return;
+  }
+  if (opt_.chunk_expiry_ms <= 0 || opt_.max_inflight_messages <= 0 ||
+      opt_.min_data_items_per_port < 0) {
+    err_ = "chunk reassembly limits must be > 0";
     return;
   }
   if (!bind_ports() && err_.empty()) {
@@ -175,8 +198,11 @@ bool MetadataJsonListener::bind_ports() {
 }
 
 bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListenerResult& result) {
-  char buf[65536];
-  const ssize_t n = ::recv(sock.fd, buf, sizeof(buf), 0);
+  std::array<char, 65536> buf{};
+  sockaddr_storage sender{};
+  socklen_t sender_len = sizeof(sender);
+  const ssize_t n = ::recvfrom(sock.fd, buf.data(), buf.size(), 0,
+                               reinterpret_cast<sockaddr*>(&sender), &sender_len);
   if (n < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return false;
@@ -185,10 +211,110 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
     return false;
   }
 
+  const auto now = std::chrono::steady_clock::now();
+  for (auto it = sock.partial.begin(); it != sock.partial.end();) {
+    const auto age =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.updated_at);
+    if (age.count() >= opt_.chunk_expiry_ms) {
+      it = sock.partial.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  std::string payload;
+  const auto size = static_cast<size_t>(n);
+  const auto* bytes = reinterpret_cast<const uint8_t*>(buf.data());
+  if (size == 0 || bytes[0] != 0x4e) {
+    payload.assign(buf.data(), size);
+  } else {
+    auto reject = [&](const std::string& reason) {
+      if (result.error.empty()) {
+        result.error = "invalid chunk on port " + std::to_string(sock.port) + ": " + reason;
+      }
+      return false;
+    };
+    if (size < kChunkHeaderSize) {
+      return reject("header is too short");
+    }
+    if (bytes[1] != 0x01) {
+      return reject("unsupported version");
+    }
+    uint64_t message_id = 0;
+    for (size_t byte = 0; byte < sizeof(message_id); ++byte) {
+      message_id = (message_id << 8U) | bytes[2 + byte];
+    }
+    const uint8_t chunk_index = bytes[10];
+    const uint8_t chunk_count = bytes[11];
+    const size_t chunk_size = size - kChunkHeaderSize;
+    if (chunk_count < 2 || chunk_count > kMaxChunkCount || chunk_index >= chunk_count) {
+      return reject("index or count is out of range");
+    }
+    if (chunk_index + 1U < chunk_count && chunk_size != kMaxChunkPayload) {
+      return reject("non-final payload has the wrong size");
+    }
+    if (chunk_index + 1U == chunk_count && (chunk_size == 0 || chunk_size > kMaxChunkPayload)) {
+      return reject("final payload has the wrong size");
+    }
+
+    char host[NI_MAXHOST]{};
+    char service[NI_MAXSERV]{};
+    if (::getnameinfo(reinterpret_cast<const sockaddr*>(&sender), sender_len, host, sizeof(host),
+                      service, sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+      return reject("could not identify sender");
+    }
+    const std::string key = std::string(host) + ":" + service + "/" + std::to_string(message_id);
+    auto it = sock.partial.find(key);
+    if (it == sock.partial.end()) {
+      if (static_cast<int>(sock.partial.size()) >= opt_.max_inflight_messages) {
+        return reject("reassembly state limit reached");
+      }
+      SocketState::PartialMessage state;
+      state.chunk_count = chunk_count;
+      state.chunks.resize(chunk_count);
+      state.present.assign(chunk_count, false);
+      state.updated_at = now;
+      it = sock.partial.emplace(key, std::move(state)).first;
+    } else if (it->second.chunk_count != chunk_count) {
+      sock.partial.erase(it);
+      return reject("inconsistent chunk count");
+    }
+
+    auto& state = it->second;
+    const std::string chunk(buf.data() + kChunkHeaderSize, chunk_size);
+    if (state.present[chunk_index]) {
+      if (state.chunks[chunk_index] != chunk) {
+        sock.partial.erase(it);
+        return reject("conflicting duplicate");
+      }
+      state.updated_at = now;
+      return false;
+    }
+    if (state.size + chunk.size() > kMaxLogicalPayload) {
+      sock.partial.erase(it);
+      return reject("logical payload limit exceeded");
+    }
+    state.chunks[chunk_index] = chunk;
+    state.present[chunk_index] = true;
+    state.size += chunk.size();
+    state.updated_at = now;
+    if (!std::all_of(state.present.begin(), state.present.end(),
+                     [](bool present) { return present; })) {
+      return false;
+    }
+    payload.reserve(state.size);
+    for (const auto& part : state.chunks) {
+      payload += part;
+    }
+    sock.partial.erase(it);
+    if (payload.size() <= kMaxDatagramPayload || payload.size() > kMaxLogicalPayload) {
+      return reject("logical payload has an invalid size");
+    }
+  }
+
   MetadataJsonMessage msg;
   msg.port = sock.port;
   std::string parse_err;
-  const std::string payload(buf, static_cast<size_t>(n));
   if (!is_valid_metadata_json(payload, opt_.metadata_type, opt_.data_array_key, msg, parse_err)) {
     if (result.error.empty()) {
       result.error = "invalid json on port " + std::to_string(sock.port) + ": " + parse_err;
@@ -196,8 +322,10 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
     return false;
   }
 
+  const bool meets_data_requirement = msg.object_count >= opt_.min_data_items_per_port;
   result.messages.push_back(std::move(msg));
-  if (std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
+  if (meets_data_requirement &&
+      std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
                 sock.port) == result.ports_with_valid_json.end()) {
     result.ports_with_valid_json.push_back(sock.port);
   }
@@ -224,18 +352,20 @@ MetadataJsonListenerResult MetadataJsonListener::wait_for_messages() {
     pfds.push_back(pollfd{sock.fd, POLLIN, 0});
   }
 
-  const int64_t deadline_ms = static_cast<int64_t>(opt_.timeout_ms);
-  int64_t waited_ms = 0;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(opt_.timeout_ms);
   // Poll all sockets from a single loop so the same utility scales from
   // single-port smoke tests to larger multi-port metadata e2e checks.
-  while (waited_ms < deadline_ms) {
-    const int poll_ms = static_cast<int>(std::min<int64_t>(250, deadline_ms - waited_ms));
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    const int poll_ms =
+        static_cast<int>(std::min<int64_t>(250, std::max<int64_t>(1, remaining.count())));
     const int rc = ::poll(pfds.data(), pfds.size(), poll_ms);
     if (rc < 0) {
       result.error = std::string("poll failed: ") + std::strerror(errno);
       return result;
     }
-    waited_ms += poll_ms;
     if (rc == 0) {
       continue;
     }

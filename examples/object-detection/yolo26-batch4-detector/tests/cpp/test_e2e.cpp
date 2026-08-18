@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <future>
 #include <iostream>
@@ -72,8 +73,7 @@ int main(int argc, char** argv) {
                     {"output.insight.video_port_base", std::to_string(video_port_base)},
                     {"output.insight.metadata_port_base", std::to_string(metadata_port_base)},
                     {"inference.frames", "140"}},
-                   {{"streams",
-                     {rtsp_urls[0], rtsp_urls[1], rtsp_urls[2], rtsp_urls[3]}}});
+                   {{"streams", {rtsp_urls[0], rtsp_urls[1], rtsp_urls[2], rtsp_urls[3]}}});
 
   MetadataJsonListenerOptions metadata_options;
   metadata_options.host = kE2eInsightHost;
@@ -81,6 +81,7 @@ int main(int argc, char** argv) {
   metadata_options.num_ports = static_cast<int>(kRequiredStreams);
   metadata_options.timeout_ms = std::min(timeout_ms, 30000);
   metadata_options.require_all_ports = true;
+  metadata_options.min_data_items_per_port = 1;
   MetadataJsonListener metadata_listener(metadata_options);
   if (!metadata_listener.ok()) {
     std::cerr << "[FAIL] metadata listener failed: " << metadata_listener.error() << "\n";
@@ -90,9 +91,8 @@ int main(int argc, char** argv) {
 
   // Drain UDP while the application runs. Waiting until process exit can
   // overflow receive buffers when four lanes publish at once.
-  auto metadata_future = std::async(std::launch::async, [&metadata_listener] {
-    return metadata_listener.wait_for_messages();
-  });
+  auto metadata_future = std::async(
+      std::launch::async, [&metadata_listener] { return metadata_listener.wait_for_messages(); });
   const ProcessResult result = spawn_until_output_files(binary, {"--config", config_path.string()},
                                                         output_dir, total_saved_frames, timeout_ms);
   const MetadataJsonListenerResult metadata = metadata_future.get();
@@ -113,7 +113,22 @@ int main(int argc, char** argv) {
       std::cerr << "[FAIL] some sampled output files are empty\n";
       rc = 1;
     } else {
-      std::cout << "[OK] batch-4 detector produced " << files << " sampled output files\n";
+      for (std::size_t lane = 0; lane < kRequiredStreams; ++lane) {
+        const std::string prefix = "stream_" + std::to_string(lane) + "_frame_";
+        const bool lane_present =
+            std::any_of(fs::directory_iterator(output_dir), fs::directory_iterator{},
+                        [&](const fs::directory_entry& entry) {
+                          return entry.is_regular_file() && entry.file_size() > 0U &&
+                                 entry.path().filename().string().starts_with(prefix);
+                        });
+        if (!lane_present) {
+          std::cerr << "[FAIL] no non-empty debug JPEG for lane " << lane << "\n";
+          rc = 1;
+        }
+      }
+      if (rc == 0) {
+        std::cout << "[OK] batch-4 detector produced " << files << " sampled output files\n";
+      }
     }
   }
   if (rc == 0) {
@@ -124,12 +139,33 @@ int main(int argc, char** argv) {
     } else {
       for (const auto& message : metadata.messages) {
         const auto payload = nlohmann::json::parse(message.payload);
-        if (!payload.contains("_insight") ||
-            !payload["_insight"].contains("rtp_timestamp") ||
-            !payload["_insight"]["rtp_timestamp"].is_number_unsigned()) {
+        if (!payload.contains("_insight") || !payload["_insight"].contains("rtp_timestamp") ||
+            !payload["_insight"]["rtp_timestamp"].is_number_unsigned() ||
+            payload["_insight"]["rtp_timestamp"].get<std::uint64_t>() > 0xffffffffULL) {
           std::cerr << "[FAIL] metadata is missing _insight.rtp_timestamp\n";
           rc = 1;
           break;
+        }
+        for (const auto& object : payload["data"]["objects"]) {
+          if (!object.contains("bbox") || !object["bbox"].is_array() ||
+              object["bbox"].size() != 4U) {
+            std::cerr << "[FAIL] detection metadata has an invalid bbox\n";
+            rc = 1;
+            break;
+          }
+          const double x = object["bbox"][0].get<double>();
+          const double y = object["bbox"][1].get<double>();
+          const double width = object["bbox"][2].get<double>();
+          const double height = object["bbox"][3].get<double>();
+          const double confidence = object.value("confidence", -1.0);
+          if (object.value("label", std::string{}).empty() || !std::isfinite(confidence) ||
+              confidence < 0.35 || confidence > 1.0 || !std::isfinite(x) || !std::isfinite(y) ||
+              !std::isfinite(width) || !std::isfinite(height) || x < 0.0 || y < 0.0 ||
+              width <= 0.0 || height <= 0.0) {
+            std::cerr << "[FAIL] detection metadata bbox is not finite and positive\n";
+            rc = 1;
+            break;
+          }
         }
       }
     }

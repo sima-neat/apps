@@ -13,13 +13,14 @@ one MLA dispatch -> per-lane head decode -> Insight video + metadata.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
 import glob
 import json
-from pathlib import Path
+import math
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import yaml
 
@@ -30,7 +31,6 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 LEVELS = 3
 EXPECTED_OUTPUTS = 2 * LEVELS
 BBOX_CHANNELS = 4
-CLASS_CHANNELS = 80
 PAD_VALUE = 114
 MAX_STREAMS = 4
 
@@ -64,10 +64,17 @@ class AppConfig:
     profile_interval: int = 50
 
 
+@dataclass(frozen=True)
+class ModelContract:
+    net: int
+    class_count: int
+    grids: tuple[tuple[int, int], ...]
+
+
 def section(raw: dict, key: str) -> dict:
     value = raw.get(key) or {}
     if not isinstance(value, dict):
-        raise ValueError(f"{key} must be a mapping")
+        raise TypeError(f"{key} must be a mapping")
     return value
 
 
@@ -76,7 +83,7 @@ def string_or(raw: dict, key: str, default: str = "") -> str:
     if value is None:
         return default
     if not isinstance(value, str):
-        raise ValueError(f"{key} must be a string")
+        raise TypeError(f"{key} must be a string")
     return value
 
 
@@ -85,7 +92,7 @@ def int_or(raw: dict, key: str, default: int) -> int:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{key} must be an integer")
+        raise TypeError(f"{key} must be an integer")
     return value
 
 
@@ -94,7 +101,7 @@ def float_or(raw: dict, key: str, default: float) -> float:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{key} must be numeric")
+        raise TypeError(f"{key} must be numeric")
     return float(value)
 
 
@@ -103,7 +110,7 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     if value is None:
         return default
     if not isinstance(value, bool):
-        raise ValueError(f"{key} must be true or false")
+        raise TypeError(f"{key} must be true or false")
     return value
 
 
@@ -146,7 +153,7 @@ def validate_config(cfg: AppConfig) -> None:
 def load_app_config(path: Path) -> AppConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise ValueError("config root must be a mapping")
+        raise TypeError("config root must be a mapping")
 
     model = section(raw, "model")
     source = section(raw, "input")
@@ -156,7 +163,9 @@ def load_app_config(path: Path) -> AppConfig:
     runtime = section(raw, "runtime")
 
     streams = raw.get("streams") or []
-    if not isinstance(streams, list) or not all(isinstance(url, str) for url in streams):
+    if not isinstance(streams, list) or not all(
+        isinstance(url, str) for url in streams
+    ):
         raise ValueError("streams must be a list of RTSP URLs")
 
     default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
@@ -223,14 +232,15 @@ def letterbox_into(rgb, lane, net: int):
     """
     height, width = rgb.shape[:2]
     scale = min(net / width, net / height)
-    new_w, new_h = round(width * scale), round(height * scale)
+    new_w = math.floor(width * scale + 0.5)
+    new_h = math.floor(height * scale + 0.5)
     dx, dy = (net - new_w) // 2, (net - new_h) // 2
     lane.fill(PAD_VALUE / 255.0)
     resized = cv2.resize(rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
     np.multiply(
         resized,
         np.float32(1.0 / 255.0),
-        out=lane[dy:dy + new_h, dx:dx + new_w],
+        out=lane[dy : dy + new_h, dx : dx + new_w],
         dtype=np.float32,
     )
     return scale, dx, dy
@@ -239,11 +249,11 @@ def letterbox_into(rgb, lane, net: int):
 # --------------------------------------------------------------------------
 # postprocessing
 # --------------------------------------------------------------------------
-def heads_from_outputs(arrays: list, lane: int) -> dict:
+def heads_from_outputs(arrays: list, lane: int, class_count: int) -> dict:
     """Six `[N, H, W, C]` outputs -> `{head_name: [H, W, C]}` for one lane.
 
     Heads are matched by shape, not by output order: 4 channels is a bbox head,
-    80 a class head, and the grid size orders the three levels. Sorted by
+    `class_count` channels is a class head, and the grid size orders the three levels. Sorted by
     descending grid so level 0 is the 80x80 map, matching the strides
     `decode_heads` derives from the grid size.
     """
@@ -257,19 +267,19 @@ def heads_from_outputs(arrays: list, lane: int) -> dict:
         channels = plane.shape[2]
         if channels == BBOX_CHANNELS:
             bbox.append(plane)
-        elif channels == CLASS_CHANNELS:
+        elif channels == class_count:
             cls.append(plane)
         else:
             raise RuntimeError(
                 f"output with {channels} channels is neither a bbox head "
-                f"({BBOX_CHANNELS}) nor a class head ({CLASS_CHANNELS})"
+                f"({BBOX_CHANNELS}) nor a class head ({class_count})"
             )
     if len(bbox) != LEVELS or len(cls) != LEVELS:
         raise RuntimeError(
             f"expected {LEVELS} bbox and {LEVELS} class heads, got {len(bbox)} and {len(cls)}"
         )
-    bbox.sort(key=lambda plane: -plane.shape[0])
-    cls.sort(key=lambda plane: -plane.shape[0])
+    bbox.sort(key=lambda plane: (-plane.shape[0], -plane.shape[1]))
+    cls.sort(key=lambda plane: (-plane.shape[0], -plane.shape[1]))
 
     heads = {}
     for level in range(LEVELS):
@@ -283,7 +293,9 @@ def heads_from_outputs(arrays: list, lane: int) -> dict:
     return heads
 
 
-def decode_heads(heads: dict, net: int, score_threshold: float, max_detections: int) -> list[dict]:
+def decode_heads(
+    heads: dict, net: int, score_threshold: float, max_detections: int
+) -> list[dict]:
     """YOLO26 reg_max=1: raw l/t/r/b distances plus class logits. No NMS.
 
     The one-to-one head is already deduplicated, so detections are only ranked
@@ -301,7 +313,8 @@ def decode_heads(heads: dict, net: int, score_threshold: float, max_detections: 
     for level in range(LEVELS):
         box = heads[f"bbox_{level}"]
         cls = heads[f"class_logit_{level}"]
-        stride = net / box.shape[0]
+        stride_x = net / box.shape[1]
+        stride_y = net / box.shape[0]
 
         best_logit = cls.max(-1)
         rows, cols = np.nonzero(best_logit >= logit_threshold)
@@ -313,10 +326,10 @@ def decode_heads(heads: dict, net: int, score_threshold: float, max_detections: 
         ltrb = box[rows, cols]
         anchor_x = cols + 0.5
         anchor_y = rows + 0.5
-        x1 = (anchor_x - ltrb[:, 0]) * stride
-        y1 = (anchor_y - ltrb[:, 1]) * stride
-        x2 = (anchor_x + ltrb[:, 2]) * stride
-        y2 = (anchor_y + ltrb[:, 3]) * stride
+        x1 = (anchor_x - ltrb[:, 0]) * stride_x
+        y1 = (anchor_y - ltrb[:, 1]) * stride_y
+        x2 = (anchor_x + ltrb[:, 2]) * stride_x
+        y2 = (anchor_y + ltrb[:, 3]) * stride_y
 
         detections.extend(
             {
@@ -328,15 +341,21 @@ def decode_heads(heads: dict, net: int, score_threshold: float, max_detections: 
                 "y2": float(dd),
             }
             for s, c, a, b, cc, dd in zip(
-                scores.tolist(), class_ids.tolist(),
-                x1.tolist(), y1.tolist(), x2.tolist(), y2.tolist(),
+                scores.tolist(),
+                class_ids.tolist(),
+                x1.tolist(),
+                y1.tolist(),
+                x2.tolist(),
+                y2.tolist(),
             )
         )
     detections.sort(key=lambda d: d["score"], reverse=True)
     return detections[:max_detections]
 
 
-def to_original(detections: list[dict], scale: float, dx: int, dy: int, width: int, height: int):
+def to_original(
+    detections: list[dict], scale: float, dx: int, dy: int, width: int, height: int
+):
     """Undo the letterbox so boxes are in source-frame coordinates."""
     mapped = []
     for det in detections:
@@ -394,10 +413,19 @@ def pull_latest(run, output_name: str, timeout_ms: int):
     """Block for one frame, then drain so the caller always gets the newest."""
     sample = run.pull(output_name, timeout_ms)
     if sample is None:
+        error = run.last_error()
+        if error:
+            raise RuntimeError(f"failed to pull {output_name}: {error}")
+        # Python's optional-return pull binding does not distinguish timeout
+        # from a closed output. A non-empty run error is the only fatal status
+        # available here; otherwise let the caller retry.
         return None
     while True:
         newer = run.pull(output_name, 0)
         if newer is None:
+            error = run.last_error()
+            if error:
+                raise RuntimeError(f"failed to drain {output_name}: {error}")
             return sample
         sample = newer
 
@@ -408,7 +436,7 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
         raise RuntimeError(f"failed to open RTSP source for probing: {url}")
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    fps = int(round(capture.get(cv2.CAP_PROP_FPS) or 0))
+    fps = round(capture.get(cv2.CAP_PROP_FPS) or 0)
     capture.release()
     if width <= 0 or height <= 0:
         raise RuntimeError(f"failed to probe RTSP frame size: {url}")
@@ -497,14 +525,6 @@ def build_decode_graph(index: int, opt):
     return decode
 
 
-def realtime_link(index: int, queue_depth: int = 3):
-    link = pyneat.GraphLinkOptions()
-    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    link.queue_depth = queue_depth
-    link.stream_id = f"stream{index}"
-    return link
-
-
 def build_run_options():
     run_options = pyneat.RunOptions()
     run_options.preset = pyneat.RunPreset.Realtime
@@ -569,6 +589,7 @@ class Stream:
 @dataclass(frozen=True)
 class FrameRef:
     """Metadata retained after the decoder-backed Sample is released."""
+
     pts_ns: int
     frame_id: int
 
@@ -580,6 +601,7 @@ class BatchSlot:
     Two of these rotate between ingest and synchronous MLA/decode/publish.
     Keeping those phases on separate slots lets ingest overlap processing.
     """
+
     tensor: object
     rgb: list = field(default_factory=list)
     geometry: list = field(default_factory=list)
@@ -606,7 +628,9 @@ class BatchPrefetcher:
     caller works on the current one, and both cv2 and the pull release the GIL.
     """
 
-    def __init__(self, run, streams: list[Stream], net: int, batch_size: int, timeout_ms: int):
+    def __init__(
+        self, run, streams: list[Stream], net: int, batch_size: int, timeout_ms: int
+    ):
         self.run = run
         self.streams = streams
         self.net = net
@@ -627,7 +651,9 @@ class BatchPrefetcher:
         return slot if slot.ready else None
 
     def _fill(self, slot: BatchSlot) -> BatchSlot:
-        results = list(self.lane_pool.map(lambda s: self._fill_lane(slot, s), self.streams))
+        results = list(
+            self.lane_pool.map(lambda s: self._fill_lane(slot, s), self.streams)
+        )
         slot.ready = all(results)
         # Fewer streams than the compiled batch: repeat the last lane so the MLA
         # still runs exactly one dispatch.
@@ -643,9 +669,13 @@ class BatchPrefetcher:
             return False
         tensor = first_tensor(sample)
         if tensor is None:
-            return False
+            raise RuntimeError(
+                f"decoded output has no tensor payload for stream {stream.index}"
+            )
         rgb = nv12_to_rgb(tensor, slot.rgb[stream.index])
-        slot.geometry[stream.index] = letterbox_into(rgb, slot.tensor[stream.index], self.net)
+        slot.geometry[stream.index] = letterbox_into(
+            rgb, slot.tensor[stream.index], self.net
+        )
         # Do not retain the zero-copy decoder Sample across inference. Four
         # pipeline slots would otherwise pin enough decoder buffers to starve
         # the live graph. Insight publication only needs these scalar fields.
@@ -664,8 +694,8 @@ class BatchPrefetcher:
         self.closed = True
         try:
             self.pending.result(timeout=self.timeout_ms / 1000.0 + 1.0)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] batch prefetch shutdown failed: {exc}", file=sys.stderr)
         self.fill_pool.shutdown(wait=True, cancel_futures=True)
         self.lane_pool.shutdown(wait=True, cancel_futures=True)
 
@@ -673,7 +703,9 @@ class BatchPrefetcher:
 # --------------------------------------------------------------------------
 # output
 # --------------------------------------------------------------------------
-def send_metadata(stream: Stream, sample, detections: list[dict], labels: list[str]) -> None:
+def send_metadata(
+    stream: Stream, sample, detections: list[dict], labels: list[str]
+) -> None:
     objects = []
     for index, det in enumerate(detections, start=1):
         class_id = det["class_id"]
@@ -701,19 +733,22 @@ def send_metadata(stream: Stream, sample, detections: list[dict], labels: list[s
     }
     if sample.pts_ns >= 0:
         message["_insight"] = {
-            "rtp_timestamp": ((sample.pts_ns * 90_000) // 1_000_000_000)
-            & 0xFFFFFFFF
+            "rtp_timestamp": ((sample.pts_ns * 90_000) // 1_000_000_000) & 0xFFFFFFFF
         }
     stream.metadata_sender.send_raw_json(json.dumps(message, separators=(",", ":")))
 
 
 def save_debug_frame(cfg: AppConfig, stream: Stream, rgb, detections, labels) -> None:
-    if not cfg.debug_dir or cfg.save_every <= 0 or stream.processed % cfg.save_every != 0:
+    if (
+        not cfg.debug_dir
+        or cfg.save_every <= 0
+        or stream.processed % cfg.save_every != 0
+    ):
         return
     annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     for det in detections:
-        p1 = (int(round(det["x1"])), int(round(det["y1"])))
-        p2 = (int(round(det["x2"])), int(round(det["y2"])))
+        p1 = (round(det["x1"]), round(det["y1"]))
+        p2 = (round(det["x2"]), round(det["y2"]))
         cv2.rectangle(annotated, p1, p2, (0, 255, 0), 2)
         class_id = det["class_id"]
         label = labels[class_id] if 0 <= class_id < len(labels) else "unknown"
@@ -726,13 +761,20 @@ def save_debug_frame(cfg: AppConfig, stream: Stream, rgb, detections, labels) ->
             (0, 255, 0),
             1,
         )
-    out_path = Path(cfg.debug_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
+    out_path = (
+        Path(cfg.debug_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
+    )
     if not cv2.imwrite(str(out_path), annotated):
         print(f"[warn] failed to write {out_path}", file=sys.stderr)
 
 
-def publish_stream(cfg: AppConfig, slot: BatchSlot, labels: list[str],
-                   stream: Stream, detections: list[dict]) -> None:
+def publish_stream(
+    cfg: AppConfig,
+    slot: BatchSlot,
+    labels: list[str],
+    stream: Stream,
+    detections: list[dict],
+) -> None:
     """Send one stream's detections for the exact analysed frame."""
     sample = slot.samples[stream.index]
     rgb = slot.rgb[stream.index]
@@ -795,31 +837,64 @@ class ProfileWindow:
 # --------------------------------------------------------------------------
 # application
 # --------------------------------------------------------------------------
-def load_model(cfg: AppConfig) -> tuple[object, int, int]:
-    """Load the batched pack and refuse anything that is not a six-head batch model."""
-    model = pyneat.Model(str(resolve(cfg.model_path)))
-    shape = [int(x) for x in model.input_specs()[0].shape]
-    if len(shape) != 4:
+def validate_model_contract(
+    input_shapes: list[list[int]], output_shapes: list[list[int]], label_count: int
+) -> ModelContract:
+    if len(input_shapes) != 1:
+        raise RuntimeError("expected exactly one model input")
+    input_shape = input_shapes[0]
+    if len(input_shape) != 4 or any(dim <= 0 for dim in input_shape):
+        raise RuntimeError("model input must be a concrete positive [4,N,N,3] tensor")
+    if (
+        input_shape[0] != MAX_STREAMS
+        or input_shape[1] != input_shape[2]
+        or input_shape[3] != 3
+    ):
+        raise RuntimeError("model input must have shape [4,N,N,3]")
+    if len(output_shapes) != EXPECTED_OUTPUTS:
+        raise RuntimeError("expected exactly six YOLO26 output tensors")
+
+    bbox_grids: list[tuple[int, int]] = []
+    class_grids: list[tuple[int, int]] = []
+    class_count = 0
+    for shape in output_shapes:
+        if (
+            len(shape) != 4
+            or any(dim <= 0 for dim in shape)
+            or shape[0] != MAX_STREAMS
+            or shape[1] != shape[2]
+        ):
+            raise RuntimeError(
+                "every model output must be a concrete positive [4,G,G,C] tensor"
+            )
+        grid = (shape[1], shape[2])
+        channels = shape[3]
+        if channels == BBOX_CHANNELS:
+            bbox_grids.append(grid)
+        else:
+            if class_count == 0:
+                class_count = channels
+            elif channels != class_count:
+                raise RuntimeError(
+                    "YOLO26 class heads must have one common class count"
+                )
+            class_grids.append(grid)
+
+    if len(bbox_grids) != LEVELS or len(class_grids) != LEVELS:
         raise RuntimeError(
-            f"this example needs a batched model, got input shape {shape}. "
-            "Compile the detector with --batch_size 4."
+            "expected three bbox heads and three class heads; four-class models are ambiguous"
         )
-    batch_size, net = shape[0], shape[1]
-    if batch_size != MAX_STREAMS:
+    if label_count != class_count:
+        raise RuntimeError("label count must match the model class-head channel count")
+    bbox_grids.sort(reverse=True)
+    class_grids.sort(reverse=True)
+    if bbox_grids != class_grids or len(set(bbox_grids)) != LEVELS:
         raise RuntimeError(
-            f"model batch size is {batch_size}; this example requires batch size {MAX_STREAMS}"
+            "bbox and class heads must form three distinct matching grids"
         )
-    outputs = model.output_specs()
-    if len(outputs) != EXPECTED_OUTPUTS:
-        raise RuntimeError(
-            f"expected {EXPECTED_OUTPUTS} YOLO26 head tensors, model has {len(outputs)}"
-        )
-    print(
-        f"Model loaded: batch={batch_size} net={net} "
-        f"heads={[list(spec.shape) for spec in outputs]}",
-        flush=True,
+    return ModelContract(
+        net=input_shape[1], class_count=class_count, grids=tuple(bbox_grids)
     )
-    return model, batch_size, net
 
 
 def build_streams(cfg: AppConfig, graph) -> list[Stream]:
@@ -841,13 +916,15 @@ def build_streams(cfg: AppConfig, graph) -> list[Stream]:
         if cfg.video_enabled:
             # Split the encoded stream: one copy is decoded for detection, the
             # other goes to Insight untouched.
-            branch = pyneat.graphs.branch(f"encoded_{index}", ["decode_h264", "video_h264"])
+            branch = pyneat.graphs.branch(
+                f"encoded_{index}", ["decode_h264", "video_h264"]
+            )
             graph.connect(source, branch)
-            graph.connect(branch, decoder, realtime_link(index))
+            graph.connect(branch, decoder)
             sender, video_port = build_video_sender_graph(cfg, index)
-            graph.connect(branch, sender, realtime_link(index))
+            graph.connect(branch, sender)
         else:
-            graph.connect(source, decoder, realtime_link(index))
+            graph.connect(source, decoder)
 
         stream = Stream(
             index=index,
@@ -873,7 +950,17 @@ def run_app(cfg: AppConfig) -> None:
     if cfg.debug_dir:
         Path(cfg.debug_dir).mkdir(parents=True, exist_ok=True)
 
-    model, batch_size, net = load_model(cfg)
+    model = pyneat.Model(str(resolve(cfg.model_path)))
+    input_shapes = [[int(x) for x in spec.shape] for spec in model.input_specs()]
+    output_shapes = [[int(x) for x in spec.shape] for spec in model.output_specs()]
+    contract = validate_model_contract(input_shapes, output_shapes, len(labels))
+    print(
+        f"Model loaded: batch={MAX_STREAMS} net={contract.net} "
+        f"classes={contract.class_count} heads={output_shapes}",
+        flush=True,
+    )
+    batch_size = MAX_STREAMS
+    net = contract.net
 
     graph = pyneat.Graph()
     streams = build_streams(cfg, graph)
@@ -884,7 +971,7 @@ def run_app(cfg: AppConfig) -> None:
 
     def decode_lane(stream: Stream, head_arrays: list, slot: BatchSlot):
         """One lane's heads -> detections in that stream's source coordinates."""
-        heads = heads_from_outputs(head_arrays, stream.index)
+        heads = heads_from_outputs(head_arrays, stream.index, contract.class_count)
         detections = decode_heads(heads, net, cfg.score_threshold, cfg.max_detections)
         scale, dx, dy = slot.geometry[stream.index]
         return to_original(detections, scale, dx, dy, stream.frame_w, stream.frame_h)
@@ -898,7 +985,10 @@ def run_app(cfg: AppConfig) -> None:
                 last_error = run.last_error()
                 if last_error:
                     raise RuntimeError(f"runtime error: {last_error}")
-                raise RuntimeError("timed out waiting for frames")
+                print(
+                    "[warn] timed out waiting for frames", file=sys.stderr, flush=True
+                )
+                continue
 
             input_tensor = pyneat.Tensor.from_numpy(batch.tensor, copy=False)
             infer_started = time_ms()
@@ -912,7 +1002,12 @@ def run_app(cfg: AppConfig) -> None:
 
             decode_started = time_ms()
             per_stream = list(
-                decode_pool.map(lambda s: decode_lane(s, head_arrays, batch), streams)
+                decode_pool.map(
+                    lambda s, arrays=head_arrays, current_batch=batch: decode_lane(
+                        s, arrays, current_batch
+                    ),
+                    streams,
+                )
             )
             decoded = time_ms()
 
@@ -924,14 +1019,22 @@ def run_app(cfg: AppConfig) -> None:
                 if stream.processed > cfg.warmup_frames:
                     publish.append((stream, detections))
             # Each stream has its own sender, so the encodes proceed in parallel.
-            list(decode_pool.map(lambda item: publish_stream(cfg, batch, labels, *item), publish))
+            list(
+                decode_pool.map(
+                    lambda item, current_batch=batch: publish_stream(
+                        cfg, current_batch, labels, *item
+                    ),
+                    publish,
+                )
+            )
 
             profile.add(
-                batch_ms, infer_ms, decoded - decode_started,
-                time_ms() - decoded, found,
+                batch_ms,
+                infer_ms,
+                decoded - decode_started,
+                time_ms() - decoded,
+                found,
             )
-    except KeyboardInterrupt:
-        raise
     finally:
         profile.flush()
         decode_pool.shutdown(wait=False, cancel_futures=True)
@@ -942,7 +1045,9 @@ def run_app(cfg: AppConfig) -> None:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Batch-4 YOLO26 detector over four RTSP streams")
+    parser = argparse.ArgumentParser(
+        description="Batch-4 YOLO26 detector over four RTSP streams"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -966,7 +1071,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except KeyboardInterrupt:
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"[ERR] {exc}", file=sys.stderr)
         return 1
 

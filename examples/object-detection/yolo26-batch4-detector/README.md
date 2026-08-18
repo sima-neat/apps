@@ -30,20 +30,7 @@ The example exercises batched inference across several streams, per-lane attribu
 
 Older runtimes misaddress multi-output tensors when `batch_size > 1`, producing incorrect results without reporting an error. Use a Neat runtime that includes the batched multi-output OFM layout fix. If lane 0 looks correct while lanes 1–3 contain implausible detections, update the runtime before debugging the application.
 
-This example was validated on Modalix DevKit SDK 2.1.3. Before the dependent changes are merged, use the matching branch in all three repositories:
-
-```text
-fix/processmla-batched-multi-output-ofm-layout
-```
-
-The Apps CI resolves Core and Internals from the identically named branch. For a manual pre-merge run on the DevKit, install compatible branch artifacts before installing the app:
-
-```bash
-sima-cli neat install core@fix/processmla-batched-multi-output-ofm-layout
-sima-cli neat install apps@fix/processmla-batched-multi-output-ofm-layout
-```
-
-Run `neat` and confirm that Neat Core, PyNeat, and `neat-runtime` report the branch build. Do not test the six-head batch-4 model against a `develop` runtime that predates the fix. After the dependent PRs merge, the normal `develop` or release artifacts replace this pre-merge setup.
+This example was validated on Modalix DevKit SDK 2.1.3. Install Apps through `sima-cli neat install apps`; its package metadata selects the compatible Core and Internals runtime. Do not mix an Apps bundle with an older independently installed runtime that predates the fix.
 
 ## Insight Setup
 
@@ -76,8 +63,6 @@ sima-cli neat install apps
 cd prebuilt-apps
 ```
 
-For pre-merge validation, use the branch-specific Apps installation from the Runtime Requirement section instead of reinstalling the latest Apps runtime here, then enter its `prebuilt-apps/` directory.
-
 Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
@@ -101,6 +86,10 @@ cd ..
 The command stores the model under `models/` as a bundle-local convention. `model.path` can point to any readable model package path.
 
 The application requires a batch-4 YOLO26 package with six separate detection heads. It validates this contract at startup and rejects batch-1 or incompatible packages.
+
+More precisely, the package must expose one positive square `[4, N, N, 3]` input, three square `[4, G, G, 4]` box heads, and three square `[4, G, G, C]` class heads on matching distinct grids. Every class head must use the same `C`, and the labels file must contain exactly `C` entries. A four-class package is rejected because shape alone cannot distinguish its class heads from four-channel box heads.
+
+The Internals layout repair is batch-size agnostic: its focused contract tests cover batches 2, 3, 4, and 8. This example remains deliberately batch 4 because its published model input is fixed at four lanes.
 
 ## Configure
 
@@ -149,7 +138,7 @@ On the Modalix DevKit, from the installed bundle root:
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/yolo26-batch4-detector/src/python/requirements.txt
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 \
+python3 \
   examples/object-detection/yolo26-batch4-detector/src/python/main.py \
   --config examples/object-detection/yolo26-batch4-detector/src/common/config.yaml
 ```
@@ -157,8 +146,7 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 \
 ### C++
 
 ```bash
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 \
-  ./examples/object-detection/yolo26-batch4-detector/src/cpp/pre-built/yolo26-batch4-detector \
+./examples/object-detection/yolo26-batch4-detector/src/cpp/pre-built/yolo26-batch4-detector \
   --config examples/object-detection/yolo26-batch4-detector/src/common/config.yaml
 ```
 
@@ -190,10 +178,10 @@ The output directory should contain non-empty JPEGs named `stream_0_...` through
 
 ## How It Works
 
-1. Each RTSP source is split before decode. Encoded H.264 is forwarded directly to Insight while the second branch is decoded to NV12.
-2. Worker threads take the latest frame from each stream, letterbox it to 640×640 RGB, and write it into one lane of a reusable `[4, 640, 640, 3]` tensor.
+1. Each RTSP source is split before decode. Encoded H.264 uses lossless graph links to both Insight and the decoder so access units are never dropped mid-stream.
+2. The decoder output owns the realtime boundary: worker threads take the latest complete decoded frame from each stream, letterbox it to 640×640 RGB, and write it into one lane of a reusable `[4, 640, 640, 3]` tensor.
 3. One synchronous `model.run(...)` call submits all four lanes. Batch preparation for the next dispatch continues in parallel.
-4. The six raw YOLO26 heads are decoded on the CPU per lane and mapped back to source-frame coordinates.
+4. The six raw YOLO26 heads are paired by grid shape rather than output order, decoded on the CPU per lane, and mapped back to source-frame coordinates.
 5. Detection metadata carries the analysed frame's `_insight.rtp_timestamp`; C++ and Python use the same video and metadata topology.
 
 CPU decode is required because the current model-managed `YoloV26` box decode only returns lane 0 for this batched six-head package. YOLO26 is end-to-end, so the application ranks detections but does not run NMS.

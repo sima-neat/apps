@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
+import math
 import os
-from pathlib import Path
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
 from tests.utils.metadata_json_listener import MetadataJsonListener
-
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
@@ -22,7 +22,10 @@ REQUIRED_STREAMS = 4
 
 
 def _runtime_deps_ready() -> bool:
-    return all(importlib.util.find_spec(name) is not None for name in ("cv2", "numpy", "pyneat"))
+    return all(
+        importlib.util.find_spec(name) is not None
+        for name in ("cv2", "numpy", "pyneat")
+    )
 
 
 def _env_int_or_default(name: str, default: int) -> int:
@@ -54,7 +57,9 @@ class TestE2E:
         output_cfg = e2e_config_section("yolo26-batch4-detector", "testing.e2e.output")
         save_every = int(output_cfg["save_every"])
         total_saved_frames = int(output_cfg["total_saved_frames"])
-        metadata_port_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+        metadata_port_base = _env_int_or_default(
+            "SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100
+        )
 
         config_path = e2e_config_writer(
             {
@@ -82,27 +87,30 @@ class TestE2E:
             "--config",
             str(config_path),
         ]
-        with MetadataJsonListener(
-            E2E_INSIGHT_HOST,
-            metadata_port_base,
-            num_ports=REQUIRED_STREAMS,
-            require_all_ports=True,
-        ) as metadata_listener:
+        with (
+            MetadataJsonListener(
+                E2E_INSIGHT_HOST,
+                metadata_port_base,
+                num_ports=REQUIRED_STREAMS,
+                require_all_ports=True,
+                min_data_items_per_port=1,
+            ) as metadata_listener,
+            ThreadPoolExecutor(max_workers=1) as listener_pool,
+        ):
             # Drain UDP while the application runs. Waiting until process exit
             # can overflow receive buffers when four lanes publish at once.
-            with ThreadPoolExecutor(max_workers=1) as listener_pool:
-                metadata_future = listener_pool.submit(
-                    metadata_listener.wait_for_messages,
-                    min(test_timeout_ms / 1000, 30.0),
-                )
-                result = run_until_output_files(
-                    cmd,
-                    tmp_output_dir,
-                    total_saved_frames,
-                    test_timeout_ms / 1000,
-                    cwd=str(EXAMPLE_DIR),
-                )
-                metadata = metadata_future.result()
+            metadata_future = listener_pool.submit(
+                metadata_listener.wait_for_messages,
+                min(test_timeout_ms / 1000, 30.0),
+            )
+            result = run_until_output_files(
+                cmd,
+                tmp_output_dir,
+                total_saved_frames,
+                test_timeout_ms / 1000,
+                cwd=str(EXAMPLE_DIR),
+            )
+            metadata = metadata_future.result()
 
         assert result.returncode == 0, (
             f"main.py exited with code {result.returncode}\n"
@@ -112,10 +120,24 @@ class TestE2E:
             f"object-detection metadata was not received on all lanes: {metadata.error}"
         )
         assert all(
-            isinstance(json.loads(message.payload).get("_insight", {}).get("rtp_timestamp"), int)
+            isinstance(
+                json.loads(message.payload).get("_insight", {}).get("rtp_timestamp"),
+                int,
+            )
+            and 0
+            <= json.loads(message.payload)["_insight"]["rtp_timestamp"]
+            <= 0xFFFFFFFF
             for message in metadata.messages
-        ), "metadata must carry the analysed frame's RTP timestamp"
-
+        ), "metadata must carry the analysed frame's 32-bit RTP timestamp"
+        for message in metadata.messages:
+            objects = json.loads(message.payload)["data"]["objects"]
+            for obj in objects:
+                assert obj["label"]
+                assert math.isfinite(obj["confidence"])
+                assert 0.35 <= obj["confidence"] <= 1.0
+                x, y, width, height = obj["bbox"]
+                assert all(math.isfinite(value) for value in (x, y, width, height))
+                assert x >= 0 and y >= 0 and width > 0 and height > 0
         files = [
             path
             for path in tmp_output_dir.rglob("*")
@@ -125,3 +147,7 @@ class TestE2E:
             f"Expected at least {total_saved_frames} sampled output files, got {len(files)}"
         )
         assert all(path.stat().st_size > 0 for path in files)
+        assert all(
+            any(path.name.startswith(f"stream_{lane}_frame_") for path in files)
+            for lane in range(REQUIRED_STREAMS)
+        ), "every batch lane must produce a non-empty debug JPEG"
