@@ -43,19 +43,12 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-| Family | Frame | `model.preprocessing_profile` | Published variants |
-| --- | --- | --- | --- |
-| SSD-MobileNetV1 | 300 | `tensorflow_ssd` | INT8/BF16 × tessellation in/out of MLA |
-| SSD-MobileNetV2 | 300 | `tensorflow_ssd` | INT8/BF16 × tessellation in/out of MLA |
-| SSDlite-MobileNetV3 BF16 | 320 | `tensorflow_ssd` | BF16 × tessellation in/out of MLA |
-| SSDlite-MobileNetV3 QAT INT8 | 320 | `torchvision_ssdlite` | INT8 × tessellation in/out of MLA |
-
-Install all four compiled SSD-MobileNetV2 variants from the current develop catalog:
+The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Install its staging
+Model Registry package:
 
 ```bash
 mkdir -p models
-sima-cli neat install --stg \
-  models/ssd_mobilenet_v2@develop:latest \
+sima-cli neat install --stg models/ssd_mobilenet_v2@develop:latest \
   --install-dir ./models
 ```
 
