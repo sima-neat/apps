@@ -36,12 +36,15 @@ int main(int argc, char** argv) {
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
-  const std::string model_path = configured_model_path("single-stream-thermal-face-detector", models_dir);
+  const std::string model_path =
+      configured_model_path("single-stream-thermal-face-detector", models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
-    return skip_or_fail("configured yolov5s-face model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+    return skip_or_fail(
+        "configured yolov5s-face model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
   }
 
-  const std::string output_dir = create_test_output_dir("single-stream-thermal-face-detector", "test_metadata_pipeline");
+  const std::string output_dir =
+      create_test_output_dir("single-stream-thermal-face-detector", "test_metadata_pipeline");
   if (output_dir.empty()) {
     return 1;
   }
@@ -89,8 +92,9 @@ int main(int argc, char** argv) {
       std::cerr << "[FAIL] pose-estimation metadata was not received: " << metadata.error << "\n";
       rc = 1;
     } else {
-      const auto detected = std::find_if(metadata.messages.begin(), metadata.messages.end(),
-                                         [](const auto& message) { return message.object_count > 0; });
+      const auto detected =
+          std::find_if(metadata.messages.begin(), metadata.messages.end(),
+                       [](const auto& message) { return message.object_count > 0; });
       const auto payload = nlohmann::json::parse(detected->payload);
       const auto& poses = payload.at("data").at("poses");
       const bool all_have_five_keypoints =

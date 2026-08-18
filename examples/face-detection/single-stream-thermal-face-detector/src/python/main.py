@@ -545,7 +545,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4))
     )
 
-    graph = pyneat.Graph()
+    graph_options = pyneat.GraphOptions()
+    graph_options.advanced_execution.postprocess_target = "EV74"
+    graph = pyneat.Graph(graph_options)
     live_link_options = pyneat.GraphLinkOptions()
     live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
     graph.connect(source, branch)

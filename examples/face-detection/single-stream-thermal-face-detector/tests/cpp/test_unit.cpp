@@ -59,7 +59,9 @@ int main(int argc, char** argv) {
 
   // Test 4: missing config file is rejected.
   {
-    auto r = spawn_and_wait(binary, {"--config", "/nonexistent/single-stream-thermal-face-detector-config.yaml"}, 20000);
+    auto r = spawn_and_wait(
+        binary, {"--config", "/nonexistent/single-stream-thermal-face-detector-config.yaml"},
+        20000);
     if (r.exit_code != 1) {
       std::cerr << "[FAIL] bad config: expected exit 1, got " << r.exit_code << "\n";
       ++failures;

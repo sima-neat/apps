@@ -556,6 +556,9 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg) {
 
 PipelineRuntime build_pipeline(const AppConfig& cfg) {
   PipelineRuntime runtime;
+  simaai::neat::GraphOptions graph_options;
+  graph_options.advanced_execution.postprocess_target = "EV74";
+  runtime.graph = simaai::neat::Graph(graph_options);
   const auto source_options =
       make_source_options(cfg, runtime.output_fps, runtime.frame_w, runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,

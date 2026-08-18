@@ -54,6 +54,8 @@ raw FP32 heads directly:
   BBOX wire format carries no landmark slots, so the box + 5-landmark decode runs
   in user space on the host (APU). The C++ and Python decoders implement the same
   math and drive the same on-device graph.
+- The final graph pins post-MLA detess/dequant to EV74 so temporary pressure on
+  its fixed output pool applies backpressure to this realtime zero-copy graph.
 
 ## Preview
 ![Thermal face detector reference preview](../../../portal/assets/examples/face-detection/single-stream-thermal-face-detector/image.png)
