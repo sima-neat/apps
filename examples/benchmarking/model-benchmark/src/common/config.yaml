@@ -1,5 +1,5 @@
 model:                       # Model package selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
 
 benchmark:                   # Synthetic benchmark settings.
   frames: 1000               # Number of synthetic frames to run.

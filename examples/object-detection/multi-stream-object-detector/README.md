@@ -1,6 +1,7 @@
 # Multi-Stream Object Detector
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | object-detection |
@@ -12,141 +13,131 @@
 | Model | yolo26m-det-int8-b1 |
 
 ## Concept
-This example runs a config-driven multistream RTSP detection pipeline for YOLO26 model packs and publishes per-stream video plus detection metadata to Insight.
+
+This example runs a config-driven multi-stream RTSP detection pipeline and publishes video plus detection metadata for each stream to Insight.
 
 ## Preview
-Snippet from a pipeline run:
 
-![Multi-stream object detector preview](../../../assets/portal/object-detection/multi-stream-object-detector/image.png)
-
-## Insight Setup
-[Neat Insight](https://developer.sima.ai/software/tools/insight/) can host RTSP streams, receive video from `VideoSender`, receive detection metadata from `MetadataSender`, and show rendered overlays plus runtime metrics in the browser.
-
-In the Neat Development Environment, install the sample video assets:
-
-```bash
-sima-cli install assets/multi-video-sources
-```
-
-This provides 720p and 480p videos that Insight can stream as RTSP sources.
-
-To create reproducible RTSP inputs:
-1. Run `neat` in the Neat Development Environment and open the reported `Insight Web UI`.
-2. In Insight, open `RTSP Source`.
-3. Use sample videos or upload your own videos.
-4. Start each stream and copy the RTSP URLs.
-5. Put those RTSP URLs into `streams`.
-
-Use the same `neat` output to set `output.insight.host`, `video_port_base`, and `metadata_port_base` from the reported `videoUDP` and `metadataUDP` ranges.
+![Multi-stream object detector preview](../../../portal/assets/examples/object-detection/multi-stream-object-detector/image.png)
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- RTSP sources created in Insight or provided by your cameras.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default YOLO26 model, or set `model.path` to another readable model package.
-- Edit `src/common/config.yaml` before running with real streams.
-- On Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` before starting the example if the runtime has been used by earlier ML/video apps.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- H.264 or H.265 RTSP sources matching `input.codec`, and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
 
-Clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
 
-## Download Models
-Use the SDK platform version wherever `<platform-version>` appears.
+## Prepare the Model
 
-The default model is `yolo26m-det-int8-b1.tar.gz`.
+| Model file | Role |
+| --- | --- |
+| `yolo26m-det-int8-b1.tar.gz` | Default |
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26l-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26x-det-bf16-mla_tess-b1.tar.gz` | Supported |
+| `yolo26m-det-bf16-b1.tar.gz` | Supported |
 
-Download the default model:
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-mkdir -p assets/models
-cd assets/models
-
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<platform-version>/models/modalix/yolo26-detection/yolo26m-det-int8-b1.tar.gz
-
-cd ../..
+export MODELZOO_VERSION="2.1.2"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
+cd ..
 ```
 
-The command stores the model under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
+Set `model.path` in the config to the downloaded package.
+
+## Prepare Insight
+
+[Insight](https://developer.sima.ai/software/tools/insight/) can host the input streams and render each output channel. Install videos directly from the Insight catalog or through Insight's YouTube support.
+
+In the Insight Web UI, start the required streams and copy their RTSP URLs into `streams`. Use the host and UDP port ranges reported by `neat` for the output settings.
 
 ## Configure
+
 Edit `examples/object-detection/multi-stream-object-detector/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: <model-path>                                   # Path to the model package.
+  path: <model-path>
+  labels: examples/object-detection/multi-stream-object-detector/src/common/coco_label.txt
 
 streams:
-  - <first-rtsp-url-copied-from-insight>               # First RTSP stream.
-  - <second-rtsp-url-copied-from-insight>              # Second RTSP stream.
+  - <first-rtsp-url>
+  - <second-rtsp-url>
+
+input:
+  codec: h264  # h264/avc or h265/hevc
 
 inference:
-  frames: 0                                            # Frame limit per stream. 0 runs continuously.
-  max_inflight_per_stream: 4                           # Raw frames admitted per stream to the detector.
-  max_inflight_total: 16                               # Raw frames admitted across detector streams.
-  min_score: 0.30                                      # Minimum object confidence.
+  frames: 0
+  max_inflight_per_stream: 4
+  max_inflight_total: 16
+  min_score: 0.30
 
 output:
   insight:
-    host: <insight-host-ip>                            # Host running Insight.
-    video_port_base: <videoUDP start port from neat>   # First UDP video port.
-    metadata_port_base: <metadataUDP start port from neat> # First UDP metadata port.
+    host: <insight-host-ip>
+    video_port_base: <videoUDP-start-port>
+    metadata_port_base: <metadataUDP-start-port>
 ```
 
 ## Run
-### Validate Config Only
-This is useful for a quick smoke test without opening RTSP streams.
+
+Validate the config without opening streams:
 
 ```bash
-./build/examples/object-detection/multi-stream-object-detector/multi-stream-object-detector \
+./examples/object-detection/multi-stream-object-detector/src/cpp/pre-built/multi-stream-object-detector \
   --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml \
   --validate-config-only
 ```
 
 ### C++
+
 ```bash
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 ./build/examples/object-detection/multi-stream-object-detector/multi-stream-object-detector \
+./examples/object-detection/multi-stream-object-detector/src/cpp/pre-built/multi-stream-object-detector \
   --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml
 ```
 
 ### Python
+
 ```bash
 source ~/pyneat/bin/activate
 pip install -r examples/object-detection/multi-stream-object-detector/src/python/requirements.txt
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/multi-stream-object-detector/src/python/main.py \
+python3 examples/object-detection/multi-stream-object-detector/src/python/main.py \
   --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml
 ```
 
-## Debugging Notes
-- The checked-in `src/common/config.yaml` includes four placeholder stream slots. Replace the RTSP URLs and Insight host before running.
-- This phase supports up to four active streams.
-- `max_inflight_per_stream` and `max_inflight_total` tune raw decoder-backed frame admission at the shared detector fan-in. Set either to `-1` to use Core defaults.
-- On Modalix DevKit, start with `bash /usr/bin/fix_devkit_runtime.sh`. If the runtime still behaves inconsistently, a full board reboot has been a more reliable reset than service restarts alone.
-- `output.debug_dir` and `output.save_every` let you save periodic aligned debug frames locally without changing the Insight output contract.
-- Profiling prints per-stream pull, metadata, output FPS, and detection-count summaries.
+## Troubleshooting
 
-## Appendix: Additional Models
-Other supported batch-1 YOLO26 detection models:
-- `yolo26n-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26s-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26l-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26x-det-bf16-mla_tess-b1.tar.gz`
-- `yolo26m-det-bf16-b1.tar.gz`
-
-Replace the default filename in the download command and `model.path`.
+- Replace all placeholder stream URLs and the Insight host before running.
+- This example supports up to four active streams.
+- Set either inflight limit to `-1` to use the Core default.
+- Verify host and UDP port ranges if Insight receives no output.
+- Use `output.debug_dir`, `output.save_every`, and profiling output for diagnosis.
 
 ## Source Files
-- C++: `src/cpp/main.cpp`
-- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
-- Python: `src/python/main.py`
-- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
-- Shared assets: `src/common/`
+
+- C++ reference source: `src/cpp/main.cpp`
+- Python source: `src/python/main.py`
+- Shared runtime files: `src/common/`
+
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

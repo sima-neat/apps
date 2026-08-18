@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
   const std::string binary = argv[1];
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
   const std::string model_path = configured_model_path(kExampleName, models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
     return skip_or_fail("configured single-stream detector model not found under "
@@ -110,6 +110,7 @@ int main(int argc, char** argv) {
 
   const std::vector<SourceCase> source_cases = {
       {"rtsp_h264", "SIMANEAT_TEST_RTSP_H264_URL", "rtsp", "h264", 0, true},
+      {"rtsp_h265", "SIMANEAT_TEST_RTSP_H265_URL", "rtsp", "h265", 0, true},
       {"rtsp_mjpeg", "SIMANEAT_TEST_RTSP_MJPEG_URL", "rtsp", "mjpeg", 0, true},
       {"http_mjpeg", "SIMANEAT_TEST_HTTP_MJPEG_URL", "http", "mjpeg", 30, false},
   };

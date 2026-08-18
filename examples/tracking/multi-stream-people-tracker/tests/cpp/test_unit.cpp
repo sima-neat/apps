@@ -59,12 +59,14 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
   const fs::path config_path = write_config("test_validate_config_only_accepts_four_streams",
                                             "model:\n"
-                                            "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
                                             "streams:\n"
                                             "  - rtsp://127.0.0.1:8554/src1\n"
                                             "  - rtsp://127.0.0.1:8554/src2\n"
                                             "  - rtsp://127.0.0.1:8554/src3\n"
                                             "  - rtsp://127.0.0.1:8554/src4\n"
+                                            "input:\n"
+                                            "  codec: hevc\n"
                                             "inference:\n"
                                             "  max_inflight_per_stream: 3\n"
                                             "  max_inflight_total: 12\n"
@@ -88,7 +90,7 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
   const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
                                             "model:\n"
-                                            "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
                                             "streams:\n"
                                             "  - rtsp://127.0.0.1:8554/src1\n"
                                             "  - rtsp://127.0.0.1:8554/src2\n"
@@ -112,7 +114,7 @@ bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string&
   const fs::path config_path =
       write_config("test_validate_config_only_rejects_invalid_inflight_limit",
                    "model:\n"
-                   "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
+                   "  path: models/yolo26m-det-int8-b1.tar.gz\n"
                    "streams:\n"
                    "  - rtsp://127.0.0.1:8554/src1\n"
                    "inference:\n"

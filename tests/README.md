@@ -46,6 +46,8 @@ Edit `tests/configs/.env.local`:
 ```bash
 SIMANEAT_TEST_RTSP_H264_URL=rtsp://<host>:<port>/<stream>
 SIMANEAT_TEST_RTSP_H264_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
+SIMANEAT_TEST_RTSP_H265_URL=rtsp://<host>:<port>/<stream>
+SIMANEAT_TEST_RTSP_H265_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
 SIMANEAT_TEST_RTSP_MJPEG_URL=rtsp://<host>:<port>/<stream>
 SIMANEAT_TEST_RTSP_MJPEG_URLS=rtsp://<host>:<port>/<stream0>,rtsp://<host>:<port>/<stream1>
 SIMANEAT_TEST_HTTP_MJPEG_URL=http://<host>:<port>/<stream>.mjpg
@@ -211,16 +213,18 @@ python3 -m pytest \
 
 `tests/test.sh` reads these variables:
 
-- `SIMANEAT_APPS_TEST_MODELS_DIR` (default: `${APPS_ROOT}/assets/models`)
+- `SIMANEAT_APPS_TEST_MODELS_DIR` (default: `${APPS_ROOT}/models`)
 - `SIMANEAT_APPS_TEST_SCOPE_FILE` (default: `${APPS_ROOT}/examples`)
-- `SIMANEAT_APPS_TEST_INPUT_DIR` (default: `${APPS_ROOT}/assets/test_images`)
+- `SIMANEAT_APPS_TEST_INPUT_DIR` (default: `${APPS_ROOT}/assets/datasets-test/coco`)
 - `SIMANEAT_APPS_TEST_OUTPUT_DIR` (default: `${APPS_ROOT}/sandbox-test`)
-- `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/test_images_classification/goldfish.jpeg`)
+- `SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE` (default: `${APPS_ROOT}/assets/datasets-test/imagenet/goldfish.jpeg`)
 - `SIMANEAT_APPS_TEST_KEEP_OUTPUT` (`1` keeps e2e output dirs, default: `1`)
 - `SIMANEAT_APPS_TEST_WRITE_SUMMARY_LOGS` (`1` writes summary logs, default: `1`)
 - `SIMANEAT_APPS_TEST_WRITE_PROCESS_LOGS` (`1` writes per-example command/stdout/stderr logs, default: `1`)
 - `SIMANEAT_TEST_RTSP_H264_URL` (single RTSP H.264 stream URL)
 - `SIMANEAT_TEST_RTSP_H264_URLS` (comma-separated RTSP H.264 URLs)
+- `SIMANEAT_TEST_RTSP_H265_URL` (single RTSP H.265 stream URL)
+- `SIMANEAT_TEST_RTSP_H265_URLS` (comma-separated RTSP H.265 URLs)
 - `SIMANEAT_TEST_RTSP_MJPEG_URL` (single RTSP MJPEG stream URL)
 - `SIMANEAT_TEST_RTSP_MJPEG_URLS` (comma-separated RTSP MJPEG URLs)
 - `SIMANEAT_TEST_HTTP_MJPEG_URL` (single HTTP MJPEG stream URL)
@@ -234,15 +238,20 @@ python3 -m pytest \
 - `NEAT_APPS_SKIP_MODEL_DOWNLOAD` (`1` skips model download before e2e, default: `0`)
 - `PYTHON_TEST_BIN` (optional Python interpreter override)
 
-## RTSP E2E Prerequisites
+## Streaming E2E Prerequisites
 
-RTSP e2e tests require live reachable RTSP streams at test time:
+Streaming e2e tests require live reachable sources at test time:
 
 - `single-stream-object-detector` (C++/Python)
+- `single-stream-instance-segmenter` (C++/Python)
 - `multi-stream-object-detector` (C++/Python)
+- `multi-stream-people-tracker` (C++/Python)
 
-Any RTSP source works. If streams are host-served, use the host IP in the RTSP
-URLs instead of `127.0.0.1`.
+Use [Insight](https://developer.sima.ai/software/tools/insight/) to install
+videos directly from its catalog or through YouTube support. Start the required
+streams and set their source URLs in the corresponding test environment
+variables. Strict single-stream coverage uses H.264 RTSP, MJPEG RTSP, and HTTP
+MJPEG URLs.
 
 ## Two-Stage Vulcan CI
 

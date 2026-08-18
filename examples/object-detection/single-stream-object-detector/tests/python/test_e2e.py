@@ -20,6 +20,15 @@ SOURCE_CASES = [
     ),
     pytest.param(
         {
+            "name": "rtsp_h265",
+            "type": "rtsp",
+            "codec": "h265",
+            "url_fixture": "rtsp_h265_url",
+        },
+        id="rtsp-h265",
+    ),
+    pytest.param(
+        {
             "name": "rtsp_mjpeg",
             "type": "rtsp",
             "codec": "mjpeg",
