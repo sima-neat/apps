@@ -688,6 +688,11 @@ class ModelManager:
         with self._bench_lock:
             if self._bench:
                 self._bench["cancel"] = True
+                model = self._bench.get("model", "")
+            else:
+                model = ""
+        if model:
+            self._stop_model_streams(model)
         return {"stopped": True}
 
     def unload(self, name: str) -> dict:

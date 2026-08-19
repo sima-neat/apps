@@ -2047,6 +2047,10 @@ def main():
         try:
             text, ttft, tps, tokens = stream_chat(oai, active, msgs, max_tokens, render=render)
         except KeyboardInterrupt:
+            try:
+                _http(f"http://{oai[0]}:{oai[1]}/stop", {"model": active}, timeout=5)
+            except Exception:
+                pass
             print(f"\n{MUTED}(stopped){RESET}")
             continue
         except urllib.error.HTTPError as exc:

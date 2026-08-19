@@ -1939,27 +1939,78 @@ class AppContext:
             def stream_response():
                 global vectodb_proc
                 yield "⏳ Starting...\n"
+                new_db_path = None
+                backup_path = None
+                service_stopped = False
+                replacement_installed = False
                 try:
                     ensure_rag_modules_loaded()
-                    yield "🛑 Stopping existing vectordb service...\n"
-                    stop_service()
-
                     yield "📚 Creating VectorDB from Markdown...\n"
+                    fd, new_db_path = tempfile.mkstemp(
+                        prefix=f".{Path(RAG_DB_PATH).name}.new-",
+                        suffix=".db",
+                        dir=str(Path(RAG_DB_PATH).parent),
+                    )
+                    os.close(fd)
+                    os.unlink(new_db_path)
                     create_markdown_vectordb(
                         input_path=tmp_path,
-                        output_db=RAG_DB_PATH,
+                        output_db=new_db_path,
                         embedding_model=self.rag_embedding_model_dir,
                     )
 
+                    yield "🛑 Stopping existing vectordb service...\n"
+                    stop_service()
+                    service_stopped = True
+                    if os.path.exists(RAG_DB_PATH):
+                        fd, backup_path = tempfile.mkstemp(
+                            prefix=f".{Path(RAG_DB_PATH).name}.backup-",
+                            dir=str(Path(RAG_DB_PATH).parent),
+                        )
+                        os.close(fd)
+                        os.unlink(backup_path)
+                        os.replace(RAG_DB_PATH, backup_path)
+                    os.replace(new_db_path, RAG_DB_PATH)
+                    replacement_installed = True
+
+                    new_meta_path = str(Path(new_db_path).with_suffix(".meta.json"))
                     yield "🚀 Starting vectordb service with new database...\n"
                     vectodb_proc = start_service()
+                    wait_for_rag_service(vectodb_proc)
+                    meta_path = str(Path(RAG_DB_PATH).with_suffix(".meta.json"))
+                    if os.path.exists(new_meta_path):
+                        os.replace(new_meta_path, meta_path)
+                    elif os.path.exists(meta_path):
+                        os.unlink(meta_path)
+                    if backup_path:
+                        os.unlink(backup_path)
+                        backup_path = None
                     yield "✅ Markdown RAG database is ready.\n"
 
                 except Exception as e:
                     logging.exception("RAG document upload failed: %s", e)
+                    if service_stopped:
+                        stop_service()
+                        if replacement_installed and os.path.exists(RAG_DB_PATH):
+                            os.unlink(RAG_DB_PATH)
+                        if backup_path and os.path.exists(backup_path):
+                            os.replace(backup_path, RAG_DB_PATH)
+                            backup_path = None
+                        if os.path.exists(RAG_DB_PATH):
+                            try:
+                                vectodb_proc = start_service()
+                                wait_for_rag_service(vectodb_proc)
+                            except Exception:  # noqa: BLE001
+                                logging.exception("Failed to restore the previous RAG service")
                     yield "❌ RAG document upload failed.\n"
                 finally:
                     os.unlink(tmp_path)
+                    if new_db_path and os.path.exists(new_db_path):
+                        os.unlink(new_db_path)
+                    if new_db_path:
+                        new_meta_path = str(Path(new_db_path).with_suffix(".meta.json"))
+                        if os.path.exists(new_meta_path):
+                            os.unlink(new_meta_path)
 
             return Response(stream_with_context(stream_response()), mimetype="text/plain")
         
@@ -2008,6 +2059,10 @@ class AppContext:
                     yield "🚀 Starting vectordb service with new database...\n"
                     vectodb_proc = start_service()
                     wait_for_rag_service(vectodb_proc)
+
+                    meta_path = str(Path(RAG_DB_PATH).with_suffix(".meta.json"))
+                    if os.path.exists(meta_path):
+                        os.unlink(meta_path)
 
                     if backup_path:
                         os.unlink(backup_path)
