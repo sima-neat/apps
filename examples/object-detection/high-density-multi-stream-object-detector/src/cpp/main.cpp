@@ -52,7 +52,10 @@ namespace {
 
 constexpr int kStreamLimit = 80;
 constexpr int kDefaultInitialDetectionTimeoutMs = 30000;
-constexpr int kDetectorResultTimeoutMs = 5000;
+constexpr int kDefaultStreamDetectionTimeoutMs = 30000;
+constexpr int kDefaultNoDetectionTimeoutMs = 30000;
+constexpr std::size_t kDetectionPrimingObservations = 2;
+constexpr int kWatchdogCheckIntervalMs = 100;
 constexpr int kDefaultQueueDepth = 4;
 constexpr int kDefaultInternalQueueDepth = 1;
 constexpr int kDefaultMaxInflightPerStream = 4;
@@ -98,6 +101,8 @@ struct AppConfig {
   bool profile = false;
   int warmup_frames = 30;
   int initial_detection_timeout_ms = kDefaultInitialDetectionTimeoutMs;
+  int stream_detection_timeout_ms = kDefaultStreamDetectionTimeoutMs;
+  int no_detection_timeout_ms = kDefaultNoDetectionTimeoutMs;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -424,6 +429,10 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
   sima_examples::require(cfg.initial_detection_timeout_ms > 0,
                          "runtime.initial_detection_timeout_ms must be > 0");
+  sima_examples::require(cfg.stream_detection_timeout_ms > 0,
+                         "runtime.stream_detection_timeout_ms must be > 0");
+  sima_examples::require(cfg.no_detection_timeout_ms > 0,
+                         "runtime.no_detection_timeout_ms must be > 0");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port_base must be > 0");
   sima_examples::require(cfg.video_port_base <= 65535,
                          "output.insight.video_port_base must be <= 65535");
@@ -509,6 +518,10 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
   cfg.initial_detection_timeout_ms =
       raw.int_or("runtime.initial_detection_timeout_ms", kDefaultInitialDetectionTimeoutMs);
+  cfg.stream_detection_timeout_ms =
+      raw.int_or("runtime.stream_detection_timeout_ms", kDefaultStreamDetectionTimeoutMs);
+  cfg.no_detection_timeout_ms =
+      raw.int_or("runtime.no_detection_timeout_ms", kDefaultNoDetectionTimeoutMs);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
@@ -1123,11 +1136,15 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
   const int liveness_ms = app_liveness_ms();
   auto now = std::chrono::steady_clock::now();
   high_density::DetectionWatchdog watchdog(
-      app.sources.size(), std::chrono::milliseconds(cfg.initial_detection_timeout_ms),
-      std::chrono::milliseconds(kDetectorResultTimeoutMs), now);
+      app.sources.size(), kDetectionPrimingObservations,
+      std::chrono::milliseconds(cfg.initial_detection_timeout_ms),
+      std::chrono::milliseconds(cfg.stream_detection_timeout_ms),
+      std::chrono::milliseconds(cfg.no_detection_timeout_ms), now);
   auto next_liveness = now + std::chrono::milliseconds(liveness_ms);
+  auto next_watchdog_check = now;
   while (g_stop_requested == 0) {
     bool did_work = false;
+    bool reached_target = false;
     constexpr int kMaxDetectionsPerRound = 64;
     for (int drained = 0; drained < kMaxDetectionsPerRound; ++drained) {
       simaai::neat::Sample detections;
@@ -1156,28 +1173,44 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
       auto& source = app.sources[static_cast<std::size_t>(stream_index)];
       complete_detection(source, cfg, aggregate_profile, detections);
       if (target_reached(app.sources)) {
-        return;
+        reached_target = true;
+        break;
       }
     }
 
     now = std::chrono::steady_clock::now();
-    const auto expired = watchdog.expired_streams(now);
-    if (!expired.empty()) {
-      const bool startup_complete = watchdog.startup_complete();
+    const bool check_watchdog = did_work || now >= next_watchdog_check;
+    const auto failure = check_watchdog ? watchdog.check(now) : high_density::DetectionFailure{};
+    if (check_watchdog) {
+      next_watchdog_check = now + std::chrono::milliseconds(kWatchdogCheckIntervalMs);
+    }
+    if (failure) {
+      using high_density::DetectionFailureKind;
+      if (failure.kind == DetectionFailureKind::GlobalStall) {
+        print_pull_liveness(app.sources, "detector_global_stall", total_pulls);
+        throw std::runtime_error("timed out waiting for any detector progress");
+      }
+
+      const bool startup = failure.kind == DetectionFailureKind::Startup;
       print_pull_liveness(app.sources,
-                          startup_complete ? "stream_detection_timeout"
-                                           : "initial_stream_detection_timeout",
+                          startup ? "initial_stream_detection_timeout" : "stream_detection_timeout",
                           total_pulls);
       std::string stream_list;
-      for (const auto index : expired) {
+      for (const auto index : failure.streams) {
         if (!stream_list.empty()) {
           stream_list += ",";
         }
         stream_list += std::to_string(index);
       }
-      throw std::runtime_error(std::string("timed out waiting for ") +
-                               (startup_complete ? "detections" : "initial detections") +
-                               " from streams: " + stream_list);
+      if (startup) {
+        throw std::runtime_error("timed out waiting for two initial detections from streams: " +
+                                 stream_list);
+      }
+      throw std::runtime_error("timed out waiting for detector progress from streams: " +
+                               stream_list);
+    }
+    if (reached_target) {
+      return;
     }
     if (liveness_ms > 0) {
       if (now >= next_liveness) {
@@ -1276,6 +1309,8 @@ int main(int argc, char** argv) {
                 << ", inference_async=" << (kInferenceAsync ? "true" : "false")
                 << ", max_inflight_per_stream=" << cfg.max_inflight_per_stream
                 << ", max_inflight_total=" << cfg.max_inflight_total
+                << ", stream_detection_timeout_ms=" << cfg.stream_detection_timeout_ms
+                << ", no_detection_timeout_ms=" << cfg.no_detection_timeout_ms
                 << ", input=" << cfg.input_width << "x" << cfg.input_height << "@" << cfg.input_fps
                 << ", insight_visible_streams=" << visible_streams
                 << ", video_ports=" << cfg.video_port_base << "-" << video_port_last

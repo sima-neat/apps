@@ -315,8 +315,8 @@ int main(int argc, char** argv) {
         ++processed;
         if (cfg.overlay) {
           std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
-                    << " -> " << image_path.stem().string() << ".png"
-                    << " (" << boxes.size() << " detections)\n";
+                    << " -> " << image_path.stem().string() << ".png" << " (" << boxes.size()
+                    << " detections)\n";
         } else {
           std::cout << "[" << processed << "/" << total_images << "] " << image_path.filename()
                     << " (" << boxes.size() << " detections)\n";

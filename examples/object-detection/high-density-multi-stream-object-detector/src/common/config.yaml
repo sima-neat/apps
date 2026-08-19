@@ -40,6 +40,8 @@ runtime:
   profile: false
   warmup_frames: 30
   initial_detection_timeout_ms: 90000
+  stream_detection_timeout_ms: 30000
+  no_detection_timeout_ms: 30000
 
 inference:
   workers: 1

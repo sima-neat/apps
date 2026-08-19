@@ -1,0 +1,19 @@
+models:
+  ssd_v2_int8_tess_mla:
+    source: model-registry
+    name: ssd_mobilenet_v2
+    ref: develop
+    spec: latest
+    file: ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+      - ssd_v2_int8_tess_mla
+  cpp:
+    enabled: true
+    models:
+      - ssd_v2_int8_tess_mla
