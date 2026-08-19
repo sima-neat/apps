@@ -15,21 +15,22 @@
 
 This example demonstrates a real-time face recognition pipeline on SiMa.ai Modalix hardware using the Neat Library. It combines two models: **SCRFD 2.5G** for face detection and **ArcFace W600K R50** for face recognition.
 
-Both models are compiled with **BF16 activations and MLA tessellation** (`--bf16-activations --mla-tesselation`). Tessellation is compiled into the MLA ELF, bypassing the CVU entirely. At runtime, the Neat Library's `graph.add(model)` API includes the EV74 APU FP32→BF16 cast step automatically from `mpk.json`. The pipeline runs SCRFD and ArcFace inference back-to-back per frame, with optional RTP/H.264 overlay streaming over UDP.
+Both models are compiled with **BF16 activations and MLA tessellation** (`--bf16-activations --mla-tesselation`). At runtime, SCRFD is driven via `InputKind::Image` so the EV74 CVU preproc node baked into the compiled package handles letterbox resize and BT.601 normalization entirely in hardware, feeding BF16 tensors directly to the MLA — no APU FP32→BF16 cast and no CPU preproc. ArcFace uses the same BF16 MLA-tessellation path via `graph.add(model)`. Overlay graphics are rendered directly on the NV12 frame (no full-frame BGR conversion) and streamed as RTP/H.264 via the SiMa hardware encoder over UDP.
 
 A companion tool, `face-enroll`, builds a gallery of face embeddings from video clips or image folders. The recognizer matches every detected face against the gallery using cosine similarity.
 
 **Pipeline stages:**
 
 1. RTSP decode (Neat HW decoder, NV12 output)
-2. CPU letterbox + normalize → FP32 tensor (SCRFD input)
-3. SCRFD inference on MLA (BF16, MLA-tessellated): detects faces + 5 landmarks
-4. Face alignment and crop per detection
-5. ArcFace inference on MLA (BF16, MLA-tessellated): 512-d embedding
+2. EV74 CVU preproc: NV12 1280×720 → letterbox resize to 640×640 → normalize [0,1] → BF16 tensor (hardware, ~0.01 ms)
+3. SCRFD inference on MLA (BF16, MLA-tessellated): detects faces + 5 landmarks (~5.4 ms)
+4. Face alignment and crop from the NV12 source frame per detection
+5. ArcFace inference on MLA (BF16, MLA-tessellated): 512-d embedding (~5.5 ms)
 6. Cosine similarity match against gallery
-7. Overlay render and optional RTP/H.264 UDP stream
+7. Overlay rendered directly on NV12 frame (ROI-only BGR round-trip, no full-frame conversion)
+8. SiMa HW H.264 encoder → RTP/UDP stream to receiving host
 
-**Throughput:** ~45 FPS on a 1280×720 @ 60 FPS RTSP stream (SCRFD ~7 ms, ArcFace ~5.5 ms, NV12→FP32 preproc ~6 ms via NEON 2×2 box filter).
+**Throughput:** ~56.5 FPS on a 1280×720 @ 45 FPS RTSP stream (CVU preproc ~0.01 ms, SCRFD ~5.4 ms, ArcFace ~5.5 ms).
 
 ## Model Download and Preparation
 
@@ -249,7 +250,10 @@ Run the face-recognizer against a live RTSP stream, with the annotated output st
 docker exec <SDK_CONTAINER> bash -c \
   "ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
    sima@<BOARD_IP> \
-    'cd /workspace/sima-neat/apps && QT_QPA_PLATFORM=offscreen \
+    'cd /workspace/sima-neat/apps && \
+     QT_QPA_PLATFORM=offscreen \
+     SIMA_PROCESSCVU_RUN_TARGET=EV74 \
+     SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY=1 \
      build/examples/face-recognition/face-recognizer_cpp/face-recognizer \
      --config examples/face-recognition/face-recognizer/src/common/config.yaml \
      --input rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME> \
@@ -263,7 +267,10 @@ docker exec <SDK_CONTAINER> bash -c \
 ```bash
 docker exec <SDK_CONTAINER> bash -c \
   "ssh -o StrictHostKeyChecking=no sima@<BOARD_IP> \
-    'cd /workspace/sima-neat/apps && QT_QPA_PLATFORM=offscreen \
+    'cd /workspace/sima-neat/apps && \
+     QT_QPA_PLATFORM=offscreen \
+     SIMA_PROCESSCVU_RUN_TARGET=EV74 \
+     SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY=1 \
      build/examples/face-recognition/face-recognizer_cpp/face-recognizer \
      --config examples/face-recognition/face-recognizer/src/common/config.yaml \
      --input rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME> \
@@ -276,6 +283,8 @@ docker exec <SDK_CONTAINER> bash -c \
 ```bash
 cd /workspace/sima-neat/apps
 QT_QPA_PLATFORM=offscreen \
+SIMA_PROCESSCVU_RUN_TARGET=EV74 \
+SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY=1 \
 build/examples/face-recognition/face-recognizer_cpp/face-recognizer \
   --config examples/face-recognition/face-recognizer/src/common/config.yaml \
   --input rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME> \
@@ -289,12 +298,27 @@ build/examples/face-recognition/face-recognizer_cpp/face-recognizer \
 On the receiving host, play the H.264 UDP stream using GStreamer:
 
 ```bash
-gst-launch-1.0 udpsrc port=<STREAM_PORT> \
-  caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" \
-  ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false
+gst-launch-1.0 \
+  udpsrc port=<STREAM_PORT> buffer-size=2097152 \
+    caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" ! \
+  rtph264depay ! \
+  h264parse ! \
+  avdec_h264 ! \
+  videoconvert ! \
+  fpsdisplaysink sync=false
 ```
 
-Or with ffplay:
+Key elements and why they are required:
+
+| Element / option | Purpose |
+|---|---|
+| `buffer-size=2097152` | 2 MB OS socket buffer — IDR frames can burst ~400 KB; the default 200 KB socket buffer drops packets, causing decoder stalls |
+| `clock-rate=90000` in caps | Correct 90 kHz RTP clock for H.264; without it the RTP jitter buffer miscalculates timestamps and may drop or hold frames |
+| `h264parse` | Buffers complete access units and resyncs the decoder at the next IDR after any packet loss; without it `avdec_h264` freezes until the next keyframe and has no clean recovery path |
+| `videoconvert` | Explicit YUV→RGB conversion before the display sink; omitting it forces the sink to negotiate directly with `avdec_h264`'s raw I420 output, which produces blurry or colour-shifted frames on some display backends |
+| `sync=false` | Disables clock gating on the display; required for live feeds where the pipeline produces frames as fast as they arrive rather than at a fixed wall-clock rate |
+
+Or with ffplay (alternative, no extra flags needed):
 
 ```bash
 ffplay -fflags nobuffer udp://@:<STREAM_PORT>
@@ -344,9 +368,12 @@ Config changes take effect on the next pipeline run — no rebuild required.
 ## Debugging Notes
 
 - `QT_QPA_PLATFORM=offscreen` is required in headless SSH sessions; omitting it aborts with a Qt xcb display error.
-- If the pipeline exits at ~64000 frames, the A65 processcvu has a memory leak on this firmware; add `SIMA_PROCESSCVU_RUN_TARGET=EV74` to the environment. This does not apply to the BF16+MLA-tessellation models (no CVU preproc path).
+- `SIMA_PROCESSCVU_RUN_TARGET=EV74` is required for the EV74 CVU preproc path (`InputKind::Image`). Without it the runtime routes CVU ops to the A65, which has a memory leak that crashes long runs at ~64000 frames.
+- `SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY=1` is required alongside `EV74` so the pipeline can copy the NV12 buffer from the HW decoder to CPU memory for the overlay step. Omitting it causes a runtime error when `draw_overlay_nv12` tries to access the HW-mapped NV12 buffer.
+- If SCRFD produces spurious high-confidence detections (chair detected as a face, landmarks on background objects), the CVU preproc normalize or pad settings are wrong. The `[preproc-meta]` line printed at startup shows what the CVU actually applied — confirm `norm=1` and `pad L/R/T/B=0/0/140/140` (black letterbox bars) for a 1280×720 source. `normalize.enable = AutoFlag::Auto` silently resolves to OFF, scaling inputs by 255×; `pad_value` defaults to 114 (YOLO gray) instead of 0 (SCRFD expects black padding).
 - If `face-enroll` fails with `QuantTessOptions` errors, the models in `assets/models/` are INT8 packages; re-compile with `--bf16-activations --mla-tesselation` as described above.
 - Similarity scores in the range 0.4–0.7 indicate a confident match. Scores below `match.threshold` are labelled Unknown.
+- The pipeline prints encoder push stats on exit (`enc_push_ok` / `enc_push_drop`). Non-zero `enc_push_drop` means the HW encoder queue was full on those frames; increase `enc_run_opt.queue_depth` in `main.cpp` (default 16) if drops persist.
 - To view SDK model graph details, set `Model::Options.verbose.level = Verbose` in the source and rebuild.
 
 ## Testing

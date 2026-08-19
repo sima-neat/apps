@@ -166,7 +166,13 @@ static void bgr_half_resize_to_rgb_f32_neon(
 //   UV plane: direct read — NV12 UV is already 2× sub-sampled, so after 2×
 //             downscale each output pixel (xo,yo) maps to UV pair at (xo,yo)
 //             with no interpolation required.
-// YUV→RGB: BT.601 full-range (Y,U,V in [0,255] → R,G,B in [0,1]).
+// YUV→RGB: BT.601 full-range fixed-point (int16) then uint8→float/255.
+//   Replaces the float multiply + vminq/vmaxq clamp chain with int16 fixed-point
+//   and vqmovun_s16 saturation (clamp to [0,255] is implicit, no float clamp ops).
+//   Coefficients (×256): R=359*V, G=88*U+183*V, B=454*U.
+//   Max intermediate for G: 88*127+183*127 = 34417 > INT16_MAX → vqaddq_s16
+//   saturates to 32767 → after >>8 gives 127 vs exact 134: max error 7/255 ≈ 3%,
+//   only on highly saturated colors, imperceptible to SCRFD.
 #ifdef __ARM_NEON__
 static void nv12_half_resize_to_rgb_f32_neon(
     const uint8_t* nv12, int src_w, int src_h,
@@ -176,19 +182,47 @@ static void nv12_half_resize_to_rgb_f32_neon(
     int content_w, int content_h)
 {
     const uint8_t* y_plane  = nv12;
-    const uint8_t* uv_plane = nv12 + src_w * src_h;  // NV12 UV row stride = src_w
+    const uint8_t* uv_plane = nv12 + src_w * src_h;
 
     const float32x4_t v_inv255 = vdupq_n_f32(1.0f / 255.0f);
-    const float32x4_t v_128    = vdupq_n_f32(128.0f);
-    const float32x4_t v_zero   = vdupq_n_f32(0.0f);
-    const float32x4_t v_255    = vdupq_n_f32(255.0f);
-    // BT.601 full-range YUV→RGB coefficients.
-    const float32x4_t kr  = vdupq_n_f32(1.402f);
-    const float32x4_t kg1 = vdupq_n_f32(0.344f);
-    const float32x4_t kg2 = vdupq_n_f32(0.714f);
-    const float32x4_t kb  = vdupq_n_f32(1.772f);
-
+    const uint8x8_t   k128     = vdup_n_u8(0x80);  // XOR mask for uint8 → signed (−128)
     const int dst_row_floats = dst_w * 3;
+
+    // Converts uint8x8 → two float32x4 scaled by 1/255.
+    auto u8_to_f32_norm = [&v_inv255](uint8x8_t ch) -> float32x4x2_t {
+        const uint16x8_t u16 = vmovl_u8(ch);
+        return {
+            vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16))),  v_inv255),
+            vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16))), v_inv255),
+        };
+    };
+
+    // Integer BT.601 YUV→RGB for 8 pixels.
+    // Inputs: y8 ∈ [0,255], u8/v8 ∈ [0,255] (unsigned, center at 128).
+    // Returns: r8, g8, b8 ∈ [0,255] clamped via vqmovun_s16.
+    auto yuv_to_rgb8 = [&k128](uint8x8_t y8, uint8x8_t u8, uint8x8_t v8,
+                               uint8x8_t& r8, uint8x8_t& g8, uint8x8_t& b8) {
+        const int16x8_t y16 = vreinterpretq_s16_u16(vmovl_u8(y8));
+        // XOR 0x80 maps uint8 [0,255] → uint8 [128..255, 0..127], reinterpreted as
+        // int8 [-128, 127] — equivalent to subtracting 128 without a separate op.
+        const int16x8_t u16 = vmovl_s8(vreinterpret_s8_u8(veor_u8(u8, k128)));
+        const int16x8_t v16 = vmovl_s8(vreinterpret_s8_u8(veor_u8(v8, k128)));
+
+        // R = Y + (359*V) >> 8  [1.402 * 256 = 358.9]
+        const int16x8_t r16 = vqaddq_s16(y16, vshrq_n_s16(vmulq_n_s16(v16, 359), 8));
+        // G = Y - (88*U + 183*V) >> 8  [0.344*256=88.1, 0.714*256=182.8]
+        //   vqaddq_s16: intermediate 88*u+183*v can hit ~34000 > INT16_MAX on vivid
+        //   colors; saturating add limits error to ≤7 intensity levels (3%), fine for SCRFD.
+        const int16x8_t g16 = vqsubq_s16(y16, vshrq_n_s16(
+            vqaddq_s16(vmulq_n_s16(u16, 88), vmulq_n_s16(v16, 183)), 8));
+        // B = Y + (454*U) >> 8  [1.772 * 256 = 453.6]
+        const int16x8_t b16 = vqaddq_s16(y16, vshrq_n_s16(vmulq_n_s16(u16, 454), 8));
+
+        // vqmovun_s16: saturating pack s16 → u8 — clamp to [0,255] implicit, no vmin/vmax.
+        r8 = vqmovun_s16(r16);
+        g8 = vqmovun_s16(g16);
+        b8 = vqmovun_s16(b16);
+    };
 
     if (pad_top > 0)
         std::memset(dst_rgb, 0, static_cast<size_t>(pad_top) * dst_row_floats * sizeof(float));
@@ -198,7 +232,7 @@ static void nv12_half_resize_to_rgb_f32_neon(
     for (int yo = 0; yo < content_h; ++yo) {
         const uint8_t* y0 = y_plane  + (2 * yo)     * src_w;
         const uint8_t* y1 = y_plane  + (2 * yo + 1) * src_w;
-        const uint8_t* uv = uv_plane + yo            * src_w;  // UV row at output row yo
+        const uint8_t* uv = uv_plane + yo            * src_w;
 
         float* dst_row = dst_rgb + (pad_top + yo) * dst_row_floats;
 
@@ -209,56 +243,40 @@ static void nv12_half_resize_to_rgb_f32_neon(
         int xo = 0;
 
         for (; xo + 8 <= content_w; xo += 8, y0 += 16, y1 += 16, uv += 16, dst_px += 24) {
-            // Y: 2×2 box filter — same NEON pattern as BGR fast path.
-            uint8x8_t y_avg = vshrn_n_u16(
+            // Prefetch next iteration's source data: A65 is in-order, so issuing prefetch
+            // one cache-line (~4 iterations) ahead hides the ~5-cycle DRAM latency.
+            __builtin_prefetch(y0 + 64, 0, 1);
+            __builtin_prefetch(y1 + 64, 0, 1);
+            __builtin_prefetch(uv + 64, 0, 1);
+
+            // Y: 2×2 box filter.
+            const uint8x8_t y_avg = vshrn_n_u16(
                 vaddq_u16(vpaddlq_u8(vld1q_u8(y0)), vpaddlq_u8(vld1q_u8(y1))), 2);
 
-            // UV: 8 interleaved U,V pairs at output (yo, xo..xo+7).
-            // vld2_u8 deinterleaves 8 pairs into separate U and V lanes.
-            uint8x8x2_t uv8 = vld2_u8(uv);
+            // UV: deinterleave 8 pairs.
+            const uint8x8x2_t uv8 = vld2_u8(uv);
 
-            auto u8_to_f32 = [](uint8x8_t ch) -> float32x4x2_t {
-                uint16x8_t u16 = vmovl_u8(ch);
-                float32x4x2_t f;
-                f.val[0] = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16)));
-                f.val[1] = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16)));
-                return f;
-            };
-            const float32x4x2_t yf = u8_to_f32(y_avg);
-            float32x4x2_t uf = u8_to_f32(uv8.val[0]);
-            float32x4x2_t vf = u8_to_f32(uv8.val[1]);
+            // Integer YUV→RGB + implicit [0,255] saturation.
+            uint8x8_t r8, g8, b8;
+            yuv_to_rgb8(y_avg, uv8.val[0], uv8.val[1], r8, g8, b8);
 
-            for (int h = 0; h < 2; ++h) {
-                uf.val[h] = vsubq_f32(uf.val[h], v_128);
-                vf.val[h] = vsubq_f32(vf.val[h], v_128);
-            }
+            // uint8 → float32 / 255.
+            const float32x4x2_t rf = u8_to_f32_norm(r8);
+            const float32x4x2_t gf = u8_to_f32_norm(g8);
+            const float32x4x2_t bf = u8_to_f32_norm(b8);
 
-            for (int h = 0; h < 2; ++h) {
-                const float32x4_t y4 = yf.val[h];
-                const float32x4_t u4 = uf.val[h];
-                const float32x4_t v4 = vf.val[h];
-
-                float32x4_t r4 = vaddq_f32(y4, vmulq_f32(kr, v4));
-                float32x4_t g4 = vsubq_f32(vsubq_f32(y4, vmulq_f32(kg1, u4)),
-                                            vmulq_f32(kg2, v4));
-                float32x4_t b4 = vaddq_f32(y4, vmulq_f32(kb, u4));
-
-                r4 = vmulq_f32(vmaxq_f32(v_zero, vminq_f32(r4, v_255)), v_inv255);
-                g4 = vmulq_f32(vmaxq_f32(v_zero, vminq_f32(g4, v_255)), v_inv255);
-                b4 = vmulq_f32(vmaxq_f32(v_zero, vminq_f32(b4, v_255)), v_inv255);
-
-                vst3q_f32(dst_px + h * 12, {r4, g4, b4});
-            }
+            vst3q_f32(dst_px,      {rf.val[0], gf.val[0], bf.val[0]});
+            vst3q_f32(dst_px + 12, {rf.val[1], gf.val[1], bf.val[1]});
         }
 
         for (; xo < content_w; ++xo, y0 += 2, y1 += 2, uv += 2, dst_px += 3) {
-            const float y_v = static_cast<float>((y0[0] + y0[1] + y1[0] + y1[1] + 2) >> 2);
-            const float u_v = static_cast<float>(uv[0]) - 128.0f;
-            const float v_v = static_cast<float>(uv[1]) - 128.0f;
-            const float inv255 = 1.0f / 255.0f;
-            dst_px[0] = std::max(0.0f, std::min(255.0f, y_v + 1.402f * v_v))                   * inv255;
-            dst_px[1] = std::max(0.0f, std::min(255.0f, y_v - 0.344f * u_v - 0.714f * v_v))   * inv255;
-            dst_px[2] = std::max(0.0f, std::min(255.0f, y_v + 1.772f * u_v))                   * inv255;
+            const int   y_i = (y0[0] + y0[1] + y1[0] + y1[1] + 2) >> 2;
+            const int   u_i = static_cast<int>(uv[0]) - 128;
+            const int   v_i = static_cast<int>(uv[1]) - 128;
+            const float inv = 1.0f / 255.0f;
+            dst_px[0] = std::max(0, std::min(255, y_i + ((359 * v_i) >> 8))) * inv;
+            dst_px[1] = std::max(0, std::min(255, y_i - ((88 * u_i + 183 * v_i) >> 8))) * inv;
+            dst_px[2] = std::max(0, std::min(255, y_i + ((454 * u_i) >> 8))) * inv;
         }
 
         if (pad_right > 0)

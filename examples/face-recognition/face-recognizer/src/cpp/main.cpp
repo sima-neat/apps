@@ -54,6 +54,7 @@ struct AppConfig {
     bool is_live             = false; // inferred from URI
     bool test_mode           = false;
     bool show_display        = false;
+    bool force_cpu_preproc   = false; // --cpu-preproc: use A65 NEON preproc even for RTSP (A/B vs EV74 CVU)
 
     face_recog::ScrfdConfig  scrfd;
     face_recog::MatchConfig  match;
@@ -113,6 +114,7 @@ static AppConfig parse_args(int argc, char** argv) {
         else if (arg == "--stream-port"  && i + 1 < argc) { cfg.stream_port    = std::stoi(argv[++i]); }
         else if (arg == "--max-frames"   && i + 1 < argc) { cfg.max_frames     = std::stoi(argv[++i]); }
         else if (arg == "--rtsp-fps"     && i + 1 < argc) { cfg.rtsp_fps       = std::stoi(argv[++i]); }
+        else if (arg == "--cpu-preproc") { cfg.force_cpu_preproc = true; }
         else if (arg == "--test")   { cfg.test_mode    = true; cfg.show_display = false; cfg.output_sink = ""; }
         else if (arg == "--no-display") { cfg.show_display = false; cfg.output_sink = ""; }
         else if (arg == "--display")    { cfg.show_display = true;  }
@@ -127,7 +129,9 @@ static AppConfig parse_args(int argc, char** argv) {
                       << "                               or vlc udp://@:PORT\n"
                       << "  --stream-port N     UDP port for the overlay stream (default 5000).\n"
                       << "  --rtsp-fps N        Optional decoder FPS override. Omit to auto-detect\n"
-                      << "                      the source rate from the stream (recommended).\n";
+                      << "                      the source rate from the stream (recommended).\n"
+                      << "  --cpu-preproc       Force A65 NEON preproc for RTSP instead of the EV74\n"
+                      << "                      CVU path. Slower, but useful to A/B detection accuracy.\n";
             std::exit(0);
         } else if (arg.rfind("--", 0) == 0) {
             throw std::runtime_error("unknown argument: " + arg);
@@ -218,6 +222,28 @@ static simaai::neat::Run build_scrfd_run(const AppConfig& cfg, bool use_ev74,
         opt.preprocess.input_max_width  = seed_nv12 ? seed_nv12->width()  : 1280;
         opt.preprocess.input_max_height = seed_nv12 ? seed_nv12->height() : 720;
         opt.preprocess.input_max_depth  = 3;
+
+        // ── These two MUST be pinned to match the A65 CPU path and the model's
+        //    calibration.  Leaving either on Auto silently degrades detection.
+        //
+        // normalize: Auto resolves to OFF here, so the CVU handed the MLA raw
+        //   [0,255] RGB instead of [0,1] — a 255x input-scale error, despite
+        //   0_preproc.json baking in "normalize": true.  This is the dominant bug:
+        //   spurious detections outscored the real face in every frame.
+        // pad_value: ResizeSpec defaults to 114 (YOLO gray), but SCRFD was calibrated
+        //   with BLACK bars and the CPU NEON path memsets padding to 0.  At
+        //   1280x720 -> 640x640 the bars are 280 of 640 rows (~44% of the image).
+        //
+        // Measured on a fixed 1000-frame clip (>1-face rate; 1 real face present):
+        //   pad=114 norm=auto (was)  50.8%      pad=0 norm=auto   56.0%
+        //   pad=114 norm=On          19.7%      pad=0  norm=On    11.5%
+        //   A65 CPU NEON reference   11.4%
+        opt.preprocess.resize.enable    = simaai::neat::AutoFlag::On;
+        opt.preprocess.resize.mode      = simaai::neat::ResizeMode::Letterbox;
+        opt.preprocess.resize.pad_value = 0;
+        opt.preprocess.normalize.enable = simaai::neat::AutoFlag::On;
+        opt.preprocess.normalize.mean   = {0.0f, 0.0f, 0.0f};
+        opt.preprocess.normalize.stddev = {1.0f, 1.0f, 1.0f};
     } else {
         opt.preprocess.kind             = simaai::neat::InputKind::Tensor;
         opt.preprocess.input_max_width  = cfg.scrfd.infer_w;
@@ -354,11 +380,11 @@ int main(int argc, char** argv) {
     // For RTSP sources the HW decoder already produces NV12 buffers; route them
     // directly to the CVU Preproc node so resize+normalize+quantize+tessellate
     // run on EV74 instead of the A65.  File/webcam sources fall back to CPU preproc.
-    const bool use_ev74_preproc = false;  // BF16+MLA-tess: tessellation is inside MLA ELF, no CVU preproc
+    const bool use_ev74_preproc = is_rtsp && !cfg.force_cpu_preproc;  // InputKind::Image → RoutePlanner sets use_preproc=true → no cast_0; CVU preproc (0_preproc.json) feeds EVXX_BFLOAT16 directly to MLA
 
     // RTSP: Neat SDK RtspDecodedInput + HW H.264 decode → NV12 frames.
     // File/webcam: cv::VideoCapture as before.
-    // Overlay-burned stream: OpenCV GStreamer VideoWriter → x264enc → mpegtsmux → udpsink.
+    // Overlay stream: SiMa HW H264EncodeSima + UdpH264OutputGroup → udpsink.
     std::optional<simaai::neat::Run>    rtsp_src_run;
     std::vector<uint8_t>                rtsp_nv12_buf;       // NV12 bytes for the frame being read in Phase A
     std::vector<uint8_t>                curr_nv12_buf;       // NV12 bytes for the frame being processed in Phase C
@@ -369,6 +395,11 @@ int main(int argc, char** argv) {
     int64_t last_pull_pts_ns      = -1;
     int64_t last_pull_duration_ns = -1;
     int64_t last_pull_frame_id    = -1;
+    // Source frame rate, measured below. The H264 encoder and its caps must be told
+    // this — a stale/hardcoded value makes the encoder's rate control and the RTP
+    // timestamps disagree with the real delivery rate, which the receiver sees as a
+    // low frame rate plus growing latency.
+    double  detected_fps          = -1.0;
     cv::VideoCapture cap;
     std::function<bool(cv::Mat&)> read_frame;
 
@@ -487,7 +518,6 @@ int main(int argc, char** argv) {
         // decoder will drop frames (KeepLatest), and a sustained overrun can build
         // up buffers and destabilise very long runs.
         {
-            double detected_fps = -1.0;
             cv::Mat tmp;
             // Warm up: let the stream stabilise past the initial keyframe wait.
             for (int i = 0; i < 5; ++i) read_frame(tmp);
@@ -618,20 +648,57 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Failed to open output: " + cfg.output_sink);
     }
 
-    // Overlay UDP stream (RTP/H264) — lazy-init on first frame so we know W×H.
+    // Overlay UDP stream (RTP/H264 via SiMa HW encoder) — lazy-init on first frame.
+    // NV12 frames are pushed directly; no NV12→BGR conversion required for streaming.
     // Receive on any host:
     //   gst-launch-1.0 udpsrc port=PORT caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" \
     //     ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false
     //   ffplay -fflags nobuffer -protocol_whitelist file,udp,rtp <stream.sdp>
-    cv::VideoWriter stream_writer;
-    bool stream_writer_ok     = false;
-    bool stream_writer_failed = false;
+    std::optional<simaai::neat::Run> enc_run;
+    bool   enc_run_failed = false;
+    long   enc_push_ok    = 0;   // frames accepted by the encoder input queue
+    long   enc_push_drop  = 0;   // frames dropped because that queue was full
+    double enc_push_ms    = 0.0; // cumulative time spent in try_push
     if (!cfg.stream_host.empty()) {
-        std::cout << "[stream] Will send RTP/H264 overlay stream -> udp://"
+        std::cout << "[stream] Will send RTP/H264 overlay stream (SiMa HW encoder) -> udp://"
                   << cfg.stream_host << ":" << cfg.stream_port << "\n"
                   << "[stream] Receive:  gst-launch-1.0 udpsrc port=" << cfg.stream_port
                   << " caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96\""
                   << " ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false\n";
+    }
+
+    // Async display thread — decouples imshow/waitKey from the pipeline loop.
+    // cv::waitKey(1) on X11/GTK can stall 4-8 ms per frame while the compositor
+    // flushes; running it on a dedicated thread lets Phase A start immediately.
+    std::mutex disp_mutex;
+    std::condition_variable disp_cv;
+    cv::Mat disp_frame;        // either 3-ch BGR or 1-ch NV12 (rows=H*3/2, cols=W)
+    bool disp_ready = false;
+    bool disp_stop  = false;
+    std::thread disp_thread;
+    if (cfg.show_display || cfg.output_sink == "display") {
+        disp_thread = std::thread([&]() {
+            while (true) {
+                cv::Mat f;
+                {
+                    std::unique_lock<std::mutex> lk(disp_mutex);
+                    disp_cv.wait(lk, [&]{ return disp_ready || disp_stop; });
+                    if (disp_stop && !disp_ready) break;
+                    f = std::move(disp_frame);
+                    disp_ready = false;
+                }
+                // If 1-channel, it's NV12 (H*3/2 × W): convert to BGR here,
+                // off the pipeline hot path.
+                if (f.channels() == 1) {
+                    cv::Mat bgr;
+                    cv::cvtColor(f, bgr, cv::COLOR_YUV2BGR_NV12);
+                    f = std::move(bgr);
+                }
+                cv::imshow("face-recognizer", f);
+                if (cv::waitKey(1) == 27) g_stop = true;
+                if (disp_stop) break;
+            }
+        });
     }
 
     Timings timings;
@@ -654,7 +721,11 @@ int main(int argc, char** argv) {
         simaai::neat::Tensor t0;
         if (use_ev74_preproc && rtsp_nv12_tensor.has_value()) {
             // EV74 path: push HW NV12 tensor directly — CVU Preproc does
-            // resize+colorconvert+normalize+quantize+tessellate on EV74 hardware.
+            // resize+colorconvert+normalize on EV74 hardware.
+            // NV12 bytes are still needed on CPU for align_face_nv12 + draw_overlay_nv12.
+            curr_nv12_buf = rtsp_nv12_buf;
+            curr_nv12_w   = frame0.cols;
+            curr_nv12_h   = frame0.rows;
             t0 = *rtsp_nv12_tensor;
             pad_meta_curr = face_recog::compute_pad_meta_only(
                 frame0.cols, frame0.rows, cfg.scrfd.infer_w, cfg.scrfd.infer_h);
@@ -678,6 +749,16 @@ int main(int argc, char** argv) {
         if (!scrfd_run.push(simaai::neat::TensorList{t0}))
             throw std::runtime_error("SCRFD push failed (prime): " + scrfd_run.last_error());
     }
+
+    // Detection-quality tally, printed at shutdown. Useful for A/B-ing preproc paths
+    // (EV74 CVU vs A65 NEON) on a fixed clip where the true face count is known.
+    struct DetStats {
+        int    frames = 0;
+        int    zero_det = 0, one_det = 0, multi_det = 0;
+        int    extra_dets = 0;          // detections beyond the first, summed
+        double top_score_sum = 0.0;
+        int    named = 0, unknown = 0;  // top-face recognition outcome
+    } det_stats;
 
     const int RECOG_INTERVAL = cfg.recog_interval;
     static std::vector<face_recog::MatchResult> cached_matches;
@@ -717,6 +798,8 @@ int main(int argc, char** argv) {
                 t_pull_end = Clock::now();   // pull (blocking wait) done; compute begins
                 if (got_next) {
                     if (use_ev74_preproc && rtsp_nv12_tensor.has_value()) {
+                        next_nv12_w = nf.cols;
+                        next_nv12_h = nf.rows;
                         next_tensor = *rtsp_nv12_tensor;
                         next_pad = face_recog::compute_pad_meta_only(
                             nf.cols, nf.rows, cfg.scrfd.infer_w, cfg.scrfd.infer_h);
@@ -758,21 +841,52 @@ int main(int argc, char** argv) {
 
         // ── Phase C: decode + ArcFace + overlay + IO (SCRFD_next runs concurrently) ─
 
-        // Deferred NV12→BGR for RTSP: convert curr_nv12_buf to frame BGR now.
-        // This runs while SCRFD_next processes on MLA, so it doesn't add to latency.
-        if (is_rtsp && !use_ev74_preproc && !curr_nv12_buf.empty() && curr_nv12_w > 0) {
-            cv::Mat nv12_mat(curr_nv12_h * 3 / 2, curr_nv12_w, CV_8UC1, curr_nv12_buf.data());
-            cv::cvtColor(nv12_mat, frame, cv::COLOR_YUV2BGR_NV12);
-        }
+        // When RTSP NV12 is available, skip the full-frame NV12→BGR conversion.
+        // ArcFace uses ROI-only conversion (face crop only); overlay draws directly on
+        // the NV12 buffer. The display thread converts NV12→BGR asynchronously.
+        const bool use_nv12_path =
+            is_rtsp && !curr_nv12_buf.empty() && curr_nv12_w > 0;
 
         std::vector<face_recog::Detection> detections;
         try {
             const auto scrfd_tensors = face_recog::collect_tensors(*scrfd_sample);
+
+            // One-time: compare the letterbox the preproc stage ACTUALLY applied
+            // (recorded in Tensor::semantic.preprocess) against compute_pad_meta_only's
+            // assumption.  A mismatch means detections are remapped with the wrong
+            // scale/offset — boxes land on the wrong objects and scores degrade.
+            static bool pp_meta_logged = false;
+            if (!pp_meta_logged) {
+                pp_meta_logged = true;
+                for (const auto& t : scrfd_tensors) {
+                    if (!t.semantic.preprocess.has_value()) continue;
+                    const auto& pp = *t.semantic.preprocess;
+                    std::cout << "[preproc-meta] actual: orig=" << pp.original_width << "x"
+                              << pp.original_height
+                              << " resized=" << pp.resized_width << "x" << pp.resized_height
+                              << " scaled=" << pp.scaled_width << "x" << pp.scaled_height
+                              << " pad L/R/T/B=" << pp.pad_left << "/" << pp.pad_right
+                              << "/" << pp.pad_top << "/" << pp.pad_bottom
+                              << " mode=" << pp.resize_mode
+                              << " color " << pp.color_in << "->" << pp.color_out
+                              << " norm=" << pp.normalize
+                              << " affine scale=(" << pp.affine_scale_x << "," << pp.affine_scale_y
+                              << ") offset=(" << pp.affine_offset_x << "," << pp.affine_offset_y << ")\n";
+                    std::cout << "[preproc-meta] assumed: pad L/T=" << pad_meta_curr.pad_left
+                              << "/" << pad_meta_curr.pad_top
+                              << " scale=" << std::min(
+                                     (float)cfg.scrfd.infer_w / pad_meta_curr.orig_w,
+                                     (float)cfg.scrfd.infer_h / pad_meta_curr.orig_h)
+                              << " (orig " << pad_meta_curr.orig_w << "x" << pad_meta_curr.orig_h << ")\n";
+                    break;
+                }
+            }
+
             detections = face_recog::decode_scrfd(scrfd_tensors, cfg.scrfd, pad_meta_curr);
         } catch (const std::exception& e) {
             std::cerr << "[SCRFD] decode error (skipping frame): " << e.what() << "\n";
             ++frame_count;
-            if (is_rtsp && !use_ev74_preproc) {
+            if (is_rtsp) {
                 std::swap(curr_nv12_buf, rtsp_nv12_buf);
                 curr_nv12_w = next_nv12_w;
                 curr_nv12_h = next_nv12_h;
@@ -793,7 +907,13 @@ int main(int argc, char** argv) {
             cached_matches.reserve(detections.size());
             for (const auto& det : detections) {
                 const auto ta0i = Clock::now();
-                const cv::Mat crop = face_recog::align_face(frame, det.landmarks);
+                // NV12 path: convert only the face-ROI region (e.g. 200×200) to BGR
+                // instead of the full 1280×720 frame — ~40× fewer pixels to convert.
+                const cv::Mat crop = use_nv12_path
+                    ? face_recog::align_face_nv12(curr_nv12_buf.data(),
+                                                  curr_nv12_w, curr_nv12_h,
+                                                  det.landmarks)
+                    : face_recog::align_face(frame, det.landmarks);
                 const auto ta1i = Clock::now();
                 const auto emb  = run_arcface(arcface_run, crop, cfg.timeout_ms);
                 const auto ta2i = Clock::now();
@@ -811,29 +931,136 @@ int main(int argc, char** argv) {
         const auto& matches = cached_matches;
         const auto tc2 = Clock::now();
 
-        face_recog::draw_overlay(frame, detections, matches, cfg.overlay);
+        // For streaming or file output: convert NV12→BGR then use draw_overlay (OpenCV)
+        // for pixel-accurate annotation matching the earlier BGR overlay path.
+        // VideoConvert in the VideoSender chain handles BGR→NV12→H264 encoding.
+        // Without streaming or file output: draw_overlay_nv12 directly (faster).
+        // NV12 path: annotate the NV12 buffer in place. draw_overlay_nv12 converts only
+        // a small ROI per face and reuses the OpenCV drawing code, so the result matches
+        // the BGR path while keeping the encoder fed with NV12 — VideoConvert then
+        // degenerates to a passthrough instead of a full-frame software BGR→NV12 pass
+        // (which capped the stream at ~45 fps).
+        // A full-frame BGR copy is produced only when a file writer actually needs one.
+        if (use_nv12_path) {
+            face_recog::draw_overlay_nv12(curr_nv12_buf.data(), curr_nv12_w, curr_nv12_h,
+                                          detections, matches, cfg.overlay);
+            if (write_video || write_image) {
+                cv::Mat nv12_mat(curr_nv12_h * 3 / 2, curr_nv12_w, CV_8UC1,
+                                 curr_nv12_buf.data());
+                cv::cvtColor(nv12_mat, frame, cv::COLOR_YUV2BGR_NV12);
+            }
+        } else {
+            face_recog::draw_overlay(frame, detections, matches, cfg.overlay);
+        }
         const auto tc3 = Clock::now();
 
-        if (!cfg.stream_host.empty() && !stream_writer_ok && !stream_writer_failed) {
-            const std::string gst_pipe =
-                "appsrc do-timestamp=true ! "
-                "queue max-size-buffers=2 leaky=downstream ! "
-                "videoconvert ! video/x-raw,format=I420 ! "
-                "x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast key-int-max=30 ! "
-                "rtph264pay config-interval=1 pt=96 ! "
-                "udpsink host=" + cfg.stream_host +
-                " port=" + std::to_string(cfg.stream_port) + " sync=false";
-            if (stream_writer.open(gst_pipe, cv::CAP_GSTREAMER, 0, 25.0,
-                                   cv::Size(frame.cols, frame.rows), true)) {
-                stream_writer_ok = true;
-                std::cout << "[stream] Writer opened -> udp://"
-                          << cfg.stream_host << ":" << cfg.stream_port << "\n";
-            } else {
-                std::cerr << "[stream] Failed to open GStreamer stream writer\n";
-                stream_writer_failed = true;
+        // Lazy-init the HW encoder Run on first frame when dimensions are known.
+        if (!cfg.stream_host.empty() && !enc_run.has_value() && !enc_run_failed &&
+            curr_nv12_w > 0 && curr_nv12_h > 0) {
+            try {
+                simaai::neat::InputOptions enc_in_opt;
+                enc_in_opt.payload_type   = simaai::neat::PayloadType::Image;
+                enc_in_opt.memory_policy  = simaai::neat::InputMemoryPolicy::SystemMemory;
+                enc_in_opt.is_live        = true;
+                enc_in_opt.do_timestamp   = true;
+                enc_in_opt.block          = false;
+
+                // Tell the encoder the ACTUAL delivery rate. VideoSender wires this
+                // into CapsRaw on both sides of VideoConvert and into H264EncodeSima's
+                // rate control; a hardcoded 30 while the app pushes ~56 fps makes the
+                // receiver report ~45 fps and accumulate lag.
+                const int enc_fps = (detected_fps > 0)
+                    ? std::clamp((int)std::lround(detected_fps), 1, 120)
+                    : 60;
+
+                // On the NV12 path, pin NV12 input caps so VideoConvert inside
+                // VideoSender degenerates to a passthrough. Letting the SDK negotiate
+                // BGR instead costs a full-frame software BGR→NV12 per frame, which
+                // capped the delivered stream at ~45 fps (vs ~57 fps on NV12).
+                if (use_nv12_path) {
+                    enc_in_opt.caps_override =
+                        "video/x-raw,format=NV12,width=" + std::to_string(curr_nv12_w) +
+                        ",height=" + std::to_string(curr_nv12_h) +
+                        ",framerate=" + std::to_string(enc_fps) + "/1";
+                }
+                simaai::neat::nodes::groups::VideoSenderOptions vsopt =
+                    simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
+                        curr_nv12_w, curr_nv12_h, enc_fps);
+                vsopt.host            = cfg.stream_host;
+                vsopt.video_port_base = cfg.stream_port;
+                vsopt.channel         = 0;
+
+                // VideoSenderEncoderOptions defaults to profile "baseline", which forces
+                // CAVLC entropy coding and forbids B-frames — a large efficiency loss that
+                // shows up first as blocking/smearing on motion. neatencoder's own default
+                // is "main"; "high" is supported and strictly better at a given bitrate.
+                vsopt.encoder.profile = "high";
+
+                // Budget bits from actual pixel rate rather than a flat constant.
+                // 6 Mbps at 720p60 is only ~0.11 bits/pixel, which starves motion;
+                // ~0.2 bpp is a reasonable target for live 720p. Level 4.0 tops out
+                // around 20-25 Mbps for High profile, so the clamp stays legal.
+                const long long pixel_rate =
+                    (long long)curr_nv12_w * curr_nv12_h * enc_fps;
+                vsopt.encoder.bitrate_kbps = (int)std::clamp(
+                    pixel_rate * 20 / 100 / 1000, 4000LL, 20000LL);
+
+                simaai::neat::Graph enc_graph("encoder");
+                enc_graph.add(simaai::neat::nodes::Input(enc_in_opt));
+                enc_graph.add(simaai::neat::nodes::groups::VideoSender(vsopt));
+
+                simaai::neat::RunOptions enc_run_opt;
+                // 16-frame queue absorbs H264 keyframe spikes (keyframe can take 5-10×
+                // longer than a P-frame; at 45 fps that's ~200 ms of backlog headroom).
+                // depth=2 caused try_push() drops during every keyframe, which triggered
+                // H264 decoder resets on the receiver and appeared as periodic pauses.
+                enc_run_opt.queue_depth     = 16;
+                enc_run_opt.overflow_policy = simaai::neat::OverflowPolicy::DropIncoming;
+
+                // Seed with a cv::Mat so GStreamer negotiates caps from the OpenCV type
+                // (single-channel NV12 layout for the NV12 path, 3-channel BGR otherwise).
+                // Seeding with a raw Tensor was causing VideoConvert to NOT degenerate to a
+                // passthrough because GStreamer saw an ambiguous [H*3/2, W] shape instead
+                // of a recognised single-channel NV12 buffer.
+                if (use_nv12_path) {
+                    cv::Mat seed_nv12(curr_nv12_h * 3 / 2, curr_nv12_w, CV_8UC1, cv::Scalar(0));
+                    enc_run = enc_graph.build(std::vector<cv::Mat>{seed_nv12}, enc_run_opt);
+                } else {
+                    cv::Mat seed_bgr(curr_nv12_h, curr_nv12_w, CV_8UC3, cv::Scalar(0, 0, 0));
+                    enc_run = enc_graph.build(std::vector<cv::Mat>{seed_bgr}, enc_run_opt);
+                }
+                std::cout << "[stream] HW encoder opened -> udp://"
+                          << cfg.stream_host << ":" << cfg.stream_port
+                          << "  (" << curr_nv12_w << "x" << curr_nv12_h << " @ " << enc_fps
+                          << " fps, " << vsopt.encoder.bitrate_kbps << " kbps, "
+                          << vsopt.encoder.profile << " profile)\n";
+            } catch (const std::exception& ex) {
+                std::cerr << "[stream] Failed to open HW encoder: " << ex.what() << "\n";
+                enc_run_failed = true;
             }
         }
-        if (stream_writer_ok) stream_writer.write(frame);
+
+        // Push the annotated NV12 frame to the HW encoder (fire-and-forget, no pull).
+        // try_push returning false means the encoder's input queue was full and the
+        // frame was dropped (OverflowPolicy::DropIncoming) — that is the gap between
+        // the loop FPS and what the receiver actually sees.
+        if (enc_run.has_value()) {
+            const auto te0 = Clock::now();
+            bool pushed = false;
+            if (use_nv12_path && !curr_nv12_buf.empty()) {
+                // Wrap curr_nv12_buf as a single-channel NV12 Mat (H*3/2 rows × W cols).
+                // Clone it so the encoder pipeline holds its own ref-counted copy that
+                // stays valid across the curr/rtsp buffer swap at end-of-loop.
+                cv::Mat enc_nv12(curr_nv12_h * 3 / 2, curr_nv12_w, CV_8UC1,
+                                 curr_nv12_buf.data());
+                pushed = enc_run->try_push(std::vector<cv::Mat>{enc_nv12.clone()});
+            } else if (!frame.empty()) {
+                // File/webcam path: BGR in, VideoConvert handles BGR→NV12.
+                pushed = enc_run->try_push(std::vector<cv::Mat>{frame});
+            }
+            if (pushed) ++enc_push_ok; else ++enc_push_drop;
+            enc_push_ms += Ms(Clock::now() - te0).count();
+        }
 
         if (write_video && is_rtsp && !writer.isOpened() && !writer_failed) {
             if (!writer.open(cfg.output_sink,
@@ -852,8 +1079,22 @@ int main(int argc, char** argv) {
                        i, matches[i].name.c_str(), matches[i].score);
         }
         if (cfg.show_display || cfg.output_sink == "display") {
-            cv::imshow("face-recognizer", frame);
-            if (cv::waitKey(1) == 27) break;
+            {
+                std::lock_guard<std::mutex> lk(disp_mutex);
+                if (!frame.empty()) {
+                    // BGR frame with overlay already drawn — display thread shows directly.
+                    disp_frame = frame.clone();
+                } else if (use_nv12_path) {
+                    // NV12-only path (no stream/write): display thread converts to BGR.
+                    cv::Mat nv12_view(curr_nv12_h * 3 / 2, curr_nv12_w,
+                                      CV_8UC1, curr_nv12_buf.data());
+                    nv12_view.copyTo(disp_frame);
+                } else {
+                    disp_frame = frame.clone();
+                }
+                disp_ready = true;
+            }
+            disp_cv.notify_one();
         }
 
         ++frame_count;
@@ -870,8 +1111,24 @@ int main(int argc, char** argv) {
             timings.overlay_ms.push_back(Ms(tc3 - tc2).count());
             timings.e2e_ms.push_back(Ms(tc3 - t_frame).count());
         }
+        ++det_stats.frames;
+        if (detections.empty())            ++det_stats.zero_det;
+        else if (detections.size() == 1)   ++det_stats.one_det;
+        else                             { ++det_stats.multi_det;
+                                           det_stats.extra_dets += (int)detections.size() - 1; }
+        if (!detections.empty()) det_stats.top_score_sum += detections[0].score;
+        if (!matches.empty()) {
+            if (matches[0].index >= 0) ++det_stats.named; else ++det_stats.unknown;
+        }
+
         if (frame_count % 100 == 0) {
             std::cout << "[" << frame_count << "] faces=" << detections.size();
+            // det=SCRFD confidence + box, so a bad preproc shows up as low/misplaced dets
+            // independently of the ArcFace match score.
+            for (size_t i = 0; i < detections.size(); ++i)
+                printf("  det[%zu]=%.3f@(%.0f,%.0f,%.0f,%.0f)",
+                       i, detections[i].score, detections[i].x1, detections[i].y1,
+                       detections[i].x2, detections[i].y2);
             for (size_t i = 0; i < matches.size(); ++i)
                 printf("  face[%zu]=%s(%.3f) 2nd=%s(%.3f) margin=%.3f",
                        i, matches[i].name.c_str(), matches[i].score,
@@ -880,12 +1137,11 @@ int main(int argc, char** argv) {
             std::cout << "\n";
         }
 
-        if (is_rtsp && !use_ev74_preproc) {
+        if (is_rtsp) {
             // Swap NV12 buffers: next frame's NV12 becomes current for Phase C next iteration.
             std::swap(curr_nv12_buf, rtsp_nv12_buf);
             curr_nv12_w = next_nv12_w;
             curr_nv12_h = next_nv12_h;
-            // frame will be filled from curr_nv12_buf at the start of Phase C next iteration.
         } else {
             frame = std::move(next_frame);
         }
@@ -905,12 +1161,44 @@ int main(int argc, char** argv) {
         print_timings(timings, frame_count, total_s > 0 ? total_s : 1.0);
     }
 
+    if (disp_thread.joinable()) {
+        { std::lock_guard<std::mutex> lk(disp_mutex); disp_stop = true; }
+        disp_cv.notify_one();
+        disp_thread.join();
+    }
+
     scrfd_run.close();
     arcface_run.close();
     if (rtsp_src_run) rtsp_src_run->close();
-    if (stream_writer_ok) stream_writer.release();
+    if (enc_run.has_value()) enc_run->close();
     if (write_video) writer.release();
     if (!is_rtsp) cap.release();
+
+    if (det_stats.frames > 0) {
+        const int scored = det_stats.one_det + det_stats.multi_det;
+        printf("\n═══ Detection quality (%d frames) ═══\n", det_stats.frames);
+        printf("  0 faces : %5d (%.1f%%)   <- misses\n",
+               det_stats.zero_det, 100.0 * det_stats.zero_det / det_stats.frames);
+        printf("  1 face  : %5d (%.1f%%)\n",
+               det_stats.one_det, 100.0 * det_stats.one_det / det_stats.frames);
+        printf("  >1 face : %5d (%.1f%%)   <- extra dets total: %d\n",
+               det_stats.multi_det, 100.0 * det_stats.multi_det / det_stats.frames,
+               det_stats.extra_dets);
+        printf("  mean top-det score: %.3f\n",
+               scored > 0 ? det_stats.top_score_sum / scored : 0.0);
+        printf("  recognized/unknown: %d / %d\n\n", det_stats.named, det_stats.unknown);
+    }
+
+    if (enc_push_ok + enc_push_drop > 0) {
+        const long tot = enc_push_ok + enc_push_drop;
+        printf("═══ Stream encoder (%ld pushes) ═══\n", tot);
+        printf("  accepted: %6ld (%.1f%%)   -> ~%.1f FPS at the receiver\n",
+               enc_push_ok, 100.0 * enc_push_ok / tot,
+               enc_push_ok / std::max(total_s, 0.001));
+        printf("  dropped : %6ld (%.1f%%)   <- encoder input queue full\n",
+               enc_push_drop, 100.0 * enc_push_drop / tot);
+        printf("  mean try_push: %.2f ms\n\n", enc_push_ms / tot);
+    }
 
     std::cout << "Done: " << frame_count << " frames in "
               << cv::format("%.2f", total_s) << " s ("

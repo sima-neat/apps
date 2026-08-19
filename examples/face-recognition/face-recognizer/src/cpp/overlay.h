@@ -23,4 +23,12 @@ void draw_overlay(
     const std::vector<MatchResult>&  matches,
     const OverlayConfig&             cfg = {});
 
+// NV12 variant: draws boxes, keypoints, and text labels directly on the NV12 buffer,
+// avoiding any full-frame color-space conversion. `nv12` is W×H×3/2 bytes, contiguous.
+void draw_overlay_nv12(
+    uint8_t*                         nv12, int W, int H,
+    const std::vector<Detection>&    detections,
+    const std::vector<MatchResult>&  matches,
+    const OverlayConfig&             cfg = {});
+
 } // namespace face_recog
