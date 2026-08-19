@@ -326,26 +326,30 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
         return
 
     token = os.environ.get("HF_TOKEN")
-    try:
-        target = _catalog_target(Path(catalog_dir), repo_id)
-    except ValueError:
-        yield event(state="error", message="Invalid model catalog target")
-        return
     yield event(state="resolving", repoId=repo_id)
 
-    total = 0
+    # Resolve the server's canonical repository id before deriving a local
+    # path.  The request value is validated above, but it is deliberately not
+    # used in a filesystem expression: the path is based on Hub metadata and
+    # is then confined to the configured catalog root by _catalog_target().
     try:
         info = HfApi(token=token).model_info(repo_id, files_metadata=True)
+        canonical_repo_id = validated_repo_id(str(getattr(info, "id", "")), hub)
+        if canonical_repo_id.casefold() != repo_id.casefold():
+            raise ValueError("Hub returned a different repository id")
+        target = _catalog_target(Path(catalog_dir), canonical_repo_id)
         total = sum(int(getattr(s, "size", 0) or 0) for s in (info.siblings or []))
-    except Exception:
-        total = 0
+    except Exception:  # noqa: BLE001 - details stay in server logs
+        logging.exception("Could not resolve Hugging Face repository %s", repo_id)
+        yield event(state="error", repoId=repo_id, message="Could not resolve model repository")
+        return
 
     error: dict = {}
 
     def _download() -> None:
         try:
             target.mkdir(parents=True, exist_ok=True)
-            snapshot_download(repo_id=repo_id, local_dir=str(target), token=token)
+            snapshot_download(repo_id=canonical_repo_id, local_dir=str(target), token=token)
         except Exception:  # noqa: BLE001 - reported generically; details stay in logs
             logging.exception("Hugging Face model download failed for %s", repo_id)
             error["message"] = "Model download failed"

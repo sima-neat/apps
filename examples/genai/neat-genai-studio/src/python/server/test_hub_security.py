@@ -2,6 +2,7 @@ import tempfile
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 # The security helpers do not parse YAML; keep this host-only unit test runnable
@@ -11,7 +12,7 @@ try:
 except ModuleNotFoundError:
     sys.modules["yaml"] = types.ModuleType("yaml")
 
-from server.hub import _catalog_target, safe_name, validated_repo_id
+from server.hub import _catalog_target, hub_download_stream, safe_name, validated_repo_id
 from server.model_manager import parse_param_count
 from shared.config import HubConfig
 
@@ -56,6 +57,33 @@ class HubPathSecurityTests(unittest.TestCase):
         self.assertEqual(parse_param_count("LFM2-350M-a16w4"), "350M")
         self.assertEqual(parse_param_count("model-1.5B-int4"), "1.5B")
         self.assertIsNone(parse_param_count("model-000000000000000000000000000000000x"))
+
+    def test_download_path_uses_canonical_hub_metadata(self):
+        captured = {}
+
+        class FakeApi:
+            def __init__(self, token=None):
+                self.token = token
+
+            def model_info(self, repo_id, files_metadata=False):
+                self.requested_repo_id = repo_id
+                return types.SimpleNamespace(id="simaai/model", siblings=[])
+
+        def fake_download(**kwargs):
+            captured.update(kwargs)
+            Path(kwargs["local_dir"]).mkdir(parents=True, exist_ok=True)
+
+        fake_hub = types.SimpleNamespace(HfApi=FakeApi, snapshot_download=fake_download)
+        with tempfile.TemporaryDirectory() as catalog, patch.dict(
+            sys.modules, {"huggingface_hub": fake_hub}
+        ), patch("server.hub.hub_enabled", return_value=True), patch(
+            "server.hub.classify_model_dir", return_value={"name": "model"}
+        ), patch("server.hub.repair_chat_template_files", return_value=[]):
+            events = list(hub_download_stream(Path(catalog), self.hub, "simaai/model"))
+
+        self.assertEqual(Path(captured["local_dir"]), Path(catalog, "model"))
+        self.assertEqual(captured["repo_id"], "simaai/model")
+        self.assertIn('"state": "done"', events[-1])
 
 
 if __name__ == "__main__":
