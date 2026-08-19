@@ -225,14 +225,14 @@ Usage:
   ./run.sh stop       Cleanly stop a running instance.
   ./run.sh status     Report whether the studio is running.
   ./run.sh update     Update to the latest version (preserves models, config,
-                      venvs, RAG db), then refresh dependencies.
+                      venvs and RAG db). Dependency refresh is opt-in.
   ./run.sh --clean    Remove app-generated data (venvs, config, RAG db, TTS
                       voices, caches, logs). Add -y to skip the prompt.
 
 Environment:
   AUTO_SETUP=0        Do not auto-run ./setup.sh on first launch (error instead).
   NEAT_APPS_BRANCH    Branch to pull for `update` (default: main).
-  UPDATE_DEPS=0       Skip the setup.sh dependency refresh during `update`.
+  UPDATE_DEPS=1       Run full setup.sh dependency refresh during `update`.
 USAGE
 }
 
@@ -351,7 +351,7 @@ do_clean() {
 # config.local.yaml, RAG db, and downloaded models (which live outside this dir) —
 # is preserved. In a git checkout this is `git pull`; standalone (fetched via
 # get-example.sh) it re-fetches the release archive and overlays the source. Set
-# NEAT_APPS_BRANCH to choose a branch (default main); UPDATE_DEPS=0 skips setup.sh.
+# NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 runs setup.sh.
 do_update() {
   local branch="${NEAT_APPS_BRANCH:-main}"
   if do_status >/dev/null 2>&1; then
@@ -408,8 +408,8 @@ do_update() {
     ok "Source updated from ${branch}."
   fi
 
-  # Refresh dependencies (setup.sh is idempotent) unless opted out.
-  if [[ "${UPDATE_DEPS:-1}" == "0" ]]; then
+  # Source-only updates preserve user data. A full setup refresh is explicit.
+  if [[ "${UPDATE_DEPS:-0}" == "0" ]]; then
     ok "Update complete. Run ${C_BOLD}./setup.sh${C_RESET} if dependencies changed."
   else
     step "Refreshing dependencies (./setup.sh)…"

@@ -52,9 +52,11 @@ def validated_repo_id(repo_id: str, hub: HubConfig | None = None) -> str:
 def safe_name(repo_id: str) -> str:
     """Local catalog directory name for a validated ``org/name`` Hub id."""
     value = validated_repo_id(repo_id)
-    # basename is a recognized path sanitizer and validation above rejects the
-    # special directory names and every path-separator spelling.
-    return os.path.basename(value)
+    org, name = value.split("/", 1)
+    # Preserve the existing on-disk layout for official SiMa models. Other
+    # allowed organizations include their namespace; '@' cannot occur in a
+    # validated component, so this mapping cannot collide with another repo.
+    return name if org.casefold() == "simaai" else f"{org}@{name}"
 
 
 def _catalog_target(catalog_dir: Path, repo_id: str) -> Path:

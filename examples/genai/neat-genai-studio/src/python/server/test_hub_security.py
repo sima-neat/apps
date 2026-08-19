@@ -29,7 +29,8 @@ class HubPathSecurityTests(unittest.TestCase):
         for value in values:
             with self.subTest(value=value):
                 self.assertEqual(validated_repo_id(value, self.hub), value)
-                self.assertEqual(safe_name(value), value.split("/", 1)[1])
+        self.assertEqual(safe_name(values[0]), values[0].split("/", 1)[1])
+        self.assertEqual(safe_name(values[1]), values[1].replace("/", "@", 1))
 
     def test_rejects_traversal_and_unconfigured_organizations(self):
         values = (
