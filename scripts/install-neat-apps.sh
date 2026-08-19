@@ -14,13 +14,12 @@ set -euo pipefail
 # - If no tag is provided, or the tag is "latest", fetch branch/latest.tag.
 # - Download neat-apps-<branch-key>-<tag>.tar.gz from the apps download root.
 # - If arg 1 points to an existing .tar.gz file, use that local archive directly.
-# - Extract the archive into ./neat-apps.
+# - Extract the archive into the current directory as ./prebuilt-apps.
 
 BASE_URL="${NEAT_APPS_BASE_URL:-https://apps.sima-neat.com/download}"
-NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
 BRANCH="${1:-}"
 TAG_INPUT="${2:-latest}"
-DEST_DIR="${NEAT_APPS_INSTALL_DIR:-neat-apps}"
+DEST_DIR="${NEAT_APPS_INSTALL_DIR:-.}"
 LOCAL_ARCHIVE="${NEAT_APPS_ARCHIVE:-}"
 
 usage() {
@@ -32,17 +31,10 @@ Usage:
 Environment:
   NEAT_APPS_BASE_URL      Base URL for apps downloads
                           default: https://apps.sima-neat.com/download
-  NEAT_INSTALLER_URL      Hosted NEAT core installer URL
-                          default: https://tools.sima-neat.com/install-neat.sh
-  NEAT_APPS_INSTALL_DIR   Destination directory for extracted files
-                          default: ./neat-apps
+  NEAT_APPS_INSTALL_DIR   Parent directory for the extracted prebuilt-apps
+                          default: current directory
   NEAT_APPS_ARCHIVE       Use an already downloaded local apps archive
-  NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL
-                          Download test-scope models after install when set to 1
-                          default: 0
-  NEAT_APPS_SKIP_MODEL_DOWNLOAD
-                          Skip model downloads when set to 1
-                          default: 0
+  SIMA_CLI_BIN            Path to sima-cli
 USAGE
 }
 
@@ -84,44 +76,7 @@ resolve_sima_cli_bin() {
     printf '%s\n' "${SIMA_CLI_BIN}"
     return 0
   fi
-  if command -v sima-cli >/dev/null 2>&1; then
-    command -v sima-cli
-    return 0
-  fi
-  local candidate
-  for candidate in \
-    /data/sima-cli/.venv/bin/sima-cli \
-    "${HOME}/.local/bin/sima-cli" \
-    "${HOME}/sima-cli/.venv/bin/sima-cli" \
-    /opt/sima-cli/.venv/bin/sima-cli \
-    /opt/bin/sima-cli; do
-    if [[ -x "${candidate}" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-  return 1
-}
-
-extract_neat_core_target() {
-  local json_path="$1"
-  python3 - <<'PY' "${json_path}"
-import json
-import sys
-
-with open(sys.argv[1], "r", encoding="utf-8") as fh:
-    data = json.load(fh)
-
-neat_core = data.get("neat-core", {})
-branch = str(neat_core.get("branch", "")).strip()
-version = str(neat_core.get("version", "")).strip()
-
-if not branch or not version:
-    raise SystemExit(1)
-
-print(branch)
-print(version)
-PY
+  command -v sima-cli
 }
 
 if [[ "${BRANCH}" == "-h" || "${BRANCH}" == "--help" ]]; then
@@ -182,14 +137,14 @@ fi
 ARCHIVE_NAME=""
 ARCHIVE_URL=""
 TMP_ARCHIVE=""
-TMP_INSTALLER=""
+TMP_DEPS_DIR=""
 
 cleanup() {
   if [[ -n "${TMP_ARCHIVE}" ]]; then
     rm -f "${TMP_ARCHIVE}"
   fi
-  if [[ -n "${TMP_INSTALLER}" ]]; then
-    rm -f "${TMP_INSTALLER}"
+  if [[ -n "${TMP_DEPS_DIR}" ]]; then
+    rm -rf "${TMP_DEPS_DIR}"
   fi
 }
 trap cleanup EXIT
@@ -232,66 +187,29 @@ mkdir -p "${DEST_DIR}"
 echo "Extracting into ${DEST_DIR}/ ..."
 tar -xzf "${LOCAL_ARCHIVE}" -C "${DEST_DIR}"
 
-RUNTIME_DIR="${DEST_DIR}/neat-apps-runtime"
-NEAT_CORE_JSON_PATH="${RUNTIME_DIR}/neat-core.json"
+RUNTIME_DIR="${DEST_DIR}/prebuilt-apps"
 
-if [[ ! -f "${NEAT_CORE_JSON_PATH}" ]]; then
-  echo "ERROR: extracted apps package is missing neat-core.json." >&2
+SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)" || {
+  echo "ERROR: sima-cli is required to install Core and Insight." >&2
   exit 1
-fi
-
-if ! mapfile -t NEAT_CORE_TARGET < <(extract_neat_core_target "${NEAT_CORE_JSON_PATH}"); then
-  echo "ERROR: failed to parse NEAT core dependency from ${NEAT_CORE_JSON_PATH}." >&2
-  exit 1
-fi
-
-NEAT_CORE_BRANCH="${NEAT_CORE_TARGET[0]}"
-NEAT_CORE_VERSION="${NEAT_CORE_TARGET[1]}"
-
-TMP_INSTALLER="$(mktemp -t install-neat-core.XXXXXX.sh)"
-download_file "${NEAT_INSTALLER_URL}" "${TMP_INSTALLER}"
-chmod +x "${TMP_INSTALLER}"
+}
+TMP_DEPS_DIR="$(mktemp -d -t neat-apps-deps.XXXXXX)"
+mkdir -p "${TMP_DEPS_DIR}/core" "${TMP_DEPS_DIR}/insight"
 
 echo
-echo "Installing matching NEAT core:"
-echo "  Branch : ${NEAT_CORE_BRANCH}"
-echo "  Version: ${NEAT_CORE_VERSION}"
-if ! "${TMP_INSTALLER}" --minimum "${NEAT_CORE_BRANCH}" "${NEAT_CORE_VERSION}"; then
-  if [[ "${NEAT_CORE_VERSION}" != "latest" ]]; then
-    echo
-    echo "Exact NEAT core version ${NEAT_CORE_VERSION} was not installable."
-    echo "Falling back to latest for branch ${NEAT_CORE_BRANCH} ..."
-    "${TMP_INSTALLER}" --minimum "${NEAT_CORE_BRANCH}" latest
-  else
-    exit 1
-  fi
-fi
+echo "Installing the latest Core version from main:"
+(
+  cd "${TMP_DEPS_DIR}/core"
+  "${SIMA_CLI_RESOLVED}" neat install -d . -t minimal core
+)
 
-DOWNLOAD_MODELS_SCRIPT="${RUNTIME_DIR}/scripts/download_models.sh"
-if [[ "${NEAT_APPS_SKIP_MODEL_DOWNLOAD:-0}" == "1" ]]; then
-  echo
-  echo "Skipping model downloads because NEAT_APPS_SKIP_MODEL_DOWNLOAD=1."
-elif [[ "${NEAT_APPS_DOWNLOAD_MODELS_ON_INSTALL:-0}" != "1" ]]; then
-  echo
-  echo "Skipping model downloads during install. Run neat-apps-runtime/scripts/download_models.sh or tests/test.sh when needed."
-elif [[ -x "${DOWNLOAD_MODELS_SCRIPT}" || -f "${DOWNLOAD_MODELS_SCRIPT}" ]]; then
-  if SIMA_CLI_RESOLVED="$(resolve_sima_cli_bin)"; then
-    echo
-    echo "Downloading models required by packaged test scope ..."
-    (
-      cd "${RUNTIME_DIR}"
-      chmod +x scripts/download_models.sh
-      SIMA_CLI_BIN="${SIMA_CLI_RESOLVED}" bash scripts/download_models.sh \
-        --kind e2e \
-        --language python \
-        --language cpp
-    )
-  else
-    echo
-    echo "WARNING: sima-cli was not found after NEAT core installation; skipping model downloads."
-  fi
-fi
+echo
+echo "Installing the latest Insight version from main:"
+(
+  cd "${TMP_DEPS_DIR}/insight"
+  "${SIMA_CLI_RESOLVED}" neat install -d . insight
+)
 
 echo
 echo "Installed apps runtime under:"
-echo "  ${DEST_DIR}"
+echo "  ${RUNTIME_DIR}"

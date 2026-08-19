@@ -15,14 +15,14 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const char* rtsp_url = env_or_null("SIMANEAT_APPS_TEST_RTSP_URL");
+  const char* rtsp_url = env_or_null("SIMANEAT_TEST_RTSP_H264_URL");
   if (!rtsp_url) {
     return skip_or_fail(
-        "SIMANEAT_APPS_TEST_RTSP_URL is required for single-stream-instance-segmenter e2e");
+        "SIMANEAT_TEST_RTSP_H264_URL is required for single-stream-instance-segmenter e2e");
   }
 
   const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
-  const std::string models_dir = models_dir_raw ? models_dir_raw : "assets/models";
+  const std::string models_dir = models_dir_raw ? models_dir_raw : "models";
   const std::string model_path =
       configured_model_path("single-stream-instance-segmenter", models_dir);
   if (model_path.empty() || !fs::exists(model_path)) {
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
   }
 
   const std::string output_dir =
-      create_test_output_dir("single-stream-instance-segmenter", "test_full_pipeline");
+      create_test_output_dir("single-stream-instance-segmenter", "test_full_pipeline_rtsp_h264");
   if (output_dir.empty()) {
     return 1;
   }
@@ -45,7 +45,9 @@ int main(int argc, char** argv) {
   const int total_saved_frames =
       e2e_int("single-stream-instance-segmenter", "testing.e2e.output", "total_saved_frames");
   write_e2e_config("single-stream-instance-segmenter", config_path,
-                   {{"source.rtsp_url", rtsp_url},
+                   {{"source.type", "rtsp"},
+                    {"source.codec", "h264"},
+                    {"source.url", rtsp_url},
                     {"model.path", model_path},
                     {"output.save_dir", output_dir},
                     {"output.insight.host", insight_host},

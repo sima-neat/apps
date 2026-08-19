@@ -1,102 +1,121 @@
 # <Example Name>
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
-| Category | <benchmarking / classification / object-detection / tracking / face-detection / segmentation / depth-estimation / genai / throughput> |
+| Category | <benchmarking / classification / object-detection / tracking / face-detection / segmentation / pose-estimation / depth-estimation / feature-extraction / genai / throughput> |
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
 | Status | <experimental / stable> |
-| Binary Name | <cmake_target_name> |
-| Model | <default_model_name> [https://example.com/path/to/<default_model_name>_mpk.tar.gz] |
+| Binary Name | <binary> |
+| Model | <default-model> |
 
 ## Concept
-<1-2 paragraphs: what this example demonstrates and which Neat Library capabilities it exercises.>
+
+<Explain what the example demonstrates and which Neat Library capabilities it uses.>
 
 ## Preview
-Optional. If you have a demo screenshot for the portal detail page, place it here immediately after `Concept`.
+
+Optional. Place portal images under `portal/assets/examples/<category>/<example>/`.
 
 ```md
-![Demo screenshot](../../../assets/portal/<category>/<example>/image.png)
+![Demo screenshot](../../../portal/assets/examples/<category>/<example>/image.png)
 ```
-
-## Supported Models
-Use the SDK platform version wherever `<platform-version>` appears.
-
-Default model: `<default-model>`.
-
-Download the default model:
-
-```bash
-mkdir -p assets/models
-cd assets/models
-
-sima-cli modelzoo -v <platform-version> get <default-model>
-
-cd ../..
-```
-
-For another supported model, replace `<default-model>` in the download command and config path.
-The command stores models under `assets/models/` as a repo-local convention. `model.path` can point to any readable model package path.
 
 ## Prerequisites
-- Installed Neat Development Environment + Neat Library.
-- Model artifacts are user-managed and should be downloaded into `assets/models/`. Download the default model, or set `model.path` to another readable model package.
-- If the model is not available through modelzoo, add a direct download URL in the `Model` metadata field using the `[https://...]` suffix.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- <Example-specific input, service, or hardware requirements.>
 
-Clone and build the apps repo inside the Neat Development Environment:
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
+sima-cli neat install apps
+cd prebuilt-apps
 ```
 
-After building, run the example commands below on the Modalix/DevKit board.
+Run the remaining commands from `prebuilt-apps/`.
+
+## Prepare the Model
+
+The default model is `<default-model>`.
+
+| Model | Role | Source |
+| --- | --- | --- |
+| `<default-model>` | Default | <Model Zoo / direct artifact> |
+| `<supported-model>` | Supported | <Model Zoo / direct artifact> |
+
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Use the command that matches the model source and delete the other command.
+
+Model Zoo:
+
+```bash
+export MODELZOO_VERSION="2.1.2"
+mkdir -p models
+cd models
+sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
+cd ..
+```
+
+Direct artifact:
+
+```bash
+mkdir -p models
+cd models
+sima-cli download <model-url>
+cd ..
+```
+
+Set `model.path` in the example config to the downloaded package.
 
 ## Configure
-Edit `examples/<category>/<name>/src/common/config.yaml`.
+
+Edit `examples/<category>/<example>/src/common/config.yaml`.
 
 ```yaml
 model:
-  path: <model-path>             # Path to the model package.
+  path: <model-path>
 
 io:
-  input_dir: assets/test_images           # Folder containing input images.
-  output_dir: sandbox/<name>              # Folder for generated outputs.
+  input_dir: assets/datasets/coco
+  output_dir: sandbox/<example>
 ```
 
 ## Run
+
 ### C++
+
 ```bash
-./build/examples/<category>/<name>/<binary> \
-  --config examples/<category>/<name>/src/common/config.yaml
+./examples/<category>/<example>/src/cpp/pre-built/<binary> \
+  --config examples/<category>/<example>/src/common/config.yaml
 ```
 
 ### Python
+
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/<category>/<name>/src/python/requirements.txt
-python3 examples/<category>/<name>/src/python/main.py \
-  --config examples/<category>/<name>/src/common/config.yaml
+pip install -r examples/<category>/<example>/src/python/requirements.txt
+python3 examples/<category>/<example>/src/python/main.py \
+  --config examples/<category>/<example>/src/common/config.yaml
 ```
 
-## Debugging Notes
-- Confirm `model.path` points to a readable model package.
-- Confirm input paths exist and are readable.
-- Confirm output directories are writable.
+## Troubleshooting
 
-## Appendix: Additional Models
-This example can also run with `<model_variant_1>` or `<model_variant_2>`. Replace the default model name in the download command and config path.
+- Confirm `model.path` points to a readable model package.
+- Confirm input paths exist and output directories are writable.
 
 ## Source Files
-- Test scope: `tests/test-scope.yaml`
-- C++ source: `src/cpp/main.cpp`
-- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+
+- C++ reference source: `src/cpp/main.cpp`
 - Python source: `src/python/main.py`
-- Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
-- Shared assets: `src/common/`
+- Shared runtime files: `src/common/`
+
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).

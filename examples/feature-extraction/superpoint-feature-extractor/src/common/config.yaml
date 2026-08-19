@@ -1,0 +1,16 @@
+model:
+  path: models/superpoint_mpk.tar.gz
+
+io:
+  input: assets/datasets/tum-rgbd/freiburg1-desk.mp4
+
+output:
+  insight:
+    host: <insight-host-ip>
+    video_port: 9000
+    channel: 0
+    bitrate_kbps: 1000
+
+runtime:
+  frames: 0
+  timeout_ms: 20000

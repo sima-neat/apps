@@ -54,42 +54,49 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 }
 
 bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_accepts_four_streams",
-                   "model:\n"
-                   "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
-                   "streams:\n"
-                   "  - rtsp://127.0.0.1:8554/src1\n"
-                   "  - rtsp://127.0.0.1:8554/src2\n"
-                   "  - rtsp://127.0.0.1:8554/src3\n"
-                   "  - rtsp://127.0.0.1:8554/src4\n"
-                   "output:\n"
-                   "  insight:\n"
-                   "    host: 127.0.0.1\n");
+  const fs::path config_path = write_config("test_validate_config_only_accepts_four_streams",
+                                            "model:\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "streams:\n"
+                                            "  - rtsp://127.0.0.1:8554/src1\n"
+                                            "  - rtsp://127.0.0.1:8554/src2\n"
+                                            "  - rtsp://127.0.0.1:8554/src3\n"
+                                            "  - rtsp://127.0.0.1:8554/src4\n"
+                                            "input:\n"
+                                            "  codec: avc\n"
+                                            "inference:\n"
+                                            "  max_inflight_per_stream: 3\n"
+                                            "  max_inflight_total: 12\n"
+                                            "output:\n"
+                                            "  insight:\n"
+                                            "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok =
       expect_true(result.exit_code == 0, "four-stream config validates") &&
-      expect_contains(result.stdout_text, "streams=4", "validate output reports stream count");
+      expect_contains(result.stdout_text, "streams=4", "validate output reports stream count") &&
+      expect_contains(result.stdout_text, "max_inflight_per_stream=3",
+                      "validate output reports per-stream inflight limit") &&
+      expect_contains(result.stdout_text, "max_inflight_total=12",
+                      "validate output reports total inflight limit");
   remove_dir(config_path.parent_path().string());
   return ok;
 }
 
 bool test_validate_config_only_rejects_too_many_streams(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_too_many_streams",
-                   "model:\n"
-                   "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
-                   "streams:\n"
-                   "  - rtsp://127.0.0.1:8554/src1\n"
-                   "  - rtsp://127.0.0.1:8554/src2\n"
-                   "  - rtsp://127.0.0.1:8554/src3\n"
-                   "  - rtsp://127.0.0.1:8554/src4\n"
-                   "  - rtsp://127.0.0.1:8554/src5\n"
-                   "output:\n"
-                   "  insight:\n"
-                   "    host: 127.0.0.1\n");
+  const fs::path config_path = write_config("test_validate_config_only_rejects_too_many_streams",
+                                            "model:\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "streams:\n"
+                                            "  - rtsp://127.0.0.1:8554/src1\n"
+                                            "  - rtsp://127.0.0.1:8554/src2\n"
+                                            "  - rtsp://127.0.0.1:8554/src3\n"
+                                            "  - rtsp://127.0.0.1:8554/src4\n"
+                                            "  - rtsp://127.0.0.1:8554/src5\n"
+                                            "output:\n"
+                                            "  insight:\n"
+                                            "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
@@ -101,20 +108,41 @@ bool test_validate_config_only_rejects_too_many_streams(const std::string& binar
 }
 
 bool test_validate_config_only_rejects_empty_streams(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_validate_config_only_rejects_empty_streams",
-                   "model:\n"
-                   "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
-                   "streams: []\n"
-                   "output:\n"
-                   "  insight:\n"
-                   "    host: 127.0.0.1\n");
+  const fs::path config_path = write_config("test_validate_config_only_rejects_empty_streams",
+                                            "model:\n"
+                                            "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                                            "streams: []\n"
+                                            "output:\n"
+                                            "  insight:\n"
+                                            "    host: 127.0.0.1\n");
 
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok =
       expect_true(result.exit_code == 1, "empty stream config is rejected") &&
       expect_contains(result.stderr_text, "streams", "empty-stream error mentions streams");
+  remove_dir(config_path.parent_path().string());
+  return ok;
+}
+
+bool test_validate_config_only_rejects_invalid_inflight_limit(const std::string& binary) {
+  const fs::path config_path =
+      write_config("test_validate_config_only_rejects_invalid_inflight_limit",
+                   "model:\n"
+                   "  path: models/yolo26m-det-int8-b1.tar.gz\n"
+                   "streams:\n"
+                   "  - rtsp://127.0.0.1:8554/src1\n"
+                   "inference:\n"
+                   "  max_inflight_per_stream: 0\n"
+                   "output:\n"
+                   "  insight:\n"
+                   "    host: 127.0.0.1\n");
+
+  const auto result =
+      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
+  const bool ok = expect_true(result.exit_code == 1, "invalid inflight limit is rejected") &&
+                  expect_contains(result.stderr_text, "max_inflight_per_stream must be -1 or > 0",
+                                  "invalid inflight error names the setting");
   remove_dir(config_path.parent_path().string());
   return ok;
 }
@@ -134,5 +162,6 @@ int main(int argc, char** argv) {
   ok &= test_validate_config_only_accepts_four_streams(binary);
   ok &= test_validate_config_only_rejects_too_many_streams(binary);
   ok &= test_validate_config_only_rejects_empty_streams(binary);
+  ok &= test_validate_config_only_rejects_invalid_inflight_limit(binary);
   return ok ? 0 : 1;
 }

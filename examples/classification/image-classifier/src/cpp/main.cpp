@@ -29,7 +29,7 @@ struct Config {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model_path = raw.string_or("model.path", "assets/models/resnet_50_mpk.tar.gz");
+  cfg.model_path = raw.string_or("model.path", "models/resnet_50_mpk.tar.gz");
   cfg.image_path = raw.string_or("io.image", "");
   cfg.fallback_image_url =
       raw.string_or("io.fallback_image_url",

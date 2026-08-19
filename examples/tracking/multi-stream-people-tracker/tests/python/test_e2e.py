@@ -28,22 +28,31 @@ def _env_int_or_default(name: str, default: int) -> int:
 
 @pytest.mark.e2e
 class TestE2E:
+    @pytest.mark.parametrize(
+        ("codec", "urls_fixture"),
+        [("h264", "rtsp_h264_urls"), ("h265", "rtsp_h265_urls")],
+    )
     def test_multi_stream_insight_and_save_pipeline(
         self,
+        request,
+        codec,
+        urls_fixture,
         e2e_model_path,
         tmp_output_dir,
-        rtsp_urls,
         test_timeout_ms,
         skip_unless_e2e_ready,
         e2e_config_writer,
         e2e_config_section,
         run_until_output_files,
     ):
+        rtsp_urls = request.getfixturevalue(urls_fixture)
         skip_unless_e2e_ready(
             _runtime_deps_ready(),
             "python runtime dependencies (cv2, numpy, pyneat) are not available",
         )
-        skip_unless_e2e_ready(len(rtsp_urls) >= 2, "need at least two RTSP URLs for multistream e2e")
+        skip_unless_e2e_ready(
+            len(rtsp_urls) >= 2, f"need at least two RTSP {codec.upper()} URLs for multistream e2e"
+        )
         output_cfg = e2e_config_section("multi-stream-people-tracker", "testing.e2e.output")
         total_saved_frames = int(output_cfg["total_saved_frames"])
         metadata_port_base = _env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
@@ -51,6 +60,7 @@ class TestE2E:
         config_path = e2e_config_writer(
             {
                 "streams": rtsp_urls[:2],
+                "input": {"codec": codec},
                 "output": {
                     "insight": {
                         "host": E2E_INSIGHT_HOST,

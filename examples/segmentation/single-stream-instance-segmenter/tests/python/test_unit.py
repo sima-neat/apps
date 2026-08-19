@@ -1,6 +1,7 @@
 """Unit tests for single-stream-instance-segmenter (Python)."""
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +55,9 @@ class TestArgParsing:
 
 @pytest.mark.unit
 class TestConfig:
+    def test_hevc_alias(self):
+        assert main.parse_source_codec("hevc") == "h265"
+
     def test_validate_config_only_accepts_common_config(self):
         r = subprocess.run(
             [sys.executable, str(MAIN_PY), "--validate-config-only"],
@@ -134,3 +138,101 @@ class TestMaskOverlay:
         out = main.overlay_segmentation(frame, dets, 0.55, cfg, ["person", "bicycle", "car"])
 
         assert int(out.sum()) > 0
+
+
+@pytest.mark.unit
+class TestSegmentationMetadata:
+    def setup_method(self):
+        main.load_runtime_dependencies()
+
+    def _segment(self, id_: str, confidence: float, points: int) -> dict:
+        return {
+            "id": id_,
+            "label": "person",
+            "confidence": confidence,
+            "bbox": [0, 0, 64, 64],
+            "mask_format": "polygon",
+            "mask": [[i % 64, i // 64] for i in range(points)],
+        }
+
+    def test_polygon_is_frame_absolute_and_in_bounds(self):
+        mask = np.full((160, 160), 255, dtype=np.uint8)
+
+        polygon = main.mask_polygon(mask, (1080, 1920, 3), (1600, 900, 1900, 1070), 0.5)
+
+        assert len(polygon) >= 3
+        assert all(1600 <= x <= 1900 and 900 <= y <= 1070 for x, y in polygon)
+
+    def test_polygon_is_empty_without_foreground(self):
+        mask = np.zeros((160, 160), dtype=np.uint8)
+
+        assert main.mask_polygon(mask, (640, 640, 3), (0, 0, 64, 64), 0.5) == []
+
+    def test_metadata_segments_shape(self):
+        mask = np.full((160, 160), 255, dtype=np.uint8)
+        dets = [{"x1": 8.0, "y1": 8.0, "x2": 56.0, "y2": 56.0, "score": 0.9, "class_id": 0,
+                 "mask": mask}]
+
+        segments = main.metadata_segments(dets, ["person"], (64, 64, 3), 0.5)
+
+        assert len(segments) == 1
+        assert segments[0]["id"] == "seg_1"
+        assert segments[0]["label"] == "person"
+        assert segments[0]["mask_format"] == "polygon"
+        assert segments[0]["bbox"] == [8, 8, 48, 48]
+        assert len(segments[0]["mask"]) >= 3
+
+    def test_encode_segments_emits_segments_array(self):
+        data_json, dropped = main.encode_segments([self._segment("seg_1", 0.9, 5)])
+
+        data = json.loads(data_json)
+        assert dropped == 0
+        assert len(data["segments"]) == 1
+        assert data["segments"][0]["mask_format"] == "polygon"
+        assert len(data["segments"][0]["mask"]) == 5
+
+    def test_budget_drops_lowest_confidence_first(self):
+        segments = [self._segment(f"seg_{i}", 0.5 + 0.01 * i, 1000) for i in range(12)]
+
+        data_json, dropped = main.encode_segments(segments)
+
+        data = json.loads(data_json)
+        assert len(data_json) <= main.METADATA_BYTE_BUDGET
+        assert 0 < len(data["segments"]) < len(segments)
+        assert len(data["segments"]) + dropped == len(segments)
+        lowest_kept = min(segment["confidence"] for segment in data["segments"])
+        assert lowest_kept == pytest.approx(0.5 + 0.01 * dropped)
+
+
+@pytest.mark.unit
+class TestSampleAccess:
+    """The pulled sample is a bundle only when save_dir added a frame branch to combine."""
+
+    class _Kind:
+        Bundle = "bundle"
+        Tensor = "tensor"
+        TensorSet = "tensorset"
+
+    class _Sample:
+        def __init__(self, kind, *, tensors=(), fields=(), stream_label=""):
+            self.kind = kind
+            self.tensors = list(tensors)
+            self.tensor = None
+            self.fields = list(fields)
+            self.stream_label = stream_label
+
+    @pytest.fixture(autouse=True)
+    def _stub_pyneat(self, monkeypatch):
+        monkeypatch.setattr(main, "pyneat", type("P", (), {"SampleKind": self._Kind}))
+
+    def test_unjoined_sample_is_the_segments_payload(self):
+        sample = self._Sample(self._Kind.TensorSet, tensors=["boxes", "masks"])
+
+        assert main.segment_tensors_from_sample(sample) == ["boxes", "masks"]
+
+    def test_bundled_sample_resolves_the_segments_field(self):
+        frame = self._Sample(self._Kind.TensorSet, tensors=["frame"], stream_label="frame")
+        segments = self._Sample(self._Kind.TensorSet, tensors=["boxes"], stream_label="segments")
+        bundle = self._Sample(self._Kind.Bundle, fields=[frame, segments])
+
+        assert main.segment_tensors_from_sample(bundle) == ["boxes"]

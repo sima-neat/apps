@@ -1,5 +1,6 @@
 model:                       # Detector model selection.
-  path: <model-path>         # Example: assets/models/<model-pack>.tar.gz
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
+  labels: examples/object-detection/multi-stream-object-detector/src/common/coco_label.txt
 
 streams:                     # RTSP inputs, one entry per camera.
   - <rtsp-url-1>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
@@ -8,6 +9,7 @@ streams:                     # RTSP inputs, one entry per camera.
   - <rtsp-url-4>
 
 input:                       # RTSP input transport settings.
+  codec: h264                # h264/avc or h265/hevc.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
 
@@ -18,6 +20,8 @@ runtime:                     # Runtime and profiling settings.
 inference:                   # Detection controls.
   frames: 0                  # Frame limit per stream. 0 means unlimited.
   fps: 0                     # Max per-stream processing and output FPS. 0 means use source FPS.
+  max_inflight_per_stream: 4 # Raw decoder-backed frames admitted per stream to the shared detector.
+  max_inflight_total: 16     # Raw decoder-backed frames admitted across all detector streams.
   min_score: 0.30            # Detection score threshold.
   nms_iou: 0.60              # NMS IoU threshold.
   max_detections: 50         # Max detections to keep per frame after NMS.

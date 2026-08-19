@@ -477,7 +477,7 @@ static void draw_detections(cv::Mat& bgr, const std::vector<Detection>& dets, in
 
 struct Config {
   fs::path input_dir;
-  std::string model = "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz";
+  std::string model = "models/retinaface_mobilenet25_mod_0_mpk.tar.gz";
   fs::path output_dir;
   float conf = 0.4f;
   float nms = 0.9f;
@@ -511,8 +511,8 @@ static std::vector<fs::path> image_paths_in_dir(const fs::path& input_dir) {
 static Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.model = raw.string_or("model.path", "assets/models/retinaface_mobilenet25_mod_0_mpk.tar.gz");
-  cfg.input_dir = raw.string_or("io.input_dir", "assets/test_images");
+  cfg.model = raw.string_or("model.path", "models/retinaface_mobilenet25_mod_0_mpk.tar.gz");
+  cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/coco");
   cfg.output_dir = raw.string_or("io.output_dir", "sandbox/face-detector");
   cfg.conf = static_cast<float>(raw.double_or("decode.confidence_threshold", 0.4));
   cfg.nms = static_cast<float>(raw.double_or("decode.nms_iou", 0.9));

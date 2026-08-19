@@ -47,11 +47,21 @@ std::vector<std::string> split_csv(const std::string& raw) {
 
 } // namespace
 
-std::vector<std::string> rtsp_urls_from_env() {
-  if (const char* urls = env_or_null("SIMANEAT_APPS_TEST_RTSP_URLS")) {
+std::vector<std::string> rtsp_h264_urls_from_env() {
+  if (const char* urls = env_or_null("SIMANEAT_TEST_RTSP_H264_URLS")) {
     return split_csv(urls);
   }
-  if (const char* url = env_or_null("SIMANEAT_APPS_TEST_RTSP_URL")) {
+  if (const char* url = env_or_null("SIMANEAT_TEST_RTSP_H264_URL")) {
+    return {url};
+  }
+  return {};
+}
+
+std::vector<std::string> rtsp_h265_urls_from_env() {
+  if (const char* urls = env_or_null("SIMANEAT_TEST_RTSP_H265_URLS")) {
+    return split_csv(urls);
+  }
+  if (const char* url = env_or_null("SIMANEAT_TEST_RTSP_H265_URL")) {
     return {url};
   }
   return {};

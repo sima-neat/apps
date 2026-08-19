@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from fractions import Fraction
 import glob
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -15,9 +17,16 @@ import yaml
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 DEFAULT_LABELS = DEFAULT_CONFIG.parent / "coco_label.txt"
-DEFAULT_FPS = 30
 MASK_ALPHA = 0.55
 MASK_THRESHOLD = 0.50
+
+# MetadataSender rejects a payload above 65507 bytes, and pyneat raises on the rejection. Half of
+# that leaves room for the envelope and keeps the datagram count low enough for Insight to
+# reassemble within its 250 ms window.
+METADATA_BYTE_BUDGET = 32768
+#: YOLO26 emits masks at one quarter of the model input per dimension, so a 160x160 head
+#: corresponds to a 640x640 input.
+MASK_STRIDE = 4
 
 cv2 = None
 np = None
@@ -37,9 +46,13 @@ class OutputConfig:
 class AppConfig:
     model_path: str
     labels_path: Path
-    rtsp_url: str
+    source_url: str
+    source_type: str = "rtsp"
+    source_codec: str = "h264"
     latency_ms: int = 200
     tcp: bool = True
+    source_fps: int = 0
+    ssl_strict: bool = True
     frames: int = 0
     min_score: float = 0.55
     nms_iou: float = 0.60
@@ -57,10 +70,10 @@ class PipelineRuntime:
     model: object
     graph: object
     run: object
-    video_graph: object
-    video_run: object
     metadata_sender: object
     labels: list[str]
+    #: Run output the loop pulls: the segments alone, or the frame-joined bundle when saving.
+    output_name: str
     frame_w: int
     frame_h: int
     output_fps: int
@@ -76,21 +89,19 @@ class ProfileWindow:
     def reset(self) -> None:
         self.frames = 0
         self.instances = 0
+        self.dropped_segments = 0
         self.start_ms = 0.0
         self.pull_ms = 0.0
         self.decode_ms = 0.0
-        self.overlay_ms = 0.0
-        self.video_push_ms = 0.0
         self.metadata_ms = 0.0
 
     def add(
         self,
         pull_ms: float,
         decode_ms: float,
-        overlay_ms: float,
-        video_push_ms: float,
         metadata_ms: float,
         instance_count: int,
+        dropped: int,
     ) -> None:
         if not self.enabled:
             return
@@ -98,10 +109,9 @@ class ProfileWindow:
             self.start_ms = time_ms()
         self.frames += 1
         self.instances += instance_count
+        self.dropped_segments += dropped
         self.pull_ms += pull_ms
         self.decode_ms += decode_ms
-        self.overlay_ms += overlay_ms
-        self.video_push_ms += video_push_ms
         self.metadata_ms += metadata_ms
         if self.frames >= self.interval:
             self.flush()
@@ -116,10 +126,9 @@ class ProfileWindow:
             f"output_fps={self.frames * 1000.0 / elapsed_ms} "
             f"avg_pull_ms={self.pull_ms / frames} "
             f"avg_decode_ms={self.decode_ms / frames} "
-            f"avg_overlay_ms={self.overlay_ms / frames} "
-            f"avg_video_push_ms={self.video_push_ms / frames} "
             f"avg_metadata_ms={self.metadata_ms / frames} "
-            f"avg_instances={self.instances / frames}",
+            f"avg_instances={self.instances / frames} "
+            f"dropped_segments={self.dropped_segments}",
             flush=True,
         )
         self.reset()
@@ -209,9 +218,27 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def parse_source_type(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"rtsp", "http", "https"}:
+        return "http" if lowered == "https" else lowered
+    raise ValueError("source.type must be rtsp or http")
+
+
+def parse_source_codec(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"h264", "avc", "h.264"}:
+        return "h264"
+    if lowered in {"h265", "hevc", "h.265"}:
+        return "h265"
+    if lowered in {"mjpeg", "jpeg"}:
+        return "mjpeg"
+    raise ValueError("source.codec must be h264/avc, h265/hevc, or mjpeg")
+
+
 def validate_config(cfg: AppConfig) -> None:
-    if not cfg.rtsp_url:
-        raise ValueError("source.rtsp_url must be set")
+    if not cfg.source_url:
+        raise ValueError("source.url or source.rtsp_url must be set")
     if not cfg.model_path:
         raise ValueError("model.path must be set")
     if not str(cfg.labels_path):
@@ -220,6 +247,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.insight.host must be set")
     if cfg.latency_ms < 0:
         raise ValueError("source.latency_ms must be >= 0")
+    if cfg.source_fps < 0:
+        raise ValueError("source.fps must be >= 0")
+    if cfg.source_type == "http" and cfg.source_codec != "mjpeg":
+        raise ValueError("source.codec must be mjpeg for source.type=http")
     if cfg.frames < 0:
         raise ValueError("inference.frames must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
@@ -257,9 +288,13 @@ def load_app_config(config_path: Path) -> AppConfig:
     cfg = AppConfig(
         model_path=string_or(model, "path"),
         labels_path=Path(string_or(model, "labels", str(DEFAULT_LABELS))),
-        rtsp_url=string_or(source, "rtsp_url"),
+        source_url=string_or(source, "url", string_or(source, "rtsp_url")),
+        source_type=parse_source_type(string_or(source, "type", "rtsp")),
+        source_codec=parse_source_codec(string_or(source, "codec", "h264")),
         latency_ms=int_or(source, "latency_ms", 200),
         tcp=bool_or(source, "tcp", True),
+        source_fps=int_or(source, "fps", 0),
+        ssl_strict=bool_or(source, "ssl_strict", True),
         frames=int_or(inference, "frames", 0),
         min_score=float_or(inference, "min_score", 0.55),
         nms_iou=float_or(inference, "nms_iou", 0.60),
@@ -331,15 +366,6 @@ def tensor_bgr_from_decoded(tensor):
     return np.ascontiguousarray(frame)
 
 
-def tensor_from_rgb_frame(frame):
-    return pyneat.Tensor.from_numpy(
-        np.ascontiguousarray(frame),
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
-    )
-
-
 def extract_tensors(sample) -> list:
     if isinstance(sample, (list, tuple)) and all(hasattr(item, "to_numpy") for item in sample):
         return list(sample)
@@ -386,9 +412,15 @@ def frame_tensor_from_sample(sample):
 
 
 def segment_tensors_from_sample(sample) -> list:
-    tensors = extract_tensors(joined_field(sample, "segments", 1))
+    # Without save_dir there is nothing to combine, so the pulled sample is the segments payload.
+    field = (
+        joined_field(sample, "segments", 1)
+        if getattr(sample, "kind", None) == pyneat.SampleKind.Bundle
+        else sample
+    )
+    tensors = extract_tensors(field)
     if not tensors:
-        raise RuntimeError("joined segments field has no tensors")
+        raise RuntimeError("segments field has no tensors")
     return tensors
 
 
@@ -423,6 +455,57 @@ def decode_segmentation_output(tensors: list, frame_w: int, frame_h: int, max_de
     return detections
 
 
+def fps_from_rate(value: str) -> int:
+    if not value or value in {"0/0", "0/1"}:
+        return 0
+    try:
+        fps = float(Fraction(value)) if "/" in value else float(value)
+    except (ValueError, ZeroDivisionError):
+        return 0
+    return int(round(fps)) if fps > 0 else 0
+
+
+def int_from_probe(value: str | None) -> int:
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
+
+
+def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-rw_timeout",
+        "5000000",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,r_frame_rate,avg_frame_rate",
+        "-of",
+        "default=nw=1",
+    ]
+    if not cfg.ssl_strict:
+        cmd.extend(["-tls_verify", "0"])
+    cmd.append(cfg.source_url)
+    try:
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return 0, 0, 0
+    if result.returncode != 0:
+        return 0, 0, 0
+    values = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key] = value
+    fps = fps_from_rate(values.get("avg_frame_rate", "")) or fps_from_rate(
+        values.get("r_frame_rate", "")
+    )
+    return int_from_probe(values.get("width")), int_from_probe(values.get("height")), fps
+
+
 def probe_rtsp(url: str) -> tuple[int, int, int]:
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
@@ -433,36 +516,129 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     cap.release()
     if width <= 0 or height <= 0:
         raise RuntimeError("failed to probe RTSP frame size")
-    return width, height, fps if fps > 0 else DEFAULT_FPS
+    return width, height, fps
 
 
-def make_source_options(cfg: AppConfig, fps: int, width: int, height: int):
+def set_output_caps(caps, fps: int, width: int, height: int) -> None:
+    if width <= 0 or height <= 0 or fps <= 0:
+        return
+    caps.enable = True
+    caps.format = pyneat.Format.NV12
+    caps.width = width
+    caps.height = height
+    caps.fps = fps
+    caps.memory = pyneat.CapsMemory.Any
+
+
+def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt = pyneat.RtspDecodedInputOptions()
-    opt.url = cfg.rtsp_url
+    opt.url = cfg.source_url
     opt.latency_ms = cfg.latency_ms
     opt.tcp = cfg.tcp
-    opt.payload_type = 96
     opt.insert_queue = True
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
-    opt.auto_caps_from_stream = True
-    opt.fallback_h264_width = width
-    opt.fallback_h264_height = height
-    opt.fallback_h264_fps = fps
-    opt.output_caps.enable = True
-    opt.output_caps.format = pyneat.Format.NV12
-    opt.output_caps.width = width
-    opt.output_caps.height = height
-    opt.output_caps.fps = fps
-    opt.output_caps.memory = pyneat.CapsMemory.Any
+    opt.codec = (
+        pyneat.RtspCodec.H264
+        if cfg.source_codec == "h264"
+        else pyneat.RtspCodec.H265
+        if cfg.source_codec == "h265"
+        else pyneat.RtspCodec.MJPEG
+    )
+    opt.source_fps = fps
+    if cfg.source_codec == "h264":
+        opt.auto_caps_from_stream = True
+        opt.fallback_h264_width = width
+        opt.fallback_h264_height = height
+    elif cfg.source_codec == "h265":
+        opt.auto_caps_from_stream = True
+        opt.dec_width = width
+        opt.dec_height = height
+    else:
+        opt.dec_width = width
+        opt.dec_height = height
+    set_output_caps(opt.output_caps, fps, width, height)
     return opt
 
 
-def make_model(cfg: AppConfig):
+def make_http_mjpeg_source_options(cfg: AppConfig, fps: int, width: int, height: int):
+    opt = pyneat.HttpMjpegDecodedInputOptions()
+    opt.url = cfg.source_url
+    opt.decoder_name = "decoder"
+    opt.decoder_raw_output = True
+    opt.source_fps = fps
+    opt.ssl_strict = cfg.ssl_strict
+    set_output_caps(opt.output_caps, fps, width, height)
+    return opt
+
+
+def make_source_graph(cfg: AppConfig, fps: int, width: int, height: int):
+    if cfg.source_type == "rtsp":
+        return pyneat.groups.rtsp_decoded_input(make_rtsp_source_options(cfg, fps, width, height))
+    return pyneat.groups.http_mjpeg_decoded_input(
+        make_http_mjpeg_source_options(cfg, fps, width, height)
+    )
+
+
+def require_mjpeg_fps(cfg: AppConfig, fps: int) -> None:
+    if cfg.source_codec == "mjpeg" and fps <= 0:
+        raise RuntimeError(
+            "MJPEG source did not provide a valid frame rate; set source.fps or use a source "
+            "with probeable FPS metadata"
+        )
+
+
+def probe_decoded_source(cfg: AppConfig, fps: int) -> tuple[int, int, int]:
+    graph = pyneat.Graph("source_probe")
+    graph.add(make_source_graph(cfg, fps, 0, 0))
+    graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(1)))
+
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 3
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run = graph.build(run_options)
+    try:
+        sample = run.pull("frame", 20000)
+    finally:
+        run.close()
+    if sample is None:
+        raise RuntimeError("failed to probe decoded source frame")
+    tensors = extract_tensors(sample)
+    if not tensors:
+        raise RuntimeError("decoded source probe did not produce a tensor")
+    return tensor_dim(tensors[0], "width"), tensor_dim(tensors[0], "height"), fps
+
+
+def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
+    probed_w, probed_h, probed_fps = probe_ffprobe(cfg)
+    fps = cfg.source_fps if cfg.source_fps > 0 else probed_fps
+    if cfg.source_type == "rtsp":
+        width, height = probed_w, probed_h
+        if width <= 0 or height <= 0 or fps <= 0:
+            rtsp_w, rtsp_h, rtsp_fps = probe_rtsp(cfg.source_url)
+            width = width if width > 0 else rtsp_w
+            height = height if height > 0 else rtsp_h
+            fps = fps if fps > 0 else rtsp_fps
+        require_mjpeg_fps(cfg, fps)
+        return width, height, fps
+
+    require_mjpeg_fps(cfg, fps)
+    if probed_w > 0 and probed_h > 0:
+        return probed_w, probed_h, fps
+    width, height, _ = probe_decoded_source(cfg, fps)
+    return width, height, fps
+
+
+def make_model(cfg: AppConfig, frame_w: int, frame_h: int):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    if frame_w > 0 and frame_h > 0:
+        opt.preprocess.input_max_width = frame_w
+        opt.preprocess.input_max_height = frame_h
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26Seg
     opt.score_threshold = cfg.min_score
@@ -480,45 +656,36 @@ def build_metadata_sender(cfg: AppConfig):
 
 
 def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
-    input_opt = pyneat.InputOptions()
-    input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = pyneat.Format.RGB
-    input_opt.width = width
-    input_opt.height = height
-    input_opt.depth = 3
-    input_opt.fps_n = max(1, fps)
-    input_opt.fps_d = 1
-    input_opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
-
-    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
+    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
     sender_opt.host = cfg.insight_host
     sender_opt.channel = 0
     sender_opt.video_port_base = cfg.video_port
     sender_opt.encoder.bitrate_kbps = 1000
 
     graph = pyneat.Graph("video")
-    graph.add(pyneat.nodes.input(input_opt))
-    graph.add(pyneat.groups.video_sender(sender_opt))
-
-    seed = pyneat.Tensor.from_numpy(
-        np.zeros((height, width, 3), dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
-    )
-    return graph, graph.build([seed]), sender_opt.video_port
+    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_opt))
+    return graph, sender_opt.video_port
 
 
 def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
-    frame_w, frame_h, fps = probe_rtsp(cfg.rtsp_url)
-    model = make_model(cfg)
+    frame_w, frame_h, fps = resolve_source_geometry(cfg)
+    if fps <= 0:
+        raise RuntimeError(
+            "failed to resolve source frame rate; set source.fps or use a source with "
+            "probeable FPS metadata"
+        )
+    model = make_model(cfg, frame_w, frame_h)
     labels = load_labels(cfg.labels_path)
 
-    source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, fps, frame_w, frame_h))
-    branch = pyneat.graphs.branch("source", ["frame", "model"])
+    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
 
-    frame_graph = pyneat.Graph("frame")
-    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    # Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
+    # segments must stay in one Run and therefore on one GStreamer timeline.
+    save_frames = bool(cfg.output.save_dir)
+    source = make_source_graph(cfg, fps, frame_w, frame_h)
+    branch = pyneat.graphs.branch(
+        "source", ["video", "model", "frame"] if save_frames else ["video", "model"]
+    )
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
@@ -526,17 +693,21 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     segments_graph = pyneat.Graph("segments")
     segments_graph.add(pyneat.nodes.output("segments", pyneat.OutputOptions.every_frame(4)))
 
-    joined = pyneat.graphs.combine(
-        ["frame", "segments"], "segmentation_output", pyneat.CombinePolicy.ByFrame
-    )
-
     graph = pyneat.Graph()
     graph.connect(source, branch)
-    graph.connect(branch, frame_graph)
+    graph.connect(branch, video_graph)
     graph.connect(branch, model_graph)
     graph.connect(model_graph, segments_graph)
-    graph.connect(frame_graph, joined)
-    graph.connect(segments_graph, joined)
+    if save_frames:
+        frame_graph = pyneat.Graph("frame")
+        frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+        joined = pyneat.graphs.combine(
+            ["frame", "segments"], "segmentation_output", pyneat.CombinePolicy.ByFrame
+        )
+        graph.connect(branch, frame_graph)
+        graph.connect(frame_graph, joined)
+        graph.connect(segments_graph, joined)
+    output_name = "segmentation_output" if save_frames else "segments"
     if cfg.profile:
         print(f"Backend:\n{graph.describe_backend()}")
 
@@ -547,10 +718,10 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     run = graph.build(run_options)
 
-    video_graph, video_run, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
     metadata_sender = build_metadata_sender(cfg)
     print(
-        f"rtsp={cfg.rtsp_url} stream={frame_w}x{frame_h}@{fps} "
+        f"source={cfg.source_url} type={cfg.source_type} codec={cfg.source_codec} "
+        f"stream={frame_w}x{frame_h}@{fps} "
         f"insight={cfg.insight_host} video={video_port} "
         f"metadata={metadata_sender.metadata_port()} channel=0"
     )
@@ -558,10 +729,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         model=model,
         graph=graph,
         run=run,
-        video_graph=video_graph,
-        video_run=video_run,
         metadata_sender=metadata_sender,
         labels=labels,
+        output_name=output_name,
         frame_w=frame_w,
         frame_h=frame_h,
         output_fps=fps,
@@ -607,8 +777,8 @@ def mask_rect_for_frame_rect(
 ) -> tuple[int, int, int, int]:
     frame_h, frame_w = frame_shape[:2]
     mask_h, mask_w = mask_shape[:2]
-    model_w = mask_w * 4
-    model_h = mask_h * 4
+    model_w = mask_w * MASK_STRIDE
+    model_h = mask_h * MASK_STRIDE
     scale = min(model_w / frame_w, model_h / frame_h)
     pad_x = (model_w - frame_w * scale) * 0.5
     pad_y = (model_h - frame_h * scale) * 0.5
@@ -669,7 +839,7 @@ def overlay_segmentation(
         if mask is None:
             continue
         mask = np.asarray(mask, dtype=np.uint8)
-        threshold = cfg.mask_threshold * (255.0 if int(mask.max()) > 1 else 1.0)
+        threshold = cfg.mask_threshold * 255.0
         x0, y0, x1, y1 = frame_rect_for_detection(det, frame.shape)
         roi_mask = project_letterbox_mask_roi(mask, frame.shape, (x0, y0, x1, y1))
         _, binary_mask = cv2.threshold(roi_mask, threshold, 255, cv2.THRESH_BINARY)
@@ -686,65 +856,123 @@ def overlay_segmentation(
     return annotated
 
 
-def metadata_boxes(detections: list[dict], labels: list[str], frame_w: int, frame_h: int):
-    objects = []
-    for index, det in enumerate(detections, start=1):
-        x0, y0, x1, y1 = frame_rect_for_detection(det, (frame_h, frame_w, 3))
-        objects.append(
+def mask_polygon(
+    mask,
+    frame_shape: tuple[int, ...],
+    frame_rect: tuple[int, int, int, int],
+    threshold: float,
+) -> list[list[int]]:
+    """Frame-absolute silhouette of ``mask`` inside ``frame_rect``.
+
+    Empty when the thresholded mask holds nothing Insight can draw. ``threshold`` is a fraction of
+    full scale, as ``output.mask_threshold`` is. Upscaling before thresholding is what makes the
+    outline match the rendered overlay.
+    """
+    roi = project_letterbox_mask_roi(mask, frame_shape, frame_rect)
+    _, binary = cv2.threshold(roi, threshold * 255.0, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return []
+    largest = max(contours, key=cv2.contourArea)
+    polygon = cv2.approxPolyDP(largest, 0.004 * cv2.arcLength(largest, True), True)
+    if len(polygon) < 3:
+        return []
+    # Contour points lie inside frame_rect, which is already clamped to the frame, so shifting them
+    # into frame space cannot leave the image.
+    x0, y0 = frame_rect[0], frame_rect[1]
+    return [[int(point[0][0]) + x0, int(point[0][1]) + y0] for point in polygon]
+
+
+def metadata_segments(
+    detections: list[dict],
+    labels: list[str],
+    frame_shape: tuple[int, ...],
+    mask_threshold: float,
+) -> list[dict]:
+    segments = []
+    for det in detections:
+        mask = det.get("mask")
+        if mask is None:
+            continue
+        x0, y0, x1, y1 = frame_rect_for_detection(det, frame_shape)
+        polygon = mask_polygon(mask, frame_shape, (x0, y0, x1, y1), mask_threshold)
+        if not polygon:
+            continue
+        segments.append(
             {
-                "id": f"obj_{index}",
+                "id": f"seg_{len(segments) + 1}",
                 "label": class_name(labels, int(det["class_id"])),
                 "confidence": float(det["score"]),
-                "bbox": [float(x0), float(y0), float(x1 - x0), float(y1 - y0)],
+                "bbox": [x0, y0, x1 - x0, y1 - y0],
+                "mask_format": "polygon",
+                "mask": polygon,
             }
         )
-    return objects
+    return segments
 
 
-def send_metadata(runtime: PipelineRuntime, sample, detections: list[dict]) -> None:
-    frame_id = getattr(sample, "frame_id", -1)
-    if frame_id is None or frame_id < 0:
-        frame_id = 0
-    runtime.metadata_sender.send_metadata(
-        "instance-segmentation",
-        json.dumps(
-            {"objects": metadata_boxes(detections, runtime.labels, runtime.frame_w, runtime.frame_h)},
-            separators=(",", ":"),
-        ),
-        int(time.time() * 1000),
-        str(frame_id),
+def encode_segments(segments: list[dict]) -> tuple[str, int]:
+    """``data`` object of a ``segmentation`` metadata message, and how many segments were dropped.
+
+    Segments that do not fit the byte budget are dropped lowest-confidence first.
+    """
+    ordered = sorted(segments, key=lambda segment: segment["confidence"], reverse=True)
+    kept = []
+    total = len('{"segments":[]}')
+    for segment in ordered:
+        entry_bytes = len(json.dumps(segment, separators=(",", ":"))) + 1
+        if total + entry_bytes > METADATA_BYTE_BUDGET:
+            break
+        total += entry_bytes
+        kept.append(segment)
+    return json.dumps({"segments": kept}, separators=(",", ":")), len(ordered) - len(kept)
+
+
+def send_metadata(
+    runtime: PipelineRuntime, sample, detections: list[dict], mask_threshold: float
+) -> int:
+    """Sends one ``segmentation`` message and reports how many segments the byte budget dropped."""
+    data_json, dropped = encode_segments(
+        metadata_segments(
+            detections, runtime.labels, (runtime.frame_h, runtime.frame_w), mask_threshold
+        )
     )
+    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
+    if not runtime.metadata_sender.send_metadata(
+        "segmentation", data_json, timestamp_ms, frame_id
+    ):
+        print("[warn] insight metadata send failed", file=sys.stderr)
+    return dropped
 
 
-def push_annotated_video(runtime: PipelineRuntime, annotated_bgr) -> None:
-    rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
-    if not runtime.video_run.push([tensor_from_rgb_frame(rgb)]):
-        raise RuntimeError("Insight video push failed")
-
-
-def maybe_save_frame(cfg: AppConfig, processed: int, annotated_bgr) -> None:
+def maybe_save_frame(
+    cfg: AppConfig, processed: int, sample, detections: list[dict], labels: list[str]
+) -> None:
     if not cfg.output.save_dir or cfg.output.save_every <= 0:
         return
     if processed % cfg.output.save_every != 0:
         return
+    frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
+    annotated = overlay_segmentation(frame, detections, cfg.min_score, cfg.output, labels)
     out_path = Path(cfg.output.save_dir) / f"frame_{processed}.jpg"
-    if not cv2.imwrite(str(out_path), annotated_bgr):
+    if not cv2.imwrite(str(out_path), annotated):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
+    dropped_total = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
-        sample = runtime.run.pull("segmentation_output", 20000)
+        sample = runtime.run.pull(runtime.output_name, 20000)
         pull_end = time_ms()
         if sample is None:
             print("[warn] timed out waiting for segmentation output", file=sys.stderr)
             continue
 
         decode_start = time_ms()
-        frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
         detections = decode_segmentation_output(
             segment_tensors_from_sample(sample),
             runtime.frame_w,
@@ -753,31 +981,31 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         )
         decode_end = time_ms()
 
-        overlay_start = time_ms()
-        annotated = overlay_segmentation(frame, detections, cfg.min_score, cfg.output, runtime.labels)
-        overlay_end = time_ms()
-
-        video_start = time_ms()
-        push_annotated_video(runtime, annotated)
-        video_end = time_ms()
-
         metadata_start = time_ms()
-        send_metadata(runtime, sample, detections)
+        dropped = send_metadata(runtime, sample, detections, cfg.output.mask_threshold)
         metadata_end = time_ms()
+        if dropped > 0 and dropped_total == 0:
+            print(
+                f"[warn] metadata byte budget exceeded, dropped {dropped} segments",
+                file=sys.stderr,
+            )
+        dropped_total += dropped
 
         processed += 1
-        maybe_save_frame(cfg, processed, annotated)
+        maybe_save_frame(cfg, processed, sample, detections, runtime.labels)
         profile.add(
             pull_end - pull_start,
             decode_end - decode_start,
-            overlay_end - overlay_start,
-            video_end - video_start,
             metadata_end - metadata_start,
             len(detections),
+            dropped,
         )
 
     profile.flush()
-    print(f"processed={processed} video_sender={cfg.insight_host}:{runtime.video_port}")
+    print(
+        f"processed={processed} dropped_segments={dropped_total} "
+        f"video_sender={cfg.insight_host}:{runtime.video_port}"
+    )
     return processed
 
 
@@ -801,7 +1029,6 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return 0 if run_pipeline(runtime, cfg) > 0 else 3
         finally:
-            runtime.video_run.close()
             runtime.run.close()
     except KeyboardInterrupt:
         return 130

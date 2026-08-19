@@ -10,7 +10,6 @@ import json
 import os
 import struct
 import sys
-import threading
 import time
 
 import yaml
@@ -27,10 +26,15 @@ class AppConfig:
     model_path: str
     labels_path: Path
     rtsp_urls: list[str]
+    # Encoded RTSP path used for every stream: "h264" or "h265". Kept as a
+    # string because load_app_config runs before the lazy pyneat import.
+    codec: str = "h264"
     latency_ms: int = 100
     tcp: bool = True
     frames: int = 0
     fps: int = 0
+    max_inflight_per_stream: int = 4
+    max_inflight_total: int = 16
     min_score: float = 0.55
     nms_iou: float = 0.60
     max_detections: int = 50
@@ -48,19 +52,25 @@ class AppConfig:
 class StreamRuntime:
     index: int
     url: str
-    model: object
-    graph: object
-    run: object
+    source_options: object
     metadata_sender: object
     labels: list[str]
     profile: "ProfileWindow"
+    latest_debug_frame: object | None
     frame_w: int
     frame_h: int
     output_fps: int
     video_port: int
-    output_name: str
     processed: int = 0
     closed: bool = False
+
+
+@dataclass
+class AppRuntime:
+    graph: object
+    run: object | None
+    model: object | None
+    streams: list[StreamRuntime]
 
 
 class ProfileWindow:
@@ -178,6 +188,15 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     return value
 
 
+def parse_input_codec(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"h264", "avc", "h.264"}:
+        return "h264"
+    if lowered in {"h265", "hevc", "h.265"}:
+        return "h265"
+    raise ValueError("input.codec must be h264/avc or h265/hevc")
+
+
 def validate_config(cfg: AppConfig) -> None:
     if not cfg.model_path:
         raise ValueError("model.path must be set")
@@ -195,6 +214,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("inference.frames must be >= 0")
     if cfg.fps < 0:
         raise ValueError("inference.fps must be >= 0")
+    if cfg.max_inflight_per_stream != -1 and cfg.max_inflight_per_stream <= 0:
+        raise ValueError("inference.max_inflight_per_stream must be -1 or > 0")
+    if cfg.max_inflight_total != -1 and cfg.max_inflight_total <= 0:
+        raise ValueError("inference.max_inflight_total must be -1 or > 0")
     if not 0.0 <= cfg.min_score <= 1.0:
         raise ValueError("inference.min_score must be between 0 and 1")
     if not 0.0 <= cfg.nms_iou <= 1.0:
@@ -237,10 +260,13 @@ def load_app_config(config_path: Path) -> AppConfig:
         model_path=string_or(model, "path"),
         labels_path=Path(string_or(model, "labels", str(default_labels))),
         rtsp_urls=rtsp_urls,
+        codec=parse_input_codec(string_or(input_cfg, "codec", "h264")),
         latency_ms=int_or(input_cfg, "latency_ms", 100),
         tcp=bool_or(input_cfg, "tcp", True),
         frames=int_or(inference, "frames", 0),
         fps=int_or(inference, "fps", 0),
+        max_inflight_per_stream=int_or(inference, "max_inflight_per_stream", 4),
+        max_inflight_total=int_or(inference, "max_inflight_total", 16),
         min_score=float_or(inference, "min_score", 0.55),
         nms_iou=float_or(inference, "nms_iou", 0.60),
         max_detections=int_or(inference, "max_detections", 50),
@@ -352,6 +378,11 @@ def build_metadata_boxes(boxes: list[dict], labels: list[str], frame_w: int, fra
     return metadata_boxes
 
 
+def rtsp_codec(codec: str):
+    """Map the parsed `input.codec` config token onto the Core RTSP codec selector."""
+    return pyneat.RtspCodec.H265 if codec == "h265" else pyneat.RtspCodec.H264
+
+
 def probe_rtsp(url: str) -> tuple[int, int, int]:
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
@@ -367,7 +398,7 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def make_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: int):
+def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: int):
     opt = pyneat.RtspDecodedInputOptions()
     opt.url = url
     opt.latency_ms = cfg.latency_ms
@@ -377,9 +408,13 @@ def make_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: 
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
     opt.auto_caps_from_stream = True
-    opt.fallback_h264_width = width
-    opt.fallback_h264_height = height
-    opt.fallback_h264_fps = fps
+    opt.codec = rtsp_codec(cfg.codec)
+    opt.dec_width = width
+    opt.dec_height = height
+    if cfg.codec == "h264":
+        opt.fallback_h264_width = width
+        opt.fallback_h264_height = height
+    opt.source_fps = fps
     opt.output_caps.enable = True
     opt.output_caps.format = pyneat.Format.NV12
     opt.output_caps.width = width
@@ -389,7 +424,98 @@ def make_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: 
     return opt
 
 
-def make_model(cfg: AppConfig):
+def output_caps_enabled(caps) -> bool:
+    return caps.enable or caps.width > 0 or caps.height > 0 or caps.fps > 0
+
+
+def build_encoded_source_graph(opt) -> pyneat.Graph:
+    source = pyneat.Graph("rtsp_encoded_source")
+
+    encoded_opt = pyneat.RtspEncodedInputOptions()
+    encoded_opt.url = opt.url
+    encoded_opt.codec = opt.codec
+    encoded_opt.latency_ms = opt.latency_ms
+    encoded_opt.tcp = opt.tcp
+    encoded_opt.source_fps = opt.source_fps
+    if opt.codec == pyneat.RtspCodec.H264:
+        encoded_opt.fallback_h264_width = opt.fallback_h264_width
+        encoded_opt.fallback_h264_height = opt.fallback_h264_height
+    source.add(pyneat.groups.rtsp_encoded_input(encoded_opt))
+    return source
+
+
+def encoded_format_tag(codec):
+    return pyneat.Format.H265 if codec == pyneat.RtspCodec.H265 else pyneat.Format.H264
+
+
+def encoded_decode_input_options(codec):
+    opt = pyneat.InputOptions()
+    opt.payload_type = pyneat.PayloadType.Encoded
+    opt.format = encoded_format_tag(codec)
+    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
+        opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
+    return opt
+
+
+def encoded_video_input_options(codec):
+    opt = pyneat.InputOptions()
+    opt.payload_type = pyneat.PayloadType.Encoded
+    opt.format = encoded_format_tag(codec)
+    if hasattr(pyneat, "InputMemoryPolicy") and hasattr(opt, "memory_policy"):
+        opt.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
+    elif hasattr(opt, "use_simaai_pool"):
+        opt.use_simaai_pool = False
+    return opt
+
+
+def build_decode_graph(input_name: str, opt) -> pyneat.Graph:
+    decode = pyneat.Graph("decode")
+    use_h265 = opt.codec == pyneat.RtspCodec.H265
+
+    dec = pyneat.SimaDecodeOptions()
+    dec.type = pyneat.SimaDecodeType.H265 if use_h265 else pyneat.SimaDecodeType.H264
+    dec.sima_allocator_type = opt.sima_allocator_type
+    dec.out_format = pyneat.Format.NV12
+    dec.decoder_name = opt.decoder_name
+    dec.raw_output = opt.decoder_raw_output
+    dec.next_element = opt.decoder_next_element
+    dec.dec_width = opt.dec_width
+    dec.dec_height = opt.dec_height
+    dec.dec_fps = opt.source_fps
+    dec.num_buffers = opt.num_buffers
+    decode.connect(
+        pyneat.nodes.input(input_name, encoded_decode_input_options(opt.codec)),
+        pyneat.nodes.sima_decode(dec),
+    )
+    if opt.use_videoconvert:
+        decode.add(pyneat.nodes.video_convert())
+    if opt.use_videoscale:
+        decode.add(pyneat.nodes.video_scale())
+    if output_caps_enabled(opt.output_caps):
+        decode.add(
+            pyneat.nodes.caps_raw(
+                "NV12",
+                opt.output_caps.width,
+                opt.output_caps.height,
+                opt.output_caps.fps,
+                opt.output_caps.memory,
+            )
+        )
+    if opt.extra_fragment:
+        decode.add(pyneat.nodes.custom(opt.extra_fragment))
+    return decode
+
+
+def build_video_sender_graph(input_name: str, codec, video_options) -> pyneat.Graph:
+    video = pyneat.Graph("video_sender")
+    video.connect(
+        pyneat.nodes.input(input_name, encoded_video_input_options(codec)),
+        pyneat.groups.video_sender(video_options),
+    )
+    return video
+
+
+def build_model(cfg: AppConfig):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
@@ -402,71 +528,99 @@ def make_model(cfg: AppConfig):
     return pyneat.Model(cfg.model_path, opt)
 
 
+def build_run_options() -> pyneat.RunOptions:
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 4
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    return run_options
+
+
+def save_frames_enabled(cfg: AppConfig) -> bool:
+    return bool(cfg.save_dir) and cfg.save_every > 0
+
+
+def stream_id_for(stream_index: int) -> str:
+    return f"stream{stream_index}"
+
+
+def stream_index_from_sample(sample, stream_count: int) -> int:
+    stream_id = str(getattr(sample, "stream_id", ""))
+    prefix = "stream"
+    if not stream_id.startswith(prefix):
+        if stream_count == 1:
+            return 0
+        raise RuntimeError(f"detection sample missing stream id: {stream_id}")
+    suffix = stream_id[len(prefix) :]
+    if not suffix.isdigit():
+        raise RuntimeError(f"invalid detection stream id: {stream_id}")
+    index = int(suffix)
+    if index < 0 or index >= stream_count:
+        raise RuntimeError(f"detection stream id out of range: {stream_id}")
+    return index
+
+
+def realtime_link(
+    stream_index: int,
+    queue_depth: int,
+    max_inflight_per_stream: int = -1,
+    max_inflight_total: int = -1,
+):
+    link = pyneat.GraphLinkOptions()
+    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    link.queue_depth = queue_depth
+    link.max_inflight_per_stream = max_inflight_per_stream
+    link.max_inflight_total = max_inflight_total
+    link.stream_id = stream_id_for(stream_index)
+    return link
+
+
+def build_detector_graph(cfg: AppConfig):
+    model = build_model(cfg)
+    input_options = model.input_appsrc_options(False)
+    input_options.block = True
+
+    detector = pyneat.Graph("detector")
+    detector.connect(pyneat.nodes.input("detector_frame", input_options), model)
+    return model, detector
+
+
+def build_detections_graph() -> pyneat.Graph:
+    detections = pyneat.Graph("detections")
+    detections.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+    return detections
+
+
+def build_debug_frame_graph(stream_index: int) -> pyneat.Graph:
+    frames = pyneat.Graph("debug_frame")
+    frames.connect(
+        pyneat.nodes.input("debug_frame"),
+        pyneat.nodes.output(f"debug_frame_{stream_index}", pyneat.OutputOptions.every_frame(4)),
+    )
+    return frames
+
+
+def make_video_options(cfg: AppConfig, stream_index: int):
+    video_options = pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg.codec))
+    video_options.host = cfg.insight_host
+    video_options.channel = stream_index
+    video_options.video_port_base = cfg.video_port_base
+    video_options.async_ = True
+    return video_options
+
+
 def build_stream_runtime(
     cfg: AppConfig, stream_index: int, url: str, labels: list[str]
 ) -> StreamRuntime:
     frame_w, frame_h, fps = probe_rtsp(url)
     output_fps = cfg.fps if cfg.fps > 0 else fps
-    model = make_model(cfg)
 
-    model_name = "model"
-    video_name = "video"
-    debug_frame_name = "debug_frame"
-    detections_name = "detections"
-    debug_output_name = "debug_output"
-    output_name = debug_output_name if cfg.save_dir and cfg.save_every > 0 else detections_name
+    source_options = build_source_options(cfg, url, fps, frame_w, frame_h)
 
-    source = pyneat.groups.rtsp_decoded_input(make_source_options(cfg, url, fps, frame_w, frame_h))
-    save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
-    outputs = [model_name]
-    if cfg.video_enabled:
-        outputs.append(video_name)
-    if save_debug_frames:
-        outputs.append(debug_frame_name)
-    branch = pyneat.graphs.branch("source", outputs)
-
-    graph = pyneat.Graph()
-    live_link_options = pyneat.GraphLinkOptions()
-    live_link_options.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-    graph.connect(source, branch)
     video_port = 0
     if cfg.video_enabled:
-        video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, output_fps)
-        video_options.host = cfg.insight_host
-        video_options.channel = stream_index
-        video_options.video_port_base = cfg.video_port_base
-        video_options.encoder.bitrate_kbps = 1000
-        video_port = video_options.video_port
-
-        video_graph = pyneat.Graph(video_name)
-        video_graph.connect(pyneat.nodes.input(video_name), pyneat.groups.video_sender(video_options))
-        graph.connect(branch, video_graph, live_link_options)
-
-    model_graph = pyneat.Graph(model_name)
-    model_graph.connect(pyneat.nodes.input(model_name), model)
-    detections_graph = pyneat.Graph(detections_name)
-    detections_graph.add(pyneat.nodes.output(detections_name, pyneat.OutputOptions.every_frame(4)))
-    graph.connect(branch, model_graph, live_link_options)
-    graph.connect(model_graph, detections_graph)
-
-    if save_debug_frames:
-        frames = pyneat.Graph(debug_frame_name)
-        frames.add(pyneat.nodes.output(debug_frame_name, pyneat.OutputOptions.every_frame(4)))
-        debug_join = pyneat.graphs.combine(
-            [debug_frame_name, detections_name], debug_output_name, pyneat.CombinePolicy.ByFrame
-        )
-        graph.connect(branch, frames, live_link_options)
-        graph.connect(frames, debug_join)
-        graph.connect(detections_graph, debug_join)
-    if cfg.profile:
-        print(f"Backend stream={stream_index}:\n{graph.describe_backend()}")
-
-    run_options = pyneat.RunOptions()
-    run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 3
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    run = graph.build(run_options)
+        video_port = make_video_options(cfg, stream_index).video_port
 
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
@@ -483,34 +637,67 @@ def build_stream_runtime(
     return StreamRuntime(
         index=stream_index,
         url=url,
-        model=model,
-        graph=graph,
-        run=run,
+        source_options=source_options,
         metadata_sender=metadata_sender,
         labels=labels,
         profile=ProfileWindow(cfg.profile, stream_index),
+        latest_debug_frame=None,
         frame_w=frame_w,
         frame_h=frame_h,
         output_fps=output_fps,
         video_port=video_port,
-        output_name=output_name,
     )
+
+
+def connect_stream_graph(
+    app: AppRuntime, cfg: AppConfig, stream: StreamRuntime, detector_graph
+) -> None:
+    source = build_encoded_source_graph(stream.source_options)
+    decoder = build_decode_graph("decode_h264", stream.source_options)
+
+    if cfg.video_enabled:
+        encoded_branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
+        app.graph.connect(source, encoded_branch)
+        app.graph.connect(encoded_branch, decoder, realtime_link(stream.index, 3))
+
+        video_options = make_video_options(cfg, stream.index)
+        app.graph.connect(
+            encoded_branch,
+            build_video_sender_graph("video_h264", rtsp_codec(cfg.codec), video_options),
+            realtime_link(stream.index, 3),
+        )
+    else:
+        app.graph.connect(source, decoder, realtime_link(stream.index, 3))
+
+    save_debug_frames = save_frames_enabled(cfg)
+    decoded_outputs = ["detector_frame", "debug_frame"] if save_debug_frames else ["detector_frame"]
+    decoded_branch = pyneat.graphs.branch("decoded", decoded_outputs)
+    app.graph.connect(decoder, decoded_branch)
+    app.graph.connect(
+        decoded_branch,
+        detector_graph,
+        realtime_link(
+            stream.index,
+            4,
+            cfg.max_inflight_per_stream,
+            cfg.max_inflight_total,
+        ),
+    )
+    if save_debug_frames:
+        app.graph.connect(
+            decoded_branch, build_debug_frame_graph(stream.index), realtime_link(stream.index, 4)
+        )
 
 
 def send_metadata(stream: StreamRuntime, sample, boxes: list[dict]) -> None:
     metadata_boxes = build_metadata_boxes(boxes, stream.labels, stream.frame_w, stream.frame_h)
-    pts_ns = getattr(sample, "pts_ns", -1)
-    if pts_ns is not None and pts_ns >= 0:
-        timestamp_ms = int(pts_ns // 1_000_000)
-    else:
-        timestamp_ms = int(time.time() * 1000)
-    frame_id = getattr(sample, "frame_id", -1)
-    frame_id = int(frame_id) if frame_id is not None and frame_id >= 0 else 0
+    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     stream.metadata_sender.send_metadata(
         "object-detection",
         json.dumps({"objects": metadata_boxes}, separators=(",", ":")),
         timestamp_ms,
-        str(frame_id),
+        frame_id,
     )
 
 
@@ -537,7 +724,7 @@ def tensor_bgr_from_decoded(tensor):
     if tensor.is_nv12():
         width = tensor_dim(tensor, "width")
         height = tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
+        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
         expected = width * height * 3 // 2
         if payload.size < expected:
             raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
@@ -578,34 +765,30 @@ def draw_boxes(frame, boxes: list[dict], min_score: float) -> None:
         )
 
 
-def maybe_save_debug_frame(cfg: AppConfig, stream: StreamRuntime, sample, boxes: list[dict]) -> None:
+def maybe_save_debug_frame(
+    cfg: AppConfig, stream: StreamRuntime, frame, boxes: list[dict]
+) -> None:
     if not cfg.save_dir or cfg.save_every <= 0 or stream.processed % cfg.save_every != 0:
         return
-
-    frame_tensor = first_tensor_from_sample(sample)
-    if frame_tensor is None:
+    if frame is None:
         return
 
-    frame = tensor_bgr_from_decoded(frame_tensor)
+    frame = frame.copy()
     draw_boxes(frame, boxes, cfg.min_score)
     out_path = Path(cfg.save_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
     if not cv2.imwrite(str(out_path), frame):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
-def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
-    pull_start = time_ms()
-    sample = stream.run.pull(stream.output_name, 50)
-    pull_end = time_ms()
-    if sample is None:
-        last_error_fn = getattr(stream.run, "last_error", None)
-        last_error = last_error_fn() if callable(last_error_fn) else ""
-        if last_error:
-            raise RuntimeError(f"stream {stream.index} runtime error: {last_error}")
-        running_fn = getattr(stream.run, "running", None)
-        if callable(running_fn) and not running_fn():
-            stream.closed = True
+def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
+    if frame_limit <= 0:
         return False
+    return all(stream.processed >= frame_limit or stream.closed for stream in streams)
+
+
+def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float) -> None:
+    if cfg.frames > 0 and stream.processed >= cfg.frames:
+        return
 
     payload = extract_bbox_payload(sample)
     boxes = parse_boxes_strict(payload, stream.frame_w, stream.frame_h, cfg.max_detections)
@@ -616,27 +799,44 @@ def process_stream_once(stream: StreamRuntime, cfg: AppConfig) -> bool:
         metadata_start = time_ms()
         send_metadata(stream, sample, boxes)
         metadata_end = time_ms()
-        maybe_save_debug_frame(cfg, stream, sample, boxes)
-        stream.profile.add(pull_end - pull_start, metadata_end - metadata_start, len(boxes))
+        if save_frames_enabled(cfg):
+            maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, boxes)
+        stream.profile.add(detection_pull_ms, metadata_end - metadata_start, len(boxes))
+
+
+def debug_frame_output_name(stream_index: int) -> str:
+    return f"debug_frame_{stream_index}"
+
+
+def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
+    if not save_frames_enabled(cfg):
+        return
+    for stream in app.streams:
+        output_name = debug_frame_output_name(stream.index)
+        while True:
+            sample = app.run.pull(output_name, 0)
+            if sample is None:
+                break
+            tensor = first_tensor_from_sample(sample)
+            if tensor is not None:
+                stream.latest_debug_frame = tensor_bgr_from_decoded(tensor)
+
+
+def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
+    drain_debug_frames(app, cfg)
+    pull_start = time_ms()
+    sample = app.run.pull(output_name, 50)
+    pull_end = time_ms()
+    if sample is None:
+        last_error_fn = getattr(app.run, "last_error", None)
+        last_error = last_error_fn() if callable(last_error_fn) else ""
+        if last_error:
+            raise RuntimeError(f"runtime error: {last_error}")
+        return False
+    stream_index = stream_index_from_sample(sample, len(app.streams))
+    process_output_sample(app.streams[stream_index], cfg, sample, pull_end - pull_start)
+    drain_debug_frames(app, cfg)
     return True
-
-
-def consume_stream(
-    stream: StreamRuntime,
-    cfg: AppConfig,
-    stop_event: threading.Event,
-    errors: list[Exception],
-) -> None:
-    try:
-        while (
-            not stop_event.is_set()
-            and not stream.closed
-            and (cfg.frames <= 0 or stream.processed < cfg.frames)
-        ):
-            process_stream_once(stream, cfg)
-    except Exception as exc:
-        errors.append(exc)
-        stop_event.set()
 
 
 def run_app(cfg: AppConfig) -> None:
@@ -644,45 +844,33 @@ def run_app(cfg: AppConfig) -> None:
         os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
         os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
         os.environ.setdefault("SIMA_GST_BOUNDARY_PROBES", "1")
-    if cfg.save_dir:
+    if save_frames_enabled(cfg):
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
     labels = load_labels(cfg.labels_path)
-    streams = [
-        build_stream_runtime(cfg, index, url, labels)
-        for index, url in enumerate(cfg.rtsp_urls)
-    ]
-    stop_event = threading.Event()
-    errors: list[Exception] = []
-    consumers = [
-        threading.Thread(
-            target=consume_stream,
-            args=(stream, cfg, stop_event, errors),
-            name=f"stream-{stream.index}-consumer",
-        )
-        for stream in streams
-    ]
+    model, detector_graph = build_detector_graph(cfg)
+    detections_graph = build_detections_graph()
+    app = AppRuntime(graph=pyneat.Graph(), run=None, model=model, streams=[])
+    for index, url in enumerate(cfg.rtsp_urls):
+        stream = build_stream_runtime(cfg, index, url, labels)
+        app.streams.append(stream)
+        connect_stream_graph(app, cfg, stream, detector_graph)
+    app.graph.connect(detector_graph, detections_graph)
 
     try:
-        for consumer in consumers:
-            consumer.start()
-        for consumer in consumers:
-            consumer.join()
+        if cfg.profile:
+            print(f"Backend:\n{app.graph.describe_backend()}")
+        app.run = app.graph.build(build_run_options())
+        while not all_streams_done(app.streams, cfg.frames):
+            process_run_once(app, cfg, "detections")
     except KeyboardInterrupt:
-        stop_event.set()
         raise
     finally:
-        stop_event.set()
-        for stream in streams:
-            stream.run.close()
-        for consumer in consumers:
-            if consumer.is_alive():
-                consumer.join(timeout=2.0)
-        for stream in streams:
+        if app.run is not None:
+            app.run.close()
+        for stream in app.streams:
             stream.profile.flush()
             print(f"[stream {stream.index}] processed={stream.processed}")
-    if errors:
-        raise errors[0]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -693,7 +881,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         cfg = load_app_config(args.config)
         if args.validate_config_only:
-            print(f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)})")
+            print(
+                f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)}, "
+                f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
+                f"max_inflight_total={cfg.max_inflight_total})"
+            )
             return 0
 
         load_runtime_dependencies()

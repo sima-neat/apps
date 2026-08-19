@@ -57,8 +57,8 @@ def parse_metadata(content: str) -> dict[str, str] | None:
 
 
 def portal_asset_relative_path(rel: Path) -> str | None:
-    if rel.parts[:2] == ("assets", "portal"):
-        return str(Path("example-assets") / Path(*rel.parts[2:]))
+    if rel.parts[:3] == ("portal", "assets", "examples"):
+        return str(Path("example-assets") / Path(*rel.parts[3:]))
     if rel.parts and rel.parts[0] == "examples":
         return str(Path("example-assets") / rel.parent.relative_to("examples") / rel.name)
     return None
@@ -164,7 +164,7 @@ def find_image_path(app_dir: Path) -> str | None:
     category = app_dir.parent.name
     app_name = app_dir.name
 
-    portal_asset_dir = REPO_ROOT / "assets" / "portal" / category / app_name
+    portal_asset_dir = REPO_ROOT / "portal" / "assets" / "examples" / category / app_name
     for rel in PORTAL_IMAGE_CANDIDATES:
         path = portal_asset_dir / rel
         if path.exists():

@@ -1,0 +1,62 @@
+# Default profile: 16 x 720p @ 30 FPS.
+# Relative model paths use this file; label paths use the Apps root.
+model:
+  path: <model-path>
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
+  decode_type: yolo26
+
+streams:
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  - <rtsp-url-3>
+  - <rtsp-url-4>
+  - <rtsp-url-5>
+  - <rtsp-url-6>
+  - <rtsp-url-7>
+  - <rtsp-url-8>
+  - <rtsp-url-9>
+  - <rtsp-url-10>
+  - <rtsp-url-11>
+  - <rtsp-url-12>
+  - <rtsp-url-13>
+  - <rtsp-url-14>
+  - <rtsp-url-15>
+  - <rtsp-url-16>
+
+input:
+  codec: h264                # h264/avc or h265/hevc.
+  tcp: true
+  latency_ms: 100
+  drop_on_latency: true
+  skip_rtsp_probe: true
+  width: 1280
+  height: 720
+  fps: 30
+  decoder_buffers: 8
+  decoder_input_buffers: 2
+  decoder_tuning: throughput-low-latency
+
+runtime:
+  profile: false
+  warmup_frames: 30
+  initial_detection_timeout_ms: 90000
+  stream_detection_timeout_ms: 30000
+  no_detection_timeout_ms: 30000
+
+inference:
+  workers: 1
+  queue_depth: 16
+  internal_queue_depth: 1
+  max_inflight_per_stream: 1
+  max_inflight_total: 8
+  min_score: 0.30
+  nms_iou: 0.60
+  max_detections: 50
+
+output:
+  insight:
+    host: <insight-host-ip>
+    video_port_base: 9000
+    metadata_port_base: 9100
+    max_visible_streams: 16
+  video_enabled: true

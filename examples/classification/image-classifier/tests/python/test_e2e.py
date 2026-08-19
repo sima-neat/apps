@@ -24,7 +24,13 @@ class TestE2E:
         image_env = Path(
             os.environ.get(
                 "SIMANEAT_APPS_TEST_CLASSIFICATION_IMAGE",
-                str(apps_root / "assets" / "test_images_classification" / "goldfish.jpeg"),
+                str(
+                    apps_root
+                    / "assets"
+                    / "datasets-test"
+                    / "imagenet"
+                    / "goldfish.jpeg"
+                ),
             )
         )
         skip_unless_e2e_ready(

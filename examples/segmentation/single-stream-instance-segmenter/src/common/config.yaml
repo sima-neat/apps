@@ -1,11 +1,16 @@
 model:
-  path: <model-path>         # Example: assets/models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
+  path: <model-path>         # Example: models/YOLO26-SEGMENTATION/yolo26m-seg-bf16-b1.tar.gz
   labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
 
 source:
-  rtsp_url: <rtsp-url-1>     # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+  type: rtsp                 # rtsp or http.
+  codec: h264                # h264/avc, h265/hevc, or mjpeg.
+  url: <rtsp-url-1>          # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+  rtsp_url: ""               # Legacy H.264 RTSP key. Used when source.url is empty.
   tcp: true                  # Use TCP for RTSP transport.
   latency_ms: 100            # RTSP receive latency in milliseconds.
+  fps: 0                     # 0 probes FPS. MJPEG requires config FPS or probeable FPS metadata.
+  ssl_strict: true           # Set false for HTTPS MJPEG streams with self-signed certs.
 
 inference:
   frames: 0                  # Frame limit. 0 means run continuously.
@@ -18,11 +23,11 @@ runtime:
   profile_interval: 100      # Rolling profile window in published frames.
 
 output:
-  save_dir: ""               # Optional directory for annotated frames.
+  save_dir: ""               # Optional directory for annotated frames. Adds a decoded-frame branch.
   save_every: 0              # Save every Nth output frame. 0 disables saving.
-  mask_alpha: 0.55           # Mask overlay opacity.
-  mask_threshold: 0.50       # Threshold applied to decoded uint8 masks.
-  draw_boxes: true           # Draw boxes and labels over mask overlays.
+  mask_alpha: 0.55           # Mask overlay opacity in saved frames.
+  mask_threshold: 0.50       # Mask threshold, for both the metadata polygon and saved frames.
+  draw_boxes: true           # Draw boxes and labels over mask overlays in saved frames.
   insight:
     host: <insight-host-ip>  # Host running the Insight receiver/viewer.
     video_port: 9000         # UDP video port.

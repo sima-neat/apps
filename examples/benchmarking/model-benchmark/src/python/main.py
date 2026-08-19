@@ -12,6 +12,13 @@ from pathlib import Path
 import yaml
 
 
+DECODE_TYPES = {"yolo26-det": "YoloV26", "yolo26-seg": "YoloV26Seg"}
+
+# neatobjectdecode rejects a zero top-K, so the BoxDecode route needs an explicit cap.
+# The same value is used for every decode type to keep the measurements comparable.
+BOXDECODE_TOP_K = 100
+
+
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
@@ -27,7 +34,23 @@ def spec_strings(model, method_name: str) -> list[str]:
         return [f"unavailable: {exc}"]
 
 
-def write_report(path: Path, model_path: Path, frames: int, model, report) -> None:
+def route_fields(model) -> dict:
+    """Describe the resolved route, without discarding a completed benchmark if info() fails."""
+    try:
+        info = model.info()
+    except Exception as exc:
+        return {"resolved_postprocess": f"unavailable: {exc}", "output_topology": None}
+    return {
+        "resolved_postprocess": info.selection.selected_post_kind,
+        "output_topology": {
+            "physical": info.output_topology.physical_outputs,
+            "logical": info.output_topology.logical_outputs,
+            "packed": info.output_topology.packed_outputs,
+        },
+    }
+
+
+def write_report(path: Path, model_path: Path, frames: int, decode_type, model, report) -> None:
     data = {
         "benchmark": {
             "type": "model.synthetic",
@@ -37,6 +60,9 @@ def write_report(path: Path, model_path: Path, frames: int, model, report) -> No
         "model": {
             "path": str(model_path),
             "file": model_path.name,
+            "requested_decode_type": decode_type,
+            "boxdecode_top_k": None if decode_type is None else BOXDECODE_TOP_K,
+            **route_fields(model),
             "input_specs": spec_strings(model, "input_specs"),
             "output_specs": spec_strings(model, "output_specs"),
         },
@@ -58,6 +84,11 @@ def main() -> int:
     parser.add_argument("--model", type=Path, help="compiled model package to benchmark")
     parser.add_argument("--frames", type=int, help="measured synthetic frames")
     parser.add_argument("--output-json", type=Path, help="benchmark report JSON path")
+    parser.add_argument(
+        "--decode-type",
+        choices=sorted(DECODE_TYPES),
+        help="select the BoxDecode postprocess route instead of the package default",
+    )
     args = parser.parse_args()
 
     try:
@@ -93,9 +124,15 @@ def main() -> int:
         return 3
 
     try:
-        model = pyneat.Model(str(model_path))
+        if args.decode_type is None:
+            model = pyneat.Model(str(model_path))
+        else:
+            options = pyneat.ModelOptions()
+            options.decode_type = getattr(pyneat.BoxDecodeType, DECODE_TYPES[args.decode_type])
+            options.top_k = BOXDECODE_TOP_K
+            model = pyneat.Model(str(model_path), options)
         report = model.benchmark(frames)
-        write_report(report_path, model_path, frames, model, report)
+        write_report(report_path, model_path, frames, args.decode_type, model, report)
     except Exception as exc:
         print(f"benchmark failed: {exc}", file=sys.stderr)
         return 4

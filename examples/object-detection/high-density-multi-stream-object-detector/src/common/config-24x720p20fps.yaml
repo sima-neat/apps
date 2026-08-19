@@ -1,0 +1,69 @@
+# Profile: 24 x 720p @ 20 FPS (q4/i2/m4).
+model:                       # Detector model selection.
+  path: <model-path>         # Absolute or relative to this config file.
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
+  decode_type: yolo26
+
+streams:                     # RTSP inputs, one entry per camera.
+  - <rtsp-url-1>
+  - <rtsp-url-2>
+  - <rtsp-url-3>
+  - <rtsp-url-4>
+  - <rtsp-url-5>
+  - <rtsp-url-6>
+  - <rtsp-url-7>
+  - <rtsp-url-8>
+  - <rtsp-url-9>
+  - <rtsp-url-10>
+  - <rtsp-url-11>
+  - <rtsp-url-12>
+  - <rtsp-url-13>
+  - <rtsp-url-14>
+  - <rtsp-url-15>
+  - <rtsp-url-16>
+  - <rtsp-url-17>
+  - <rtsp-url-18>
+  - <rtsp-url-19>
+  - <rtsp-url-20>
+  - <rtsp-url-21>
+  - <rtsp-url-22>
+  - <rtsp-url-23>
+  - <rtsp-url-24>
+
+input:                       # RTSP input transport settings.
+  codec: h264                # h264/avc or h265/hevc.
+  tcp: true                  # Use TCP for RTSP transport.
+  latency_ms: 100            # RTSP receive latency in milliseconds.
+  drop_on_latency: true      # Keep live display current instead of preserving stale RTSP frames.
+  skip_rtsp_probe: true      # Use explicit caps below; avoids slow per-stream startup probes.
+  width: 1280                # Required when input.skip_rtsp_probe is true.
+  height: 720
+  fps: 20
+  decoder_buffers: 16        # Per-stream decoder output pool used by the validated profile.
+  decoder_input_buffers: 2   # Per-stream compressed-input pool.
+  decoder_tuning: throughput-low-latency
+
+runtime:                     # Runtime and profiling settings.
+  profile: false             # Leave hot-path profiling off for the live visualizer run.
+  warmup_frames: 30          # Drain this many frames before metadata/profile output.
+  initial_detection_timeout_ms: 90000 # Wait for two completions from every stream at startup.
+  stream_detection_timeout_ms: 30000 # Each live stream must keep producing detections.
+  no_detection_timeout_ms: 30000 # Fail only when the entire detector stops completing work.
+
+inference:                   # Detection controls.
+  workers: 1                 # One shared detector graph avoids dispatcher/resource contention.
+  queue_depth: 4             # Terminal detection output and Run queue depth.
+  internal_queue_depth: 2    # Two global model-stage handoffs; not per-camera decoded queues.
+  max_inflight_per_stream: 4 # Proven per-stream mux credit for approximately 20 detections/s.
+  max_inflight_total: 24     # One bounded raw-frame credit per stream across the shared detector.
+  min_score: 0.30            # Detection score threshold used by the validated Insight run.
+  nms_iou: 0.60              # NMS IOU threshold.
+  max_detections: 50         # Max detections to keep per frame after NMS.
+
+output:                      # Insight video and metadata output.
+  insight:                   # Live video and metadata destination.
+    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
+    video_port_base: 9000    # Base UDP port for video channels.
+    metadata_port_base: 9100 # Base UDP port for metadata channels.
+    max_visible_streams: 24  # Publish all 24 video and metadata channels to Insight.
+  video_enabled: true        # Disable to publish metadata only.

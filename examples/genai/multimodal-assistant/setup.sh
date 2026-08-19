@@ -2,7 +2,8 @@
 set -euo pipefail
 
 EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODELS_DIR="${LLIMA_MODELS_PATH:-/media/nvme/llima/models}"
+DEFAULT_MODELS_DIR="/media/nvme/llima/models"
+MODELS_DIR="${LLIMA_MODELS_PATH:-${DEFAULT_MODELS_DIR}}"
 APP_VENV="${APP_VENV:-${EXAMPLE_DIR}/.venv}"
 CONFIG_PATH="${CONFIG_PATH:-${EXAMPLE_DIR}/config.local.yaml}"
 PYNEAT_PYTHON="${PYNEAT_PYTHON:-${HOME}/pyneat/bin/python}"
@@ -50,6 +51,19 @@ if [[ $# -gt 0 ]]; then
   exit 2
 fi
 
+if ! mkdir -p "${MODELS_DIR}" 2>/dev/null ||
+  [[ ! -d "${MODELS_DIR}" || ! -w "${MODELS_DIR}" ]]
+then
+  echo "Model directory is not writable: ${MODELS_DIR}" >&2
+  if [[ -z "${LLIMA_MODELS_PATH:-}" ]]; then
+    echo "Mount NVMe and make ${DEFAULT_MODELS_DIR} writable, or set:" >&2
+  else
+    echo "Set LLIMA_MODELS_PATH to a writable directory and retry:" >&2
+  fi
+  echo "  LLIMA_MODELS_PATH=/writable/path ./setup.sh" >&2
+  exit 1
+fi
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required." >&2
   exit 1
@@ -90,7 +104,6 @@ install_cpu_torch_if_needed
   -r "${EXAMPLE_DIR}/src/python/requirements.txt" \
   -r "${EXAMPLE_DIR}/src/python/requirements-rag.txt"
 
-mkdir -p "${MODELS_DIR}"
 CHAT_MODEL_DIR="${MODELS_DIR}/${CHAT_MODEL_NAME}"
 ASR_MODEL_DIR="${MODELS_DIR}/whisper-small-a16w8"
 RAG_EMBEDDING_DIR="${MODELS_DIR}/gte-small"

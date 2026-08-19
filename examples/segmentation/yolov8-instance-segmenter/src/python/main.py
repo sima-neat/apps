@@ -298,12 +298,12 @@ def main() -> int:
 
     with args.config.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
-    model_path = raw.get("model", {}).get("path", "assets/models/yolo_v8n_seg_mpk.tar.gz")
+    model_path = raw.get("model", {}).get("path", "models/yolo_v8n_seg_mpk.tar.gz")
     io_cfg = raw.get("io", {})
     runtime = raw.get("runtime", {})
     decode = raw.get("decode", {})
     visualization = raw.get("visualization", {})
-    input_dir = Path(io_cfg.get("input_dir", "assets/test_images"))
+    input_dir = Path(io_cfg.get("input_dir", "assets/datasets/coco"))
     output_dir = Path(io_cfg.get("output_dir", "sandbox/yolov8-instance-segmenter"))
     infer_size = int(runtime.get("infer_size", 640))
     timeout_ms = int(runtime.get("timeout_ms", 20000))
