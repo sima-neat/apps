@@ -1,0 +1,43 @@
+models:                              # Model packages are supplied at runtime.
+  detector_path: <detector-model-path> # Default: yolo26m-det-int8-b1.tar.gz.
+  pose_path: <blazepose-model-path>  # Existing BlazePose 3D BF16 package.
+
+streams:                             # Any non-empty startup camera list; restart after edits.
+  - id: camera0                     # Unique stable stream identity.
+    url: <rtsp-url>                 # RTSP source URL.
+    codec: h264                     # h264/avc or h265/hevc.
+    insight_channel: 0              # Unique Insight video/metadata channel.
+
+input:
+  tcp: true                         # Use TCP for RTSP transport.
+  latency_ms: 100                   # RTSP receive latency in milliseconds.
+
+detector:
+  min_score: 0.30                   # YOLO score threshold.
+  nms_iou: 0.60                     # YOLO NMS IoU threshold.
+  max_detections: 100               # YOLO BoxDecode top-k before person filtering.
+  max_inflight_per_stream: 4        # Decoder-backed frames admitted per stream; -1 uses Core default.
+  max_inflight_total: 16            # Aggregate decoder-backed frame limit; -1 uses Core default.
+
+pose:
+  max_people_per_frame: 4           # Highest-confidence people sent to BlazePose.
+  roi_scale: 1.65                   # Square ROI expansion around each person box.
+  presence_threshold: 0.50          # Global BlazePose presence threshold.
+  job_timeout_ms: 1000              # Publish completed poses when this deadline expires.
+  max_pending_jobs: 64              # Aggregate bound across all streams.
+
+runtime:
+  frames: 0                         # Metadata frame limit per stream; 0 runs until interrupted.
+
+output:
+  insight:
+    host: <insight-host-ip>         # Host running Insight.
+    video_port_base: 9000           # Insight videoUDP base port.
+    metadata_port_base: 9100        # Insight metadataUDP base port.
+  video_enabled: true               # Codec passthrough; no board overlay or re-encode.
+
+# Test harness settings only. Normal runs ignore this section.
+testing:
+  e2e:
+    runtime:
+      frames: 12
