@@ -389,7 +389,7 @@ std::string shell_quote(const std::string& value) {
   return out;
 }
 
-SourceGeometry probe_ffprobe_geometry(const AppConfig& cfg) {
+SourceGeometry probe_http_ffprobe_geometry(const AppConfig& cfg) {
   SourceGeometry geometry;
   std::string command =
       "ffprobe -v error -rw_timeout 5000000 -select_streams v:0 "
@@ -517,7 +517,7 @@ simaai::neat::Graph make_source_graph(const AppConfig& cfg, const SourceGeometry
       make_http_mjpeg_source_options(cfg, geometry));
 }
 
-SourceGeometry probe_rtsp_h264_geometry(const AppConfig& cfg) {
+SourceGeometry probe_shared_rtsp_geometry(const AppConfig& cfg) {
   sima_examples::RtspStreamInfo probe;
   sima_examples::RtspProbeOptions probe_options;
   probe_options.payload_type = 96;
@@ -534,32 +534,7 @@ SourceGeometry probe_rtsp_h264_geometry(const AppConfig& cfg) {
 }
 
 SourceGeometry probe_rtsp_geometry(const AppConfig& cfg) {
-  SourceGeometry geometry = probe_ffprobe_geometry(cfg);
-  if (cfg.source_fps > 0) {
-    geometry.fps = cfg.source_fps;
-  }
-
-  if (cfg.source_codec == SourceCodec::H264) {
-    SourceGeometry rtsp_geometry = probe_rtsp_h264_geometry(cfg);
-    if (cfg.source_fps > 0) {
-      rtsp_geometry.fps = cfg.source_fps;
-    }
-    fill_missing_geometry(geometry, rtsp_geometry);
-    return geometry;
-  }
-
-  if (geometry.width <= 0 || geometry.height <= 0 || geometry.fps <= 0) {
-    cv::VideoCapture cap(cfg.source_url);
-    if (!cap.isOpened()) {
-      throw std::runtime_error("failed to open RTSP source for probing: " + cfg.source_url);
-    }
-    SourceGeometry cv_geometry;
-    cv_geometry.width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
-    cv_geometry.height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
-    cv_geometry.fps = static_cast<int>(std::lround(cap.get(cv::CAP_PROP_FPS)));
-    cap.release();
-    fill_missing_geometry(geometry, cv_geometry);
-  }
+  SourceGeometry geometry = probe_shared_rtsp_geometry(cfg);
   if (cfg.source_fps > 0) {
     geometry.fps = cfg.source_fps;
   }
@@ -601,7 +576,7 @@ SourceGeometry resolve_source_geometry(const AppConfig& cfg) {
   if (cfg.source_type == SourceType::Rtsp) {
     return probe_rtsp_geometry(cfg);
   }
-  SourceGeometry geometry = probe_ffprobe_geometry(cfg);
+  SourceGeometry geometry = probe_http_ffprobe_geometry(cfg);
   if (cfg.source_fps > 0) {
     geometry.fps = cfg.source_fps;
   }
