@@ -169,6 +169,7 @@ if [[ "${REMOTE_DIR}" =~ [[:space:]] || "${CARD_BINARY}" =~ [[:space:]] ]]; then
 fi
 
 CONFIG_PATH="$(cd "$(dirname "${CONFIG_PATH}")" && pwd)/$(basename "${CONFIG_PATH}")"
+cd "${APPS_ROOT}"
 CARD_TARGET="${CARD_USER}@${CARD_HOST}"
 REMOTE_CONFIG="${REMOTE_DIR}/config.yaml"
 REMOTE_PID_FILE="${REMOTE_DIR}/card.pid"
