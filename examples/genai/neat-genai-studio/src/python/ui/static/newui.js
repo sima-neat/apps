@@ -1393,8 +1393,11 @@ function resetSettingsToDefaults() {
 
 // Abort current response
 function abortResponse() {
-  // Stop backend processing and audio
-  stop(true);
+  // Stop audible playback immediately, but serialize the backend /stop with
+  // subsequent sends. Otherwise a fast second request can start before this
+  // stop finishes, and the late stop then clears the new response's TTS queue.
+  stopAudio();
+  enqueueRequest(() => stop(false));
 
   // Remove speaking indicator from current assistant message
   const assistantMessages = chatMessages.querySelectorAll('.message.assistant');
