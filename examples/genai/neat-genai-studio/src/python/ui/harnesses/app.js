@@ -1,11 +1,12 @@
 // SiMaSentry Mission Control — air-gapped, zero-dependency portal.
-// All state in DOM + localStorage. The single outbound network use is the
-// iframe loading a harness page from the same origin; the portal itself
+// Credentials stay in memory; non-sensitive preferences use localStorage.
+// The iframe loads a harness page from the same origin; the portal itself
 // makes no fetch() calls.
 'use strict';
 
 (function () {
   const CONFIG_KEY = 'sima-sentry:config';
+  let volatileApiKey = '';
 
   // Public mode names → folder paths. Decouples brand naming from disk layout.
   const MODE_ROUTES = {
@@ -76,18 +77,32 @@
     if (!raw) return { ...DEFAULTS };
     try {
       const obj = JSON.parse(raw);
+      if (Object.prototype.hasOwnProperty.call(obj, 'apiKey')) {
+        safeSet(CONFIG_KEY, JSON.stringify({
+          provider: obj.provider,
+          baseUrl: obj.baseUrl,
+          model: obj.model,
+        }));
+      }
       return {
         provider: obj.provider === 'openai' ? 'openai' : 'ollama',
         baseUrl:  typeof obj.baseUrl === 'string' ? obj.baseUrl : DEFAULTS.baseUrl,
         model:    typeof obj.model === 'string'   ? obj.model   : DEFAULTS.model,
-        apiKey:   typeof obj.apiKey === 'string'  ? obj.apiKey  : '',
+        apiKey:   volatileApiKey,
       };
     } catch {
       return { ...DEFAULTS };
     }
   }
   function persistConfig(cfg) {
-    safeSet(CONFIG_KEY, JSON.stringify(cfg));
+    volatileApiKey = typeof cfg.apiKey === 'string' ? cfg.apiKey : '';
+    // Credentials remain in this page's memory only. Persisting them in web
+    // storage or an iframe URL exposes them to scripts, history, and logs.
+    safeSet(CONFIG_KEY, JSON.stringify({
+      provider: cfg.provider,
+      baseUrl: cfg.baseUrl,
+      model: cfg.model,
+    }));
   }
 
   // ── Drawer ──────────────────────────────────────────────
@@ -159,15 +174,18 @@
     const cfg = readDrawer();
     persistConfig(cfg);
     paintStatus(cfg);
+    sendHarnessConfig();
     showMessage('ok',
       `Saved. Each card will launch its harness with this base URL ` +
       `pre-applied via URL parameters.`);
   }
 
   function onClear() {
+    volatileApiKey = '';
     safeRemove(CONFIG_KEY);
     fillDrawerForm({ ...DEFAULTS });
     paintStatus({ ...DEFAULTS });
+    sendHarnessConfig();
     showMessage('warn', 'Cleared. Cards will launch with shipped defaults.');
   }
 
@@ -215,9 +233,22 @@
     if (cfg.provider) params.set('provider', cfg.provider);
     if (cfg.baseUrl)  params.set('base_url', cfg.baseUrl);
     if (cfg.model)    params.set('model',    cfg.model);
-    if (cfg.provider === 'openai' && cfg.apiKey) params.set('api_key', cfg.apiKey);
     const qs = params.toString();
     return `${route.folder}/index.html${qs ? `?${qs}` : ''}`;
+  }
+
+  function sendHarnessConfig() {
+    if (!dom.frame || !dom.frame.contentWindow || !dom.frame.dataset.mode) return;
+    const cfg = loadConfig();
+    dom.frame.contentWindow.postMessage({
+      type: 'sima-sentry:config',
+      config: {
+        provider: cfg.provider,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        apiKey: cfg.apiKey,
+      },
+    }, window.location.origin);
   }
 
   function openMode(mode, { pushHistory = true } = {}) {
@@ -321,6 +352,7 @@
     dom.drawerClose.addEventListener('click', closeDrawer);
     dom.scrim.addEventListener('click', closeDrawer);
     dom.form.addEventListener('submit', onSave);
+    dom.frame.addEventListener('load', sendHarnessConfig);
     dom.clearBtn.addEventListener('click', onClear);
     for (const r of dom.providerInputs) r.addEventListener('change', syncProviderUI);
     document.addEventListener('keydown', (event) => {

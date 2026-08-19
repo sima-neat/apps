@@ -32,12 +32,32 @@ from server import hub as hub_helpers
 
 def parse_param_count(name: str) -> str | None:
     """Extract a parameter count from a model name, e.g. '4B', '1.5B', '500M'."""
-    m = re.search(r"(\d+(?:\.\d+)?)\s*[bB](?![a-zA-Z])", name or "")
-    if m:
-        return f"{m.group(1)}B"
-    m = re.search(r"(\d+(?:\.\d+)?)\s*[mM](?![a-zA-Z])", name or "")
-    if m:
-        return f"{m.group(1)}M"
+    text = name or ""
+    for wanted_suffix in ("b", "m"):
+        i = 0
+        while i < len(text):
+            if not text[i].isdigit():
+                i += 1
+                continue
+            start = i
+            while i < len(text) and text[i].isdigit():
+                i += 1
+            if i < len(text) and text[i] == ".":
+                decimal = i
+                i += 1
+                fraction_start = i
+                while i < len(text) and text[i].isdigit():
+                    i += 1
+                if i == fraction_start:
+                    i = decimal
+            number_end = i
+            while i < len(text) and text[i].isspace():
+                i += 1
+            if i < len(text) and text[i].lower() == wanted_suffix:
+                after = i + 1
+                if after == len(text) or not text[after].isascii() or not text[after].isalpha():
+                    return f"{text[start:number_end]}{wanted_suffix.upper()}"
+            i = max(i, start + 1)
     return None
 
 

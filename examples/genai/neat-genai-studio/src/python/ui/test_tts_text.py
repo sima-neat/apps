@@ -153,7 +153,10 @@ for label, payload in [("20k$", "$" * 20000), ("8k[", "\\[" * 8000),
                        ("2k-", "-" * 2000 + "z"), ("dashline", "-" * 5000 + " Total: 5"),
                        ("unclosed[", "See [ref" * 6000), ("bracket", "[" * 30000),
                        ("truncjson", "[1, " * 8000),
-                       ("mixed", ("$x^2$ " * 2000)), ("longline", "a" * 50000)]:
+                       ("mixed", ("$x^2$ " * 2000)), ("longline", "a" * 50000),
+                       ("tabs", "\t" * 50000 + "done"),
+                       ("comments", "<!--" * 10000 + "-->"),
+                       ("punct", " " * 50000 + ".")]:
     t0 = time.perf_counter()
     out = s(payload)
     dt = time.perf_counter() - t0

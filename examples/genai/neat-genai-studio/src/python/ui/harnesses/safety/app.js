@@ -1,5 +1,5 @@
 /* SiMaSentry-Safe — zero-dependency, air-gapped occupational-safety client.
- * All state lives in browser memory + localStorage. No build step, no CDNs. */
+ * Credentials stay in memory; non-sensitive preferences use localStorage. */
 (() => {
   "use strict";
 
@@ -97,7 +97,6 @@
   const URL_PARAM_MAP = {
     provider: "provider",
     base_url: "baseUrl", baseUrl: "baseUrl",
-    api_key: "apiKey", apiKey: "apiKey",
     model: "model",
     lang: "language", language: "language",
     system_prompt: "systemPrompt", systemPrompt: "systemPrompt",
@@ -156,6 +155,8 @@
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) stored = JSON.parse(raw);
+        if (!stored || typeof stored !== "object") stored = {};
+        else delete stored.apiKey;
       } catch (err) {
         console.warn("Settings: localStorage unreadable", err);
       }
@@ -186,10 +187,10 @@
         }
       }
 
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(final)); }
-      catch (err) { console.warn("Settings: localStorage write failed", err); }
+      this._persistValues(final);
 
-      if (Object.keys(fromUrl).length) this._cleanUrl();
+      // Remove legacy credential parameters without consuming them.
+      this._cleanUrl();
       return final;
     }
 
@@ -221,7 +222,19 @@
     }
 
     _persist() {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.values)); }
+      this._persistValues(this.values);
+    }
+
+    _persistValues(values) {
+      const persistable = {
+        provider: values.provider,
+        baseUrl: values.baseUrl,
+        model: values.model,
+        language: values.language,
+        systemPrompt: values.systemPrompt,
+        autoRead: values.autoRead,
+      };
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable)); }
       catch (err) { console.warn("Settings: localStorage write failed", err); }
     }
   }
@@ -1885,11 +1898,27 @@
     }
   }
 
+  function boot() {
+    const app = new App();
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent || event.origin !== window.location.origin) return;
+      if (!event.data || event.data.type !== "sima-sentry:config") return;
+      const cfg = event.data.config || {};
+      const patch = {};
+      if (cfg.provider === "openai" || cfg.provider === "ollama") patch.provider = cfg.provider;
+      for (const key of ["baseUrl", "model", "apiKey"]) {
+        if (typeof cfg[key] === "string") patch[key] = cfg[key];
+      }
+      app.settings.update(patch);
+      app._populateSettingsForm();
+    });
+  }
+
   // ─── Boot ───────────────────────────────────────────────────────────────
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => new App());
+    document.addEventListener("DOMContentLoaded", boot);
   } else {
-    new App();
+    boot();
   }
 })();
 

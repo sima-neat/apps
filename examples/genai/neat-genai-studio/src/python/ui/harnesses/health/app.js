@@ -1,5 +1,5 @@
 /* SiMaSentry-Med — zero-dependency client.
- * All state lives in browser memory + localStorage. No build step. */
+ * Credentials stay in memory; non-sensitive preferences use localStorage. */
 (() => {
   "use strict";
 
@@ -54,7 +54,6 @@
   const URL_PARAM_MAP = {
     provider: "provider",
     base_url: "baseUrl", baseUrl: "baseUrl",
-    api_key: "apiKey", apiKey: "apiKey",
     model: "model",
     lang: "language", language: "language",
     system_prompt: "systemPrompt", systemPrompt: "systemPrompt",
@@ -106,6 +105,8 @@
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) stored = JSON.parse(raw);
+        if (!stored || typeof stored !== "object") stored = {};
+        else delete stored.apiKey;
       } catch (err) {
         console.warn("Settings: localStorage unreadable", err);
       }
@@ -128,13 +129,11 @@
         final.systemPrompt = DEFAULT_SYSTEM_PROMPT;
       }
 
-      // Persist the merged state so URL params "stick" for next visit.
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(final)); }
-      catch (err) { console.warn("Settings: localStorage write failed", err); }
+      // Persist non-sensitive settings only. The API key stays in memory.
+      this._persistValues(final);
 
-      // Strip sensitive params from the URL after loading (api_key only) —
-      // leave the rest so the URL still reflects the configuration.
-      if (Object.keys(fromUrl).length) this._cleanUrl();
+      // Remove legacy credential parameters without consuming them.
+      this._cleanUrl();
 
       return final;
     }
@@ -169,7 +168,20 @@
     }
 
     _persist() {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.values)); }
+      this._persistValues(this.values);
+    }
+
+    _persistValues(values) {
+      const persistable = {
+        provider: values.provider,
+        baseUrl: values.baseUrl,
+        model: values.model,
+        language: values.language,
+        systemPrompt: values.systemPrompt,
+        autoRead: values.autoRead,
+        mode: values.mode,
+      };
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable)); }
       catch (err) { console.warn("Settings: localStorage write failed", err); }
     }
   }
@@ -1857,11 +1869,27 @@
     }
   }
 
+  function boot() {
+    const app = new App();
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent || event.origin !== window.location.origin) return;
+      if (!event.data || event.data.type !== "sima-sentry:config") return;
+      const cfg = event.data.config || {};
+      const patch = {};
+      if (cfg.provider === "openai" || cfg.provider === "ollama") patch.provider = cfg.provider;
+      for (const key of ["baseUrl", "model", "apiKey"]) {
+        if (typeof cfg[key] === "string") patch[key] = cfg[key];
+      }
+      app.settings.update(patch);
+      app._populateSettingsForm();
+    });
+  }
+
   // ─── Boot ───────────────────────────────────────────────────────────────
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => new App());
+    document.addEventListener("DOMContentLoaded", boot);
   } else {
-    new App();
+    boot();
   }
 })();
 

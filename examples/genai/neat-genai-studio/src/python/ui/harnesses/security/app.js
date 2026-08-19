@@ -103,7 +103,6 @@ const STORAGE_KEYS = Object.fromEntries(
 const URL_PARAM_ALIASES = {
   provider: ['provider'],
   baseUrl: ['baseUrl', 'base_url'],
-  apiKey: ['apiKey', 'api_key'],
   model: ['model'],
   language: ['language', 'lang'],
   systemPrompt: ['systemPrompt', 'system_prompt'],
@@ -280,10 +279,15 @@ class SecurityConsole {
   loadSettings() {
     const fromStorage = {};
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      if (key === 'apiKey') {
+        this.safeStorageRemove(STORAGE_KEYS[key]);
+        continue;
+      }
       const stored = this.safeStorageGet(STORAGE_KEYS[key]);
       if (stored !== null) fromStorage[key] = this.coerce(key, stored);
     }
     const fromUrl = this.parseUrlParams();
+    this.removeLegacyApiKeyParams();
     this.settings = { ...DEFAULT_SETTINGS, ...fromStorage, ...fromUrl };
 
     // ?mode=security applies a bundle of SOC-appropriate defaults: high-contrast
@@ -350,10 +354,38 @@ class SecurityConsole {
     try { window.localStorage.removeItem(key); } catch { /* */ }
   }
 
+  removeLegacyApiKeyParams() {
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has('apiKey') && !url.searchParams.has('api_key')) return;
+      url.searchParams.delete('apiKey');
+      url.searchParams.delete('api_key');
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    } catch { /* best effort */ }
+  }
+
   saveSettings() {
     for (const [key, value] of Object.entries(this.settings)) {
+      if (key === 'apiKey') {
+        this.safeStorageRemove(STORAGE_KEYS[key]);
+        continue;
+      }
       this.safeStorageSet(STORAGE_KEYS[key], String(value));
     }
+  }
+
+  applyMissionConfig(config) {
+    const patch = {};
+    if (config.provider === 'openai' || config.provider === 'ollama') {
+      patch.provider = config.provider;
+    }
+    for (const key of ['baseUrl', 'model', 'apiKey']) {
+      if (typeof config[key] === 'string') patch[key] = config[key];
+    }
+    this.settings = { ...this.settings, ...patch };
+    this.saveSettings();
+    this.applySettingsToForm();
+    this.applyProviderUI();
   }
 
   applySettingsToForm() {
@@ -2315,6 +2347,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const app = new SecurityConsole(document);
   app.init();
   window.__security = app;
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent || event.origin !== window.location.origin) return;
+    if (!event.data || event.data.type !== 'sima-sentry:config') return;
+    app.applyMissionConfig(event.data.config || {});
+  });
 });
 
 // ─── Mission Control "Home" button ────────────────────────────────────────

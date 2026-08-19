@@ -251,22 +251,12 @@ def _inline_dollar_repl(m: "re.Match") -> str:
 
 # Pre-compiled patterns used on every call.
 _FENCE = re.compile(r"```+[ \t]*[A-Za-z0-9_+\-]*")
-# Footnote definitions ("[^1]: body") and reference-link definitions ("[id]: url")
-# are auxiliary — drop the whole line. A URL value is required for the ref form so
-# ordinary prose that merely opens with "[Label]: ..." is NOT deleted.
-# Footnote refs/defs use a short identifier label ("[^1]", "[^note]"), so a regex
-# negated class in prose ("[^0-9]", "[^aeiou]:") is not mistaken for one. The inner
-# bounds also cap the scan so an unclosed "[" in a partial chunk cannot backtrack.
-_FOOTNOTE_DEF = re.compile(r"(?m)^[ \t]*\[\^\w{1,12}\]:[ \t]*.*$")
-_REF_DEF = re.compile(
-    r"(?m)^[ \t]*\[[^\]\n]{1,120}\]:[ \t]*<?(?:https?://|ftp://|mailto:|www\.)\S.*$")
 _IMAGE = re.compile(r"!\[([^\]]{0,300})\]\([^)]{0,600}\)")
 _FOOTNOTE_REF = re.compile(r"\[\^\w{1,12}\]")
 _INLINE_LINK = re.compile(r"\[([^\]]{0,300})\]\([^)]{0,600}\)")
 _REF_LINK = re.compile(r"\[([^\]]{0,300})\]\[[^\]]{0,120}\]")
 _AUTO_LINK = re.compile(r"<((?:https?|mailto):[^>]{0,600})>")
 _BARE_URL = re.compile(r"\b(?:https?|ftp)://\S+")
-_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # Only strip *real* HTML tags (known element names) so prose inequalities
 # ("x<y and a>b") and generic type parameters ("List<int>") are not swallowed.
 _HTML_TAG = re.compile(
@@ -286,10 +276,6 @@ _MATH_DISPLAY_BRACKET = re.compile(r"\\\[(.{1,2000}?)\\\]", re.DOTALL)
 _MATH_INLINE_PAREN = re.compile(r"\\\((.{1,2000}?)\\\)", re.DOTALL)
 _MATH_INLINE_DOLLAR = re.compile(r"\$([^$\n]{1,800}?)\$")
 _HR = re.compile(r"(?m)^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
-# Table separator row: a whole line of only dashes/colons/pipes/spaces (with at
-# least one dash). One character class + one quantifier → no catastrophic
-# backtracking on a long dash run (the previous three-quantifier form was O(N^3)).
-_TABLE_SEP = re.compile(r"(?m)^[ \t]*(?=[-:| \t]*-)[-:| \t]{2,}$")
 # ATX heading: the '#'s must be followed by a space or end of line, so "#42" (a
 # reference, not a heading) is left for _HASH_NUM.
 _HEADING = re.compile(r"(?m)^[ \t]{0,3}#{1,6}(?:[ \t]+|$)")
@@ -305,8 +291,6 @@ _ARTIFACTS = re.compile(r"[$#`~|{}\\^*＊]")                   # final safety sw
 # Only repair a space-split contraction ("don ' t" → "don't"); do not weld a
 # spaced quotation mark ("said ' hello '") onto its neighbours.
 _APOS = re.compile(r"(\w)\s+['’‘]\s*(t|s|d|m|re|ll|ve)\b")
-_SPACE_BEFORE_PUNCT = re.compile(r"\s+([\.,;:!?。！？])(?=\s|$)")
-_MULTISPACE = re.compile(r"\s+")
 
 _HTML_ENTITIES = {
     "&amp;": " and ", "&lt;": " less than ", "&gt;": " greater than ",
@@ -321,6 +305,74 @@ _HTML_ENTITIES = {
 }
 
 
+def _strip_auxiliary_definition_lines(text: str) -> str:
+    """Drop Markdown footnote/reference definitions with a linear line scan."""
+    def is_definition(line: str) -> bool:
+        value = line.lstrip(" \t")
+        if not value.startswith("["):
+            return False
+        close = value.find("]:", 1)
+        if close < 0:
+            return False
+        label = value[1:close]
+        remainder = value[close + 2:].lstrip(" \t")
+        if label.startswith("^"):
+            ident = label[1:]
+            return 1 <= len(ident) <= 12 and all(c == "_" or c.isalnum() for c in ident)
+        if not 1 <= len(label) <= 120:
+            return False
+        if remainder.startswith("<"):
+            remainder = remainder[1:]
+        return remainder.startswith(("http://", "https://", "ftp://", "mailto:", "www."))
+
+    return "\n".join(" " if is_definition(line) else line for line in text.split("\n"))
+
+
+def _strip_html_comments(text: str) -> str:
+    """Remove complete HTML comments without regular-expression backtracking."""
+    pieces = []
+    cursor = 0
+    while True:
+        start = text.find("<!--", cursor)
+        if start < 0:
+            pieces.append(text[cursor:])
+            break
+        end = text.find("-->", start + 4)
+        if end < 0:
+            pieces.append(text[cursor:])
+            break
+        pieces.append(text[cursor:start])
+        pieces.append(" ")
+        cursor = end + 3
+    return "".join(pieces)
+
+
+def _strip_table_separator_lines(text: str) -> str:
+    """Drop Markdown table separators using a bounded linear line scan."""
+    def is_separator(line: str) -> bool:
+        value = line.strip(" \t")
+        return len(value) >= 2 and "-" in value and all(c in "-:| \t" for c in value)
+
+    return "\n".join(" " if is_separator(line) else line for line in text.split("\n"))
+
+
+def _normalize_spaces(text: str) -> str:
+    """Collapse whitespace and remove spaces before terminal punctuation."""
+    value = " ".join(text.split())
+    punctuation = ".,;:!?。！？"
+    out = []
+    for index, char in enumerate(value):
+        if (
+            char == " "
+            and index + 1 < len(value)
+            and value[index + 1] in punctuation
+            and (index + 2 == len(value) or value[index + 2] == " ")
+        ):
+            continue
+        out.append(char)
+    return "".join(out)
+
+
 def sanitize_for_tts(text: str) -> str:
     """Strip Markdown and LaTeX from ``text`` and return clean, speakable prose."""
     if not text:
@@ -331,8 +383,7 @@ def sanitize_for_tts(text: str) -> str:
     text = text.replace("`", "")
 
     # 2. Footnote / reference-link definition lines — drop them whole (auxiliary).
-    text = _FOOTNOTE_DEF.sub(" ", text)
-    text = _REF_DEF.sub(" ", text)
+    text = _strip_auxiliary_definition_lines(text)
 
     # 3. Images, links, footnote refs, autolinks, bare URLs — keep visible text.
     #    Bracket forms only run when a "]" exists (a partial chunk of unclosed "["
@@ -346,7 +397,7 @@ def sanitize_for_tts(text: str) -> str:
     text = _BARE_URL.sub(" ", text)
 
     # 4. HTML comments, real tags, and named/numeric entities.
-    text = _HTML_COMMENT.sub(" ", text)
+    text = _strip_html_comments(text)
     text = _HTML_TAG.sub(" ", text)
     for ent, rep in _HTML_ENTITIES.items():
         text = text.replace(ent, rep)
@@ -370,7 +421,7 @@ def sanitize_for_tts(text: str) -> str:
 
     # 6. Block-level Markdown (still multi-line at this point).
     text = _HR.sub(" ", text)
-    text = _TABLE_SEP.sub(" ", text)
+    text = _strip_table_separator_lines(text)
     text = _HEADING.sub("", text)
     text = _BLOCKQUOTE.sub("", text)
     text = _LIST_MARKER.sub("", text)
@@ -397,8 +448,7 @@ def sanitize_for_tts(text: str) -> str:
     #     usually an em-dash / clause break, so fusing "home - it" into "home-it"
     #     garbled more prose than the rare "state - of - the - art" it helped.)
     text = text.replace("\n", " ")
-    text = _MULTISPACE.sub(" ", text).strip()
+    text = _normalize_spaces(text)
     text = _APOS.sub(r"\1'\2", text)                 # don ' t → don't
-    text = _SPACE_BEFORE_PUNCT.sub(r"\1", text)      # "word ." → "word." (keeps ".NET")
-    text = _MULTISPACE.sub(" ", text).strip()
+    text = _normalize_spaces(text)                     # "word ." → "word." (keeps ".NET")
     return text

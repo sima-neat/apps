@@ -1224,7 +1224,8 @@ class AppContext:
                     resp.content, status=resp.status_code, mimetype='application/json'
                 )
             except requests.RequestException as exc:
-                return jsonify({'error': f'control API unreachable: {exc}'}), 502
+                logging.warning("Control API request failed: %s", exc)
+                return jsonify({'error': 'control API unreachable'}), 502
 
         @self.app.route('/favicon.ico')
         def favicon():
@@ -1248,7 +1249,8 @@ class AppContext:
                 )
                 return Response(resp.content, status=resp.status_code, mimetype='application/json')
             except requests.RequestException as exc:
-                return jsonify({'error': f'control API unreachable: {exc}'}), 502
+                logging.warning("Control API logs request failed: %s", exc)
+                return jsonify({'error': 'control API unreachable'}), 502
 
         @self.app.route('/models/logs/stream', methods=['GET'])
         def models_logs_stream():
@@ -1381,25 +1383,26 @@ class AppContext:
                 )
                 return Response(resp.content, status=resp.status_code, mimetype='application/json')
             except requests.RequestException as exc:
-                return jsonify({'error': f'control API unreachable: {exc}'}), 502
+                logging.warning("Control API model-card request failed: %s", exc)
+                return jsonify({'error': 'control API unreachable'}), 502
 
         @self.app.route('/models/hub/search', methods=['GET'])
         def models_hub_search():
             query = request.args.get('q', '')
             try:
                 return jsonify(hub_helpers.hub_search(self.catalog_dir, self.hub_config, query))
-            except Exception as exc:
+            except Exception:
                 logging.exception("Hub search failed")
-                return jsonify({'enabled': False, 'results': [], 'error': str(exc)}), 500
+                return jsonify({'enabled': False, 'results': [], 'error': 'Hub search failed'}), 500
 
         @self.app.route('/models/hub/card', methods=['GET'])
         def models_hub_card():
             repo_id = request.args.get('repoId', '')
             try:
                 return jsonify(hub_helpers.hub_card(self.hub_config, repo_id))
-            except Exception as exc:
+            except Exception:
                 logging.exception("Hub card failed")
-                return jsonify({'enabled': False, 'error': str(exc)}), 500
+                return jsonify({'enabled': False, 'error': 'Could not load model metadata'}), 500
 
         @self.app.route('/models/hub/download', methods=['POST'])
         def models_hub_download():
@@ -1437,7 +1440,7 @@ class AppContext:
                 upstream = requests.post(url, json=payload, stream=True, timeout=(10, 600))
             except requests.RequestException as exc:
                 logging.error(f"Chat proxy: model server unreachable: {exc}")
-                return jsonify({'error': f'model server unreachable: {exc}'}), 502
+                return jsonify({'error': 'model server unreachable'}), 502
 
             def relay():
                 try:
@@ -1527,8 +1530,8 @@ class AppContext:
             cfg = genai_app.get_config()
             try:
                 selected_model = self.resolve_chat_model(request.form.get('chatModel'))
-            except ValueError as exc:
-                return jsonify({'error': str(exc)}), 400
+            except ValueError:
+                return jsonify({'error': 'Invalid chat model'}), 400
 
             self.talk_ctrl.reset()
             initial_tts_language = (
@@ -1565,11 +1568,11 @@ class AppContext:
                 try:
                     node = normalize_camera_device(board_camera_device) if board_camera_device else None
                     jpeg, tool = capture_camera_frame(node)
-                except ValueError as exc:
-                    return jsonify({'error': str(exc)}), 400
+                except ValueError:
+                    return jsonify({'error': 'Invalid board camera device'}), 400
                 except RuntimeError as exc:
                     logging.error(f"Board camera capture failed: {exc}")
-                    return jsonify({'error': f'board camera: {exc}'}), 503
+                    return jsonify({'error': 'Board camera capture failed'}), 503
                 image_base64 = base64.b64encode(jpeg).decode('utf-8')
                 logging.info(f"Attached board-camera frame (via {tool})")
 
@@ -1622,7 +1625,7 @@ class AppContext:
                                 if asr['reason'] == 'no_speech'
                                 else 'No transcription was produced. Please try again.'
                             )
-                            return {
+                            return jsonify({
                                 'ignored': True,
                                 'message': message,
                                 'question': '',
@@ -1630,7 +1633,7 @@ class AppContext:
                                 'asr': asr,
                                 'rag_used': False,
                                 'rag_hits': 0,
-                            }
+                            })
 
                         self.socketio.emit('transcription', asr)
                     else:
@@ -1691,13 +1694,13 @@ class AppContext:
             )
             thread.start()
 
-            return {
+            return jsonify({
                 'question': query_str,
                 'ttt': elapsed_time,
                 'asr': asr,
                 'rag_used': rag_used,
                 'rag_hits': rag_hits,
-            }
+            })
 
         @self.app.route('/raghealth', methods=['GET'])
         def check_rag_server():
@@ -1758,7 +1761,7 @@ class AppContext:
                 result["collection"] = data.get("collection")
             except Exception as e:  # noqa: BLE001
                 logging.error(f"RAG inspect error: {e}")
-                result["error"] = f"Could not read the RAG database: {e}"
+                result["error"] = "Could not read the RAG database"
             return jsonify(result), 200
 
         @self.app.route('/v1/audio/speech', methods=['POST'])
@@ -1829,13 +1832,13 @@ class AppContext:
             device = (request.args.get('device') or '').strip()
             try:
                 node = normalize_camera_device(device) if device else None
-            except ValueError as exc:
-                return jsonify({'error': str(exc)}), 400
+            except ValueError:
+                return jsonify({'error': 'Invalid board camera device'}), 400
             try:
                 jpeg, tool = capture_camera_frame(node)
             except RuntimeError as exc:
                 logging.error(f"Board camera capture failed: {exc}")
-                return jsonify({'error': str(exc)}), 503
+                return jsonify({'error': 'Board camera capture failed'}), 503
             return Response(jpeg, mimetype='image/jpeg',
                             headers={'Cache-Control': 'no-store', 'X-Capture-Tool': tool})
 
@@ -1852,8 +1855,8 @@ class AppContext:
                 cfg = genai_app.get_config()
                 try:
                     selected_model = self.resolve_chat_model(request.form.get('chatModel'))
-                except ValueError as exc:
-                    return jsonify({'error': str(exc)}), 400
+                except ValueError:
+                    return jsonify({'error': 'Invalid chat model'}), 400
 
                 had_active_generation = self.interrupt_active_generation(preserve_partial=True)
                 if had_active_generation:
@@ -1926,7 +1929,8 @@ class AppContext:
                     yield "✅ Markdown RAG database is ready.\n"
 
                 except Exception as e:
-                    yield f"❌ {str(e)}\n"
+                    logging.exception("RAG document upload failed: %s", e)
+                    yield "❌ RAG document upload failed.\n"
                 finally:
                     os.unlink(tmp_path)
 
@@ -1964,7 +1968,8 @@ class AppContext:
 
                     yield "✅ Import completed and service restarted.\n"
                 except Exception as e:
-                    yield f"❌ Failed: {str(e)}\n"
+                    logging.exception("RAG database import failed: %s", e)
+                    yield "❌ RAG database import failed.\n"
                 finally:
                     if 'tmp_path' in locals() and os.path.exists(tmp_path):
                         os.unlink(tmp_path)
@@ -1998,7 +2003,8 @@ class AppContext:
                     vectodb_proc = start_service()
                     yield "✅ RAG database reset to default.\n"
                 except Exception as e:  # noqa: BLE001
-                    yield f"❌ {str(e)}\n"
+                    logging.exception("RAG database reset failed: %s", e)
+                    yield "❌ RAG database reset failed.\n"
 
             return Response(stream_with_context(_stream()), mimetype="text/plain")
 
@@ -2027,7 +2033,8 @@ class AppContext:
                     yield (f"✅ RAG database cleared ({removed} file(s) removed). "
                            "Upload a document or reset to default to use RAG again.\n")
                 except Exception as e:  # noqa: BLE001
-                    yield f"❌ {str(e)}\n"
+                    logging.exception("RAG database cleanup failed: %s", e)
+                    yield "❌ RAG database cleanup failed.\n"
 
             return Response(stream_with_context(_stream()), mimetype="text/plain")
 
