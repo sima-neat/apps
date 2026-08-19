@@ -119,17 +119,21 @@
     border-radius:6px; padding:1px 6px; font:12px var(--font-mono); }
 
 /* Language toggle (chooser-only; the three panels follow this choice). */
-.langbar { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; flex-wrap: wrap; }
-.langlabel { font-size: 13px; opacity: .7; margin-right: 2px; }
-button.lang {
-  font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px;
-  border: 1px solid rgba(255,255,255,.18); background: transparent; color: inherit;
-  cursor: pointer;
+.langbar { display: flex; justify-content: center; margin: 0 0 22px; }
+/* Segmented control: two halves of one pill, so the pair reads as a single
+   switch rather than two loose buttons. */
+.langtoggle {
+  display: inline-flex; border: 1px solid rgba(255,255,255,.18);
+  border-radius: 999px; overflow: hidden;
 }
-button.lang:hover:not(:disabled) { border-color: rgba(255,255,255,.4); }
-button.lang.sel { background: #4f8cff; border-color: #4f8cff; color: #fff; font-weight: 600; }
+button.lang {
+  font: inherit; font-size: 13px; padding: 7px 22px; border: 0;
+  background: transparent; color: inherit; cursor: pointer; line-height: 1.4;
+}
+button.lang + button.lang { border-left: 1px solid rgba(255,255,255,.18); }
+button.lang:hover:not(:disabled):not(.sel) { background: rgba(255,255,255,.06); }
+button.lang.sel { background: #4f8cff; color: #fff; font-weight: 600; }
 button.lang:disabled { opacity: .4; cursor: not-allowed; }
-.langnote { font-size: 12px; opacity: .6; }
 </style>
 </head>
 <body>
@@ -142,10 +146,10 @@ button.lang:disabled { opacity: .4; cursor: not-allowed; }
      detector runs. Each pipeline still fixes its own topology (scale/group are
      fused, live is adaptive); this only picks Python or C++. -->
 <div class="langbar">
-  <span class="langlabel">Implementation</span>
-  <button id="lang-python" class="lang" onclick="setLang('python')">Python</button>
-  <button id="lang-cpp" class="lang" onclick="setLang('cpp')">C++</button>
-  <span id="lang-note" class="langnote"></span>
+  <div class="langtoggle">
+    <button id="lang-python" class="lang" onclick="setLang('python')">Python</button>
+    <button id="lang-cpp" class="lang" onclick="setLang('cpp')">C++</button>
+  </div>
 </div>
 
 <main>
@@ -321,10 +325,10 @@ function render(st) {
   $("#lang-python").classList.toggle("sel", lang === "python");
   $("#lang-cpp").classList.toggle("sel", lang === "cpp");
   $("#lang-cpp").disabled = busy || !st.cpp_available;
-  $("#lang-python").disabled = busy;
-  $("#lang-note").textContent = st.cpp_available
+  $("#lang-cpp").title = st.cpp_available
     ? "switching stops any running detector"
     : "C++ binary not built - run ./build.sh --clean";
+  $("#lang-python").disabled = busy;
 }
 
 // Tolerate a dropped poll. The status endpoint is polled every 4s, so a single
