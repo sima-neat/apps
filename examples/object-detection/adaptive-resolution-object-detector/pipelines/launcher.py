@@ -38,7 +38,7 @@ PORT = 8080
 PIPELINES = {
     "scale": {"dir": "pipeline-scale", "port": 8090, "pattern": r"[s]cale-run\.yaml"},
     "live":  {"dir": "pipeline-live",  "port": 8091, "pattern": r"[l]ive-run\.yaml"},
-    "group": {"dir": "pipeline-group", "port": 8092, "pattern": r"[g]roup[0-9]-run\.yaml"},
+    "group": {"dir": "pipeline-group", "port": 8092, "pattern": r"[g]roup[0-9]*-run\.yaml"},
 }
 
 

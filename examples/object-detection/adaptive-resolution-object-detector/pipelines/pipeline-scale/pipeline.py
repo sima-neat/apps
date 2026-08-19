@@ -178,14 +178,14 @@ def app_command() -> str:
 # the path appears in argv for both, and is unique per pipeline. The bracket
 # stops the pattern matching the pgrep command that carries it.
 APP_PATTERN = ("[" + PIPELINE[0] + "]" + PIPELINE[1:]
-               + ("[0-9]" if PIPELINE == "group" else "") + "-run.yaml")
+               + ("[0-9]*" if PIPELINE == "group" else "") + "-run.yaml")
 
 # Patterns for ALL pipelines - used to stop the others before starting this one,
 # since they share one MLA and one set of Insight ports.
 ALL_PIPELINE_PATTERNS = (
     "[s]cale-run.yaml",
     "[l]ive-run.yaml",
-    "[g]roup[0-9]-run.yaml",
+    "[g]roup[0-9]*-run.yaml",
 )
 
 # Per-pipeline files, so the two deployments never clobber each other's state.
