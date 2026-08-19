@@ -119,8 +119,8 @@ simaai::neat::Graph make_decoder(const pcie_high_density::AppConfig& config, int
 
 class PcieMultiStreamResultSink final : public simaai::neat::Node {
 public:
-  explicit PcieMultiStreamResultSink(pcie_high_density::AppConfig config)
-      : config_(std::move(config)) {}
+  PcieMultiStreamResultSink(const int stream_count, const int queue)
+      : stream_count_(stream_count), queue_(queue) {}
 
   std::string kind() const override {
     return "PcieMultiStreamResultSink";
@@ -145,11 +145,11 @@ public:
 
     std::ostringstream fragment;
     fragment << "neatappstreamdemux name=" << demux_name;
-    for (int stream = 0; stream < config_.stream_count; ++stream) {
+    for (int stream = 0; stream < stream_count_; ++stream) {
       fragment << ' ' << demux_name << ".src_" << stream << " ! queue name=" << prefix << "_queue_"
                << stream << " max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! ";
       if (stream == 0) {
-        fragment << "neatpciesink name=" << sink_name << " queue=" << config_.queue;
+        fragment << "neatpciesink name=" << sink_name << " queue=" << queue_;
       } else {
         fragment << sink_name << ".sink_" << stream;
       }
@@ -160,15 +160,16 @@ public:
   std::vector<std::string> element_names(int node_index) const override {
     const std::string prefix = "n" + std::to_string(node_index) + "_pcie_result";
     std::vector<std::string> names{prefix + "_demux", prefix + "_sink"};
-    names.reserve(static_cast<std::size_t>(2 + config_.stream_count));
-    for (int stream = 0; stream < config_.stream_count; ++stream) {
+    names.reserve(static_cast<std::size_t>(2 + stream_count_));
+    for (int stream = 0; stream < stream_count_; ++stream) {
       names.push_back(prefix + "_queue_" + std::to_string(stream));
     }
     return names;
   }
 
 private:
-  pcie_high_density::AppConfig config_;
+  int stream_count_ = 0;
+  int queue_ = 0;
 };
 
 simaai::neat::BoxDecodeType decode_type(const std::string& value) {
@@ -202,7 +203,7 @@ simaai::neat::Graph make_graph(const pcie_high_density::AppConfig& config,
   const auto source = make_pcie_source(config);
   simaai::neat::Graph detector = model->graph();
   simaai::neat::Graph results;
-  results.add(std::make_shared<PcieMultiStreamResultSink>(config));
+  results.add(std::make_shared<PcieMultiStreamResultSink>(config.stream_count, config.queue));
 
   simaai::neat::GraphOptions graph_options;
   graph_options.advanced_execution.internal_queue_depth = config.inference_internal_queue_depth;

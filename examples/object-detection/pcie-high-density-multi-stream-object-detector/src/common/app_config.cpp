@@ -16,7 +16,6 @@
 
 #include "support/runtime/config_utils.h"
 
-#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -122,9 +121,7 @@ std::filesystem::path resolve_path(const std::filesystem::path& config_path,
 
 void validate(const AppConfig& config) {
   require(config.stream_count == 16 || config.stream_count == 24 || config.stream_count == 48,
-          "profile.stream_count must be 16, 24, or 48");
-  require(config.rtsp_urls.size() == static_cast<std::size_t>(config.stream_count),
-          "streams must contain exactly profile.stream_count RTSP URLs");
+          "streams must contain exactly 16, 24, or 48 RTSP URLs");
   require(config.decode_type == "yolo26" || config.decode_type == "yolov8",
           "model.decode_type must be yolo26 or yolov8");
   require(config.queue >= 0 && config.queue <= 5, "card.queue must be in [0, 5]");
@@ -180,17 +177,14 @@ AppConfig load_config(const std::filesystem::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
 
   AppConfig config;
-  config.config_path = std::filesystem::absolute(path).lexically_normal();
   config.profile_name = raw.string_or("profile.name", "pcie-high-density");
-  config.stream_count = raw.int_or("profile.stream_count", 0);
   config.model_path = resolve_path(path, raw.string_or("model.path", ""));
   config.labels_path = resolve_path(path, raw.string_or("model.labels", "coco_label.txt"));
   config.decode_type = raw.string_or("model.decode_type", "yolo26");
-  config.card_host = raw.string_or("card.host", "10.0.0.2");
-  config.card_user = raw.string_or("card.user", "sima");
   config.card_id = raw.int_or("card.card_id", 0);
   config.queue = raw.int_or("card.queue", 0);
   config.rtsp_urls = parse_streams(path);
+  config.stream_count = static_cast<int>(config.rtsp_urls.size());
   require(raw.string_or("input.codec", "h264") == "h264",
           "the first PCIe implementation supports input.codec=h264 only");
   config.rtsp_tcp = raw.bool_or("input.tcp", true);

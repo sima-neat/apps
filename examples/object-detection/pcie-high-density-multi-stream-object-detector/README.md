@@ -112,9 +112,12 @@ The checked-in profile placeholders are:
 | `src/common/config-24x720p20fps.yaml` | 24 | 1280x720 at 20 FPS |
 | `src/common/config-48x720p10fps.yaml` | 48 | 1280x720 at 10 FPS |
 
-Populate exactly `profile.stream_count` entries under `streams`, set `model.path`, and set
-`output.insight.host`. Both processes consume the same configuration and reject mismatched stream
-counts before starting.
+Populate `streams` with the number of URLs shown for the selected profile, set `model.path`, and
+set `output.insight.host`. Both processes consume the same configuration and derive the stream
+count from the URL list.
+
+For multiple cards, use one configuration and host/card process pair per card. Set `card.card_id`
+for each physical card and assign non-overlapping Insight video and metadata port ranges.
 
 ## Run
 

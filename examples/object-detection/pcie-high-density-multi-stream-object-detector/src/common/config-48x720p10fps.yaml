@@ -1,7 +1,6 @@
 # PCIe profile: 48 x 720p at 10 FPS.
 profile:
   name: 48x720p10fps
-  stream_count: 48
 
 model:
   path: <model-path>
@@ -9,12 +8,10 @@ model:
   decode_type: yolo26
 
 card:
-  host: 10.0.0.2
-  user: sima
   card_id: 0
   queue: 0
 
-# Populate exactly profile.stream_count URLs.
+# Populate exactly 48 URLs.
 streams: []
 
 input:

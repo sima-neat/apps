@@ -21,7 +21,6 @@
 namespace pcie_high_density {
 
 struct AppConfig {
-  std::filesystem::path config_path;
   std::string profile_name;
   int stream_count = 0;
 
@@ -29,8 +28,6 @@ struct AppConfig {
   std::filesystem::path labels_path;
   std::string decode_type = "yolo26";
 
-  std::string card_host = "10.0.0.2";
-  std::string card_user = "sima";
   int card_id = 0;
   int queue = 0;
 
