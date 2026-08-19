@@ -217,8 +217,8 @@ def test_runtime_archive_validator_rejects_misplaced_cpp_executable(
 
 def test_runtime_archive_validator_accepts_example_root_scripts(tmp_path):
     scripts = (
-        "examples/genai/multimodal-assistant/run.sh",
-        "examples/genai/multimodal-assistant/setup.sh",
+        "examples/genai/neat-genai-studio/run.sh",
+        "examples/genai/neat-genai-studio/setup.sh",
     )
     archive = _write_runtime_archive(
         tmp_path,

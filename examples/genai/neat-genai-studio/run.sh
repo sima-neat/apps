@@ -536,19 +536,8 @@ reset_mla_dispatcher() {
     return 0
   fi
 
-  # 2) The SDK's official runtime-recovery script, if present on the board.
-  local fixer
-  for fixer in \
-    "$(command -v fix_devkit_runtime.sh 2>/dev/null || true)" \
-    /usr/bin/fix_devkit_runtime.sh /usr/local/bin/fix_devkit_runtime.sh; do
-    if [[ -n "${fixer}" && -x "${fixer}" ]]; then
-      info "Resetting MLA runtime via ${C_DIM}${fixer}${C_RESET}…"
-      mla_sudo "${fixer}" || warn "MLA runtime reset failed (continuing)"
-      return 0
-    fi
-  done
-
-  # 3) Minimal fallback: restart the dispatcher service + re-init MLA memory.
+  # 2) Restart only the MLA dispatcher and reinitialize its memory. Do not use
+  # a board-wide runtime recovery flow from this application.
   if command -v systemctl >/dev/null 2>&1; then
     info "Restarting MLA dispatcher (${MLA_DISPATCHER_SERVICE})…"
     mla_sudo systemctl restart "${MLA_DISPATCHER_SERVICE}" 2>/dev/null \
@@ -778,7 +767,8 @@ printf '\n'
 # Supervisor: keep both processes alive. If the model server exits with the
 # MLA-reset sentinel (a switch or the UI's Reset button hit a wedged
 # accelerator), reset the MLA dispatcher and relaunch just the server — the UI
-# keeps running and its socket reconnects automatically.
+# keeps running and its socket reconnects automatically. Other failures are
+# deterministic application/configuration errors and stop without an MLA reset.
 #
 # A relaunched server can die at startup if the freshly-reset dispatcher isn't
 # ready yet, so retry a BOUNDED number of times (resetting the dispatcher again)
@@ -799,16 +789,16 @@ while true; do
     if [[ "${status}" -eq 0 ]]; then
       break   # clean model-server shutdown — do not relaunch
     fi
+    if [[ "${status}" -ne "${MLA_RESET_EXIT_CODE}" ]]; then
+      errln "Model server exited with status ${status}; shutting down without resetting the MLA."
+      break
+    fi
     if [[ "${restart_attempts}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
       errln "Model server did not stay up after ${restart_attempts} restart attempts (last status ${status}); shutting down."
       break
     fi
     restart_attempts=$((restart_attempts + 1))
-    if [[ "${status}" -eq "${MLA_RESET_EXIT_CODE}" ]]; then
-      info "Model server requested an MLA reset — resetting dispatcher and relaunching (attempt ${restart_attempts}/${MLA_MAX_RESTART_RETRIES})…"
-    else
-      warn "Model server exited (status ${status}) — resetting dispatcher and relaunching (attempt ${restart_attempts}/${MLA_MAX_RESTART_RETRIES})…"
-    fi
+    info "Model server requested an MLA reset — resetting dispatcher and relaunching (attempt ${restart_attempts}/${MLA_MAX_RESTART_RETRIES})…"
     reset_mla_dispatcher
     launch_server
     sleep "${MODEL_SERVER_START_DELAY:-2}"

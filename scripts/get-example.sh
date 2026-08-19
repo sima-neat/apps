@@ -5,9 +5,9 @@ set -euo pipefail
 # directory. This intentionally avoids requiring git on target systems.
 #
 # Usage:
-#   get-example.sh multimodal-assistant
-#   get-example.sh genai/multimodal-assistant
-#   get-example.sh examples/genai/multimodal-assistant
+#   get-example.sh neat-genai-studio
+#   get-example.sh genai/neat-genai-studio
+#   get-example.sh examples/genai/neat-genai-studio
 
 REPO_URL="${NEAT_APPS_REPO_URL:-https://github.com/sima-neat/apps.git}"
 ARCHIVE_URL="${NEAT_APPS_ARCHIVE_URL:-}"
@@ -21,9 +21,9 @@ Usage:
   get-example.sh [--branch <branch>] [--dest <dir>] [--force] <example>
 
 Examples:
-  get-example.sh multimodal-assistant
-  get-example.sh genai/multimodal-assistant
-  get-example.sh examples/genai/multimodal-assistant
+  get-example.sh neat-genai-studio
+  get-example.sh genai/neat-genai-studio
+  get-example.sh examples/genai/neat-genai-studio
 
 Environment:
   NEAT_APPS_REPO_URL          Apps Git repository URL
@@ -86,10 +86,9 @@ fi
 normalize_example_path() {
   local raw="$1"
   case "${raw}" in
-    multimodal-assistant|multimodal-assist)
-      printf '%s\n' "examples/genai/multimodal-assistant"
-      ;;
-    neat-genai-studio|genai-studio)
+    neat-genai-studio|genai-studio|\
+    multimodal-assistant|multimodal-assist|\
+    genai/multimodal-assistant|examples/genai/multimodal-assistant)
       printf '%s\n' "examples/genai/neat-genai-studio"
       ;;
     examples/*/*)
@@ -100,7 +99,7 @@ normalize_example_path() {
       ;;
     *)
       echo "Unknown example alias: ${raw}" >&2
-      echo "Use a path like genai/multimodal-assistant." >&2
+      echo "Use a path like genai/neat-genai-studio." >&2
       return 1
       ;;
   esac

@@ -27,6 +27,9 @@ ALLOW_HUB_DOWNLOAD="${ALLOW_HUB_DOWNLOAD:-true}"
 # simaai (official precompiled) + TDoSiMa (community).
 HUB_ORGS="${HUB_ORGS:-simaai TDoSiMa}"
 INSTALL_TTS_VOICES="${INSTALL_TTS_VOICES:-1}"
+DEFAULT_TTS_LANGUAGES="en,de,es,fr,it,ja,pt,vi,zh"
+TTS_LANGUAGES="${TTS_LANGUAGES:-}"
+TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
 
@@ -115,6 +118,11 @@ Environment:
                                 default: true
   INSTALL_TTS_VOICES            Download Piper TTS voices, 1 or 0
                                 default: 1
+  TTS_LANGUAGES                 Comma/space-separated language codes to install.
+                                If unset in a terminal, setup prompts; otherwise:
+                                en,de,es,fr,it,ja,pt,vi,zh
+  TTS_OPTIONAL_VOICES           Optional catalogued voice ids to also install,
+                                e.g. mera,en_US-ljspeech-medium
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
                                 default: 2.8.0+cpu
   SKIP_MODEL_DOWNLOAD           Write config without downloading models, 1 or 0
@@ -304,11 +312,23 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
 fi
 
 if [[ "${INSTALL_TTS_VOICES}" == "1" ]]; then
+  if [[ -z "${TTS_LANGUAGES}" ]]; then
+    if [[ -t 0 ]]; then
+      printf '\nAvailable server TTS languages: en de es fr it ja no pt vi zh\n'
+      printf 'Korean remains browser/text-only (no catalogued server voice).\n'
+      read -r -p "Languages to install [${DEFAULT_TTS_LANGUAGES}]: " TTS_LANGUAGES
+      TTS_LANGUAGES="${TTS_LANGUAGES:-${DEFAULT_TTS_LANGUAGES}}"
+    else
+      TTS_LANGUAGES="${DEFAULT_TTS_LANGUAGES}"
+    fi
+  fi
   section "Text-to-speech"
-  step "Installing piper-tts voices + the piper-plus model…"
+  step "Installing catalogued voices for: ${TTS_LANGUAGES}"
   (
     cd "${EXAMPLE_DIR}/src/python"
-    ENABLE_KOREAN_TTS="${ENABLE_KOREAN_TTS:-0}" bash voice_install.sh
+    TTS_LANGUAGES="${TTS_LANGUAGES}" \
+      TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES}" \
+      bash voice_install.sh
   )
   # piper-plus English G2P (g2p-en) pulls NLTK tagger data at runtime; fetch it
   # now so English TTS works offline on the board.

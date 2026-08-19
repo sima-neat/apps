@@ -11,6 +11,7 @@
 import base64
 import json
 import logging
+import math
 import os
 import requests
 import shutil
@@ -44,8 +45,23 @@ from shared.board_camera import (
 )
 from server import hub as hub_helpers
 from tts_text import sanitize_for_tts   # Markdown/LaTeX → speakable text (stdlib only)
+from asr_metadata import (
+    DEFAULT_LOGPROB_THRESHOLD,
+    DEFAULT_NO_SPEECH_THRESHOLD,
+    analyze_transcription,
+    normalize_language_code,
+)
+from voice_catalog import (
+    asset_paths as catalog_asset_paths,
+    catalog_voices,
+    install_voice as install_catalog_voice,
+    installed_voices,
+    load_catalog,
+    voice_by_id,
+)
 
 APP_DIR = Path(__file__).resolve().parent
+VOICE_CATALOG = load_catalog()
 
 _VERSION_CACHE = None
 
@@ -177,6 +193,17 @@ class AppConstants:
     DEFAULT_HTTP_PORT = 8081
     DEFAULT_UPLOADS_DIR = 'uploads'
 
+
+def _env_float(name, default):
+    try:
+        value = float(os.environ.get(name, default))
+        if not math.isfinite(value):
+            raise ValueError
+        return value
+    except (TypeError, ValueError):
+        logging.warning("Invalid %s; using %s", name, default)
+        return default
+
 class TalkController:
     def __init__(self, supported_langs=None):
         self._next = None
@@ -184,19 +211,17 @@ class TalkController:
         self.totalk = ''
         self.talk = []
         self.pipers = {}            # rhasspy piper-tts voices, keyed by language
-        self.pp = None              # active piper-plus engine (multilingual; adds Japanese)
+        self.pp = None              # active piper-plus multilingual engine
         self.pp_models = []         # installed piper-plus voices (selectable)
         self.pp_current = None      # key of the active piper-plus voice
         self.pp_lock = threading.Lock()   # guards runtime piper-plus voice switches
-        self.mms = None             # optional MMS engine (Korean; opt-in, CC-BY-NC)
-        self.prefer_piper_plus = False  # default engine: rhasspy piper-tts (ja still uses piper-plus)
+        self.prefer_piper_plus = False  # default engine: dedicated piper-tts voices
         self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
-        # Load piper-plus (and optional MMS) first so the rhasspy-voice loader
-        # knows which languages are already covered by another engine.
+        # Load Piper Plus first so the dedicated voice loader can report which
+        # allowlisted languages already have a fallback.
         self._init_piper_plus()
-        self._init_mms_optional()
         self._init_pipers_threaded(supported_langs or ['en'])
         
         self.lock = threading.Lock()
@@ -231,7 +256,7 @@ class TalkController:
         except (TypeError, ValueError):
             speed = 1.0
         self.utterance_speed = max(0.5, min(2.0, speed))
-        for eng in list(self.pipers.values()) + [self.pp, self.mms]:
+        for eng in list(self.pipers.values()) + [self.pp]:
             if eng is not None and hasattr(eng, 'set_utterance_speed'):
                 eng.set_utterance_speed(self.utterance_speed)
 
@@ -253,83 +278,55 @@ class TalkController:
 
         for lang in langs:
             found = False
-            voice_files = list(assets.glob(f"{lang}_*-*.onnx"))
-
-            # For English, prioritize voices with fallback order
-            if lang == 'en' and voice_files:
-                def voice_priority(voice_path):
-                    name = voice_path.name
-                    if name == "en_US-hfc_female-medium.onnx":
-                        return 0  # Highest priority
-                    elif name == "en_US-kristin-medium.onnx":
-                        return 1  # Second choice
-                    elif name == "en_US-hfc_male-medium.onnx":
-                        return 2  # Third choice
-                    elif name == "en_GB-northern_english_male-medium.onnx":
-                        return 3  # Fourth choice
-                    else:
-                        return 4  # Any other voices
-
-                voice_files.sort(key=voice_priority)
-
-            for model_path in voice_files:
-                config_path = assets / f"{model_path.name}.json"
-                if config_path.exists():
-                    lang_code = lang
-                    thread = threading.Thread(
-                        target=load_piper, args=(lang_code, model_path)
-                    )
-                    thread.start()
-                    threads.append(thread)
-                    found = True
-                    break
+            voices = installed_voices(
+                VOICE_CATALOG, assets_path=assets, engine="piper-tts", language=lang
+            )
+            voices.sort(key=lambda voice: not voice.get("default", False))
+            if voices:
+                model_path = next(
+                    path for path in catalog_asset_paths(voices[0], assets)
+                    if path.suffix == ".onnx"
+                )
+                thread = threading.Thread(target=load_piper, args=(lang, model_path))
+                thread.start()
+                threads.append(thread)
+                found = True
             if not found:
-                # No rhasspy voice for this language — expected when piper-plus
-                # covers it (ja/en/zh/es/fr/pt) or when it is served by the
-                # opt-in MMS engine (ko). Only warn when nothing can speak it.
-                if (self.pp is not None and self.pp.supports(lang)) or lang == 'ko':
-                    logging.info(f"No rhasspy voice for '{lang}' — served by piper-plus/MMS.")
+                if self.pp is not None and self.pp.supports(lang):
+                    logging.info("No dedicated voice installed for '%s' — using Piper Plus.", lang)
+                elif lang == 'ko':
+                    logging.info("No Korean server voice — browser/text only.")
                 else:
-                    logging.warning(f"No TTS voice available for language: {lang}")
+                    logging.warning("No server TTS voice installed for language: %s", lang)
 
         for t in threads:
             t.join()
 
-    # Selectable piper-plus voices. Every checkpoint is the same 6-language
-    # model (ja/en/zh/es/fr/pt); these differ only by voice. Discovered under
-    # assets/piper-plus/<key>/{model.onnx,config.json} (see voice_install.sh);
-    # order sets the default (first available).
-    PIPER_PLUS_VOICES = [
-        {"key": "css10", "label": "CSS10 (neutral)"},
-        {"key": "tsukuyomi", "label": "Tsukuyomi-chan"},
-        {"key": "mera", "label": "MERA multilingual"},
-    ]
-
     def _init_piper_plus(self):
-        """Discover installed piper-plus voices and load the default one. Each
-        voice is a full 6-language model; users switch between them at runtime.
-        Best-effort — no voices / unbuilt deps just leaves piper-plus off and the
-        router falls back to piper-tts."""
-        base = Path("assets") / "piper-plus"
-        self.pp_models = []          # [{key, label, onnx: Path, config: Path|None}]
-        for v in self.PIPER_PLUS_VOICES:
-            onnx = base / v["key"] / "model.onnx"
-            cfg = base / v["key"] / "config.json"
-            if onnx.exists():
-                self.pp_models.append({"key": v["key"], "label": v["label"],
-                                       "onnx": onnx, "config": cfg if cfg.exists() else None})
-        # Back-compat: a flat assets/piper-plus.onnx counts as one unnamed voice.
-        flat = Path("assets") / "piper-plus.onnx"
-        if not self.pp_models and flat.exists():
-            flat_cfg = Path("assets") / "piper-plus.config.json"
-            self.pp_models.append({"key": "default", "label": "piper-plus",
-                                   "onnx": flat, "config": flat_cfg if flat_cfg.exists() else None})
+        """Load only installed Piper Plus models from the reviewed catalog."""
+        assets = Path("assets")
+        voices = installed_voices(
+            VOICE_CATALOG, assets_path=assets, engine="piper-plus"
+        )
+        voices.sort(key=lambda voice: not voice.get("default", False))
+        self.pp_models = []
+        for voice in voices:
+            paths = catalog_asset_paths(voice, assets)
+            onnx = next(path for path in paths if path.suffix == ".onnx")
+            cfg = next((path for path in paths if path.name == "config.json"), None)
+            self.pp_models.append({
+                "key": voice["id"],
+                "label": voice["label"],
+                "onnx": onnx,
+                "config": cfg,
+                "license": voice["license"],
+            })
 
         self.pp = None
         self.pp_current = None
         if not self.pp_models:
             logging.info("No piper-plus voice found under assets/piper-plus/ — "
-                         "Japanese TTS disabled (run voice_install.sh).")
+                         "multilingual alternative unavailable (run voice_install.sh).")
             return
         self._load_piper_plus(self.pp_models[0]["key"])
 
@@ -352,23 +349,40 @@ class TalkController:
             return False
 
     def set_piper_plus_voice(self, key):
-        """Switch the active piper-plus voice at runtime (thread-safe)."""
+        """Install a catalogued model when needed and switch to it."""
         with self.pp_lock:
-            return self._load_piper_plus(key)
+            catalog_voice = voice_by_id(key, VOICE_CATALOG)
+            if catalog_voice is None or catalog_voice["engine"] != "piper-plus":
+                return False
+            try:
+                # The installer also verifies existing files against the pinned
+                # checksums, so a corrupt or manually replaced model is repaired.
+                install_catalog_voice(catalog_voice, assets_path=Path("assets"))
+                self._init_piper_plus()
+                return self._load_piper_plus(key)
+            except Exception:  # noqa: BLE001
+                logging.exception("Could not install/load Piper Plus voice '%s'", key)
+                return False
 
     def piper_plus_voices(self):
         """Available piper-plus voices + the current one, for the UI picker."""
+        installed = {model["key"] for model in getattr(self, "pp_models", [])}
         return {
-            "voices": [{"key": m["key"], "label": m["label"]}
-                       for m in getattr(self, "pp_models", [])],
+            "voices": [
+                {
+                    "key": voice["id"],
+                    "label": voice["label"],
+                    "installed": voice["id"] in installed,
+                }
+                for voice in catalog_voices(VOICE_CATALOG, engine="piper-plus")
+            ],
             "current": getattr(self, "pp_current", None),
         }
 
     def set_voice_engine(self, engine):
         """Choose the preferred TTS engine for languages both can speak.
         'piper-plus' -> prefer piper-plus; 'piper-tts' -> prefer rhasspy piper.
-        Languages only one engine supports are unaffected (ja is always
-        piper-plus; de/it/no/vi are always piper-tts)."""
+        Languages only one engine supports are unaffected."""
         engine = (engine or "").strip().lower()
         if engine in ("browser", "web", "webspeech", "web-speech"):
             self.browser_tts = True
@@ -393,7 +407,7 @@ class TalkController:
         pp_ok = self.pp is not None and (language is None or self.pp.supports(language))
         tts_ok = bool(self.pipers) and (language is None or language in self.pipers)
         if pp_ok:
-            engines.append({"key": "piper-plus", "label": "piper-plus (multilingual · Japanese)"})
+            engines.append({"key": "piper-plus", "label": "piper-plus (multilingual)"})
         if tts_ok:
             engines.append({"key": "piper-tts", "label": "piper-tts (rhasspy voices)"})
         # Browser TTS runs entirely in the client via the Web Speech API, so it is
@@ -415,60 +429,16 @@ class TalkController:
             current = keys[0]
         return {"engines": engines, "current": current}
 
-    def _init_mms_optional(self):
-        """Optionally load the MMS Korean engine, ONLY when explicitly enabled
-        (ENABLE_KOREAN_TTS=1) and the model is present. MMS is CC-BY-NC and pulls
-        in torch, so it is off by default."""
-        flag = os.environ.get("ENABLE_KOREAN_TTS", "0").strip().lower()
-        if flag not in ("1", "true", "yes", "on"):
-            return
-        model_dir = Path("assets") / "mms-tts-kor"
-        if not model_dir.is_dir():
-            logging.warning("ENABLE_KOREAN_TTS set but %s is missing — Korean TTS off.",
-                            model_dir)
-            return
-        try:
-            from mms_tts import MmsTTS
-            self.mms = MmsTTS(model_dir)
-            self.mms.set_utterance_speed(self.utterance_speed)
-            logging.info("MMS Korean TTS ready (CC-BY-NC 4.0, non-commercial).")
-        except Exception as e:  # noqa: BLE001
-            self.mms = None
-            logging.warning("Failed to load MMS Korean TTS: %s", e)
-
-    def _init_mms_optional(self):
-        """Optionally load the MMS Korean engine, ONLY when explicitly enabled
-        (ENABLE_KOREAN_TTS=1) and the model is present. MMS is CC-BY-NC and pulls
-        in torch, so it is off by default."""
-        flag = os.environ.get("ENABLE_KOREAN_TTS", "0").strip().lower()
-        if flag not in ("1", "true", "yes", "on"):
-            return
-        model_dir = Path("assets") / "mms-tts-kor"
-        if not model_dir.is_dir():
-            logging.warning("ENABLE_KOREAN_TTS set but %s is missing — Korean TTS off.",
-                            model_dir)
-            return
-        try:
-            from mms_tts import MmsTTS
-            self.mms = MmsTTS(model_dir)
-            self.mms.set_utterance_speed(self.utterance_speed)
-            logging.info("MMS Korean TTS ready (CC-BY-NC 4.0, non-commercial).")
-        except Exception as e:  # noqa: BLE001
-            self.mms = None
-            logging.warning("Failed to load MMS Korean TTS: %s", e)
-
     def _get_piper(self, language):
         """Route a language to the best available TTS engine, returning
         ``(effective_language, engine)`` or ``(None, None)`` when nothing can
         speak it. Preference (with prefer_piper_plus): piper-plus for the
-        languages it supports (incl. Japanese) → MMS for Korean (if enabled) →
-        a rhasspy piper-tts voice → English as a *latin-script only* fallback.
+        languages it supports → a dedicated catalogued voice → English as a
+        *latin-script only* fallback.
         CJK/Korean never fall back to an English voice — better silent than
         mispronounced."""
         if self.prefer_piper_plus and self.pp is not None and self.pp.supports(language):
             return language, self.pp
-        if language == 'ko' and self.mms is not None:
-            return language, self.mms
         if language in self.pipers:
             return language, self.pipers[language]
         if self.pp is not None and self.pp.supports(language):
@@ -939,7 +909,9 @@ class AppContext:
             self.set_system_prompt(self.system_prompt)
 
         if not self.apionly:
-            self.talk_ctrl = TalkController(['en', 'fr', 'es', 'de', 'it', 'zh', 'vi', 'ja', 'pt', 'ko'])
+            self.talk_ctrl = TalkController([
+                'en', 'fr', 'es', 'de', 'it', 'zh', 'vi', 'ja', 'pt', 'ko', 'no'
+            ])
 
     def update_from_config(self, app_cfg):
         model_server = f"{app_cfg.openai.client_host}:{app_cfg.openai.port}"
@@ -1158,20 +1130,22 @@ class AppContext:
             lang = request.args.get('lang', 'en')
             assets_dir = Path('assets')
             voices = []
-            for onnx_path in assets_dir.glob(f"{lang}_*-*.onnx"):
-                cfg = assets_dir / f"{onnx_path.name}.json"
-                if cfg.exists():
-                    voices.append({
-                        'id': onnx_path.name,
-                        'label': onnx_path.stem
-                    })
+            for voice in catalog_voices(
+                VOICE_CATALOG, engine="piper-tts", language=lang
+            ):
+                paths = catalog_asset_paths(voice, assets_dir)
+                voices.append({
+                    'id': voice['id'],
+                    'label': voice['label'],
+                    'installed': all(path.is_file() for path in paths),
+                })
             current = self.current_voice_by_lang.get(lang)
             if not current:
                 if self.talk_ctrl != None:
                     inst = self.talk_ctrl.pipers.get(lang)
                     try:
                         if inst is not None and hasattr(inst, 'model_path'):
-                            current = Path(getattr(inst, 'model_path')).name
+                            current = Path(getattr(inst, 'model_path')).stem
                     except Exception:
                         current = None
             return jsonify({'lang': lang, 'voices': voices, 'current': current})
@@ -1189,13 +1163,18 @@ class AppContext:
                     return jsonify({'error': 'voiceId is required'}), 400
                 assets_dir = Path('assets')
                 voice_name = str(voice_id)
-                voice_names = [voice_name]
-                if not voice_name.endswith('.onnx'):
-                    voice_names.append(f"{voice_name}.onnx")
-                available_voices = {path.name: path for path in assets_dir.glob('*.onnx')}
-                candidate = next((available_voices[name] for name in voice_names if name in available_voices), None)
-                if candidate is None:
-                    return jsonify({'error': 'Voice model not found'}), 404
+                catalog_voice = voice_by_id(voice_name.removesuffix('.onnx'), VOICE_CATALOG)
+                if (
+                    catalog_voice is None
+                    or catalog_voice['engine'] != 'piper-tts'
+                    or lang not in catalog_voice['languages']
+                ):
+                    return jsonify({'error': 'Voice is not in the catalog for this language'}), 400
+                paths = catalog_asset_paths(catalog_voice, assets_dir)
+                # Always run through the verified installer. Existing files are
+                # retained only when their SHA-256 matches the pinned catalog.
+                install_catalog_voice(catalog_voice, assets_path=assets_dir)
+                candidate = next(path for path in paths if path.suffix == '.onnx')
 
                 from pipertts import PiperTTS
                 with self.talk_ctrl.lock:
@@ -1203,7 +1182,8 @@ class AppContext:
                     new_voice = PiperTTS(model_path=str(candidate))
                     new_voice.set_utterance_speed(self.talk_ctrl.utterance_speed)
                     self.talk_ctrl.pipers[lang] = new_voice
-                    self.current_voice_by_lang[lang] = candidate.name
+                    self.current_voice_by_lang[lang] = catalog_voice['id']
+                    self.talk_ctrl.set_voice_engine('piper-tts')
                     # Drop reference to old instance; GC will reclaim when unreferenced
                     del old
 
@@ -1221,7 +1201,12 @@ class AppContext:
                 except Exception as ee:
                     logging.warning(f"Voice switch confirmation audio failed: {ee}")
 
-                return jsonify({'status': 'ok', 'lang': lang, 'current': self.current_voice_by_lang.get(lang)})
+                return jsonify({
+                    'status': 'ok',
+                    'lang': lang,
+                    'current': self.current_voice_by_lang.get(lang),
+                    'engine': 'piper-tts',
+                })
             except Exception:
                 logging.exception("Voice selection failed")
                 return jsonify({'error': 'Voice selection failed'}), 500
@@ -1515,6 +1500,8 @@ class AppContext:
             image_file = None
             elapsed_time = 0
             query_str = ''
+            result = None
+            asr = None
 
             # Handle file uploads
             if 'audio_data' in request.files:
@@ -1523,7 +1510,12 @@ class AppContext:
                 image_file = request.files['image_data']
 
             # Handle form fields
-            language = request.form.get('language', 'en')
+            language = request.form.get('language', 'auto')
+            # For typed prompts while ASR is in auto mode, keep using the most
+            # recently detected UI language (English before the first recording).
+            response_language = normalize_language_code(
+                request.form.get('responseLanguage', '')
+            ) or 'en'
             utterance_speed = request.form.get('utteranceSpeed', '1.0')
             chat = request.form.get('textchat', '').strip()
             search_rag = request.form.get('searchRag', 'false').lower() == 'true'
@@ -1539,7 +1531,12 @@ class AppContext:
                 return jsonify({'error': str(exc)}), 400
 
             self.talk_ctrl.reset()
-            self.talk_ctrl.set_language(language)
+            initial_tts_language = (
+                response_language
+                if str(language).strip().lower() == 'auto'
+                else normalize_language_code(language)
+            )
+            self.talk_ctrl.set_language(initial_tts_language)
             # Set before any tokens are enqueued so the worker never synthesizes.
             self.talk_ctrl.set_tts_enabled(enable_tts)
             self.talk_ctrl.set_utterance_speed(utterance_speed)
@@ -1588,12 +1585,54 @@ class AppContext:
 
                     if result:
                         elapsed_time = round(time.time() - start_time, 2)
-                        # The text is in the 'text' field
-                        query_str = result.get('text', '')
-                        logging.info(f"Transcribed results from backend: {query_str}")
-                        
-                        if query_str:
-                            self.socketio.emit('transcription', query_str)
+                        asr = analyze_transcription(
+                            result,
+                            requested_language=language,
+                            supported_tts_languages=self.talk_ctrl.supported_langs,
+                            no_speech_threshold=_env_float(
+                                'ASR_NO_SPEECH_THRESHOLD', DEFAULT_NO_SPEECH_THRESHOLD
+                            ),
+                            logprob_threshold=_env_float(
+                                'ASR_LOGPROB_THRESHOLD', DEFAULT_LOGPROB_THRESHOLD
+                            ),
+                        )
+                        query_str = asr['text']
+                        logging.info(
+                            "ASR result text=%r requested_language=%s detected_language=%s "
+                            "resolved_language=%s tts_language=%s no_speech_prob=%s "
+                            "avg_logprob=%s ignored=%s",
+                            query_str,
+                            language,
+                            asr['language'] if asr['language_detected'] else None,
+                            asr['language'],
+                            asr['tts_language'],
+                            asr['no_speech_prob'],
+                            asr['avg_logprob'],
+                            asr['reason'],
+                        )
+
+                        # Route this response through the voice matching the
+                        # detected language. Unsupported languages intentionally
+                        # produce text only instead of using a mismatched voice.
+                        self.talk_ctrl.set_language(asr['tts_language'] or 'xx')
+
+                        if asr['ignored']:
+                            message = (
+                                'No speech detected. Please try again.'
+                                if asr['reason'] == 'no_speech'
+                                else 'No transcription was produced. Please try again.'
+                            )
+                            return {
+                                'ignored': True,
+                                'message': message,
+                                'question': '',
+                                'ttt': elapsed_time,
+                                'asr': asr,
+                                'rag_used': False,
+                                'rag_hits': 0,
+                            }
+
+                        self.socketio.emit('transcription', asr)
                     else:
                         logging.warning("Backend transcription returned no result")
                         query_str = AppConstants.DEFAULT_MODEL_QUERY_STR
@@ -1655,6 +1694,7 @@ class AppContext:
             return {
                 'question': query_str,
                 'ttt': elapsed_time,
+                'asr': asr,
                 'rag_used': rag_used,
                 'rag_hits': rag_hits,
             }
@@ -2217,7 +2257,7 @@ def post_stop_to_sima(model_name=None):
         logging.error(f"Failed to send stop signal: {e}")
         return False
 
-def post_audio_to_mla(audio_bytes, language="en"):
+def post_audio_to_mla(audio_bytes, language="auto"):
     """
     Sends an audio file (as bytes) to the SIMA model server for transcription.
     """

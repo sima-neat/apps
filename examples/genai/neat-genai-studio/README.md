@@ -12,8 +12,8 @@
 | Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-GPTQ-a16w4) + whisper-small-a16w8 |
 
 ## Concept
-Neat GenAI Studio is an improved, more immersive version of the multimodal assistant
-runtime demo. It hosts SiMa-supported GenAI models through Neat's
+Neat GenAI Studio is an immersive multimodal assistant and model-management
+workbench. It hosts SiMa-supported GenAI models through Neat's
 OpenAI-compatible server and drives them from a polished Flask UI that adds:
 
 - **Switch LLMs/VLMs on the fly** — pick any compatible model from an on-disk
@@ -33,8 +33,8 @@ OpenAI-compatible server and drives them from a polished Flask UI that adds:
 - **Font customization** — choose a UI font family and size (or type any locally
   installed family); the choice persists in the browser.
 - **Multilingual text-to-speech** — a small multi-engine router speaks replies
-  in the selected language, now including **Japanese** (via the MIT-licensed
-  piper-plus engine) alongside the existing piper-tts voices. See
+  in the selected language, including **Japanese** through a dedicated Piper
+  voice or the optional piper-plus multilingual engine. See
   [Text-to-speech](#text-to-speech-voices--languages) below.
 - **Board camera input** — besides the browser webcam, the backend can grab
   stills from a camera plugged into the devkit board itself (`/dev/video*`):
@@ -48,9 +48,8 @@ OpenAI-compatible server and drives them from a polished Flask UI that adds:
   `libcamera`/`rpicam`, OpenCV).
 - **Drag & drop images** — drop an image anywhere on the page to attach it to
   the chat (or onto the full-screen Vision view to ask about it).
-- Everything the multimodal assistant already offered: image/text chat, audio
-  transcription (ASR), RAG, system-prompt control, chat history, voice
-  selection, and abort.
+- Image/text chat, audio transcription (ASR), RAG, system-prompt control, chat
+  history, voice selection, and abort.
 
 All UI assets — the Markdown renderer, sanitizer, syntax highlighter, and the
 bundled fonts — are served locally, so the studio runs **fully offline** on the
@@ -79,7 +78,7 @@ Runtime ownership is split deliberately:
 ## Preview
 Neat GenAI Studio UI:
 
-![Neat GenAI Studio preview](../../../assets/portal/genai/neat-genai-studio/image.png)
+![Neat GenAI Studio preview](../../../portal/assets/examples/genai/neat-genai-studio/image.png)
 
 ## Prerequisites
 - Installed Neat Development Environment + Neat Library.
@@ -92,33 +91,21 @@ Neat GenAI Studio UI:
 Set `PYNEAT_PYTHON=/path/to/python-with-pyneat` if your Neat Library environment is
 somewhere else.
 
-## Get The Apps Repo
-Use the [Neat Development Environment](https://developer.sima.ai/software/getting-started/dev-environment/) with the [Neat Library](https://developer.sima.ai/software/getting-started/neat-library/) installed for setup and compilation.
-
-Clone and build the apps repo inside the Neat Development Environment:
-
-```bash
-git clone https://github.com/sima-neat/apps.git
-cd apps
-./build.sh --clean
-```
-
-After building, run the example commands below on the Modalix/DevKit board.
-
-## Install
-Fetch only this example:
+## Install Apps
+Fetch only Neat GenAI Studio and enter its directory. This avoids downloading
+the complete Apps bundle:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- neat-genai-studio
+cd neat-genai-studio
 ```
 
+## Prepare the Model
 Install the UI virtual environment, Whisper ASR model, GTE-small embedding
 model, TTS voices (piper-tts + the piper-plus model), default RAG database, and
 generated local config:
 
 ```bash
-cd neat-genai-studio
-
 ./setup.sh
 ```
 
@@ -164,10 +151,11 @@ Other useful environment variables:
   chat/VLM model is resident and loading a new one clears the others.
 - `ALLOW_HUB_DOWNLOAD` — `true`/`false` to enable/disable in-UI Hugging Face
   downloads (default `true`).
-- `ENABLE_KOREAN_TTS` — `1` to download and enable the optional Korean voice
-  (Meta MMS, **CC-BY-NC 4.0 non-commercial**, also needs `pip install -r
-  src/python/requirements-korean.txt`). Off by default — see
-  [Text-to-speech](#text-to-speech-voices--languages).
+- `TTS_LANGUAGES` — comma- or space-separated catalogued server-TTS languages to
+  install. Interactive setup prompts when this is unset; non-interactive setup
+  defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
+- `TTS_OPTIONAL_VOICES` — optional voice ids to install, for example
+  `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
 The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set.
 The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is
@@ -332,23 +320,17 @@ stale or crashed run leaves models resident and the next load fails with
 3. waits for the model-server port to free up.
 
 Step 2 needs privileges. Run `run.sh` as a user with (passwordless) `sudo`, or
-as root. By default it uses the SDK's `fix_devkit_runtime.sh` if present, else
-restarts `simaai-appcomplex.service` and re-runs `init_mla_memory.sh`. Overrides:
+as root. It restarts only `simaai-appcomplex.service` and re-runs
+`init_mla_memory.sh`; the application does not invoke the board-wide runtime
+recovery script. Overrides:
 
 - `MLA_RESET_CMD="my-reset-tool"` — run your own reset command instead.
 - `MLA_DISPATCHER_SERVICE=<unit>` — use a different dispatcher service name.
 - `MLA_RESET=0` — skip the MLA reset entirely.
 
-```bash
-# example: force a specific reset command
-MLA_RESET_CMD="sudo fix_devkit_runtime.sh" ./run.sh
-```
-
 If you hit `MLA_LOAD_FAILED` right now, reset the runtime once by hand:
 
 ```bash
-sudo fix_devkit_runtime.sh        # SDK recovery script (preferred)
-# or, minimally:
 sudo systemctl restart simaai-appcomplex.service && sudo /usr/bin/init_mla_memory.sh
 ```
 
@@ -451,52 +433,50 @@ selector in Settings.
 
 | Engine | Licence | Runtime | Languages |
 | --- | --- | --- | --- |
-| **piper-plus** | MIT | onnxruntime (CPU) | **Japanese (ja)**, English, Chinese (zh), Spanish, French, Portuguese |
-| **piper-tts** (rhasspy) | MIT | onnxruntime (CPU) | German (de), Italian (it), Norwegian (no), Vietnamese (vi), + English fallback |
-| **MMS** — `facebook/mms-tts-kor` *(optional)* | **CC-BY-NC (non-commercial)** | torch (CPU) | Korean (ko) |
+| **piper-plus** | MIT runtime; model-specific terms | onnxruntime (CPU) | Japanese, English, Chinese, Spanish, French, Portuguese |
+| **piper-tts** | GPL-3.0 runtime; model-specific terms | onnxruntime (CPU) | English, Chinese, Spanish, French, Portuguese, German, Italian, Norwegian, Vietnamese |
 | **Browser** (Web Speech API) | — | client-side (your browser / OS) | any language your device has a voice for |
 
-- **Japanese** is available only through piper-plus (rhasspy piper-tts has no
-  Japanese voice). For languages both engines can speak (en/zh/es/fr), piper-plus
-  is preferred; the rhasspy voices are kept for the languages piper-plus has no
-  trained model for (de/it/no/vi).
+- **Japanese** defaults to Piper Plus CSS10. CSS10 is declared public domain;
+  the multilingual base model is CC BY 4.0 and its attribution is preserved in
+  [the TTS notices](THIRD_PARTY_TTS_MODELS.md).
+- **MERA** is an optional Piper Plus model published under Apache 2.0, with the
+  CC BY 4.0 base-model attribution preserved. Selecting it downloads and
+  verifies it automatically.
+- **Chinese** defaults to the dedicated Huayan Piper voice. Chaowen is an
+  optional second Chinese voice; Piper Plus CSS10 remains available as the
+  multilingual alternative.
+- **Korean has no server-side TTS model.** Use Browser TTS when the client has a
+  Korean voice; otherwise replies remain text-only.
 - **Voice engine** — a **Settings → Voice engine** dropdown chooses which engine
   is preferred for languages more than one can speak (piper-plus or piper-tts).
-  Languages only one engine supports are unaffected (ja is always piper-plus;
-  de/it/no/vi are always piper-tts).
+  Languages only one engine supports are unaffected.
 - **Browser** — selecting the **Browser** engine speaks replies on the client with
   the Web Speech API instead of synthesizing on the board (no server compute). The
   server still cleans each sentence (Markdown/LaTeX stripped), so the browser
   utters clean text; pick a device voice under **Settings → Browser voice**. It
   works for any language your browser has a voice for.
-- `setup.sh` (via `voice_install.sh`) downloads a few piper-plus **voices**
-  (each is the same 6-language model with a different speaker) into
-  `src/python/ui/assets/piper-plus/<voice>/`, and pre-fetches the NLTK data
-  piper-plus's English G2P needs so English speaks offline. Choose the active
-  voice under **Settings → Japanese / multilingual voice** (CSS10, Tsukuyomi-chan,
-  MERA) — it applies across all six piper-plus languages and switches at runtime.
+- `setup.sh` asks which catalogued languages to install. In non-interactive use,
+  set `TTS_LANGUAGES`, and use `TTS_OPTIONAL_VOICES=mera` to add MERA. The UI
+  lists catalogued voices per language and downloads a missing voice when it is
+  activated.
+- CSS10 is the default Piper Plus model. It applies across all six Piper Plus
+  languages; MERA is the only optional multilingual model.
 - **piper-tts runs in its own venv** (`.venv-pipertts`). piper-tts and piper-plus
   both ship a top-level `piper` package and can't share one environment, so
   `setup.sh` installs piper-tts separately and the UI reaches it through a
   subprocess worker (`pipertts_worker.py`); `run.sh` exports `PIPERTTS_PYTHON`
-  for this. If that venv is missing, the de/it/no/vi voices are simply skipped
-  and piper-plus keeps working.
-- To route en/zh/es/fr back to the rhasspy voices instead of piper-plus, set
-  `self.prefer_piper_plus = False` in `TalkController` (`flask_app.py`).
+  for this. If the venv is missing, dedicated voices are skipped and Piper Plus
+  keeps working.
+- The default router preference is `piper-tts`. Selecting `piper-plus` under
+  **Settings → Voice engine** switches supported languages to the active
+  multilingual voice.
 
-**Korean is opt-in.** No trained Korean voice exists for piper-plus (its Korean
-support is grapheme-to-phoneme only — no acoustic model), so Korean uses Meta's
-MMS model. It is **CC-BY-NC 4.0 (non-commercial)** and pulls in `torch`, so it is
-**off by default**. Enable it only if the non-commercial licence is acceptable:
-
-```bash
-pip install -r src/python/requirements-korean.txt
-ENABLE_KOREAN_TTS=1 ./setup.sh    # downloads facebook/mms-tts-kor into assets/
-ENABLE_KOREAN_TTS=1 ./run.sh      # loads the Korean engine at runtime
-```
-
-Without it, Korean text is left unspoken rather than mispronounced by another
-language's voice.
+The authoritative reviewed catalog is `src/python/ui/voice_catalog.json`. Each
+entry has a compact licence label, pinned upstream repository revision, and
+SHA-256 checksums. Models under `CC-BY-NC-SA-4.0` are excluded. Runtime
+discovery ignores models outside the catalog. See
+[Third-party TTS models](THIRD_PARTY_TTS_MODELS.md) for attribution notices.
 
 ### Manual Process Start
 Use this only when you want two explicit terminals.
@@ -658,11 +638,26 @@ AUDIO_FILE="/path/to/audio.wav"
 
 curl -s http://127.0.0.1:9998/v1/audio/transcriptions \
   -F "model=${ASR_MODEL}" \
+  -F "language=auto" \
   -F "file=@${AUDIO_FILE}"
 ```
 
+The Studio defaults to Whisper's standard silence filter: a recording is
+ignored when `no_speech_prob > 0.6`, unless `avg_logprob > -1.0` provides
+strong evidence that speech was decoded. Automatic language detection also
+routes the answer to the matching installed TTS voice. Override either
+threshold when tuning for a microphone or environment:
+
+```bash
+ASR_NO_SPEECH_THRESHOLD=0.6 ASR_LOGPROB_THRESHOLD=-1.0 ./run.sh
+```
+
+If the deployed Whisper artifact does not provide `avg_logprob`, the Studio
+uses `no_speech_prob` alone.
+
 Check TTS through the Flask app. `language` selects the engine via the router
-(English below → piper-plus/piper-tts; Japanese → piper-plus):
+(English and Japanese below → piper-plus/piper-tts according to the selected
+engine; dedicated piper-tts voices are the default):
 
 ```bash
 # English
@@ -671,7 +666,7 @@ curl -k -s https://127.0.0.1:5000/v1/audio/speech \
   -d '{"model":"piper-tts","input":"Hello from Neat GenAI Studio.","language":"en"}' \
   --output /tmp/neat-genai-studio-tts-en.wav
 
-# Japanese (piper-plus)
+# Japanese (dedicated piper-tts by default)
 curl -k -s https://127.0.0.1:5000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -d '{"model":"piper-tts","input":"こんにちは。Neat GenAI Studio です。","language":"ja"}' \
@@ -700,14 +695,19 @@ Then test the browser UI:
 - Model hosting + control API: `src/python/server/main.py`, `src/python/server/model_manager.py`, `src/python/server/control_api.py`, `src/python/server/hub.py`
 - UI: `src/python/ui/main.py`, `src/python/ui/flask_app.py`
 - Terminal chat (CLI): `src/python/cli/main.py`
-- TTS engines: `src/python/ui/piperplus_tts.py` (piper-plus, main venv), `src/python/ui/pipertts.py` + `src/python/ui/pipertts_worker.py` (rhasspy piper-tts, isolated venv), `src/python/ui/mms_tts.py` (optional MMS Korean)
-- Voice/model install: `src/python/voice_install.sh`
+- TTS engines: `src/python/ui/piperplus_tts.py` (Piper Plus, main venv), `src/python/ui/pipertts.py` + `src/python/ui/pipertts_worker.py` (piper-tts, isolated venv)
+- Voice/model install and policy: `src/python/voice_install.sh`, `src/python/ui/voice_catalog.py`, `src/python/ui/voice_catalog.json`, `THIRD_PARTY_TTS_MODELS.md`
 - Shared config: `src/python/shared/config.py`, `src/common/config.yaml`
-- Python dependencies: `src/python/requirements.txt` (main venv, piper-plus), `src/python/requirements-pipertts.txt` (isolated piper-tts venv), `src/python/requirements-rag.txt`, `src/python/requirements-korean.txt` (optional Korean TTS)
+- Python dependencies: `src/python/requirements.txt` (main venv, Piper Plus), `src/python/requirements-pipertts.txt` (isolated piper-tts venv), `src/python/requirements-rag.txt`
 - RAG helper: `src/python/rag/create_db.py`, `src/python/rag/vectordb.py`, `src/python/rag/vectordb_worker.py`
 - RAG sample document: `src/common/rag/neat.md`
 - UI assets: `src/python/ui/templates/`, `src/python/ui/static/` (including `static/vendor/` and `static/fonts/`), `src/python/ui/assets/`, `src/python/ui/certs/`
 - SiMaSentry Solutions harnesses (vendored from `apps-llima-harnesses`): `src/python/ui/harnesses/`
 - Manual API scripts: `src/python/ui/apitest/`
 - Test scope: `tests/test-scope.yaml`
-```
+
+## Development From Source
+See the Apps repository [contributor guide](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md)
+for contribution requirements. The single-example download contains the Studio
+source and can be edited directly; cloning the complete Apps repository is not
+required to run or customize it.

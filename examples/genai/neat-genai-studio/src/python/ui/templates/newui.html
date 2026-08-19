@@ -93,6 +93,9 @@
 
         <div id="metricsSection" class="metrics-section">
           <div class="metric-item"><span class="metric-value" id="transcribeTime">0s</span><span class="metric-label">Transcribe</span></div>
+          <div class="metric-item"><span class="metric-value" id="asrLanguage">—</span><span class="metric-label">ASR Language</span></div>
+          <div class="metric-item"><span class="metric-value" id="asrNoSpeech">—</span><span class="metric-label">No Speech</span></div>
+          <div class="metric-item"><span class="metric-value" id="asrLogprob">—</span><span class="metric-label">Avg Logprob</span></div>
           <div class="metric-item"><span class="metric-value" id="firstTokenTime">0s</span><span class="metric-label">First Token</span></div>
           <div class="metric-item"><span class="metric-value" id="firstAudioTime">0s</span><span class="metric-label">First Audio</span></div>
           <div class="metric-item"><span class="metric-value" id="tpsValue">0</span><span class="metric-label">TPS</span></div>
@@ -389,7 +392,8 @@
               <div class="setting-row" id="languageRow">
                 <label for="languageSelect" class="setting-label">Transcription language</label>
                 <select id="languageSelect" class="setting-select">
-                  <option value="en" selected>English</option>
+                  <option value="auto" selected>Auto-detect</option>
+                  <option value="en">English</option>
                   <option value="es">Español (Spanish)</option>
                   <option value="fr">Français (French)</option>
                   <option value="pt">Português (Portuguese)</option>
@@ -399,16 +403,13 @@
                   <option value="ko">한국어 (Korean)</option>
                   <option value="zh">中文 (Chinese)</option>
                   <option value="vi">Tiếng Việt (Vietnamese)</option>
+                  <option value="no">Norsk (Norwegian)</option>
                 </select>
               </div>
               <div class="setting-row voice-language-group" id="voiceRow">
                 <label for="voiceSelect" class="setting-label">Voice</label>
-                <select id="voiceSelect" class="setting-select">
-                  <option value="default" selected>Default</option>
-                  <option value="htc_female">HTC Female</option>
-                  <option value="ryan">Ryan</option>
-                  <option value="amy">Amy</option>
-                </select>
+                <select id="voiceSelect" class="setting-select"></select>
+                <button id="voiceActivateButton" class="setting-button" type="button">Install and use server voice</button>
                 <div id="voiceStatus" class="voice-status"></div>
               </div>
               <div class="setting-row voice-language-group" id="voiceEngineRow" style="display: none;">
@@ -417,7 +418,7 @@
                 <div id="voiceEngineStatus" class="voice-status"></div>
               </div>
               <div class="setting-row voice-language-group" id="piperPlusVoiceRow" style="display: none;">
-                <label for="piperPlusVoiceSelect" class="setting-label">Japanese / multilingual voice</label>
+                <label for="piperPlusVoiceSelect" class="setting-label">Piper Plus multilingual voice</label>
                 <select id="piperPlusVoiceSelect" class="setting-select"></select>
                 <div id="piperPlusVoiceStatus" class="voice-status"></div>
               </div>

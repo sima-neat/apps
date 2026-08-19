@@ -57,6 +57,9 @@ let imagePromptWasCheckedBeforeModelDisable = false;
 // which voice-selection setting is shown (rhasspy voice vs piper-plus voice).
 let _currentTtsEngine = 'piper-tts';
 let _ppVoicesAvailable = false;
+// Used for TTS routing while the transcription selector remains on Auto-detect.
+// English is the safe default for typed prompts before the first recording.
+let _detectedSpeechLanguage = 'en';
 
 function isLlmOnlyMode() {
   return document.body.classList.contains('llm-only') || !selectedChatModelSupportsVision();
@@ -1323,11 +1326,12 @@ function resetSettingsToDefaults() {
     ragCheckbox.checked = false;
   }
 
-  // Reset language select to English
+  // Reset transcription to automatic language detection.
   const languageSelect = document.getElementById('languageSelect');
   if (languageSelect) {
-    languageSelect.value = 'en';
-    refreshVoiceOptions();
+    languageSelect.value = 'auto';
+    _detectedSpeechLanguage = 'en';
+    updateVoiceEngineForLanguage();
   }
 
   // Clear any status messages
@@ -1575,6 +1579,9 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
   document.getElementById('tpsValue').textContent = '...';
   document.getElementById('rtfValue').textContent = '...';
   document.getElementById('transcribeTime').textContent = '...';
+  document.getElementById('asrLanguage').textContent = '—';
+  document.getElementById('asrNoSpeech').textContent = '—';
+  document.getElementById('asrLogprob').textContent = '—';
   document.getElementById('firstAudioTime').textContent = '...';
 
   // Reset First Audio timing
@@ -1624,7 +1631,20 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
         body: formData
       });
       const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      updateAsrMetrics(data.asr);
       displayResult(data.question || resultMessage, 'static/sample_audio.wav', data.ttt);
+      if (data.ignored) {
+        activeGeneration = false;
+        receivedEndSignal = true;
+        pendingNewGenerationAudio = false;
+        shouldPlayAudio = false;
+        hideAbortButton();
+        const message = data.message || 'No speech detected. Please try again.';
+        if (typeof isVisionOpen === 'function' && isVisionOpen()) setVisionAskHint(message);
+        addChatMessage(message, false, false);
+        return;
+      }
       const ragStatus = document.getElementById("ragStatus");
       if (isRagEnabled() && ragStatus) {
         ragStatus.textContent = data.rag_used
@@ -1643,6 +1663,7 @@ async function startProcessingInternal(resultMessage, textchat = null, waitForTr
   const selectedLanguage = languageSelect ? languageSelect.value : 'en';
 
   formData.append('language', selectedLanguage);
+  formData.append('responseLanguage', getSelectedVoiceLanguage());
 
   if (includeImageCheckbox && includeImageCheckbox.checked && snapAnimation.src) {
     try {
@@ -2272,8 +2293,33 @@ function scrollChatToBottom() {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-function displayTranscribedQuery(text) {
+function updateAsrMetrics(metadata) {
+  if (!metadata || typeof metadata !== 'object') return;
+  const language = metadata.language || '—';
+  const noSpeech = metadata.no_speech_prob == null ? NaN : Number(metadata.no_speech_prob);
+  const avgLogprob = metadata.avg_logprob == null ? NaN : Number(metadata.avg_logprob);
+  const languageEl = document.getElementById('asrLanguage');
+  const noSpeechEl = document.getElementById('asrNoSpeech');
+  const logprobEl = document.getElementById('asrLogprob');
+  if (languageEl) languageEl.textContent = language;
+  if (noSpeechEl) {
+    noSpeechEl.textContent = Number.isFinite(noSpeech) ? `${(noSpeech * 100).toFixed(1)}%` : '—';
+  }
+  if (logprobEl) {
+    logprobEl.textContent = Number.isFinite(avgLogprob) ? avgLogprob.toFixed(2) : '—';
+  }
+  if (metadata.language_detected && metadata.language) {
+    _detectedSpeechLanguage = metadata.tts_language || metadata.language;
+    updateVoiceEngineForLanguage();
+  }
+}
+
+function displayTranscribedQuery(payload) {
+  const metadata = (payload && typeof payload === 'object') ? payload : null;
+  const text = metadata ? metadata.text : payload;
   if (!text) return;
+
+  updateAsrMetrics(metadata);
 
   // Display transcribed text as a user message in the chat interface
   // Check if image should be included with transcribed audio
@@ -2518,7 +2564,8 @@ async function processSystemAudioOnce(data) {
 
 function getSelectedVoiceLanguage() {
   const languageSelect = document.getElementById('languageSelect');
-  return languageSelect ? languageSelect.value : 'en';
+  const selected = languageSelect ? languageSelect.value : 'en';
+  return selected === 'auto' ? (_detectedSpeechLanguage || 'en') : selected;
 }
 
 function getVoiceStorageKey(lang) {
@@ -2528,8 +2575,9 @@ function getVoiceStorageKey(lang) {
 function setVoiceRowVisible(visible) {
   const voiceRow = document.getElementById('voiceRow');
   if (voiceRow) {
-    // The rhasspy voice picker is only relevant when piper-tts is the engine.
-    const show = visible && _currentTtsEngine !== 'piper-plus' && _currentTtsEngine !== 'browser';
+    // Keep the allowlisted server voice catalog reachable while Browser is
+    // active so a language omitted during setup can be installed from the UI.
+    const show = visible && _currentTtsEngine !== 'piper-plus';
     voiceRow.style.display = show ? 'block' : 'none';
   }
 }
@@ -2593,7 +2641,9 @@ function setVoiceLabel(lang) {
   const voiceLabel = document.querySelector('label[for="voiceSelect"]');
   const languageSelect = document.getElementById('languageSelect');
   const selectedOption = languageSelect ? languageSelect.options[languageSelect.selectedIndex] : null;
-  const label = selectedOption ? selectedOption.textContent.replace(/\s*\([^)]*\)\s*$/, '') : lang;
+  const label = languageSelect && languageSelect.value === 'auto'
+    ? `${String(lang).toUpperCase()} (detected)`
+    : (selectedOption ? selectedOption.textContent.replace(/\s*\([^)]*\)\s*$/, '') : lang);
   if (voiceLabel) {
     voiceLabel.textContent = `${label} Voice:`;
   }
@@ -2601,6 +2651,7 @@ function setVoiceLabel(lang) {
 
 async function refreshVoiceOptions() {
   const voiceSelect = document.getElementById('voiceSelect');
+  const activateButton = document.getElementById('voiceActivateButton');
   if (!voiceSelect) return;
 
   const lang = getSelectedVoiceLanguage();
@@ -2618,6 +2669,7 @@ async function refreshVoiceOptions() {
       voiceSelect.dataset.lang = lang;
       voiceSelect.dataset.prev = '';
       setVoiceRowVisible(false);
+      if (activateButton) activateButton.style.display = 'none';
       return;
     }
 
@@ -2628,7 +2680,8 @@ async function refreshVoiceOptions() {
     voices.forEach(v => {
       const opt = document.createElement('option');
       opt.value = v.id;
-      opt.textContent = v.label || v.id;
+      opt.dataset.installed = v.installed ? 'true' : 'false';
+      opt.textContent = `${v.label || v.id}${v.installed ? '' : ' · download'}`;
       voiceSelect.appendChild(opt);
     });
 
@@ -2636,11 +2689,19 @@ async function refreshVoiceOptions() {
     voiceSelect.value = found ? toSelect : voiceSelect.options[0].value;
     voiceSelect.dataset.lang = lang;
     voiceSelect.dataset.prev = voiceSelect.value;
-    setVoiceRowVisible(voices.length > 1);
+    setVoiceRowVisible(true);
+    if (activateButton) {
+      activateButton.style.display = '';
+      const selected = voiceSelect.options[voiceSelect.selectedIndex];
+      activateButton.textContent = selected?.dataset.installed === 'true'
+        ? 'Use server voice'
+        : 'Download and use server voice';
+    }
   } catch (e) {
     voiceSelect.dataset.lang = lang;
     voiceSelect.dataset.prev = '';
     setVoiceRowVisible(false);
+    if (activateButton) activateButton.style.display = 'none';
   }
 }
 
@@ -2866,9 +2927,7 @@ function initializeRagHealth(attempt = 1) {
 // Settings panel is always visible, no close button needed
 
 // The transcription language selector is available by default.
-// ---- piper-plus voice picker (one multilingual model; ja/en/zh/es/fr/pt) ----
-// Every piper-plus voice speaks all six languages; this switches which voice is
-// active. Hidden when no piper-plus voice is installed.
+// ---- Piper Plus voice picker (allowlisted multilingual models) -------------
 async function initPiperPlusVoices() {
   const sel = document.getElementById('piperPlusVoiceSelect');
   const row = document.getElementById('piperPlusVoiceRow');
@@ -2884,7 +2943,7 @@ async function initPiperPlusVoices() {
   voices.forEach(v => {
     const o = document.createElement('option');
     o.value = v.key;
-    o.textContent = v.label || v.key;
+    o.textContent = `${v.label || v.key}${v.installed ? '' : ' · download'}`;
     sel.appendChild(o);
   });
   if (data.current) sel.value = data.current;
@@ -2901,6 +2960,7 @@ async function initPiperPlusVoices() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed to load');
       if (status) status.textContent = 'Active';
+      initPiperPlusVoices();
     } catch (err) {
       if (status) status.textContent = 'Failed: ' + err.message;
     } finally {
@@ -3240,6 +3300,7 @@ document.getElementById("importRagDatabaseButton").addEventListener("click", asy
 // Wire language-aware voice selection change
 (function setupVoiceSelection() {
   const voiceSelectEl = document.getElementById('voiceSelect');
+  const activateButton = document.getElementById('voiceActivateButton');
   if (!voiceSelectEl) return;
 
   // Controls to disable during voice switch
@@ -3273,7 +3334,7 @@ document.getElementById("importRagDatabaseButton").addEventListener("click", asy
     voiceSelectEl.dataset.prev = voiceSelectEl.value;
   }
 
-  voiceSelectEl.addEventListener('change', async () => {
+  async function activateSelectedVoice() {
     const chosen = voiceSelectEl.value;
     const label = voiceSelectEl.options[voiceSelectEl.selectedIndex]?.text || chosen;
     const voiceMsg = document.getElementById('voiceStatus');
@@ -3290,6 +3351,7 @@ document.getElementById("importRagDatabaseButton").addEventListener("click", asy
       const data = await res.json();
       localStorage.setItem(getVoiceStorageKey(getSelectedVoiceLanguage()), chosen);
       voiceSelectEl.dataset.prev = chosen;
+      _currentTtsEngine = data.engine || 'piper-tts';
       // brief confirmation: write into voiceStatus if present
       if (voiceMsg) {
         voiceMsg.textContent = `✅ Voice switched to: ${label}`;
@@ -3305,8 +3367,12 @@ document.getElementById("importRagDatabaseButton").addEventListener("click", asy
       }
     } finally {
       setControlsDisabled(false);
+      await updateVoiceEngineForLanguage();
     }
-  });
+  }
+
+  voiceSelectEl.addEventListener('change', activateSelectedVoice);
+  if (activateButton) activateButton.addEventListener('click', activateSelectedVoice);
 })();
 
 // Theme Management Functions

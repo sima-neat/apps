@@ -4,8 +4,8 @@ piper-plus (https://github.com/ayutaz/piper-plus) is the MIT-licensed Piper fork
 with a custom G2P (no espeak-ng). It is installed in the MAIN venv and owns the
 top-level ``piper`` package, exposing ``piper.PiperVoice``. Its trained
 multilingual model covers **Japanese, English, Mandarin (zh), Spanish, French,
-Portuguese** (the ``language_id_map`` in the checkpoint). We use it above all for
-**Japanese**, the one language the rhasspy piper-tts voices lack.
+Portuguese** (the ``language_id_map`` in the checkpoint). It is the selectable
+multilingual alternative to the dedicated piper-tts voices.
 
 Published-wheel API (piper-plus 1.13.0):
 
