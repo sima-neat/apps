@@ -276,18 +276,20 @@ Press `Ctrl+C` in the terminal running `run.sh`, or from another shell:
 ```
 
 ### Update
-Pull the latest version of the studio, then refresh dependencies. Your models,
-`config.local.yaml`, both venvs, and the RAG database are **preserved**:
+Pull the latest Studio source. Dependency refresh is opt-in; it updates only the
+two Python environments and does not rewrite models, voices, configuration, or
+the RAG database:
 
 ```bash
 ./run.sh update              # git pull in a checkout, else re-fetch the example
 NEAT_APPS_BRANCH=develop ./run.sh update   # update from a specific branch
-UPDATE_DEPS=0 ./run.sh update              # source only, skip the setup.sh refresh
+UPDATE_DEPS=1 ./run.sh update              # also refresh Python dependencies
 ```
 
 In a full `apps` git checkout this runs `git pull`; if you fetched just this
-example with `get-example.sh`, it re-downloads the release archive and overlays
-the source (user data isn't in the archive, so it's left untouched).
+example with `get-example.sh`, it re-downloads the release archive and mirrors
+tracked source, removing files deleted by later releases while preserving the
+venvs, local config/certificates, RAG database, logs, and downloaded voices.
 
 ### Clean up
 Remove everything the app generated (both venvs, `config.local.yaml`, the RAG
@@ -310,22 +312,10 @@ default 10). `run.sh` records its PID in `.neat-genai-studio.pid` (used by
 `stop`/`status`) and refuses to start a second instance while one is running.
 
 On launch, `run.sh` stops stale model-server/UI processes from an interrupted
-Studio run and waits for the model-server port to become available. Normal
-startup does **not** restart `simaai-appcomplex.service`, initialize the MLA, or
-run any board-runtime recovery script.
-
-The following settings apply only to an explicit supervised recovery request
-from the running model server (for example, after a failed model switch):
-
-- `MLA_RESET_CMD="my-reset-tool"` — run your own reset command instead.
-- `MLA_DISPATCHER_SERVICE=<unit>` — use a different dispatcher service name.
-- `MLA_RESET=0` — disable supervised MLA recovery entirely.
-
-If you hit `MLA_LOAD_FAILED` right now, reset the runtime once by hand:
-
-```bash
-sudo systemctl restart simaai-appcomplex.service && sudo /usr/bin/init_mla_memory.sh
-```
+Studio run and waits for the model-server port to become available. It never
+restarts the MLA dispatcher, initializes the MLA, or runs a board-runtime
+recovery script. Model/runtime failures are reported and left to board runtime
+management outside this application.
 
 Open the Flask UI:
 
@@ -352,11 +342,8 @@ top of the tab and shows the live progress bar while it loads. The studio cancel
 the outgoing model's in-flight generation and waits for its memory to be released
 before loading the new one, then warms it so your first message is instant.
 
-If a switch still hits a busy/wedged accelerator, the studio automatically
-requests a **supervised MLA reset**: the model server exits with a sentinel code,
-`run.sh` resets the MLA dispatcher and relaunches it (the UI stays up and
-reconnects). Disable this with `MLA_RESET_ON_SWITCH=0` (then a failed switch just
-reports an error asking you to restart).
+If a switch hits an accelerator error, the Studio rolls back the failed model
+registration and reports the error. It does not restart or reset board services.
 
 ### Download models from Hugging Face
 When the board is online, the **Settings → Add Model** tab appears (it's hidden
@@ -461,6 +448,14 @@ selector in Settings.
   subprocess worker (`pipertts_worker.py`); `run.sh` exports `PIPERTTS_PYTHON`
   for this. If the venv is missing, dedicated voices are skipped and Piper Plus
   keeps working.
+- Every dedicated piper-tts voice is split into encoder and decoder ONNX files
+  during setup. The decoder emits roughly half-second audio slices, so the
+  browser starts playback while the remainder of the sentence is synthesized.
+  Split inference is required: setup fails if an installed dedicated voice cannot
+  be split, and the UI keeps the current voice if a newly selected voice cannot
+  be prepared. The original model remains on disk only to rebuild the split
+  files; the worker loads only the encoder and decoder sessions into memory.
+  Piper Plus is a separate multilingual engine and does not use this split path.
 - The default router preference is `piper-tts`. Selecting `piper-plus` under
   **Settings → Voice engine** switches supported languages to the active
   multilingual voice.

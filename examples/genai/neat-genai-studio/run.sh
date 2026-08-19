@@ -41,18 +41,6 @@ SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
-# Configure the dispatcher reset used only for an explicit recovery request from
-# the running model server. Normal startup never restarts the MLA dispatcher.
-# MLA_RESET=0 disables recovery; MLA_RESET_CMD overrides how it is performed.
-MLA_RESET="${MLA_RESET:-1}"
-MLA_RESET_CMD="${MLA_RESET_CMD:-}"
-# The MLA shared-memory dispatcher service that holds loaded models across
-# client processes; restarting it releases every model on the MLA.
-MLA_DISPATCHER_SERVICE="${MLA_DISPATCHER_SERVICE:-simaai-appcomplex.service}"
-# Password fed to sudo (via -S) so the privileged MLA reset never blocks on a
-# prompt. Defaults to the SiMa Modalix board's default login ("edgeai");
-# override with MLA_SUDO_PASSWORD if your board differs.
-MLA_SUDO_PASSWORD="${MLA_SUDO_PASSWORD:-edgeai}"
 # PID file for the running instance (enables `./run.sh stop`).
 PID_FILE="${RUN_PID_FILE:-${EXAMPLE_DIR}/.neat-genai-studio.pid}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-20}"
@@ -350,8 +338,9 @@ do_clean() {
 # Update the example's source to the latest published version. User data — venvs,
 # config.local.yaml, RAG db, and downloaded models (which live outside this dir) —
 # is preserved. In a git checkout this is `git pull`; standalone (fetched via
-# get-example.sh) it re-fetches the release archive and overlays the source. Set
-# NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 runs setup.sh.
+# get-example.sh) it re-fetches the release archive and mirrors the source. Set
+# NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 refreshes only
+# the Python dependencies.
 do_update() {
   local branch="${NEAT_APPS_BRANCH:-main}"
   if do_status >/dev/null 2>&1; then
@@ -370,8 +359,9 @@ do_update() {
       return 1
     fi
   else
-    # Standalone (fetched via get-example.sh): re-download the archive and overlay.
+    # Standalone (fetched via get-example.sh): re-download and mirror the source.
     command -v tar >/dev/null 2>&1 || { errln "tar is required to update."; return 1; }
+    command -v rsync >/dev/null 2>&1 || { errln "rsync is required to update a standalone install."; return 1; }
     local repo repo_url archive_url tmp root ex_path
     repo_url="${NEAT_APPS_REPO_URL:-https://github.com/sima-neat/apps.git}"
     repo="${repo_url%.git}"; repo="${repo#https://github.com/}"; repo="${repo#git@github.com:}"
@@ -399,24 +389,41 @@ do_update() {
     tar -xzf "${tmp}/src.tar.gz" -C "${tmp}" "${ex_path}" \
       || { errln "Extract failed."; rm -rf "${tmp}"; return 1; }
     step "Applying update (keeping your models, venvs, config and RAG db)…"
-    # The archive holds only tracked source, so this overlays new code without
-    # touching venvs / config.local.yaml / milvus.db (none are in the archive).
-    cp -a "${tmp}/${ex_path}/." "${EXAMPLE_DIR}/" \
-      || { errln "Copy failed — the update may be incomplete."; rm -rf "${tmp}"; return 1; }
+    # Mirror tracked source so files deleted by a release disappear locally.
+    # Explicitly exclude every install-owned path from transfer and deletion.
+    rsync -a --delete-delay --delay-updates \
+      --exclude='/.venv/' \
+      --exclude='/.venv-pipertts/' \
+      --exclude='/config.local.yaml' \
+      --exclude='/.local-certs/' \
+      --exclude='/.neat-genai-studio.pid' \
+      --exclude='*.log' \
+      --exclude='/src/python/ui/uploads/' \
+      --exclude='/src/python/ui/.milvus.db.lock' \
+      --exclude='/src/python/ui/milvus.db' \
+      --exclude='/src/python/ui/milvus.meta.json' \
+      --exclude='/src/python/ui/assets/*.onnx' \
+      --exclude='/src/python/ui/assets/*.onnx.json' \
+      --exclude='/src/python/ui/assets/piper-plus/' \
+      --exclude='/src/python/ui/assets/mms-tts-kor/' \
+      "${tmp}/${ex_path}/" "${EXAMPLE_DIR}/" \
+      || { errln "Source replacement failed."; rm -rf "${tmp}"; return 1; }
     rm -rf "${tmp}"
     chmod +x "${EXAMPLE_DIR}/run.sh" "${EXAMPLE_DIR}/setup.sh" 2>/dev/null || true
     ok "Source updated from ${branch}."
   fi
 
-  # Source-only updates preserve user data. A full setup refresh is explicit.
+  # Dependency refresh is opt-in and deliberately avoids setup's data-writing
+  # model, voice, config and RAG stages.
   if [[ "${UPDATE_DEPS:-0}" == "0" ]]; then
     ok "Update complete. Run ${C_BOLD}./setup.sh${C_RESET} if dependencies changed."
   else
-    step "Refreshing dependencies (./setup.sh)…"
-    if "${EXAMPLE_DIR}/setup.sh"; then
+    step "Refreshing Python dependencies…"
+    if "${EXAMPLE_DIR}/setup.sh" --dependencies-only; then
       ok "Update complete."
     else
-      warn "Dependency refresh reported an error — re-run ./setup.sh manually."
+      errln "Dependency refresh failed."
+      return 1
     fi
   fi
 }
@@ -507,43 +514,6 @@ except OSError:
 finally:
     s.close()
 ' "$1" 2>/dev/null
-}
-
-# Run a privileged command best-effort. As root: run directly. Otherwise feed
-# the board password to sudo over stdin (-S) so the MLA reset never blocks on a
-# prompt — whether or not there is a terminal. Callers tolerate failure.
-mla_sudo() {
-  if [[ "$(id -u)" == "0" ]]; then
-    "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo -S -p '' "$@" <<<"${MLA_SUDO_PASSWORD}"
-  else
-    return 1
-  fi
-}
-
-# Clear models held by the MLA shared-memory dispatcher. Models are loaded into
-# the dispatcher daemon (mlashmcomplex), which persists across our client
-# processes, so killing our server is not enough — a stale/crashed run leaves
-# models resident and the next load fails with MLA_LOAD_FAILED. This restarts the
-# dispatcher (which frees the MLA) best-effort; it needs privileges.
-reset_mla_dispatcher() {
-  [[ "${MLA_RESET}" == "1" ]] || return 0
-
-  # 1) Explicit override wins.
-  if [[ -n "${MLA_RESET_CMD}" ]]; then
-    info "Resetting MLA via MLA_RESET_CMD: ${C_DIM}${MLA_RESET_CMD}${C_RESET}"
-    bash -c "${MLA_RESET_CMD}" || warn "MLA_RESET_CMD failed (continuing)"
-    return 0
-  fi
-
-  # 2) Restart only the MLA dispatcher. Its systemd unit owns all hardware
-  # initialization; the application must not invoke an initializer itself.
-  if command -v systemctl >/dev/null 2>&1; then
-    info "Restarting MLA dispatcher (${MLA_DISPATCHER_SERVICE})…"
-    mla_sudo systemctl restart "${MLA_DISPATCHER_SERVICE}" 2>/dev/null \
-      || warn "could not restart ${MLA_DISPATCHER_SERVICE} (need privileges? set MLA_RESET_CMD or MLA_RESET=0)"
-  fi
 }
 
 # Stop stale Studio processes from a previous (e.g. crashed) run and wait for
@@ -664,9 +634,6 @@ echo "$$" > "${PID_FILE}"
 export NEAT_RUN_PID="$$"
 export RUN_PID_FILE="${PID_FILE}"
 
-# Sentinel exit code the model server uses to ask for an MLA reset + relaunch.
-MLA_RESET_EXIT_CODE="${MLA_RESET_EXIT_CODE:-75}"
-
 launch_server() {
   step "Starting the Neat model server (OpenAI-compatible)…"
   # In CLI mode the model server shares the terminal with the interactive chat,
@@ -683,27 +650,6 @@ launch_server() {
   remember_process_group "${server_pid}"
 }
 
-# Background watchdog for --cli mode. CLI mode has no supervisor loop, so if the
-# model server exits to service an MLA reset (the CLI's /reset) — or crashes —
-# relaunch it here so the CLI can reconnect. Poll-based, since a backgrounded
-# subshell can't `wait` a sibling PID; bounded so a broken server won't respawn
-# forever. Strays it may spawn are swept by cleanup().
-cli_supervise() {
-  local tries=0
-  while true; do
-    sleep 2
-    if kill -0 "${server_pid}" 2>/dev/null; then
-      tries=0
-      continue
-    fi
-    [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES:-4}" ]] && return 0
-    tries=$((tries + 1))
-    reset_mla_dispatcher
-    launch_server
-    sleep "${MODEL_SERVER_START_DELAY:-2}"
-  done
-}
-
 prepare_clean_start
 
 section "Model Server"
@@ -716,14 +662,7 @@ if ! child_running "${server_pid}"; then
   wait "${server_pid}"
   status=$?
   set -e
-  if [[ "${status}" -eq "${MLA_RESET_EXIT_CODE}" ]]; then
-    warn "Model server requested an MLA reset during startup — resetting and relaunching…"
-    reset_mla_dispatcher
-    launch_server
-    sleep "${MODEL_SERVER_START_DELAY:-2}"
-  else
-    exit "${status}"
-  fi
+  exit "${status}"
 fi
 
 # CLI mode: skip the web UI and run an interactive terminal chat in the
@@ -734,12 +673,9 @@ if [[ "${CLI_MODE}" == "1" ]]; then
   step "Launching the CLI — type ${C_BOLD}/help${C_RESET} for commands, ${C_BOLD}/quit${C_RESET} to exit."
   info "Model server logs → ${C_DIM}${SERVER_LOG}${C_RESET}"
   printf '\n'
-  cli_supervise &       # relaunch the server on an MLA-reset request so /reset works
-  cli_sup_pid="$!"
   trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
   "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" \
     ${CLI_EXTRA_ARGS[@]+"${CLI_EXTRA_ARGS[@]}"} || true
-  kill "${cli_sup_pid}" 2>/dev/null || true
   exit 0                # -> EXIT trap stops the model server
 fi
 
@@ -759,45 +695,19 @@ fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
 
-# Supervisor: keep both processes alive. If the model server exits with the
-# MLA-reset sentinel (a switch or the UI's Reset button hit a wedged
-# accelerator), reset the MLA dispatcher and relaunch just the server — the UI
-# keeps running and its socket reconnects automatically. Other failures are
-# deterministic application/configuration errors and stop without an MLA reset.
-#
-# A relaunched server can die at startup if the freshly-reset dispatcher isn't
-# ready yet, so retry a BOUNDED number of times (resetting the dispatcher again)
-# before giving up — otherwise one transient post-reset failure would tear down
-# the whole studio, including the still-healthy UI. The budget refreshes once the
-# server has stayed up for a while, so an unrelated later reset gets a clean slate.
+# Supervisor: keep both processes alive. A child failure stops the Studio; board
+# runtime recovery remains outside this application.
 status=0
-restart_attempts=0
-healthy_ticks=0
-MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
 while true; do
   if ! child_running "${server_pid}"; then
     set +e
     wait "${server_pid}"
     status=$?
     set -e
-    healthy_ticks=0
-    if [[ "${status}" -eq 0 ]]; then
-      break   # clean model-server shutdown — do not relaunch
+    if [[ "${status}" -ne 0 ]]; then
+      errln "Model server exited with status ${status}; shutting down."
     fi
-    if [[ "${status}" -ne "${MLA_RESET_EXIT_CODE}" ]]; then
-      errln "Model server exited with status ${status}; shutting down without resetting the MLA."
-      break
-    fi
-    if [[ "${restart_attempts}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
-      errln "Model server did not stay up after ${restart_attempts} restart attempts (last status ${status}); shutting down."
-      break
-    fi
-    restart_attempts=$((restart_attempts + 1))
-    info "Model server requested an MLA reset — resetting dispatcher and relaunching (attempt ${restart_attempts}/${MLA_MAX_RESTART_RETRIES})…"
-    reset_mla_dispatcher
-    launch_server
-    sleep "${MODEL_SERVER_START_DELAY:-2}"
-    continue
+    break
   fi
   if ! child_running "${ui_pid}"; then
     set +e
@@ -805,12 +715,6 @@ while true; do
     status=$?
     set -e
     break
-  fi
-  # Both healthy — once the server has stayed up a while, refresh the restart
-  # budget so a later, unrelated reset isn't starved of retries.
-  healthy_ticks=$((healthy_ticks + 1))
-  if [[ "${healthy_ticks}" -ge 15 ]]; then
-    restart_attempts=0
   fi
   sleep 1
 done

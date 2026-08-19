@@ -418,20 +418,6 @@ def wait_ready(oai, timeout=90):
     return False
 
 
-def reset_mla_wait(ctrl, oai, announce=True):
-    """Reset the accelerator (MLA). The model server exits and the run.sh
-    supervisor relaunches it; returns True once the new server accepts requests."""
-    if announce:
-        print(f"{MUTED}  resetting the accelerator (MLA) — the server will restart, "
-              f"this takes a few seconds…{RESET}")
-    try:
-        ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
-    except Exception:
-        pass   # the server exits mid-request, so this call often won't return
-    time.sleep(3)               # let the old server exit before polling
-    return wait_ready(oai, timeout=120)
-
-
 def stream_chat(oai, model, messages, max_tokens, render=False):
     """Stream a completion. Returns (text, ttft_seconds, tps, tokens).
     With render=True the response is shown live, rendered as Markdown line-by-line
@@ -526,7 +512,6 @@ HELP = f"""{MUTED}Commands:
   /system <text>     set a system prompt (empty clears it)
   /new               clear the conversation history
   /export [file]     save this chat to a .log file (default neat-chat-<time>.log)
-  /reset             reset the accelerator (MLA) and restart the model server
   /tokens <n>        set the max response tokens
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
@@ -729,11 +714,7 @@ def _arrow_multiselect(items, prompt):
 # ---- model loading + Hugging Face (reuses server/hub.py, like the UI) --------
 def load_model(ctrl, name, oai=None, auto_retry=True):
     """Load a model via the control API. Returns True on success. Loading a
-    chat/VLM model evicts any other resident one, so that is made explicit.
-
-    If the load fails and ``oai`` is given, auto-recover once: reset the
-    accelerator (MLA) and retry before notifying the user — mirrors the UI, where
-    a first load can fail if the MLA is in a bad state."""
+    chat/VLM model evicts any other resident one, so that is made explicit."""
     try:
         resident = [m.get("name") for m in catalog(ctrl)
                     if m.get("loaded") and m.get("type", "chat") != "asr"
@@ -754,22 +735,8 @@ def load_model(ctrl, name, oai=None, auto_retry=True):
     try:
         r = _attempt()
     except Exception as exc:  # noqa: BLE001
-        if auto_retry and oai is not None:
-            # Auto-recover: reset the MLA once and retry before giving up.
-            print(f"{MUTED}  load failed ({exc}) — resetting the accelerator (MLA) "
-                  f"and retrying once…{RESET}")
-            if not reset_mla_wait(ctrl, oai, announce=False):
-                print(f"{ERR}  the server did not come back after the reset.{RESET}")
-                return False
-            try:
-                print(f"{MUTED}  retrying load of {name}…{RESET}")
-                r = _attempt()
-            except Exception as exc2:  # noqa: BLE001
-                print(f"{ERR}  {exc2}{RESET}")
-                return False
-        else:
-            print(f"{ERR}  {exc}{RESET}")
-            return False
+        print(f"{ERR}  {exc}{RESET}")
+        return False
 
     ev = r.get("evicted") if isinstance(r, dict) else None
     ev = ev if isinstance(ev, list) else ([ev] if ev else [])
@@ -1940,12 +1907,6 @@ def main():
                     print(f"{OK}✔ exported {turns} turn(s) to {path}{RESET}")
                 except Exception as exc:  # noqa: BLE001
                     print(f"{ERR}  export failed: {exc}{RESET}")
-            elif cmd in ("reset", "reset-mla"):
-                if reset_mla_wait(ctrl, oai):
-                    print(f"{OK}✔ MLA reset — server back online. Load a model to continue.{RESET}")
-                    active, messages, pending_image, camera_device = "", [], None, None
-                else:
-                    print(f"{ERR}  the server did not come back after the reset.{RESET}")
             elif cmd in ("tokens", "max"):
                 try:
                     max_tokens = max(1, int(arg))

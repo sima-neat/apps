@@ -9,6 +9,7 @@
 # All rights reserved.
 #########################################################
 import base64
+import ipaddress
 import json
 import logging
 import math
@@ -24,7 +25,6 @@ import time
 # Flask imports
 from flask import Flask, Response, render_template, jsonify, request, send_from_directory, stream_with_context
 from flask_socketio import SocketIO
-from flask_cors import CORS
 
 from collections import deque
 import wave
@@ -34,6 +34,7 @@ from werkzeug.utils import secure_filename
 import tempfile
 import atexit
 import signal
+import socket
 import subprocess
 
 from shared.config import HubConfig
@@ -64,6 +65,55 @@ APP_DIR = Path(__file__).resolve().parent
 VOICE_CATALOG = load_catalog()
 
 _VERSION_CACHE = None
+
+
+def _https_credentials():
+    """Return configured TLS files or generate a unique local pair once."""
+    cert_override = os.environ.get('NEAT_TLS_CERT')
+    key_override = os.environ.get('NEAT_TLS_KEY')
+    if bool(cert_override) != bool(key_override):
+        raise RuntimeError('Set both NEAT_TLS_CERT and NEAT_TLS_KEY')
+    if cert_override and key_override:
+        cert_path = Path(cert_override).expanduser()
+        key_path = Path(key_override).expanduser()
+        if not cert_path.is_file() or not key_path.is_file():
+            raise RuntimeError('Configured TLS certificate or key does not exist')
+        return str(cert_path), str(key_path)
+
+    tls_dir = APP_DIR.parents[2] / '.local-certs'
+    cert_path = tls_dir / 'server.crt'
+    key_path = tls_dir / 'server.key'
+    if cert_path.is_file() and key_path.is_file():
+        return str(cert_path), str(key_path)
+
+    tls_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    hostname = re.sub(r'[^A-Za-z0-9.-]', '', socket.gethostname()) or 'localhost'
+    sans = {'DNS:localhost', f'DNS:{hostname}', 'IP:127.0.0.1', 'IP:::1'}
+    try:
+        for item in socket.getaddrinfo(hostname, None):
+            address = item[4][0].split('%', 1)[0]
+            sans.add(f'IP:{ipaddress.ip_address(address)}')
+    except OSError:
+        pass
+    try:
+        subprocess.run(
+            [
+                'openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-sha256',
+                '-nodes', '-days', '825', '-keyout', str(key_path),
+                '-out', str(cert_path), '-subj', f'/CN={hostname}',
+                '-addext', f"subjectAltName={','.join(sorted(sans))}",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f'Could not generate local HTTPS credentials: {exc}') from exc
+    key_path.chmod(0o600)
+    cert_path.chmod(0o644)
+    logging.info('Generated per-install HTTPS certificate at %s', cert_path)
+    return str(cert_path), str(key_path)
 
 
 def _studio_version():
@@ -275,12 +325,10 @@ class TalkController:
         def load_piper(lang_code, onnx_file):
             from pipertts import PiperTTS # import here if needed locally
             try:
-                piper = PiperTTS(
-                    model_path=str(onnx_file)
-                )
+                piper = PiperTTS(model_path=str(onnx_file))
                 piper.set_utterance_speed(self.utterance_speed)
                 self.pipers[lang_code] = piper
-                logging.info(f"Loaded Piper model for {lang_code}")
+                logging.info("Loaded Piper model for %s (streaming)", lang_code)
             except Exception as e:
                 logging.warning(f"Failed to load Piper model for {lang_code}: {e}")
 
@@ -583,21 +631,35 @@ class TalkController:
                 if piper is None:
                     self._warn_missing_voice_once(self.current_language)
                 else:
-                    buffer = piper.synthesize(sanitized_sentence, language=self.current_language)
-                    if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                        return
                     self.full_response.append(sanitized_sentence)
-
-                    elapsed_time = time.time() - start_time
-                    audio_duration = self._get_wav_duration(buffer)
-                    rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                    audio_duration = 0.0
+                    elapsed_time = 0.0
+                    if hasattr(piper, 'synthesize_stream'):
+                        buffers = piper.synthesize_stream(
+                            sanitized_sentence, language=self.current_language
+                        )
+                    else:
+                        buffers = [piper.synthesize(
+                            sanitized_sentence, language=self.current_language
+                        )]
+                    try:
+                        for buffer in buffers:
+                            if generation_id is not None and not genai_app.is_generation_current(generation_id):
+                                return
+                            elapsed_time = time.time() - start_time
+                            audio_duration += self._get_wav_duration(buffer)
+                            rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                            genai_app.emit('audio_chunk', {
+                                'text': sanitized_sentence.strip(),
+                                'audio': buffer.getvalue(),
+                                'tps': round(self.tps, 2),
+                                'rtf': round(rtf, 2)
+                            })
+                    finally:
+                        close = getattr(buffers, 'close', None)
+                        if close is not None:
+                            close()
                     logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                    genai_app.emit('audio_chunk', {
-                        'text': sanitized_sentence.strip(),
-                        'audio': buffer.getvalue(),
-                        'tps': round(self.tps, 2),
-                        'rtf': round(rtf, 2)
-                    })
                     self.chunk_count += 1
 
         self.talk = []
@@ -853,6 +915,19 @@ class AppContext:
             self._active_generation_id = None
             return True
 
+    def fail_generation(self, generation_id, message):
+        """Terminate one failed generation and notify the browser exactly once."""
+        with self._state_lock:
+            if self._active_generation_id != generation_id:
+                return False
+            self._append_current_response_to_history_locked()
+            self._active_generation_id = None
+        if self.talk_ctrl is not None:
+            self.talk_ctrl.reset()
+        self.emit('generation_error', {'message': message})
+        self.emit('end', {})
+        return True
+
     def interrupt_active_generation(self, preserve_partial):
         with self._state_lock:
             had_active_generation = self._active_generation_id is not None
@@ -1000,8 +1075,31 @@ class AppContext:
         
     def initialize(self):
         self.app = Flask(__name__)
-        CORS(self.app)
         self.socketio = SocketIO(self.app)
+
+        @self.app.before_request
+        def _reject_cross_origin_mutation():
+            """Keep browser mutations on the Studio's own origin.
+
+            Headerless local API/CLI clients remain supported. Browsers provide
+            Origin, Referer, or Sec-Fetch-Site for cross-origin requests.
+            """
+            if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+                return None
+
+            expected_origin = request.host_url.rstrip("/")
+            origin = (request.headers.get("Origin") or "").rstrip("/")
+            if origin and origin != expected_origin:
+                return jsonify({"error": "Cross-origin request rejected"}), 403
+
+            fetch_site = request.headers.get("Sec-Fetch-Site", "").lower()
+            if fetch_site in {"cross-site", "same-site"}:
+                return jsonify({"error": "Cross-origin request rejected"}), 403
+
+            referer = request.headers.get("Referer", "")
+            if not origin and referer and not referer.startswith(request.host_url):
+                return jsonify({"error": "Cross-origin request rejected"}), 403
+            return None
 
         # Cache-bust static assets: append each file's mtime to its URL so the
         # browser refetches newui.js / newui.css after an update instead of
@@ -1054,10 +1152,7 @@ class AppContext:
 
     def run(self):
         if not self.httponly:
-            ssl_context = (
-                str(APP_DIR / 'certs/server.crt'),
-                str(APP_DIR / 'certs/server.key')
-            )
+            ssl_context = _https_credentials()
             self.socketio.run(self.app, host=self.web_host, port=self.web_port,
                             ssl_context=ssl_context,
                             debug=False, allow_unsafe_werkzeug=True)
@@ -1203,7 +1298,15 @@ class AppContext:
                 install_catalog_voice(catalog_voice, assets_path=assets_dir)
                 candidate = next(path for path in paths if path.suffix == '.onnx')
 
-                from pipertts import PiperTTS
+                from pipertts import PiperTTS, prepare_voice_for_streaming
+                if not prepare_voice_for_streaming(candidate):
+                    logging.warning(
+                        "Voice %s could not be prepared for split synthesis; keeping current voice",
+                        catalog_voice['id'],
+                    )
+                    return jsonify({
+                        'error': 'Voice could not be prepared for streaming; current voice unchanged'
+                    }), 500
                 with self.talk_ctrl.lock:
                     old = self.talk_ctrl.pipers.get(lang)
                     new_voice = PiperTTS(model_path=str(candidate))
@@ -1355,10 +1458,6 @@ class AppContext:
         def models_delete():
             name = (request.get_json(silent=True) or {}).get('name', '')
             return _proxy_control('POST', '/control/delete', 120, {'name': name})
-
-        @self.app.route('/models/reset-mla', methods=['POST'])
-        def models_reset_mla():
-            return _proxy_control('POST', '/control/reset_mla', 30)
 
         @self.app.route('/benchmark/run', methods=['POST'])
         def benchmark_run():
@@ -1665,9 +1764,14 @@ class AppContext:
                         self.socketio.emit('transcription', asr)
                     else:
                         logging.warning("Backend transcription returned no result")
-                        query_str = AppConstants.DEFAULT_MODEL_QUERY_STR
+                        return jsonify({
+                            'error': 'Speech transcription is unavailable. Please try again.'
+                        }), 503
                 except Exception as e:
-                    logging.error(e)
+                    logging.exception("Speech transcription failed: %s", e)
+                    return jsonify({
+                        'error': 'Speech transcription is unavailable. Please try again.'
+                    }), 503
 
             # Handle polite endings
             if ('Thank you' in query_str) or ('Thanks' in query_str):
@@ -2358,7 +2462,10 @@ def stream_chat_request(messages, model, config, generation_id, socketio_event='
     except Exception as e:
         if genai_app.is_generation_current(generation_id):
             logging.error(f"Backend Stream Error: {e}")
-        # genai_app.emit('error', str(e))
+            genai_app.fail_generation(
+                generation_id,
+                'Response generation failed. Please try again.',
+            )
         return None
 
 def post_stop_to_sima(model_name=None):

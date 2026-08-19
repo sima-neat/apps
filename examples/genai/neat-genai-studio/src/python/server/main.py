@@ -51,6 +51,9 @@ def start_openai_server(cfg: AppConfig):
             "provided by the installed Neat Development Environment."
         ) from exc
 
+    if len(cfg.chat_models) > 1:
+        raise RuntimeError("Only one startup chat/VLM model may be configured")
+
     options = pyneat.GenAIServerOptions()
     options.host = cfg.openai.host
     options.port = cfg.openai.port
@@ -66,6 +69,7 @@ def start_openai_server(cfg: AppConfig):
                 continue
             chat_name = server.add_model(model.path, model.name)
             print(f"added chat model: {chat_name} -> {model.path}", flush=True)
+            break
 
         if cfg.asr_model and cfg.asr_model.path and cfg.asr_model.path.is_dir():
             asr_name = server.add_model(cfg.asr_model.path, cfg.asr_model.name)
@@ -137,12 +141,6 @@ def main() -> int:
 
         server = start_openai_server(cfg)
 
-        # On a genuine MLA load failure during a switch, request a supervised
-        # reset (run.sh resets the dispatcher and relaunches) via a sentinel exit
-        # code. Disable with MLA_RESET_ON_SWITCH=0.
-        mla_reset_on_switch = os.environ.get("MLA_RESET_ON_SWITCH", "1") != "0"
-        mla_reset_exit_code = int(os.environ.get("MLA_RESET_EXIT_CODE", "75"))
-
         manager = ModelManager(
             server,
             catalog_dir=cfg.catalog_dir,
@@ -150,8 +148,6 @@ def main() -> int:
             asr_name=cfg.asr_model.name if cfg.asr_model else None,
             hub=cfg.hub,
             openai_base_url=cfg.openai.base_url,
-            mla_reset_on_switch=mla_reset_on_switch,
-            mla_reset_exit_code=mla_reset_exit_code,
             log_tap=log_tap,
         )
         # Make startup models (loaded from absolute paths) visible in the catalog.

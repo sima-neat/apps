@@ -30,7 +30,9 @@ let isPlaying = false;
 let currentAudioContext = null;
 let receivedEndSignal = false;
 let shouldPlayAudio = true;
-let currentSourceNode = null;
+let scheduledSources = [];
+let scheduledHighlightTimers = [];
+let nextStartTime = 0;
 let activeGeneration = false;
 let pendingNewGenerationAudio = false;
 // Bumped every time playback is stopped/aborted. Any in-flight or queued audio
@@ -1734,30 +1736,18 @@ function stopAudio() {
   pendingNewGenerationAudio = false;
   isPlaying = false;
   audioQueue.length = 0;
+  nextStartTime = 0;
   // Cancel any in-flight / queued browser (Web Speech) utterances too.
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
   clearTtsHighlight();
 
-  try {
-    if (currentSourceNode) {
-      currentSourceNode.stop(0);
-      currentSourceNode.disconnect();
-    }
-  } catch (e) {
-    console.warn("Error stopping source node:", e);
-  } finally {
-    currentSourceNode = null;
-  }
-
-  try {
-    if (currentAudioContext) {
-      currentAudioContext.close();
-    }
-  } catch (e) {
-    console.warn("Error closing audio context:", e);
-  } finally {
-    currentAudioContext = null;
-  }
+  scheduledSources.forEach(source => {
+    try { source.stop(0); source.disconnect(); }
+    catch (e) { console.warn("Error stopping source node:", e); }
+  });
+  scheduledSources = [];
+  scheduledHighlightTimers.forEach(timer => clearTimeout(timer));
+  scheduledHighlightTimers = [];
 
   console.log("🧹 Audio playback completely stopped and cleaned up.");
 }
@@ -2396,6 +2386,10 @@ function handleTranscriptionTimeUpdate(data) {
 }
 
 socket.on('update', handleTextUpdate);
+socket.on('generation_error', (data) => {
+  const message = (data && data.message) || 'Response generation failed. Please try again.';
+  addChatMessage(`⚠️ ${message}`, false, false);
+});
 socket.on('end', (data) => {
   console.log('Received end event:', data);
   receivedEndSignal = true;
@@ -2508,19 +2502,13 @@ async function processAudioQueue() {
   }
 
   try {
-    if (currentAudioContext) {
-      currentAudioContext.close();
-    }
-
-    currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-    await applySpeakerSink(currentAudioContext);
+    await ensureAudioContext();
     const audioBuffer = await currentAudioContext.decodeAudioData(arrayBuffer);
 
     // Final check before starting playback
     if (!shouldPlayAudio || myEpoch !== audioEpoch) {
       console.log('Audio playback cancelled before starting');
       isPlaying = false;
-      try { currentAudioContext.close(); } catch (e) { /* already closed by stopAudio */ }
       return;
     }
 
@@ -2533,12 +2521,21 @@ async function processAudioQueue() {
     analyser.connect(gainNode);
     gainNode.connect(currentAudioContext.destination);
 
-    currentSourceNode = source;
+    scheduledSources.push(source);
+    const startAt = Math.max(currentAudioContext.currentTime, nextStartTime);
+    source.start(startAt);
+    nextStartTime = startAt + audioBuffer.duration;
 
-    source.start();
-
-    // Highlight the sentence now being spoken (survives streaming re-renders).
-    setTtsHighlight(ttsAnswerContainer(), chunkText);
+    // Highlight when this scheduled chunk actually starts, not while an earlier
+    // sentence is still playing.
+    const highlightDelay = Math.max(0, (startAt - currentAudioContext.currentTime) * 1000);
+    const highlightTimer = setTimeout(() => {
+      scheduledHighlightTimers = scheduledHighlightTimers.filter(t => t !== highlightTimer);
+      if (shouldPlayAudio && myEpoch === audioEpoch) {
+        setTtsHighlight(ttsAnswerContainer(), chunkText);
+      }
+    }, highlightDelay);
+    scheduledHighlightTimers.push(highlightTimer);
 
     // Track First Audio timing (only for the very first audio chunk)
     if (!firstAudioStarted && userInputStartTime) {
@@ -2548,8 +2545,7 @@ async function processAudioQueue() {
     }
 
     source.onended = () => {
-      isPlaying = false;
-      currentSourceNode = null;
+      scheduledSources = scheduledSources.filter(s => s !== source);
 
       // Disconnect and clean up
       try {
@@ -2564,15 +2560,9 @@ async function processAudioQueue() {
 
       // Check if we should hide the abort button
       // Hide it only if text streaming has ended AND no more audio in queue
-      if (receivedEndSignal && audioQueue.length === 0) {
+      if (receivedEndSignal && audioQueue.length === 0 && scheduledSources.length === 0) {
         hideAbortButton();
         clearTtsHighlight();   // nothing left to speak — drop the highlight
-      }
-
-      // Only continue processing if audio should still play and this turn's
-      // playback was not stopped (epoch unchanged).
-      if (shouldPlayAudio && myEpoch === audioEpoch) {
-        setTimeout(() => processAudioQueue(), 250);
       }
     };
   } catch (err) {
@@ -2580,9 +2570,21 @@ async function processAudioQueue() {
     isPlaying = false;
 
     // Hide abort button if text streaming ended and this was the last audio
-    if (receivedEndSignal && audioQueue.length === 0) {
+    if (receivedEndSignal && audioQueue.length === 0 && scheduledSources.length === 0) {
       hideAbortButton();
     }
+  }
+  isPlaying = false;
+  processAudioQueue();
+}
+
+async function ensureAudioContext() {
+  if (!currentAudioContext || currentAudioContext.state === 'closed') {
+    currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    await applySpeakerSink(currentAudioContext);
+  }
+  if (currentAudioContext.state === 'suspended') {
+    await currentAudioContext.resume();
   }
 }
 
@@ -2591,17 +2593,20 @@ async function processSystemAudioOnce(data) {
     const blob = new Blob([data], { type: 'audio/wav' });
     const arrayBuffer = await blob.arrayBuffer();
 
-    if (currentAudioContext) {
-      currentAudioContext.close();
-    }
-    currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-    await applySpeakerSink(currentAudioContext);
+    await ensureAudioContext();
     const audioBuffer = await currentAudioContext.decodeAudioData(arrayBuffer);
 
     const source = currentAudioContext.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(currentAudioContext.destination);
-    source.start();
+    scheduledSources.push(source);
+    const startAt = Math.max(currentAudioContext.currentTime, nextStartTime);
+    source.start(startAt);
+    nextStartTime = startAt + audioBuffer.duration;
+    source.onended = () => {
+      scheduledSources = scheduledSources.filter(s => s !== source);
+      try { source.disconnect(); } catch (e) { /* already disconnected by stopAudio */ }
+    };
   } catch (e) {
     console.warn('System audio playback failed:', e);
   }
@@ -3820,7 +3825,6 @@ function addResponseCopyButton(messageDiv) {
 // ---- Live model management --------------------------------------------
 
 let _modelBusy = false;
-let _resetting = false;   // an accelerator (MLA) reset is in progress
 
 function controlEnabled() {
   const c = window.SIMA_CONFIG || {};
@@ -4080,7 +4084,7 @@ function renderInstalledList() {
   }
 
   const control = controlEnabled();
-  const busy = _modelBusy || _resetting;
+  const busy = _modelBusy;
   const activeName = control ? _activeChatModel : getSelectedChatModel();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
@@ -4216,7 +4220,7 @@ function updateManageButtons() {
 // A model is usable for chat only once it is FULLY resident (not mid-load and
 // not mid-reset). The composer is locked until then.
 function modelReady() {
-  return !!getSelectedChatModel() && !_modelBusy && !_resetting;
+  return !!getSelectedChatModel() && !_modelBusy;
 }
 
 // Enable/disable the chat input interface based on model readiness.
@@ -4229,8 +4233,7 @@ function updateComposerEnabled() {
     input.disabled = !ready;
     input.placeholder = ready ? 'Message'
       : (_modelBusy ? 'Loading model — please wait…'
-        : (_resetting ? 'Resetting the accelerator…'
-          : 'Load a model in Settings to start chatting…'));
+        : 'Load a model in Settings to start chatting…');
   }
   if (send) send.disabled = !ready;
   if (typeof recordButton !== 'undefined' && recordButton) recordButton.disabled = !ready;
@@ -4245,9 +4248,7 @@ function updateComposerEnabled() {
 }
 
 function initModelManage() {
-  // Info / delete / load / unload are per-row buttons in the list now
-  // (wired in renderInstalledList). Only the shared load-error + reset controls
-  // are wired here.
+  // Info / delete / load / unload are per-row buttons in the list now.
   const sel = document.getElementById('chatModelSelect');
   if (sel) sel.addEventListener('change', updateManageButtons);
 
@@ -4257,9 +4258,7 @@ function initModelManage() {
     const box = document.getElementById('modelLoadError');
     const target = (box && box.dataset.model) || (sel && sel.value);
     clearModelError();
-    // A failed load usually means the accelerator is wedged — reset the MLA
-    // first (no extra confirm), then retry loading the model.
-    if (target) resetMla({ skipConfirm: true, thenLoad: target });
+    if (target) loadModelAndActivate(target);
   });
   if (viewLogs) viewLogs.addEventListener('click', () => {
     const det = document.getElementById('modelLogDetails');
@@ -4270,7 +4269,7 @@ function initModelManage() {
 
 // Explicitly unload the resident chat/VLM model, freeing the accelerator.
 async function unloadModel(name) {
-  if (!name || _modelBusy || _resetting) return;
+  if (!name || _modelBusy) return;
   if (!window.confirm(`Unload "${name}" from the accelerator? You can load it again anytime.`)) return;
   _modelBusy = true;
   updateManageButtons();
@@ -4290,65 +4289,6 @@ async function unloadModel(name) {
     await refreshCatalog();
     if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
   }
-}
-
-// Reset the accelerator: unloads all models and asks the supervisor (run.sh) to
-// reset the MLA dispatcher and relaunch the model server. The UI stays up and
-// waits for the server to come back.
-async function resetMla(opts) {
-  opts = opts || {};
-  if (_resetting) return;
-  if (!opts.skipConfirm &&
-      !window.confirm('Reset the accelerator (MLA)?\n\nThis unloads all models and briefly restarts the model server — it will be unavailable for a few seconds. In-progress generation will stop.')) return;
-  _resetting = true;
-  stopLoadPolling();            // abort any live load feed from the outgoing server
-  clearModelError();
-  updateManageButtons();
-  setModelStatus(opts.thenLoad ? `Resetting the accelerator, then loading ${opts.thenLoad}…`
-    : 'Resetting the accelerator and restarting…', 'loading');
-  setModelLoadBar('active');
-  try {
-    // The server exits ~1.5s after replying, so the response may or may not arrive.
-    try { await fetch('/models/reset-mla', { method: 'POST' }); } catch (e) { /* expected */ }
-    await waitForServerBack();
-  } finally {
-    // Always release the reset lock, even if the wait threw, so the UI can't
-    // get stuck with every action disabled.
-    _resetting = false;
-    _modelBusy = false;           // a wedged load (if any) is gone with the restart
-    setModelLoadBar(null);
-    clearModelError();            // drop any stale error a concurrent load's 502 raised
-    await refreshCatalog();
-    updateManageButtons();
-    if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
-  }
-  // After a clean-slate reset, load the requested model (used by Retry and by the
-  // one-shot auto-recovery). Disable autoRetry so a second failure is surfaced
-  // rather than triggering another reset loop.
-  if (opts.thenLoad) {
-    await loadModelAndActivate(opts.thenLoad, { autoRetry: false });
-  }
-}
-
-// Poll /models/status until the relaunched model server answers.
-async function waitForServerBack() {
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const start = Date.now();
-  const timeoutMs = 90000;
-  await sleep(2500);   // let the old process exit before polling
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const r = await fetch('/models/status', { cache: 'no-store' });
-      if (r.ok) {
-        const d = await r.json().catch(() => ({}));
-        // The server is back; the MLA is cleared only if run.sh had the
-        // privileges to reset the dispatcher — so don't over-claim a full reset.
-        if (d && !d.error) { setModelStatus('Model server restarted — ready', 'ready'); return; }
-      }
-    } catch (e) { /* server still down */ }
-    await sleep(1500);
-  }
-  setModelStatus('Reset requested, but the server is slow to return — check run.sh.', 'error');
 }
 
 async function deleteModel(name) {
@@ -4438,10 +4378,8 @@ function initModelCardModal() {
   });
 }
 
-async function loadModelAndActivate(name, opts) {
-  opts = opts || {};
-  const autoRetry = opts.autoRetry !== false;   // a fresh load auto-recovers once
-  if (!name || _modelBusy || _resetting) return;
+async function loadModelAndActivate(name) {
+  if (!name || _modelBusy) return;
   const select = document.getElementById('chatModelSelect');
   const option = select && Array.from(select.options).find(o => o.value === name);
   if (option && option.dataset.loaded === 'true') {
@@ -4469,7 +4407,6 @@ async function loadModelAndActivate(name, opts) {
   setModelStatus(`${switchNote}Loading ${name}… preparing`, 'loading');
   setModelLoadBar('active');
   startLoadPolling(name);
-  let recover = false;   // set when we should auto reset the MLA and retry once
   try {
     const resp = await fetch('/models/load', {
       method: 'POST',
@@ -4477,23 +4414,7 @@ async function loadModelAndActivate(name, opts) {
       body: JSON.stringify({ name })
     });
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      // 503 = accelerator (MLA) busy/wedged. Auto-recover once before notifying.
-      if (resp.status === 503) {
-        if (autoRetry && !_resetting) { recover = true; return; }
-        if (!_resetting) {
-          setModelStatus('Load failed — see details below', 'error');
-          showModelError(name, data.error || 'The accelerator (MLA) is busy or wedged. Restart the studio (run.sh) to clear it.');
-        }
-        return;
-      }
-      throw new Error(data.error || 'load failed');
-    }
-    // The server is resetting the MLA and restarting; the socket will reconnect.
-    if (data.state === 'resetting' || data.reset) {
-      setModelStatus(data.message || 'Resetting the accelerator and restarting…', 'loading');
-      return;
-    }
+    if (!resp.ok) throw new Error(data.error || 'load failed');
     const ev = Array.isArray(data.evicted) ? data.evicted : (data.evicted ? [data.evicted] : []);
     const evictedNote = ev.length ? ` · unloaded ${ev.join(', ')}` : '';
     const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
@@ -4502,34 +4423,19 @@ async function loadModelAndActivate(name, opts) {
     // A newly loaded model starts with a fresh context — clear the chat.
     newChat();
   } catch (err) {
-    // First failure of a fresh load: auto-recover (reset + retry) before showing
-    // anything. If a reset is already in progress, resetMla owns the UI.
-    if (autoRetry && !_resetting) {
-      recover = true;
-    } else if (!_resetting) {
-      setModelStatus('Load failed — see details below', 'error');
-      showModelError(name, err.message);
-    }
+    setModelStatus('Load failed — see details below', 'error');
+    showModelError(name, err.message);
   } finally {
     stopLoadPolling();
     if (select) select.disabled = false;
     _modelBusy = false;
     _pendingLoad = '';
-    if (recover) {
-      // Auto-recover: reset the MLA and retry the load once. The retry runs with
-      // autoRetry disabled, so a second failure surfaces the error to the user.
-      setModelStatus(`Load failed — resetting the accelerator and retrying ${name}…`, 'loading');
-      await resetMla({ skipConfirm: true, thenLoad: name });
-    } else if (!_resetting) {
-      // During a reset, leave the status/bar/catalog to resetMla so its progress
-      // and this doomed load don't fight over the UI.
-      await pollLoadLogsOnce(name);   // flush any remaining load-log lines
-      setModelLoadBar(null);
-      await refreshCatalog();
-      if (select) select.value = name;
-      updateManageButtons();
-      if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
-    }
+    await pollLoadLogsOnce(name);   // flush any remaining load-log lines
+    setModelLoadBar(null);
+    await refreshCatalog();
+    if (select) select.value = name;
+    updateManageButtons();
+    if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
   }
 }
 
@@ -6370,7 +6276,7 @@ function updateBenchModelState() {
   const run = document.getElementById('benchRunBtn');
   const hint = document.getElementById('benchHint');
   const n = benchSelectedModels().length;
-  const busy = _modelBusy || _resetting;
+  const busy = _modelBusy;
   if (run) {
     run.disabled = n === 0 || busy;
     run.textContent = n > 1 ? `Run benchmark · ${n} models` : 'Run benchmark';
@@ -6395,7 +6301,7 @@ function benchFmt(n) { return (n == null) ? '–' : (Math.round(n * 100) / 100).
 async function runBenchmark() {
   const models = benchSelectedModels();
   const hint = document.getElementById('benchHint');
-  if (!models.length || _modelBusy || _resetting) { updateBenchModelState(); return; }
+  if (!models.length || _modelBusy) { updateBenchModelState(); return; }
   const runs = benchClampInt('benchRuns', 1, 50, 5);
   const maxTokens = benchClampInt('benchMaxTokens', 8, 2048, 128);
   const promptEl = document.getElementById('benchPrompt');

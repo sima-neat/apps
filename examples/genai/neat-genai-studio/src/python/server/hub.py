@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import socket
 import threading
 import time
@@ -70,6 +71,21 @@ def _catalog_target(catalog_dir: Path, repo_id: str) -> Path:
     return target
 
 
+def _existing_catalog_target(catalog_dir: Path, repo_id: str) -> Path:
+    """Prefer the canonical target, but recognize the legacy basename layout."""
+    target = _catalog_target(catalog_dir, repo_id)
+    if target.exists() or safe_name(repo_id) == repo_id.rsplit("/", 1)[-1]:
+        return target
+
+    root = Path(catalog_dir).resolve()
+    legacy = (root / repo_id.rsplit("/", 1)[-1]).resolve()
+    try:
+        legacy.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Model target escapes the catalog directory") from exc
+    return legacy if legacy.exists() else target
+
+
 def _dir_size(path: Path) -> int:
     total = 0
     try:
@@ -113,8 +129,7 @@ def internet_reachable() -> bool:
     now = time.monotonic()
     cached = _internet_cache["ok"]
     if cached is None:
-        # Never probed — do it once synchronously so the first hubEnabled value
-        # is accurate (this runs on the initial status poll, not repeatedly).
+        # Explicit Hub operations need an accurate first result.
         ok = _probe_internet()
         _internet_cache["ok"] = ok
         _internet_cache["at"] = now
@@ -223,7 +238,7 @@ def hub_search(catalog_dir: Path | None, hub: HubConfig, query: str, limit: int 
                 elif "safetensors" in repo_id.rsplit("/", 1)[-1].lower():
                     continue
                 try:
-                    local = _catalog_target(catalog_dir, repo_id) if catalog_dir else None
+                    local = _existing_catalog_target(catalog_dir, repo_id) if catalog_dir else None
                 except ValueError:
                     logging.warning("Ignoring unsafe Hub repository id %r", repo_id)
                     continue
@@ -339,7 +354,8 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
         canonical_repo_id = validated_repo_id(str(getattr(info, "id", "")), hub)
         if canonical_repo_id.casefold() != repo_id.casefold():
             raise ValueError("Hub returned a different repository id")
-        target = _catalog_target(Path(catalog_dir), canonical_repo_id)
+        target = _existing_catalog_target(Path(catalog_dir), canonical_repo_id)
+        target_existed = target.exists()
         total = sum(int(getattr(s, "size", 0) or 0) for s in (info.siblings or []))
     except Exception:  # noqa: BLE001 - details stay in server logs
         logging.exception("Could not resolve Hugging Face repository %s", repo_id)
@@ -383,6 +399,8 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
 
     info = classify_model_dir(target)
     if info is None:
+        if not target_existed:
+            shutil.rmtree(target, ignore_errors=True)
         yield event(state="error", repoId=repo_id,
                     message="Downloaded repo is not a compatible model (no devkit/ config)")
         return

@@ -32,6 +32,7 @@ TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
+DEPENDENCIES_ONLY=0
 
 # ---------------------------------------------------------------------------
 # Pretty output: the Neat sparkle banner + colourised status lines. Degrades to
@@ -58,6 +59,17 @@ info() { printf '%s\n' "${C_MUTED}·${C_RESET} $*"; }
 ok()   { printf '%s\n' "${C_OK}✔${C_RESET} $*"; }
 warn() { printf '%s\n' "${C_WARN}⚠${C_RESET} $*" >&2; }
 errln(){ printf '%s\n' "${C_ERR}✘${C_RESET} $*" >&2; }
+
+catalog_dir_name() {
+  local repo="$1" org name
+  org="${repo%%/*}"
+  name="${repo##*/}"
+  if [[ "${org,,}" == "simaai" ]]; then
+    printf '%s\n' "${name}"
+  else
+    printf '%s@%s\n' "${org}" "${name}"
+  fi
+}
 
 # The Neat sparkle, formed from the logo palette, plus the wordmark + tagline.
 banner() {
@@ -97,7 +109,11 @@ section() {
 usage() {
   cat <<'USAGE'
 Usage:
-  ./setup.sh
+  ./setup.sh [--dependencies-only]
+
+Options:
+  --dependencies-only             Refresh the two Python environments only;
+                                  do not download models/voices or rewrite data
 
 Environment:
   PYNEAT_PYTHON                 Python interpreter with pyneat
@@ -132,13 +148,14 @@ Environment:
 USAGE
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
-
-if [[ $# -gt 0 ]]; then
-  errln "Unknown argument: $1"
+case "${1:-}" in
+  "") ;;
+  -h|--help) usage; exit 0 ;;
+  --dependencies-only) DEPENDENCIES_ONLY=1 ;;
+  *) errln "Unknown argument: $1"; usage; exit 2 ;;
+esac
+if [[ $# -gt 1 ]]; then
+  errln "Too many arguments."
   usage
   exit 2
 fi
@@ -200,8 +217,17 @@ info "Installing piper-tts (isolated)…"
   -r "${EXAMPLE_DIR}/src/python/requirements-pipertts.txt"
 ok "piper-tts venv ready."
 
+if [[ "${DEPENDENCIES_ONLY}" == "1" ]]; then
+  ok "Dependency refresh complete; models, voices, config and RAG data were unchanged."
+  exit 0
+fi
+
 mkdir -p "${MODELS_DIR}"
-CHAT_MODEL_DIR="${MODELS_DIR}/${CHAT_MODEL_NAME}"
+if [[ -n "${CHAT_MODEL_REPO}" ]]; then
+  CHAT_MODEL_DIR="${MODELS_DIR}/$(catalog_dir_name "${CHAT_MODEL_REPO}")"
+else
+  CHAT_MODEL_DIR=""
+fi
 ASR_MODEL_DIR="${MODELS_DIR}/whisper-small-a16w8"
 RAG_EMBEDDING_DIR="${MODELS_DIR}/gte-small"
 
@@ -221,7 +247,7 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
   "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
 
   for repo in ${CATALOG_MODEL_REPOS}; do
-    name="$(basename "${repo}")"
+    name="$(catalog_dir_name "${repo}")"
     step "Downloading catalog model: ${repo}"
     "${APP_VENV}/bin/hf" download "${repo}" --local-dir "${MODELS_DIR}/${name}"
   done
@@ -243,7 +269,6 @@ fi
 
 # Render "simaai TDoSiMa" -> "simaai, TDoSiMa" for the YAML flow list.
 HUB_ORGS_YAML="$(echo "${HUB_ORGS}" | tr -s ' ' | sed 's/^ //; s/ $//; s/ /, /g')"
-
 section "Configuration"
 step "Writing local config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
 mkdir -p "$(dirname "${CONFIG_PATH}")"
@@ -297,6 +322,7 @@ app:
   rag:
     enabled: true
     embedding_model_dir: ${RAG_EMBEDDING_DIR}
+
 YAML
 ok "Config written."
 
@@ -330,6 +356,7 @@ if [[ "${INSTALL_TTS_VOICES}" == "1" ]]; then
     cd "${EXAMPLE_DIR}/src/python"
     TTS_LANGUAGES="${TTS_LANGUAGES}" \
       TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES}" \
+      PYTHON="${PIPERTTS_VENV}/bin/python" \
       bash voice_install.sh
   )
   # piper-plus English G2P (g2p-en) pulls NLTK tagger data at runtime; fetch it

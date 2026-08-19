@@ -27,7 +27,6 @@ from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
 from shared.config import HubConfig, classify_model_dir, model_dir_complete
-from server import hub as hub_helpers
 
 
 def parse_param_count(name: str) -> str | None:
@@ -104,8 +103,6 @@ class ModelManager:
         openai_base_url: str,
         warmup: bool = True,
         switch_settle_s: float = 0.6,
-        mla_reset_on_switch: bool = True,
-        mla_reset_exit_code: int = 75,
         log_tap=None,
     ) -> None:
         self._server = server
@@ -119,12 +116,6 @@ class ModelManager:
         # (which returns MLA memory to the dispatcher) completes before loading
         # the replacement — avoids transient double-residency (MLA_LOAD_FAILED).
         self._switch_settle_s = max(0.0, float(switch_settle_s))
-        # On a genuine MLA load failure, request a supervised restart (run.sh
-        # resets the dispatcher and relaunches) instead of an unsafe in-process
-        # dispatcher restart. Gated so the behavior is explicit.
-        self._mla_reset_on_switch = bool(mla_reset_on_switch)
-        self._mla_reset_exit_code = int(mla_reset_exit_code)
-
         self._lock = threading.RLock()
         # Serializes mutating operations (load/unload/delete) end-to-end WITHOUT
         # holding _lock across the slow accelerator/IO calls (remove_model's MLA
@@ -284,8 +275,7 @@ class ModelManager:
         others cleanly (cancel their in-flight streams, then unload, then wait so
         the MLA memory is actually returned before the new model loads), then
         warms the new model synchronously so an MLA load failure is caught here
-        and escalated to a supervised reset rather than surfacing on the user's
-        first chat.
+        and surfaced during the load rather than on the user's first chat.
         """
         name = (name or "").strip()
         with self._op_lock:
@@ -380,7 +370,7 @@ class ModelManager:
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
                 if _is_mla_failure(detail):
-                    return self._handle_mla_failure(name, evicted, detail)
+                    return self._handle_mla_failure(name, detail)
 
                 # Non-MLA warm failure: roll back so manager state stays consistent.
                 try:
@@ -702,6 +692,7 @@ class ModelManager:
         with self._op_lock:
             # remove_model frees MLA memory and can block for seconds — keep it
             # out of _lock so concurrent status polls are not held up.
+            self._stop_model_streams(name)
             removed = bool(self._server.remove_model(name))
             with self._lock:
                 if name in self._resident:
@@ -851,71 +842,28 @@ class ModelManager:
         except Exception as exc:  # noqa: BLE001 - surfaced to caller
             return False, str(exc)
 
-    def _handle_mla_failure(self, name: str, evicted: list, detail: str) -> dict:
-        """A model failed to load with an MLA error. Escalate to a reset."""
+    def _handle_mla_failure(self, name: str, detail: str) -> dict:
+        """Roll back a failed MLA load and report it without runtime recovery."""
         logging.error("MLA load failed for '%s': %s", name, detail)
         self._record_error(name, detail, kind="mla")
-        if not self._mla_reset_on_switch:
-            with self._lock:
-                try:
-                    self._server.remove_model(name)
-                except Exception:
-                    pass
+        try:
+            self._server.remove_model(name)
+        except Exception:
+            pass
+        with self._lock:
+            if name in self._resident:
                 self._resident = []
-            raise RuntimeError(
-                f"Model '{name}' could not be loaded because the accelerator (MLA) "
-                "is busy or wedged. Restart the studio (run.sh) to clear it."
-            )
-
-        return self._request_supervised_reset(
-            f"MLA load failed for '{name}'",
-            "The accelerator was busy, so the studio is resetting it and "
-            "restarting. Reconnecting shortly…",
-            extra={"name": name, "evicted": evicted},
-        )
-
-    def _request_supervised_reset(self, reason: str, message: str,
-                                  extra: dict | None = None) -> dict:
-        """Ask the supervisor (run.sh) to reset the MLA dispatcher and relaunch.
-
-        A dispatcher restart cannot be done safely in-process (it would free the
-        pinned ASR model and the runtime cannot reconnect), so we exit with the
-        sentinel code after the HTTP response has had a moment to flush; run.sh
-        resets the dispatcher and relaunches just the model server.
-        """
-        logging.error(
-            "requesting supervised MLA reset + relaunch (%s; exit code %d)",
-            reason, self._mla_reset_exit_code,
-        )
-
-        def _exit_soon() -> None:
-            time.sleep(1.5)
-            os._exit(self._mla_reset_exit_code)
-
-        threading.Thread(target=_exit_soon, daemon=True).start()
-        result = {"state": "resetting", "reset": True, "message": message}
-        if extra:
-            result.update(extra)
-        return result
-
-    def reset_mla(self) -> dict:
-        """User-triggered accelerator reset: drain in-flight streams (best-effort,
-        WITHOUT taking the op-lock so it works even if a load is wedged), then ask
-        the supervisor to reset the MLA dispatcher and relaunch the server."""
-        for victim in list(self._resident):
-            try:
-                self._stop_model_streams(victim)
-            except Exception:
-                pass
-        return self._request_supervised_reset(
-            "user requested MLA reset",
-            "Resetting the accelerator and restarting. Reconnecting shortly…",
+        raise RuntimeError(
+            f"Model '{name}' could not be loaded because the accelerator (MLA) "
+            "reported an error. Check the board runtime before retrying."
         )
 
     # -- status ----------------------------------------------------------------
 
     def hub_enabled(self) -> bool:
-        return hub_helpers.hub_enabled(self._hub)
+        # Status polling reports configuration only. Reachability is checked by
+        # explicit Hub search/card/download operations, never during UI startup.
+        return bool(self._hub.allow_download)
 
     def disk_info(self) -> dict | None:
         """Free / total bytes of the filesystem that holds the model catalog (the

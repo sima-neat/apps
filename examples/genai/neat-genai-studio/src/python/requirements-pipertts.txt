@@ -4,3 +4,4 @@
 # with piper-plus, so it lives in its OWN venv (.venv-pipertts) and the app
 # reaches it through pipertts_worker.py. Installed by setup.sh.
 piper-tts==1.7.0
+onnx>=1.17,<2
