@@ -1,6 +1,6 @@
 id: neat-application-builder
 name: Neat Application Builder
-version: 0.1.2
+version: 0.1.3
 agents: [codex, claude]
 description: Build Neat applications in the Neat Development Environment or on DevKit after choosing the public API shape.
 compatibility:

@@ -52,7 +52,9 @@ current installed Neat Library contract.
 - `development-workflow/model.mdx`: `Model`, model specs, and route fragments.
 - `development-workflow/graph.mdx`: graph boundaries, `add`, `connect`, named endpoints.
 - `development-workflow/core_types.mdx`: `Tensor` and `Sample`.
-- `development-workflow/genai-model.mdx`: GenAI model and server APIs.
+- `development-workflow/genai-model/index.mdx`: GenAI application entry point.
+- `development-workflow/genai-model/direct-api.mdx`: direct model requests, results, and graph fragments.
+- `development-workflow/genai-model/genai-server.mdx`: HTTP serving, lifecycle, and network boundary.
 - `development-workflow/node.mdx`: public nodes and node groups.
 - `development-workflow/pipeline.mdx`: built pipeline/runtime view.
 - `advanced-concepts/application-design/graphs.md`: graph composition details.

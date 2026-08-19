@@ -34,15 +34,14 @@ reference implementations after the API shape is chosen.
 - Prefer clear application endpoint names such as `image`, `detections`, `classes`, `preview`, `prompt`, and `tokens`.
 - Keep generated application code runnable with explicit build and run commands.
 
-## DevKit Local Display and Run
+## DevKit Display and Run
 
 For applications that show results locally on a Modalix DevKit, or that run interactively until a human stops them:
 
-- Choose a local display path. The DevKit runs an X11 desktop, but no GStreamer X-window video sink is installed (`ximagesink`, `xvimagesink`, and `glimagesink` are absent), so a GStreamer pipeline cannot render into a desktop window directly. Use one of:
-  - HDMI full-screen via `kmssink`. The desktop holds the DRM master, so stop it first (`sudo systemctl stop lightdm`) and restart it after (`sudo systemctl start lightdm`). The DevKit DRM driver is `smifb`: it needs `driver-name=smifb`, an RGB (`BGRx`) caps, and a full-screen primary-plane modeset (`force-modesetting=true connector-id=<id>`); it rejects sub-CRTC overlay planes. Symptoms: "Could not open DRM module" means the driver name is missing; `drmModeSetPlane failed: Invalid argument` means a non-full-screen or overlay-plane config.
-  - A window on the existing desktop via OpenCV `cv::imshow` (the installed OpenCV `highgui` uses the Qt backend), with no monitor takeover and no extra packages. Launch with `DISPLAY=:0` and the session's `XAUTHORITY`. Detect the window close ("X") button with `getWindowProperty(name, WND_PROP_VISIBLE) < 1`, otherwise `imshow` re-creates the closed window on the next call. `cv::waitKey` reads X events from the window, so ESC/q/close only work at the DevKit's own keyboard/mouse with the window focused.
-  - Stream to Neat Insight with `VideoSender` (H.264 RTP/UDP) plus `MetadataSender` (detection JSON) and view the overlay in the browser — no local display.
-- Run and stop over `dk`/`devkit-run`. These run the application over SSH without a pty, so a terminal Ctrl-C is not forwarded and the application can be left orphaned on the DevKit (still holding the MLA and streaming). For interactive runs, launch with `ssh -tt` so Ctrl-C and disconnects reach the application, have the application handle `SIGINT`/`SIGTERM`/`SIGHUP` for a clean `Run::close()` and teardown, and as a backup `trap` on exit to `pkill` the remote process. `dk`/`devkit-run` stays the right tool for short, bounded smoke runs that exit on their own.
+- Inspect the target before choosing a local display path. Check installed GStreamer sinks, the active desktop session, the DRM owner and connector, and the OpenCV HighGUI backend instead of assuming one image's package or driver layout.
+- Use Neat Insight when the result should be viewed remotely. `VideoSender` can encode compatible raw input as H.264 or forward an already encoded H.264 or H.265 stream with the matching codec; pair it with `MetadataSender` when the viewer needs structured overlays.
+- Prefer `dk`/`devkit-run` for SDK-to-DevKit execution. The current helper streams output and attempts remote cleanup after interruption or common SSH and signal exits. Use `dk shell` when an interactive remote terminal is required, and fall back to direct SSH only when the helper cannot express the workflow.
+- Have long-running applications handle `SIGINT` and `SIGTERM`, close their `Run` handles, and release model, codec, and streaming resources on every exit path.
 
 ## Boundaries
 

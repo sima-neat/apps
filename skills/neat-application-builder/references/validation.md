@@ -45,8 +45,11 @@ Before running:
 
 - Confirm classic `Model` inputs point at a compiled model archive.
 - Confirm GenAI inputs point at a deployed LLiMa model directory.
+- Confirm coupled Core, Internals, and LLiMa packages belong to a compatible release set when the application uses their shared runtime contracts.
 - Confirm image, video, audio, config, and output paths exist or are created by the app.
 - Confirm the app uses public endpoint names that exist in the built graph.
+- For encoded media, confirm the selected source, decoder, and passthrough sender use the same codec.
+- For camera capture, make strict zero-copy versus CPU fallback an explicit application choice and validate the requested capture depth on the target.
 
 ## Runtime Checks
 
@@ -61,6 +64,11 @@ Exercise at least:
 - timeout or empty-output behavior when the app exposes a timeout
 - wrong endpoint name for multi-input or multi-output graphs
 - invalid GenAI request shape when working with GenAI APIs
+
+When local display is part of the application, inspect the target before choosing
+the path. Confirm the selected GStreamer sink or OpenCV backend exists, identify
+the active display session, and verify DRM ownership and connector details before
+changing services or modesetting.
 
 For graph failures, read structured diagnostics first:
 
