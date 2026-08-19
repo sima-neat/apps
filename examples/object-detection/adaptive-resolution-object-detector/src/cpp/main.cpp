@@ -39,6 +39,7 @@ constexpr const char* kUsage =
 
 int main(int argc, char** argv) {
   std::string mode = "adaptive";
+  bool want_help = false;
   std::vector<char*> forwarded;
   forwarded.reserve(static_cast<std::size_t>(argc));
   forwarded.push_back(argv[0]);
@@ -58,15 +59,24 @@ int main(int argc, char** argv) {
       continue;
     }
     if (arg == "-h" || arg == "--help") {
-      std::cout << kUsage;
-      return 0;
+      want_help = true;
+      continue;
     }
     forwarded.push_back(argv[i]);
   }
 
+  // Validate the mode BEFORE honouring --help, so `--mode nonsense --help` is an
+  // error rather than a usage dump. src/python/main.py behaves the same way
+  // (argparse rejects an invalid choice first) and the two must not drift: the
+  // pipelines chooser assumes both entry points take identical flags.
   if (mode != "adaptive" && mode != "fused") {
     std::cerr << "[ERR] unknown --mode '" << mode << "' (adaptive|fused)\n" << kUsage;
     return 2;
+  }
+
+  if (want_help) {
+    std::cout << kUsage;
+    return 0;
   }
 
   const int forwarded_argc = static_cast<int>(forwarded.size());

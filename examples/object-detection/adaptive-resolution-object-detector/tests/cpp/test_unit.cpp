@@ -64,8 +64,43 @@ bool test_help_runs(const std::string& binary) {
   return expect_true(result.exit_code == 0, "help exits with code 0") &&
          expect_contains(result.stdout_text, "--config", "help mentions --config") &&
          expect_contains(result.stdout_text, "--validate-config-only",
-                         "help mentions --validate-config-only");
+                         "help mentions --validate-config-only") &&
+         expect_contains(result.stdout_text, "--mode", "help mentions --mode");
 }
+
+// ── mode dispatch ────────────────────────────────────────────────────────────
+//
+// This binary is an entry point for BOTH topologies, mirroring
+// src/python/main.py. The pipelines chooser relies on the two taking identical
+// flags, so a drift here breaks the language toggle rather than just this test.
+
+bool test_rejects_unknown_mode(const std::string& binary) {
+  const auto result = spawn_and_wait(binary, {"--mode", "nonsense", "--help"}, 20000);
+  return expect_true(result.exit_code != 0, "unknown --mode is rejected");
+}
+
+fs::path write_adaptive_config(const char* name) {
+  return write_config(name,
+                      "model:\n"
+                      "  path: assets/models/yolo26m-det-int8-b1.tar.gz\n"
+                      "streams:\n"
+                      "  max_streams: 8\n"
+                      "  sources:\n"
+                      "    - id: cam-1\n"
+                      "      rtsp_url: rtsp://127.0.0.1:8554/src1\n"
+                      "output:\n"
+                      "  insight:\n"
+                      "    host: 127.0.0.1\n");
+}
+
+bool test_mode_adaptive_validates(const std::string& binary) {
+  const fs::path config_path = write_adaptive_config("test_mode_adaptive_validates");
+  const auto result = spawn_and_wait(
+      binary, {"--mode", "adaptive", "--config", config_path.string(),
+               "--validate-config-only"}, 20000);
+  return expect_true(result.exit_code == 0, "--mode adaptive validates its config");
+}
+
 
 bool test_missing_config_file_fails_cleanly(const std::string& binary) {
   const auto result = spawn_and_wait(binary, {"--config", "does-not-exist.yaml"}, 20000);
@@ -271,6 +306,8 @@ int main(int argc, char** argv) {
   }
   const std::string binary = argv[1];
   ok &= test_help_runs(binary);
+  ok &= test_rejects_unknown_mode(binary);
+  ok &= test_mode_adaptive_validates(binary);
   ok &= test_missing_config_file_fails_cleanly(binary);
   ok &= test_validate_rich_sources(binary);
   ok &= test_validate_bare_list(binary);

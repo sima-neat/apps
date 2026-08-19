@@ -68,7 +68,11 @@ class TestE2E:
             }
         )
 
-        cmd = [sys.executable, str(MAIN_PY), "--config", str(config_path)]
+        # --mode is explicit even though adaptive is the default: this test
+        # exercises the per-stream topology specifically, and the entry point
+        # now serves both.
+        cmd = [sys.executable, str(MAIN_PY), "--mode", "adaptive",
+               "--config", str(config_path)]
         with MetadataJsonListener(
             E2E_INSIGHT_HOST,
             metadata_port_base,
