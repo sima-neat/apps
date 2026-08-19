@@ -25,8 +25,10 @@ serves two topologies, selected with `--mode`:
 The per-stream bridges in `adaptive` cap reliable metadata at roughly six
 streams; `fused` has no such limit and its ceiling is decoder and pool capacity.
 
-The tier policy that drives `adaptive` is documented in [POLICY.md](POLICY.md).
-[`pipelines/`](pipelines/README.md) drives both modes from a browser UI.
+Both languages expose the same flags, which is what lets
+[`pipelines/`](pipelines/README.md) switch implementation from a browser without
+changing anything else. The tier policy behind `adaptive` is in
+[POLICY.md](POLICY.md).
 
 ## Prerequisites
 
@@ -49,14 +51,18 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-`adaptive.resolutions` is pinned to `[640]` in `src/common/config.yaml`, so one
-YOLO26n pack covers every run — there is no model-tier switching and no per-tier
-archives to build.
+`adaptive.resolutions` is pinned to `[640]`, so one YOLO26n pack covers every
+run. The `model.tiers` block in `config.yaml` is only consulted when you restore
+a multi-value `resolutions` list; those per-tier archives are built locally by
+`tools/build_yolo26_tiers.sh` and are not needed otherwise.
 
 ```bash
 mkdir -p assets/models
 cd assets/models
+# used by src/common/config.yaml
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+# used by the pipelines/ bundle
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
 cd ../..
 ```
 
@@ -80,7 +86,7 @@ Edit `examples/object-detection/adaptive-resolution-object-detector/src/common/c
 ```yaml
 model:
   path: assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz
-  labels: examples/object-detection/adaptive-resolution-object-detector/src/common/coco_label.txt
+  labels: src/common/coco_label.txt
 
 adaptive:
   resolutions: [640]         # single value => fixed model input size
@@ -97,7 +103,7 @@ inference:
 output:
   adaptive:
     heights: [2160, 1080, 720, 480]
-    budget_megapixels_per_s: <shared-output-budget>
+    budget_megapixels_per_s: 280   # fair-shared across active streams
   insight:
     host: <insight-host-ip>
     video_port: <video-udp-port>
@@ -132,6 +138,29 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/adaptive-
 
 Use `--mode fused` for the shared-detector topology, and
 `--validate-config-only` for a config check that opens no streams.
+
+## Pipelines UI
+
+[`pipelines/`](pipelines/README.md) runs both modes from a browser instead of the
+command line, and switches implementation language without editing anything.
+
+```bash
+cd examples/object-detection/adaptive-resolution-object-detector/pipelines
+./repoint-ip.sh <host-ip> <board-ip>    # one-time: rewrites both addresses
+```
+
+Then open `http://<board-ip>:8080/` and pick a pipeline:
+
+| Pipeline | Runs | Port |
+| --- | --- | --- |
+| scale | `--mode fused`, one process | 8090 |
+| live | `--mode adaptive` | 8091 |
+| group | `--mode fused`, several processes, each owning a subset | 8092 |
+
+The Python/C++ toggle on that page applies to all three. They share one MLA and
+one set of Insight channels, so the chooser starts one and stops the others.
+C++ is offered only once a binary exists; a fresh clone has none until
+`./build.sh --clean`.
 
 ## Troubleshooting
 
