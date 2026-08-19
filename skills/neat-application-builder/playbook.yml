@@ -1,8 +1,8 @@
 id: neat-application-builder
 name: Neat Application Builder
-version: 0.1.1
+version: 0.1.2
 agents: [codex, claude]
-description: Generic application-building guidance for the installed Neat Library public APIs, including Model, Graph, GenAIModel, and GenAIServer.
+description: Build runnable Neat Library applications from compiled model artifacts, including API and input-topology selection for Model, Graph, GenAIModel, and GenAIServer.
 compatibility:
   env_types: [sdk]
   env_subtypes: [linux, palette]
