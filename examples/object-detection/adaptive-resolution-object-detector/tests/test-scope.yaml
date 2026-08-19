@@ -21,8 +21,8 @@ e2e:
   python:
     enabled: true
     models:
-    - yolo26n-det-bf16-mla_tess-b1
+    - yolo26n-det-int8-b1
   cpp:
     enabled: true
     models:
-    - yolo26n-det-bf16-mla_tess-b1
+    - yolo26n-det-int8-b1

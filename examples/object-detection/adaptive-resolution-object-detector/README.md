@@ -9,7 +9,7 @@
 | Languages | C++, Python |
 | Status | experimental |
 | Binary Name | adaptive-resolution-object-detector |
-| Model | yolo26n-det-bf16-mla_tess-b1 |
+| Model | yolo26n-det-int8-b1 |
 
 ## Concept
 
@@ -69,13 +69,16 @@ Run the remaining commands from `prebuilt-apps/`.
 ```bash
 mkdir -p assets/models
 cd assets/models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
 cd ../..
 ```
 
 `<modelzoo-version>` is the `modelzoo-version` field in `deps/manifest.json`.
-The [`pipelines/`](pipelines/README.md) bundle uses `yolo26n-det-int8-b1.tar.gz`
-instead — download that too if you plan to use it.
+
+int8 is the default in `config.yaml` and in [`pipelines/`](pipelines/README.md)
+because it is the build the published throughput numbers were measured on. bf16
+is a drop-in alternative — download
+`yolo26n-det-bf16-mla_tess-b1.tar.gz` the same way and point `model.path` at it.
 
 One pack is enough. `model.tiers` in the config maps a *model input size* to its
 own MLA-compiled archive, and is consulted only when `adaptive.resolutions` has
@@ -103,7 +106,7 @@ The two modes read different files.
 
 ```yaml
 model:
-  path: assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz
+  path: assets/models/yolo26n-det-int8-b1.tar.gz
   labels: src/common/coco_label.txt
 
 adaptive:
@@ -118,7 +121,7 @@ streams:
 output:
   adaptive:
     heights: [2160, 1080, 720, 480]   # candidates, never upscaled past native
-    budget_megapixels_per_s: 280      # fair-shared across active streams
+    budget_megapixels_per_s: 280      # starting point; see note below
   insight:
     host: <insight-host-ip>
     video_port: 9000
@@ -127,14 +130,20 @@ output:
 
 `budget_megapixels_per_s` bounds encode/deliver load, not raw decode. Each
 stream gets `budget / active_streams` and picks the highest height that fits, so
-one stream lands near 4K and sixteen near 480p. There is no hardware number to
-query — raise it until frames drop, then back off.
+one stream lands near 4K and sixteen near 480p ([POLICY.md](POLICY.md) has the
+full table).
+
+**280 is a starting point, not a measured limit.** There is no hardware number
+to query — raise it until frames drop, then back off. The `pipelines/` bundle
+sets it high deliberately, so streams are delivered at source resolution and the
+budget never binds; the throughput figures quoted for those pipelines were taken
+that way.
 
 **`--mode fused`** — a bare `streams:` list, up to 64, and `*_port_base` keys:
 
 ```yaml
 model:
-  path: assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz
+  path: assets/models/yolo26n-det-int8-b1.tar.gz
   labels: src/common/coco_label.txt
 
 streams:
