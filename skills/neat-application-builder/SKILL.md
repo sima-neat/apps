@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Build end-to-end Neat applications with public C++ or Python APIs. Use when a request starts from ONNX or a compiled model and targets a DevKit, including Model, Graph, GenAIModel, GenAIServer, camera, file, or RTSP pipelines. Choose the API shape before consulting Apps examples. Model compilation and repository workflows use separate skills.
+description: Build Neat applications with public C++ or Python APIs in the Neat Development Environment or on DevKit. Use for classic apps that start from ONNX or compiled model archives, GenAI apps from deployed model directories, and camera, file, or RTSP pipelines. Choose Model, Graph, GenAIModel, or GenAIServer before consulting Apps examples. Model compilation and repository workflows use separate skills.
 ---
 
 # Neat Application Builder

@@ -7,8 +7,8 @@ input owner, then select the smallest API that fits the application.
 
 - Classic applications consume a compiled model archive, not ONNX. Complete
   compilation before application design.
-- Decide whether the caller supplies decoded inputs or the application owns a
-  source and topology.
+- Decide whether the caller supplies decoded inputs or the `Graph` owns a source
+  and topology.
 - Inspect the model package before adding preprocessing or postprocessing.
 
 ## Classic Model
@@ -29,7 +29,7 @@ Use `Model.build(...)` when:
 
 Use `Graph` when:
 
-- The application owns a camera, file, RTSP stream, encoded source, or other
+- The `Graph` owns a camera, file, RTSP stream, encoded source, or other
   producer.
 - The application composes decoding, preprocessing, or output paths around the
   model route.
