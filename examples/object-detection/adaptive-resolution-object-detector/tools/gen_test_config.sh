@@ -15,7 +15,6 @@
 # Each SRC becomes cam-N. A SRC containing "://" is used as the URL as-is;
 # otherwise it becomes rtsp://RTSP_HOST:8554/SRC.
 # Tune behaviour with env vars (defaults in parentheses):
-#   RES(320,640,960) HYST(15) BUDGET(12) MINPX(24) CONF_LOW(0.40) DENSITY(20)
 #   MIN_SCORE(0.30) FPS(0) FRAMES(0) MAX_STREAMS(8) VIDEO(true) PROFILE(true)
 #   DEBUG_DIR(/tmp/adaptive_out) SAVE_EVERY(20) MODEL_DIR(assets/models)
 set -euo pipefail
@@ -26,22 +25,11 @@ shift 3
 
 APPS_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 MODEL_DIR="${MODEL_DIR:-$APPS_ROOT/assets/models}"
-RES="${RES:-320,640,960}"
-IFS=',' read -r -a RESA <<< "$RES"
 
 {
 echo "model:"
-echo "  path: $MODEL_DIR/yolo26n-640-det-int8-mla_tess-b1.tar.gz"
+echo "  path: $MODEL_DIR/${MODEL:-yolo26n-det-int8-b1.tar.gz}"
 echo "  labels: $APPS_ROOT/examples/object-detection/adaptive-resolution-object-detector/src/common/coco_label.txt"
-echo "  tiers:"
-for r in "${RESA[@]}"; do echo "    $r: $MODEL_DIR/yolo26n-${r}-det-int8-mla_tess-b1.tar.gz"; done
-echo "adaptive:"
-echo "  resolutions: [$(IFS=', '; echo "${RESA[*]}")]"
-echo "  confidence_low: ${CONF_LOW:-0.40}"
-echo "  min_object_px: ${MINPX:-24}"
-echo "  hysteresis_frames: ${HYST:-15}"
-echo "  density_high: ${DENSITY:-20}"
-echo "  budget_units: ${BUDGET:-12}"
 echo "input:"
 echo "  tcp: true"
 echo "  latency_ms: 100"

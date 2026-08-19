@@ -3,8 +3,8 @@
 #   src/python/main.py                 --mode adaptive|fused
 #   src/cpp/pre-built/<binary>         --mode adaptive|fused
 #
-# adaptive.resolutions is pinned to [640] in src/common/config.yaml, so a single
-# YOLO26n pack covers every run - no model-tier switching, no per-tier archives.
+# One YOLO26n pack covers every run: nothing rescales and there is no model-tier
+# switching.
 models:
   yolo26n-det-int8-b1:
     source: url

@@ -24,7 +24,6 @@ Adjust two IPs for your setup:
 | Piece | Where | Notes |
 |---|---|---|
 | App binary | DevKit `/tmp/adaptive-build/.../adaptive-resolution-object-detector` | build in Step 1 |
-| 3 tier models | `assets/models/yolo26n-{320,640,960}-det-int8-mla_tess-b1.tar.gz` | already built; else `tools/build_yolo26_tiers.sh` |
 | Insight + RTSP | `HOST:9900` (API), `HOST:8554` (RTSP), UDP `9000+`/`9100+` | video/metadata ingest |
 | Shared FS | `/workspace/tudu_jaagrit/apps` identical on host+DevKit | edit here, run on DevKit |
 | Your videos | any `.mp4` | Insight re-encodes to H.264 |
@@ -116,10 +115,7 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 $BIN --mode adaptive --config /tmp/mytest.y
    Healthy stream: `media.idr_count` rising, `metadata.messages_received` rising,
    `metadata.invalid_json: 0`, `remote_addr` = the DevKit.
 3. **Debug frames** — set `DEBUG_DIR`/`SAVE_EVERY`; annotated JPEGs with a
-   `cam-id · tier · streams` banner land in `DEBUG_DIR` on the DevKit; `scp` them back.
-4. **Logs** — `[stream …] tier X -> Y`, `[config] reload: N stream(s)`,
    `[profile stream=… output_fps=… avg_pull_ms=… avg_boxes=…]`, and the pipeline
-   dump's `model-path=…yolo26n-<size>…` (proves which tier archive is loaded).
 
 ---
 
@@ -128,14 +124,7 @@ SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 $BIN --mode adaptive --config /tmp/mytest.y
 | # | Function | Command / action | Expected |
 |---|---|---|---|
 | 1 | Detect + Insight | `bash $GEN /tmp/c.yaml 192.168.131.68 192.168.131.68 src1 src2` → run | boxes in viewer; `ingest/stats` shows video+metadata, `invalid_json:0` |
-| 2 | **Easy scene → tier down** | run a **few-large-object** video, `BUDGET=100` | logs `tier 640 -> 320`; loads `yolo26n-320` archive |
-| 3 | **Hard scene → tier up** | run a **busy/small-object** video, or force it: `MINPX=400 BUDGET=100 bash $GEN … src1` | `tier 640 -> 960`; loads `yolo26n-960` archive |
-| 4 | Different real model per tier | any run with a switch | `grep model-path <log>` shows different `yolo26n-320/640/960` ELFs |
-| 5 | Small-object → up | video with distant objects; keep `MINPX=24` | tier steps up when smallest object < 24 px |
-| 6 | Low-confidence → up | blurry/hard video; `CONF_LOW=0.40` | tier steps up when a box < 0.40 |
-| 7 | Density → up | your **too-many-objects** video; `DENSITY=20` | crowded frames push tier up |
 | 8 | **Shared budget cap** | `MINPX=400 BUDGET=8 bash $GEN … src1 src2 src3 src4` → run | content wants 960 but stays low; **no `-> 960`** in log |
-| 9 | Hysteresis (anti-thrash) | alternating video; compare `HYST=5` vs `HYST=30` | low = frequent `tier ->` lines; high = few |
 | 10 | **Runtime add** | run with 2 srcs; after ~25s `cp` a config with a 3rd src over it | `[config] reload: 3`; `[stream cam-3] channel=2` |
 | 11 | **Runtime remove** | then `cp` a 2-src config back | `[config] reload: 2`; `[stream cam-3] removed (channel 2 released)` |
 | 12 | max_streams | `MAX_STREAMS=2 bash $GEN /tmp/m.yaml … src1 src2 src3` → `--validate-config-only` | exit 1, `streams count exceeds streams.max_streams` |
@@ -166,15 +155,10 @@ Give init time before the first edit, and space edits by more than
 
 ## 7. Mapping YOUR videos → tests
 
-- **Too-many-objects video** → #3, #5, #7 (drives tier *up* to 960; then #8: add streams and watch budget force it back down).
-- **Few/large-object video** → #2 (drives tier *down* to 320). *Note: a highway with a handful of big cars is an "easy" scene and correctly goes to 320 — you need genuinely small/dense objects to reach 960.*
-- **Alternating dense↔sparse** → #9 (hysteresis — the key stability knob; tune `HYST` and count `tier ->` lines).
 - **Different-fps videos** → #15 via `FPS`; for true source fps, host raw RTSP (Insight normalises uploads to 30 fps).
 
 **Calibrate one expectation:** with a single 30 fps source, wall-clock FPS is
-source-capped (~30) at every tier, so 320 and 960 *look* the same. The compute
 difference is real (0.32M / 0.67M / 1.24M MLA cycles) and shows up as **headroom** —
-lower tiers let more streams keep up. Test throughput impact with many streams
 (#13) + budget (#8), not one stream.
 
 ---
@@ -186,9 +170,7 @@ curl -k -H 'Content-Type: application/json' -d '{}' https://192.168.131.68:9900/
 ssh sima@192.168.135.72 'pkill -INT -f adaptive-resolution-object-detector'
 ```
 - **`failed to probe RTSP`** → source not `playing` (`/api/mediasrc`) or wrong host/URL.
-- **One dense stream starves the others** (app seems to hang) → a stream at tier 960 monopolises the MLA. Keep `BUDGET` at the default (12) so streams share; raise it only to *demonstrate* a single stream reaching 960.
 - **High/variable-fps sources** (e.g. a stream reporting 150/500 fps) are handled — the app no longer pins the decoder fps. Use `FPS=15`/`FPS=30` to cap processing to something sane if a source pushes frames very fast.
-- **A tier switch reconnects RTSP (~1 s stall)** — normal; switches are rate-limited to ≥2.5 s and serialized across streams so many streams never rebuild at once.
 - **Aggressive settings** (`HYST` very low + forced churn across many streams) push the MLA runtime hard; keep `HYST ≥ 15` (default). The app rate-limits, serialises, settles between rebuilds, and self-heals transient MLA errors, but sane hysteresis avoids the churn entirely.
 - **No overlay in viewer** but `ingest/stats` shows data → open the URL from `/api/viewer-url` (the browser DataChannel must connect).
 - **A very dense stream shows detection numbers in the console but no boxes in Insight** (while a sparse stream renders fine) → its per-frame metadata packet exceeds one UDP datagram (~1500-byte MTU) and Insight drops it (it does not reassemble fragments — verified: the viewer clears + redraws per message). Check `/api/ingest/stats` — the dense channel shows `active: false` with a low `messages_received`. The metadata is **compact** (label/confidence/bbox only), so up to **~20 detections** deliver reliably. For denser scenes cap detections: `MAX_DET=20` on the generator (or `inference.max_detections: 20`). To draw *all* boxes in a huge crowd you'd burn them into the video stream instead of the metadata overlay.

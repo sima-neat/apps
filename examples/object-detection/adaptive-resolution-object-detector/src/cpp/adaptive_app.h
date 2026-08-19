@@ -21,14 +21,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Adaptive-resolution multi-stream YOLO26 detector for Insight.
+// Live multi-stream YOLO26 detector for Insight - ONE GRAPH PER STREAM.
 //
-// Runs YOLO26 across N RTSP streams where the stream count and each stream's
-// input resolution adapt at runtime. Streams are added/removed live by editing
-// streams.sources in the config; each stream selects a resolution tier from
-// scene content (object size, density, confidence) under a shared compute
-// budget, and publishes H.264 video + detection metadata (with the active tier
-// and stream count) to Insight per stream. Mirrors src/python/main.py.
+// Each stream owns its own graph, so a stream can be built or torn down while
+// the others keep running: edit streams.sources in the config and the app picks
+// the change up on its next poll. Every stream is decoded and detected at its
+// native size and publishes H.264 video plus detection metadata to Insight on
+// its own channel. Mirrors src/python/adaptive_app.py.
 
 #include "neat.h"
 #include "neat/models.h"
@@ -38,7 +37,6 @@
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 
-#include "adaptive_policy.h"
 
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
@@ -77,7 +75,7 @@ volatile std::sig_atomic_t g_stop_requested = 0;
 void request_stop(int) { g_stop_requested = 1; }
 
 // Serializes MLA model loads across stream threads. Concurrent pipeline builds
-// (initial or tier-switch rebuilds) otherwise race on MLA/RPMsg setup.
+// (initial builds and reconnects) otherwise race on MLA/RPMsg setup.
 std::mutex g_model_build_mutex;
 
 // ── configuration ────────────────────────────────────────────────────────────
@@ -88,11 +86,8 @@ struct StreamSource {
 };
 
 struct AppConfig {
-  std::string model_path;                // fallback archive when a tier has none
-  std::map<int, std::string> tier_paths; // size -> archive
+  std::string model_path;
   fs::path labels_path;
-  adaptive::PolicyConfig policy;
-  double budget_units = 12.0;
   int max_streams = 8;
   std::vector<StreamSource> sources;
   fs::path config_path;
@@ -113,16 +108,7 @@ struct AppConfig {
   fs::path save_dir;
   int save_every = 0;
 
-  const std::vector<int>& resolutions() const { return policy.resolutions; }
 
-  // Archive for a tier: the tier-specific one if it exists on disk, else model.path.
-  std::string tier_model_path(int size) const {
-    auto it = tier_paths.find(size);
-    if (it != tier_paths.end() && !it->second.empty() && fs::exists(it->second)) {
-      return it->second;
-    }
-    return model_path;
-  }
 };
 
 struct CliOptions {
@@ -188,36 +174,6 @@ void extract_ints(const std::string& text, std::vector<int>& out) {
   }
 }
 
-// Parse `adaptive.resolutions` (inline `[a, b, c]` or a `- N` block) from the file.
-std::vector<int> parse_resolutions(const fs::path& config_path) {
-  std::ifstream input(config_path);
-  std::vector<int> resolutions;
-  bool in_block = false;
-  std::string raw_line;
-  while (std::getline(input, raw_line)) {
-    const std::string t = sima_examples::trim_copy(strip_inline_comment(raw_line));
-    if (t.empty())
-      continue;
-    if (!in_block && starts_with(t, "resolutions:")) {
-      const std::string rest = sima_examples::trim_copy(t.substr(std::string("resolutions:").size()));
-      extract_ints(rest, resolutions);
-      if (!resolutions.empty())
-        break;
-      in_block = true; // values are on following `- N` lines
-      continue;
-    }
-    if (in_block) {
-      if (starts_with(t, "- ")) {
-        extract_ints(t, resolutions);
-      } else {
-        break;
-      }
-    }
-  }
-  if (resolutions.empty())
-    resolutions = {320, 640, 960};
-  return resolutions;
-}
 
 void apply_kv_or_scalar(const std::string& rest, std::string& cur_id, std::string& cur_url) {
   if (starts_with(rest, "id:")) {
@@ -330,8 +286,8 @@ std::vector<StreamSource> parse_stream_sources(const fs::path& config_path) {
 }
 
 void validate_config(const AppConfig& cfg) {
-  sima_examples::require(!cfg.model_path.empty() || !cfg.tier_paths.empty(),
-                         "model.path or model.tiers must be set");
+  sima_examples::require(!cfg.model_path.empty(),
+                         "model.path must be set");
   sima_examples::require(!cfg.labels_path.empty(), "model.labels must be set");
   sima_examples::require(!cfg.sources.empty(), "streams must be a non-empty list");
   sima_examples::require(cfg.max_streams >= 1, "streams.max_streams must be >= 1");
@@ -355,7 +311,6 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0, "output.insight.metadata_port must be > 0");
   sima_examples::require(cfg.save_every >= 0, "output.save_every must be >= 0");
-  sima_examples::require(cfg.budget_units > 0.0, "adaptive.budget_units must be > 0");
 }
 
 AppConfig load_app_config(const fs::path& config_path) {
@@ -367,17 +322,6 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.config_path = config_path;
   cfg.model_path = raw.string_or("model.path", "");
   cfg.labels_path = raw.string_or("model.labels", default_labels.string());
-  cfg.policy.resolutions = parse_resolutions(config_path);
-  for (int size : cfg.policy.resolutions) {
-    const std::string value = raw.string_or("model.tiers." + std::to_string(size), "");
-    if (!value.empty())
-      cfg.tier_paths[size] = value;
-  }
-  cfg.policy.confidence_low = static_cast<float>(raw.double_or("adaptive.confidence_low", 0.40));
-  cfg.policy.min_object_px = static_cast<float>(raw.double_or("adaptive.min_object_px", 24.0));
-  cfg.policy.hysteresis_frames = raw.int_or("adaptive.hysteresis_frames", 15);
-  cfg.policy.density_high = raw.int_or("adaptive.density_high", 20);
-  cfg.budget_units = raw.double_or("adaptive.budget_units", 12.0);
   cfg.max_streams = raw.int_or("streams.max_streams", 8);
   cfg.sources = parse_stream_sources(config_path);
   cfg.tcp = raw.bool_or("input.tcp", true);
@@ -439,13 +383,6 @@ bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::u
   return objdet::extract_bbox_payload(sample, payload, err);
 }
 
-adaptive::FrameStats frame_stats_from_boxes(const std::vector<objdet::Box>& boxes, float min_score) {
-  std::vector<adaptive::DetBox> det;
-  det.reserve(boxes.size());
-  for (const auto& b : boxes)
-    det.push_back({b.x2 - b.x1, b.y2 - b.y1, b.score});
-  return adaptive::frame_stats(det, min_score);
-}
 
 std::string json_escape(const std::string& value) {
   std::string out;
@@ -489,13 +426,13 @@ std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<o
 }
 
 // Compact object-detection metadata: only the fields Insight's overlay reads
-// (label, confidence, bbox), plus the active tier and stream count. The "id" is
+// (label, confidence, bbox), plus the stream count. The "id" is
 // dropped, confidence is rounded to 2 decimals, and bboxes are integer pixels, so
 // ~2x more detections fit in a single UDP datagram (Insight drops fragmented
 // metadata packets larger than the ~1500-byte MTU, since it does not reassemble).
 std::string metadata_payload(const std::vector<objdet::Box>& boxes,
                              const std::vector<std::string>& labels, int frame_w, int frame_h,
-                             int active_tier, int stream_count, const std::string& stream_id) {
+                             int stream_count, const std::string& stream_id) {
   const auto mb = build_metadata_boxes(boxes, labels, frame_w, frame_h);
   std::string s = "{\"objects\":[";
   for (std::size_t i = 0; i < mb.size(); ++i) {
@@ -509,8 +446,7 @@ std::string metadata_payload(const std::vector<objdet::Box>& boxes,
          std::to_string(static_cast<int>(mb[i].w)) + "," +
          std::to_string(static_cast<int>(mb[i].h)) + "]}";
   }
-  s += "],\"active_tier\":" + std::to_string(active_tier) +
-       ",\"stream_count\":" + std::to_string(stream_count) + ",\"stream_id\":\"" +
+  s += "],\"stream_count\":" + std::to_string(stream_count) + ",\"stream_id\":\"" +
        json_escape(stream_id) + "\"}";
   return s;
 }
@@ -567,12 +503,11 @@ struct StreamRuntime {
   int frame_h = 0;
   int output_fps = 0;
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender; // persists across rebuilds
-  std::unique_ptr<simaai::neat::Model> model;                    // rebuilt per tier
-  std::unique_ptr<simaai::neat::Graph> graph;                    // rebuilt per tier
-  simaai::neat::Run run;                                         // rebuilt per tier
+  std::unique_ptr<simaai::neat::Model> model;                    // rebuilt on reconnect
+  std::unique_ptr<simaai::neat::Graph> graph;                    // rebuilt on reconnect
+  simaai::neat::Run run;                                         // rebuilt on reconnect
   std::string output_name;
   int video_port = 0;
-  int tier_index = 0;
   int processed = 0;
   ProfileWindow profile;
 };
@@ -615,9 +550,8 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg, const std:
 }
 
 // One pipeline build attempt. Assumes rt.run/graph/model have been cleared.
-void build_pipeline_once(const AppConfig& cfg, StreamRuntime& rt, int tier_index) {
-  const int size = cfg.resolutions()[tier_index];
-  rt.model = make_model(cfg, cfg.tier_model_path(size));
+void build_pipeline_once(const AppConfig& cfg, StreamRuntime& rt) {
+  rt.model = make_model(cfg, cfg.model_path);
   rt.graph = std::make_unique<simaai::neat::Graph>();
   auto& graph = *rt.graph;
 
@@ -682,15 +616,14 @@ void build_pipeline_once(const AppConfig& cfg, StreamRuntime& rt, int tier_index
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   rt.run = graph.build(run_options);
-  rt.tier_index = tier_index;
 }
 
-// (Re)build the RTSP -> {video, model} graph for a stream at a resolution tier.
+// (Re)build the RTSP -> {video, model} graph for one stream.
 // The MetadataSender and probed geometry persist; only model/graph/run rebuild.
 // Model loads are serialized across streams and retried: concurrent rebuilds
 // otherwise race on MLA/RPMsg setup (observed "Unable to load model" under heavy
-// tier-switch thrash). The steady-state per-frame pull loop is unaffected.
-void build_pipeline(const AppConfig& cfg, StreamRuntime& rt, int tier_index) {
+// concurrent rebuilds). The steady-state per-frame pull loop is unaffected.
+void build_pipeline(const AppConfig& cfg, StreamRuntime& rt) {
   constexpr int kBuildAttempts = 3;
   constexpr int kRebuildSettleMs = 800;
   for (int attempt = 1;; ++attempt) {
@@ -710,10 +643,10 @@ void build_pipeline(const AppConfig& cfg, StreamRuntime& rt, int tier_index) {
       rt.model.reset();
       // The Neat MLA pipeline tears down asynchronously; give it time to fully
       // release before building the next one, or concurrent teardown/build in the
-      // runtime can segfault when several streams switch tiers at once.
+      // runtime can segfault when several streams rebuild at once.
       if (rebuilding)
         std::this_thread::sleep_for(std::chrono::milliseconds(kRebuildSettleMs));
-      build_pipeline_once(cfg, rt, tier_index);
+      build_pipeline_once(cfg, rt);
       return;
     } catch (const std::exception& e) {
       rt.run = simaai::neat::Run{};
@@ -729,7 +662,7 @@ void build_pipeline(const AppConfig& cfg, StreamRuntime& rt, int tier_index) {
 }
 
 StreamRuntime init_stream_runtime(const AppConfig& cfg, int channel, const StreamSource& source,
-                                  const std::vector<std::string>& labels, int initial_tier) {
+                                  const std::vector<std::string>& labels) {
   StreamRuntime rt;
   rt.channel = channel;
   rt.id = source.id;
@@ -763,25 +696,19 @@ StreamRuntime init_stream_runtime(const AppConfig& cfg, int channel, const Strea
       std::make_unique<simaai::neat::MetadataSender>(metadata_options, &metadata_err);
   sima_examples::require(rt.metadata_sender->ok(), metadata_err);
 
-  build_pipeline(cfg, rt, initial_tier);
+  build_pipeline(cfg, rt);
   std::cout << "[stream " << source.id << "] channel=" << channel << " rtsp=" << source.rtsp_url
             << " " << rt.frame_w << "x" << rt.frame_h << "@" << rt.output_fps
-            << " tier=" << cfg.resolutions()[initial_tier]
             << " video=" << (cfg.video_enabled ? std::to_string(rt.video_port) : "disabled")
             << " metadata=" << rt.metadata_sender->metadata_port() << "\n";
   return rt;
 }
 
-void switch_tier(const AppConfig& cfg, StreamRuntime& rt, int new_tier) {
-  std::cout << "[stream " << rt.id << "] tier " << cfg.resolutions()[rt.tier_index] << " -> "
-            << cfg.resolutions()[new_tier] << " (rebuilding pipeline)\n";
-  build_pipeline(cfg, rt, new_tier); // handles close/teardown/settle under the global lock
-}
 
 void send_metadata(StreamRuntime& rt, const simaai::neat::Sample& sample,
-                   const std::vector<objdet::Box>& boxes, int active_tier, int stream_count) {
+                   const std::vector<objdet::Box>& boxes, int stream_count) {
   const std::string data_json =
-      metadata_payload(boxes, rt.labels, rt.frame_w, rt.frame_h, active_tier, stream_count, rt.id);
+      metadata_payload(boxes, rt.labels, rt.frame_w, rt.frame_h, stream_count, rt.id);
   const int64_t timestamp_ms =
       sample.pts_ns >= 0 ? sample.pts_ns / 1000000 : fallback_timestamp_ms();
   const int64_t frame_id = sample.frame_id >= 0 ? sample.frame_id : 0;
@@ -794,7 +721,7 @@ void send_metadata(StreamRuntime& rt, const simaai::neat::Sample& sample,
 
 void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& rt,
                             const simaai::neat::Sample& sample, const std::vector<objdet::Box>& boxes,
-                            int active_tier, int stream_count) {
+                            int stream_count) {
   if (cfg.save_dir.empty() || cfg.save_every <= 0 || rt.processed % cfg.save_every != 0)
     return;
   const auto tensors = simaai::neat::tensors_from_sample(sample, false);
@@ -807,7 +734,7 @@ void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& rt,
     return;
   }
   objdet::draw_boxes(bgr, boxes, static_cast<float>(cfg.min_score), cv::Scalar(0, 255, 0), "");
-  const std::string banner = rt.id + "  tier=" + std::to_string(active_tier) +
+  const std::string banner = rt.id +
                              "  streams=" + std::to_string(stream_count);
   cv::putText(bgr, banner, cv::Point(12, 28), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 4);
   cv::putText(bgr, banner, cv::Point(12, 28), cv::FONT_HERSHEY_SIMPLEX, 0.7,
@@ -832,8 +759,7 @@ struct ManagedStream {
 class StreamManager {
 public:
   StreamManager(const AppConfig& cfg, std::vector<std::string> labels)
-      : cfg_(cfg), labels_(std::move(labels)),
-        initial_tier_(static_cast<int>(cfg.resolutions().size()) / 2) {
+      : cfg_(cfg), labels_(std::move(labels)) {
     for (int c = 0; c < cfg.max_streams; ++c)
       free_channels_.push_back(c);
   }
@@ -947,7 +873,7 @@ public:
 
 private:
   // A source-side close (RTSP drop, EOS at a loop boundary, RTCP timeout) is not
-  // fatal: rebuild this stream at its current tier and rejoin, with bounded
+  // fatal: rebuild this stream and rejoin, with bounded
   // exponential backoff. Returns true once reconnected; false only if we should
   // stop the stream (shutdown, stream removed, or reconnect budget exhausted).
   bool reconnect_stream(ManagedStream* managed, StreamRuntime& rt) {
@@ -962,9 +888,8 @@ private:
       if (managed->stop.load() || stop_.load() || g_stop_requested != 0)
         return false;
       try {
-        build_pipeline(cfg_, rt, rt.tier_index);
-        std::cout << "[stream " << managed->id << "] reconnected at tier "
-                  << cfg_.resolutions()[rt.tier_index] << "\n";
+        build_pipeline(cfg_, rt);
+        std::cout << "[stream " << managed->id << "] reconnected\n";
         return true;
       } catch (const std::exception& e) {
         std::cerr << "[warn] stream " << managed->id << " reconnect attempt " << attempt
@@ -979,13 +904,13 @@ private:
   void consume(ManagedStream* managed) {
     StreamRuntime rt;
     bool built = false;
-    adaptive::PolicyState policy{initial_tier_, initial_tier_, 0};
     int transient_recoveries = 0;
+    // Desync identical streams so a fleet-wide recovery rolls through rather
+    // than every stream rebuilding in the same instant.
+    const double stagger_ms = static_cast<double>(managed->channel) * 350.0;
     constexpr int kMaxTransientRecoveries = 10;
-    double last_switch_ms = -1e12; // allow the first switch immediately
-    constexpr double kMinSwitchIntervalMs = 2500.0;
     // Throttle: inference.fps caps the rate at which we PROCESS + emit (metadata,
-    // video, tier decisions). <=0 means uncapped (run at the pipeline's max). The
+    // video). <=0 means uncapped (run at the pipeline's max). The
     // runtime already drops stale decoded frames (OverflowPolicy::KeepLatest), so
     // this bounds MLA-output/network/CPU work, not the hardware decode rate (which
     // the source sets). Give an fps below the sustainable rate -> runs at exactly
@@ -993,22 +918,20 @@ private:
     const double min_process_interval_ms =
         cfg_.fps > 0 ? 1000.0 / static_cast<double>(cfg_.fps) : 0.0;
     double last_process_ms = -1e12;
-    // Desync identical streams so a fleet-wide tier change / recovery rolls through
+    // Desync identical streams so a fleet-wide recovery rolls through
     // instead of storming: each stream waits a per-channel offset before committing.
-    const double stagger_ms = static_cast<double>(managed->channel) * 350.0;
     // Retry transient MLA blips a few times before paying for a full rebuild -- an
     // immediate rebuild is what turns one contention blip into a rebuild storm.
     int consecutive_transient = 0;
     constexpr int kTransientRetries = 8;
     try {
-      rt = init_stream_runtime(cfg_, managed->channel, {managed->id, managed->url}, labels_,
-                               initial_tier_);
+      rt = init_stream_runtime(cfg_, managed->channel, {managed->id, managed->url}, labels_);
       built = true;
       while (!managed->stop.load() && !stop_.load() && g_stop_requested == 0 &&
              (cfg_.frames <= 0 || rt.processed < cfg_.frames)) {
         // Throttle: pace processing to inference.fps. We keep pulling (KeepLatest
         // always has the freshest frame ready) but skip frames that arrive faster
-        // than the target, capping metadata/video/tier-decision work per stream.
+        // than the target, capping metadata and video work per stream.
         if (min_process_interval_ms > 0.0) {
           const double due = last_process_ms + min_process_interval_ms;
           const double now = sima_examples::time_ms();
@@ -1061,7 +984,7 @@ private:
                         << transient_recoveries << "/" << kMaxTransientRecoveries << ")\n";
               std::this_thread::sleep_for(
                   std::chrono::milliseconds(300 + static_cast<int>(stagger_ms)));
-              build_pipeline(cfg_, rt, rt.tier_index);
+              build_pipeline(cfg_, rt);
               last_process_ms = -1e12;
               continue;
             }
@@ -1083,21 +1006,8 @@ private:
         if (rt.processed <= cfg_.warmup_frames)
           continue;
 
-        const auto stats = frame_stats_from_boxes(boxes, static_cast<float>(cfg_.min_score));
-        const int target = adaptive::effective_tier(policy, stats, cfg_.policy, active_count(),
-                                                    cfg_.budget_units);
-        if (target != rt.tier_index &&
-            pull_end - last_switch_ms >= kMinSwitchIntervalMs + stagger_ms) {
-          // Rate-limit rebuilds (never thrash the MLA) and stagger by channel so a
-          // budget change doesn't switch every identical stream in lockstep.
-          switch_tier(cfg_, rt, target);
-          last_switch_ms = sima_examples::time_ms();
-          last_process_ms = -1e12;
-          continue;
-        }
-        const int active_tier = cfg_.resolutions()[rt.tier_index];
-        send_metadata(rt, sample, boxes, active_tier, active_count());
-        maybe_save_debug_frame(cfg_, rt, sample, boxes, active_tier, active_count());
+        send_metadata(rt, sample, boxes, active_count());
+        maybe_save_debug_frame(cfg_, rt, sample, boxes, active_count());
         rt.profile.add(pull_end - pull_start, static_cast<int>(boxes.size()));
       }
     } catch (...) {
@@ -1124,7 +1034,6 @@ private:
   std::atomic_bool stop_{false};
   std::mutex error_mtx_;
   std::exception_ptr first_error_;
-  int initial_tier_ = 0;
 };
 
 void interruptible_sleep(double seconds, const StreamManager& manager) {

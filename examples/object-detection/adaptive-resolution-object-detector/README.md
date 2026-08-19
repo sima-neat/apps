@@ -19,20 +19,8 @@ topologies, chosen with `--mode`:
 
 **`--mode adaptive`** (default) builds **one graph per stream**. Streams can be
 added or removed while the others keep running: the app polls its config file
-and diffs `streams.sources`.
-
-"Adaptive" here means two separate things, and only the first is on by default:
-
-- **Delivered video resolution** *(always on)* — each stream's output height is
-  chosen from a shared bandwidth budget divided by the active stream count, so
-  the picture steps down gracefully as streams are added rather than the
-  pipeline falling over. Changes only on add/remove, never per frame.
-- **Model input tier** *(off)* — `adaptive.resolutions: [640]` is a single
-  value, so the model input size is fixed. List several ascending sizes matching
-  `model.tiers` to let detection accuracy follow scene content too.
-
-[POLICY.md](POLICY.md) documents both axes, with the resolution table and every
-knob.
+and diffs `streams.sources`, and only the affected stream is built or torn down.
+Every stream is decoded, detected and delivered at its source's native size.
 
 **`--mode fused`** builds **one graph for all streams**, fanning into a single
 shared detector. Adding a stream rebuilds the whole graph, so it is not live —
@@ -80,11 +68,6 @@ because it is the build the published throughput numbers were measured on. bf16
 is a drop-in alternative — download
 `yolo26n-det-bf16-mla_tess-b1.tar.gz` the same way and point `model.path` at it.
 
-One pack is enough. `model.tiers` in the config maps a *model input size* to its
-own MLA-compiled archive, and is consulted only when `adaptive.resolutions` has
-more than one entry. The shipped config pins `resolutions: [640]`, so tier
-switching is off and `model.path` serves every stream. `tools/build_yolo26_tiers.sh`
-builds the per-tier archives if you want that behaviour back.
 
 ## Prepare Insight
 
@@ -109,9 +92,6 @@ model:
   path: assets/models/yolo26n-det-int8-b1.tar.gz
   labels: src/common/coco_label.txt
 
-adaptive:
-  resolutions: [640]           # one entry => fixed model input, no tier switching
-
 streams:
   max_streams: 16              # default 8 if omitted
   sources:                     # edit while running to add/remove streams
@@ -119,25 +99,11 @@ streams:
       rtsp_url: <first-rtsp-url>
 
 output:
-  adaptive:
-    heights: [2160, 1080, 720, 480]   # candidates, never upscaled past native
-    budget_megapixels_per_s: 280      # starting point; see note below
   insight:
     host: <insight-host-ip>
     video_port: 9000
     metadata_port: 9100
 ```
-
-`budget_megapixels_per_s` bounds encode/deliver load, not raw decode. Each
-stream gets `budget / active_streams` and picks the highest height that fits, so
-one stream lands near 4K and sixteen near 480p ([POLICY.md](POLICY.md) has the
-full table).
-
-**280 is a starting point, not a measured limit.** There is no hardware number
-to query — raise it until frames drop, then back off. The `pipelines/` bundle
-sets it high deliberately, so streams are delivered at source resolution and the
-budget never binds; the throughput figures quoted for those pipelines were taken
-that way.
 
 **`--mode fused`** — a bare `streams:` list, up to 64, and `*_port_base` keys:
 
@@ -222,13 +188,12 @@ once a binary exists — a fresh clone has none until `./build.sh --clean`.
 ## Source Files
 
 - C++ source: `src/cpp/main.cpp` (entry point), `src/cpp/adaptive_app.h`,
-  `src/cpp/fused_app.h`, `src/cpp/adaptive_policy.h`
+  `src/cpp/fused_app.h`
 - Python source: `src/python/main.py` (entry point), `src/python/adaptive_app.py`,
-  `src/python/fused_app.py`, `src/python/adaptive_policy.py`
+  `src/python/fused_app.py`
 - Shared runtime files: `src/common/`
 - Browser UI for both modes: `pipelines/`
-- Per-tier model builder: `tools/build_yolo26_tiers.sh`
-- Tier policy reference: [POLICY.md](POLICY.md); test plan: [TESTING.md](TESTING.md)
+- Manual test guide: [TESTING.md](TESTING.md)
 
 Each language keeps both topologies behind one entry point because the Apps
 build compiles a single `main.cpp` per example; the C++ implementations are

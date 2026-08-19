@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse

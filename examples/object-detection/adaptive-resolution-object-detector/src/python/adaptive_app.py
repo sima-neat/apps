@@ -12,20 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Adaptive-resolution multi-stream YOLO26 detector for Insight (pyneat).
+"""Live multi-stream YOLO26 detector for Insight (pyneat) - one graph PER stream.
 
-Runs YOLO26 across N RTSP streams where the stream count and each stream's input
-resolution adapt at runtime. Streams are added/removed live by editing
-streams.sources in the config; each stream picks a resolution tier from scene
-content (object size, density, confidence) under a shared compute budget, and
-publishes H.264 video + detection metadata (with active tier + stream count) to
-Insight per stream.
+Each stream owns its own graph, so a stream can be built or torn down while the
+others keep running: edit streams.sources in the config and the app picks the
+change up on its next poll. Every stream is decoded and detected at its native
+size and publishes H.264 video plus detection metadata to Insight on its own
+channel.
+
+The companion topology is fused_app.py (one graph, one shared detector, higher
+stream counts, rebuild to change the set). main.py selects between them.
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import glob
 import json
@@ -37,15 +39,6 @@ import time
 
 import yaml
 
-from adaptive_policy import (
-    OutputPolicyConfig,
-    PolicyConfig,
-    PolicyState,
-    effective_tier,
-    frame_stats,
-    output_candidates,
-    select_output_index,
-)
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
@@ -54,7 +47,7 @@ np = None
 pyneat = None
 
 # Serializes MLA model loads across stream threads. Concurrent pipeline builds
-# (initial or tier-switch rebuilds) otherwise race on MLA/RPMsg setup.
+# (initial builds and reconnects) otherwise race on MLA/RPMsg setup.
 _BUILD_LOCK = threading.Lock()
 
 
@@ -70,11 +63,7 @@ class StreamSource:
 @dataclass
 class AppConfig:
     model_path: str
-    tier_paths: dict[int, str]
     labels_path: Path
-    policy: PolicyConfig
-    budget_units: float
-    output_policy: OutputPolicyConfig
     max_streams: int
     sources: list[StreamSource]
     config_path: Path
@@ -102,17 +91,6 @@ class AppConfig:
     metadata_rtp_timestamp: str = "auto"   # "auto" | "on" | "off"
     save_dir: str = ""
     save_every: int = 0
-
-    @property
-    def resolutions(self) -> list[int]:
-        return self.policy.resolutions
-
-    def tier_model_path(self, size: int) -> str:
-        """Archive for a tier: the tier-specific one if it exists, else model.path."""
-        path = self.tier_paths.get(size)
-        if path and Path(path).is_file():
-            return path
-        return self.model_path
 
 
 def section(raw: dict, key: str) -> dict:
@@ -196,58 +174,12 @@ def parse_sources_from_raw(raw: dict) -> tuple[list[StreamSource], int]:
     return sources, max_streams
 
 
-def build_policy(adaptive: dict) -> tuple[PolicyConfig, float]:
-    resolutions = adaptive.get("resolutions") or [320, 640, 960]
-    if not isinstance(resolutions, list) or not resolutions:
-        raise ValueError("adaptive.resolutions must be a non-empty list")
-    resolutions = [int(r) for r in resolutions]
-    if resolutions != sorted(resolutions):
-        raise ValueError("adaptive.resolutions must be ascending")
-    policy = PolicyConfig(
-        resolutions=resolutions,
-        confidence_low=float_or(adaptive, "confidence_low", 0.40),
-        min_object_px=float_or(adaptive, "min_object_px", 24.0),
-        hysteresis_frames=int_or(adaptive, "hysteresis_frames", 15),
-        density_high=int_or(adaptive, "density_high", 20),
-    )
-    budget_units = float_or(adaptive, "budget_units", 12.0)
-    return policy, budget_units
 
-
-def build_output_policy(output: dict) -> OutputPolicyConfig:
-    """Parse the output.adaptive block: delivered-video bandwidth policy.
-
-    Absent block => defaults (heights [2160,1080,720,480], budget 280 MP/s), so
-    existing configs keep working (a single stream just delivers its native size).
-    """
-    adaptive = section(output, "adaptive")
-    defaults = OutputPolicyConfig()
-    heights = adaptive.get("heights") or defaults.heights
-    if not isinstance(heights, list) or not heights:
-        raise ValueError("output.adaptive.heights must be a non-empty list")
-    heights = [int(h) for h in heights]
-    if any(h <= 0 for h in heights):
-        raise ValueError("output.adaptive.heights must be positive")
-    budget = float_or(adaptive, "budget_megapixels_per_s", defaults.budget_megapixels_per_s)
-    return OutputPolicyConfig(heights=sorted(set(heights), reverse=True), budget_megapixels_per_s=budget)
-
-
-def resolve_tier_paths(model: dict, resolutions: list[int]) -> dict[int, str]:
-    tiers = model.get("tiers") or {}
-    if not isinstance(tiers, dict):
-        raise ValueError("model.tiers must be a mapping of size -> path")
-    resolved: dict[int, str] = {}
-    for size in resolutions:
-        for key in (size, str(size)):
-            if key in tiers and tiers[key]:
-                resolved[size] = str(tiers[key])
-                break
-    return resolved
 
 
 def validate_config(cfg: AppConfig) -> None:
-    if not cfg.model_path and not cfg.tier_paths:
-        raise ValueError("model.path or model.tiers must be set")
+    if not cfg.model_path:
+        raise ValueError("model.path must be set")
     if not str(cfg.labels_path):
         raise ValueError("model.labels must be set")
     if not cfg.sources:
@@ -283,12 +215,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.insight.metadata_port must be > 0")
     if cfg.save_every < 0:
         raise ValueError("output.save_every must be >= 0")
-    if cfg.budget_units <= 0:
-        raise ValueError("adaptive.budget_units must be > 0")
-    if not cfg.output_policy.heights:
-        raise ValueError("output.adaptive.heights must be a non-empty list")
-    if cfg.output_policy.budget_megapixels_per_s <= 0:
-        raise ValueError("output.adaptive.budget_megapixels_per_s must be > 0")
 
 
 def load_app_config(config_path: Path) -> AppConfig:
@@ -297,7 +223,6 @@ def load_app_config(config_path: Path) -> AppConfig:
         raise ValueError("config root must be a mapping")
 
     model = section(raw, "model")
-    adaptive = section(raw, "adaptive")
     input_cfg = section(raw, "input")
     inference = section(raw, "inference")
     runtime = section(raw, "runtime")
@@ -305,17 +230,11 @@ def load_app_config(config_path: Path) -> AppConfig:
     insight = section(output, "insight")
     default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
 
-    policy, budget_units = build_policy(adaptive)
-    output_policy = build_output_policy(output)
     sources, max_streams = parse_sources_from_raw(raw)
 
     cfg = AppConfig(
         model_path=string_or(model, "path"),
-        tier_paths=resolve_tier_paths(model, policy.resolutions),
         labels_path=Path(string_or(model, "labels", str(default_labels))),
-        policy=policy,
-        budget_units=budget_units,
-        output_policy=output_policy,
         max_streams=max_streams,
         sources=sources,
         config_path=config_path,
@@ -472,10 +391,10 @@ def build_metadata_boxes(boxes: list[dict], labels: list[str], frame_w: int, fra
 
 
 def metadata_payload(
-    boxes: list[dict], labels: list[str], frame_w: int, frame_h: int, active_tier: int,
+    boxes: list[dict], labels: list[str], frame_w: int, frame_h: int,
     stream_count: int, stream_id: str,
 ) -> str:
-    """Compact object-detection metadata plus the active tier and stream count.
+    """Compact object-detection metadata plus the active stream count.
 
     Only the fields Insight's overlay reads (label, confidence, bbox); the id is
     dropped, confidence is rounded to 2 decimals, and bboxes are integer pixels, so
@@ -493,7 +412,6 @@ def metadata_payload(
     return json.dumps(
         {
             "objects": objects,
-            "active_tier": int(active_tier),
             "stream_count": int(stream_count),
             "stream_id": stream_id,
         },
@@ -552,8 +470,8 @@ class StreamRuntime:
     # on the post-videoscale frame, so boxes, metadata, and video all share these.
     frame_w: int = 0
     frame_h: int = 0
-    # native_w/native_h are the source's decoded size (parser fallback caps + the
-    # ceiling that output candidates are clamped to; the source is never upscaled).
+    # The source's decoded size: parser fallback caps, and the geometry every
+    # stage downstream uses (nothing rescales).
     native_w: int = 0
     native_h: int = 0
     output_fps: int = 0
@@ -567,11 +485,6 @@ class StreamRuntime:
     run: object = None
     output_name: str = "detections"
     video_port: int = 0
-    tier_index: int = 0
-    # Delivered-resolution candidates (highest-area first) and the active index,
-    # chosen from the shared output-bandwidth budget and current stream count.
-    candidates: list = field(default_factory=list)
-    out_index: int = 0
     processed: int = 0
     profile: ProfileWindow = None
 
@@ -714,11 +627,9 @@ def make_model(cfg: AppConfig, model_path: str, name_suffix: str,
     opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     # Preprocess input capacity defaults to 1920x1080, so anything larger (a 4K
-    # delivered tier) fails the graph compile with "input width N exceeds
-    # configured capacity". Size the envelope to the frame this model will
-    # actually receive - the delivered resolution, since videoscale has already
-    # run at the decode tail - rather than a blanket 4K, so the allocation stays
-    # proportional to the tier in use.
+    # source) fails the graph compile with "input width N exceeds configured
+    # capacity". Size the envelope to the frame this model actually receives -
+    # the source's native size - rather than a blanket 4K.
     if input_max_w > 0 and input_max_h > 0:
         opt.preprocess.input_max_width = input_max_w
         opt.preprocess.input_max_height = input_max_h
@@ -731,27 +642,20 @@ def make_model(cfg: AppConfig, model_path: str, name_suffix: str,
     return pyneat.Model(model_path, opt)
 
 
-def build_pipeline_once(cfg: AppConfig, runtime: StreamRuntime, tier_index: int) -> None:
+def build_pipeline_once(cfg: AppConfig, runtime: StreamRuntime) -> None:
     """One pipeline build attempt. Assumes run/graph/model have been cleared.
 
-    The delivered output resolution is runtime.candidates[runtime.out_index]; the
-    caller sets out_index (from the shared output-bandwidth budget) before building.
+    Every stream is delivered and detected at its native size: one model, no
+    rescaling. The preprocess envelope is sized to the native frame, which is
+    what the model actually receives.
     """
-    size = cfg.resolutions[tier_index]
-    model_path = cfg.tier_model_path(size)
-    out_w, out_h, _rate = runtime.candidates[runtime.out_index]
-    suffix = f"_s{runtime.channel}_t{size}_o{out_h}"
+    model_path = cfg.model_path
+    out_w, out_h = runtime.native_w, runtime.native_h
+    suffix = f"_s{runtime.channel}"
 
-    # Decided up front: it determines the geometry the model will actually see.
-    # Under passthrough nothing rescales, so the model receives NATIVE frames and
-    # the preprocess envelope must be sized for those - sizing it to the smaller
-    # delivered size would fail the graph compile with "input width N exceeds
-    # configured capacity" the moment the output policy picks a lower tier.
     save_debug_frames = bool(cfg.save_dir and cfg.save_every > 0)
     passthrough = cfg.encoded_passthrough and not save_debug_frames
-    model_w = runtime.native_w if passthrough else out_w
-    model_h = runtime.native_h if passthrough else out_h
-    model = make_model(cfg, model_path, suffix, model_w, model_h)
+    model = make_model(cfg, model_path, suffix, runtime.native_w, runtime.native_h)
 
     model_name = "model"
     video_name = "video"
@@ -873,7 +777,6 @@ def build_pipeline_once(cfg: AppConfig, runtime: StreamRuntime, tier_index: int)
     runtime.run = graph.build(run_options)
     runtime.output_name = output_name
     runtime.video_port = video_port
-    runtime.tier_index = tier_index
 
     # Decide rtp_timestamp from what Core ACTUALLY lowered, not from hope. If a
     # bridging appsrc still restamps PTS, an rtp_timestamp can never match and
@@ -898,7 +801,7 @@ def build_pipeline_once(cfg: AppConfig, runtime: StreamRuntime, tier_index: int)
     # Detection runs on whatever frame the model actually receives. Under
     # passthrough nothing rescales, so that is the NATIVE size; using out_w/out_h
     # there would put boxes in the wrong coordinate space the moment the output
-    # policy picks a smaller tier.
+    # source would otherwise be rescaled.
     if passthrough:
         runtime.frame_w = runtime.native_w
         runtime.frame_h = runtime.native_h
@@ -907,13 +810,13 @@ def build_pipeline_once(cfg: AppConfig, runtime: StreamRuntime, tier_index: int)
         runtime.frame_h = out_h
 
 
-def build_pipeline(cfg: AppConfig, runtime: StreamRuntime, tier_index: int) -> None:
-    """(Re)build the RTSP -> {video, model} graph for a stream at a resolution tier.
+def build_pipeline(cfg: AppConfig, runtime: StreamRuntime) -> None:
+    """(Re)build the RTSP -> {video, model} graph for one stream.
 
     The MetadataSender and probed geometry persist; only model/graph/run rebuild.
     Model loads are serialized across streams and retried: concurrent rebuilds
     otherwise race on MLA/RPMsg setup ("Unable to load model" under heavy
-    tier-switch thrash). The steady-state per-frame pull loop is unaffected.
+    concurrent rebuilds). The steady-state per-frame pull loop is unaffected.
     """
     attempts = 3
     for attempt in range(1, attempts + 1):
@@ -933,10 +836,10 @@ def build_pipeline(cfg: AppConfig, runtime: StreamRuntime, tier_index: int) -> N
                 # The Neat MLA pipeline tears down asynchronously; give it time to
                 # fully release before building the next one, or concurrent
                 # teardown/build in the runtime can segfault when several streams
-                # switch tiers at once.
+                # rebuild at once.
                 if rebuilding:
                     time.sleep(0.8)
-                build_pipeline_once(cfg, runtime, tier_index)
+                build_pipeline_once(cfg, runtime)
             return
         except Exception as exc:  # noqa: BLE001 - retry transient MLA build failures
             runtime.run = None
@@ -952,14 +855,10 @@ def build_pipeline(cfg: AppConfig, runtime: StreamRuntime, tier_index: int) -> N
             time.sleep(0.75)
 
 
-def init_stream_runtime(cfg: AppConfig, channel: int, source: StreamSource, labels: list[str],
-                        initial_tier: int, active_count: int) -> StreamRuntime:
+def init_stream_runtime(cfg: AppConfig, channel: int, source: StreamSource,
+                        labels: list[str]) -> StreamRuntime:
     native_w, native_h, fps = probe_rtsp(source.rtsp_url)
     output_fps = cfg.fps if cfg.fps > 0 else fps
-    candidates = output_candidates(native_w, native_h, output_fps, cfg.output_policy.heights)
-    out_index = select_output_index(
-        active_count, candidates, cfg.output_policy.budget_megapixels_per_s
-    )
     runtime = StreamRuntime(
         channel=channel,
         id=source.id,
@@ -968,8 +867,6 @@ def init_stream_runtime(cfg: AppConfig, channel: int, source: StreamSource, labe
         native_w=native_w,
         native_h=native_h,
         output_fps=output_fps,
-        candidates=candidates,
-        out_index=out_index,
         profile=ProfileWindow(cfg.profile, source.id),
     )
     metadata_options = pyneat.MetadataSenderOptions()
@@ -982,35 +879,15 @@ def init_stream_runtime(cfg: AppConfig, channel: int, source: StreamSource, labe
         metadata_options.nonblocking = True
     runtime.metadata_sender = pyneat.MetadataSender(metadata_options)
 
-    build_pipeline(cfg, runtime, initial_tier)  # sets frame_w/frame_h from out_index
-    out_w, out_h, _rate = runtime.candidates[runtime.out_index]
+    build_pipeline(cfg, runtime)  # sets frame_w/frame_h
     print(
         f"[stream {source.id}] channel={channel} rtsp={source.rtsp_url} "
-        f"native={native_w}x{native_h}@{output_fps} output={out_w}x{out_h} "
-        f"tier={cfg.resolutions[initial_tier]} "
+        f"native={native_w}x{native_h}@{output_fps} "
         f"video={runtime.video_port if cfg.video_enabled else 'disabled'} "
         f"metadata={runtime.metadata_sender.metadata_port()}",
         flush=True,
     )
     return runtime
-
-
-def switch_tier(cfg: AppConfig, runtime: StreamRuntime, new_tier: int) -> None:
-    old_size = cfg.resolutions[runtime.tier_index]
-    new_size = cfg.resolutions[new_tier]
-    print(f"[stream {runtime.id}] tier {old_size} -> {new_size} (rebuilding pipeline)", flush=True)
-    build_pipeline(cfg, runtime, new_tier)  # handles teardown (run -> graph -> model)
-
-
-def switch_output(cfg: AppConfig, runtime: StreamRuntime, new_out_index: int) -> None:
-    old_w, old_h, _ = runtime.candidates[runtime.out_index]
-    new_w, new_h, _ = runtime.candidates[new_out_index]
-    print(
-        f"[stream {runtime.id}] output {old_w}x{old_h} -> {new_w}x{new_h} (rebuilding pipeline)",
-        flush=True,
-    )
-    runtime.out_index = new_out_index  # build_pipeline_once reads out_index for geometry
-    build_pipeline(cfg, runtime, runtime.tier_index)  # handles teardown (run -> graph -> model)
 
 
 def rtp_timestamp_from_pts_ns(pts_ns: int) -> int:
@@ -1020,7 +897,7 @@ def rtp_timestamp_from_pts_ns(pts_ns: int) -> int:
     return ((pts_ns * 90_000) // 1_000_000_000) & 0xFFFFFFFF
 
 
-def send_metadata(runtime: StreamRuntime, sample, boxes: list[dict], active_tier: int,
+def send_metadata(runtime: StreamRuntime, sample, boxes: list[dict],
                   stream_count: int) -> None:
     """Publish detections on the frame's own source clock.
 
@@ -1051,7 +928,7 @@ def send_metadata(runtime: StreamRuntime, sample, boxes: list[dict], active_tier
         "type": "object-detection",
         "data": json.loads(
             metadata_payload(
-                boxes, runtime.labels, runtime.frame_w, runtime.frame_h, active_tier,
+                boxes, runtime.labels, runtime.frame_w, runtime.frame_h,
                 stream_count, runtime.id,
             )
         ),
@@ -1131,14 +1008,14 @@ def draw_boxes_and_banner(frame, boxes: list[dict], min_score: float, banner: st
 
 
 def maybe_save_debug_frame(cfg: AppConfig, runtime: StreamRuntime, sample, boxes: list[dict],
-                           active_tier: int, stream_count: int) -> None:
+                           stream_count: int) -> None:
     if not cfg.save_dir or cfg.save_every <= 0 or runtime.processed % cfg.save_every != 0:
         return
     frame_tensor = first_tensor_from_sample(sample)
     if frame_tensor is None:
         return
     frame = tensor_bgr_from_decoded(frame_tensor)
-    banner = f"{runtime.id}  tier={active_tier}  streams={stream_count}"
+    banner = f"{runtime.id}  streams={stream_count}"
     draw_boxes_and_banner(frame, boxes, cfg.min_score, banner)
     out_path = Path(cfg.save_dir) / f"stream_{runtime.channel}_frame_{runtime.processed}.jpg"
     if not cv2.imwrite(str(out_path), frame):
@@ -1168,7 +1045,6 @@ class StreamManager:
         self.free_channels = list(range(cfg.max_streams))
         self.stop_event = threading.Event()
         self.errors: list[Exception] = []
-        self.initial_tier = len(cfg.resolutions) // 2
 
     def active_count(self) -> int:
         with self.lock:
@@ -1232,7 +1108,7 @@ class StreamManager:
                 m.thread.join(timeout=15.0)
 
     def _reconnect_stream(self, managed: "ManagedStream", runtime: "StreamRuntime") -> bool:
-        """Rebuild a stream at its current tier after a source-side close.
+        """Rebuild a stream after a source-side close.
 
         A source drop (RTSP disconnect, EOS at a loop boundary, RTCP timeout) is
         not fatal. Returns True once reconnected, or False if we should stop the
@@ -1252,10 +1128,9 @@ class StreamManager:
             if managed.stop_event.is_set() or self.stop_event.is_set():
                 return False
             try:
-                build_pipeline(self.cfg, runtime, runtime.tier_index)
+                build_pipeline(self.cfg, runtime)
                 print(
-                    f"[stream {managed.id}] reconnected at tier "
-                    f"{self.cfg.resolutions[runtime.tier_index]}",
+                    f"[stream {managed.id}] reconnected",
                     flush=True,
                 )
                 return True
@@ -1273,25 +1148,23 @@ class StreamManager:
     def _consume(self, managed: ManagedStream) -> None:
         cfg = self.cfg
         runtime = None
-        policy_state = PolicyState(tier_index=self.initial_tier, pending_index=self.initial_tier)
         transient_recoveries = 0
+        # Desync identical streams so a fleet-wide recovery rolls through rather
+        # than every stream rebuilding in the same instant.
+        stagger_ms = float(managed.channel) * 350.0
         max_transient_recoveries = 10
-        last_switch_ms = -1e12  # allow the first switch immediately
-        min_switch_interval_ms = 2500.0
         # Throttle: inference.fps caps the rate at which we PROCESS + emit. <=0 is
         # uncapped. The runtime already drops stale decoded frames (KeepLatest), so
         # this bounds MLA-output/network/CPU work, not the hardware decode rate.
         min_process_interval_ms = 1000.0 / cfg.fps if cfg.fps > 0 else 0.0
         last_process_ms = -1e12
-        # Desync identical streams so a fleet-wide change rolls through, not storms.
-        stagger_ms = float(managed.channel) * 350.0
         # Retry transient MLA blips before paying for a rebuild (avoids storms).
         consecutive_transient = 0
         transient_retries = 8
         try:
             source = StreamSource(managed.id, managed.url)
             runtime = init_stream_runtime(
-                cfg, managed.channel, source, self.labels, self.initial_tier, self.active_count()
+                cfg, managed.channel, source, self.labels
             )
             while (
                 not managed.stop_event.is_set()
@@ -1300,7 +1173,7 @@ class StreamManager:
             ):
                 # Throttle: pace processing to inference.fps. We keep pulling the
                 # freshest frame (KeepLatest) but skip frames arriving faster than
-                # the target, capping metadata/video/tier work per stream.
+                # the target, capping metadata and video work per stream.
                 if min_process_interval_ms > 0.0:
                     now = time_ms()
                     due = last_process_ms + min_process_interval_ms
@@ -1334,7 +1207,7 @@ class StreamManager:
                                     file=sys.stderr,
                                 )
                                 time.sleep(0.3 + stagger_ms / 1000.0)
-                                build_pipeline(cfg, runtime, runtime.tier_index)
+                                build_pipeline(cfg, runtime)
                                 last_process_ms = -1e12
                                 continue
                         raise RuntimeError(f"stream {managed.id} runtime error: {last_error}")
@@ -1359,42 +1232,8 @@ class StreamManager:
                 if runtime.processed <= cfg.warmup_frames:
                     continue
 
-                active = self.active_count()
-                stats = frame_stats(boxes, cfg.min_score)
-                target_tier = effective_tier(
-                    policy_state, stats, cfg.policy, active, cfg.budget_units
-                )
-                if (
-                    target_tier != runtime.tier_index
-                    and pull_end - last_switch_ms >= min_switch_interval_ms + stagger_ms
-                ):
-                    # Rate-limit rebuilds and stagger by channel so a budget change
-                    # doesn't switch every identical stream in lockstep.
-                    switch_tier(cfg, runtime, target_tier)
-                    last_switch_ms = time_ms()
-                    last_process_ms = -1e12
-                    continue
-
-                # Output-resolution axis: the shared bandwidth budget's fair share
-                # depends only on the active stream count, so this changes just on
-                # add/remove. Reuse the same rate-limit + per-channel stagger so a
-                # fleet-wide step (e.g. the 16th stream joins) rolls through rather
-                # than rebuilding every stream in lockstep.
-                target_out = select_output_index(
-                    active, runtime.candidates, cfg.output_policy.budget_megapixels_per_s
-                )
-                if (
-                    target_out != runtime.out_index
-                    and pull_end - last_switch_ms >= min_switch_interval_ms + stagger_ms
-                ):
-                    switch_output(cfg, runtime, target_out)
-                    last_switch_ms = time_ms()
-                    last_process_ms = -1e12
-                    continue
-
-                active_tier = cfg.resolutions[runtime.tier_index]
-                send_metadata(runtime, sample, boxes, active_tier, self.active_count())
-                maybe_save_debug_frame(cfg, runtime, sample, boxes, active_tier, self.active_count())
+                send_metadata(runtime, sample, boxes, self.active_count())
+                maybe_save_debug_frame(cfg, runtime, sample, boxes, self.active_count())
                 runtime.profile.add(pull_end - pull_start, len(boxes))
         except Exception as exc:  # noqa: BLE001 - surface to main thread
             self.errors.append(exc)

@@ -5,17 +5,13 @@ Insight (in the SDK container) serves the RTSP sources and receives video and
 detection metadata. The detector application runs on the Modalix DevKit and
 reads its stream list from a YAML config it polls while running.
 
-Two things adapt as the stream count changes:
-
-  delivered resolution  the application's own bandwidth-budget policy picks the
-                        highest output height whose w*h*fps fits its fair share
-                        of output.adaptive.budget_megapixels_per_s
+One thing adapts as the stream count changes:
 
   source resolution     this script swaps which Insight media file each slot
-                        streams, because the application always DECODES at the
-                        source's native size. Delivery adapting alone does not
-                        save decoder or buffer memory, and those are what
-                        actually run out first.
+                        streams. The application decodes and delivers at the
+                        source's native size, so feeding it smaller sources is
+                        the only way to cut decoder and buffer memory - what
+                        actually runs out first.
 
 The tier table below is measured on this DevKit, not derived. See README.md.
 
@@ -241,7 +237,6 @@ FPS = 25
 # set this high enough that the app always delivers the source as-is. Egress
 # stays bounded because the UI decode budget caps total pixels at 10.4 MP, and
 # 10.4 MP x 25 fps ~= 260 MP/s, under the ~280 MP/s the platform sustains.
-BUDGET_MPS = 100000     # output.adaptive.budget_megapixels_per_s (deliver source as-is)
 
 
 def tier_for(streams: int) -> Tier:
@@ -376,9 +371,6 @@ model:
   path: {MODELS}/yolo26n-det-int8-b1.tar.gz
   labels: {LABELS}
 
-adaptive:
-  resolutions: [640]
-
 streams:
   max_streams: 16
   sources:
@@ -403,9 +395,6 @@ inference:
 output:
   encoded_passthrough: false
   metadata_rtp_timestamp: "on"
-  adaptive:
-    heights: [2160, 1080, 720, 480]
-    budget_megapixels_per_s: {BUDGET_MPS}
   insight:
     host: {INSIGHT_HOST}
     video_port: 9000
