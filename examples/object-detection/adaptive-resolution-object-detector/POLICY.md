@@ -1,7 +1,18 @@
 # Adaptive Resolution Policy
 
-The app adapts resolution on **two independent axes**, both pure and unit-tested
-in `src/python/adaptive_policy.py`:
+**Scope: `--mode adaptive` only.** The example ships two topologies behind one
+entry point (see the [README](README.md)). Everything below applies to
+`--mode adaptive`, which builds one graph per stream and can therefore resize a
+single stream without touching the others. `--mode fused` has neither axis: it
+builds one graph for all streams into a shared detector, forwards the source
+H.264 untouched, and changes resolution only if you change the sources.
+
+The policy is pure and unit-tested in `src/python/adaptive_policy.py`
+(`src/cpp/adaptive_policy.h` for C++); `src/python/adaptive_app.py` and
+`src/cpp/adaptive_app.h` call it. `main.py` / `main.cpp` only dispatch on
+`--mode`.
+
+`--mode adaptive` adapts resolution on **two independent axes**:
 
 - **Delivered output resolution** (default, always on) — the H.264 video sent to
   Insight, driven by a shared *bandwidth* budget and the active stream count. See

@@ -5,6 +5,13 @@ Every command below was run and verified on a Modalix DevKit with Insight. It us
 `src/common/config.yaml` leaves blank (Insight host, RTSP URLs, model paths), so
 you can run immediately.
 
+**Scope: `--mode adaptive`.** The example carries two topologies behind one
+entry point. This guide exercises `adaptive` (one graph per stream, live
+add/remove). `--mode fused` takes a different config schema - a bare `streams:`
+list - and rebuilds the whole graph to change stream count; see the
+[README](README.md). For a browser-driven path over both modes, and a
+Python/C++ toggle, use [`pipelines/`](pipelines/README.md).
+
 Adjust two IPs for your setup:
 - **`DEVKIT`** — the board that runs the app (this guide: `sima@192.168.135.72`).
 - **`HOST`** — the machine running Insight + the RTSP server (this guide:
@@ -38,7 +45,9 @@ BIN=/tmp/adaptive-build/examples/object-detection/adaptive-resolution-object-det
 `$BIN` only lives in the current shell — re-`export` it in each new SSH session, or use the full path.
 
 Python parity: `pip install -r src/python/requirements.txt`, then
-`python3 src/python/main.py --config <cfg>` (same flags).
+`python3 src/python/main.py --mode adaptive --config <cfg>` (identical flags -
+`main.py` dispatches to `adaptive_app.py`, as `main.cpp` does to
+`adaptive_app.h`).
 
 ---
 
@@ -88,8 +97,8 @@ Tune behaviour with env vars (defaults in parens): `RES(320,640,960)`, `HYST(15)
 
 ```bash
 BIN=/tmp/adaptive-build/examples/object-detection/adaptive-resolution-object-detector/adaptive-resolution-object-detector
-$BIN --config /tmp/mytest.yaml --validate-config-only        # quick sanity (no streams)
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 $BIN --config /tmp/mytest.yaml   # Ctrl-C to stop
+$BIN --mode adaptive --config /tmp/mytest.yaml --validate-config-only   # quick sanity (no streams)
+SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 $BIN --mode adaptive --config /tmp/mytest.yaml   # Ctrl-C to stop
 ```
 
 ---

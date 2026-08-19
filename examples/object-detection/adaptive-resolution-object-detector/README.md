@@ -19,9 +19,20 @@ topologies, chosen with `--mode`:
 
 **`--mode adaptive`** (default) builds **one graph per stream**. Streams can be
 added or removed while the others keep running: the app polls its config file
-and diffs `streams.sources`. Each stream's *delivered* video resolution is
-chosen from a shared output-bandwidth budget, so the picture degrades gracefully
-as streams are added instead of the pipeline falling over.
+and diffs `streams.sources`.
+
+"Adaptive" here means two separate things, and only the first is on by default:
+
+- **Delivered video resolution** *(always on)* — each stream's output height is
+  chosen from a shared bandwidth budget divided by the active stream count, so
+  the picture steps down gracefully as streams are added rather than the
+  pipeline falling over. Changes only on add/remove, never per frame.
+- **Model input tier** *(off)* — `adaptive.resolutions: [640]` is a single
+  value, so the model input size is fixed. List several ascending sizes matching
+  `model.tiers` to let detection accuracy follow scene content too.
+
+[POLICY.md](POLICY.md) documents both axes, with the resolution table and every
+knob.
 
 **`--mode fused`** builds **one graph for all streams**, fanning into a single
 shared detector. Adding a stream rebuilds the whole graph, so it is not live —
