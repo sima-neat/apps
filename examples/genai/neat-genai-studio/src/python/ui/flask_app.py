@@ -526,6 +526,77 @@ class TalkController:
         logging.info(f'WAV duration: {duration:.2f} seconds')
         return duration
 
+    def _flush_talk(self, generation_id, force=False):
+        """Synthesize buffered text, bypassing the early-chunk minimum at END."""
+        if force and self._next is not None:
+            self.talk.append(self._next)
+            self._next = None
+        if not self.talk:
+            return
+
+        self.totalk = self.generate_talk()
+        start_time = time.time()
+        sanitized_sentence = self._sanitize_for_tts(self.totalk)
+        logging.info(f"{self.full_response} : {sanitized_sentence}")
+
+        if (
+            not force
+            and self.tts_enabled
+            and self.current_language != 'xx'
+            and self.chunk_count < self.permissive_chunks
+            and len(sanitized_sentence) < self.min_chars_first_chunks
+        ):
+            # Keep the entire fragment in order until more text arrives. When
+            # END arrives, force=True flushes it regardless of its length.
+            if self._next is not None:
+                self.talk.append(self._next)
+                self._next = None
+            return
+
+        if not sanitized_sentence.strip():
+            pass
+        elif sanitized_sentence in self.full_response:
+            logging.info(f"Skipping synthesis for repeated text: {self.totalk}")
+            self._reset_tps_counters()
+        elif self.tts_enabled and self.current_language != 'xx':
+            if self.browser_tts:
+                if generation_id is not None and not genai_app.is_generation_current(generation_id):
+                    return
+                self.full_response.append(sanitized_sentence)
+                genai_app.emit('audio_chunk', {
+                    'text': sanitized_sentence.strip(),
+                    'browser': True,
+                    'lang': self.current_language,
+                    'tps': round(self.tps, 2),
+                })
+                self.chunk_count += 1
+            else:
+                _, piper = self._get_piper(self.current_language)
+                if piper is None:
+                    self._warn_missing_voice_once(self.current_language)
+                else:
+                    buffer = piper.synthesize(sanitized_sentence, language=self.current_language)
+                    if generation_id is not None and not genai_app.is_generation_current(generation_id):
+                        return
+                    self.full_response.append(sanitized_sentence)
+
+                    elapsed_time = time.time() - start_time
+                    audio_duration = self._get_wav_duration(buffer)
+                    rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
+                    logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
+                    genai_app.emit('audio_chunk', {
+                        'text': sanitized_sentence.strip(),
+                        'audio': buffer.getvalue(),
+                        'tps': round(self.tps, 2),
+                        'rtf': round(rtf, 2)
+                    })
+                    self.chunk_count += 1
+
+        self.talk = []
+        if self._next is not None:
+            self.talk.append(self._next)
+            self._next = None
+
     def _process_subword(self, item):
         subword = item.get('text', '')
         generation_id = item.get('generation_id')
@@ -553,65 +624,13 @@ class TalkController:
                 else:
                     self.talk.append(subword)
 
-                self.totalk = self.generate_talk()
-                start_time = time.time()
-
-                sanitized_sentence = self._sanitize_for_tts(self.totalk)
-                logging.info(f"{self.full_response} : {sanitized_sentence}")
-                if sanitized_sentence in self.full_response:
-                    logging.info(f"Skipping synthesis for repeated text: {self.totalk}")
-                    self._reset_tps_counters()
-                    
-                elif self.tts_enabled and self.current_language != 'xx':
-                    sanitized_sentence = self._sanitize_for_tts(self.totalk)
-                    # Enforce minimum length for first N chunks
-                    if self.chunk_count < self.permissive_chunks and len(sanitized_sentence) < self.min_chars_first_chunks:
-                        # Not enough content yet; keep buffering
-                        return
-                    if self.browser_tts:
-                        # Browser TTS: skip server synthesis and hand the clean
-                        # sentence to the client, which speaks it with the Web
-                        # Speech API. Reuses the same chunking + sanitization.
-                        if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                            return
-                        if sanitized_sentence.strip():
-                            self.full_response.append(sanitized_sentence)
-                            genai_app.emit('audio_chunk', {
-                                'text': sanitized_sentence.strip(),
-                                'browser': True,
-                                'lang': self.current_language,
-                                'tps': round(self.tps, 2),
-                            })
-                            self.chunk_count += 1
-                    else:
-                        _, piper = self._get_piper(self.current_language)
-                        if piper is None:
-                            self._warn_missing_voice_once(self.current_language)
-                        else:
-                            buffer = piper.synthesize(sanitized_sentence, language=self.current_language)
-                            if generation_id is not None and not genai_app.is_generation_current(generation_id):
-                                return
-                            self.full_response.append(sanitized_sentence)
-
-                            elapsed_time = time.time() - start_time
-                            audio_duration = self._get_wav_duration(buffer)
-                            rtf = elapsed_time / audio_duration if audio_duration > 0 else 0
-                            logging.info(f"[Timing] self.piper.synthesize took {elapsed_time:.3f} seconds for [{sanitized_sentence}]")
-                            genai_app.emit('audio_chunk', {
-                                'text': sanitized_sentence.strip(),
-                                'audio': buffer.getvalue(),
-                                'tps': round(self.tps, 2),
-                                'rtf': round(rtf, 2)
-                            })
-                            self.chunk_count += 1
-
-                self.talk = []
-                if self._next is not None:
-                    self.talk.append(self._next)
-                    self._next = None
+                self._flush_talk(generation_id)
             else:
                 self.talk.append(subword)
         else:
+            # A response can end with a short sentence that did not satisfy the
+            # initial chunk-size threshold. Never discard that final fragment.
+            self._flush_talk(generation_id, force=True)
             avg_tps = (sum(self.tps_history) / len(self.tps_history)) if getattr(self, 'tps_history', None) else 0.0
             logging.info(f"[TTS] Average tokens/sec for answer: {avg_tps:.2f}")
             genai_app.emit('end', {})
