@@ -50,9 +50,6 @@ let ragServerStatusText = "";
 
 let currentSystemPrompt = '';
 let systemPromptRequestInFlight = false;
-// Chat-first: the camera image is off by default (even after a VLM loads) so the
-// UI opens on just the chat; enabling "Include camera image" reveals the camera.
-let imagePromptWasCheckedBeforeModelDisable = false;
 // Preferred TTS engine (defaults to piper-tts, matching the backend). Drives
 // which voice-selection setting is shown (rhasspy voice vs piper-plus voice).
 let _currentTtsEngine = 'piper-tts';
@@ -62,7 +59,7 @@ let _ppVoicesAvailable = false;
 let _detectedSpeechLanguage = 'en';
 
 function isLlmOnlyMode() {
-  return document.body.classList.contains('llm-only') || !selectedChatModelSupportsVision();
+  return !selectedChatModelSupportsVision();
 }
 
 function isRagEnabled() {
@@ -86,6 +83,9 @@ function getChatModelCapabilities() {
 // The dropdown is only a *selection* that the Load button acts on, so it can
 // differ from the active model while the user browses the catalog.
 let _activeChatModel = '';
+// Match the original Multimodal Assistant behavior: automatically enable image
+// prompting whenever a vision-capable model becomes active.
+let _visionPromptModel = '';
 
 function getSelectedChatModel() {
   // In control mode the loaded model is authoritative — the dropdown selection
@@ -100,9 +100,15 @@ function getSelectedChatModel() {
 
 function selectedChatModelSupportsVision() {
   const model = getSelectedChatModel();
+  if (!model) return false;
   const capabilities = getChatModelCapabilities();
   const modelCaps = capabilities[model] || {};
-  return modelCaps.supportsVision !== false;
+  if (Object.prototype.hasOwnProperty.call(modelCaps, 'supportsVision')) {
+    return modelCaps.supportsVision === true;
+  }
+  // Preserve compatibility with static/legacy launches that identify an LLM
+  // using the rendered body class but do not publish per-model capabilities.
+  return !document.body.classList.contains('llm-only');
 }
 
 function initializeChatModelSelect() {
@@ -130,30 +136,39 @@ function initializeChatModelSelect() {
 
 function updateSelectedModelVisionState() {
   const includeImageCheckbox = document.getElementById('toggleImagePrompt');
+  const activeModel = getSelectedChatModel();
   const supportsVision = selectedChatModelSupportsVision();
+  const activatedVisionModel = supportsVision && activeModel !== _visionPromptModel;
+  document.body.classList.toggle('llm-only', !supportsVision);
 
   if (includeImageCheckbox) {
     if (!supportsVision) {
-      if (!includeImageCheckbox.disabled) {
-        imagePromptWasCheckedBeforeModelDisable = includeImageCheckbox.checked;
-      }
       includeImageCheckbox.checked = false;
       includeImageCheckbox.disabled = true;
+      _visionPromptModel = '';
     } else {
-      if (includeImageCheckbox.disabled) {
-        includeImageCheckbox.checked = imagePromptWasCheckedBeforeModelDisable;
-      }
+      // A newly activated VLM should be immediately multimodal. Repeated catalog
+      // refreshes for the same model must not override a later manual opt-out.
+      if (activatedVisionModel) includeImageCheckbox.checked = true;
       includeImageCheckbox.disabled = false;
+      _visionPromptModel = activeModel;
     }
     toggleImageButtons(includeImageCheckbox.checked);
   }
 
-  if (!supportsVision && mediaStream) {
-    mediaStream.getVideoTracks().forEach(track => {
-      track.stop();
-      mediaStream.removeTrack(track);
-    });
-  } else if (supportsVision && (!mediaStream || mediaStream.getVideoTracks().length === 0)) {
+  if (activatedVisionModel) revealCameraForVisionModel();
+
+  if (!supportsVision) {
+    if (mediaStream) {
+      mediaStream.getVideoTracks().forEach(track => {
+        track.stop();
+        mediaStream.removeTrack(track);
+      });
+    }
+    if (activeModel && (!mediaStream || mediaStream.getAudioTracks().length === 0)) {
+      startAudioOnly();
+    }
+  } else if (!mediaStream || mediaStream.getVideoTracks().length === 0) {
     startCamera();
   }
 }
@@ -196,7 +211,7 @@ async function startCamera() {
 
   cameraStartPromise = startCameraInternal();
   try {
-    await cameraStartPromise;
+    return await cameraStartPromise;
   } finally {
     cameraStartPromise = null;
   }
@@ -204,22 +219,49 @@ async function startCamera() {
 
 async function startCameraInternal() {
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Browser camera access requires HTTPS and media-device support');
+    }
+    const previousStream = mediaStream;
+    const nextStream = await navigator.mediaDevices.getUserMedia({
       video: buildVideoConstraint(),
       audio: buildAudioConstraint()
     });
+    if (previousStream && previousStream !== nextStream) {
+      previousStream.getTracks().forEach(track => track.stop());
+    }
+    mediaStream = nextStream;
 
     cameraPreview.srcObject = mediaStream;
     audioTracks = mediaStream.getAudioTracks();
     toggleMicrophone(true);
+    setCameraStatus('Live Camera');
 
     // Set up dynamic camera container sizing
     setupCameraContainer();
     // Labels are only available after permission is granted.
     refreshDeviceLists();
+    return true;
   } catch (error) {
     console.error('Error accessing media devices.', error);
+    setCameraStatus(cameraAccessErrorMessage(error), true);
+    return false;
   }
+}
+
+function cameraAccessErrorMessage(error) {
+  if (error && error.name === 'NotAllowedError') return 'Camera blocked — allow access';
+  if (error && error.name === 'NotFoundError') return 'No browser camera found';
+  if (error && error.name === 'NotReadableError') return 'Camera unavailable or busy';
+  return 'Camera unavailable — check HTTPS';
+}
+
+function setCameraStatus(message, isError = false) {
+  const badge = document.getElementById('cameraStatus');
+  if (!badge) return;
+  badge.textContent = message;
+  badge.classList.toggle('is-error', isError);
+  badge.title = isError ? message : '';
 }
 
 async function startAudioOnly() {
@@ -358,8 +400,10 @@ function startSettingsCameraPreview() {
     // For a vision-capable session, turn the camera on so the preview is live.
     if (!isLlmOnlyMode()) {
       try {
-        startCamera().then(() => startSettingsCameraPreview())
-          .catch(() => { if (off) off.textContent = 'Camera unavailable — check browser permissions'; });
+        startCamera().then(started => {
+          if (started) startSettingsCameraPreview();
+          else if (off) off.textContent = 'Camera unavailable — check browser permissions';
+        }).catch(() => { if (off) off.textContent = 'Camera unavailable — check browser permissions'; });
       } catch (e) { /* ignore */ }
     }
   }
@@ -758,12 +802,10 @@ window.onload = function () {
       uploadButton.title = 'Vision features disabled - LLM-only mode';
     }
 
-    // Audio-only mode for LLM
-    startAudioOnly();
-  } else {
-    // Full camera + audio
-    startCamera();
   }
+
+  // Camera/microphone capture starts after the model manager resolves the active
+  // model. This avoids racing an audio-only request against a VLM camera request.
 
   // Initialize dashboard functionality
   initializeVoiceSync();
@@ -5240,6 +5282,19 @@ function initFullscreenButton() {
 }
 
 // ---- Collapsible camera dock ------------------------------------------
+
+function revealCameraForVisionModel() {
+  const section = document.getElementById('cameraSection');
+  const btn = document.getElementById('cameraCollapseBtn');
+  if (!section) return;
+  section.classList.remove('collapsed');
+  if (btn) {
+    btn.title = 'Collapse camera';
+    btn.setAttribute('aria-label', btn.title);
+  }
+  try { localStorage.setItem('studioCameraCollapsed', '0'); } catch (e) { /* ignore */ }
+  window.dispatchEvent(new Event('resize'));
+}
 
 function initCameraCollapse() {
   const section = document.getElementById('cameraSection');

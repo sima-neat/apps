@@ -412,6 +412,7 @@ body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
 #snapAnimation { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 5; animation: snapAndShrink 1.5s ease forwards; }
 @keyframes snapAndShrink { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(.1); opacity: 0; } }
 .camera-badge { position: absolute; bottom: 8px; left: 8px; z-index: 3; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); background: color-mix(in srgb, var(--surface) 80%, transparent); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; }
+.camera-badge.is-error { color: #ffb4ab; border-color: color-mix(in srgb, #ff6b5f 55%, var(--border)); }
 
 /* Camera dock tools (collapse / open full-screen vision), overlaid top-right. */
 .camera-tools { position: absolute; top: 8px; right: 8px; z-index: 6; display: flex; gap: 6px; }

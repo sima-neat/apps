@@ -536,15 +536,12 @@ reset_mla_dispatcher() {
     return 0
   fi
 
-  # 2) Restart only the MLA dispatcher and reinitialize its memory. Do not use
-  # a board-wide runtime recovery flow from this application.
+  # 2) Restart only the MLA dispatcher. Its systemd unit owns all hardware
+  # initialization; the application must not invoke an initializer itself.
   if command -v systemctl >/dev/null 2>&1; then
     info "Restarting MLA dispatcher (${MLA_DISPATCHER_SERVICE})…"
     mla_sudo systemctl restart "${MLA_DISPATCHER_SERVICE}" 2>/dev/null \
       || warn "could not restart ${MLA_DISPATCHER_SERVICE} (need privileges? set MLA_RESET_CMD or MLA_RESET=0)"
-  fi
-  if [[ -x /usr/bin/init_mla_memory.sh ]]; then
-    mla_sudo /usr/bin/init_mla_memory.sh 2>/dev/null || true
   fi
 }
 
