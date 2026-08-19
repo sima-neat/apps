@@ -41,8 +41,9 @@ SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
-# Reset the MLA runtime dispatcher on launch so no models are left resident.
-# MLA_RESET=0 disables it; MLA_RESET_CMD overrides how the reset is performed.
+# Configure the dispatcher reset used only for an explicit recovery request from
+# the running model server. Normal startup never restarts the MLA dispatcher.
+# MLA_RESET=0 disables recovery; MLA_RESET_CMD overrides how it is performed.
 MLA_RESET="${MLA_RESET:-1}"
 MLA_RESET_CMD="${MLA_RESET_CMD:-}"
 # The MLA shared-memory dispatcher service that holds loaded models across
@@ -545,11 +546,11 @@ reset_mla_dispatcher() {
   fi
 }
 
-# Put the MLA in a clean slate before starting: stop any stale model processes
-# from a previous (e.g. crashed) run, reset the MLA dispatcher so no models are
-# left resident, and wait for the OpenAI port to free up.
-reset_mla_clean_slate() {
-  step "Preparing the MLA (clearing any stale model processes)…"
+# Stop stale Studio processes from a previous (e.g. crashed) run and wait for
+# the OpenAI port to become available. Do not touch the board runtime or restart
+# the MLA dispatcher during normal application startup.
+prepare_clean_start() {
+  step "Clearing stale Neat GenAI Studio processes…"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
     pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
@@ -558,8 +559,6 @@ reset_mla_clean_slate() {
     pkill -KILL -f "${UI_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
-
-  reset_mla_dispatcher
 
   # Wait for the OpenAI port to be released so the new server can bind it.
   local port deadline
@@ -705,8 +704,7 @@ cli_supervise() {
   done
 }
 
-section "Accelerator"
-reset_mla_clean_slate
+prepare_clean_start
 
 section "Model Server"
 launch_server

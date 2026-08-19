@@ -309,24 +309,17 @@ releases its models from the MLA and the UI stops the RAG worker before exiting
 default 10). `run.sh` records its PID in `.neat-genai-studio.pid` (used by
 `stop`/`status`) and refuses to start a second instance while one is running.
 
-On launch, `run.sh` first puts the MLA in a clean slate. Models are loaded into
-the MLA **shared-memory dispatcher** (`mlashmcomplex`, service
-`simaai-appcomplex.service`), which persists across client processes — so a
-stale or crashed run leaves models resident and the next load fails with
-`MLA_LOAD_FAILED`. `run.sh` therefore:
+On launch, `run.sh` stops stale model-server/UI processes from an interrupted
+Studio run and waits for the model-server port to become available. Normal
+startup does **not** restart `simaai-appcomplex.service`, initialize the MLA, or
+run any board-runtime recovery script.
 
-1. stops any stale model-server/UI processes from a previous run,
-2. resets the MLA dispatcher (releasing every model on the device), and
-3. waits for the model-server port to free up.
-
-Step 2 needs privileges. Run `run.sh` as a user with (passwordless) `sudo`, or
-as root. It restarts only `simaai-appcomplex.service` and re-runs
-`init_mla_memory.sh`; the application does not invoke the board-wide runtime
-recovery script. Overrides:
+The following settings apply only to an explicit supervised recovery request
+from the running model server (for example, after a failed model switch):
 
 - `MLA_RESET_CMD="my-reset-tool"` — run your own reset command instead.
 - `MLA_DISPATCHER_SERVICE=<unit>` — use a different dispatcher service name.
-- `MLA_RESET=0` — skip the MLA reset entirely.
+- `MLA_RESET=0` — disable supervised MLA recovery entirely.
 
 If you hit `MLA_LOAD_FAILED` right now, reset the runtime once by hand:
 
