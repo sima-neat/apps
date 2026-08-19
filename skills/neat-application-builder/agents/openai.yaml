@@ -1,4 +1,4 @@
 interface:
   display_name: "Neat Application Builder"
-  short_description: "Build runnable Neat model applications"
-  default_prompt: "Use $neat-application-builder to choose the input topology and public API before building a runnable Neat application."
+  short_description: "Build applications with the Neat Library APIs"
+  default_prompt: "Use $neat-application-builder to build a Neat Library application with the right public API shape."

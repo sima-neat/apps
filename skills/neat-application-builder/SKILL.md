@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Builds runnable Neat Library applications with public C++ or Python APIs after ONNX compilation or from existing model artifacts. Use for end-to-end model apps, DevKit runs, classification or detection pipelines, and camera, file, or RTSP inputs that may require Model, Graph, SimaDecode, Preproc, GenAIModel, or GenAIServer. Chooses the API and input topology before consulting Apps examples. Do not use for model quantization or compilation, repository maintenance, release automation, or review workflows.
+description: Build end-to-end Neat applications with public C++ or Python APIs. Use when a request starts from ONNX or a compiled model and targets a DevKit, including Model, Graph, GenAIModel, GenAIServer, camera, file, or RTSP pipelines. Choose the API shape before consulting Apps examples. Model compilation and repository workflows use separate skills.
 ---
 
 # Neat Application Builder
@@ -18,20 +18,13 @@ reference implementations after the API shape is chosen.
    - In the Neat Development Environment, read `/neat-resources/core-src` first.
    - Prefer installed public headers under the Neat Development Environment sysroot when checking the user-facing contract.
    - Read `references/source-of-truth.md`.
-2. Establish the artifact and input boundary before opening an Apps example.
-   - An ONNX file is compiler input, not the runtime artifact for a classic Neat
-     application. Treat compilation as a prerequisite outside this skill, then
-     continue with the compiled model archive.
-   - Decide whether application code supplies decoded images or tensors, or the
-     graph owns a camera, file, encoded stream, or other source.
-   - Inspect the model package before deciding whether preprocessing and
-     postprocessing already belong to its route.
-3. Choose the application API shape before writing code.
+2. Choose the application API shape before opening an Apps example.
    - Read `references/api-decision-map.md`.
-4. If the request touches APIs outside the main Model/Graph/Run/GenAI path, read `references/api-surface-map.md` and inspect the referenced headers/docs.
-5. For classic compiled model applications, read `references/model-graph-run.md`.
-6. For LLM, VLM, ASR, or HTTP model serving applications, read `references/genai.md`.
-7. Before claiming success, read `references/validation.md` and run the validation that is possible in the current environment.
+   - Continue after the runtime artifact, input owner, and API family are known.
+3. If the request touches APIs outside the main Model/Graph/Run/GenAI path, read `references/api-surface-map.md` and inspect the referenced headers/docs.
+4. For classic compiled model applications, read `references/model-graph-run.md`.
+5. For LLM, VLM, ASR, or HTTP model serving applications, read `references/genai.md`.
+6. Before claiming success, read `references/validation.md` and run the validation that is possible in the current environment.
 
 ## Defaults
 
@@ -40,16 +33,6 @@ reference implementations after the API shape is chosen.
 - Use only public APIs from installed headers and bindings.
 - Prefer clear application endpoint names such as `image`, `detections`, `classes`, `preview`, `prompt`, and `tokens`.
 - Keep generated application code runnable with explicit build and run commands.
-
-## API Selection
-
-- Use `Model` when application code owns decoded image or tensor input and the
-  model-owned route is the complete pipeline.
-- Use `Graph` when the application owns a source or explicitly composes
-  decoding, preprocessing, multiple stages, named endpoints, branching, fan-in,
-  reusable fragments, or output side paths.
-- Use `GenAIModel` for in-process GenAI calls against LLiMa model directories.
-- Use `GenAIServer` when a browser, service, or remote client should call GenAI models over HTTP.
 
 ## DevKit Local Display and Run
 

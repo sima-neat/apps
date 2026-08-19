@@ -5,11 +5,8 @@ packaged for Neat as compiled archives, commonly `.tar.gz` MPK artifacts.
 
 ## Model
 
-`Model` loads and validates a compiled model archive. Use it when application
-code supplies decoded images or tensors and the package-owned route is the
-complete pipeline. Classification, detection, segmentation, depth, or embedding
-describes the model task; it does not decide whether the application needs a
-`Model` or an explicit `Graph`.
+`Model` loads and validates a compiled model archive. Use it only when the API
+decision map identifies caller-owned input.
 
 Common application steps:
 
@@ -25,11 +22,6 @@ Do not manually recreate the model route unless the public API requires it. Let
 ## Graph
 
 `Graph` is the application assembly boundary.
-
-Use it when the application owns a source such as a camera, file, or RTSP
-stream, or when it explicitly composes decode, preprocessing, multiple model
-stages, branching, or output side paths. Keep package-owned stages inside the
-model route rather than recreating them as application nodes.
 
 Use `add(...)` for linear chains:
 
