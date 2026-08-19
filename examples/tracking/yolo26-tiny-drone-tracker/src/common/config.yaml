@@ -1,0 +1,53 @@
+model:
+  path: models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
+
+streams:
+  - <tiny-drone-rtsp-url>
+
+input:
+  codec: h264
+  tcp: true
+  latency_ms: 100
+
+runtime:
+  profile: true
+  warmup_frames: 30
+
+inference:
+  frames: 0
+  fps: 0                       # Output/inference FPS; 0 keeps the source rate.
+  max_inflight_per_stream: 4
+  max_inflight_total: 4
+  num_classes: 1
+  target_class_id: 0
+  target_label: drone
+  min_score: 0.05
+  nms_iou: 0.60
+  max_detections: 100
+
+tracking:
+  high_score_threshold: 0.20
+  new_track_threshold: 0.30
+  match_iou_threshold: 0.05
+  center_distance_enabled: true
+  max_center_distance: 3.0
+  velocity_momentum: 0.75
+  max_missing_frames: 30
+  min_confirmed_hits: 2
+  max_active_tracks: 256
+
+output:
+  insight:
+    host: <insight-host-ip>
+    video_port_base: 9000
+    metadata_port_base: 9100
+  video_enabled: true
+  debug_dir: null
+  save_every: 0
+
+# Test harness settings only. Normal example runs ignore this section.
+testing:
+  e2e:
+    output:
+      save_every: 10
+      total_saved_frames: 20
