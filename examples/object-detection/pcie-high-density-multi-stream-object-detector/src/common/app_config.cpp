@@ -128,6 +128,7 @@ void validate(const AppConfig& config) {
   require(config.card_id >= 0, "card.card_id must be >= 0");
   require(config.input_width > 0 && config.input_height > 0 && config.input_fps > 0,
           "input width, height, and fps must be > 0");
+  require(config.startup_stagger_ms >= 0, "input.startup_stagger_ms must be >= 0");
   require(config.decoder_buffers > 0 && config.decoder_buffers <= 64,
           "input.decoder_buffers must be in [1, 64]");
   require(config.decoder_input_buffers > 0, "input.decoder_input_buffers must be > 0");
@@ -190,6 +191,7 @@ AppConfig load_config(const std::filesystem::path& path) {
   config.rtsp_tcp = raw.bool_or("input.tcp", true);
   config.rtsp_drop_on_latency = raw.bool_or("input.drop_on_latency", false);
   config.latency_ms = raw.int_or("input.latency_ms", 100);
+  config.startup_stagger_ms = raw.int_or("input.startup_stagger_ms", 50);
   config.input_width = raw.int_or("input.width", 1280);
   config.input_height = raw.int_or("input.height", 720);
   config.input_fps = raw.int_or("input.fps", 25);
@@ -241,8 +243,8 @@ std::string config_summary(const AppConfig& config) {
   std::ostringstream out;
   out << "profile=" << config.profile_name << " streams=" << config.stream_count
       << " input=" << config.input_width << 'x' << config.input_height << '@' << config.input_fps
-      << " card=" << config.card_id << " queue=" << config.queue
-      << " pcie_pool_size=" << config.pcie_pool_size
+      << " rtsp_startup_stagger_ms=" << config.startup_stagger_ms << " card=" << config.card_id
+      << " queue=" << config.queue << " pcie_pool_size=" << config.pcie_pool_size
       << " pcie_max_inflight_per_stream=" << config.max_inflight_per_stream
       << " correlation_cache_size=" << config.correlation_cache_size
       << " pcie_max_inflight_total=" << config.max_inflight_total

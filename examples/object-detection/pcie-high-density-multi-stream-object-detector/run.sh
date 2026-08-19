@@ -25,7 +25,7 @@ CARD_HOST="${PCIE_CARD_HOST:-10.0.0.2}"
 CARD_USER="${PCIE_CARD_USER:-sima}"
 CARD_PORT="${PCIE_CARD_SSH_PORT:-22}"
 SSH_IDENTITY="${PCIE_CARD_SSH_KEY:-${HOME}/.ssh/sima_neat_pcie_ed25519}"
-CARD_BINARY="${PCIE_CARD_BINARY:-/workspace/prebuilt-apps/examples/object-detection/${APP_NAME}/src/cpp/pre-built/${APP_NAME}}"
+CARD_BINARY="${PCIE_CARD_BINARY:-}"
 HOST_BINARY="${PCIE_HOST_BINARY:-${APPS_ROOT}/build-host-pcie/${APP_NAME}-host}"
 REMOTE_DIR="${PCIE_REMOTE_RUN_DIR:-}"
 READINESS_TIMEOUT="${PCIE_CARD_READINESS_TIMEOUT:-120}"
@@ -148,6 +148,9 @@ done
   usage >&2
   exit 2
 }
+if [[ -z "${CARD_BINARY}" ]]; then
+  CARD_BINARY="/home/${CARD_USER}/prebuilt-apps/examples/object-detection/${APP_NAME}/src/cpp/pre-built/${APP_NAME}"
+fi
 [[ -f "${CONFIG_PATH}" ]] || die "config does not exist: ${CONFIG_PATH}"
 [[ -x "${HOST_BINARY}" ]] || die "host binary is not executable: ${HOST_BINARY}"
 [[ -r "${SSH_IDENTITY}" ]] || die "SSH identity is not readable: ${SSH_IDENTITY}"

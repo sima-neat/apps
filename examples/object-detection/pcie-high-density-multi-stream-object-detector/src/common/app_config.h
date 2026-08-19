@@ -35,6 +35,7 @@ struct AppConfig {
   bool rtsp_tcp = true;
   bool rtsp_drop_on_latency = false;
   int latency_ms = 100;
+  int startup_stagger_ms = 50;
   int input_width = 1280;
   int input_height = 720;
   int input_fps = 25;

@@ -18,6 +18,7 @@ input:
   codec: h264
   tcp: true
   latency_ms: 100
+  startup_stagger_ms: 50
   width: 1280
   height: 720
   fps: 30

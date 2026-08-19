@@ -27,10 +27,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -243,11 +245,14 @@ struct SharedState {
   }
 };
 
+class ResultDispatcher;
+
 struct StreamRuntime {
   int index = 0;
   const pcie_high_density::AppConfig* config = nullptr;
   const std::vector<std::string>* labels = nullptr;
   SharedState* shared = nullptr;
+  ResultDispatcher* result_dispatcher = nullptr;
   std::unique_ptr<UdpEndpoint> metadata_endpoint;
 
   std::atomic<std::uint32_t> next_frame_id{0};
@@ -262,6 +267,7 @@ struct StreamRuntime {
   std::atomic<std::uint64_t> dropped_before_admission{0};
   std::atomic<std::uint64_t> result_timeouts{0};
   std::atomic<std::uint64_t> correlation_misses{0};
+  std::atomic<std::uint64_t> result_queue_dropped{0};
   std::atomic<std::uint64_t> returned{0};
   std::atomic<std::uint64_t> rtp_timestamps_recorded{0};
   std::atomic<std::uint64_t> metadata_without_rtp_timestamp{0};
@@ -431,58 +437,43 @@ void input_queue_overrun(GstElement*, gpointer user_data) {
   ++stream->dropped_before_admission;
 }
 
-GstFlowReturn consume_result(GstAppSink* sink, gpointer user_data) {
-  auto* stream = static_cast<StreamRuntime*>(user_data);
-  GstSample* sample = gst_app_sink_pull_sample(sink);
-  if (!sample) {
-    return GST_FLOW_EOS;
+struct PendingResult {
+  StreamRuntime* stream = nullptr;
+  std::uint64_t identifier = 0;
+  std::uint32_t frame_id = 0;
+  std::vector<std::uint8_t> payload;
+};
+
+void discard_pending_result(PendingResult result) {
+  auto* stream = result.stream;
+  std::lock_guard lock(stream->frame_mutex);
+  const auto found = stream->frames.find(result.frame_id);
+  if (found != stream->frames.end() && found->second.identifier == result.identifier) {
+    stream->frames.erase(found);
+  } else {
+    ++stream->correlation_misses;
   }
+  ++stream->result_queue_dropped;
+}
 
+void process_result(PendingResult result) {
+  auto* stream = result.stream;
   try {
-    GstBuffer* buffer = gst_sample_get_buffer(sample);
-    if (!buffer) {
-      throw std::runtime_error("result sample has no buffer");
-    }
-    GstCustomMeta* meta = gst_buffer_get_custom_meta(buffer, "GstSimaHostMeta");
-    const GstStructure* structure = meta ? gst_custom_meta_get_structure(meta) : nullptr;
-    guint64 identifier = 0;
-    guint metadata_stream = 0;
-    guint metadata_frame = 0;
-    if (!structure || !gst_structure_get_uint64(structure, "frame-identifier", &identifier) ||
-        !gst_structure_get_uint(structure, "stream-id", &metadata_stream) ||
-        !gst_structure_get_uint(structure, "frame-id", &metadata_frame)) {
-      throw std::runtime_error("result is missing PCIe correlation metadata");
-    }
-    if (metadata_stream != static_cast<guint>(stream->index)) {
-      throw std::runtime_error("result stream-id does not match neatpciehost.src_N");
-    }
-
     FrameContext frame;
     {
       std::lock_guard lock(stream->frame_mutex);
-      const auto found = stream->frames.find(metadata_frame);
-      if (found == stream->frames.end() || found->second.identifier != identifier) {
+      const auto found = stream->frames.find(result.frame_id);
+      if (found == stream->frames.end() || found->second.identifier != result.identifier) {
         ++stream->correlation_misses;
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
+        return;
       }
       frame = found->second;
       stream->frames.erase(found);
     }
 
-    GstMapInfo mapping{};
-    if (!gst_buffer_map(buffer, &mapping, GST_MAP_READ)) {
-      throw std::runtime_error("failed to map returned BBOX buffer");
-    }
-    std::vector<Box> boxes;
-    try {
-      boxes = parse_bbox_payload(mapping.data, mapping.size, stream->config->input_width,
-                                 stream->config->input_height, stream->config->max_detections);
-    } catch (...) {
-      gst_buffer_unmap(buffer, &mapping);
-      throw;
-    }
-    gst_buffer_unmap(buffer, &mapping);
+    const std::vector<Box> boxes = parse_bbox_payload(
+        result.payload.data(), result.payload.size(), stream->config->input_width,
+        stream->config->input_height, stream->config->max_detections);
     const std::uint64_t completed = ++stream->returned;
 
     if (completed > static_cast<std::uint64_t>(stream->config->warmup_frames)) {
@@ -509,8 +500,7 @@ GstFlowReturn consume_result(GstAppSink* sink, gpointer user_data) {
       } else if (stream->config->video_enabled) {
         ++stream->metadata_without_rtp_timestamp;
         ++stream->metadata_dropped;
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
+        return;
       }
       const std::string payload = sima_examples::detection_egress::serialize(
           boxes, *stream->labels, stream->config->input_width, stream->config->input_height,
@@ -525,9 +515,135 @@ GstFlowReturn consume_result(GstAppSink* sink, gpointer user_data) {
     stream->shared->fail("stream " + std::to_string(stream->index) +
                          " result handling failed: " + error.what());
   }
+}
+
+class ResultDispatcher {
+public:
+  explicit ResultDispatcher(std::size_t capacity) : capacity_(capacity) {}
+
+  ~ResultDispatcher() {
+    stop();
+  }
+
+  ResultDispatcher(const ResultDispatcher&) = delete;
+  ResultDispatcher& operator=(const ResultDispatcher&) = delete;
+
+  void start() {
+    worker_ = std::thread([this] { run(); });
+  }
+
+  bool enqueue(PendingResult result) {
+    std::optional<PendingResult> dropped;
+    {
+      std::lock_guard lock(mutex_);
+      if (stopping_) {
+        return false;
+      }
+      if (queue_.size() == capacity_) {
+        dropped = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      queue_.push_back(std::move(result));
+    }
+    if (dropped) {
+      discard_pending_result(std::move(*dropped));
+    }
+    ready_.notify_one();
+    return true;
+  }
+
+  void stop() {
+    {
+      std::lock_guard lock(mutex_);
+      if (!worker_.joinable()) {
+        return;
+      }
+      stopping_ = true;
+    }
+    ready_.notify_one();
+    worker_.join();
+  }
+
+  std::size_t pending() const {
+    std::lock_guard lock(mutex_);
+    return queue_.size();
+  }
+
+private:
+  void run() {
+    while (true) {
+      PendingResult result;
+      {
+        std::unique_lock lock(mutex_);
+        ready_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+        if (queue_.empty()) {
+          return;
+        }
+        result = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      process_result(std::move(result));
+    }
+  }
+
+  const std::size_t capacity_;
+  mutable std::mutex mutex_;
+  std::condition_variable ready_;
+  std::deque<PendingResult> queue_;
+  bool stopping_ = false;
+  std::thread worker_;
+};
+
+GstFlowReturn consume_result(GstAppSink* sink, gpointer user_data) {
+  auto* stream = static_cast<StreamRuntime*>(user_data);
+  GstSample* sample = gst_app_sink_pull_sample(sink);
+  if (!sample) {
+    return GST_FLOW_EOS;
+  }
+
+  PendingResult result;
+  result.stream = stream;
+  try {
+    GstBuffer* buffer = gst_sample_get_buffer(sample);
+    if (!buffer) {
+      throw std::runtime_error("result sample has no buffer");
+    }
+    GstCustomMeta* meta = gst_buffer_get_custom_meta(buffer, "GstSimaHostMeta");
+    const GstStructure* structure = meta ? gst_custom_meta_get_structure(meta) : nullptr;
+    guint64 identifier = 0;
+    guint metadata_stream = 0;
+    guint metadata_frame = 0;
+    if (!structure || !gst_structure_get_uint64(structure, "frame-identifier", &identifier) ||
+        !gst_structure_get_uint(structure, "stream-id", &metadata_stream) ||
+        !gst_structure_get_uint(structure, "frame-id", &metadata_frame)) {
+      throw std::runtime_error("result is missing PCIe correlation metadata");
+    }
+    if (metadata_stream != static_cast<guint>(stream->index)) {
+      throw std::runtime_error("result stream-id does not match neatpciehost.src_N");
+    }
+    result.identifier = identifier;
+    result.frame_id = metadata_frame;
+
+    GstMapInfo mapping{};
+    if (!gst_buffer_map(buffer, &mapping, GST_MAP_READ)) {
+      throw std::runtime_error("failed to map returned BBOX buffer");
+    }
+    try {
+      result.payload.assign(mapping.data, mapping.data + mapping.size);
+    } catch (...) {
+      gst_buffer_unmap(buffer, &mapping);
+      throw;
+    }
+    gst_buffer_unmap(buffer, &mapping);
+  } catch (const std::exception& error) {
+    stream->shared->fail("stream " + std::to_string(stream->index) +
+                         " result handoff failed: " + error.what());
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
 
   gst_sample_unref(sample);
-  return stream->shared->failed ? GST_FLOW_ERROR : GST_FLOW_OK;
+  return stream->result_dispatcher->enqueue(std::move(result)) ? GST_FLOW_OK : GST_FLOW_FLUSHING;
 }
 
 std::string make_pipeline(const pcie_high_density::AppConfig& config) {
@@ -567,10 +683,8 @@ std::string make_pipeline(const pcie_high_density::AppConfig& config) {
                << " port=" << config.video_port_base + stream << " sync=false async=false";
     }
 
-    pipeline << " pcie.src_" << stream
-             << " ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream"
-             << " ! appsink name=result_" << stream
-             << " emit-signals=true sync=false async=false max-buffers=1 drop=true";
+    pipeline << " pcie.src_" << stream << " ! appsink name=result_" << stream
+             << " emit-signals=true sync=false async=false max-buffers=1 drop=false";
   }
   return pipeline.str();
 }
@@ -592,7 +706,9 @@ void validate_pipeline(const std::string& launch) {
 class HostApplication {
 public:
   explicit HostApplication(pcie_high_density::AppConfig config)
-      : config_(std::move(config)), labels_(pcie_high_density::load_labels(config_.labels_path)) {
+      : config_(std::move(config)), labels_(pcie_high_density::load_labels(config_.labels_path)),
+        result_dispatcher_(
+            std::max<std::size_t>(256U, static_cast<std::size_t>(config_.stream_count) * 64U)) {
     const std::string launch = make_pipeline(config_);
     GError* error = nullptr;
     pipeline_ = gst_parse_launch(launch.c_str(), &error);
@@ -610,14 +726,24 @@ public:
     }
 
     streams_.reserve(static_cast<std::size_t>(config_.stream_count));
+    rtsp_sources_.reserve(static_cast<std::size_t>(config_.stream_count));
     for (int index = 0; index < config_.stream_count; ++index) {
       auto stream = std::make_unique<StreamRuntime>();
       stream->index = index;
       stream->config = &config_;
       stream->labels = &labels_;
       stream->shared = &shared_;
+      stream->result_dispatcher = &result_dispatcher_;
       stream->metadata_endpoint =
           std::make_unique<UdpEndpoint>(config_.insight_host, config_.metadata_port_base + index);
+
+      const std::string source_name = "rtsp_" + std::to_string(index);
+      GstElement* source = gst_bin_get_by_name(GST_BIN(pipeline_), source_name.c_str());
+      if (!source) {
+        throw std::runtime_error("pipeline is missing " + source_name);
+      }
+      gst_element_set_locked_state(source, TRUE);
+      rtsp_sources_.push_back(source);
 
       const std::string stamp_name = "pcie_stamp_" + std::to_string(index);
       GstElement* stamp = gst_bin_get_by_name(GST_BIN(pipeline_), stamp_name.c_str());
@@ -668,11 +794,18 @@ public:
       gst_object_unref(result);
       streams_.push_back(std::move(stream));
     }
+    result_dispatcher_.start();
   }
 
   ~HostApplication() {
     if (pipeline_) {
       gst_element_set_state(pipeline_, GST_STATE_NULL);
+      result_dispatcher_.stop();
+      for (GstElement* source : rtsp_sources_) {
+        gst_element_set_state(source, GST_STATE_NULL);
+        gst_element_set_locked_state(source, FALSE);
+        gst_object_unref(source);
+      }
       gst_object_unref(pipeline_);
     }
   }
@@ -681,6 +814,22 @@ public:
     const GstStateChangeReturn state = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
     if (state == GST_STATE_CHANGE_FAILURE) {
       throw std::runtime_error("failed to start host GStreamer pipeline");
+    }
+    if (config_.startup_stagger_ms > 0) {
+      std::cout << "[host] starting RTSP streams " << config_.startup_stagger_ms << " ms apart\n";
+    }
+    for (std::size_t index = 0; index < rtsp_sources_.size(); ++index) {
+      if (g_stop_requested) {
+        break;
+      }
+      if (index != 0U && config_.startup_stagger_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(config_.startup_stagger_ms));
+      }
+      GstElement* source = rtsp_sources_[index];
+      gst_element_set_locked_state(source, FALSE);
+      if (!gst_element_sync_state_with_parent(source)) {
+        throw std::runtime_error("failed to start RTSP stream " + std::to_string(index));
+      }
     }
     std::cout << "[host] running " << pcie_high_density::config_summary(config_) << "\n";
 
@@ -718,6 +867,7 @@ public:
 
     gst_element_send_event(pipeline_, gst_event_new_eos());
     gst_element_set_state(pipeline_, GST_STATE_NULL);
+    result_dispatcher_.stop();
     print_stats(true);
     if (shared_.failed) {
       std::lock_guard lock(shared_.error_mutex);
@@ -733,6 +883,7 @@ public:
     std::uint64_t dropped = 0;
     std::uint64_t result_timeouts = 0;
     std::uint64_t correlation_misses = 0;
+    std::uint64_t result_queue_dropped = 0;
     std::uint64_t returned = 0;
     std::uint64_t rtp_timestamps_recorded = 0;
     std::uint64_t metadata_without_rtp_timestamp = 0;
@@ -745,6 +896,7 @@ public:
       dropped += stream->dropped_before_admission;
       result_timeouts += stream->result_timeouts;
       correlation_misses += stream->correlation_misses;
+      result_queue_dropped += stream->result_queue_dropped;
       returned += stream->returned;
       rtp_timestamps_recorded += stream->rtp_timestamps_recorded;
       metadata_without_rtp_timestamp += stream->metadata_without_rtp_timestamp;
@@ -758,7 +910,9 @@ public:
     std::cout << (final ? "[host] final" : "[host] stats") << " received=" << received
               << " admitted=" << admitted << " dropped_before_admission=" << dropped
               << " result_timeouts=" << result_timeouts
-              << " correlation_misses=" << correlation_misses << " outstanding=" << outstanding
+              << " correlation_misses=" << correlation_misses
+              << " result_queue_pending=" << result_dispatcher_.pending()
+              << " result_queue_dropped=" << result_queue_dropped << " outstanding=" << outstanding
               << " returned=" << returned << " rtp_timestamps_recorded=" << rtp_timestamps_recorded
               << " metadata_without_rtp_timestamp=" << metadata_without_rtp_timestamp
               << " metadata_sent=" << metadata_sent << " metadata_dropped=" << metadata_dropped
@@ -785,7 +939,9 @@ private:
   pcie_high_density::AppConfig config_;
   std::vector<std::string> labels_;
   SharedState shared_;
+  ResultDispatcher result_dispatcher_;
   GstElement* pipeline_ = nullptr;
+  std::vector<GstElement*> rtsp_sources_;
   std::vector<std::unique_ptr<StreamRuntime>> streams_;
 };
 
