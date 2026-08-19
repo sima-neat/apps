@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "ffprobe_command.h"
 #include "neat.h"
 #include "neat/models.h"
 #include "neat/node_groups.h"
@@ -535,24 +536,15 @@ int fps_from_rate(const std::string& value) {
   }
 }
 
-std::string shell_quote(const std::string& value) {
-  std::string out = "'";
-  for (const char c : value) {
-    out += c == '\'' ? "'\\''" : std::string(1, c);
-  }
-  out += "'";
-  return out;
-}
-
 SourceGeometry probe_ffprobe_geometry(const AppConfig& cfg) {
   SourceGeometry geometry;
-  std::string command =
-      "ffprobe -v error -rw_timeout 5000000 -select_streams v:0 "
-      "-show_entries stream=width,height,r_frame_rate,avg_frame_rate -of default=nw=1 ";
-  if (!cfg.ssl_strict) {
-    command += "-tls_verify 0 ";
-  }
-  command += shell_quote(cfg.source_url) + " 2>/dev/null";
+  sima_examples::single_stream_instance_segmenter::FfprobeCommandOptions options;
+  options.rtsp_source = cfg.source_type == SourceType::Rtsp;
+  options.tcp = cfg.tcp;
+  options.tls_verify = cfg.ssl_strict;
+  const std::string command =
+      sima_examples::single_stream_instance_segmenter::build_ffprobe_geometry_command(
+          cfg.source_url, options);
 
   FILE* pipe = popen(command.c_str(), "r");
   if (!pipe) {

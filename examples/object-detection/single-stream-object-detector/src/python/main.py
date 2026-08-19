@@ -396,6 +396,8 @@ def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
         "-of",
         "default=nw=1",
     ]
+    if cfg.source_type == "rtsp" and cfg.tcp:
+        cmd.extend(["-rtsp_transport", "tcp"])
     if not cfg.ssl_strict:
         cmd.extend(["-tls_verify", "0"])
     cmd.append(cfg.source_url)
