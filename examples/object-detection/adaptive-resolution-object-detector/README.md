@@ -6,7 +6,7 @@
 | Category | object-detection |
 | Difficulty | Advanced |
 | Tags | object-detection, rtsp, multistream, adaptive-resolution, insight, yolo26 |
-| Languages | Python |
+| Languages | C++, Python |
 | Status | experimental |
 | Binary Name | adaptive-resolution-object-detector |
 | Model | yolo26n-det-bf16-mla_tess-b1 |
@@ -229,8 +229,22 @@ output:
 
 ## Run
 
-This example is Python-only. Activate PyNeat first; every command below is run
-from `prebuilt-apps/`.
+Both languages ship the same two topologies behind one entry point, selected by
+`--mode`. Every command below is run from `prebuilt-apps/`.
+
+### C++
+
+```bash
+SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 examples/object-detection/adaptive-resolution-object-detector/src/cpp/pre-built/adaptive-resolution-object-detector \
+  --mode adaptive \
+  --config examples/object-detection/adaptive-resolution-object-detector/src/common/config.yaml
+```
+
+Use `--mode fused` for the shared-detector topology.
+
+### Python
+
+Activate PyNeat first.
 
 ```bash
 source ~/pyneat/bin/activate
@@ -246,23 +260,24 @@ python3 examples/object-detection/adaptive-resolution-object-detector/src/python
   --validate-config-only
 ```
 
-### Adaptive detector - one graph per stream
+### Adaptive detector - one graph per stream (`--mode adaptive`)
 Streams can be added or removed while the others keep running.
 
 ```bash
 SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/adaptive-resolution-object-detector/src/python/main.py \
+  --mode adaptive \
   --config examples/object-detection/adaptive-resolution-object-detector/src/common/config.yaml
 ```
 
-### Fused detector - one shared detector for all streams
+### Fused detector - one shared detector for all streams (`--mode fused`)
 Higher stream counts, but adding a stream rebuilds the graph. It takes a
 different config schema (a bare `streams:` list); the `pipelines/` bundle
 generates one, or write it by hand following
 [`pipelines/README.md`](pipelines/README.md).
 
 ```bash
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/adaptive-resolution-object-detector/src/python/fused_main.py \
-  --config <your-fused-config>.yaml
+SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/adaptive-resolution-object-detector/src/python/main.py \
+  --mode fused --config <your-fused-config>.yaml
 ```
 
 ### All three pipelines behind one page
@@ -327,16 +342,20 @@ model-variant note above).
 
 ## Source Files
 - Test scope: `tests/test-scope.yaml`
-- Python source: `src/python/main.py` (per-stream graphs),
-  `src/python/fused_main.py` (one fused graph, shared detector),
+- Python source: `src/python/main.py` (entry point, `--mode adaptive|fused`),
+  `src/python/adaptive_app.py`, `src/python/fused_app.py`,
   `src/python/adaptive_policy.py`
 - Python tests: `tests/python/test_unit.py`, `tests/python/test_e2e.py`
 - Pipelines bundle: `pipelines/` (see `pipelines/README.md`)
 - Model build tool: `tools/build_yolo26_tiers.sh` (optional; only needed to
   produce per-tier packs if you re-enable multi-resolution model switching)
 
-This example is Python-only - there is no C++ port, and `tests/test-scope.yaml`
-declares the C++ lanes off.
+- C++ source: `src/cpp/main.cpp` (entry point, `--mode adaptive|fused`),
+  `src/cpp/adaptive_app.h`, `src/cpp/fused_app.h`, `src/cpp/adaptive_policy.h`
+- C++ tests: `tests/cpp/test_unit.cpp`, `tests/cpp/test_e2e.cpp`
+
+Both languages expose the same two topologies behind `--mode`, which is what
+lets `pipelines/` toggle between them without changing anything else.
 - Manual test guide + config generator: `TESTING.md`, `tools/gen_test_config.sh`
 - Tier-switching policy + budget reference: `POLICY.md`
 - Shared assets: `src/common/`

@@ -1,6 +1,7 @@
-# Python-only example: the adaptive detector (src/python/main.py) and the fused
-# multi-stream detector (src/python/fused_main.py) are both Python. There is no
-# C++ port, so the C++ lanes are declared off rather than left to fail in CI.
+# Both languages ship the SAME two topologies behind one entry point:
+#
+#   src/python/main.py                 --mode adaptive|fused
+#   src/cpp/pre-built/<binary>         --mode adaptive|fused
 #
 # adaptive.resolutions is pinned to [640] in src/common/config.yaml, so a single
 # YOLO26n pack covers every run - no model-tier switching, no per-tier archives.
@@ -15,11 +16,13 @@ models:
     file: yolo26n-det-bf16-mla_tess-b1.tar.gz
 unit:
   python: true
-  cpp: false
+  cpp: true
 e2e:
   python:
     enabled: true
     models:
     - yolo26n-det-bf16-mla_tess-b1
   cpp:
-    enabled: false
+    enabled: true
+    models:
+    - yolo26n-det-bf16-mla_tess-b1

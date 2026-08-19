@@ -103,21 +103,90 @@ BUNDLE = HERE.parent                            # pipelines/
 EXAMPLE = BUNDLE.parent                         # adaptive-resolution-object-detector/
 APPS_ROOT = EXAMPLE.parents[2]                  # the apps repo root
 
-_APPS = {
-    # Both detectors ship inside THIS example, so the bundle is standalone -
-    # nothing here reaches into a sibling example. The pgrep patterns must stay
-    # mutually exclusive: "src/python/main.py" does not match
-    # "src/python/fused_main.py", and "fused_main.py" matches only the fused one.
-    "scale": (str(EXAMPLE / "src" / "python" / "fused_main.py"),
-              "[f]used_main.py", 16, False),
-    "live":  (str(EXAMPLE / "src" / "python" / "main.py"),
-              "[a]daptive-resolution-object-detector/src/python/main.py", 6, True),
-    # group: the SAME fused app as scale, but run as several independent
-    # processes instead of one - see GROUP_SIZE below.
-    "group": (str(EXAMPLE / "src" / "python" / "fused_main.py"),
-              "[f]used_main.py", 16, False),
-}
-APP, APP_PATTERN, MAX_STREAMS, LIVE_ADD = _APPS[PIPELINE]
+# ==========================================================================
+# WHICH DETECTOR, IN WHICH LANGUAGE
+# ==========================================================================
+#
+# There is ONE entry point per language, and both take the same flags:
+#
+#   src/python/main.py                            --mode {adaptive,fused} --config X
+#   src/cpp/pre-built/<binary>                    --mode {adaptive,fused} --config X
+#
+# The PIPELINE fixes the mode; the UI toggles the LANGUAGE. Because the flags
+# are identical, flipping the toggle changes nothing else in this file.
+#
+#   scale / group  -> fused     one graph, one shared detector, passthrough
+#   live           -> adaptive  one graph per stream, built/torn down live
+_MODES = {"scale": "fused", "live": "adaptive", "group": "fused"}
+APP_MODE = _MODES[PIPELINE]
+MAX_STREAMS = 6 if PIPELINE == "live" else 16
+LIVE_ADD = PIPELINE == "live"
+
+PY_APP = EXAMPLE / "src" / "python" / "main.py"
+# Packaged location first - that is what `sima-cli neat install apps` ships -
+# then the from-source build tree.
+CPP_APP_CANDIDATES = (
+    EXAMPLE / "src" / "cpp" / "pre-built" / "adaptive-resolution-object-detector",
+    APPS_ROOT / "build" / "examples" / "object-detection"
+    / "adaptive-resolution-object-detector" / "adaptive-resolution-object-detector",
+)
+
+LANGUAGES = ("python", "cpp")
+# One file, shared by all three pipelines and the UI, so the toggle is global:
+# picking C++ in any panel applies everywhere. Gitignored - it is user state.
+LANGUAGE_FILE = BUNDLE / "language"
+
+
+def language() -> str:
+    """The selected implementation language; python unless set otherwise."""
+    try:
+        value = LANGUAGE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "python"
+    return value if value in LANGUAGES else "python"
+
+
+def set_language(value: str) -> None:
+    if value not in LANGUAGES:
+        raise ValueError(f"language must be one of {LANGUAGES}")
+    LANGUAGE_FILE.write_text(value + "\n", encoding="utf-8")
+
+
+def cpp_binary():
+    """First existing C++ binary, or None when it has not been built."""
+    for candidate in CPP_APP_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def app_command() -> str:
+    """How to start this pipeline's detector, minus --config."""
+    if language() == "cpp":
+        binary = cpp_binary()
+        if binary is None:
+            raise SystemExit(
+                "language is 'cpp' but no binary was found. Build it with "
+                "./build.sh --clean, or switch back to Python. Looked in:\n  "
+                + "\n  ".join(str(c) for c in CPP_APP_CANDIDATES))
+        return f"{binary} --mode {APP_MODE}"
+    return f"{PYTHON} -u {PY_APP} --mode {APP_MODE}"
+
+
+# pgrep pattern for THIS pipeline's detector in EITHER language. Matching the
+# config filename rather than the program is what makes it language-agnostic:
+# the path appears in argv for both, and is unique per pipeline. The bracket
+# stops the pattern matching the pgrep command that carries it.
+APP_PATTERN = ("[" + PIPELINE[0] + "]" + PIPELINE[1:]
+               + ("[0-9]" if PIPELINE == "group" else "") + "-run.yaml")
+
+# Patterns for ALL pipelines - used to stop the others before starting this one,
+# since they share one MLA and one set of Insight ports.
+ALL_PIPELINE_PATTERNS = (
+    "[s]cale-run.yaml",
+    "[l]ive-run.yaml",
+    "[g]roup[0-9]-run.yaml",
+)
 
 # ==========================================================================
 # GROUPED (hybrid) MODE
@@ -500,7 +569,10 @@ def stop_any_detector() -> None:
     before starting we also clear the OTHER pipeline's app - otherwise starting
     the live pipeline while the scale detector runs would collide on the MLA.
     """
-    for _app, pattern, *_ in _APPS.values():
+    # Every pipeline's config filename, in either language. Kept as literals
+    # rather than derived from one mapping, because each pipeline module only
+    # knows its own PIPELINE name.
+    for pattern in ALL_PIPELINE_PATTERNS:
         pids = ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip()
         if pids:
             ssh(f'kill -TERM {pids} 2>/dev/null || true; sleep 2; '
@@ -515,7 +587,7 @@ def start_app() -> None:
     if not clean:
         print("previous stop was unclean - reclaiming decoder/MLA pools", flush=True)
         reset_runtime()
-    exec_devkit(f'rm -f {LOG}; setsid nohup {PYTHON} -u {APP} --config {CONFIG} '
+    exec_devkit(f'rm -f {LOG}; setsid nohup {app_command()} --config {CONFIG} '
         f'> {LOG} 2>&1 < /dev/null & sleep 2', timeout=180)
 
 
@@ -601,7 +673,7 @@ def stop_foreign_detectors() -> None:
     app path alone would kill our own groups. Both are therefore identified by
     their CONFIG filename instead, which is unique per deployment.
     """
-    for pattern in ("[s]cale-run.yaml", _APPS["live"][1]):
+    for pattern in ("[s]cale-run.yaml", "[l]ive-run.yaml"):
         pids = ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip()
         if pids:
             ssh(f'kill -TERM {pids} 2>/dev/null || true; sleep 2; '
@@ -624,7 +696,7 @@ def start_group(group: int) -> None:
         print(f"group {group} stop was unclean - reclaiming decoder/MLA pools", flush=True)
         reset_runtime()
     log = log_path(group)
-    exec_devkit(f'rm -f {log}; setsid nohup {PYTHON} -u {APP} '
+    exec_devkit(f'rm -f {log}; setsid nohup {app_command()} '
                 f'--config {config_path(group)} > {log} 2>&1 < /dev/null & sleep 2',
                 timeout=180)
 

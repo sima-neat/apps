@@ -73,8 +73,66 @@ def stream_count(name: str) -> int:
     return len(data.get("streams", []))
 
 
+# --------------------------------------------------------------------------
+# implementation language (Python or C++)
+# --------------------------------------------------------------------------
+#
+# The toggle lives HERE, in the chooser, not in the three panels: it is one
+# global choice and all three pipelines read the same file. Each pipeline fixes
+# its own --mode (scale/group = fused, live = adaptive); this only selects which
+# implementation of that mode runs.
+LANGUAGES = ("python", "cpp")
+LANGUAGE_FILE = HERE / "language"
+EXAMPLE = HERE.parent
+CPP_CANDIDATES = (
+    EXAMPLE / "src" / "cpp" / "pre-built" / "adaptive-resolution-object-detector",
+    EXAMPLE.parents[2] / "build" / "examples" / "object-detection"
+    / "adaptive-resolution-object-detector" / "adaptive-resolution-object-detector",
+)
+
+
+def language() -> str:
+    try:
+        value = LANGUAGE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "python"
+    return value if value in LANGUAGES else "python"
+
+
+def cpp_binary():
+    for candidate in CPP_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def set_language(value: str) -> dict:
+    """Switch implementation language for every pipeline.
+
+    Refuses to select C++ when no binary exists - otherwise the next Start would
+    fail deep inside a pipeline with a confusing error instead of here, where the
+    user can see why.
+    """
+    if value not in LANGUAGES:
+        return {"error": f"language must be one of {LANGUAGES}"}
+    if value == "cpp" and cpp_binary() is None:
+        return {"error": "C++ binary not found - build it with ./build.sh --clean",
+                "language": language()}
+    # A detector already running was started in the OLD language; stop them all
+    # so the next Start actually uses the new one.
+    for cfg in PIPELINES.values():
+        pids = sh(f'pgrep -f "{cfg["pattern"]}" | tr "\\n" " "')
+        if pids:
+            sh(f'kill -TERM {pids} 2>/dev/null || true; sleep 2; '
+               f'kill -9 {pids} 2>/dev/null || true')
+    LANGUAGE_FILE.write_text(value + "\n", encoding="utf-8")
+    return {"ok": True, "language": value, "status": status()}
+
+
 def status() -> dict:
     return {
+        "language": language(),
+        "cpp_available": cpp_binary() is not None,
         "pipelines": {
             name: {
                 "detector_running": detector_running(name),
@@ -166,7 +224,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
-        if urlparse(self.path).path != "/api/activate":
+        path = urlparse(self.path).path
+        if path not in ("/api/activate", "/api/language"):
             self._json({"error": "not found"}, 404)
             return
         n = int(self.headers.get("Content-Length", 0))
@@ -174,6 +233,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n)) if n else {}
         except json.JSONDecodeError:
             body = {}
+        if path == "/api/language":
+            self._json(set_language(str(body.get("language", ""))))
+            return
         self._json(activate(str(body.get("pipeline", ""))))
 
 

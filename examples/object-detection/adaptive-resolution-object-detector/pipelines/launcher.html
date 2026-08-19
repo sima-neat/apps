@@ -117,6 +117,19 @@
   footer b { color:var(--ink); }
   footer code { background:var(--surface); border:1px solid var(--line);
     border-radius:6px; padding:1px 6px; font:12px var(--font-mono); }
+
+/* Language toggle (chooser-only; the three panels follow this choice). */
+.langbar { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; flex-wrap: wrap; }
+.langlabel { font-size: 13px; opacity: .7; margin-right: 2px; }
+button.lang {
+  font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.18); background: transparent; color: inherit;
+  cursor: pointer;
+}
+button.lang:hover:not(:disabled) { border-color: rgba(255,255,255,.4); }
+button.lang.sel { background: #4f8cff; border-color: #4f8cff; color: #fff; font-weight: 600; }
+button.lang:disabled { opacity: .4; cursor: not-allowed; }
+.langnote { font-size: 12px; opacity: .6; }
 </style>
 </head>
 <body>
@@ -124,6 +137,16 @@
   <img class="logo" src="/assets/sima-logo.png" alt="SiMa.ai">
   <h1>Adaptive Pipeline</h1>
 </header>
+
+<!-- One global choice for all three pipelines: which implementation of the
+     detector runs. Each pipeline still fixes its own topology (scale/group are
+     fused, live is adaptive); this only picks Python or C++. -->
+<div class="langbar">
+  <span class="langlabel">Implementation</span>
+  <button id="lang-python" class="lang" onclick="setLang('python')">Python</button>
+  <button id="lang-cpp" class="lang" onclick="setLang('cpp')">C++</button>
+  <span id="lang-note" class="langnote"></span>
+</div>
 
 <main>
 
@@ -291,6 +314,17 @@ function render(st) {
     link.href = panelUrl(name, info.port);
   }
   document.querySelectorAll("button.use").forEach(b => b.disabled = busy);
+
+  // Language toggle state. C++ is offered only when a binary actually exists,
+  // so a user cannot select something that would fail at Start.
+  const lang = st.language || "python";
+  $("#lang-python").classList.toggle("sel", lang === "python");
+  $("#lang-cpp").classList.toggle("sel", lang === "cpp");
+  $("#lang-cpp").disabled = busy || !st.cpp_available;
+  $("#lang-python").disabled = busy;
+  $("#lang-note").textContent = st.cpp_available
+    ? "switching stops any running detector"
+    : "C++ binary not built - run ./build.sh --clean";
 }
 
 // Tolerate a dropped poll. The status endpoint is polled every 4s, so a single
@@ -314,6 +348,35 @@ async function refresh() {
       $("#msg").textContent = "cannot reach the chooser service - is it still running on :8080?";
       $("#msg").className = "msg err";
     }
+  }
+}
+
+async function setLang(lang) {
+  if (busy) return;
+  busy = true;
+  $("#msg").textContent = `switching to ${lang === "cpp" ? "C++" : "Python"}...`;
+  $("#msg").className = "msg";
+  try {
+    const r = await (await fetch("/api/language", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: lang }),
+    })).json();
+    if (r.error) {
+      $("#msg").textContent = r.error;
+      $("#msg").className = "msg err";
+    } else {
+      $("#msg").textContent =
+        `now running ${lang === "cpp" ? "C++" : "Python"} - start a pipeline below`;
+      $("#msg").className = "msg";
+      if (r.status) render(r.status);
+    }
+  } catch (e) {
+    $("#msg").textContent = "could not switch implementation";
+    $("#msg").className = "msg err";
+  } finally {
+    busy = false;
+    refresh();
   }
 }
 
