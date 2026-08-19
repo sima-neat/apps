@@ -91,6 +91,9 @@ add_library(multi_stream_people_tracker_lib STATIC
 target_include_directories(multi_stream_people_tracker_lib
   PUBLIC
     "${APPS_ROOT}"
+)
+target_include_directories(multi_stream_people_tracker_lib
+  SYSTEM PUBLIC
     ${TRACKER_OPENCV_INCLUDE_DIRS}
 )
 target_compile_definitions(multi_stream_people_tracker_lib
