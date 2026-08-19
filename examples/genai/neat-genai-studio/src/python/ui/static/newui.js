@@ -3893,10 +3893,8 @@ async function initStudioModelManager() {
   if (row) row.style.display = '';   // reveal (CSS gives it the flex-column layout)
   if (!controlEnabled()) {
     // Static mode: models are preloaded server-side and switching is instant, so
-    // there is nothing to load/unload/reset — hide those controls and treat a row
+    // there is nothing to load/unload — hide those controls and treat a row
     // pick (which writes the hidden <select>) as an immediate switch.
-    const accelRow = document.querySelector('.model-accel-row');
-    if (accelRow) accelRow.style.display = 'none';
     const progress = document.getElementById('modelLoadProgress');
     if (progress) progress.style.display = 'none';
     populateModelSelect(getConfiguredChatModels().map(name => ({ name, loaded: true, type: 'chat' })));
@@ -4209,11 +4207,8 @@ function updateHomeModelIndicator() {
 }
 
 // Refresh the per-row actions in the model list (Load / Unload / active state)
-// plus the shared Reset button and composer, whenever model state changes.
+// and composer whenever model state changes.
 function updateManageButtons() {
-  // Reset stays available even mid-load — it is the way out of a wedged state.
-  const reset = document.getElementById('modelResetMlaButton');
-  if (reset) reset.disabled = _resetting;
   renderInstalledList();
   updateComposerEnabled();
 }
@@ -4270,8 +4265,6 @@ function initModelManage() {
     const det = document.getElementById('modelLogDetails');
     if (det) { det.open = true; det.scrollIntoView({ block: 'nearest' }); }
   });
-  const resetBtn = document.getElementById('modelResetMlaButton');
-  if (resetBtn) resetBtn.addEventListener('click', () => resetMla());
   updateManageButtons();
 }
 

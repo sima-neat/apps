@@ -635,11 +635,12 @@ curl -s http://127.0.0.1:9998/v1/audio/transcriptions \
   -F "file=@${AUDIO_FILE}"
 ```
 
-The Studio defaults to Whisper's standard silence filter: a recording is
-ignored when `no_speech_prob > 0.6`, unless `avg_logprob > -1.0` provides
-strong evidence that speech was decoded. Automatic language detection also
-routes the answer to the matching installed TTS voice. Override either
-threshold when tuning for a microphone or environment:
+The Studio uses a strict silence/noise filter: a recording is ignored when
+either `no_speech_prob > 0.6` or `avg_logprob <= -1.0`. The latter catches
+Gaussian/background noise that Whisper may assign a low no-speech probability
+but very low-confidence tokens. Automatic language detection also routes the
+answer to the matching installed TTS voice. Override either threshold when
+tuning for a microphone or environment:
 
 ```bash
 ASR_NO_SPEECH_THRESHOLD=0.6 ASR_LOGPROB_THRESHOLD=-1.0 ./run.sh

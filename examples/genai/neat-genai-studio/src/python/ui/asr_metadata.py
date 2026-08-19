@@ -57,10 +57,10 @@ def analyze_transcription(
 ) -> dict[str, Any]:
     """Normalize a Whisper result and decide whether it should reach the LLM.
 
-    This mirrors Whisper's no-speech decision: a high no-speech probability is
-    ignored when the generated tokens still have a sufficiently good average
-    log probability. If avg_logprob is unavailable, no_speech_prob is used on
-    its own.
+    Apply a stricter gate than Whisper's default decoder heuristic: reject
+    either a high no-speech probability or a low-confidence transcription.
+    Noise can produce a low no-speech probability while still having a very
+    poor average token log probability.
     """
     result = payload if isinstance(payload, dict) else {}
     text = str(result.get("text") or "").strip()
@@ -74,13 +74,14 @@ def analyze_transcription(
         language = requested
 
     likely_no_speech = (
-        no_speech_prob is not None
-        and no_speech_prob > no_speech_threshold
-        and (avg_logprob is None or avg_logprob <= logprob_threshold)
+        no_speech_prob is not None and no_speech_prob > no_speech_threshold
     )
+    low_confidence = avg_logprob is not None and avg_logprob <= logprob_threshold
     reason = ""
     if likely_no_speech:
         reason = "no_speech"
+    elif low_confidence:
+        reason = "low_confidence"
     elif not text:
         reason = "empty_transcription"
 

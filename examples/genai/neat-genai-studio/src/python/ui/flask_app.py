@@ -122,6 +122,8 @@ rag_db_client = None
 RAG_DB_PATH = None
 start_service = None
 create_markdown_vectordb = None
+validate_rag_database = None
+wait_for_rag_service = None
 
 
 def save_image_upload_as_base64(image_file, upload_folder):
@@ -145,6 +147,8 @@ def ensure_rag_modules_loaded():
     global RAG_DB_PATH
     global start_service
     global create_markdown_vectordb
+    global validate_rag_database
+    global wait_for_rag_service
 
     if rag_db_client is not None:
         return rag_db_client
@@ -152,6 +156,8 @@ def ensure_rag_modules_loaded():
     from rag.vectordb import (
         RAG_DB_PATH as _RAG_DB_PATH,
         start_service as _start_service,
+        validate_database as _validate_database,
+        wait_for_service as _wait_for_service,
         RagDbClient,
     )
     from rag.create_db import create_markdown_vectordb as _create_markdown_vectordb
@@ -159,6 +165,8 @@ def ensure_rag_modules_loaded():
     RAG_DB_PATH = _RAG_DB_PATH
     start_service = _start_service
     create_markdown_vectordb = _create_markdown_vectordb
+    validate_rag_database = _validate_database
+    wait_for_rag_service = _wait_for_service
     rag_db_client = RagDbClient()
     return rag_db_client
 
@@ -1640,8 +1648,8 @@ class AppContext:
 
                         if asr['ignored']:
                             message = (
-                                'No speech detected. Please try again.'
-                                if asr['reason'] == 'no_speech'
+                                'No clear speech detected. Please try again.'
+                                if asr['reason'] in ('no_speech', 'low_confidence')
                                 else 'No transcription was produced. Please try again.'
                             )
                             return jsonify({
@@ -1961,33 +1969,66 @@ class AppContext:
                 return "RAG is disabled", 403
 
             def _stream():
+                global vectodb_proc
                 db_file = request.files.get("dbfile")
                 if not db_file:
                     yield "❌ No file provided\n"
                     return
 
                 yield "📥 Uploading database file...\n"
+                backup_path = None
+                service_stopped = False
+                replacement_installed = False
                 try:
                     ensure_rag_modules_loaded()
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
                         db_file.save(tmp)
                         tmp_path = tmp.name
 
-                    yield "✅ File uploaded. Replacing existing DB...\n"
-                    shutil.move(tmp_path, RAG_DB_PATH)
-
-                    yield "🛑 Stopping existing vectordb service...\n"
+                    yield "🛑 Stopping existing vectordb service for validation...\n"
                     stop_service()
-                    time.sleep(1)
+                    service_stopped = True
+
+                    yield "🔎 Validating uploaded database...\n"
+                    validate_rag_database(tmp_path)
+
+                    if os.path.exists(RAG_DB_PATH):
+                        fd, backup_path = tempfile.mkstemp(
+                            prefix=f".{Path(RAG_DB_PATH).name}.backup-",
+                            dir=str(Path(RAG_DB_PATH).parent),
+                        )
+                        os.close(fd)
+                        os.unlink(backup_path)
+                        os.replace(RAG_DB_PATH, backup_path)
+
+                    yield "✅ Database validated. Installing...\n"
+                    shutil.move(tmp_path, RAG_DB_PATH)
+                    replacement_installed = True
 
                     yield "🚀 Starting vectordb service with new database...\n"
-                    global vectodb_proc
                     vectodb_proc = start_service()
-                    time.sleep(30)
+                    wait_for_rag_service(vectodb_proc)
+
+                    if backup_path:
+                        os.unlink(backup_path)
+                        backup_path = None
 
                     yield "✅ Import completed and service restarted.\n"
                 except Exception as e:
                     logging.exception("RAG database import failed: %s", e)
+                    if service_stopped:
+                        stop_service()
+                        if replacement_installed and os.path.exists(RAG_DB_PATH):
+                            os.unlink(RAG_DB_PATH)
+                        if backup_path and os.path.exists(backup_path):
+                            os.replace(backup_path, RAG_DB_PATH)
+                            backup_path = None
+                        if os.path.exists(RAG_DB_PATH):
+                            try:
+                                vectodb_proc = start_service()
+                                wait_for_rag_service(vectodb_proc)
+                            except Exception:  # noqa: BLE001
+                                logging.exception("Failed to restore the previous RAG service")
                     yield "❌ RAG database import failed.\n"
                 finally:
                     if 'tmp_path' in locals() and os.path.exists(tmp_path):

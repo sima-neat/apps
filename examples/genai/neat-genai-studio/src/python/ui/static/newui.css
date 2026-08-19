@@ -909,18 +909,6 @@ body.solutions-open { overflow: hidden; }
 .model-unload-button:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); transform: translateY(-1px); }
 .model-unload-button:disabled { opacity: .5; cursor: default; }
 .model-unload-button[hidden] { display: none; }
-/* Accelerator reset — disruptive (restarts the model server), styled as caution. */
-.model-accel-row { margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--border); }
-.model-accel-btn {
-  width: 100%; padding: 9px 14px; border-radius: var(--radius-sm); cursor: pointer;
-  background: transparent; color: var(--text-2); border: 1px solid var(--border);
-  font: inherit; font-weight: 600; font-size: 12.5px; transition: .2s ease;
-}
-.model-accel-btn:hover:not(:disabled) {
-  color: #e0a83a; border-color: color-mix(in srgb, #e0a83a 55%, var(--border));
-  background: color-mix(in srgb, #e0a83a 10%, transparent);
-}
-.model-accel-btn:disabled { opacity: .5; cursor: default; }
 /* Load status is its own block, divided from the Load action above it. */
 .model-load-progress {
   margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border);

@@ -3,6 +3,7 @@
 import os
 import asyncio
 import logging
+import sqlite3
 import subprocess
 import time
 import warnings
@@ -33,7 +34,7 @@ UI_DIR = PYTHON_DIR / "ui"
 STARTUP_DELAY = 2
 K_RETRIEVED_DOCS = 1
 DEFAULT_MIN_SCORE = float(os.environ.get("VDB_MIN_SCORE", "0.0"))
-DEFAULT_VDB_HOST = '0.0.0.0'
+DEFAULT_VDB_HOST = '127.0.0.1'
 DEFAULT_VDB_PORT = 9100
 
 # --- Logging setup ---
@@ -303,6 +304,56 @@ def start_service():
     time.sleep(STARTUP_DELAY)
     return proc
 
+
+def validate_database(db_path: Union[str, Path], timeout: int = 120) -> None:
+    """Open an uploaded database in an isolated process before installing it."""
+    path = Path(db_path).resolve()
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+            if db.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                raise ValueError
+            tables = {
+                row[0]
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if "collection_meta" not in tables or "demo_collection" not in tables:
+                raise ValueError
+    except (sqlite3.Error, ValueError) as exc:
+        raise ValueError("Uploaded file is not a valid RAG database") from exc
+
+    env = os.environ.copy()
+    env["VECTOR_DB_PATH"] = str(path)
+    result = subprocess.run(
+        [PYTHON, str(SCRIPT), "--init-only"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        log.error("RAG database validation failed: %s", result.stdout[-2000:])
+        raise ValueError("Uploaded file is not a valid RAG database")
+
+
+def wait_for_service(proc: subprocess.Popen, timeout: int = 35) -> None:
+    """Wait until the worker has initialized its database and serves HTTP."""
+    deadline = time.monotonic() + timeout
+    port = int(os.environ.get("PORT", DEFAULT_VDB_PORT))
+    url = f"http://127.0.0.1:{port}/"
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError("RAG database service exited during startup")
+        try:
+            response = requests.get(url, timeout=1)
+            response.raise_for_status()
+            return
+        except requests.RequestException:
+            time.sleep(0.5)
+    raise TimeoutError("RAG database service did not become ready")
+
 if __name__ == "__main__":
     import argparse
 
@@ -312,7 +363,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Backward-compatible flag. Service starts with or without this flag.",
     )
-    parser.add_argument("--host", default=None, help="Override host (default: env HOST or 0.0.0.0).")
+    parser.add_argument("--host", default=None, help="Override host (default: env HOST or 127.0.0.1).")
     parser.add_argument("--port", type=int, default=None, help="Override port (default: env PORT or 9100).")
     parser.add_argument(
         "--init-only",

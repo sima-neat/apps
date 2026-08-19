@@ -25,12 +25,12 @@ class AsrMetadataTests(unittest.TestCase):
         self.assertTrue(result["language_detected"])
         self.assertEqual(result["tts_language"], "es")
 
-    def test_rejects_high_no_speech_with_low_logprob(self):
+    def test_rejects_low_logprob_even_when_no_speech_probability_is_low(self):
         result = analyze_transcription(
             {
                 "text": "Thank you.",
                 "language": "en",
-                "no_speech_prob": 0.91,
+                "no_speech_prob": 0.13,
                 "avg_logprob": -1.4,
             },
             requested_language="auto",
@@ -38,9 +38,9 @@ class AsrMetadataTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ignored"])
-        self.assertEqual(result["reason"], "no_speech")
+        self.assertEqual(result["reason"], "low_confidence")
 
-    def test_good_logprob_rescues_high_no_speech_probability(self):
+    def test_rejects_high_no_speech_despite_good_logprob(self):
         result = analyze_transcription(
             {
                 "text": "quiet but intelligible",
@@ -52,7 +52,8 @@ class AsrMetadataTests(unittest.TestCase):
             supported_tts_languages=("en",),
         )
 
-        self.assertFalse(result["ignored"])
+        self.assertTrue(result["ignored"])
+        self.assertEqual(result["reason"], "no_speech")
 
     def test_logprob_at_threshold_does_not_rescue_no_speech(self):
         result = analyze_transcription(
@@ -79,7 +80,7 @@ class AsrMetadataTests(unittest.TestCase):
             requested_language="auto",
             supported_tts_languages=("en",),
             no_speech_threshold=0.8,
-            logprob_threshold=-1.0,
+            logprob_threshold=-1.3,
         )
 
         self.assertFalse(result["ignored"])

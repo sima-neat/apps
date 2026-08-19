@@ -114,6 +114,8 @@ Environment:
                                 (space-separated). default: empty
   MAX_RESIDENT_CHAT_MODELS      Chat/VLM models kept resident in RAM at once
                                 default: 1
+  CREATE_ALIAS                  Create the neat-ai shell alias, 1 or 0.
+                                If unset, interactive setup prompts; otherwise 0.
   ALLOW_HUB_DOWNLOAD            Allow in-UI Hugging Face downloads, true or false
                                 default: true
   INSTALL_TTS_VOICES            Download Piper TTS voices, 1 or 0
@@ -347,8 +349,8 @@ PY
   ok "Voices installed."
 fi
 
-# Always set up (and show) a convenient `neat-ai` shell alias for ./run.sh.
-# Set CREATE_ALIAS=0 to opt out.
+# Offer a convenient `neat-ai` shell alias for ./run.sh. Noninteractive setup
+# does not modify the shell profile unless CREATE_ALIAS=1 is explicitly set.
 maybe_create_alias() {
   local run_path="${EXAMPLE_DIR}/run.sh"
   # Target is eLxr, where interactive board sessions (e.g. over SSH) are login
@@ -360,18 +362,33 @@ maybe_create_alias() {
   esac
 
   chmod +x "${run_path}" 2>/dev/null || true
-  if [[ "${CREATE_ALIAS:-1}" != "0" ]]; then
-    if [[ -f "${rc}" ]] && grep -q "alias neat-ai=" "${rc}"; then
-      ok "'neat-ai' alias already set in ${rc}."
+  if [[ -f "${rc}" ]] && grep -q "alias neat-ai=" "${rc}"; then
+    ok "'neat-ai' alias already set in ${rc}."
+    return
+  fi
+
+  local create_alias="${CREATE_ALIAS:-}"
+  if [[ -z "${create_alias}" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p "Create a 'neat-ai' shell alias in ${rc}? [y/N] " create_alias
+      case "${create_alias}" in
+        y|Y|yes|YES) create_alias=1 ;;
+        *) create_alias=0 ;;
+      esac
     else
-      {
-        printf '\n# Neat GenAI Studio — added by setup.sh\n'
-        printf "alias neat-ai='%s'\n" "${run_path}"
-      } >> "${rc}"
-      ok "Added a 'neat-ai' alias to ${rc}."
+      create_alias=0
     fi
   fi
-  # Always show how to start it.
+  if [[ "${create_alias}" != "1" ]]; then
+    info "Shell alias not created (set CREATE_ALIAS=1 to enable it)."
+    return
+  fi
+
+  {
+    printf '\n# Neat GenAI Studio — added by setup.sh\n'
+    printf "alias neat-ai='%s'\n" "${run_path}"
+  } >> "${rc}"
+  ok "Added a 'neat-ai' alias to ${rc}."
   info "Start the studio with ${C_BOLD}neat-ai${C_RESET} (alias for ./run.sh) — run ${C_BOLD}source ${rc}${C_RESET} or open a new shell first."
   info "Alias: ${C_DIM}neat-ai='${run_path}'${C_RESET}"
 }
