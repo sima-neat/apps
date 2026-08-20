@@ -79,7 +79,7 @@ For graph failures, read structured diagnostics first:
 
 ## Apps Examples
 
-Use public apps examples for reference commands and full application patterns
-after the Neat Library API shape is selected. Do not treat reference-repository build,
+Confirm the implementation follows the closest current Apps example for build
+commands and full application patterns. Do not treat reference-repository
 publication, documentation, or automation rules as required for standalone
 applications.

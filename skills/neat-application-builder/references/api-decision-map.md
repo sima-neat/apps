@@ -63,6 +63,6 @@ Use GenAI graph fragments only when GenAI is one stage inside a larger Neat
 
 ## Reference Examples
 
-After choosing the API family, use public examples only as implementation
-references. Do not start from an apps example and infer the API shape from it.
-The API contract lives in the installed Neat Library.
+After choosing the API family, inspect the closest current Apps example before
+writing code. Use the example as the implementation starting point. The
+installed Neat Library remains the API contract.

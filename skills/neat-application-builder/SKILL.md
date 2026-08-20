@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Build Neat applications with public C++ or Python APIs in the Neat Development Environment or on DevKit. Use for classic apps that start from ONNX or compiled model archives, GenAI apps from deployed model directories, and camera, file, or RTSP pipelines. Choose Model, Graph, GenAIModel, or GenAIServer before consulting Apps examples. Model compilation and repository workflows use separate skills.
+description: Build Neat applications with public C++ or Python APIs in the Neat Development Environment or on DevKit. Use for classic apps that start from ONNX or compiled model archives, GenAI apps from deployed model directories, and camera, file, or RTSP pipelines. Choose Model, Graph, GenAIModel, or GenAIServer, then inspect the closest Apps example before implementation. Model compilation and repository workflows use separate skills.
 ---
 
 # Neat Application Builder
@@ -9,8 +9,8 @@ description: Build Neat applications with public C++ or Python APIs in the Neat 
 
 Build applications against the installed Neat Library. Treat the current Neat
 Development Environment's packaged core source, installed headers, and local
-documentation as the source of truth. Use apps examples only as optional
-reference implementations after the API shape is chosen.
+documentation as the API source of truth. Once the broad API family is known,
+use the closest current Apps example as the implementation starting point.
 
 ## Workflow
 
@@ -18,13 +18,16 @@ reference implementations after the API shape is chosen.
    - In the Neat Development Environment, read `/neat-resources/core-src` first.
    - Prefer installed public headers under the Neat Development Environment sysroot when checking the user-facing contract.
    - Read `references/source-of-truth.md`.
-2. Choose the application API shape before opening an Apps example.
+2. Determine the runtime artifact, input owner, and broad API family.
    - Read `references/api-decision-map.md`.
    - Continue after the runtime artifact, input owner, and API family are known.
-3. If the request touches APIs outside the main Model/Graph/Run/GenAI path, read `references/api-surface-map.md` and inspect the referenced headers/docs.
-4. For classic compiled model applications, read `references/model-graph-run.md`.
-5. For LLM, VLM, ASR, or HTTP model serving applications, read `references/genai.md`.
-6. Before claiming success, read `references/validation.md` and run the validation that is possible in the current environment.
+3. Before writing application code, inspect the closest current example under `/neat-resources/apps-src/examples`.
+   - Use it for project structure, configuration, graph composition, build commands, and runtime patterns.
+   - Verify API details against the installed Core headers and docs.
+4. If the request touches APIs outside the main Model/Graph/Run/GenAI path, read `references/api-surface-map.md` and inspect the referenced headers/docs.
+5. For classic compiled model applications, read `references/model-graph-run.md`.
+6. For LLM, VLM, ASR, or HTTP model serving applications, read `references/genai.md`.
+7. Before claiming success, read `references/validation.md` and run the validation that is possible in the current environment.
 
 ## Defaults
 
