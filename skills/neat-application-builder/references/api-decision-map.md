@@ -35,10 +35,9 @@ Use `Graph` when:
   model route.
 - The application needs multiple stages, named endpoints, branching, or fan-in.
 
-For encoded media, decide whether the graph decodes for inference, forwards the
-original encoded stream, or branches into both paths. Keep the selected RTSP,
-decode, and passthrough codec consistent. Inspect the current codec-neutral
-options instead of copying H.264-specific compatibility fields into new code.
+With encoded RTSP input, decide whether to decode for inference, forward the
+encoded stream to `VideoSender`, or branch to both. Use the same codec across
+`RtspEncodedInput`, `SimaDecode`, and `VideoSenderOptions::Passthrough`.
 
 ## GenAI
 
