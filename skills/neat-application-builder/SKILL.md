@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Use when building Neat Library applications with public C++ or Python APIs, including choosing between Model, Graph, GenAIModel, and GenAIServer; using Run handles returned by built graphs; reading packaged core headers/docs; composing application pipelines; and validating Neat Development Environment or DevKit behavior. Do not use for repository maintenance, release automation, review workflows, or work outside the public Neat Library application surface.
+description: Build Neat applications with public C++ or Python APIs in the Neat Development Environment or on DevKit. Use for classic apps that start from ONNX or compiled model archives, GenAI apps from deployed model directories, and camera, file, or RTSP pipelines. Choose Model, Graph, GenAIModel, or GenAIServer before consulting Apps examples. Model compilation and repository workflows use separate skills.
 ---
 
 # Neat Application Builder
@@ -18,8 +18,9 @@ reference implementations after the API shape is chosen.
    - In the Neat Development Environment, read `/neat-resources/core-src` first.
    - Prefer installed public headers under the Neat Development Environment sysroot when checking the user-facing contract.
    - Read `references/source-of-truth.md`.
-2. Choose the application API shape before writing code.
+2. Choose the application API shape before opening an Apps example.
    - Read `references/api-decision-map.md`.
+   - Continue after the runtime artifact, input owner, and API family are known.
 3. If the request touches APIs outside the main Model/Graph/Run/GenAI path, read `references/api-surface-map.md` and inspect the referenced headers/docs.
 4. For classic compiled model applications, read `references/model-graph-run.md`.
 5. For LLM, VLM, ASR, or HTTP model serving applications, read `references/genai.md`.
@@ -32,13 +33,6 @@ reference implementations after the API shape is chosen.
 - Use only public APIs from installed headers and bindings.
 - Prefer clear application endpoint names such as `image`, `detections`, `classes`, `preview`, `prompt`, and `tokens`.
 - Keep generated application code runnable with explicit build and run commands.
-
-## API Selection
-
-- Use `Model` for a single classic compiled model archive and direct request/response inference.
-- Use `Graph` when the application needs multiple stages, named inputs or outputs, branching, fan-in, reusable fragments, or source/output nodes.
-- Use `GenAIModel` for in-process GenAI calls against LLiMa model directories.
-- Use `GenAIServer` when a browser, service, or remote client should call GenAI models over HTTP.
 
 ## DevKit Local Display and Run
 
