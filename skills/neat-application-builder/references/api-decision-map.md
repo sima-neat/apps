@@ -35,6 +35,10 @@ Use `Graph` when:
   model route.
 - The application needs multiple stages, named endpoints, branching, or fan-in.
 
+With encoded RTSP input, decide whether to decode for inference, forward the
+encoded stream to `VideoSender`, or branch to both. Use the same codec across
+`RtspEncodedInput`, `SimaDecode`, and `VideoSenderOptions::Passthrough`.
+
 ## GenAI
 
 Use `GenAIModel` when:
@@ -59,6 +63,7 @@ Use GenAI graph fragments only when GenAI is one stage inside a larger Neat
 
 ## Reference Examples
 
-After choosing the API family, use public examples only as implementation
-references. Do not start from an apps example and infer the API shape from it.
-The API contract lives in the installed Neat Library.
+After choosing the API family, inspect the closest current Apps example under
+`/neat-resources/apps-src/examples` before writing code. Use it as the
+implementation starting point. The installed Neat Library remains the API
+contract.

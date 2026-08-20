@@ -1,0 +1,56 @@
+server:                      # Local OpenAI-compatible model server.
+  openai:                    # Server bind address.
+    host: 0.0.0.0            # Host interface to bind.
+    port: 9998               # Server port.
+
+  control:                   # Runtime model-management control API (local only).
+    host: 127.0.0.1          # Host interface to bind (keep local).
+    port: 9997               # Control API port.
+
+  models:                    # Models served by the local server.
+    catalog_dir: <path-to-models-catalog-dir> # Directory scanned for loadable models.
+    # Only one chat/VLM model is resident at a time: loading a new one clears all
+    # other chat/VLM models (the ASR model is pinned and always kept).
+    max_resident_chat_models: 1
+    chat:                    # Chat/VLM models loaded at startup (OPTIONAL).
+      # Optional: use an empty list (chat: []) to start with no model resident and
+      # load any compatible catalog model on demand from the UI. When present, these
+      # are a subset of the catalog and the first is selected by default in the UI.
+      - name: <primary-chat-model-name>
+        path: <path-to-primary-chat-model-dir>
+    asr:                     # Speech-to-text model (OPTIONAL; omit to start without ASR).
+      name: <asr-model-name>        # Model name shown to the app.
+      path: <path-to-asr-model-dir> # Local model directory.
+
+  hub:                       # Hugging Face on-demand model download.
+    allow_download: true     # Allow downloading compatible models when online.
+    orgs: [simaai, TDoSiMa]  # Hub accounts searched for precompiled models
+                             # (simaai official + TDoSiMa community).
+
+app:                         # Assistant web app settings.
+  openai:                    # OpenAI-compatible client endpoint.
+    client_host: 127.0.0.1   # Host used by the app client.
+    port: 9998               # Port used by the app client.
+
+  control:                   # Model-management control API client endpoint.
+    client_host: 127.0.0.1   # Host used to reach the control API.
+    port: 9997               # Control API port.
+
+  request:                   # Default generation settings.
+    max_tokens: 512          # Max generated tokens per response.
+    system_prompt: >-
+      Answer clearly and concisely. Use Markdown formatting when it helps.
+      Answer the question in the language it was asked in.
+
+  web:                       # Browser UI settings.
+    host: 0.0.0.0            # Host interface to bind.
+    port: 5000               # Web UI port.
+    https: true              # Serve the UI over HTTPS.
+
+  ui:                        # Appearance defaults (users can override in the browser).
+    font_family: Inter       # Default UI font family.
+    font_size: 15            # Default UI font size in px.
+
+  rag:                       # Retrieval-augmented generation settings.
+    enabled: false                             # Enable document retrieval.
+    embedding_model_dir: <path-to-embedding-model-dir> # Embedding model directory.

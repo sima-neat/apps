@@ -1,0 +1,1098 @@
+:root {
+  /* Mission Control palette — pulled from the SiMaSentry shield logo:
+     deep slate ground, cobalt blue primary, with the geometric tile
+     colors (lavender, rust orange, mint, lime) used for per-vertical
+     accents. */
+  --mc-bg:           #0b1220;
+  --mc-bg-deep:      #070b15;
+  --mc-surface:      #131a2a;
+  --mc-surface-2:    #1a2335;
+  --mc-surface-3:    #243049;
+  --mc-border:       #243049;
+  --mc-border-strong:#2f3d5b;
+  --mc-text:         #e9edf6;
+  --mc-text-muted:   #94a1bb;
+  --mc-text-faint:   #6c7997;
+
+  --mc-accent:        #5a93dd;   /* SiMa cobalt blue (logo right-wedge) */
+  --mc-accent-strong: #7faedf;
+  --mc-accent-soft:   #102543;
+  --mc-accent-glow:   rgba(90, 147, 221, 0.20);
+
+  --mc-ok:     #b4d33d;          /* SiMa lime — keeps "good" on-brand */
+  --mc-ok-soft:#1d2410;
+  --mc-warn:   #e07f3d;          /* SiMa rust orange */
+  --mc-warn-soft:#2c1d10;
+  --mc-danger: #ff7d63;
+  --mc-danger-soft:#3a1a13;
+
+  /* Per-vertical accents — sampled directly from the SiMa logo tiles */
+  --med-accent: #a6a8d6;         /* lavender (top wedge) */
+  --med-soft:   #1f2240;
+  --safe-accent:#e07f3d;         /* rust orange (left wedge) */
+  --safe-soft:  #2c1d10;
+  --sec-accent: #b4d33d;         /* lime (bottom wedge) */
+  --sec-soft:   #1d2410;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 0 1px var(--mc-accent-glow), 0 18px 48px rgba(0, 0, 0, 0.45);
+
+  --radius-sm: 6px;
+  --radius:    12px;
+  --radius-lg: 18px;
+
+  --header-h: 60px;
+  --maxw: 1280px;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--mc-text);
+  background: var(--mc-bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  /* Subtle command-center backdrop: cobalt-blue glow at top, lavender
+     wash at bottom-right — sampled from the SiMa shield logo. */
+  background:
+    radial-gradient(ellipse 110% 70% at 50% -10%, rgba(90, 147, 221, 0.12), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 100% 110%, rgba(166, 168, 214, 0.06), transparent 60%),
+    var(--mc-bg);
+  background-attachment: fixed;
+}
+
+a { color: var(--mc-accent-strong); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--mc-accent);
+  color: #02110f;
+  padding: 8px 12px;
+  border-radius: 0 0 var(--radius-sm) 0;
+  z-index: 100;
+  font-weight: 600;
+}
+.skip-link:focus { left: 0; }
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0);
+  white-space: nowrap; border: 0;
+}
+
+.mono { font-family: var(--mono); font-size: 0.92em; }
+code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--mc-surface-2);
+  color: var(--mc-text);
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.mc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 22px;
+  height: var(--header-h);
+  background: linear-gradient(180deg, rgba(19, 26, 42, 0.95), rgba(19, 26, 42, 0.78));
+  border-bottom: 1px solid var(--mc-border);
+  backdrop-filter: saturate(150%) blur(10px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.mc-brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.mc-brand-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  /* Subtle cobalt halo around the shield artwork — matches the brand's
+     own drop-shadow on dark surfaces without forcing a gradient tile. */
+  box-shadow: var(--shadow-glow);
+}
+.mc-brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.mc-brand-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.mc-brand-eyebrow {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mc-accent-strong);
+  line-height: 1;
+}
+.mc-brand-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+}
+.mc-brand-sub {
+  font-size: 11px;
+  color: var(--mc-text-muted);
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.mc-header-actions { display: flex; align-items: center; gap: 10px; }
+
+.mc-env-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+.mc-env-pill .mc-env-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.mc-env-pill[data-state="online"] {
+  background: var(--mc-accent-soft);
+  border: 1px solid var(--mc-accent);
+  color: var(--mc-accent-strong);
+}
+.mc-env-pill[data-state="online"] .mc-env-dot {
+  background: var(--mc-accent-strong);
+  box-shadow: 0 0 0 3px rgba(90, 147, 221, 0.20);
+}
+
+.mc-env-pill[data-state="offline"] {
+  background: var(--mc-danger-soft);
+  border: 1px solid var(--mc-danger);
+  color: var(--mc-danger);
+}
+.mc-env-pill[data-state="offline"] .mc-env-dot {
+  background: var(--mc-danger);
+  box-shadow: 0 0 0 3px rgba(255, 125, 99, 0.20);
+}
+
+.icon-button {
+  appearance: none;
+  background: var(--mc-surface-2);
+  border: 1px solid var(--mc-border);
+  color: var(--mc-text);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-button:hover { background: var(--mc-surface-3); border-color: var(--mc-border-strong); }
+.icon-button:focus-visible { outline: 2px solid var(--mc-accent); outline-offset: 2px; }
+
+.btn {
+  appearance: none;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 500;
+  background: var(--mc-surface-2);
+  color: var(--mc-text);
+  border: 1px solid var(--mc-border);
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn:hover { background: var(--mc-surface-3); border-color: var(--mc-border-strong); }
+.btn:focus-visible { outline: 2px solid var(--mc-accent); outline-offset: 2px; }
+.btn.primary {
+  background: var(--mc-accent);
+  border-color: var(--mc-accent);
+  color: #02110f;
+}
+.btn.primary:hover { background: var(--mc-accent-strong); border-color: var(--mc-accent-strong); }
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--mc-text-muted);
+}
+.btn.ghost:hover { background: var(--mc-surface-2); color: var(--mc-text); }
+
+.config-btn {
+  /* Header Configure button: ghost-style but with a subtle accent border so
+     it reads as the primary action without competing with product cards. */
+  background: var(--mc-surface-2);
+  border-color: var(--mc-border-strong);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+.config-btn:hover {
+  background: var(--mc-accent-soft);
+  border-color: var(--mc-accent);
+  color: var(--mc-accent-strong);
+}
+
+@media (max-width: 640px) {
+  .config-btn-label { display: none; }
+  .config-btn { padding: 8px; }
+}
+
+/* ── Main ───────────────────────────────────────────────── */
+.mc-main {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 36px 22px 48px;
+}
+
+.mc-hero { margin-bottom: 28px; max-width: 64ch; }
+.mc-eyebrow {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mc-accent-strong);
+}
+.mc-hero h2 {
+  margin: 0 0 8px;
+  font-size: 30px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.mc-lede {
+  margin: 0;
+  color: var(--mc-text-muted);
+  font-size: 16px;
+}
+
+.mc-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ── Product cards ──────────────────────────────────────── */
+.mc-cards {
+  display: grid;
+  /* Always three columns side-by-side. minmax(0, 1fr) allows shrinking past
+     content's intrinsic min-width so the cards never wrap to a second row
+     while the sidebar is on the right. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* Below ~720px the layout has already stacked (sidebar below cards), but the
+   three cards themselves can still be too cramped — collapse to one column. */
+@media (max-width: 720px) {
+  .mc-cards { grid-template-columns: 1fr; }
+}
+
+.mc-card {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 60%),
+    var(--mc-surface);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--radius);
+  padding: 22px 22px 18px;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+  text-decoration: none;
+  overflow: hidden;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.mc-card::before {
+  /* Soft accent corner glow */
+  content: "";
+  position: absolute;
+  inset: -40% -40% auto auto;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, var(--card-accent-glow, var(--mc-accent-glow)), transparent 60%);
+  opacity: 0.35;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+.mc-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--card-accent, var(--mc-accent));
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--card-accent, var(--mc-accent));
+  text-decoration: none;
+}
+.mc-card:hover::before { opacity: 0.7; }
+.mc-card:focus-visible {
+  outline: 2px solid var(--card-accent, var(--mc-accent));
+  outline-offset: 3px;
+}
+
+.mc-card[data-accent="medical"]  { --card-accent: var(--med-accent);  --card-soft: var(--med-soft);  --card-accent-glow: rgba(166, 168, 214, 0.22); }
+.mc-card[data-accent="safety"]   { --card-accent: var(--safe-accent); --card-soft: var(--safe-soft); --card-accent-glow: rgba(224, 127, 61, 0.22); }
+.mc-card[data-accent="security"] { --card-accent: var(--sec-accent);  --card-soft: var(--sec-soft);  --card-accent-glow: rgba(180, 211, 61, 0.22); }
+
+.mc-card-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 8px;
+  overflow: hidden;
+  /* Each logo has its own dark surround + 3D treatment, so we let the
+     artwork speak: no tinted backplate, just a subtle frame and the
+     per-card accent shows up on the card border + CTA. */
+  border: 1px solid var(--mc-border);
+  background: var(--mc-bg-deep);
+}
+.mc-card-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.mc-card h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.mc-card-tag {
+  margin: 0;
+  color: var(--mc-text-muted);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.mc-card-cta {
+  margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--card-accent, var(--mc-accent-strong));
+}
+
+/* ── System Status panel (full-width dropdown under the cards) ── */
+.mc-status {
+  background: var(--mc-surface);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--radius);
+  padding: 0;
+  overflow: hidden; /* keeps rounded corners while details collapses/expands */
+}
+
+.mc-status-details summary { list-style: none; cursor: pointer; }
+.mc-status-details summary::-webkit-details-marker { display: none; }
+
+.mc-status-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 22px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--mc-accent-strong);
+  user-select: none;
+}
+.mc-status-title:hover { background: var(--mc-surface-2); }
+.mc-status-details:not([open]) .mc-status-title:hover .mc-status-chevron { color: var(--mc-accent-strong); }
+.mc-status-details[open] .mc-status-title { border-bottom: 1px solid var(--mc-border); }
+
+.mc-status-details summary:focus-visible {
+  outline: 2px solid var(--mc-accent);
+  outline-offset: -2px;
+}
+
+.mc-status-label { flex: 1 1 auto; }
+
+.mc-status-glyph {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--mc-accent-soft);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.mc-status-chevron {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--mc-text-muted);
+  transition: transform 180ms ease, color 180ms ease;
+  flex: 0 0 auto;
+}
+.mc-status-details[open] .mc-status-chevron {
+  transform: rotate(180deg);
+  color: var(--mc-accent-strong);
+}
+
+/* Body padding for the expanded panel; the summary keeps its own padding. */
+.mc-status-details > .mc-status-list,
+.mc-status-details > .mc-status-note {
+  margin-left: 22px;
+  margin-right: 22px;
+}
+.mc-status-details > .mc-status-list { margin-top: 16px; }
+.mc-status-details > .mc-status-note { margin-bottom: 16px; }
+
+.mc-status-list {
+  margin: 0 0 14px;
+  padding: 0;
+  display: grid;
+  /* Fixed 3-column grid so each cell is wide enough to hold the full
+     chat-completion URL on a single line. Six rows lay out cleanly as 3×2. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 24px;
+}
+@media (max-width: 900px) {
+  .mc-status-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .mc-status-list { grid-template-columns: 1fr; }
+}
+.mc-status-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  min-width: 0; /* allow children to truncate inside grid track */
+}
+.mc-status-row dd.mono {
+  /* Endpoints can be long. Keep them on a single line with a tooltip
+     fallback for any cell narrow enough to truncate. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+.mc-status-row dt {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mc-text-faint);
+}
+.mc-status-row dd {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--mc-text);
+  word-break: break-word;
+}
+.mc-status-row dd a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--mc-text);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--mc-border-strong);
+  padding-bottom: 1px;
+}
+.mc-status-row dd a:hover {
+  color: var(--mc-accent-strong);
+  border-bottom-color: var(--mc-accent);
+}
+.mc-ext-icon { opacity: 0.7; }
+.mc-status-row dd a:hover .mc-ext-icon { opacity: 1; color: var(--mc-accent-strong); }
+
+.mc-edit-link,
+.mc-inline-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mc-accent-strong);
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+.mc-inline-link {
+  font-size: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.mc-edit-link:hover,
+.mc-inline-link:hover {
+  border-bottom-color: var(--mc-accent);
+}
+.mc-edit-link:focus-visible,
+.mc-inline-link:focus-visible {
+  outline: 2px solid var(--mc-accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.mc-status-note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--mc-text-faint);
+  line-height: 1.6;
+}
+
+/* ── Value Proposition ──────────────────────────────────── */
+.mc-value {
+  margin-top: 36px;
+  padding: 28px 28px 26px;
+  background:
+    linear-gradient(180deg, rgba(90, 147, 221, 0.07), transparent 70%),
+    var(--mc-surface);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  box-shadow: var(--shadow-1);
+}
+
+.mc-value-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: var(--mc-bg-deep);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--radius);
+  min-height: 160px;
+}
+.mc-value-brand img {
+  display: block;
+  max-width: 100%;
+  max-height: 200px;
+  height: auto;
+  width: auto;
+  object-fit: contain;
+}
+
+.mc-value-content h2 {
+  margin: 4px 0 10px;
+  font-size: 24px;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.mc-value-lede {
+  margin: 0 0 20px;
+  color: var(--mc-text-muted);
+  max-width: 64ch;
+  font-size: 14.5px;
+}
+
+.mc-value-points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.mc-value-point {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--mc-surface-2);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--radius);
+  align-items: start;
+}
+.mc-value-point-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--mc-accent-soft);
+  color: var(--mc-accent-strong);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.mc-value-point-text strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-bottom: 3px;
+  color: var(--mc-text);
+}
+.mc-value-point-text p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--mc-text-muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 820px) {
+  .mc-value {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 22px;
+  }
+  .mc-value-brand { min-height: 120px; }
+  .mc-value-brand img { max-height: 140px; }
+  .mc-value-points { grid-template-columns: 1fr; }
+}
+
+/* ── Drawer ─────────────────────────────────────────────── */
+.mc-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 11, 21, 0.6);
+  z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+body.drawer-open .mc-drawer-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mc-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  background: var(--mc-surface);
+  border-left: 1px solid var(--mc-border);
+  z-index: 50;
+  transform: translateX(100%);
+  transition: transform 220ms cubic-bezier(.18,.89,.32,1);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -24px 0 50px rgba(0, 0, 0, 0.5);
+}
+.mc-drawer[hidden] { display: flex; } /* still occupy layout while sliding */
+body.drawer-open .mc-drawer { transform: translateX(0); }
+
+.mc-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--mc-border);
+}
+.mc-drawer-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mc-accent-strong);
+}
+.mc-drawer-body {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.mc-drawer-hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--mc-text-muted);
+  padding: 10px 12px;
+  background: var(--mc-surface-2);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--mc-accent);
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mc-text-muted);
+}
+.field input[type="text"],
+.field input[type="url"],
+.field input[type="password"] {
+  appearance: none;
+  background: var(--mc-bg-deep);
+  color: var(--mc-text);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 13px;
+  width: 100%;
+}
+.field input:focus {
+  outline: 2px solid var(--mc-accent);
+  outline-offset: 1px;
+  border-color: var(--mc-accent);
+}
+.field-hint { font-size: 12px; color: var(--mc-text-faint); }
+
+.radio-group { display: flex; gap: 8px; flex-wrap: wrap; }
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--mc-surface-2);
+  border: 1px solid var(--mc-border);
+  cursor: pointer;
+  font-size: 13px;
+}
+.radio input { accent-color: var(--mc-accent); }
+.radio:has(input:checked) {
+  border-color: var(--mc-accent);
+  background: var(--mc-accent-soft);
+  color: var(--mc-accent-strong);
+  font-weight: 600;
+}
+
+.mc-drawer-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.mc-drawer-message {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  border: 1px solid var(--mc-border);
+  background: var(--mc-surface-2);
+  color: var(--mc-text-muted);
+}
+.mc-drawer-message[data-tone="ok"]    { background: var(--mc-ok-soft);    color: var(--mc-ok);    border-color: var(--mc-ok); }
+.mc-drawer-message[data-tone="warn"]  { background: var(--mc-warn-soft);  color: var(--mc-warn);  border-color: var(--mc-warn); }
+.mc-drawer-message[data-tone="error"] { background: var(--mc-danger-soft); color: var(--mc-danger); border-color: var(--mc-danger); }
+.mc-drawer-message[hidden] { display: none; }
+
+/* ── Frame (embedded harness) ───────────────────────────── */
+.mc-frame {
+  display: none;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+body.in-frame .mc-main { display: none; }
+body.in-frame .mc-footer { display: none; }
+body.in-frame .mc-frame { display: flex; }
+
+.mc-frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--mc-border);
+  background: var(--mc-surface);
+  flex-wrap: wrap;
+}
+.frame-back { flex: 0 0 auto; }
+.mc-frame-switcher {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--mc-bg-deep);
+  border: 1px solid var(--mc-border);
+  border-radius: 999px;
+  margin-left: auto;
+}
+.frame-switch {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--mc-text-muted);
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.frame-switch:hover { color: var(--mc-text); }
+.frame-switch[aria-current="page"] {
+  background: var(--mc-surface);
+  color: var(--switch-accent, var(--mc-text));
+  box-shadow: var(--shadow-1);
+}
+.frame-switch[data-accent="medical"]  { --switch-accent: var(--med-accent); }
+.frame-switch[data-accent="safety"]   { --switch-accent: var(--safe-accent); }
+.frame-switch[data-accent="security"] { --switch-accent: var(--sec-accent); }
+.frame-switch .swatch {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--switch-accent, var(--mc-text-faint));
+  flex: 0 0 auto;
+}
+.harness-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  border: 0;
+  background: var(--mc-bg);
+  min-height: 0;
+  /* Cross-fade between harnesses: JS toggles opacity around the src swap. */
+  transition: opacity 220ms ease;
+}
+
+/* ── View transitions (landing ↔ frame) ─────────────────── */
+@keyframes mcFrameEnter {
+  from { opacity: 0; transform: translateY(8px) scale(0.992); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes mcMainReturn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+body.in-frame .mc-frame {
+  animation: mcFrameEnter 320ms cubic-bezier(.21,.84,.34,1) both;
+  transform-origin: center top;
+}
+
+body.is-returning .mc-main {
+  animation: mcMainReturn 280ms cubic-bezier(.21,.84,.34,1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.in-frame .mc-frame,
+  body.is-returning .mc-main { animation: none; }
+  .harness-frame { transition: none; }
+}
+
+@media (max-width: 520px) {
+  .mc-frame-switcher { margin-left: 0; width: 100%; justify-content: space-between; }
+  .frame-switch { flex: 1; justify-content: center; padding: 6px 8px; }
+}
+
+/* ── Footer ─────────────────────────────────────────────── */
+.mc-footer {
+  border-top: 1px solid var(--mc-border);
+  background: var(--mc-surface);
+  padding: 14px 22px;
+  font-size: 12px;
+  color: var(--mc-text-muted);
+  text-align: center;
+}
+.mc-footer a { color: var(--mc-accent-strong); }
+.mc-footer a:hover { text-decoration: underline; }
+
+/* ── Landing-page entrance animation ────────────────────── */
+@keyframes mcFadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.mc-header,
+.mc-hero,
+.mc-cards .mc-card,
+.mc-status,
+.mc-value,
+.mc-footer {
+  /* `both` so each element starts invisible until its delay elapses,
+     instead of a hard pop-in followed by the animation. */
+  animation: mcFadeIn 0.55s cubic-bezier(.21,.84,.34,1) both;
+}
+
+.mc-header                 { animation-delay:  0ms; }
+.mc-hero                   { animation-delay:  80ms; }
+.mc-cards .mc-card:nth-child(1) { animation-delay: 160ms; }
+.mc-cards .mc-card:nth-child(2) { animation-delay: 220ms; }
+.mc-cards .mc-card:nth-child(3) { animation-delay: 280ms; }
+.mc-status                 { animation-delay: 360ms; }
+.mc-value                  { animation-delay: 440ms; }
+.mc-footer                 { animation-delay: 520ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-header,
+  .mc-hero,
+  .mc-cards .mc-card,
+  .mc-status,
+  .mc-value,
+  .mc-footer { animation: none; }
+}
+
+/* ── Small screens ──────────────────────────────────────── */
+@media (max-width: 640px) {
+  .mc-brand-sub { display: none; }
+  .mc-env-pill { display: none; }
+  .mc-main { padding: 24px 16px 32px; }
+  .mc-hero h2 { font-size: 24px; }
+}
+
+/* ── Mobile-first overhaul ──────────────────────────────────
+   Field-ready rules for tablets and phones. Touch targets,
+   drawer full-screen on small viewports, orientation handling.
+   ----------------------------------------------------------- */
+
+/* Touch-device baseline: bump every interactive control to a
+   44×44 hit area regardless of viewport width. Honours the
+   pointer media query so desktop with mouse stays compact. */
+@media (pointer: coarse) {
+  .icon-button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 10px;
+  }
+  .icon-button svg { width: 22px; height: 22px; }
+
+  .btn,
+  .config-btn,
+  .frame-back,
+  .mc-edit-link,
+  .mc-inline-link {
+    min-height: 44px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .frame-switch {
+    min-height: 40px;
+    padding: 8px 16px;
+    font-size: 14px;
+  }
+
+  .radio { min-height: 40px; padding: 9px 14px; }
+
+  .mc-card { min-height: 220px; }
+
+  /* Fingerprint-friendly form fields. */
+  .field input[type="text"],
+  .field input[type="url"],
+  .field input[type="password"] {
+    min-height: 44px;
+    font-size: 16px; /* iOS doesn't zoom inputs >=16px */
+  }
+
+  /* Looser line-height on the diagnostics summary so the dropdown
+     header is comfortably tappable. */
+  .mc-status-title { padding: 16px 22px; }
+
+  /* The Edge Diagnostics body has more breathing room on touch. */
+  .mc-status-row { gap: 6px; }
+}
+
+/* Phone-class viewports — the layout itself reflows. */
+@media (max-width: 640px) {
+  /* Header: tighter padding, brand-mark slightly smaller. */
+  .mc-header { padding: 8px 14px; height: auto; min-height: var(--header-h); }
+  .mc-brand { gap: 10px; }
+  .mc-brand-mark { width: 36px; height: 36px; border-radius: 9px; }
+  .mc-brand-title { font-size: 14px; }
+  .mc-brand-eyebrow { font-size: 9px; letter-spacing: 0.16em; }
+  .config-btn-label { display: none; }
+
+  /* Main padding */
+  .mc-main { padding: 18px 14px 28px; }
+  .mc-hero { margin-bottom: 18px; }
+  .mc-hero h2 { font-size: 22px; }
+  .mc-eyebrow { font-size: 10px; }
+
+  /* Drawer: full-width slide-over at phone widths. */
+  .mc-drawer { width: 100vw; box-shadow: none; border-left: 0; }
+  .mc-drawer-header { padding: 14px 16px; }
+  .mc-drawer-body { padding: 16px; gap: 18px; }
+
+  /* Frame view: full-bleed iframe; slim bar. */
+  .mc-frame-bar { padding: 6px 10px; gap: 8px; }
+  .frame-back { padding: 10px 12px; }
+
+  /* Cards collapse to a single column on phones, with the icon
+     and copy reflowing vertically and stretching to fill. */
+  .mc-cards { grid-template-columns: 1fr; gap: 12px; }
+  .mc-card { min-height: 0; padding: 18px; }
+  .mc-card-icon { width: 64px; height: 64px; border-radius: 14px; }
+
+  /* Diagnostics: single column on phones. */
+  .mc-status-list { grid-template-columns: 1fr; gap: 12px; }
+
+  /* Value-prop tiles single column. */
+  .mc-value { padding: 20px; gap: 16px; }
+  .mc-value-content h2 { font-size: 20px; }
+  .mc-value-points { grid-template-columns: 1fr; }
+
+  /* Footer reflows tighter. */
+  .mc-footer { padding: 12px 16px; line-height: 1.5; }
+}
+
+/* Short landscape phones — compact the hero so cards are above the fold. */
+@media (orientation: landscape) and (max-height: 480px) {
+  .mc-header { height: 52px; min-height: 52px; }
+  .mc-hero { margin-bottom: 14px; }
+  .mc-hero h2 { font-size: 20px; }
+  .mc-lede { display: none; }
+}
+
+/* Portrait tablets/phones — keep cards full-width and let the
+   diagnostics dropdown breathe across the full width. */
+@media (orientation: portrait) and (max-width: 820px) {
+  .mc-cards { grid-template-columns: 1fr; }
+  .mc-status-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (orientation: portrait) and (max-width: 560px) {
+  .mc-status-list { grid-template-columns: 1fr; }
+}

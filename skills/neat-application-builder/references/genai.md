@@ -43,6 +43,15 @@ Keep requests explicit.
 - Use per-message images when using chat history.
 - Use `audio` or `audio_file` for ASR.
 - Do not mix direct images with cached images in the same request.
+- Use `enable_thinking` only when the selected model supports reasoning. Read
+  `GenerationResult.reasoning` or streamed `TokenSample.reasoning` separately
+  from answer text.
+- Use `tools` and `tool_choice` for supported tool-calling models. Read parsed
+  calls from `tool_calls` instead of maintaining a model-family-specific parser.
+- For ASR, use `language` when the source language is known or leave it as
+  `auto`, and choose the `asr_task` required by the application. Inspect the
+  returned language, `no_speech_prob`, and `avg_logprob` before deciding whether
+  to keep or retry a transcription.
 
 Capability-check the model before constructing task-specific requests when the
 model directory is user-provided.
@@ -58,6 +67,13 @@ Common steps:
 3. Add one or more model directories with stable served names.
 4. Use `serve()` for a blocking server or `start()` / `stop()` for managed lifetime.
 5. Use `model_names()` and `remove_model(...)` for model management when needed.
+
+`stop()` also removes the registered models. Add them again before restarting the
+same server object.
+
+`GenAIServer` does not provide authentication or TLS termination and allows CORS
+requests from any origin. Bind it only to a trusted interface or put it behind a
+network layer that provides access control and encryption.
 
 Do not use a server when the app can call the model directly inside one process.
 Direct APIs are the simpler starting point for embedded application logic and

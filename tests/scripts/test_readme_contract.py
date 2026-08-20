@@ -63,6 +63,13 @@ sima-cli neat install apps
 cd prebuilt-apps
 ```"""
 
+VALID_STANDALONE_INSTALL = """Fetch only this example.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sima-neat/apps/main/scripts/get-example.sh | bash -s -- sample
+cd sample
+```"""
+
 VALID_RUN = """```bash
 ./examples/classification/sample/src/cpp/pre-built/sample
 python3 examples/classification/sample/src/python/main.py
@@ -71,6 +78,16 @@ python3 examples/classification/sample/src/python/main.py
 
 def test_installed_readme_contract_accepts_packaged_commands(tmp_path: Path) -> None:
     readme = write_readme(tmp_path, install=VALID_INSTALL, run=VALID_RUN)
+
+    assert validate_readme(readme) == []
+
+
+def test_readme_contract_accepts_single_example_install(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_STANDALONE_INSTALL,
+        run=VALID_RUN,
+    )
 
     assert validate_readme(readme) == []
 

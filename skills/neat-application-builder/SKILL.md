@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Build Neat applications with public C++ or Python APIs in the Neat Development Environment or on DevKit. Use for classic apps that start from ONNX or compiled model archives, GenAI apps from deployed model directories, and camera, file, or RTSP pipelines. Choose Model, Graph, GenAIModel, or GenAIServer before consulting Apps examples. Model compilation and repository workflows use separate skills.
+description: Build Neat applications with public C++ or Python APIs in the Neat Development Environment or on DevKit. Use for classic apps that start from ONNX or compiled model archives, GenAI apps from deployed model directories, and camera, file, or RTSP pipelines. Choose Model, Graph, GenAIModel, or GenAIServer, then inspect the closest Apps example before implementation. Model compilation and repository workflows use separate skills.
 ---
 
 # Neat Application Builder
@@ -9,8 +9,8 @@ description: Build Neat applications with public C++ or Python APIs in the Neat 
 
 Build applications against the installed Neat Library. Treat the current Neat
 Development Environment's packaged core source, installed headers, and local
-documentation as the source of truth. Use apps examples only as optional
-reference implementations after the API shape is chosen.
+documentation as the API source of truth. Once the broad API family is known,
+use the closest current Apps example as the implementation starting point.
 
 ## Workflow
 
@@ -18,13 +18,16 @@ reference implementations after the API shape is chosen.
    - In the Neat Development Environment, read `/neat-resources/core-src` first.
    - Prefer installed public headers under the Neat Development Environment sysroot when checking the user-facing contract.
    - Read `references/source-of-truth.md`.
-2. Choose the application API shape before opening an Apps example.
+2. Determine the artifact, input owner, and broad API family.
    - Read `references/api-decision-map.md`.
-   - Continue after the runtime artifact, input owner, and API family are known.
-3. If the request touches APIs outside the main Model/Graph/Run/GenAI path, read `references/api-surface-map.md` and inspect the referenced headers/docs.
-4. For classic compiled model applications, read `references/model-graph-run.md`.
-5. For LLM, VLM, ASR, or HTTP model serving applications, read `references/genai.md`.
-6. Before claiming success, read `references/validation.md` and run the validation that is possible in the current environment.
+   - Continue once all three are known.
+3. Before writing application code, inspect the closest current example under `/neat-resources/apps-src/examples`.
+   - Use it for project structure, configuration, graph composition, build commands, and runtime patterns.
+   - Verify API details against the installed Core headers and docs.
+4. If the request touches APIs outside the main Model/Graph/Run/GenAI path, read `references/api-surface-map.md` and inspect the referenced headers/docs.
+5. For classic compiled model applications, read `references/model-graph-run.md`.
+6. For LLM, VLM, ASR, or HTTP model serving applications, read `references/genai.md`.
+7. Before claiming success, read `references/validation.md` and run the validation that is possible in the current environment.
 
 ## Defaults
 
@@ -34,15 +37,34 @@ reference implementations after the API shape is chosen.
 - Prefer clear application endpoint names such as `image`, `detections`, `classes`, `preview`, `prompt`, and `tokens`.
 - Keep generated application code runnable with explicit build and run commands.
 
-## DevKit Local Display and Run
+## Neat Insight output
+
+Prefer Neat Insight when results should be viewed remotely in a browser. This
+keeps the DevKit desktop and display hardware available.
+
+- Add the public `VideoSender` graph fragment for video. Use
+  `VideoSenderOptions::H264RtpUdpFromRaw(...)` for raw frames or
+  `VideoSenderOptions::Passthrough(codec)` for encoded H.264 or H.265.
+- Pair it with `MetadataSender` when Insight needs JSON detections or other
+  structured overlays.
+- Inspect `include/nodes/groups/VideoSender.h` and
+  `include/nodes/io/MetadataSender.h`. Read the packaged Core docs
+  `advanced-concepts/application-design/video_sender.md` and
+  `advanced-concepts/application-design/metadata_sender.md` before choosing
+  ports, channels, codecs, or graph links.
+- Use the Insight documentation for viewer setup and operations. This skill
+  owns the application-side APIs only.
+
+## DevKit local display and run
 
 For applications that show results locally on a Modalix DevKit, or that run interactively until a human stops them:
 
-- Choose a local display path. The DevKit runs an X11 desktop, but no GStreamer X-window video sink is installed (`ximagesink`, `xvimagesink`, and `glimagesink` are absent), so a GStreamer pipeline cannot render into a desktop window directly. Use one of:
-  - HDMI full-screen via `kmssink`. The desktop holds the DRM master, so stop it first (`sudo systemctl stop lightdm`) and restart it after (`sudo systemctl start lightdm`). The DevKit DRM driver is `smifb`: it needs `driver-name=smifb`, an RGB (`BGRx`) caps, and a full-screen primary-plane modeset (`force-modesetting=true connector-id=<id>`); it rejects sub-CRTC overlay planes. Symptoms: "Could not open DRM module" means the driver name is missing; `drmModeSetPlane failed: Invalid argument` means a non-full-screen or overlay-plane config.
-  - A window on the existing desktop via OpenCV `cv::imshow` (the installed OpenCV `highgui` uses the Qt backend), with no monitor takeover and no extra packages. Launch with `DISPLAY=:0` and the session's `XAUTHORITY`. Detect the window close ("X") button with `getWindowProperty(name, WND_PROP_VISIBLE) < 1`, otherwise `imshow` re-creates the closed window on the next call. `cv::waitKey` reads X events from the window, so ESC/q/close only work at the DevKit's own keyboard/mouse with the window focused.
-  - Stream to Neat Insight with `VideoSender` (H.264 RTP/UDP) plus `MetadataSender` (detection JSON) and view the overlay in the browser — no local display.
-- Run and stop over `dk`/`devkit-run`. These run the application over SSH without a pty, so a terminal Ctrl-C is not forwarded and the application can be left orphaned on the DevKit (still holding the MLA and streaming). For interactive runs, launch with `ssh -tt` so Ctrl-C and disconnects reach the application, have the application handle `SIGINT`/`SIGTERM`/`SIGHUP` for a clean `Run::close()` and teardown, and as a backup `trap` on exit to `pkill` the remote process. `dk`/`devkit-run` stays the right tool for short, bounded smoke runs that exit on their own.
+- Inspect the target before choosing a local display path. Check the installed GStreamer sinks, active desktop session, DRM owner and connector, and OpenCV HighGUI backend.
+- On the validated DevKit image, the X11 desktop is present but the GStreamer X-window sinks `ximagesink`, `xvimagesink`, and `glimagesink` are absent. Use one of these local paths:
+  - For full-screen HDMI, use `kmssink`. Stop the desktop first with `sudo systemctl stop lightdm`, then restart it with `sudo systemctl start lightdm`. The `smifb` DRM driver needs `driver-name=smifb`, `BGRx` caps, `force-modesetting=true`, and `connector-id=<id>`. It accepts a full-screen primary-plane modeset, not a sub-CRTC overlay plane. `Could not open DRM module` means the driver name is missing. `drmModeSetPlane failed: Invalid argument` means the plane or dimensions are unsupported.
+  - For a window on the existing desktop, use OpenCV `cv::imshow`. Launch with `DISPLAY=:0` and the desktop session's `XAUTHORITY`. Detect the close button with `getWindowProperty(name, WND_PROP_VISIBLE) < 1`; otherwise the next `imshow` call recreates the window. `cv::waitKey` reads the window's X events, so ESC, q, and close work only from the DevKit keyboard or mouse while the window has focus.
+- Prefer `dk` or `devkit-run` for SDK-to-DevKit execution. The current helper streams output and cleans up the remote process after interruption and common SSH or signal exits. Use `dk shell` when the workflow needs an interactive PTY. Older helpers that lack this cleanup can orphan the application; use `ssh -tt` and an exit trap that stops the remote process in that environment.
+- Have long-running applications handle `SIGINT`, `SIGTERM`, and `SIGHUP`, close their `Run` handles, and release model, codec, display, and streaming resources on every exit path.
 
 ## Boundaries
 
