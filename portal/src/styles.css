@@ -942,17 +942,13 @@ select {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 16px;
-  border-radius: 18px;
-  background: #2b241d;
-  color: #f7f1ea;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-alt);
+  color: var(--text);
   white-space: pre;
   word-break: normal;
   overflow-wrap: normal;
-}
-
-:root[data-theme="dark"] .markdown-body pre {
-  background: #101314;
-  color: #ebdfd0;
 }
 
 .markdown-body pre code {

@@ -16,9 +16,6 @@
 
 Finds SuperPoint feature points in a video and streams the annotated video to Insight.
 
-The application selects the A65V1 numerical profile explicitly. Tensor roles, output dtypes, and
-storage layouts come from the MPK contract rather than being inferred from tensor order or values.
-
 ## Preview
 
 Frame from the included TUM RGB-D `freiburg1_desk` sequence:
@@ -31,7 +28,7 @@ Frame from the included TUM RGB-D `freiburg1_desk` sequence:
   Modalix or DevKit target.
 - Neat Library with SuperPoint BoxDecode support.
 - Insight or another RTP receiver for the annotated output stream.
-- A qualified SuperPoint MPK as described below.
+- The SuperPoint model package installed below.
 
 ## Install Apps
 
@@ -47,9 +44,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The [Neat Model Registry](https://github.com/sima-neat/models/issues/24) publishes SuperPoint
-through the staging Vulcan artifact registry. Install the current model-matrix package and select
-the INT8 variant that keeps tessellation inside the MLA:
+Install the SuperPoint model package from the staging [Neat Model Registry](https://github.com/sima-neat/models/issues/24):
 
 ```bash
 mkdir -p models/superpoint
@@ -61,28 +56,7 @@ cp models/superpoint/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz \
   models/superpoint_mpk.tar.gz
 ```
 
-Do not download the model from an ad hoc attachment or copy; the registry package supplies the
-immutable artifact and verifies its published checksum.
-
-The default CI pipeline test uses `modalix_int8_tessellation_mla`, while the accuracy matrix covers
-all four INT8/BF16 and MLA/EV74 tessellation combinations. The INT8 MLA archive was calibrated with
-128 deterministic images (80 COCO val2017, 32 HPatches, and 16 TUM RGB-D), contains one MLA
-program, and has this SHA-256 checksum:
-
-```text
-768f8f2838b335ffa92fd4d2464730b61a4bcdf4190484aac125b7395e271d53
-```
-
-Verify the selected package when reproducing the reference qualification:
-
-```bash
-sha256sum models/superpoint_mpk.tar.gz
-```
-
-The model accepts a normalized 640x480 grayscale input and publishes a 65-channel detector head
-and a 256-channel descriptor head. The registry also provides BF16 and EV74-tessellation variants.
-
-Configure `model.path` after the model is published under a different filename.
+The commands copy the INT8 MLA model to the path used by the packaged config. The model expects 640x480 grayscale input.
 
 ## Configure
 

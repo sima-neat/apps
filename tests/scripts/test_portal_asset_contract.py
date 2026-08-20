@@ -32,6 +32,13 @@ def test_portal_page_uses_global_search_only():
     assert 'type="search"' not in app_jsx
 
 
+def test_portal_markdown_uses_normal_paragraph_flow():
+    app_jsx = (APPS_ROOT / "portal" / "src" / "App.jsx").read_text()
+
+    assert "marked.setOptions({ breaks: false });" in app_jsx
+    assert "breaks: true" not in app_jsx
+
+
 def test_portal_code_blocks_preserve_tokens_and_scroll_internally():
     styles = (APPS_ROOT / "portal" / "src" / "styles.css").read_text()
     pre_rule = styles.split(".markdown-body pre {", 1)[1].split("}", 1)[0]
@@ -43,6 +50,8 @@ def test_portal_code_blocks_preserve_tokens_and_scroll_internally():
     assert "overflow-wrap: normal;" in pre_rule
     assert "overflow-x: auto;" in pre_rule
     assert "max-width: 100%;" in pre_rule
+    assert "background: var(--bg-alt);" in pre_rule
+    assert "color: var(--text);" in pre_rule
     assert "white-space: pre-wrap;" not in pre_rule
     assert "min-width: 0;" in doc_panel_rule
     assert "grid-template-columns: minmax(0, 1fr);" in styles

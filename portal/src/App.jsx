@@ -10,7 +10,7 @@ import {
   portalAssetUrl,
 } from "./catalog";
 
-marked.setOptions({ breaks: true });
+marked.setOptions({ breaks: false });
 
 const THEME_COOKIE = "sima-neat-theme";
 const THEME_KEYS = ["portal-theme", "theme"];
