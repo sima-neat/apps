@@ -20,6 +20,7 @@ def write_readme(
     run: str,
     concept: str = "Classifies one image with a compiled model and prints the result.",
     configure: str = "Open `${APP_DIR}/src/common/config.yaml` and set `model.path`.",
+    preview: str = "![Sample preview](../../../portal/assets/examples/classification/sample/image.png)",
 ) -> Path:
     readme = tmp_path / "examples" / "classification" / "sample" / "README.md"
     readme.parent.mkdir(parents=True)
@@ -41,7 +42,7 @@ def write_readme(
 {concept}
 
 ## Preview
-![Sample preview](../../../portal/assets/examples/classification/sample/image.png)
+{preview}
 
 ## Prerequisites
 - A supported target.
@@ -199,6 +200,19 @@ def test_readme_contract_rejects_missing_preview_asset(tmp_path: Path) -> None:
     preview.unlink()
 
     assert any("Preview image does not exist" in error for error in validate_readme(readme))
+
+
+def test_readme_contract_rejects_fenced_preview(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        preview="""```md
+![Sample preview](../../../portal/assets/examples/classification/sample/image.png)
+```""",
+    )
+
+    assert any("Preview must contain a Markdown image" in error for error in validate_readme(readme))
 
 
 def test_readme_contract_rejects_repeated_bundle_path(tmp_path: Path) -> None:

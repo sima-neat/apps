@@ -88,6 +88,7 @@ SUMMARY_FILLER_PREFIXES = (
 )
 MARKDOWN_IN_SUMMARY_RE = re.compile(r"[`*_\[\]<>]|!\[")
 PREVIEW_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+FENCE_START_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
 PREVIEW_IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 
 
@@ -143,6 +144,32 @@ def first_paragraph(section: str) -> str:
     return " ".join(" ".join(paragraph).split())
 
 
+def strip_fenced_code(section: str) -> str:
+    """Remove fenced code blocks before checking rendered Markdown content."""
+    visible: list[str] = []
+    fence_char: str | None = None
+    fence_length = 0
+    for line in section.splitlines():
+        if fence_char is not None:
+            closing = re.match(
+                rf"^[ \t]{{0,3}}{re.escape(fence_char)}{{{fence_length},}}[ \t]*$",
+                line,
+            )
+            if closing:
+                fence_char = None
+                fence_length = 0
+            continue
+
+        opening = FENCE_START_RE.match(line)
+        if opening:
+            fence = opening.group("fence")
+            fence_char = fence[0]
+            fence_length = len(fence)
+            continue
+        visible.append(line)
+    return "\n".join(visible)
+
+
 def validate_portal_content(
     *,
     sections: dict[str, str],
@@ -174,7 +201,7 @@ def validate_portal_content(
         if binary and binary in summary.lower():
             errors.append("Concept summary must not include the executable name")
 
-    preview = sections.get("Preview", "")
+    preview = strip_fenced_code(sections.get("Preview", ""))
     match = PREVIEW_IMAGE_RE.search(preview)
     if not match:
         errors.append("Preview must contain a Markdown image")

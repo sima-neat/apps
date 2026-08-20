@@ -92,7 +92,7 @@ In the Insight Web UI, start the required stream and copy its RTSP URL. Use the 
 
 Open `${APP_DIR}/src/common/config.yaml`. Set the RTSP URL, detector model path, and Insight host and ports.
 
-To enable the VLM, set `genai.enabled` to `true`, then check the server model name and path and update the prompts. Leave it `false` to run only detection and Insight output.
+The packaged config sets `genai.enabled` to `true`. Check the server model name and path and update the prompts before using the VLM. Set it to `false` to run only detection and Insight output.
 
 ## Run
 
@@ -106,6 +106,7 @@ pip install -r ${APP_DIR}/src/python/requirements.txt
 When GenAI is enabled, start the server in one terminal:
 
 ```bash
+APP_DIR=examples/genai/detection-to-vlm-assistant
 source ~/pyneat/bin/activate
 python3 ${APP_DIR}/src/python/genai_server.py \
   --config ${APP_DIR}/src/common/config.yaml
@@ -114,6 +115,7 @@ python3 ${APP_DIR}/src/python/genai_server.py \
 Start the detection pipeline in another terminal:
 
 ```bash
+APP_DIR=examples/genai/detection-to-vlm-assistant
 source ~/pyneat/bin/activate
 python3 ${APP_DIR}/src/python/detector_app.py \
   --config ${APP_DIR}/src/common/config.yaml
