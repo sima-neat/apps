@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "name": "reviewed voice catalog",
+    "description": "Voices licensed CC-BY-NC-SA-4.0 are excluded; other reviewed voices may be installed.",
+    "blocked_licenses": ["CC-BY-NC-SA-4.0"],
+    "korean_server_tts": false
+  },
+  "voices": [
+    {
+      "id": "css10",
+      "label": "CSS10 multilingual",
+      "engine": "piper-plus",
+      "languages": ["ja", "en", "zh", "es", "fr", "pt"],
+      "default": true,
+      "optional": false,
+      "repository": "ayousanz/piper-plus-css10-ja-6lang",
+      "revision": "bd0d812d4db9182ecdb907ef074becf9e230c17f",
+      "asset_dir": "piper-plus/css10",
+      "files": [
+        {
+          "source": "css10-ja-6lang-fp16.onnx",
+          "target": "model.onnx",
+          "sha256": "5ebc51dbf897238523f3df0d6e0f6c93033bc5cda3f8602a8379ebe2a4738c42"
+        },
+        {
+          "source": "config.json",
+          "target": "config.json",
+          "sha256": "3c613dacf139349c20159433559b2e94e6364e9a340d95245f3de6006f453fcc"
+        }
+      ],
+      "license": "CC-BY-4.0 + CSS10 public domain"
+    },
+    {
+      "id": "mera",
+      "label": "MERA multilingual",
+      "engine": "piper-plus",
+      "languages": ["ja", "en", "zh", "es", "fr", "pt"],
+      "default": false,
+      "optional": true,
+      "repository": "kizuna-intelligence/piper-plus-mera-multilingual",
+      "revision": "d5ed57f04a1fd1cada7940ecd79a51d523b83462",
+      "asset_dir": "piper-plus/mera",
+      "files": [
+        {
+          "source": "mera-multilingual.onnx",
+          "target": "model.onnx",
+          "sha256": "97952c17fd60d47c4db2a6bf3903184df2054b6fa97396c971102bc60a9f135f"
+        },
+        {
+          "source": "config.json",
+          "target": "config.json",
+          "sha256": "26dfa6f0e82ad64c3334b0e34d765cca29ddd20f23df22ac33748fff0ea3e17f"
+        }
+      ],
+      "license": "Apache-2.0 + CC-BY-4.0"
+    },
+    {
+      "id": "en_US-ljspeech-medium",
+      "label": "LJ Speech (US English, medium)",
+      "engine": "piper-tts",
+      "languages": ["en"],
+      "default": false,
+      "optional": true,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "en/en_US/ljspeech/medium/en_US-ljspeech-medium.onnx", "target": "en_US-ljspeech-medium.onnx", "sha256": "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22"},
+        {"source": "en/en_US/ljspeech/medium/en_US-ljspeech-medium.onnx.json", "target": "en_US-ljspeech-medium.onnx.json", "sha256": "141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860"}
+      ],
+      "license": "Public domain"
+    },
+    {
+      "id": "en_US-kristin-medium",
+      "label": "Kristin (US English, medium)",
+      "engine": "piper-tts",
+      "languages": ["en"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "en/en_US/kristin/medium/en_US-kristin-medium.onnx", "target": "en_US-kristin-medium.onnx", "sha256": "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4"},
+        {"source": "en/en_US/kristin/medium/en_US-kristin-medium.onnx.json", "target": "en_US-kristin-medium.onnx.json", "sha256": "5681426d4aead22195de70531eeeeddb46493cfaffc5764b2ea3db73428b651c"}
+      ],
+      "license": "Public domain"
+    },
+    {
+      "id": "de_DE-thorsten-medium",
+      "label": "Thorsten (German, medium)",
+      "engine": "piper-tts",
+      "languages": ["de"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx", "target": "de_DE-thorsten-medium.onnx", "sha256": "7e64762d8e5118bb578f2eea6207e1a35a8e0c30595010b666f983fc87bb7819"},
+        {"source": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json", "target": "de_DE-thorsten-medium.onnx.json", "sha256": "974adee790533adb273a1ac88f49027d2a1b8f0f2cf4905954a4791e79264e85"}
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "es_ES-davefx-medium",
+      "label": "DaveFX (Spanish, medium)",
+      "engine": "piper-tts",
+      "languages": ["es"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "es/es_ES/davefx/medium/es_ES-davefx-medium.onnx", "target": "es_ES-davefx-medium.onnx", "sha256": "6658b03b1a6c316ee4c265a9896abc1393353c2d9e1bca7d66c2c442e222a917"},
+        {"source": "es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json", "target": "es_ES-davefx-medium.onnx.json", "sha256": "0e0dda87c732f6f38771ff274a6380d9252f327dca77aa2963d5fbdf9ec54842"}
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "fr_FR-siwis-medium",
+      "label": "SIWIS (French, medium)",
+      "engine": "piper-tts",
+      "languages": ["fr"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx", "target": "fr_FR-siwis-medium.onnx", "sha256": "641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99"},
+        {"source": "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json", "target": "fr_FR-siwis-medium.onnx.json", "sha256": "39479916c2db192b5ac9764daddd0c744d83e023ad890c6976c0633ae4df8959"}
+      ],
+      "license": "CC-BY-4.0"
+    },
+    {
+      "id": "it_IT-paola-medium",
+      "label": "Paola (Italian, medium)",
+      "engine": "piper-tts",
+      "languages": ["it"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "it/it_IT/paola/medium/it_IT-paola-medium.onnx", "target": "it_IT-paola-medium.onnx", "sha256": "6fc918b5a0ea6137382833dddfa567bffbe6a5060c02043c87192ee59c04210c"},
+        {"source": "it/it_IT/paola/medium/it_IT-paola-medium.onnx.json", "target": "it_IT-paola-medium.onnx.json", "sha256": "aea19c0a7fce29fbc359b93f10e7902854401e4c95ae2ea328ae516b15d296cf"}
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "no_NO-talesyntese-medium",
+      "label": "Talesyntese (Norwegian, medium)",
+      "engine": "piper-tts",
+      "languages": ["no"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx", "target": "no_NO-talesyntese-medium.onnx", "sha256": "b763aebe02e72c4628c4074c4b8b448f05ffe523b975bfcd58e2c5d531270c13"},
+        {"source": "no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx.json", "target": "no_NO-talesyntese-medium.onnx.json", "sha256": "b0eb0491fc8bf9843d2beac8acf8773b6cf59274316406b36ff579ae8a1909d5"}
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "pt_BR-faber-medium",
+      "label": "Faber (Brazilian Portuguese, medium)",
+      "engine": "piper-tts",
+      "languages": ["pt"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx", "target": "pt_BR-faber-medium.onnx", "sha256": "858555e3a064209c57088fe6bd70c4c3dc54d03eaa00c45d5ecaf43a33f95aa7"},
+        {"source": "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json", "target": "pt_BR-faber-medium.onnx.json", "sha256": "7e694de195ae3fc36dd732c445eb04fb49b649854893cb5506b978f0d50a1d6f"}
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "vi_VN-vais1000-medium",
+      "label": "VAIS1000 (Vietnamese, medium)",
+      "engine": "piper-tts",
+      "languages": ["vi"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx", "target": "vi_VN-vais1000-medium.onnx", "sha256": "ec7c89e2c85f4d1edc24b6120c18aaf1bda614f06b511567eb9c7c0de15e2dab"},
+        {"source": "vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx.json", "target": "vi_VN-vais1000-medium.onnx.json", "sha256": "fafb9da1354ed4b77c31af228ed41fb41cd825c14cffa105454b25e6ae751ee0"}
+      ],
+      "license": "CC-BY-4.0"
+    },
+    {
+      "id": "zh_CN-huayan-medium",
+      "label": "Huayan (Chinese, medium)",
+      "engine": "piper-tts",
+      "languages": ["zh"],
+      "default": true,
+      "optional": false,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx", "target": "zh_CN-huayan-medium.onnx", "sha256": "9929917bf8cabb26fd528ea44d3a6699c11e87317a14765312420be230be0f3d"},
+        {"source": "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json", "target": "zh_CN-huayan-medium.onnx.json", "sha256": "d521dc45504a8ccc99e325822b35946dd701840bfb07e3dbb31a40929ed6a82b"}
+      ],
+      "license": "Unknown"
+    },
+    {
+      "id": "zh_CN-chaowen-medium",
+      "label": "Chaowen (Chinese, medium)",
+      "engine": "piper-tts",
+      "languages": ["zh"],
+      "default": false,
+      "optional": true,
+      "repository": "rhasspy/piper-voices",
+      "revision": "f5a6e9094787fd865d65cb024472f977f9c542b5",
+      "asset_dir": ".",
+      "files": [
+        {"source": "zh/zh_CN/chaowen/medium/zh_CN-chaowen-medium.onnx", "target": "zh_CN-chaowen-medium.onnx", "sha256": "820d64ac16048fbcf38dd0823d37fab5f5e0c2bd71b01ca5a50f553fac19e746"},
+        {"source": "zh/zh_CN/chaowen/medium/zh_CN-chaowen-medium.onnx.json", "target": "zh_CN-chaowen-medium.onnx.json", "sha256": "a6bb2caafa0645642f13cbf7e2f6fbbb16fded66e51109fc26d622f6472fa16f"}
+      ],
+      "license": "Mixed (CC0 dataset; Xiao Ya base)"
+    }
+  ]
+}

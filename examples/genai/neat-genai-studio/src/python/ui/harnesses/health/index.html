@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="SiMaSentry-Med — zero-dependency medical AI harness with vision, voice, and OpenAI/Ollama support." />
+  <title>SiMaSentry-Med</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/png" href="SiMaSentry-Med.png" />
+</head>
+<body data-tab="chat">
+  <a class="skip-link" href="#composer-input">Skip to input</a>
+
+  <header class="app-header" role="banner">
+    <div class="brand">
+      <img class="brand-mark" src="SiMaSentry-Med.png" alt="" aria-hidden="true" />
+      <h1 class="brand-title">SiMaSentry-Med</h1>
+    </div>
+    <div class="header-actions">
+      <button id="home-button" class="icon-button" type="button"
+        aria-label="Return to Mission Control">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/>
+        </svg>
+      </button>
+      <span id="provider-chip" class="provider-chip" data-provider="ollama" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="provider-chip-label">Ollama</span>
+      </span>
+      <button id="settings-button" class="icon-button" type="button"
+        aria-label="Open settings" aria-haspopup="dialog" aria-controls="settings-drawer">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 8a4 4 0 1 0 4 4 4 4 0 0 0-4-4Zm8.94 4a7.94 7.94 0 0 0-.13-1.4l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.78 7.78 0 0 0-2.42-1.4l-.38-2.65A.5.5 0 0 0 14.66 1h-4a.5.5 0 0 0-.49.42l-.38 2.65a7.78 7.78 0 0 0-2.42 1.4l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65A7.94 7.94 0 0 0 3.06 12a7.94 7.94 0 0 0 .13 1.4l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1a7.78 7.78 0 0 0 2.42 1.4l.38 2.65a.5.5 0 0 0 .49.42h4a.5.5 0 0 0 .49-.42l.38-2.65a7.78 7.78 0 0 0 2.42-1.4l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65A7.94 7.94 0 0 0 20.94 12Z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="disclaimer" role="note">
+    <strong>Disclaimer:</strong> AI-generated output is not a medical diagnosis. Always consult a licensed physician.
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="Workspace">
+    <button class="tab-button" type="button" role="tab"
+      id="tab-btn-chat" data-tab="chat" aria-selected="true" aria-controls="tab-chat">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Z"/></svg>
+      Chat
+    </button>
+    <button class="tab-button" type="button" role="tab"
+      id="tab-btn-workbench" data-tab="workbench" aria-selected="false" aria-controls="tab-workbench" tabindex="-1">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm0 2h14v9.5l-3-3-4 4-3-3-4 4Zm10.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/></svg>
+      Workbench
+    </button>
+    <button class="tab-button tab-action" type="button"
+      id="tab-btn-home" data-action="home" aria-label="Return to Mission Control">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/></svg>
+      Home
+    </button>
+  </nav>
+
+  <!-- ─── Tab 1: Chat ──────────────────────────────────────── -->
+  <section id="tab-chat" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-chat">
+    <main class="app-main">
+      <ol id="messages" class="messages" aria-live="polite" aria-relevant="additions" aria-label="Conversation"></ol>
+
+      <div id="empty-state" class="empty-state">
+        <h2>Start a consultation</h2>
+        <p>Type a question, attach a medical image, or use the microphone. Configure your provider in <button type="button" class="link-button" data-action="open-settings">Settings</button>.</p>
+      </div>
+    </main>
+
+    <div id="image-preview" class="image-preview" hidden>
+      <img id="image-preview-img" alt="Attached medical image preview" />
+      <span id="image-preview-meta" class="image-preview-meta"></span>
+      <button type="button" id="image-remove" class="icon-button danger" aria-label="Remove attached image">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+      </button>
+    </div>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <label for="composer-input" class="visually-hidden">Message</label>
+      <textarea id="composer-input" name="message" rows="1"
+        placeholder="Describe symptoms, ask a question, or attach a medical image…"
+        aria-label="Message input"></textarea>
+
+      <div class="composer-actions">
+        <input id="image-input" type="file" accept="image/*" hidden />
+        <button id="image-button" class="icon-button" type="button" aria-label="Attach medical image">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5Z"/></svg>
+        </button>
+
+        <button id="camera-button" class="icon-button" type="button" aria-label="Capture from camera">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M9 4 7 6H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3l-2-2Zm3 14a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>
+        </button>
+
+        <button id="mic-button" class="icon-button" type="button"
+          aria-label="Start voice input" aria-pressed="false" disabled>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11Z"/></svg>
+        </button>
+
+        <button id="speaker-button" class="icon-button" type="button"
+          aria-label="Toggle auto read-aloud" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3 10v4a1 1 0 0 0 1 1h3l4 4a1 1 0 0 0 1.71-.71V5.71A1 1 0 0 0 11 5l-4 4H4a1 1 0 0 0-1 1Zm13.5 2A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12ZM14 3.23v2.06a6.99 6.99 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23Z"/></svg>
+        </button>
+
+        <button id="stop-voice-button" class="icon-button" type="button"
+          aria-label="Stop voice playback" title="Stop voice playback (Esc)">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path fill="currentColor" d="M3 10v4a1 1 0 0 0 1 1h3l4 4a1 1 0 0 0 1.71-.71V5.71A1 1 0 0 0 11 5l-4 4H4a1 1 0 0 0-1 1Z"/>
+            <line x1="3.5" y1="3.5" x2="20.5" y2="20.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+
+        <button id="clear-button" class="icon-button" type="button" aria-label="Clear conversation">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6Zm3.17-7.83 1.42-1.41L12 11.17l1.41-1.41 1.42 1.41L13.41 12.59l1.42 1.41-1.42 1.42L12 14l-1.41 1.42-1.42-1.42 1.42-1.41ZM15.5 4l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+        </button>
+
+        <button id="send-button" class="primary-button" type="submit">
+          <span>Send</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m3 20 18-8L3 4v7l13 1-13 1Z"/></svg>
+        </button>
+      </div>
+    </form>
+
+    <div id="status" class="status" aria-live="polite" role="status"></div>
+  </section>
+
+  <!-- ─── Tab 2: Workbench ─────────────────────────────────── -->
+  <section id="tab-workbench" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-workbench" hidden>
+    <div class="workbench">
+      <div class="viewer">
+        <div class="viewer-stage" id="viewer-stage" data-has-image="false">
+          <div class="viewer-empty" id="viewer-empty">
+            <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M5 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm0 2h14v9.5l-3-3-4 4-3-3-4 4Zm10.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/></svg>
+            <p>Upload an X-ray, MRI, or other medical image to begin.</p>
+            <div class="empty-actions">
+              <button type="button" class="primary-button" id="viewer-upload">Choose image</button>
+              <button type="button" class="secondary-button" id="viewer-camera">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M9 4 7 6H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3l-2-2Zm3 14a5 5 0 1 1 0-10 5 5 0 0 1 0 10Zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>
+                Use camera
+              </button>
+            </div>
+            <p class="viewer-empty-hint">Then click any point on the scan to analyze that region.</p>
+          </div>
+          <div class="viewer-frame" id="viewer-frame" hidden>
+            <img id="viewer-image" class="viewer-image" alt="Loaded medical image" draggable="false" />
+            <svg id="viewer-overlay" class="viewer-overlay"
+              xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+              <g id="viewer-markers"></g>
+            </svg>
+          </div>
+        </div>
+
+        <div class="viewer-toolbar">
+          <button type="button" class="secondary-button" id="viewer-replace">Replace image</button>
+          <button type="button" class="secondary-button" id="viewer-clear">Clear markers</button>
+          <span class="viewer-hint" id="viewer-hint">Click anywhere on the scan to analyze that region.</span>
+          <span class="viewer-coords" id="viewer-coords" aria-live="polite"></span>
+        </div>
+      </div>
+
+      <aside class="findings" aria-label="Findings">
+        <header class="findings-header">
+          <h2>Findings</h2>
+          <span id="findings-count" class="findings-count">0</span>
+        </header>
+        <ol id="findings-list" class="findings-list"></ol>
+        <p id="findings-empty" class="findings-empty">No findings yet. Click a point on the scan to analyze it.</p>
+      </aside>
+    </div>
+
+    <div id="workbench-status" class="status" aria-live="polite" role="status"></div>
+  </section>
+
+  <!-- ─── TTS active control ───────────────────────────────── -->
+  <div id="tts-controls" class="tts-controls" role="status" aria-live="polite" hidden>
+    <svg viewBox="0 0 24 24" width="16" height="16" class="tts-controls-icon" aria-hidden="true">
+      <path fill="currentColor" d="M3 10v4a1 1 0 0 0 1 1h3l4 4a1 1 0 0 0 1.71-.71V5.71A1 1 0 0 0 11 5l-4 4H4a1 1 0 0 0-1 1Zm13.5 2A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12Z"/>
+    </svg>
+    <span class="tts-controls-label">Speaking…</span>
+    <button id="stop-tts-button" class="stop-tts-btn" type="button" aria-label="Stop speech">
+      <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><rect x="6" y="6" width="12" height="12" fill="currentColor"/></svg>
+      Stop
+    </button>
+  </div>
+
+  <!-- ─── Camera capture modal ─────────────────────────────── -->
+  <div id="camera-modal" class="camera-modal" role="dialog" aria-modal="true"
+    aria-labelledby="camera-title" hidden>
+    <div class="camera-backdrop" data-action="close-camera" aria-hidden="true"></div>
+    <div class="camera-panel" role="document">
+      <header class="camera-header">
+        <h2 id="camera-title">Capture image</h2>
+        <button type="button" class="icon-button" data-action="close-camera" aria-label="Close camera">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+        </button>
+      </header>
+      <div class="camera-stage">
+        <video id="camera-video" autoplay playsinline muted></video>
+        <div id="camera-error" class="camera-error" hidden role="alert"></div>
+      </div>
+      <div class="camera-toolbar">
+        <button type="button" class="secondary-button" id="camera-switch">Switch camera</button>
+        <span class="camera-spacer"></span>
+        <button type="button" class="secondary-button" data-action="close-camera">Cancel</button>
+        <button type="button" class="primary-button" id="camera-capture">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>
+          Capture
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Settings drawer ──────────────────────────────────── -->
+  <aside id="settings-drawer" class="drawer" role="dialog" aria-modal="true"
+    aria-labelledby="settings-title" hidden>
+    <div class="drawer-backdrop" data-action="close-settings" aria-hidden="true"></div>
+    <div class="drawer-panel" role="document">
+      <header class="drawer-header">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="icon-button" data-action="close-settings" aria-label="Close settings">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+        </button>
+      </header>
+
+      <form id="settings-form" class="drawer-body">
+        <fieldset class="field-group">
+          <legend>Provider</legend>
+          <div class="radio-row">
+            <label class="radio">
+              <input type="radio" name="provider" value="openai" />
+              <span>OpenAI</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="provider" value="ollama" />
+              <span>Ollama (local)</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <label class="field">
+          <span class="field-label">Base URL</span>
+          <input type="text" name="baseUrl" id="setting-base-url"
+            placeholder="https://api.openai.com/v1/chat/completions" inputmode="url" />
+          <small class="field-hint">Endpoint must accept OpenAI-style <code>/v1/chat/completions</code>.</small>
+        </label>
+
+        <label class="field" id="api-key-field">
+          <span class="field-label">API Key</span>
+          <input type="password" name="apiKey" id="setting-api-key"
+            placeholder="sk-…" autocomplete="off" spellcheck="false" />
+          <small class="field-hint">Stored locally in your browser only. Leave blank for Ollama.</small>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Model</span>
+          <input type="text" name="model" id="setting-model"
+            placeholder="gemma3, llava, llama3.2-vision, gpt-4o…" autocomplete="off" spellcheck="false" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Language (BCP-47)</span>
+          <select name="language" id="setting-language">
+            <option value="en-US">English (US)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="es-ES">Español (España)</option>
+            <option value="es-MX">Español (México)</option>
+            <option value="pt-BR">Português (Brasil)</option>
+            <option value="fr-FR">Français</option>
+            <option value="de-DE">Deutsch</option>
+            <option value="it-IT">Italiano</option>
+            <option value="nl-NL">Nederlands</option>
+            <option value="ru-RU">Русский</option>
+            <option value="ar-SA">العربية</option>
+            <option value="hi-IN">हिन्दी</option>
+            <option value="zh-CN">中文 (简体)</option>
+            <option value="zh-TW">中文 (繁體)</option>
+            <option value="ja-JP">日本語</option>
+            <option value="ko-KR">한국어</option>
+          </select>
+          <small class="field-hint">Used for speech recognition and voice selection.</small>
+        </label>
+
+        <label class="field">
+          <span class="field-label">System Prompt</span>
+          <textarea name="systemPrompt" id="setting-system-prompt" rows="6"></textarea>
+          <button type="button" class="link-button" data-action="reset-system-prompt">Reset to default</button>
+        </label>
+
+        <label class="field-inline">
+          <input type="checkbox" name="autoRead" id="setting-auto-read" />
+          <span>Auto-read assistant replies aloud</span>
+        </label>
+
+        <div class="drawer-footer">
+          <button type="button" class="secondary-button" data-action="close-settings">Cancel</button>
+          <button type="submit" class="primary-button">Save</button>
+        </div>
+      </form>
+    </div>
+  </aside>
+
+  <template id="message-template">
+    <li class="message">
+      <div class="message-avatar" aria-hidden="true"></div>
+      <div class="message-body">
+        <div class="message-role"></div>
+        <div class="message-content"></div>
+        <div class="message-attachments"></div>
+        <div class="message-metrics" hidden></div>
+      </div>
+    </li>
+  </template>
+
+  <template id="finding-template">
+    <li class="finding" role="button" tabindex="0">
+      <span class="finding-num"></span>
+      <div class="finding-body">
+        <div class="finding-coords"></div>
+        <div class="finding-text"></div>
+        <div class="finding-metrics" hidden></div>
+      </div>
+    </li>
+  </template>
+
+  <nav class="mc-bottom-nav" role="navigation" aria-label="Quick navigation">
+    <button type="button" data-tab="chat" aria-label="Switch to Chat">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Z"/></svg>
+      <span>Chat</span>
+    </button>
+    <button type="button" data-tab="workbench" aria-label="Switch to Workbench">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm0 2h14v9.5l-3-3-4 4-3-3-4 4Zm10.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/></svg>
+      <span>Workbench</span>
+    </button>
+    <button type="button" data-action="home" aria-label="Return to Mission Control">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/></svg>
+      <span>Home</span>
+    </button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
