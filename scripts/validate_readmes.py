@@ -87,7 +87,9 @@ SUMMARY_FILLER_PREFIXES = (
     "the example",
 )
 MARKDOWN_IN_SUMMARY_RE = re.compile(r"[`*_\[\]<>]|!\[")
-PREVIEW_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+PREVIEW_IMAGE_RE = re.compile(
+    r"^[ \t]{0,3}!\[[^\]]*\]\(([^)]+)\)[ \t]*$", re.MULTILINE
+)
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 FENCE_START_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
 PREVIEW_IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
@@ -324,12 +326,6 @@ def validate_install_workflow(
     )
     if uses_bundle and repeated_path in run_without_assignment:
         errors.append("Run must reuse APP_DIR instead of repeating the example path")
-
-    configure = sections.get("Configure", "")
-    if uses_bundle and re.search(r"```ya?ml\b", configure, re.IGNORECASE):
-        errors.append(
-            "Configure must point to the packaged config instead of copying YAML"
-        )
 
     if CONTRIBUTING_URL not in development:
         errors.append("Development From Source must link to CONTRIBUTING.md")

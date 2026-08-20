@@ -228,6 +228,17 @@ def test_readme_contract_rejects_commented_preview(tmp_path: Path) -> None:
     assert any("Preview must contain a Markdown image" in error for error in validate_readme(readme))
 
 
+def test_readme_contract_rejects_inline_code_preview(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        preview="`![Sample preview](../../../portal/assets/examples/classification/sample/image.png)`",
+    )
+
+    assert any("Preview must contain a Markdown image" in error for error in validate_readme(readme))
+
+
 def test_readme_contract_rejects_repeated_bundle_path(tmp_path: Path) -> None:
     readme = write_readme(
         tmp_path,
@@ -239,17 +250,17 @@ def test_readme_contract_rejects_repeated_bundle_path(tmp_path: Path) -> None:
     assert any("reuse APP_DIR" in error for error in validate_readme(readme))
 
 
-def test_readme_contract_rejects_packaged_config_copy(tmp_path: Path) -> None:
+def test_readme_contract_allows_focused_config_override(tmp_path: Path) -> None:
     readme = write_readme(
         tmp_path,
         install=VALID_INSTALL,
         run=VALID_RUN,
-        configure="""Open the packaged config.
+        configure="""Create a short-run override:
 
 ```yaml
-model:
-  path: model.tar.gz
+runtime:
+  frames: 30
 ```""",
     )
 
-    assert any("instead of copying YAML" in error for error in validate_readme(readme))
+    assert validate_readme(readme) == []
