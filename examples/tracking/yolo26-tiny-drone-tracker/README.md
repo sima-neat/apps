@@ -51,20 +51,19 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Install the accepted immutable Model Registry candidate used by this app's CI:
+Download the tested SDK 2.1.2 model artifact:
 
 ```bash
+export MODELZOO_VERSION="2.1.2"
 mkdir -p models
-sima-cli neat install --stg \
-  models/yolo26_tiny_drone@develop:d13a9ed31daa \
-  --install-dir ./models
+cd models
+sima-cli download \
+  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz"
+cd ..
 ```
 
-The command installs
-`models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz`. This immutable staging
-reference tracks the model workflow merged into Models `develop`. Replace it
-here and in `tests/test-scope.yaml` with the production Model Registry reference
-before release.
+The command stores
+`models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz`.
 
 ## Prepare Insight
 
