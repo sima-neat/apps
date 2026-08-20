@@ -276,9 +276,9 @@ class Tier:
 # (Earlier, smaller limits were the pre-passthrough re-encode topology, which ran
 # out of encoder pools far sooner; passthrough removed that and lifted them here.)
 TIERS: list[Tier] = [
-    Tier("2160p", 3840, 2160, "2160p_", 2),
-    Tier("1080p", 1920, 1080, "1080p_", 8),
-    Tier("720p", 1280, 720, "video", 16),
+    Tier("2160p", 3840, 2160, "2160p_", 1),
+    Tier("1080p", 1920, 1080, "1080p_", 3),
+    Tier("720p", 1280, 720, "video", 8),
 ]
 
 FPS = 25

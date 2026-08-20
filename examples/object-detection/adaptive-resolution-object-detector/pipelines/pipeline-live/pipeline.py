@@ -223,7 +223,7 @@ class Tier:
 TIERS: list[Tier] = [
     Tier("2160p", 3840, 2160, "2160p_", 1),
     Tier("1080p", 1920, 1080, "1080p_", 5),
-    Tier("720p", 1280, 720, "video", 8),
+    Tier("720p", 1280, 720, "video", 5),
 ]
 
 FPS = 25
