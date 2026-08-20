@@ -4,8 +4,8 @@ models:
     name: resnet_50
     file: resnet_50_mpk.tar.gz
   depth_anything_v2_vits:
-    source: modelzoo
-    name: depth_anything_v2_vits
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/depth_anything_v2_vits_mpk.tar.gz
     file: depth_anything_v2_vits_mpk.tar.gz
   retinaface_mobilenet25:
     source: url
