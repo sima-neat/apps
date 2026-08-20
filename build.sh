@@ -984,7 +984,8 @@ consumer = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 receipt = artifact["sysroot-version"]
 consumer_base = consumer["platform-version"]
 if not isinstance(receipt, str) or (
-    receipt and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}~pre[0-9]+", receipt)
+    receipt
+    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~pre[0-9]+)?", receipt)
 ):
     raise SystemExit("invalid sysroot-version")
 if receipt and consumer_base != receipt.split("~pre", 1)[0]:
@@ -1000,15 +1001,45 @@ PY
     return 0
   fi
 
-  echo "Updating SDK sysroot to Core's Internals receipt ${receipt}"
-  if ! run_privileged sysroot update "${receipt}"; then
-    echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
-    return 1
+  if [[ "${receipt}" == *"~pre"* ]]; then
+    echo "Updating SDK sysroot to Core's Internals receipt ${receipt}"
+    if ! run_privileged sysroot update "${receipt}"; then
+      echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
+      return 1
+    fi
+    if ! sysroot status; then
+      echo "ERROR: Failed to read SDK sysroot status." >&2
+      return 1
+    fi
+    return 0
   fi
-  if ! sysroot status; then
+
+  local status_output image_platform overlay_state overlay_revision
+  if ! status_output="$(sysroot status)"; then
     echo "ERROR: Failed to read SDK sysroot status." >&2
     return 1
   fi
+  printf '%s\n' "${status_output}"
+  image_platform="$(sed -nE \
+    's/^SDK image platform:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+    <<< "${status_output}" | head -n1)"
+  overlay_state="$(sed -nE \
+    's/^Sysroot overlay state:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+    <<< "${status_output}" | head -n1)"
+  overlay_revision="$(sed -nE \
+    's/^Sysroot overlay revision:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+    <<< "${status_output}" | head -n1)"
+
+  if [[ "${image_platform}" != "${receipt}" ]]; then
+    echo "ERROR: SDK image platform ${image_platform:-unknown} does not match required stable platform ${receipt}." >&2
+    return 1
+  fi
+  if [[ "${overlay_state}" != "inactive" || "${overlay_revision}" != "none" ]]; then
+    echo "ERROR: Stable platform ${receipt} requires the image-default sysroot, but overlay ${overlay_revision:-unknown} is ${overlay_state:-unknown}." >&2
+    echo "ERROR: Recreate the SDK container to remove the prerelease sysroot overlay." >&2
+    return 1
+  fi
+  echo "Using stable SDK sysroot ${image_platform} with no active overlay."
 )
 
 ensure_neat_core() {
