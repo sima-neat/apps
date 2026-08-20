@@ -22,9 +22,10 @@ One source graph owns every RTSP input, encoded-video branch, decoder, admission
 Per stream: RTSP encoded ─┬─> codec passthrough ─> Insight video
                          └─> decode NV12 ─> RealtimeLatestByStream ─> RGB output
 
-Application: latest RGB mailbox per stream ─> full-frame Preproc ROI
-             ─> shared YOLO26 runner ─> person ROI mailbox per stream
-             ─> BlazePose Preproc ROIs ─> shared BlazePose runner
+Application: latest RGB mailbox per stream ─> shared YOLO26 Model graph
+             (Preproc ─> inference ─> BoxDecode) ─> person ROI mailbox per stream
+             ─> BlazePose Preproc ROIs ─> owned EV74 ROI inputs
+             ─> shared BlazePose runner
              ─> 33 image keypoints ─> correlated Insight metadata
 ```
 
@@ -162,7 +163,8 @@ The application retains the source `stream_id`, frame ID, PTS, DTS, duration, an
 - YOLO26 and BlazePose each use one shared model route. Increasing stream count does not create additional model routes.
 - Video uses H.264 or H.265 encoded passthrough. The application does not draw on frames or re-encode them.
 - The current public `VideoConvert` node performs the one NV12-to-RGB conversion on A65 after admission. The RGB frame remains holder-backed in application code; Python passes the `Tensor` directly and C++ maps a non-owning `cv::Mat` view.
-- The public `stages::Preproc(..., rois)` API performs the required packed-image transfer and hardware preprocessing for one full-frame YOLO ROI or the selected BlazePose ROIs. The application does not clone full frames.
+- YOLO26 preprocessing stays inside the shared `Model::graph()` route; the application pushes each correlated RGB frame directly into that runner.
+- The public `stages::Preproc(..., rois)` API preprocesses the smallest crop containing the selected BlazePose ROIs in one batched call. C++ passes a non-owning RGB crop view; Python materializes a packed crop because its binding requires contiguous HWC input. The crop origin is composed into each returned affine before publishing frame-relative keypoints. Full RGB frames are not cloned.
 
 The shutdown summary reports source and detector frames, selected and completed ROIs, both mailbox drop counts, timed-out jobs, metadata FPS, and pose FPS. These are application counters, not node profiling or graph visualization.
 
