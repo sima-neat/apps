@@ -4,7 +4,7 @@
 Scans examples/*/*/README.md files and verifies:
 - Metadata table exists with all required fields
 - Field values match allowed enums (categories, difficulties, languages, statuses)
-- Installed Apps commands and required sections are present
+- Supported bundle or standalone install commands and required sections are present
 
 Exit code 0 on success, 1 if any README is missing or malformed.
 """
@@ -69,6 +69,7 @@ REQUIRED_SECTION_ORDER = (
 )
 
 INSTALL_COMMAND = "sima-cli neat install apps"
+STANDALONE_INSTALL_SCRIPT = "scripts/get-example.sh"
 CONTRIBUTING_URL = "https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md"
 SOURCE_ONLY_COMMANDS = (
     "git clone ",
@@ -119,29 +120,17 @@ def parse_sections(content: str) -> tuple[dict[str, str], list[str]]:
     return {name: "\n".join(lines).strip() for name, lines in sections.items()}, order
 
 
-def validate_installed_workflow(
+def validate_install_workflow(
     *,
     sections: dict[str, str],
     metadata: dict[str, str],
     readme_path: Path,
 ) -> list[str]:
-    """Validate commands that must work from the installed bundle root."""
+    """Validate either the complete bundle or single-example workflow."""
     errors: list[str] = []
     install = sections.get("Install Apps", "")
     run = sections.get("Run", "")
     development = sections.get("Development From Source", "")
-
-    if INSTALL_COMMAND not in {line.strip() for line in install.splitlines()}:
-        errors.append(f"Install Apps must use '{INSTALL_COMMAND}'")
-    if "cd prebuilt-apps" not in install:
-        errors.append("Install Apps must enter the prebuilt-apps directory")
-
-    for command in SOURCE_ONLY_COMMANDS:
-        if command in install or command in run:
-            errors.append(
-                f"Source-only command '{command.strip()}' must not appear in "
-                "Install Apps or Run"
-            )
 
     parts = readme_path.parts
     try:
@@ -150,6 +139,29 @@ def validate_installed_workflow(
         example = parts[examples_idx + 2]
     except (ValueError, IndexError):
         return errors
+
+    install_lines = {line.strip() for line in install.splitlines()}
+    uses_bundle = INSTALL_COMMAND in install_lines
+    uses_standalone = (
+        STANDALONE_INSTALL_SCRIPT in install
+        and f"bash -s -- {example}" in install
+    )
+    if not uses_bundle and not uses_standalone:
+        errors.append(
+            f"Install Apps must use '{INSTALL_COMMAND}' or fetch this example "
+            f"with '{STANDALONE_INSTALL_SCRIPT}'"
+        )
+    if uses_bundle and "cd prebuilt-apps" not in install:
+        errors.append("Bundle installation must enter the prebuilt-apps directory")
+    if uses_standalone and f"cd {example}" not in install:
+        errors.append(f"Standalone installation must enter the {example} directory")
+
+    for command in SOURCE_ONLY_COMMANDS:
+        if command in install or command in run:
+            errors.append(
+                f"Source-only command '{command.strip()}' must not appear in "
+                "Install Apps or Run"
+            )
 
     languages = {
         item.strip()
@@ -249,7 +261,7 @@ def validate_readme(readme_path: Path) -> list[str]:
         )
 
     errors.extend(
-        validate_installed_workflow(
+        validate_install_workflow(
             sections=sections,
             metadata=metadata,
             readme_path=readme_path,
