@@ -8,20 +8,13 @@
 | Difficulty | Intermediate |
 | Tags | superpoint, feature-extraction, video, boxdecode |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | superpoint-feature-extractor |
 | Model | superpoint / modalix_int8_tessellation_mla |
 
 ## Concept
 
-`superpoint-feature-extractor` runs SuperPoint on a video and streams the feature-point overlay
-to Insight. Like the YOLO examples, it feeds BGR image tensors into Core preprocessing. Preproc
-owns resize, BGR-to-grayscale conversion, normalization, and the original/model geometry metadata
-consumed by A65 SuperPoint BoxDecode. BoxDecode applies the inverse Preproc affine to feature
-coordinates, so the app does not duplicate W/H, resize-mode, or coordinate-remap logic.
-
-The application selects the A65V1 numerical profile explicitly. Tensor roles, output dtypes, and
-storage layouts come from the MPK contract rather than being inferred from tensor order or values.
+Finds SuperPoint feature points in a video and streams the annotated video to Insight.
 
 ## Preview
 
@@ -35,7 +28,7 @@ Frame from the included TUM RGB-D `freiburg1_desk` sequence:
   Modalix or DevKit target.
 - Neat Library with SuperPoint BoxDecode support.
 - Insight or another RTP receiver for the annotated output stream.
-- A qualified SuperPoint MPK as described below.
+- The SuperPoint model package installed below.
 
 ## Install Apps
 
@@ -44,15 +37,14 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/feature-extraction/superpoint-feature-extractor
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The [Neat Model Registry](https://github.com/sima-neat/models/issues/24) publishes SuperPoint
-through the staging Vulcan artifact registry. Install the current model-matrix package and select
-the INT8 variant that keeps tessellation inside the MLA:
+Install the SuperPoint model package from the staging [Neat Model Registry](https://github.com/sima-neat/models/issues/24):
 
 ```bash
 mkdir -p models/superpoint
@@ -64,64 +56,16 @@ cp models/superpoint/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz \
   models/superpoint_mpk.tar.gz
 ```
 
-Do not download the model from an ad hoc attachment or copy; the registry package supplies the
-immutable artifact and verifies its published checksum.
-
-The default CI pipeline test uses `modalix_int8_tessellation_mla`, while the accuracy matrix covers
-all four INT8/BF16 and MLA/EV74 tessellation combinations. The INT8 MLA archive was calibrated with
-128 deterministic images (80 COCO val2017, 32 HPatches, and 16 TUM RGB-D), contains one MLA
-program, and has this SHA-256 checksum:
-
-```text
-768f8f2838b335ffa92fd4d2464730b61a4bcdf4190484aac125b7395e271d53
-```
-
-Verify the selected package when reproducing the reference qualification:
-
-```bash
-sha256sum models/superpoint_mpk.tar.gz
-```
-
-The model accepts a normalized 640x480 grayscale input and publishes a 65-channel detector head
-and a 256-channel descriptor head. The registry also provides BF16 and EV74-tessellation variants.
-
-Configure `model.path` after the model is published under a different filename.
+The commands copy the INT8 MLA model to the path used by the packaged config. The model expects 640x480 grayscale input.
 
 ## Configure
 
-Edit `examples/feature-extraction/superpoint-feature-extractor/src/common/config.yaml`:
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `io.input`, and `output.insight.host`. Change the Insight port or channel only if your Insight setup uses different values.
 
-```yaml
-model:
-  path: models/superpoint_mpk.tar.gz
-
-io:
-  input: assets/datasets/tum-rgbd/freiburg1-desk.mp4
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port: 9000
-    channel: 0
-    bitrate_kbps: 1000
-
-runtime:
-  frames: 0
-  timeout_ms: 20000
-```
-
-`runtime.frames: 0` processes the complete video. Any stable input resolution supported by the
-hardware may be used. Core Preproc stretches each frame to the model's 640x480 input and publishes
-the resize geometry; BoxDecode returns source-space feature coordinates for the Insight overlay. A
-mid-stream resolution change is rejected because the model and video-sender graphs are built once
-from the first frame.
-
-Set `output.insight.host` to the host running Insight. The application sends the annotated stream
-as H.264 over RTP/UDP using the configured base port and channel.
+Set `runtime.frames` to `0` to process the full video. The input must keep the same resolution for the whole run.
 
 The included sequence comes from the TUM RGB-D visual-SLAM benchmark. Its camera motion and office
-scene are representative of the repeatable local features SuperPoint is designed to extract. The
-source, attribution, transformation, and CC BY 4.0 license are documented in
+scene provide repeatable local features for SuperPoint to extract. The source, attribution, transformation, and CC BY 4.0 license are documented in
 `assets/datasets/tum-rgbd/LICENSE.md`.
 
 ## Run
@@ -129,17 +73,17 @@ source, attribution, transformation, and CC BY 4.0 license are documented in
 ### C++
 
 ```bash
-./examples/feature-extraction/superpoint-feature-extractor/src/cpp/pre-built/superpoint-feature-extractor \
-  --config examples/feature-extraction/superpoint-feature-extractor/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/superpoint-feature-extractor \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/feature-extraction/superpoint-feature-extractor/src/python/requirements.txt
-python3 examples/feature-extraction/superpoint-feature-extractor/src/python/main.py \
-  --config examples/feature-extraction/superpoint-feature-extractor/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 Both implementations stream the overlay to Insight and print the number of processed frames,

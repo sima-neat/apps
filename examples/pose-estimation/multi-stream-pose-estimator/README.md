@@ -8,13 +8,13 @@
 | Difficulty | Advanced |
 | Tags | pose-estimation, keypoints, rtsp, multistream, insight, yolo26 |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | multi-stream-pose-estimator |
 | Model | yolo26m-pose-int8-b1 |
 
 ## Concept
 
-This example runs a config-driven multi-stream RTSP pose pipeline and publishes video plus 17-keypoint COCO pose metadata for each stream to Insight.
+Estimates 17-point COCO poses in multiple RTSP streams with YOLO26 Pose and sends synchronized video and pose metadata to Insight.
 
 Every stream feeds one shared pose model. Each decoded branch is admitted through a real-time, keep-latest link, so an overloaded stream drops frames instead of building a backlog.
 
@@ -35,6 +35,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/pose-estimation/multi-stream-pose-estimator
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -75,61 +76,34 @@ Insight renders the skeleton from the published `pose-estimation` metadata and h
 
 ## Configure
 
-Edit `examples/pose-estimation/multi-stream-pose-estimator/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
 
-```yaml
-model:
-  path: <model-path>
-
-streams:
-  - <first-rtsp-url>
-  - <second-rtsp-url>
-
-input:
-  codec: h264  # h264/avc or h265/hevc
-  tcp: true
-  max_width: 2560
-  max_height: 1440
-
-inference:
-  frames: 0
-  max_inflight_per_stream: 4
-  max_inflight_total: 16
-  min_score: 0.30
-  max_poses: 50
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port_base: <videoUDP-start-port>
-    metadata_port_base: <metadataUDP-start-port>
-  min_keypoint_visibility: 0.30
-```
+The checked-in inference and keypoint thresholds are ready for a first run. Lower them only if poses or joints you expect are missing.
 
 ## Run
 
 Validate the config without opening streams:
 
 ```bash
-./examples/pose-estimation/multi-stream-pose-estimator/src/cpp/pre-built/multi-stream-pose-estimator \
-  --config examples/pose-estimation/multi-stream-pose-estimator/src/common/config.yaml \
+./${APP_DIR}/src/cpp/pre-built/multi-stream-pose-estimator \
+  --config ${APP_DIR}/src/common/config.yaml \
   --validate-config-only
 ```
 
 ### C++
 
 ```bash
-./examples/pose-estimation/multi-stream-pose-estimator/src/cpp/pre-built/multi-stream-pose-estimator \
-  --config examples/pose-estimation/multi-stream-pose-estimator/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/multi-stream-pose-estimator \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/pose-estimation/multi-stream-pose-estimator/src/python/requirements.txt
-python3 examples/pose-estimation/multi-stream-pose-estimator/src/python/main.py \
-  --config examples/pose-estimation/multi-stream-pose-estimator/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Output Metadata
@@ -137,9 +111,24 @@ python3 examples/pose-estimation/multi-stream-pose-estimator/src/python/main.py 
 Each stream publishes `pose-estimation` metadata. Every pose carries the person box, the person score, and 17 named COCO keypoints:
 
 ```json
-{"poses": [{"id": "pose_1", "label": "person", "confidence": 0.77,
-            "bbox": [163, 403, 130, 315],
-            "keypoints": [{"name": "nose", "x": 238, "y": 421, "confidence": 0.99}]}]}
+{
+  "poses": [
+    {
+      "id": "pose_1",
+      "label": "person",
+      "confidence": 0.77,
+      "bbox": [163, 403, 130, 315],
+      "keypoints": [
+        {
+          "name": "nose",
+          "x": 238,
+          "y": 421,
+          "confidence": 0.99
+        }
+      ]
+    }
+  ]
+}
 ```
 
 Keypoint coordinates are in source-frame pixels, matching the box.
@@ -147,7 +136,7 @@ Keypoint coordinates are in source-frame pixels, matching the box.
 ## Troubleshooting
 
 - Replace all placeholder stream URLs and the Insight host before running.
-- This example supports up to four active streams.
+- The application supports up to four active streams.
 - Set either inflight limit to `-1` to use the Core default.
 - Verify host and UDP port ranges if Insight receives no output.
 - If skeletons look sparse, lower `output.min_keypoint_visibility`; occluded joints are reported with low visibility by design.
