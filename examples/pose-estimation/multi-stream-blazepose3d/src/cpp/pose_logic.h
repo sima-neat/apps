@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -54,6 +55,17 @@ struct Roi {
   int y = 0;
   int width = 0;
   int height = 0;
+};
+
+struct CropPlan {
+  Roi image;
+  Roi roi;
+};
+
+struct BatchCropPlan {
+  Roi image;
+  std::vector<std::size_t> indices;
+  std::vector<Roi> rois;
 };
 
 struct Affine {
@@ -104,6 +116,64 @@ inline Roi square_roi(const Box& box, double scale) {
   const double center_y = (static_cast<double>(box.y1) + box.y2) * 0.5;
   return {round_half_away_from_zero(center_x - static_cast<double>(side) * 0.5),
           round_half_away_from_zero(center_y - static_cast<double>(side) * 0.5), side, side};
+}
+
+inline std::optional<CropPlan> crop_plan(const Roi& roi, int frame_width, int frame_height) {
+  if (frame_width <= 0 || frame_height <= 0 || roi.width <= 0 || roi.height <= 0) {
+    return std::nullopt;
+  }
+  const int64_t left = std::max<int64_t>(0, roi.x);
+  const int64_t top = std::max<int64_t>(0, roi.y);
+  const int64_t right = std::min<int64_t>(frame_width, static_cast<int64_t>(roi.x) + roi.width);
+  const int64_t bottom = std::min<int64_t>(frame_height, static_cast<int64_t>(roi.y) + roi.height);
+  if (right <= left || bottom <= top) {
+    return std::nullopt;
+  }
+
+  const Roi image{static_cast<int>(left), static_cast<int>(top), static_cast<int>(right - left),
+                  static_cast<int>(bottom - top)};
+  return CropPlan{image, {roi.x - image.x, roi.y - image.y, roi.width, roi.height}};
+}
+
+inline std::optional<BatchCropPlan> batch_crop_plan(const std::vector<Roi>& rois, int frame_width,
+                                                    int frame_height) {
+  BatchCropPlan result;
+  bool has_image = false;
+  for (std::size_t index = 0; index < rois.size(); ++index) {
+    const auto crop = crop_plan(rois[index], frame_width, frame_height);
+    if (!crop.has_value()) {
+      continue;
+    }
+    if (!has_image) {
+      result.image = crop->image;
+      has_image = true;
+    } else {
+      const int right =
+          std::max(result.image.x + result.image.width, crop->image.x + crop->image.width);
+      const int bottom =
+          std::max(result.image.y + result.image.height, crop->image.y + crop->image.height);
+      result.image.x = std::min(result.image.x, crop->image.x);
+      result.image.y = std::min(result.image.y, crop->image.y);
+      result.image.width = right - result.image.x;
+      result.image.height = bottom - result.image.y;
+    }
+    result.indices.push_back(index);
+  }
+  if (!has_image) {
+    return std::nullopt;
+  }
+  result.rois.reserve(result.indices.size());
+  for (const std::size_t index : result.indices) {
+    const Roi& roi = rois[index];
+    result.rois.push_back({roi.x - result.image.x, roi.y - result.image.y, roi.width, roi.height});
+  }
+  return result;
+}
+
+inline Affine offset_affine(Affine affine, int x, int y) {
+  affine.m02 += x;
+  affine.m12 += y;
+  return affine;
 }
 
 inline float sigmoid(float value) {

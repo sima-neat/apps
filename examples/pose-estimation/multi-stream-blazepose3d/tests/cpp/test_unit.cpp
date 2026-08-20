@@ -45,12 +45,32 @@ bool test_math_contract() {
   bool ok = expect(roi.x == -10 && roi.y == 10 && roi.width == 60 && roi.height == 60,
                    "ROI is square, centered, scaled, and may extend beyond the frame");
 
+  const auto crop = blazepose_app::crop_plan(roi, 1280, 720);
+  ok &= expect(crop.has_value() && crop->image.x == 0 && crop->image.y == 10 &&
+                   crop->image.width == 50 && crop->image.height == 60,
+               "crop view contains only the in-frame ROI pixels");
+  ok &= expect(crop.has_value() && crop->roi.x == -10 && crop->roi.y == 0 &&
+                   crop->roi.width == 60 && crop->roi.height == 60,
+               "crop-relative ROI preserves out-of-frame padding");
+  ok &= expect(!blazepose_app::crop_plan({1280, 10, 20, 20}, 1280, 720).has_value(),
+               "ROI without frame overlap is rejected");
+  const auto batch =
+      blazepose_app::batch_crop_plan({roi, {1280, 10, 20, 20}, {100, 100, 20, 20}}, 1280, 720);
+  ok &= expect(batch.has_value() && batch->image.x == 0 && batch->image.y == 10 &&
+                   batch->image.width == 120 && batch->image.height == 110,
+               "batch crop is the smallest in-frame window containing every valid ROI");
+  ok &= expect(batch.has_value() && batch->indices == std::vector<std::size_t>({0, 2}) &&
+                   batch->rois[0].x == -10 && batch->rois[0].y == 0 && batch->rois[1].x == 100 &&
+                   batch->rois[1].y == 90,
+               "batch crop keeps source indices and makes every ROI crop-relative");
+
   std::vector<float> raw(39 * 5, 0.0F);
   raw[0] = 4.0F;
   raw[1] = 8.0F;
   raw[3] = 2.0F;
   raw[4] = -2.0F;
-  const blazepose_app::Affine affine{2.0, 0.0, 10.0, 0.0, 3.0, 20.0};
+  const blazepose_app::Affine affine =
+      blazepose_app::offset_affine({2.0, 0.0, 10.0, 0.0, 3.0, 10.0}, 0, 10);
   const auto pose = blazepose_app::decode_pose(raw, affine, box, 2);
   ok &= expect(std::abs(pose.keypoints[0].x - 18.0F) < 0.001F &&
                    std::abs(pose.keypoints[0].y - 44.0F) < 0.001F,

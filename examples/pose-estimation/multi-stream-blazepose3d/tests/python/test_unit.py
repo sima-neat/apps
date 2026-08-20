@@ -95,10 +95,17 @@ def test_duplicate_stream_fields_are_rejected(tmp_path: Path, mutator, message: 
 
 def test_roi_landmark_and_metadata_contract():
     box = {"x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 60.0, "score": 0.9, "class_id": 0}
-    assert main.square_roi(box, 1.5) == (-10, 10, 60, 60)
+    roi = main.square_roi(box, 1.5)
+    assert roi == (-10, 10, 60, 60)
+    assert main.crop_plan(roi, 1280, 720) == ((0, 10, 50, 60), (-10, 0, 60, 60))
+    assert main.crop_plan((1280, 10, 20, 20), 1280, 720) is None
+    assert main.batch_crop_plan(
+        [roi, (1280, 10, 20, 20), (100, 100, 20, 20)], 1280, 720
+    ) == ((0, 10, 120, 110), [(0, (-10, 0, 60, 60)), (2, (100, 90, 20, 20))])
     raw = np.zeros((39, 5), dtype=np.float32)
     raw[0] = [4.0, 8.0, 0.0, 2.0, -2.0]
-    pose = main.decode_pose(raw, (2.0, 0.0, 10.0, 0.0, 3.0, 20.0), box, 2)
+    affine = main.offset_affine((2.0, 0.0, 10.0, 0.0, 3.0, 10.0), 0, 10)
+    pose = main.decode_pose(raw, affine, box, 2)
     assert pose["keypoints"][0]["x"] == pytest.approx(18.0)
     assert pose["keypoints"][0]["y"] == pytest.approx(44.0)
     assert pose["keypoints"][0]["confidence"] == pytest.approx(main.sigmoid(-2.0))
