@@ -88,6 +88,7 @@ SUMMARY_FILLER_PREFIXES = (
 )
 MARKDOWN_IN_SUMMARY_RE = re.compile(r"[`*_\[\]<>]|!\[")
 PREVIEW_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 FENCE_START_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
 PREVIEW_IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 
@@ -201,7 +202,8 @@ def validate_portal_content(
         if binary and binary in summary.lower():
             errors.append("Concept summary must not include the executable name")
 
-    preview = strip_fenced_code(sections.get("Preview", ""))
+    preview = HTML_COMMENT_RE.sub("", sections.get("Preview", ""))
+    preview = strip_fenced_code(preview)
     match = PREVIEW_IMAGE_RE.search(preview)
     if not match:
         errors.append("Preview must contain a Markdown image")

@@ -215,6 +215,19 @@ def test_readme_contract_rejects_fenced_preview(tmp_path: Path) -> None:
     assert any("Preview must contain a Markdown image" in error for error in validate_readme(readme))
 
 
+def test_readme_contract_rejects_commented_preview(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        preview="""<!--
+![Sample preview](../../../portal/assets/examples/classification/sample/image.png)
+-->""",
+    )
+
+    assert any("Preview must contain a Markdown image" in error for error in validate_readme(readme))
+
+
 def test_readme_contract_rejects_repeated_bundle_path(tmp_path: Path) -> None:
     readme = write_readme(
         tmp_path,
