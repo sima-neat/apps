@@ -147,8 +147,10 @@ def apply_surgery(model: onnx.ModelProto) -> tuple[onnx.ModelProto, int]:
     for vi in list(g.value_info) + list(g.input) + list(g.output):
         try:
             rank_of[vi.name] = len(vi.type.tensor_type.shape.dim)
-        except Exception:
-            pass
+        except (AttributeError, TypeError):
+            # Some ValueInfoProto entries may not carry complete type/shape info.
+            # Leave rank unset here; downstream code uses a safe default rank.
+            continue
 
     new_nodes: list = []
     new_inits: list = list(g.initializer)
