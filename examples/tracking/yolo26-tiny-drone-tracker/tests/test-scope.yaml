@@ -2,8 +2,8 @@ models:
   yolo26-tiny-drone-int8-qat-mla-tess:
     source: model-registry
     name: yolo26_tiny_drone
-    ref: feat/yolo26-p2-tiny-drone-qat
-    spec: c54a3d12c52b
+    ref: develop
+    spec: d13a9ed31daa
     file: yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
 unit:
   python: true

@@ -56,14 +56,15 @@ Install the accepted immutable Model Registry candidate used by this app's CI:
 ```bash
 mkdir -p models
 sima-cli neat install --stg \
-  models/yolo26_tiny_drone@feat/yolo26-p2-tiny-drone-qat:c54a3d12c52b \
+  models/yolo26_tiny_drone@develop:d13a9ed31daa \
   --install-dir ./models
 ```
 
 The command installs
-`models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz`. The staging reference
-is temporary: it must be replaced here and in `tests/test-scope.yaml` by the
-production Model Registry reference before release.
+`models/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz`. This immutable staging
+reference tracks the model workflow merged into Models `develop`. Replace it
+here and in `tests/test-scope.yaml` with the production Model Registry reference
+before release.
 
 ## Prepare Insight
 
