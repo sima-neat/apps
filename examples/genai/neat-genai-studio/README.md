@@ -7,73 +7,22 @@
 | Difficulty | Advanced |
 | Tags | genai, vlm, asr, tts, japanese, multilingual, rag, model-switching, huggingface, markdown, openai-compatible |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | neat-genai-studio |
 | Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-GPTQ-a16w4) + whisper-small-a16w8 |
 
 ## Concept
-Neat GenAI Studio is an immersive multimodal assistant and model-management
-workbench. It hosts SiMa-supported GenAI models through Neat's
-OpenAI-compatible server and drives them from a polished Flask UI that adds:
+Runs supported language and vision-language models on a Modalix device through a web interface for chat, image analysis, model setup, and diagnostics.
 
-- **Switch LLMs/VLMs on the fly** — pick any compatible model from an on-disk
-  catalog and it loads at runtime, with no restart. Only **one chat/VLM model is
-  resident at a time**: loading a new one clears all other chat/VLM models (the
-  ASR model is always kept), so the MLA holds just the active model. The UI is
-  decoupled from the models: the server and UI **start with no model resident**,
-  and you load one on demand (or download one first). `run.sh` also puts the MLA
-  in a clean slate on launch by stopping any stale model processes from a
-  previous run.
-- **Download compatible models from Hugging Face** — when the board is online,
-  search the `simaai` (official) and `TDoSiMa` (community) model accounts and
-  download new models straight into the studio, then load them like any other.
-- **Live Markdown rendering** — assistant replies render Markdown (headings,
-  lists, tables, bold, links) with syntax-highlighted code blocks and
-  copy-to-clipboard buttons, instead of raw text.
-- **Font customization** — choose a UI font family and size (or type any locally
-  installed family); the choice persists in the browser.
-- **Multilingual text-to-speech** — a small multi-engine router speaks replies
-  in the selected language, including **Japanese** through a dedicated Piper
-  voice or the optional piper-plus multilingual engine. See
-  [Text-to-speech](#text-to-speech-voices--languages) below.
-- **Board camera input** — besides the browser webcam, the backend can grab
-  stills from a camera plugged into the devkit board itself (`/dev/video*`):
-  the **⌾** button on the camera dock and the **Board Camera** button in the
-  full-screen Vision view fetch a frame via `GET /board-camera/snapshot`
-  (`GET /board-camera/devices` lists the nodes; `?device=` or
-  `NEAT_CAMERA_DEVICE` picks one). API users can instead send
-  `useBoardCamera=true` (optionally `boardCameraDevice`) with a `/upload` chat
-  request to attach a fresh board frame server-side. Uses the same capture
-  fallbacks as the CLI's `/camera` mode (`ffmpeg`, `fswebcam`,
-  `libcamera`/`rpicam`, OpenCV).
-- **Drag & drop images** — drop an image anywhere on the page to attach it to
-  the chat (or onto the full-screen Vision view to ask about it).
-- Image/text chat, audio transcription (ASR), RAG, system-prompt control, chat
-  history, voice selection, and abort.
+The Studio starts without a chat model loaded. From the web interface you can:
 
-All UI assets — the Markdown renderer, sanitizer, syntax highlighter, and the
-bundled fonts — are served locally, so the studio runs **fully offline** on the
-board. Hugging Face is used only when you explicitly search or download.
+- find compatible models already on the device
+- download models from the supported Hugging Face accounts when the device is online
+- load one language or vision-language model at a time without restarting the Studio
+- chat with text, uploaded images, a browser camera, or a camera attached to the board
+- transcribe speech with Whisper, speak replies with the installed voices, and search local documents with RAG
 
-The demo runs as two processes. `src/python/server/main.py` reads the `server`
-section of the selected config, starts the Neat OpenAI-compatible server, and
-also runs a small **model-management control API** (localhost only) that loads
-and unloads models on the running server. `src/python/ui/main.py` reads the
-`app` section and starts the Flask UI, which proxies to that control API.
-`src/common/config.yaml` is the tracked template; `./setup.sh` writes the
-runnable local config to `config.local.yaml`.
-
-Runtime ownership is split deliberately:
-
-- Neat hosts the OpenAI-compatible `/v1/chat/completions` endpoint for text and
-  image chat, and `/v1/audio/transcriptions` for ASR.
-- The model-management control API (`127.0.0.1:9997`) scans the model catalog
-  and loads/unloads models at runtime via `pyneat`'s `add_model` / `remove_model`.
-- The Flask app owns UI state, Markdown rendering, font settings, system prompt,
-  chat history, abort, uploaded images, microphone recordings, Piper TTS, and the
-  Hugging Face search/download (it writes new models into the catalog directory).
-- RAG is app-side and optional, using the local VectorDB service and the active
-  chat model.
+The interface and its fonts and JavaScript libraries run locally. Internet access is needed only when you search for or download a model from Hugging Face.
 
 ## Preview
 Neat GenAI Studio UI:
@@ -120,9 +69,9 @@ shell), then run `neat-ai`, `neat-ai --cli`, `neat-ai stop`, etc.
 > the first launch** if it hasn't completed. Opt out with `AUTO_SETUP=0` (it then
 > errors with a hint instead of installing).
 
-**No chat/VLM model is downloaded by default.** The UI starts decoupled with no
-model resident — download one from the in-UI Hugging Face panel (or seed the
-catalog at install time, below). By default, `setup.sh` downloads only:
+**No chat/VLM model is downloaded by default.** The UI starts with no
+chat model loaded. Download one from the Hugging Face panel or seed the
+catalog during installation, as shown below. By default, `setup.sh` downloads only:
 
 - `simaai/whisper-small-a16w8` (ASR)
 - `thenlper/gte-small` (RAG embedding)
@@ -145,23 +94,26 @@ CATALOG_MODEL_REPOS="simaai/<a-chat-or-vlm-repo> simaai/<another-repo>" ./setup.
 
 Other useful environment variables:
 
-- `CHAT_MODEL_REPO` — optionally download **and preload** one chat/VLM model at
+- `CHAT_MODEL_REPO`: optionally download **and preload** one chat/VLM model at
   startup (empty by default, i.e. none).
-- `MAX_RESIDENT_CHAT_MODELS` — kept for advanced use; by default only one
+- `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
   chat/VLM model is resident and loading a new one clears the others.
-- `ALLOW_HUB_DOWNLOAD` — `true`/`false` to enable/disable in-UI Hugging Face
+- `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
   downloads (default `true`).
-- `TTS_LANGUAGES` — comma- or space-separated catalogued server-TTS languages to
+- `TTS_LANGUAGES`: comma- or space-separated catalogued server-TTS languages to
   install. Interactive setup prompts when this is unset; non-interactive setup
   defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
-- `TTS_OPTIONAL_VOICES` — optional voice ids to install, for example
+- `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
   `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
 The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set.
 The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is
 set. RAG is enabled by default and uses `src/python/ui/milvus.db`.
 
-### Configure the model catalog
+## Configure
+
+### Model catalog
+
 After install, edit `config.local.yaml` to change the catalog, memory budget, or
 the models loaded at startup:
 
@@ -184,7 +136,7 @@ server:
 
 Any compatible model directory (one containing `devkit/` with `vlm_config.json`
 or `whisper_config.json`) placed under `catalog_dir` is discovered automatically
-and can be loaded from the UI — no need to list it under `chat:` or restart.
+and can be loaded from the UI. You do not need to list it under `chat:` or restart.
 
 Both `chat:` and `asr:` are **optional**. Use `chat: []` (and omit `asr:`) to
 start the server and UI with no model resident; the UI comes up and prompts you
@@ -201,8 +153,8 @@ Start both the Neat OpenAI-compatible server (with the control API) and the Flas
 icon; the **Models** tab lists your downloaded models (search, load/unload,
 delete) and the **Add Model** tab lists models available to download from Hugging
 Face with their download size and the NVMe free space remaining. When you're done,
-either `Ctrl+C` the terminal or use the **⏻ Shutdown** button in the
-sidebar — it stops both the UI and the model server gracefully (same as
+either press `Ctrl+C` in the terminal or use the **⏻ Shutdown** button in the
+sidebar. Both methods stop the UI and model server cleanly, just like
 `./run.sh stop`).
 
 ### Terminal chat (CLI)
@@ -213,7 +165,7 @@ as usual) and drops you into an interactive chat instead of the web UI:
 ./run.sh --cli    # or `neat-ai --cli`
 ```
 
-On an interactive start it first asks what you want to do — **Chat with a model**,
+On an interactive start it first asks what you want to do: **Chat with a model**,
 **Benchmark model(s)**, **Download a model** (when online), or **go straight to the
 prompt**. Skip the menu by jumping straight to a mode:
 
@@ -228,24 +180,24 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 
 ```text
 /models          list catalog models (● loaded, ○ not)
-/load [name]     load a model — no name pops an arrow-key picker (↑/↓, Enter)
-/download        browse Hugging Face — pick one, several, or all models to
+/load [name]     load a model: no name pops an arrow-key picker (↑/↓, Enter)
+/download        browse Hugging Face: pick one, several, or all models to
                  download (Space to multi-select, 'a' for all), then load one
-/unload [name]   unload a model — no name unloads the loaded LLM/VLM
-/delete [name]   delete a model's weights from disk — no name pops a picker;
+/unload [name]   unload a model: no name unloads the loaded LLM/VLM
+/delete [name]   delete a model's weights from disk: no name pops a picker;
                  asks to confirm (irreversible; /rm, /remove)
 /image [path]    attach an image to the next message (VLM only; no path prompts)
-/camera [device] arm the board camera — every message then auto-sends a fresh
-                 frame to the VLM (/camera off to stop; /dev/video16 — /cam, /webcam)
-/benchmark …     TTFT/TPS benchmark — see the Benchmark section below
+/camera [device] arm the board camera: every message then auto-sends a fresh
+                 frame to the VLM (/camera off to stop; /dev/video16: /cam, /webcam)
+/benchmark …     TTFT/TPS benchmark: see the Benchmark section below
 /system <text>   set a system prompt (empty clears it)
 /new             clear the conversation
 /export [file]   save this chat to a .log file (default neat-chat-<time>.log)
 /reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
-/rag [filter]    inspect the RAG database — list chunks (/docs; filter narrows)
+/rag [filter]    inspect the RAG database: list chunks (/docs; filter narrows)
 /rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
-/rag search <q>  semantic search — show top matches without asking the model
+/rag search <q>  semantic search: show top matches without asking the model
 /rag db [path]   show, or switch to, which milvus.db is served ('default' reverts)
 /rag status      show the RAG toggle, active database and service state
 /rag reset|clear rebuild from the default document, or clear all RAG documents
@@ -261,9 +213,9 @@ previous prompts (history persists across sessions in `~/.neat_ai_history`).
 
 `/camera <index>` **arms** a camera attached **to the board** (the CLI runs on
 the board, unlike the web UI, which uses the browser's camera). Once armed, every
-message auto-grabs a fresh frame and sends it to the VLM — `/camera off` disarms,
-and a `📷` in the prompt shows it's live. It shells out to whatever capture tool
-the board has — `ffmpeg`, `fswebcam`, or `libcamera`/`rpicam` — so install one if
+message auto-grabs a fresh frame and sends it to the VLM: `/camera off` disarms,
+and a `📷` in the prompt shows it's live. It uses any available capture tool,
+including `ffmpeg`, `fswebcam`, or `libcamera`/`rpicam`. Install one if
 the board has none, or set `NEAT_CAMERA_DEVICE` to the right `/dev/video*` node.
 An explicit `/image` still takes precedence for that one message.
 
@@ -333,8 +285,7 @@ curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
 ```
 
 ### Switch models on the fly
-In the UI's **Settings → Models** tab, your downloaded models are shown in a
-searchable list (labelled *Downloaded — on this board*). Loaded models are marked
+The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
 to load it at runtime and unload all other chat/VLM models (whisper is always
 kept), so the MLA holds just the active model. A **Load status** panel pins to the
@@ -381,22 +332,19 @@ Ctrl+C stops the current run. (Accuracy tasks like hellaswag/piqa still need the
 host `llima-benchmark` CLI.)
 
 ### SiMaSentry Solutions (Med / Safe / Sec demo harnesses)
-Three vertical AI harnesses — **SiMaSentry-Med** (clinical VLM chat + diagnostic
-imaging workbench), **SiMaSentry-Safe** (PPE & hazard inspection with live camera
-zones) and **SiMaSentry-Sec** (SOC threat analysis + change detection) — are
-vendored into the Studio and open from the **shield icon** in the header.
+The Studio includes three AI harnesses. **SiMaSentry-Med** provides clinical VLM chat and diagnostic imaging tools. **SiMaSentry-Safe** handles PPE and hazard inspection with live camera zones. **SiMaSentry-Sec** supports SOC threat analysis and change detection. Open them from the shield icon in the header.
 
 - Picking a card launches the harness full-screen, **auto-wired to the currently
   loaded model** through a same-origin `/v1/chat/completions` proxy (the Studio
   page is HTTPS while the model server is HTTP, so the proxy avoids
   mixed-content/CORS blocks).
-- The harnesses are **vision-centric** — load a VLM for the image features. A
+- Load a VLM to use the image features. A
   badge and confirmation warn when the loaded model has no vision support.
 - The harness's ⌂ Home action returns to the launcher grid; ✕ (or Esc) closes it.
 - The suite also works standalone at `https://<board>:5000/solutions/` (the
   SiMaSentry Mission Control portal), handy for kiosk setups.
 - Safe's PPE Inspector uses the browser camera and all three support voice
-  in/out — grant camera/microphone permission when prompted (HTTPS required,
+  in/out: grant camera/microphone permission when prompted (HTTPS required,
   which the Studio already serves).
 
 ### Markdown & fonts
@@ -415,7 +363,7 @@ selector in Settings.
 | --- | --- | --- | --- |
 | **piper-plus** | MIT runtime; model-specific terms | onnxruntime (CPU) | Japanese, English, Chinese, Spanish, French, Portuguese |
 | **piper-tts** | GPL-3.0 runtime; model-specific terms | onnxruntime (CPU) | English, Chinese, Spanish, French, Portuguese, German, Italian, Norwegian, Vietnamese |
-| **Browser** (Web Speech API) | — | client-side (your browser / OS) | any language your device has a voice for |
+| **Browser** (Web Speech API) | None | client-side (your browser / OS) | any language your device has a voice for |
 
 - **Japanese** defaults to Piper Plus CSS10. CSS10 is declared public domain;
   the multilingual base model is CC BY 4.0 and its attribution is preserved in
@@ -428,10 +376,10 @@ selector in Settings.
   multilingual alternative.
 - **Korean has no server-side TTS model.** Use Browser TTS when the client has a
   Korean voice; otherwise replies remain text-only.
-- **Voice engine** — a **Settings → Voice engine** dropdown chooses which engine
+- **Voice engine**: a **Settings → Voice engine** dropdown chooses which engine
   is preferred for languages more than one can speak (piper-plus or piper-tts).
   Languages only one engine supports are unaffected.
-- **Browser** — selecting the **Browser** engine speaks replies on the client with
+- **Browser**: selecting the **Browser** engine speaks replies on the client with
   the Web Speech API instead of synthesizing on the board (no server compute). The
   server still cleans each sentence (Markdown/LaTeX stripped), so the browser
   utters clean text; pick a device voice under **Settings → Browser voice**. It
@@ -506,7 +454,7 @@ src/python/ui/milvus.meta.json
 ```
 
 ### Inspect the RAG database
-See exactly what has been ingested — the source, chunk count, embedding model,
+See exactly what has been ingested: the source, chunk count, embedding model,
 and every chunk (header breadcrumb + text):
 
 - **Web UI**: **Settings → Knowledge (RAG) → Inspect RAG DB** opens a browser with
@@ -514,27 +462,27 @@ and every chunk (header breadcrumb + text):
 - **CLI**: `/rag` lists the chunks, `/rag <filter>` narrows by a substring
   (alias `/docs`).
 
-The UI reads through the running VectorDB service (which owns the DB file); the
-CLI reads the service if it's up, otherwise the `milvus.db` file directly — so the
-single-writer database is never opened twice.
+The UI reads through the running VectorDB service, which owns the DB file. The
+CLI uses that service when it is available. Otherwise, it reads `milvus.db`
+directly. This prevents the database from being opened twice for writing.
 
 ### RAG-augmented chat (CLI)
 The web UI has a **Search RAG Database** toggle; the CLI has the same, plus a way
 to switch which database it searches:
 
-- `/rag on` / `/rag off` — when on, each prompt is first used to retrieve the top
+- `/rag on` / `/rag off`: when on, each prompt is first used to retrieve the top
   passages from the database, which are prepended to that turn as context (your
   chat history keeps the clean prompt, so context isn't re-fed every turn).
-- `/rag search <query>` — a one-off semantic search that prints the top matches
+- `/rag search <query>`: a one-off semantic search that prints the top matches
   without asking the model.
-- `/rag db <path>` — point the CLI at a different `milvus.db` (`/rag db default`
+- `/rag db <path>`: point the CLI at a different `milvus.db` (`/rag db default`
   reverts). Inspection, search and augmentation then all use that file.
-- `/rag status` — show the toggle, the active database and the service state.
+- `/rag status`: show the toggle, the active database and the service state.
 
 RAG needs the VectorDB service (semantic search). In CLI mode the studio's web
 service usually isn't running, so the CLI **starts its own** worker on first use
-(loading the embedding model takes a moment) and stops it on exit. If the studio
-*is* running, the CLI shares its service instead of starting a second one — and
+(loading the embedding model takes a moment) and stops it on exit. If the Studio
+is running, the CLI shares its service instead of starting a second one, and
 `/rag status` shows which database that shared service actually serves (a pending
 `/rag db` override only takes effect once the running service stops).
 

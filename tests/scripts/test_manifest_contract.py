@@ -614,7 +614,11 @@ def _write_fake_sysroot(tmp_path: Path) -> dict[str, str]:
     bin_dir.mkdir(exist_ok=True)
     sdk_release = tmp_path / "sdk-release"
     sdk_release.write_text(
-        "SDK Version = 2.0.0\neLXr Version = 12.9.0\n", encoding="utf-8"
+        "SDK Version = 2.0.0\n"
+        "eLXr Version = 12.9.0\n"
+        "Platform Base = 2.0.0\n"
+        "Platform Version = 2.0.0\n",
+        encoding="utf-8",
     )
     id_path = bin_dir / "id"
     id_path.write_text(
@@ -639,7 +643,13 @@ def _write_fake_sysroot(tmp_path: Path) -> dict[str, str]:
             fi
             case "${1:-}" in
               update) exit "${NEAT_APPS_TEST_SYSROOT_UPDATE_STATUS:-0}" ;;
-              status) exit "${NEAT_APPS_TEST_SYSROOT_STATUS_STATUS:-0}" ;;
+              status)
+                printf 'SDK image platform:       %s\n' "${NEAT_APPS_TEST_SYSROOT_IMAGE_PLATFORM:-2.0.0}"
+                printf 'Platform Base:            %s\n' "${NEAT_APPS_TEST_SYSROOT_PLATFORM_BASE:-2.0.0}"
+                printf 'Sysroot overlay state:    %s\n' "${NEAT_APPS_TEST_SYSROOT_OVERLAY_STATE:-inactive}"
+                printf 'Sysroot overlay revision: %s\n' "${NEAT_APPS_TEST_SYSROOT_OVERLAY_REVISION:-none}"
+                exit "${NEAT_APPS_TEST_SYSROOT_STATUS_STATUS:-0}"
+                ;;
             esac
             """
         ),
@@ -1040,6 +1050,58 @@ def test_vulcan_sysroot_sync_accepts_empty_receipt(tmp_path):
     assert "Apps is using the existing SDK sysroot." in proc.stdout
 
 
+def test_vulcan_sysroot_sync_accepts_stable_receipt_without_overlay(tmp_path):
+    proc = _run_build(
+        tmp_path,
+        args=["--only-install-neat-core"],
+        env=_sysroot_sync_env(
+            tmp_path, manifest_text='{"sysroot-version":"2.0.0"}\n'
+        ),
+    )
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (tmp_path / "events.log").read_text(encoding="utf-8").splitlines() == [
+        "sima-cli:neat install --env production -t minimal --json "
+        "core@scratch-core-for-test:scratchsha1",
+        "sysroot:status",
+        "sima-cli:neat install --env production -d . -t minimal "
+        "core@scratch-core-for-test:scratchsha1",
+    ]
+    assert "Using stable SDK sysroot 2.0.0 with no active overlay." in proc.stdout
+
+
+def test_vulcan_sysroot_sync_rejects_stable_receipt_on_wrong_image(tmp_path):
+    env = _sysroot_sync_env(
+        tmp_path, manifest_text='{"sysroot-version":"2.0.0"}\n'
+    )
+    env["NEAT_APPS_TEST_SYSROOT_IMAGE_PLATFORM"] = "2.0.0~pre9999"
+
+    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+
+    assert proc.returncode != 0
+    assert "does not match required stable platform 2.0.0" in proc.stderr
+    assert (tmp_path / "sysroot.log").read_text(encoding="utf-8").splitlines() == [
+        "status"
+    ]
+
+
+def test_vulcan_sysroot_sync_rejects_active_overlay_for_stable_receipt(tmp_path):
+    env = _sysroot_sync_env(
+        tmp_path, manifest_text='{"sysroot-version":"2.0.0"}\n'
+    )
+    env["NEAT_APPS_TEST_SYSROOT_OVERLAY_STATE"] = "active"
+    env["NEAT_APPS_TEST_SYSROOT_OVERLAY_REVISION"] = "2.0.0~pre9999"
+
+    proc = _run_build(tmp_path, args=["--only-install-neat-core"], env=env)
+
+    assert proc.returncode != 0
+    assert "overlay 2.0.0~pre9999 is active" in proc.stderr
+    assert "Recreate the SDK container" in proc.stderr
+    assert (tmp_path / "sysroot.log").read_text(encoding="utf-8").splitlines() == [
+        "status"
+    ]
+
+
 def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
     env = _sysroot_sync_env(tmp_path)
     _write_fake_neat_json(
@@ -1069,6 +1131,7 @@ def test_vulcan_sysroot_sync_runs_before_installed_core_shortcut(tmp_path):
         '{"sysroot-version":"latest"}',
         '{"sysroot-version":"2.0.0~pre9999; touch /tmp/nope"}',
         '{"sysroot-version":"2.0.0~pre9999\\nstatus"}',
+        '{"sysroot-version":"2.0.1"}',
         '{"sysroot-version":"2.0.1~pre9999"}',
     ],
 )

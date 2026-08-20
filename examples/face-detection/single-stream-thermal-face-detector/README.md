@@ -7,61 +7,29 @@
 | Difficulty | Intermediate |
 | Tags | face-detection, keypoints, yolov5s-face, thermal, rtsp, insight |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | single-stream-thermal-face-detector |
 | Model | yolov5s_face_raw_split |
 
 ## Concept
-Single-camera RTSP face detection pipeline using yolov5s-face, rendered live in a
-[neat-insight](https://developer.sima.ai/software/tools/insight/) viewer. The app
-decodes an RTSP stream, runs inference on the MLA, and publishes results to
-Insight over UDP:
+Detects faces and five facial landmarks in a live thermal RTSP stream with YOLOv5s-Face, then sends the overlay to Insight.
+
+The pipeline keeps the video and landmarks on the same frame:
 
 ```
 RTSP decode (NV12) --> branch --> video_sender (H264 RTP/UDP -> Insight)
                             \--> model (raw split heads) --> detections
 ```
 
-For each frame the app publishes a **pose-estimation** overlay carrying the 5
-named facial landmarks (`eye_l`, `eye_r`, `nose_tip`, `mouth_l`, `mouth_r`),
-which the viewer draws as labeled dots.
+Each frame sends one `pose-estimation` message with the left eye, right eye, nose tip, and both mouth corners. Insight draws them as labeled dots. The application sends one metadata type because Insight shows only one type per channel at a time.
 
-Two Insight viewer behaviors shape this choice:
-- The viewer renders **one metadata type per channel at a time** — it clears the
-  canvas and draws only the most recent message's type. Sending both
-  `object-detection` and `pose-estimation` makes them overwrite each other, so
-  the pipeline sends a single type.
-- The pose overlay joins keypoints whose names match a **COCO body skeleton**
-  pair (`nose`–`left_eye`, `nose`–`right_eye`, …). The landmark names above
-  deliberately avoid those joint names, so no skeleton lines are drawn across the
-  face.
-
-To show boxes instead, send `object-detection` with `{"objects":[{"id","label",
-"confidence","bbox":[x,y,w,h]}]}` from `send_metadata` in place of the pose
-payload.
-
-Unlike the BBOX-emitting detectors in this repo (yolo26m, yolov8n), yolov5s-face
-has a split-head topology with paired box (18-channel) and landmark (30-channel)
-outputs at three pyramid levels. The model archive is compiled to emit those six
-raw FP32 heads directly:
-
-- `Model` is loaded with an intent-based preprocess (`preprocess.kind = Image`,
-  `color_convert.input_format = NV12`, `preset = COCO_YOLO`). The Neat route
-  planner attaches the model's on-device CVU (EV74) preprocess, which converts
-  NV12->RGB, letterboxes the frame to the 800x800 canvas, normalizes `/255`,
-  quantizes to INT8, and tessellates for the MLA.
-- `decode_type` is left `Unspecified`, so no fused `SimaBoxDecode` runs. The NEAT
-  BBOX wire format carries no landmark slots, so the box + 5-landmark decode runs
-  in user space on the host (APU). The C++ and Python decoders implement the same
-  math and drive the same on-device graph.
-- The final graph pins post-MLA detess/dequant to EV74 so temporary pressure on
-  its fixed output pool applies backpressure to this realtime zero-copy graph.
+YOLOv5s-Face returns raw box and landmark outputs. The C++ and Python applications decode those outputs with the same math before sending the five points to Insight.
 
 ## Preview
 ![Thermal face detector reference preview](../../../portal/assets/examples/face-detection/single-stream-thermal-face-detector/image.png)
 
 The reference visualization pairs a thermal stream with its visible-light
-source and shows face, eye, and mouth regions. This example currently publishes
+source and shows face, eye, and mouth regions. The application publishes
 the five facial landmarks to Insight as labeled dots; it does not publish the
 reference visualization's boxes.
 
@@ -81,6 +49,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/face-detection/single-stream-thermal-face-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -142,53 +111,24 @@ assume the defaults:
 Keep video and metadata on the same channel (0).
 
 ## Configure
-Edit `examples/face-detection/single-stream-thermal-face-detector/src/common/config.yaml`.
 
-```yaml
-model:
-  path: models/yolov5s_face_raw_split_mpk.tar.gz
-  labels: examples/face-detection/single-stream-thermal-face-detector/src/common/face_label.txt
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `source.rtsp_url`, and `output.insight.host`. If Insight uses nondefault ports, also set the video and metadata ports reported by `neat --json`.
 
-source:
-  rtsp_url: rtsp://<insight-host-ip>:<rtsp-port>/src0   # RTSP source to detect on.
-  tcp: true
-  latency_ms: 100
-
-inference:
-  frames: 0                  # 0 = run continuously.
-  min_score: 0.25
-  nms_iou: 0.45
-  max_detections: 50
-
-runtime:
-  profile: false
-  profile_interval: 100
-
-output:
-  insight:
-    host: <insight-host-ip>  # Host running the Insight receiver/viewer.
-    video_port: 9000         # UDP video base port (add channel).
-    metadata_port: 9100      # UDP metadata base port (add channel).
-```
-
-When Insight was started with non-default host ports (check `neat --json`), set
-`source.rtsp_url` to the mapped `rtsp.tcp` port, `output.insight.host` to the SDK
-host IP, and `video_port` / `metadata_port` to the mapped `videoUDP` / `metadataUDP`
-base ports. Keep video and metadata on the same channel (0).
+Keep video and metadata on the same Insight channel. The checked-in thresholds and runtime settings are ready to use for a first run.
 
 ## Run
 ### C++
 ```bash
-./examples/face-detection/single-stream-thermal-face-detector/src/cpp/pre-built/single-stream-thermal-face-detector \
-  --config examples/face-detection/single-stream-thermal-face-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/single-stream-thermal-face-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/face-detection/single-stream-thermal-face-detector/src/python/requirements.txt
-python3 examples/face-detection/single-stream-thermal-face-detector/src/python/main.py \
-  --config examples/face-detection/single-stream-thermal-face-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 Open the Insight video viewer for the channel (e.g. `/api/viewer-url?src=0`) to

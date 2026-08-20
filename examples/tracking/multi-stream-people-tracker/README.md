@@ -8,13 +8,13 @@
 | Difficulty | Advanced |
 | Tags | object-detection, yolo26, rtsp, multistream, insight, people-tracking |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | multi-stream-people-tracker |
 | Model | yolo26m-det-int8-b1 |
 
 ## Concept
 
-Track people across multiple RTSP inputs with mixed-resolution support. The pipeline filters detections to the configured person class, assigns stable IDs per stream, and publishes live video and metadata to Insight.
+Tracks people across multiple RTSP streams with YOLO26, assigns a stable ID to each person, and sends live video and tracking metadata to Insight.
 
 ## Preview
 
@@ -33,6 +33,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/tracking/multi-stream-people-tracker
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -69,51 +70,26 @@ In the Insight Web UI, start the required streams and copy their RTSP URLs into 
 
 ## Configure
 
-Edit `examples/tracking/multi-stream-people-tracker/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
 
-```yaml
-model:
-  path: <model-path>
-
-streams:
-  - <first-rtsp-url>
-  - <second-rtsp-url>
-
-input:
-  codec: h264  # h264/avc or h265/hevc
-
-inference:
-  frames: 0
-  max_inflight_per_stream: 4
-  max_inflight_total: 16
-  min_score: 0.30
-
-tracking:
-  max_missing_frames: 15
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port_base: <videoUDP-start-port>
-    metadata_port_base: <metadataUDP-start-port>
-```
+The checked-in inference and tracking values are ready for a first run. Change `tracking.max_missing_frames` only if tracks disappear too quickly or linger too long.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/tracking/multi-stream-people-tracker/src/cpp/pre-built/multi-stream-people-tracker \
-  --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/multi-stream-people-tracker \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/tracking/multi-stream-people-tracker/src/python/requirements.txt
-python3 examples/tracking/multi-stream-people-tracker/src/python/main.py \
-  --config examples/tracking/multi-stream-people-tracker/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

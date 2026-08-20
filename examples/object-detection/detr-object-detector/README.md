@@ -8,15 +8,15 @@
 | Difficulty | Intermediate |
 | Tags | detr, object-detection, folder-input, coco |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | detr-object-detector |
 | Model | detr_resnet50_modified_class_embed_bbox_embed |
 
 ## Concept
 
-This example runs folder-based object detection with a compiled DETR model. Each image is resized with preserved aspect ratio, normalized, inferred, and decoded into object boxes and class scores.
+Detects objects in a folder of images with DETR and saves annotated images with class labels and confidence scores.
 
-The model emits classification logits and normalized boxes for a fixed set of queries. The example applies softmax to the logits, sigmoid to the boxes, filters by confidence, optionally keeps only the COCO `person` class, maps detections to the original image, and writes annotated output.
+The model returns class scores and normalized boxes for a fixed set of queries. The application filters weak detections, can keep only the COCO `person` class, maps each box to the original image, and writes the annotated result.
 
 ## Preview
 
@@ -33,6 +33,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/detr-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -57,37 +58,24 @@ Set `model.path` in the config to the downloaded package.
 
 ## Configure
 
-Edit `examples/object-detection/detr-object-detector/src/common/config.yaml`.
-
-```yaml
-model:
-  path: <model-path>
-
-io:
-  input_dir: assets/datasets/coco
-  output_dir: sandbox/detr-object-detector
-
-decode:
-  confidence_threshold: 0.70
-  person_only: false
-```
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`. Set `decode.person_only` to `true` if you only want person detections.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/object-detection/detr-object-detector/src/cpp/pre-built/detr-object-detector \
-  --config examples/object-detection/detr-object-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/detr-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/detr-object-detector/src/python/requirements.txt
-python3 examples/object-detection/detr-object-detector/src/python/main.py \
-  --config examples/object-detection/detr-object-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting
