@@ -34,14 +34,34 @@ reference implementations after the API shape is chosen.
 - Prefer clear application endpoint names such as `image`, `detections`, `classes`, `preview`, `prompt`, and `tokens`.
 - Keep generated application code runnable with explicit build and run commands.
 
-## DevKit Display and Run
+## Neat Insight output
+
+Prefer Neat Insight when results should be viewed remotely in a browser. This
+keeps the DevKit desktop and display hardware available.
+
+- Add the public `VideoSender` graph fragment for video. Use
+  `VideoSenderOptions::H264RtpUdpFromRaw(...)` for raw frames or
+  `VideoSenderOptions::Passthrough(codec)` for encoded H.264 or H.265.
+- Pair it with `MetadataSender` when Insight needs JSON detections or other
+  structured overlays.
+- Inspect `include/nodes/groups/VideoSender.h` and
+  `include/nodes/io/MetadataSender.h`. Read the packaged Core docs
+  `advanced-concepts/application-design/video_sender.md` and
+  `advanced-concepts/application-design/metadata_sender.md` before choosing
+  ports, channels, codecs, or graph links.
+- Use the Insight documentation for viewer setup and operations. This skill
+  owns the application-side APIs only.
+
+## DevKit local display and run
 
 For applications that show results locally on a Modalix DevKit, or that run interactively until a human stops them:
 
-- Inspect the target before choosing a local display path. Check installed GStreamer sinks, the active desktop session, the DRM owner and connector, and the OpenCV HighGUI backend instead of assuming one image's package or driver layout.
-- Use Neat Insight when the result should be viewed remotely. `VideoSender` can encode compatible raw input as H.264 or forward an already encoded H.264 or H.265 stream with the matching codec; pair it with `MetadataSender` when the viewer needs structured overlays.
-- Prefer `dk`/`devkit-run` for SDK-to-DevKit execution. The current helper streams output and attempts remote cleanup after interruption or common SSH and signal exits. Use `dk shell` when an interactive remote terminal is required, and fall back to direct SSH only when the helper cannot express the workflow.
-- Have long-running applications handle `SIGINT` and `SIGTERM`, close their `Run` handles, and release model, codec, and streaming resources on every exit path.
+- Inspect the target before choosing a local display path. Check the installed GStreamer sinks, active desktop session, DRM owner and connector, and OpenCV HighGUI backend.
+- On the validated DevKit image, the X11 desktop is present but the GStreamer X-window sinks `ximagesink`, `xvimagesink`, and `glimagesink` are absent. Use one of these local paths:
+  - For full-screen HDMI, use `kmssink`. Stop the desktop first with `sudo systemctl stop lightdm`, then restart it with `sudo systemctl start lightdm`. The `smifb` DRM driver needs `driver-name=smifb`, `BGRx` caps, `force-modesetting=true`, and `connector-id=<id>`. It accepts a full-screen primary-plane modeset, not a sub-CRTC overlay plane. `Could not open DRM module` means the driver name is missing. `drmModeSetPlane failed: Invalid argument` means the plane or dimensions are unsupported.
+  - For a window on the existing desktop, use OpenCV `cv::imshow`. Launch with `DISPLAY=:0` and the desktop session's `XAUTHORITY`. Detect the close button with `getWindowProperty(name, WND_PROP_VISIBLE) < 1`; otherwise the next `imshow` call recreates the window. `cv::waitKey` reads the window's X events, so ESC, q, and close work only from the DevKit keyboard or mouse while the window has focus.
+- Prefer `dk` or `devkit-run` for SDK-to-DevKit execution. The current helper streams output and cleans up the remote process after interruption and common SSH or signal exits. Use `dk shell` when the workflow needs an interactive PTY. Older helpers that lack this cleanup can orphan the application; use `ssh -tt` and an exit trap that stops the remote process in that environment.
+- Have long-running applications handle `SIGINT`, `SIGTERM`, and `SIGHUP`, close their `Run` handles, and release model, codec, display, and streaming resources on every exit path.
 
 ## Boundaries
 
