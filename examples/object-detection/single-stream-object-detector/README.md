@@ -8,7 +8,7 @@
 | Difficulty | Intermediate |
 | Tags | object-detection, yolo26, rtsp, insight |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | single-stream-object-detector |
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 

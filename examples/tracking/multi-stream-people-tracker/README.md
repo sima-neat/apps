@@ -8,7 +8,7 @@
 | Difficulty | Advanced |
 | Tags | object-detection, yolo26, rtsp, multistream, insight, people-tracking |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | multi-stream-people-tracker |
 | Model | yolo26m-det-int8-b1 |
 

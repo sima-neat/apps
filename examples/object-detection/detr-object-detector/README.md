@@ -8,7 +8,7 @@
 | Difficulty | Intermediate |
 | Tags | detr, object-detection, folder-input, coco |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | detr-object-detector |
 | Model | detr_resnet50_modified_class_embed_bbox_embed |
 

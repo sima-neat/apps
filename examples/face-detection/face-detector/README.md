@@ -8,7 +8,7 @@
 | Difficulty | Beginner |
 | Tags | retinaface, face-detection |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | face-detector |
 | Model | retinaface_mobilenet25 |
 

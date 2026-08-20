@@ -8,7 +8,7 @@
 | Difficulty | Intermediate |
 | Tags | segmentation, yolo26, instance-segmentation, rtsp, insight |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | single-stream-instance-segmenter |
 | Model | yolo26m-seg-bf16-b1 |
 

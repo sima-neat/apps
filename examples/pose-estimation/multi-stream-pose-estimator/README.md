@@ -8,7 +8,7 @@
 | Difficulty | Advanced |
 | Tags | pose-estimation, keypoints, rtsp, multistream, insight, yolo26 |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | multi-stream-pose-estimator |
 | Model | yolo26m-pose-int8-b1 |
 

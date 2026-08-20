@@ -8,7 +8,7 @@
 | Difficulty | Advanced |
 | Tags | object-detection, genai, yolo26, rtsp, insight, vlm |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | detection-to-vlm-assistant |
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 

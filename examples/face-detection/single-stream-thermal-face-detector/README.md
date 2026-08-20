@@ -7,7 +7,7 @@
 | Difficulty | Intermediate |
 | Tags | face-detection, keypoints, yolov5s-face, thermal, rtsp, insight |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | single-stream-thermal-face-detector |
 | Model | yolov5s_face_raw_split |
 

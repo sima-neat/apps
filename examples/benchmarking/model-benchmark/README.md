@@ -8,7 +8,7 @@
 | Difficulty | Beginner |
 | Tags | benchmarking, model, performance, pyneat |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | model-benchmark |
 | Model | Any compiled model package |
 

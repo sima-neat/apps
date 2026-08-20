@@ -8,7 +8,7 @@
 | Difficulty | Beginner |
 | Tags | camera, mipi, libcamera, zero-copy, diagnostics |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | mipi-camera-capture |
 | Model | None |
 

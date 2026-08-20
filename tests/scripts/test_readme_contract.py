@@ -23,6 +23,7 @@ def write_readme(
         "Open `${APP_DIR}/src/common/config.yaml` and set `model.path`."
     ),
     preview: str = "![Sample preview](../../../portal/assets/examples/classification/sample/image.png)",
+    status: str = "stable",
 ) -> Path:
     readme = tmp_path / "examples" / "classification" / "sample" / "README.md"
     readme.parent.mkdir(parents=True)
@@ -39,7 +40,7 @@ def write_readme(
 | Difficulty | Beginner |
 | Tags | sample |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | {status} |
 | Binary Name | sample |
 | Model | sample-model |
 
@@ -123,6 +124,19 @@ def test_readme_contract_accepts_single_example_install(tmp_path: Path) -> None:
     )
 
     assert validate_readme(readme) == []
+
+
+def test_readme_contract_rejects_experimental_status(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        status="experimental",
+    )
+
+    assert "Invalid Status 'experimental'. Must be one of: stable" in validate_readme(
+        readme
+    )
 
 
 def test_readme_contract_requires_configure(tmp_path: Path) -> None:

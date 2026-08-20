@@ -8,7 +8,7 @@
 | Difficulty | Beginner |
 | Tags | classification, model, mpk |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | image-classifier |
 | Model | resnet_50 |
 

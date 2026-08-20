@@ -8,7 +8,7 @@
 | Difficulty | Advanced |
 | Tags | object-detection, rtsp, multistream, high-density, pcie, insight |
 | Languages | C++ |
-| Status | experimental |
+| Status | stable |
 | Binary Name | pcie-high-density-multi-stream-object-detector |
 | Model | yolo26n-det-int8-b1 |
 

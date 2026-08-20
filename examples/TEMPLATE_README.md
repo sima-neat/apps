@@ -8,7 +8,7 @@
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
-| Status | <experimental / stable> |
+| Status | stable |
 | Binary Name | <binary> |
 | Model | <default-model> |
 

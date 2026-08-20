@@ -29,7 +29,7 @@ VALID_DIFFICULTIES = {"Beginner", "Intermediate", "Advanced"}
 
 VALID_LANGUAGES = {"C++", "Python"}
 
-VALID_STATUSES = {"experimental", "stable"}
+VALID_STATUSES = {"stable"}
 
 REQUIRED_METADATA_FIELDS = {
     "Category",

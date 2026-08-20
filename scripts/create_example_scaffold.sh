@@ -209,7 +209,7 @@ render_readme() {
 | Difficulty | Intermediate |
 | Tags | ${category} |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | ${example_name} |
 | Model | <default-model> |
 

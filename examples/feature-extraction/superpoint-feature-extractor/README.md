@@ -8,7 +8,7 @@
 | Difficulty | Intermediate |
 | Tags | superpoint, feature-extraction, video, boxdecode |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | superpoint-feature-extractor |
 | Model | superpoint / modalix_int8_tessellation_mla |
 

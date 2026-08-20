@@ -8,7 +8,7 @@
 | Difficulty | Intermediate |
 | Tags | ssd, mobilenet, object-detection, folder-input, coco |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | ssd-mobilenet-object-detector |
 | Model | SSD-MobileNet V1/V2 and SSDlite-MobileNetV3 |
 

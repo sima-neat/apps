@@ -7,7 +7,7 @@
 | Difficulty | Advanced |
 | Tags | genai, vlm, asr, tts, japanese, multilingual, rag, model-switching, huggingface, markdown, openai-compatible |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | neat-genai-studio |
 | Model | Loaded on demand (e.g. Qwen3-VL-4B-Instruct-GPTQ-a16w4) + whisper-small-a16w8 |
 

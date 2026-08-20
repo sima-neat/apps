@@ -8,7 +8,7 @@
 | Difficulty | Intermediate |
 | Tags | depth-estimation, depth-anything, folder-inference |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | depth-estimator |
 | Model | depth_anything_v2_vits |
 

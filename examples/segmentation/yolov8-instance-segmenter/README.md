@@ -8,7 +8,7 @@
 | Difficulty | Intermediate |
 | Tags | segmentation, yolov8, instance-segmentation, folder-inference |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | yolov8-instance-segmenter |
 | Model | yolo_v8n_seg |
 

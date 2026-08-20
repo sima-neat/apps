@@ -8,7 +8,7 @@
 | Difficulty | Advanced |
 | Tags | object-detection, rtsp, multistream, insight, yolo26 |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | multi-stream-object-detector |
 | Model | yolo26m-det-int8-b1 |
 

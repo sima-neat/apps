@@ -8,7 +8,7 @@
 | Difficulty | Beginner |
 | Tags | object-detection, yolo26, folder-inference |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | yolo26-object-detector |
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
