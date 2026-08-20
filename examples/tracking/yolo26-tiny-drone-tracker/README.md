@@ -51,10 +51,10 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Download the tested SDK 2.1.2 model artifact:
+Download the tested SDK 2.1.3 model artifact:
 
 ```bash
-export MODELZOO_VERSION="2.1.2"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
 sima-cli download \
