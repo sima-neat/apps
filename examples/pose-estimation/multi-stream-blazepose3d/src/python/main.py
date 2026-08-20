@@ -125,6 +125,14 @@ class PoseInputContext:
     identity: FrameIdentity
 
 
+@dataclass(frozen=True)
+class PreparedPoseInput:
+    roi_index: int
+    box: dict[str, Any]
+    affine: tuple[float, float, float, float, float, float]
+    tensor: Any
+
+
 @dataclass
 class PoseAggregate:
     stream_index: int
@@ -374,6 +382,53 @@ def square_roi(box: dict[str, Any], scale: float) -> tuple[int, int, int, int]:
         side,
         side,
     )
+
+
+def crop_plan(
+    roi: tuple[int, int, int, int], frame_width: int, frame_height: int
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None:
+    x, y, width, height = roi
+    if frame_width <= 0 or frame_height <= 0 or width <= 0 or height <= 0:
+        return None
+    left = max(0, x)
+    top = max(0, y)
+    right = min(frame_width, x + width)
+    bottom = min(frame_height, y + height)
+    if right <= left or bottom <= top:
+        return None
+    image = (left, top, right - left, bottom - top)
+    return image, (x - left, y - top, width, height)
+
+
+def batch_crop_plan(
+    rois: list[tuple[int, int, int, int]], frame_width: int, frame_height: int
+) -> tuple[
+    tuple[int, int, int, int], list[tuple[int, tuple[int, int, int, int]]]
+] | None:
+    valid = []
+    for index, roi in enumerate(rois):
+        crop = crop_plan(roi, frame_width, frame_height)
+        if crop is not None:
+            valid.append((index, roi, crop[0]))
+    if not valid:
+        return None
+    left = min(crop[0] for _, _, crop in valid)
+    top = min(crop[1] for _, _, crop in valid)
+    right = max(crop[0] + crop[2] for _, _, crop in valid)
+    bottom = max(crop[1] + crop[3] for _, _, crop in valid)
+    image = (left, top, right - left, bottom - top)
+    relative_rois = [
+        (index, (roi[0] - left, roi[1] - top, roi[2], roi[3]))
+        for index, roi, _ in valid
+    ]
+    return image, relative_rois
+
+
+def offset_affine(
+    affine: tuple[float, float, float, float, float, float], x: int, y: int
+) -> tuple[float, float, float, float, float, float]:
+    m00, m01, m02, m10, m11, m12 = affine
+    return m00, m01, m02 + x, m10, m11, m12 + y
 
 
 def sigmoid(value: float) -> float:
@@ -653,13 +708,12 @@ def build_pose_run(model):
     return graph, graph.build([pose_input_sample(seed_tensor, None)], options)
 
 
-def tensor_input_sample(name: str, tensor, identity: FrameIdentity | None):
+def image_input_sample(name: str, tensor, identity: FrameIdentity | None):
     sample = pyneat.make_tensor_sample(name, tensor)
-    sample.payload_type = pyneat.PayloadType.Tensor
-    sample.media_type = "application/vnd.simaai.tensor"
-    if tensor.semantic.tess is not None:
-        sample.format = tensor.semantic.tess.format
-        sample.payload_tag = sample.format
+    sample.payload_type = pyneat.PayloadType.Image
+    sample.media_type = "video/x-raw"
+    sample.format = "RGB"
+    sample.payload_tag = sample.format
     if identity is not None:
         sample.stream_id = identity.stream_id
         sample.frame_id = identity.frame_id
@@ -679,20 +733,24 @@ def build_detector_run(model, max_width: int, max_height: int):
     if len(outputs) != 1:
         raise RuntimeError("YOLO26 must expose one decoded BBOX output")
     seed_image = np.zeros((max_height, max_width, 3), dtype=np.uint8)
-    seed_tensor = pyneat.stages.preproc(
-        [seed_image],
-        model,
-        rois=[pyneat.PreprocessRoi(0, 0, 0, max_width, max_height)],
+    seed_tensor = pyneat.Tensor.from_numpy(
+        seed_image,
+        copy=True,
         image_format=pyneat.PixelFormat.RGB,
-        copy=False,
-    )[0]
+        memory=pyneat.TensorMemory.EV74,
+    )
     graph = pyneat.Graph("yolo26_runner")
-    graph.add(pyneat.nodes.input("detector_input"))
-    graph.add(model.inference())
-    graph.add(model.postprocess())
-    graph.add(
+    input_options = model.input_appsrc_options(False)
+    input_options.block = True
+    input_graph = pyneat.Graph()
+    input_graph.add(pyneat.nodes.input("detector_input", input_options))
+    model_graph = model.graph()
+    output_graph = pyneat.Graph()
+    output_graph.add(
         pyneat.nodes.output("detector_output", pyneat.OutputOptions.every_frame(4))
     )
+    graph.connect(input_graph, model_graph)
+    graph.connect(model_graph, output_graph)
     options = pyneat.RunOptions()
     options.preset = pyneat.RunPreset.Reliable
     options.overflow_policy = pyneat.OverflowPolicy.Block
@@ -700,7 +758,7 @@ def build_detector_run(model, max_width: int, max_height: int):
     options.input_timeout_ms = 30000
     options.startup_preflight = False
     return graph, graph.build(
-        [tensor_input_sample("detector_input", seed_tensor, None)], options
+        [image_input_sample("detector_input", seed_tensor, None)], options
     )
 
 
@@ -1024,18 +1082,8 @@ def dispatch_detector_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 stream.timed_out_jobs += 1
                 publish_metadata(stream, job.identity, [])
                 continue
-            detector_inputs = pyneat.stages.preproc(
-                [job.rgb],
-                runtime.detector_model,
-                rois=[pyneat.PreprocessRoi(0, 0, 0, stream.width, stream.height)],
-                image_format=pyneat.PixelFormat.RGB,
-                copy=False,
-            )
-            if len(detector_inputs) != 1:
-                raise RuntimeError("YOLO26 Preproc must return one tensor per frame")
-            sample = tensor_input_sample(
-                "detector_input", detector_inputs[0], job.identity
-            )
+            detector_frame = job.rgb.cvu()
+            sample = image_input_sample("detector_input", detector_frame, job.identity)
             with state.condition:
                 state.condition.wait_for(
                     lambda: (
@@ -1115,20 +1163,54 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 publish_metadata(stream, job.identity, [])
                 continue
 
-            rois = [
-                pyneat.PreprocessRoi(0, *square_roi(box, cfg.roi_scale))
-                for box in job.people
+            rgb_view = np.asarray(job.rgb.to_numpy(copy=False))
+            if rgb_view.ndim != 3 or rgb_view.shape[2] != 3:
+                raise RuntimeError("RGB frame must be a packed HWC image")
+            requested_rois = [
+                square_roi(box, cfg.roi_scale) for box in job.people
             ]
-            pose_inputs = pyneat.stages.preproc(
-                [job.rgb],
+            plan = batch_crop_plan(
+                requested_rois,
+                int(rgb_view.shape[1]),
+                int(rgb_view.shape[0]),
+            )
+            if plan is None:
+                publish_metadata(stream, job.identity, [])
+                continue
+            image, planned_rois = plan
+            x, y, width, height = image
+            crop = np.array(
+                rgb_view[y : y + height, x : x + width],
+                dtype=np.uint8,
+                copy=True,
+                order="C",
+            )
+            output = pyneat.stages.preproc(
+                [crop],
                 runtime.pose_model,
-                rois=rois,
+                rois=[
+                    pyneat.PreprocessRoi(0, *relative_roi)
+                    for _, relative_roi in planned_rois
+                ],
                 image_format=pyneat.PixelFormat.RGB,
                 copy=False,
             )
-            if len(pose_inputs) != len(job.people):
+            if len(output) != len(planned_rois):
                 raise RuntimeError(
                     "BlazePose Preproc output count does not match ROI count"
+                )
+            prepared_inputs = []
+            for tensor, (person_index, _) in zip(output, planned_rois, strict=True):
+                affine = offset_affine(affine_from_tensor(tensor), x, y)
+                # Detached asynchronous Runs may retain their input after push().
+                # Give each ROI independent EV74 storage before enqueueing.
+                prepared_inputs.append(
+                    PreparedPoseInput(
+                        person_index,
+                        job.people[person_index],
+                        affine,
+                        tensor.clone().cvu(),
+                    )
                 )
 
             state = runtime.state
@@ -1141,20 +1223,20 @@ def dispatch_pose_jobs(runtime: AppRuntime, cfg: AppConfig) -> None:
                 if state.stopping:
                     return
                 state.aggregates[job.job_id] = PoseAggregate(
-                    job.stream_index, len(pose_inputs), job.identity, job.deadline
+                    job.stream_index, len(prepared_inputs), job.identity, job.deadline
                 )
 
-            for index, tensor in enumerate(pose_inputs):
+            for prepared in prepared_inputs:
                 context = PoseInputContext(
                     job.job_id,
                     job.stream_index,
-                    index,
-                    len(pose_inputs),
-                    job.people[index],
-                    affine_from_tensor(tensor),
+                    prepared.roi_index,
+                    len(prepared_inputs),
+                    prepared.box,
+                    prepared.affine,
                     job.identity,
                 )
-                sample = pose_input_sample(tensor, context)
+                sample = pose_input_sample(prepared.tensor, context)
                 with state.condition:
                     if state.stopping:
                         return
