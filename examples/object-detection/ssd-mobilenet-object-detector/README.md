@@ -14,11 +14,9 @@
 
 ## Concept
 
-This example runs SSD object detection on every image in a folder. Neat resizes and normalizes each
-image, runs the model, decodes the SSD outputs, and writes an annotated PNG to the output folder.
-An optional JSON report contains the same detections as class, score, and bounding-box values.
+Detects objects in a folder of images with SSD MobileNet, saves annotated PNGs, and can write the same detections to a JSON report.
 
-The example supports 300×300 SSD-MobileNet V1/V2 and 320×320 SSDlite-MobileNetV3 models. Neat owns
+The application supports 300×300 SSD-MobileNet V1/V2 and 320×320 SSDlite-MobileNetV3 models. Neat owns
 the recipe-specific priors, class scoring, and non-maximum suppression through
 `BoxDecodeType::Ssd`; the example only selects the matching preprocessing profile.
 
@@ -37,6 +35,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/ssd-mobilenet-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -57,29 +56,9 @@ The configuration below uses
 
 ## Configure
 
-Edit `examples/object-detection/ssd-mobilenet-object-detector/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `io.input_dir`, and `io.output_dir`. Set `io.detections_json` to a file path if you also want a JSON report.
 
-```yaml
-model:
-  path: models/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
-  preprocessing_profile: tensorflow_ssd
-  labels: examples/object-detection/ssd-mobilenet-object-detector/src/common/coco_labels.txt
-
-io:
-  input_dir: assets/datasets/coco
-  output_dir: sandbox/ssd-mobilenet-object-detector
-  detections_json: ""        # Optional machine-readable detections report.
-
-decode:
-  score_threshold: 0.55
-  nms_iou: 0.60
-  max_detections: 100
-
-runtime:
-  timeout_ms: 20000
-```
-
-`model.path` is required. `io.input_dir` is a folder, not a single image: the app processes every
+`io.input_dir` is a folder, not a single image. The application processes every
 `.jpg`, `.jpeg`, `.png`, and `.bmp` file directly inside it in filename order. Subdirectories are
 not searched. Each input produces an annotated PNG under `io.output_dir`.
 
@@ -88,17 +67,17 @@ not searched. Each input produces an annotated PNG under `io.output_dir`.
 ### C++
 
 ```bash
-./examples/object-detection/ssd-mobilenet-object-detector/src/cpp/pre-built/ssd-mobilenet-object-detector \
-  --config examples/object-detection/ssd-mobilenet-object-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/ssd-mobilenet-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/ssd-mobilenet-object-detector/src/python/requirements.txt
-python3 examples/object-detection/ssd-mobilenet-object-detector/src/python/main.py \
-  --config examples/object-detection/ssd-mobilenet-object-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting
@@ -108,8 +87,8 @@ python3 examples/object-detection/ssd-mobilenet-object-detector/src/python/main.
 - Keep `io.input_dir` and `io.output_dir` different.
 - If boxes look vertically squished or shifted toward the frame center, the resize mode is wrong.
   This model requires a **stretch** resize; the example already sets it.
-- If detections are missing but the pipeline runs, lower `decode.score_threshold` — int8
-  quantization of the classification heads can drop weak detections.
+- If detections are missing but the pipeline runs, lower `decode.score_threshold` because INT8
+  quantization can drop weak detections.
 - Set `io.detections_json` to write per-image detections (class, score, box) for offline checks.
 
 ## Source Files

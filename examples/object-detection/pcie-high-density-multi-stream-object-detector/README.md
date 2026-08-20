@@ -14,10 +14,11 @@
 
 ## Concept
 
-This example runs high-density object detection across a host machine and a Modalix PCIe Card.
-The host receives H.264 RTSP streams and sends encoded access units over PCIe. The card decodes the
-streams, runs one shared object-detection model, and returns compact BBOX results. The host sends
-the original encoded video and matched detection metadata to Insight.
+Runs YOLO26 object detection across many RTSP streams using a host and Modalix PCIe card, then sends synchronized results to Insight.
+
+## Preview
+
+![PCIe high-density detector preview](../../../portal/assets/examples/object-detection/pcie-high-density-multi-stream-object-detector/image.png)
 
 ```text
 Host machine                         Modalix PCIe Card
@@ -49,13 +50,11 @@ Install the precompiled card application on the Modalix PCIe Card:
 cd "$HOME"
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/pcie-high-density-multi-stream-object-detector
 ```
 
-This installs the card binary at:
-
-```text
-/home/sima/prebuilt-apps/examples/object-detection/pcie-high-density-multi-stream-object-detector/src/cpp/pre-built/pcie-high-density-multi-stream-object-detector
-```
+The card binary is installed at
+`${APP_DIR}/src/cpp/pre-built/pcie-high-density-multi-stream-object-detector`.
 
 To build the card application yourself, see
 [Development From Source](#development-from-source).
@@ -128,12 +127,12 @@ cmake --build build-host-pcie --parallel
 Start both applications from the host:
 
 ```bash
-./examples/object-detection/pcie-high-density-multi-stream-object-detector/run.sh \
-  --config examples/object-detection/pcie-high-density-multi-stream-object-detector/src/common/config.local.yaml
+./${APP_DIR}/run.sh \
+  --config ${APP_DIR}/src/common/config.local.yaml
 ```
 
 The launcher uses the packaged card binary under
-`examples/object-detection/pcie-high-density-multi-stream-object-detector/src/cpp/pre-built/pcie-high-density-multi-stream-object-detector`,
+`${APP_DIR}/src/cpp/pre-built/pcie-high-density-multi-stream-object-detector`,
 waits for the card graph, and then starts the locally built host application.
 
 Press `Ctrl-C` once to stop the host first and the card second. Run `run.sh --help` for nondefault
@@ -169,8 +168,9 @@ To build the card application from source, run on the Modalix PCIe Card:
 
 ```bash
 cd "$HOME/apps"
+APP_DIR=examples/object-detection/pcie-high-density-multi-stream-object-detector
 cmake \
-  -S examples/object-detection/pcie-high-density-multi-stream-object-detector/src/cpp \
+  -S ${APP_DIR}/src/cpp \
   -B build-pcie-card \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build-pcie-card --parallel
@@ -179,8 +179,8 @@ cmake --build build-pcie-card --parallel
 Then pass the resulting binary to the launcher:
 
 ```bash
-./examples/object-detection/pcie-high-density-multi-stream-object-detector/run.sh \
-  --config examples/object-detection/pcie-high-density-multi-stream-object-detector/src/common/config.local.yaml \
+./${APP_DIR}/run.sh \
+  --config ${APP_DIR}/src/common/config.local.yaml \
   --card-binary /home/sima/apps/build-pcie-card/pcie-high-density-multi-stream-object-detector
 ```
 

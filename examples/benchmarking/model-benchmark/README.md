@@ -14,7 +14,7 @@
 
 ## Concept
 
-Benchmark a compiled model before integrating it into a full pipeline. The example runs `pyneat.Model.benchmark()` and writes latency, FPS, power, and energy measurements to JSON.
+Measures latency, throughput, power, and energy for any compiled model package, then saves the results as JSON.
 
 This synthetic model benchmark does not measure input decoding, Insight output, overlays, or application postprocessing.
 
@@ -34,13 +34,14 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/benchmarking/model-benchmark
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-This example accepts any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
+Use any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download a Model Zoo package:
 
@@ -63,25 +64,14 @@ cd ..
 
 ## Configure
 
-Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or provide the same values on the command line.
-
-```yaml
-model:
-  path: <model-path>
-
-benchmark:
-  frames: 1000
-
-output:
-  report_json: sandbox/model-benchmark/report.json
-```
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`. You can also change the number of benchmark frames and the JSON report path, or pass those values on the command line.
 
 ## Run
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/benchmarking/model-benchmark/src/python/requirements.txt
-python3 examples/benchmarking/model-benchmark/src/python/main.py \
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
   --model models/<model-file>.tar.gz \
   --frames 1000 \
   --output-json sandbox/model-benchmark/report.json

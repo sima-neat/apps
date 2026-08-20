@@ -32,6 +32,24 @@ def test_portal_page_uses_global_search_only():
     assert 'type="search"' not in app_jsx
 
 
+def test_portal_code_blocks_preserve_tokens_and_scroll_internally():
+    styles = (APPS_ROOT / "portal" / "src" / "styles.css").read_text()
+    pre_rule = styles.split(".markdown-body pre {", 1)[1].split("}", 1)[0]
+    doc_panel_rule = styles.split(".doc-panel {", 1)[1].split("}", 1)[0]
+    table_rule = styles.split(".markdown-body table {", 1)[1].split("}", 1)[0]
+
+    assert "white-space: pre;" in pre_rule
+    assert "word-break: normal;" in pre_rule
+    assert "overflow-wrap: normal;" in pre_rule
+    assert "overflow-x: auto;" in pre_rule
+    assert "max-width: 100%;" in pre_rule
+    assert "white-space: pre-wrap;" not in pre_rule
+    assert "min-width: 0;" in doc_panel_rule
+    assert "grid-template-columns: minmax(0, 1fr);" in styles
+    assert "display: block;" in table_rule
+    assert "overflow-x: auto;" in table_rule
+
+
 def test_generate_catalog_uses_repo_level_portal_assets_for_example():
     module = _load_module(
         "generate_catalog_for_test",

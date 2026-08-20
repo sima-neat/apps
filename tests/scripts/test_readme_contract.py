@@ -13,7 +13,14 @@ SPEC.loader.exec_module(VALIDATOR)
 validate_readme = VALIDATOR.validate_readme
 
 
-def write_readme(tmp_path: Path, *, install: str, run: str) -> Path:
+def write_readme(
+    tmp_path: Path,
+    *,
+    install: str,
+    run: str,
+    concept: str = "Classifies one image with a compiled model and prints the result.",
+    configure: str = "Open `${APP_DIR}/src/common/config.yaml` and set `model.path`.",
+) -> Path:
     readme = tmp_path / "examples" / "classification" / "sample" / "README.md"
     readme.parent.mkdir(parents=True)
     readme.write_text(
@@ -31,7 +38,10 @@ def write_readme(tmp_path: Path, *, install: str, run: str) -> Path:
 | Model | sample-model |
 
 ## Concept
-Sample concept.
+{concept}
+
+## Preview
+![Sample preview](../../../portal/assets/examples/classification/sample/image.png)
 
 ## Prerequisites
 - A supported target.
@@ -41,6 +51,9 @@ Sample concept.
 
 ## Prepare the Model
 Download the sample model.
+
+## Configure
+{configure}
 
 ## Run
 {run}
@@ -53,6 +66,17 @@ See [CONTRIBUTING.md](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.m
 """,
         encoding="utf-8",
     )
+    preview = (
+        tmp_path
+        / "portal"
+        / "assets"
+        / "examples"
+        / "classification"
+        / "sample"
+        / "image.png"
+    )
+    preview.parent.mkdir(parents=True)
+    preview.write_bytes(b"png")
     return readme
 
 
@@ -61,6 +85,7 @@ VALID_INSTALL = """Install the latest Neat Apps runtime.
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/classification/sample
 ```"""
 
 VALID_STANDALONE_INSTALL = """Fetch only this example.
@@ -71,8 +96,13 @@ cd sample
 ```"""
 
 VALID_RUN = """```bash
-./examples/classification/sample/src/cpp/pre-built/sample
-python3 examples/classification/sample/src/python/main.py
+./${APP_DIR}/src/cpp/pre-built/sample
+python3 ${APP_DIR}/src/python/main.py
+```"""
+
+VALID_STANDALONE_RUN = """```bash
+./src/cpp/pre-built/sample
+python3 src/python/main.py
 ```"""
 
 
@@ -86,7 +116,7 @@ def test_readme_contract_accepts_single_example_install(tmp_path: Path) -> None:
     readme = write_readme(
         tmp_path,
         install=VALID_STANDALONE_INSTALL,
-        run=VALID_RUN,
+        run=VALID_STANDALONE_RUN,
     )
 
     assert validate_readme(readme) == []
@@ -109,7 +139,7 @@ def test_installed_readme_contract_rejects_build_tree_binary(tmp_path: Path) -> 
         tmp_path,
         install=VALID_INSTALL,
         run=VALID_RUN.replace(
-            "./examples/classification/sample/src/cpp/pre-built/sample",
+            "./${APP_DIR}/src/cpp/pre-built/sample",
             "./build/examples/classification/sample/sample",
         ),
     )
@@ -131,3 +161,68 @@ def test_installed_readme_contract_rejects_source_builds_in_install(
     assert any(
         "Source-only command 'build.sh'" in error for error in validate_readme(readme)
     )
+
+
+def test_readme_contract_rejects_filler_summary(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        concept="This example classifies one image with a sample model.",
+    )
+
+    assert any("must start with what" in error for error in validate_readme(readme))
+
+
+def test_readme_contract_rejects_long_summary(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        concept="Classifies images with a sample model and writes results. " * 5,
+    )
+
+    assert any("at most 200 characters" in error for error in validate_readme(readme))
+
+
+def test_readme_contract_rejects_missing_preview_asset(tmp_path: Path) -> None:
+    readme = write_readme(tmp_path, install=VALID_INSTALL, run=VALID_RUN)
+    preview = (
+        tmp_path
+        / "portal"
+        / "assets"
+        / "examples"
+        / "classification"
+        / "sample"
+        / "image.png"
+    )
+    preview.unlink()
+
+    assert any("Preview image does not exist" in error for error in validate_readme(readme))
+
+
+def test_readme_contract_rejects_repeated_bundle_path(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN
+        + "\npython3 examples/classification/sample/src/python/main.py",
+    )
+
+    assert any("reuse APP_DIR" in error for error in validate_readme(readme))
+
+
+def test_readme_contract_rejects_packaged_config_copy(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        configure="""Open the packaged config.
+
+```yaml
+model:
+  path: model.tar.gz
+```""",
+    )
+
+    assert any("instead of copying YAML" in error for error in validate_readme(readme))

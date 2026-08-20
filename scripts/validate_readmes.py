@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Validate that every example README.md conforms to the required contract.
 
-Scans examples/*/*/README.md files and verifies:
-- Metadata table exists with all required fields
-- Field values match allowed enums (categories, difficulties, languages, statuses)
-- Supported bundle or standalone install commands and required sections are present
+Scans examples/*/*/README.md files and verifies metadata, portal summaries and
+previews, configuration guidance, and supported install and run commands.
 
 Exit code 0 on success, 1 if any README is missing or malformed.
 """
@@ -49,6 +47,7 @@ MODEL_REFERENCE_RE = re.compile(
 REQUIRED_SECTIONS = {
     "Metadata",
     "Concept",
+    "Preview",
     "Prerequisites",
     "Install Apps",
     "Prepare the Model",
@@ -60,6 +59,7 @@ REQUIRED_SECTIONS = {
 REQUIRED_SECTION_ORDER = (
     "Metadata",
     "Concept",
+    "Preview",
     "Prerequisites",
     "Install Apps",
     "Prepare the Model",
@@ -79,6 +79,16 @@ SOURCE_ONLY_COMMANDS = (
     "./build/",
     "tests/test.sh",
 )
+SUMMARY_MAX_CHARS = 200
+SUMMARY_FILLER_PREFIXES = (
+    "this example",
+    "this application",
+    "this app",
+    "the example",
+)
+MARKDOWN_IN_SUMMARY_RE = re.compile(r"[`*_\[\]<>]|!\[")
+PREVIEW_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+PREVIEW_IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 
 
 def parse_metadata_table(content: str) -> dict[str, str] | None:
@@ -120,6 +130,84 @@ def parse_sections(content: str) -> tuple[dict[str, str], list[str]]:
     return {name: "\n".join(lines).strip() for name, lines in sections.items()}, order
 
 
+def first_paragraph(section: str) -> str:
+    """Return the first nonempty paragraph with whitespace normalized."""
+    paragraph: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if paragraph:
+                break
+            continue
+        paragraph.append(stripped)
+    return " ".join(" ".join(paragraph).split())
+
+
+def validate_portal_content(
+    *,
+    sections: dict[str, str],
+    metadata: dict[str, str],
+    readme_path: Path,
+) -> list[str]:
+    """Validate the summary and preview consumed by the portal."""
+    errors: list[str] = []
+    summary = first_paragraph(sections.get("Concept", ""))
+    if not summary:
+        errors.append("Concept must start with a portal summary")
+    else:
+        if len(summary) > SUMMARY_MAX_CHARS:
+            errors.append(
+                f"Concept summary must be at most {SUMMARY_MAX_CHARS} characters "
+                f"after whitespace is normalized; found {len(summary)}"
+            )
+        if summary.lower().startswith(SUMMARY_FILLER_PREFIXES):
+            errors.append(
+                "Concept summary must start with what the application does, "
+                "not filler such as 'This example'"
+            )
+        if MARKDOWN_IN_SUMMARY_RE.search(summary):
+            errors.append("Concept summary must be plain text without Markdown")
+        sentence_count = len(re.findall(r"[.!?](?:\s|$)", summary))
+        if sentence_count not in (1, 2):
+            errors.append("Concept summary must contain one or two sentences")
+        binary = metadata.get("Binary Name", "").strip().lower()
+        if binary and binary in summary.lower():
+            errors.append("Concept summary must not include the executable name")
+
+    preview = sections.get("Preview", "")
+    match = PREVIEW_IMAGE_RE.search(preview)
+    if not match:
+        errors.append("Preview must contain a Markdown image")
+        return errors
+
+    parts = readme_path.parts
+    try:
+        examples_idx = list(parts).index("examples")
+        category = parts[examples_idx + 1]
+        example = parts[examples_idx + 2]
+    except (ValueError, IndexError):
+        return errors
+
+    repo_root = readme_path.parents[3]
+    image_path = (readme_path.parent / match.group(1)).resolve()
+    expected_dir = (
+        repo_root / "portal" / "assets" / "examples" / category / example
+    ).resolve()
+    if (
+        image_path.parent != expected_dir
+        or image_path.stem != "image"
+        or image_path.suffix.lower() not in PREVIEW_IMAGE_SUFFIXES
+    ):
+        errors.append(
+            "Preview image must use "
+            f"portal/assets/examples/{category}/{example}/image.*"
+        )
+    elif not image_path.is_file():
+        errors.append(f"Preview image does not exist: {match.group(1)}")
+
+    return errors
+
+
 def validate_install_workflow(
     *,
     sections: dict[str, str],
@@ -153,6 +241,11 @@ def validate_install_workflow(
         )
     if uses_bundle and "cd prebuilt-apps" not in install:
         errors.append("Bundle installation must enter the prebuilt-apps directory")
+    expected_app_dir = f"APP_DIR=examples/{category}/{example}"
+    if uses_bundle and expected_app_dir not in install:
+        errors.append(
+            f"Bundle installation must define '{expected_app_dir}'"
+        )
     if uses_standalone and f"cd {example}" not in install:
         errors.append(f"Standalone installation must enter the {example} directory")
 
@@ -170,11 +263,44 @@ def validate_install_workflow(
     }
     if "C++" in languages:
         binary = metadata.get("Binary Name", "").strip()
-        expected = f"examples/{category}/{example}/src/cpp/pre-built/{binary}"
-        if binary and expected not in run:
-            errors.append(f"Run must reference packaged C++ binary '{expected}'")
-    if "Python" in languages and "src/python/" not in run:
-        errors.append("Run must reference a packaged src/python/ entrypoint")
+        expected_paths = (
+            (
+                f"${{APP_DIR}}/src/cpp/pre-built/{binary}",
+                f"$APP_DIR/src/cpp/pre-built/{binary}",
+            )
+            if uses_bundle
+            else (f"src/cpp/pre-built/{binary}",)
+        )
+        if binary and not any(path in run for path in expected_paths):
+            errors.append(
+                "Run must reference the packaged C++ binary through APP_DIR"
+                if uses_bundle
+                else f"Run must reference packaged C++ binary '{expected_paths[0]}'"
+            )
+    if "Python" in languages:
+        expected_python_paths = (
+            ("${APP_DIR}/src/python/", "$APP_DIR/src/python/")
+            if uses_bundle
+            else ("src/python/",)
+        )
+        if not any(path in run for path in expected_python_paths):
+            errors.append(
+                f"Run must reference a packaged Python entrypoint through "
+                f"'{expected_python_paths[0]}'"
+            )
+
+    repeated_path = f"examples/{category}/{example}"
+    run_without_assignment = "\n".join(
+        line for line in run.splitlines() if line.strip() != expected_app_dir
+    )
+    if uses_bundle and repeated_path in run_without_assignment:
+        errors.append("Run must reuse APP_DIR instead of repeating the example path")
+
+    configure = sections.get("Configure", "")
+    if uses_bundle and re.search(r"```ya?ml\b", configure, re.IGNORECASE):
+        errors.append(
+            "Configure must point to the packaged config instead of copying YAML"
+        )
 
     if CONTRIBUTING_URL not in development:
         errors.append("Development From Source must link to CONTRIBUTING.md")
@@ -262,6 +388,13 @@ def validate_readme(readme_path: Path) -> list[str]:
 
     errors.extend(
         validate_install_workflow(
+            sections=sections,
+            metadata=metadata,
+            readme_path=readme_path,
+        )
+    )
+    errors.extend(
+        validate_portal_content(
             sections=sections,
             metadata=metadata,
             readme_path=readme_path,

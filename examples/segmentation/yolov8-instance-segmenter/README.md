@@ -14,7 +14,7 @@
 
 ## Concept
 
-Offline YOLOv8 instance segmentation over image folders using YOLOv8 segmentation outputs and DetessDequant postprocessing.
+Segments objects in a folder of images with YOLOv8 and saves annotated images with a colored mask for each detected instance.
 
 ## Preview
 
@@ -31,6 +31,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/segmentation/yolov8-instance-segmenter
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -58,36 +59,24 @@ Set `model.path` in the config to the downloaded package.
 
 ## Configure
 
-Edit `examples/segmentation/yolov8-instance-segmenter/src/common/config.yaml`.
-
-```yaml
-model:
-  path: <model-path>
-
-io:
-  input_dir: assets/datasets/coco
-  output_dir: sandbox/yolov8-instance-segmenter
-
-decode:
-  score_threshold: 0.25
-```
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`. Change the score threshold only if you want to show more or fewer segments.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/segmentation/yolov8-instance-segmenter/src/cpp/pre-built/yolov8-instance-segmenter \
-  --config examples/segmentation/yolov8-instance-segmenter/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/yolov8-instance-segmenter \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/segmentation/yolov8-instance-segmenter/src/python/requirements.txt
-python3 examples/segmentation/yolov8-instance-segmenter/src/python/main.py \
-  --config examples/segmentation/yolov8-instance-segmenter/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

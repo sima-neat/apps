@@ -14,11 +14,7 @@
 
 ## Concept
 
-`superpoint-feature-extractor` runs SuperPoint on a video and streams the feature-point overlay
-to Insight. Like the YOLO examples, it feeds BGR image tensors into Core preprocessing. Preproc
-owns resize, BGR-to-grayscale conversion, normalization, and the original/model geometry metadata
-consumed by A65 SuperPoint BoxDecode. BoxDecode applies the inverse Preproc affine to feature
-coordinates, so the app does not duplicate W/H, resize-mode, or coordinate-remap logic.
+Finds SuperPoint feature points in a video and streams the annotated video to Insight.
 
 The application selects the A65V1 numerical profile explicitly. Tensor roles, output dtypes, and
 storage layouts come from the MPK contract rather than being inferred from tensor order or values.
@@ -44,6 +40,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/feature-extraction/superpoint-feature-extractor
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -89,39 +86,12 @@ Configure `model.path` after the model is published under a different filename.
 
 ## Configure
 
-Edit `examples/feature-extraction/superpoint-feature-extractor/src/common/config.yaml`:
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `io.input`, and `output.insight.host`. Change the Insight port or channel only if your Insight setup uses different values.
 
-```yaml
-model:
-  path: models/superpoint_mpk.tar.gz
-
-io:
-  input: assets/datasets/tum-rgbd/freiburg1-desk.mp4
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port: 9000
-    channel: 0
-    bitrate_kbps: 1000
-
-runtime:
-  frames: 0
-  timeout_ms: 20000
-```
-
-`runtime.frames: 0` processes the complete video. Any stable input resolution supported by the
-hardware may be used. Core Preproc stretches each frame to the model's 640x480 input and publishes
-the resize geometry; BoxDecode returns source-space feature coordinates for the Insight overlay. A
-mid-stream resolution change is rejected because the model and video-sender graphs are built once
-from the first frame.
-
-Set `output.insight.host` to the host running Insight. The application sends the annotated stream
-as H.264 over RTP/UDP using the configured base port and channel.
+Set `runtime.frames` to `0` to process the full video. The input must keep the same resolution for the whole run.
 
 The included sequence comes from the TUM RGB-D visual-SLAM benchmark. Its camera motion and office
-scene are representative of the repeatable local features SuperPoint is designed to extract. The
-source, attribution, transformation, and CC BY 4.0 license are documented in
+scene provide repeatable local features for SuperPoint to extract. The source, attribution, transformation, and CC BY 4.0 license are documented in
 `assets/datasets/tum-rgbd/LICENSE.md`.
 
 ## Run
@@ -129,17 +99,17 @@ source, attribution, transformation, and CC BY 4.0 license are documented in
 ### C++
 
 ```bash
-./examples/feature-extraction/superpoint-feature-extractor/src/cpp/pre-built/superpoint-feature-extractor \
-  --config examples/feature-extraction/superpoint-feature-extractor/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/superpoint-feature-extractor \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/feature-extraction/superpoint-feature-extractor/src/python/requirements.txt
-python3 examples/feature-extraction/superpoint-feature-extractor/src/python/main.py \
-  --config examples/feature-extraction/superpoint-feature-extractor/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 Both implementations stream the overlay to Insight and print the number of processed frames,

@@ -109,8 +109,26 @@ README metadata fields are:
 - `Binary Name`
 - `Model`
 
-For portal-facing examples, add `Preview` after `Concept` and store the image
-under `portal/assets/examples/<category>/<example>/image.*`.
+The first paragraph under `Concept` becomes the portal card summary. Write one
+or two plain-English sentences, no more than 200 normalized characters, that
+say what the application does and produces. Name the main model family when it
+helps users understand the application. Do not use Markdown, executable names,
+implementation details, or filler such as "This example" in the summary.
+
+Every portal example needs a `Preview` section immediately after `Concept` and
+an application-specific image under
+`portal/assets/examples/<category>/<example>/image.*`. Check that it is clear in
+both the catalog card and detail page and contains no sensitive information.
+
+Treat the packaged `src/common/config.yaml` as the source of truth. Point users
+to it and name only the settings they must change. Do not copy the full file
+into the README. A focused snippet is appropriate only for an override or
+generated configuration that the package does not provide.
+
+Bundle instructions run from `prebuilt-apps/`. Define
+`APP_DIR=examples/<category>/<example>` once and reuse it so commands remain
+readable without changing relative model, asset, label, or output paths.
+Pretty-print structured output examples.
 
 ## Test Scope
 

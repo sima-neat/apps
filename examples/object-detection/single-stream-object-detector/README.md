@@ -14,7 +14,7 @@
 
 ## Concept
 
-This focused example ingests one RTSP H.264/H.265/MJPEG or HTTP MJPEG stream, decodes it, runs YOLO26 detection, and sends H.264 video plus detection metadata to Insight.
+Detects objects in one RTSP or MJPEG stream with YOLO26 and sends synchronized H.264 video and detection metadata to Insight.
 
 The decoded frame branches inside a single graph to the detector and to the H.264 sender. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from. Setting `output.save_dir` adds a third branch that returns the decoded frame to the application so it can write annotated JPEGs.
 
@@ -34,6 +34,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/single-stream-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -70,47 +71,26 @@ In the Insight Web UI, start the required stream and copy its source URL. Use RT
 
 ## Configure
 
-Edit `examples/object-detection/single-stream-object-detector/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, the source type, codec, and URL, and the Insight host and video and metadata ports.
 
-```yaml
-model:
-  path: <model-path>
-  labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
-
-source:
-  type: rtsp
-  codec: h264
-  url: <rtsp-url>
-  tcp: true
-  fps: 0
-
-inference:
-  frames: 0
-  min_score: 0.30
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port: <videoUDP-start-port>
-    metadata_port: <metadataUDP-start-port>
-```
+The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Keep `inference.frames` at `0` to run until you stop the application.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/object-detection/single-stream-object-detector/src/cpp/pre-built/single-stream-object-detector \
-  --config examples/object-detection/single-stream-object-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/single-stream-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/single-stream-object-detector/src/python/requirements.txt
-python3 examples/object-detection/single-stream-object-detector/src/python/main.py \
-  --config examples/object-detection/single-stream-object-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting
