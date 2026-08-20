@@ -55,6 +55,7 @@ struct AppConfig {
     bool test_mode           = false;
     bool show_display        = false;
     bool force_cpu_preproc   = false; // --cpu-preproc: use A65 NEON preproc even for RTSP (A/B vs EV74 CVU)
+    bool output_sink_explicit = false; // true when --output/--test/--no-display set output_sink from CLI
 
     face_recog::ScrfdConfig  scrfd;
     face_recog::MatchConfig  match;
@@ -109,14 +110,14 @@ static AppConfig parse_args(int argc, char** argv) {
             config_path = argv[++i];
         } else if (arg == "--input"      && i + 1 < argc) { cfg.input_uri      = argv[++i]; }
         else if (arg == "--gallery"      && i + 1 < argc) { cfg.gallery_path   = argv[++i]; }
-        else if (arg == "--output"       && i + 1 < argc) { cfg.output_sink    = argv[++i]; }
+        else if (arg == "--output"       && i + 1 < argc) { cfg.output_sink = argv[++i]; cfg.output_sink_explicit = true; }
         else if (arg == "--stream-host"  && i + 1 < argc) { cfg.stream_host    = argv[++i]; }
         else if (arg == "--stream-port"  && i + 1 < argc) { cfg.stream_port    = std::stoi(argv[++i]); }
         else if (arg == "--max-frames"   && i + 1 < argc) { cfg.max_frames     = std::stoi(argv[++i]); }
         else if (arg == "--rtsp-fps"     && i + 1 < argc) { cfg.rtsp_fps       = std::stoi(argv[++i]); }
         else if (arg == "--cpu-preproc") { cfg.force_cpu_preproc = true; }
-        else if (arg == "--test")   { cfg.test_mode    = true; cfg.show_display = false; cfg.output_sink = ""; }
-        else if (arg == "--no-display") { cfg.show_display = false; cfg.output_sink = ""; }
+        else if (arg == "--test")   { cfg.test_mode = true; cfg.show_display = false; cfg.output_sink = ""; cfg.output_sink_explicit = true; }
+        else if (arg == "--no-display") { cfg.show_display = false; cfg.output_sink = ""; cfg.output_sink_explicit = true; }
         else if (arg == "--display")    { cfg.show_display = true;  }
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: face-recognizer [--config <path>] [--input <uri>]\n"
@@ -142,7 +143,7 @@ static AppConfig parse_args(int argc, char** argv) {
     if (cfg.input_uri.empty())   cfg.input_uri   = yaml_cfg.input_uri;
     if (cfg.gallery_path.empty() || cfg.gallery_path == "gallery.bin")
         cfg.gallery_path = yaml_cfg.gallery_path;
-    if (cfg.output_sink.empty()) cfg.output_sink = yaml_cfg.output_sink;
+    if (!cfg.output_sink_explicit && cfg.output_sink.empty()) cfg.output_sink = yaml_cfg.output_sink;
     cfg.scrfd_model   = yaml_cfg.scrfd_model;
     cfg.arcface_model = yaml_cfg.arcface_model;
     cfg.timeout_ms      = yaml_cfg.timeout_ms;
@@ -762,6 +763,7 @@ int main(int argc, char** argv) {
 
     const int RECOG_INTERVAL = cfg.recog_interval;
     static std::vector<face_recog::MatchResult> cached_matches;
+    static std::vector<face_recog::Detection>   cached_detections; // boxes from last ArcFace run
     int last_recog_frame = -RECOG_INTERVAL;
 
     // ── main loop ─────────────────────────────────────────────────────────────
@@ -899,12 +901,31 @@ int main(int argc, char** argv) {
         }
         const auto tc1 = Clock::now();
 
+        // Determine whether to re-run ArcFace recognition this frame.
+        // Always rerun when count changes. When count is the same, check if
+        // detection boxes have drifted significantly from the cached positions —
+        // SCRFD sorts by score, so a confidence crossover between two faces
+        // silently reorders them and would attach the wrong cached label.
+        // A centroid shift > half a box width signals a likely reorder or
+        // new face and forces fresh recognition.
         const bool face_count_changed = detections.size() != cached_matches.size();
-        const bool recog_due = face_count_changed ||
+        bool boxes_reordered = false;
+        if (!face_count_changed && detections.size() > 1) {
+            for (size_t di = 0; di < detections.size() && !boxes_reordered; ++di) {
+                const auto& cur = detections[di];
+                const auto& prv = cached_detections[di];
+                const float cx = (cur.x1 + cur.x2) * 0.5f, cy = (cur.y1 + cur.y2) * 0.5f;
+                const float px = (prv.x1 + prv.x2) * 0.5f, py = (prv.y1 + prv.y2) * 0.5f;
+                const float half_w = (prv.x2 - prv.x1) * 0.5f;
+                boxes_reordered = (std::abs(cx - px) + std::abs(cy - py)) > half_w;
+            }
+        }
+        const bool recog_due = face_count_changed || boxes_reordered ||
                                (frame_count - last_recog_frame >= RECOG_INTERVAL);
         if (recog_due) {
             cached_matches.clear();
             cached_matches.reserve(detections.size());
+            cached_detections = detections;
             for (const auto& det : detections) {
                 const auto ta0i = Clock::now();
                 // NV12 path: convert only the face-ROI region (e.g. 200×200) to BGR

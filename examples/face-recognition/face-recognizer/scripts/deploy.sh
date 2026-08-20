@@ -72,11 +72,7 @@ ssh -o StrictHostKeyChecking=no "${DEVKIT_USER}@${DEVKIT_IP}" \
 
 # Copy binaries
 for BIN in face-recognizer face-enroll face-model-test; do
-  BIN_PATH="${BUILD_DIR}/examples/face-recognition/face-recognizer/src/cpp/${BIN}"
-  if [[ ! -f "${BIN_PATH}" ]]; then
-    # Fallback: flat build
-    BIN_PATH="${BUILD_DIR}/${BIN}"
-  fi
+  BIN_PATH="${BUILD_DIR}/examples/face-recognition/face-recognizer_cpp/${BIN}"
   if [[ -f "${BIN_PATH}" ]]; then
     scp -o StrictHostKeyChecking=no "${BIN_PATH}" "${DEVKIT_USER}@${DEVKIT_IP}:${DEPLOY_DIR}/"
     echo "  Deployed: ${BIN}"
@@ -87,7 +83,7 @@ done
 
 # Copy models
 MODELS_DIR="${MOD_ROOT}/assets/models"
-for MODEL in scrfd_2.5g_bnkps.mla_mpk.tar.gz w600k_mbf.surgery_mpk.tar.gz; do
+for MODEL in scrfd_2.5g_bnkps.mla_mpk.tar.gz w600k_r50.surgery_mpk.tar.gz; do
   if [[ -f "${MODELS_DIR}/${MODEL}" ]]; then
     scp -o StrictHostKeyChecking=no "${MODELS_DIR}/${MODEL}" \
         "${DEVKIT_USER}@${DEVKIT_IP}:${DEPLOY_DIR}/assets/models/"
@@ -97,10 +93,20 @@ for MODEL in scrfd_2.5g_bnkps.mla_mpk.tar.gz w600k_mbf.surgery_mpk.tar.gz; do
   fi
 done
 
-# Copy config
+# Copy config and rewrite paths to be relative to the deploy directory.
+# config.yaml paths are authored relative to the apps/ root (e.g.
+# examples/face-recognition/face-recognizer/assets/models/...) so they resolve
+# when running from apps/.  After deployment the user runs from DEPLOY_DIR, so
+# the prefix must be stripped to match the local assets/ and gallery.bin layout.
 CONF="${SCRIPT_DIR}/../src/common/config.yaml"
 scp -o StrictHostKeyChecking=no "${CONF}" "${DEVKIT_USER}@${DEVKIT_IP}:${DEPLOY_DIR}/config.yaml"
-echo "  Deployed: config.yaml"
+ssh -o StrictHostKeyChecking=no "${DEVKIT_USER}@${DEVKIT_IP}" \
+    "sed -i \
+       's|examples/face-recognition/face-recognizer/assets/models/|assets/models/|g; \
+        s|examples/face-recognition/face-recognizer/gallery\.bin|gallery.bin|g; \
+        s|sink:[[:space:]]*display|sink: \"\"|g' \
+       ${DEPLOY_DIR}/config.yaml"
+echo "  Deployed: config.yaml (paths rewritten for deploy dir)"
 
 # Copy gallery if provided
 if [[ -n "${GALLERY_FILE}" && -f "${GALLERY_FILE}" ]]; then

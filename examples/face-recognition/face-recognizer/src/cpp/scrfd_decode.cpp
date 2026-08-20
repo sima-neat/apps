@@ -579,7 +579,7 @@ static std::vector<Anchor> make_anchors(int scale_idx, int infer_h, int infer_w,
     const int fh = static_cast<int>(std::ceil(static_cast<float>(infer_h) / stride));
     const int fw = static_cast<int>(std::ceil(static_cast<float>(infer_w) / stride));
     std::vector<Anchor> anchors;
-    anchors.reserve(fh * fw * num_anchors);
+    anchors.reserve(static_cast<size_t>(fh) * fw * num_anchors);
     for (int i = 0; i < fh; ++i)
         for (int j = 0; j < fw; ++j)
             for (int a = 0; a < num_anchors; ++a)
