@@ -1,4 +1,4 @@
-#include "../../src/cpp/detection_egress.h"
+#include "support/object_detection/detection_egress.h"
 #include "../../src/cpp/detection_watchdog.h"
 #include "support/testing/test_process.h"
 
@@ -49,7 +49,7 @@ struct TestBox {
 
 std::string legacy_metadata_json(const std::vector<TestBox>& boxes,
                                  const std::vector<std::string>& labels, int frame_w, int frame_h,
-                                 const high_density::detection_egress::FrameMetadata& frame) {
+                                 const sima_examples::detection_egress::FrameMetadata& frame) {
   nlohmann::json data;
   data["objects"] = nlohmann::json::array();
   int object_index = 1;
@@ -99,7 +99,7 @@ bool test_metadata_fast_path_preserves_insight_payload() {
       {105.0f, 10.0f, 115.0f, 18.0f, 0.25f, 99},
   };
   const std::vector<std::string> labels{"person", "bicycle\n\"quoted\""};
-  high_density::detection_egress::FrameMetadata frame;
+  sima_examples::detection_egress::FrameMetadata frame;
   frame.stream_index = 7;
   frame.stream_id = "stream7";
   frame.frame_id = 42;
@@ -112,7 +112,7 @@ bool test_metadata_fast_path_preserves_insight_payload() {
 
   const std::string expected = legacy_metadata_json(boxes, labels, 100, 100, frame);
   const std::string actual =
-      high_density::detection_egress::serialize(boxes, labels, 100, 100, frame);
+      sima_examples::detection_egress::serialize(boxes, labels, 100, 100, frame);
   bool ok = expect_true(actual == expected,
                         "single-pass metadata matches the legacy Insight JSON byte-for-byte");
 
@@ -134,7 +134,7 @@ bool test_metadata_fast_path_preserves_insight_payload() {
   frame.pts_ns = -1;
   frame.rtp_timestamp.reset();
   const std::string no_pts =
-      high_density::detection_egress::serialize(boxes, labels, 100, 100, frame);
+      sima_examples::detection_egress::serialize(boxes, labels, 100, 100, frame);
   ok &= expect_true(no_pts == legacy_metadata_json(boxes, labels, 100, 100, frame),
                     "single-pass metadata preserves the no-PTS envelope");
   ok &= expect_true(!nlohmann::json::parse(no_pts).contains("rtp_timestamp"),

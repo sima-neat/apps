@@ -23,7 +23,7 @@
 #include <string_view>
 #include <vector>
 
-namespace high_density::detection_egress {
+namespace sima_examples::detection_egress {
 
 struct FrameMetadata {
   int stream_index = 0;
@@ -39,9 +39,8 @@ struct FrameMetadata {
 
 inline const std::string kUnknownLabel = "unknown";
 
-// Serialize the exact Insight object-detection envelope in one JSON DOM pass.
-// BoxRange is intentionally structural so this app-only helper is host-testable
-// without linking the Neat runtime; its elements expose x1/y1/x2/y2/score/class_id.
+// Serialize the Insight object-detection envelope in one JSON DOM pass. BoxRange is intentionally
+// structural so host applications can use it without linking the NEAT target runtime.
 template <typename BoxRange>
 std::string serialize(const BoxRange& boxes, const std::vector<std::string>& labels, int frame_w,
                       int frame_h, const FrameMetadata& frame) {
@@ -56,8 +55,9 @@ std::string serialize(const BoxRange& boxes, const std::vector<std::string>& lab
   payload["duration_ns"] = frame.duration_ns;
   payload["input_seq"] = frame.input_seq;
   payload["orig_input_seq"] = frame.orig_input_seq;
-  if (frame.rtp_timestamp.has_value())
+  if (frame.rtp_timestamp.has_value()) {
     payload["rtp_timestamp"] = *frame.rtp_timestamp;
+  }
 
   auto& objects = payload["data"]["objects"];
   objects = nlohmann::json::array();
@@ -67,10 +67,12 @@ std::string serialize(const BoxRange& boxes, const std::vector<std::string>& lab
     const int y1 = std::max(0, static_cast<int>(box.y1));
     int width = std::max(0, static_cast<int>(box.x2 - box.x1));
     int height = std::max(0, static_cast<int>(box.y2 - box.y1));
-    if (x1 + width > frame_w)
+    if (x1 + width > frame_w) {
       width = frame_w - x1;
-    if (y1 + height > frame_h)
+    }
+    if (y1 + height > frame_h) {
       height = frame_h - y1;
+    }
 
     const std::string& label = box.class_id >= 0 && box.class_id < static_cast<int>(labels.size())
                                    ? labels[static_cast<std::size_t>(box.class_id)]
@@ -88,4 +90,4 @@ std::string serialize(const BoxRange& boxes, const std::vector<std::string>& lab
   return payload.dump();
 }
 
-} // namespace high_density::detection_egress
+} // namespace sima_examples::detection_egress
