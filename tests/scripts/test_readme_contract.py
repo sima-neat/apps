@@ -19,11 +19,16 @@ def write_readme(
     install: str,
     run: str,
     concept: str = "Classifies one image with a compiled model and prints the result.",
-    configure: str = "Open `${APP_DIR}/src/common/config.yaml` and set `model.path`.",
+    configure: str | None = (
+        "Open `${APP_DIR}/src/common/config.yaml` and set `model.path`."
+    ),
     preview: str = "![Sample preview](../../../portal/assets/examples/classification/sample/image.png)",
 ) -> Path:
     readme = tmp_path / "examples" / "classification" / "sample" / "README.md"
     readme.parent.mkdir(parents=True)
+    configure_section = (
+        f"## Configure\n{configure}\n\n" if configure is not None else ""
+    )
     readme.write_text(
         f"""# Sample
 
@@ -53,10 +58,7 @@ def write_readme(
 ## Prepare the Model
 Download the sample model.
 
-## Configure
-{configure}
-
-## Run
+{configure_section}## Run
 {run}
 
 ## Source Files
@@ -121,6 +123,17 @@ def test_readme_contract_accepts_single_example_install(tmp_path: Path) -> None:
     )
 
     assert validate_readme(readme) == []
+
+
+def test_readme_contract_requires_configure(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        configure=None,
+    )
+
+    assert "Missing required section: ## Configure" in validate_readme(readme)
 
 
 def test_installed_readme_contract_requires_latest_install(tmp_path: Path) -> None:

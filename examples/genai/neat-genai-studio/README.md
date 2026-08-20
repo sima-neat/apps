@@ -110,7 +110,10 @@ The UI virtual environment is stored under `./.venv` unless `APP_VENV` is set.
 The generated config is stored at `./config.local.yaml` unless `CONFIG_PATH` is
 set. RAG is enabled by default and uses `src/python/ui/milvus.db`.
 
-### Configure the model catalog
+## Configure
+
+### Model catalog
+
 After install, edit `config.local.yaml` to change the catalog, memory budget, or
 the models loaded at startup:
 

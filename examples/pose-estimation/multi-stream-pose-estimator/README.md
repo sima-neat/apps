@@ -14,7 +14,7 @@
 
 ## Concept
 
-Estimates 17-point COCO poses in multiple RTSP streams with YOLOv8 Pose and sends synchronized video and pose metadata to Insight.
+Estimates 17-point COCO poses in multiple RTSP streams with YOLO26 Pose and sends synchronized video and pose metadata to Insight.
 
 Every stream feeds one shared pose model. Each decoded branch is admitted through a real-time, keep-latest link, so an overloaded stream drops frames instead of building a backlog.
 

@@ -48,15 +48,17 @@ The validator requires these sections in order:
 
 1. `Metadata`
 2. `Concept`
-3. `Prerequisites`
-4. `Install Apps`
-5. `Prepare the Model`
-6. `Run`
-7. `Source Files`
-8. `Development From Source`
+3. `Preview`
+4. `Prerequisites`
+5. `Install Apps`
+6. `Prepare the Model`
+7. `Configure`
+8. `Run`
+9. `Source Files`
+10. `Development From Source`
 
-Optional sections such as `Preview`, `Configure`, `Expected Result`, and
-`Troubleshooting` belong where they support that sequence.
+Optional sections such as `Expected Result` and `Troubleshooting` belong where
+they support that sequence.
 
 The installed workflow must:
 
