@@ -7,15 +7,15 @@
 | Difficulty | Advanced |
 | Tags | object-detection, rtsp, multistream, adaptive-resolution, insight, yolo26 |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | adaptive-resolution-object-detector |
 | Model | yolo26n-det-int8-b1 |
 
 ## Concept
 
-Multi-stream RTSP YOLO26 detection that publishes video plus detection metadata
-per stream to Insight. One entry point per language carries two graph
-topologies, chosen with `--mode`:
+Runs YOLO26 object detection across multiple RTSP streams and sends each stream's video and detection metadata to Insight, with a choice of two graph topologies.
+
+One entry point per language carries both topologies, chosen with `--mode`:
 
 **`--mode adaptive`** (default) builds **one graph per stream**. Streams can be
 added or removed while the others keep running: the app polls its config file
@@ -35,6 +35,10 @@ The C++ and Python entry points take identical flags. That is what lets
 [`pipelines/`](pipelines/README.md) switch implementation language from a
 browser without changing anything else.
 
+## Preview
+
+![Adaptive resolution object detector preview](../../../portal/assets/examples/object-detection/adaptive-resolution-object-detector/image.png)
+
 ## Prerequisites
 
 - Installed Neat Development Environment and Neat Library.
@@ -48,6 +52,7 @@ browser without changing anything else.
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/adaptive-resolution-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -135,19 +140,19 @@ without opening any stream.
 ### C++
 
 ```bash
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 examples/object-detection/adaptive-resolution-object-detector/src/cpp/pre-built/adaptive-resolution-object-detector \
+SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 ./${APP_DIR}/src/cpp/pre-built/adaptive-resolution-object-detector \
   --mode adaptive \
-  --config examples/object-detection/adaptive-resolution-object-detector/src/common/config.yaml
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/adaptive-resolution-object-detector/src/python/requirements.txt
-SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 examples/object-detection/adaptive-resolution-object-detector/src/python/main.py \
+pip install -r ${APP_DIR}/src/python/requirements.txt
+SIMA_GST_RUN_INPUT_TIMEOUT_MS=120000 python3 ${APP_DIR}/src/python/main.py \
   --mode adaptive \
-  --config examples/object-detection/adaptive-resolution-object-detector/src/common/config.yaml
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Pipelines UI
