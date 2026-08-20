@@ -533,16 +533,34 @@ def wait_for_streams(n: int, timeout_s: int = 300) -> bool:
 
 
 def delivered() -> dict[str, str]:
-    """Map cam id -> delivered WxH, parsed from the application log."""
+    """Map cam id -> delivered WxH, parsed from the application log.
+
+    The two apps label their startup banner differently, and this pipeline runs
+    the adaptive one:
+
+      adaptive  [stream cam-1] channel=0 rtsp=... native=1280x720@25 ...
+      fused     [stream 0] rtsp=... stream=1280x720@30 ...
+
+    Both are accepted: the adaptive banner already carries a cam id, the fused
+    one carries a zero-based index. Matching only the fused shape is why this
+    used to come back empty here and the UI showed no resolution.
+    """
     log = Path(LOG)
     out: dict[str, str] = {}
     if not log.exists():
         return out
     for line in log.read_text().splitlines():
-        if "] rtsp=" in line and "stream=" in line:
-            idx = line.split("[stream ")[1].split("]")[0]
-            geom = line.split("stream=")[1].split()[0]      # WxH@fps
-            out[f"cam-{int(idx) + 1}"] = geom.split("@")[0]
+        if "[stream " not in line or "rtsp=" not in line:
+            continue
+        label = line.split("[stream ")[1].split("]")[0]
+        if "native=" in line:
+            geom = line.split("native=")[1].split()[0]      # WxH@fps
+        elif "stream=" in line:
+            geom = line.split("stream=")[1].split()[0]
+        else:
+            continue
+        cam = label if label.startswith("cam-") else f"cam-{int(label) + 1}"
+        out[cam] = geom.split("@")[0]
     return out
 
 

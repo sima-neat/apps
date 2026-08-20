@@ -697,8 +697,11 @@ StreamRuntime init_stream_runtime(const AppConfig& cfg, int channel, const Strea
   sima_examples::require(rt.metadata_sender->ok(), metadata_err);
 
   build_pipeline(cfg, rt);
+  // The `native=` label is not decoration: pipelines/ parses this banner to show
+  // each stream's resolution, and an unlabelled WxH cannot be told apart from
+  // anything else on the line. src/python/adaptive_app.py prints the same shape.
   std::cout << "[stream " << source.id << "] channel=" << channel << " rtsp=" << source.rtsp_url
-            << " " << rt.frame_w << "x" << rt.frame_h << "@" << rt.output_fps
+            << " native=" << rt.frame_w << "x" << rt.frame_h << "@" << rt.output_fps
             << " video=" << (cfg.video_enabled ? std::to_string(rt.video_port) : "disabled")
             << " metadata=" << rt.metadata_sender->metadata_port() << "\n";
   return rt;
