@@ -8,13 +8,13 @@
 | Difficulty | Advanced |
 | Tags | object-detection, genai, yolo26, rtsp, insight, vlm |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | detection-to-vlm-assistant |
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
 
-This example decodes an RTSP stream, runs YOLO26 detection, and sends video plus detection metadata to Insight. When GenAI is enabled, a bounded background worker crops the highest-scoring person and sends it to a configured VLM server without blocking detection or Insight output.
+Detects people in a live RTSP stream with YOLO26 and sends video to Insight. It can also crop the highest-confidence person and ask a configured vision-language model about them.
 
 The decoded frame branches inside a single graph to the detector, to the H.264 sender, and back to the application for the GenAI crop. Video and metadata therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from.
 
@@ -35,6 +35,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/genai/detection-to-vlm-assistant
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -89,37 +90,9 @@ In the Insight Web UI, start the required stream and copy its RTSP URL. Use the 
 
 ## Configure
 
-Edit `examples/genai/detection-to-vlm-assistant/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set the RTSP URL, detector model path, and Insight host and ports.
 
-```yaml
-source:
-  rtsp_url: <rtsp-url>
-
-model:
-  path: <model-path>
-  labels: examples/genai/detection-to-vlm-assistant/src/common/coco_label.txt
-
-insight:
-  host: <insight-host-ip>
-  video_port: <videoUDP-start-port>
-  metadata_port: <metadataUDP-start-port>
-
-genai_server:
-  host: 0.0.0.0
-  port: 9998
-  model:
-    name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
-    path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-
-genai:
-  enabled: false
-  host: 127.0.0.1
-  port: 9998
-  system_prompt: <system-prompt>
-  user_prompt: <user-prompt>
-```
-
-Set `genai.enabled: false` to run only detection and Insight output.
+The packaged config sets `genai.enabled` to `true`. Check the server model name and path and update the prompts before using the VLM. Set it to `false` to run only detection and Insight output.
 
 ## Run
 
@@ -127,23 +100,25 @@ Install the Python dependencies:
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/genai/detection-to-vlm-assistant/src/python/requirements.txt
+pip install -r ${APP_DIR}/src/python/requirements.txt
 ```
 
 When GenAI is enabled, start the server in one terminal:
 
 ```bash
+APP_DIR=examples/genai/detection-to-vlm-assistant
 source ~/pyneat/bin/activate
-python3 examples/genai/detection-to-vlm-assistant/src/python/genai_server.py \
-  --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
+python3 ${APP_DIR}/src/python/genai_server.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 Start the detection pipeline in another terminal:
 
 ```bash
+APP_DIR=examples/genai/detection-to-vlm-assistant
 source ~/pyneat/bin/activate
-python3 examples/genai/detection-to-vlm-assistant/src/python/detector_app.py \
-  --config examples/genai/detection-to-vlm-assistant/src/common/config.yaml
+python3 ${APP_DIR}/src/python/detector_app.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 The GenAI path checks `/v1/models`, waits at least `genai.interval_seconds` between requests, and bounds queued and in-flight work with `genai.max_pending_requests`.

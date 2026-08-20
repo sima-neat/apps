@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,6 +18,31 @@ assert _SPEC is not None and _SPEC.loader is not None
 main = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = main
 _SPEC.loader.exec_module(main)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("source_type", "url", "tcp", "expected_tcp"),
+    [
+        ("rtsp", "rtsp://camera/live", True, True),
+        ("rtsp", "rtsp://camera/live", False, False),
+        ("http", "https://camera/live", True, False),
+    ],
+)
+def test_ffprobe_transport_matches_source(monkeypatch, source_type, url, tcp, expected_tcp):
+    captured = []
+
+    def fake_run(cmd, **_kwargs):
+        captured.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="width=1920\nheight=1080\navg_frame_rate=30/1\n")
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    cfg = main.AppConfig("model", Path("labels"), url, source_type, tcp=tcp,
+                         ssl_strict=False)
+
+    assert main.probe_ffprobe(cfg) == (1920, 1080, 30)
+    assert captured[0].count("-rtsp_transport") == int(expected_tcp)
+    assert captured[0][-3:] == ["-tls_verify", "0", url]
 
 
 @pytest.mark.unit

@@ -8,17 +8,17 @@
 | Difficulty | <Beginner / Intermediate / Advanced> |
 | Tags | <comma-separated tags> |
 | Languages | C++, Python |
-| Status | <experimental / stable> |
+| Status | stable |
 | Binary Name | <binary> |
 | Model | <default-model> |
 
 ## Concept
 
-<Explain what the example demonstrates and which Neat Library capabilities it uses.>
+<In one or two plain-English sentences, say what the application does and produces. Name the main model or model family when useful. Keep this paragraph under 200 characters because the portal uses it as the card summary.>
 
 ## Preview
 
-Optional. Place portal images under `portal/assets/examples/<category>/<example>/`.
+Add an application-specific image under `portal/assets/examples/<category>/<example>/`.
 
 ```md
 ![Demo screenshot](../../../portal/assets/examples/<category>/<example>/image.png)
@@ -36,6 +36,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/<category>/<example>
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -74,33 +75,26 @@ Set `model.path` in the example config to the downloaded package.
 
 ## Configure
 
-Edit `examples/<category>/<example>/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Name only the values users must change, such as the model path, input, output, stream URLs, or Insight host.
 
-```yaml
-model:
-  path: <model-path>
-
-io:
-  input_dir: assets/datasets/coco
-  output_dir: sandbox/<example>
-```
+Do not copy the packaged configuration into the README. Keep a focused snippet only when the workflow creates an override or generated configuration that the package does not already provide.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/<category>/<example>/src/cpp/pre-built/<binary> \
-  --config examples/<category>/<example>/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/<binary> \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/<category>/<example>/src/python/requirements.txt
-python3 examples/<category>/<example>/src/python/main.py \
-  --config examples/<category>/<example>/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

@@ -73,6 +73,7 @@ jobs:
           -e NEAT_ARTIFACTS_BASE_URL="${artifact_base_url%/}/core" \
           -e NEAT_CORE_INSTALL_MODE="vulcan" \
           -e NEAT_INSTALLER_SKIP_PLATFORM_CHECK=ON \
+          -e NEAT_SYNC_SYSROOT=ON \
           -e NEAT_VULCAN_ENV="${{ needs.resolve-vulcan-config.outputs.vulcan_env }}" \
           "${sdk_container}" \
           bash -lc '

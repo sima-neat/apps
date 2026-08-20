@@ -8,13 +8,13 @@
 | Difficulty | Beginner |
 | Tags | camera, mipi, libcamera, zero-copy, diagnostics |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | mipi-camera-capture |
 | Model | None |
 
 ## Concept
 
-Capture NV12 frames directly from a MIPI/libcamera camera with the Neat Library `CameraInput` node. The example requests an application-owned 32-buffer capture queue, exercises the strict DMA-BUF path, and records timing and luminance diagnostics in JSON.
+Captures NV12 frames from a MIPI camera and saves selected frames with timing and luminance diagnostics. It uses Neat CameraInput with a zero-copy DMA-BUF path.
 
 The camera-to-Neat path remains zero-copy. Copying occurs only for the explicitly selected snapshots written by the Python application.
 
@@ -41,6 +41,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/benchmarking/mipi-camera-capture
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -51,38 +52,17 @@ This camera capture example does not use a model. No model download or compilati
 
 ## Configure
 
-Edit `examples/benchmarking/mipi-camera-capture/src/common/config.yaml`:
+Open `${APP_DIR}/src/common/config.yaml`. Set `camera.name` to a name reported by `cam -l`, or leave it empty to use the default camera. Change the capture duration, sample times, or output directory if needed.
 
-```yaml
-camera:
-  name: <camera-name-from-cam-l>
-  width: 1920
-  height: 1080
-  fps_num: 30
-  fps_den: 1
-  format: NV12
-  capture_buffers: 32
-  strict_zero_copy: true
-  queue_depth: 2
-
-capture:
-  duration_seconds: 30
-  sample_times_seconds: [3, 15, 27]
-  pull_timeout_ms: 2000
-
-output:
-  directory: sandbox/mipi-camera-capture
-```
-
-Leave `camera.name` empty to select libcamera's default camera. Keep `strict_zero_copy: true` to fail rather than silently copying when the downstream allocator cannot be negotiated.
+Keep `camera.strict_zero_copy` enabled to report an error instead of silently copying frames when zero-copy capture is unavailable.
 
 ## Run
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/benchmarking/mipi-camera-capture/src/python/requirements.txt
-python3 examples/benchmarking/mipi-camera-capture/src/python/main.py \
-  --config examples/benchmarking/mipi-camera-capture/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 The output directory contains sampled NV12 frames and `summary.json`. Convert a frame for visual inspection with:
