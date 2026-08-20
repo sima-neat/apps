@@ -3,7 +3,7 @@ models:
     source: model-registry
     name: ssd_mobilenet_v2
     ref: develop
-    spec: latest
+    spec: d15c24ddb8cd
     file: ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz
 unit:
   python: true
