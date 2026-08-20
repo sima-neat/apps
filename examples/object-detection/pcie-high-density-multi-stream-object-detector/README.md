@@ -64,9 +64,10 @@ To build the card application yourself, see
 Download the model on the Modalix PCIe Card:
 
 ```bash
+export MODELZOO_VERSION="2.1.3"
 mkdir -p /workspace/models
 cd /workspace/models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
 ```
 
 Use this absolute path for `model.path` in the configuration:
