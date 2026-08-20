@@ -26,6 +26,7 @@ from shared.config import HubConfig, classify_model_dir, model_dir_complete
 
 _internet_cache: dict = {"ok": None, "at": 0.0, "refreshing": False}
 _internet_lock = threading.Lock()
+_REPO_ID_MARKER = ".neat-hub-repo"
 
 
 def _valid_repo_component(value: str) -> bool:
@@ -72,7 +73,7 @@ def _catalog_target(catalog_dir: Path, repo_id: str) -> Path:
 
 
 def _existing_catalog_target(catalog_dir: Path, repo_id: str) -> Path:
-    """Prefer the canonical target, but recognize the legacy basename layout."""
+    """Prefer the canonical target; trust a legacy path only with ownership metadata."""
     target = _catalog_target(catalog_dir, repo_id)
     if target.exists() or safe_name(repo_id) == repo_id.rsplit("/", 1)[-1]:
         return target
@@ -83,7 +84,11 @@ def _existing_catalog_target(catalog_dir: Path, repo_id: str) -> Path:
         legacy.relative_to(root)
     except ValueError as exc:
         raise ValueError("Model target escapes the catalog directory") from exc
-    return legacy if legacy.exists() else target
+    try:
+        owner = (legacy / _REPO_ID_MARKER).read_text(encoding="utf-8").strip()
+    except OSError:
+        return target
+    return legacy if owner.casefold() == repo_id.casefold() else target
 
 
 def _dir_size(path: Path) -> int:
@@ -429,6 +434,7 @@ def hub_download_stream(catalog_dir: Path | None, hub: HubConfig, repo_id: str) 
 
     # Mark the download complete so completeness checks trust it definitively.
     try:
+        (target / _REPO_ID_MARKER).write_text(canonical_repo_id + "\n", encoding="utf-8")
         (target / ".neat-complete").write_text("ok\n")
     except OSError:
         pass

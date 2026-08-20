@@ -71,6 +71,10 @@ catalog_dir_name() {
   fi
 }
 
+write_repo_marker() {
+  printf '%s\n' "$1" > "$2/.neat-hub-repo"
+}
+
 # The Neat sparkle, formed from the logo palette, plus the wordmark + tagline.
 banner() {
   printf '\n'
@@ -236,6 +240,7 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
   if [[ -n "${CHAT_MODEL_REPO}" ]]; then
     step "Downloading chat/VLM model: ${CHAT_MODEL_REPO}"
     "${APP_VENV}/bin/hf" download "${CHAT_MODEL_REPO}" --local-dir "${CHAT_MODEL_DIR}"
+    write_repo_marker "${CHAT_MODEL_REPO}" "${CHAT_MODEL_DIR}"
   else
     info "No default chat/VLM model — download one from the UI (or set CHAT_MODEL_REPO)."
   fi
@@ -250,6 +255,7 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
     name="$(catalog_dir_name "${repo}")"
     step "Downloading catalog model: ${repo}"
     "${APP_VENV}/bin/hf" download "${repo}" --local-dir "${MODELS_DIR}/${name}"
+    write_repo_marker "${repo}" "${MODELS_DIR}/${name}"
   done
   ok "Model downloads complete."
 else

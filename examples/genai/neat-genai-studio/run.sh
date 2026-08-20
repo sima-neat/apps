@@ -341,6 +341,33 @@ do_clean() {
 # get-example.sh) it re-fetches the release archive and mirrors the source. Set
 # NEAT_APPS_BRANCH chooses a branch (default main); UPDATE_DEPS=1 refreshes only
 # the Python dependencies.
+migrate_piper_voices() {
+  local assets="${PYTHON_DIR}/ui/assets" py voice encoder decoder needs_split=0
+  py="${PIPERTTS_PYTHON:-${EXAMPLE_DIR}/.venv-pipertts/bin/python}"
+  for voice in "${assets}"/*.onnx; do
+    [[ -e "${voice}" ]] || continue
+    [[ "${voice}" == *.enc.onnx || "${voice}" == *.dec.onnx ]] && continue
+    encoder="${voice%.onnx}.enc.onnx"
+    decoder="${voice%.onnx}.dec.onnx"
+    if [[ ! -f "${encoder}" || ! -f "${decoder}" \
+          || "${voice}" -nt "${encoder}" || "${voice}" -nt "${decoder}" ]]; then
+      needs_split=1
+      break
+    fi
+  done
+  [[ "${needs_split}" == "1" ]] || return 0
+
+  step "Preparing installed Piper voices for streaming…"
+  if [[ ! -x "${py}" ]]; then
+    errln "Piper environment not found; run ./setup.sh before updating."
+    return 1
+  fi
+  if ! "${py}" -c "import onnx" >/dev/null 2>&1; then
+    "${py}" -m pip install "onnx>=1.17,<2" || return 1
+  fi
+  "${py}" "${PYTHON_DIR}/split_voices.py" "${assets}"
+}
+
 do_update() {
   local branch="${NEAT_APPS_BRANCH:-main}"
   if do_status >/dev/null 2>&1; then
@@ -416,16 +443,18 @@ do_update() {
   # Dependency refresh is opt-in and deliberately avoids setup's data-writing
   # model, voice, config and RAG stages.
   if [[ "${UPDATE_DEPS:-0}" == "0" ]]; then
-    ok "Update complete. Run ${C_BOLD}./setup.sh${C_RESET} if dependencies changed."
+    info "Python dependency refresh skipped (set UPDATE_DEPS=1 to enable it)."
   else
     step "Refreshing Python dependencies…"
     if "${EXAMPLE_DIR}/setup.sh" --dependencies-only; then
-      ok "Update complete."
+      ok "Python dependencies refreshed."
     else
       errln "Dependency refresh failed."
       return 1
     fi
   fi
+  migrate_piper_voices || { errln "Piper voice migration failed."; return 1; }
+  ok "Update complete."
 }
 
 case "${1:-run}" in
@@ -474,6 +503,13 @@ if [[ ! -x "${DEFAULT_APP_VENV}/bin/python" || ! -f "${DEFAULT_LOCAL_CONFIG}" ]]
   if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python" ]]; then
     export PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
   fi
+fi
+
+# Also covers the first launch after updating from a run.sh version that did
+# not yet invoke the migration itself.
+if ! migrate_piper_voices; then
+  errln "Installed Piper voices could not be prepared; fix the error above and retry."
+  exit 1
 fi
 
 if [[ ! -f "${CONFIG_PATH}" ]]; then

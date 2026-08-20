@@ -124,12 +124,28 @@ def _request_stream(req):
                     complete = True
                     return
                 else:
+                    # An error frame also terminates this request; the worker is
+                    # already ready for another command and remains reusable.
+                    complete = True
                     raise RuntimeError(payload.decode("utf-8", "replace"))
         finally:
-            # Leaving early would leave unread chunk frames in stdout and corrupt
-            # the next request, so discard this worker and respawn on demand.
+            # Leaving early would leave unread frames in stdout and corrupt the
+            # next request. Drain this response to its terminal frame so the
+            # worker keeps its loaded voice sessions; discard it only if the
+            # protocol/pipe fails while draining.
             if not complete:
-                _discard_worker()
+                try:
+                    while True:
+                        status = _read_exact(proc.stdout, 1)[0]
+                        length = struct.unpack(">I", _read_exact(proc.stdout, 4))[0]
+                        _read_exact(proc.stdout, length)
+                        if status in (0, 1):
+                            complete = True
+                            break
+                except Exception:
+                    pass
+                if not complete:
+                    _discard_worker()
 
 
 def prepare_voice_for_streaming(model_path):
