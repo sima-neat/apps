@@ -18,9 +18,9 @@ use the closest current Apps example as the implementation starting point.
    - In the Neat Development Environment, read `/neat-resources/core-src` first.
    - Prefer installed public headers under the Neat Development Environment sysroot when checking the user-facing contract.
    - Read `references/source-of-truth.md`.
-2. Determine the runtime artifact, input owner, and broad API family.
+2. Determine the artifact, input owner, and broad API family.
    - Read `references/api-decision-map.md`.
-   - Continue after the runtime artifact, input owner, and API family are known.
+   - Continue once all three are known.
 3. Before writing application code, inspect the closest current example under `/neat-resources/apps-src/examples`.
    - Use it for project structure, configuration, graph composition, build commands, and runtime patterns.
    - Verify API details against the installed Core headers and docs.
