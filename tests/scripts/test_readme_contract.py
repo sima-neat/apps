@@ -266,6 +266,19 @@ def test_readme_contract_rejects_inline_code_preview(tmp_path: Path) -> None:
     assert any("Preview must contain a Markdown image" in error for error in validate_readme(readme))
 
 
+def test_readme_contract_rejects_raw_html_preview(tmp_path: Path) -> None:
+    readme = write_readme(
+        tmp_path,
+        install=VALID_INSTALL,
+        run=VALID_RUN,
+        preview="""<pre>
+![Sample preview](../../../portal/assets/examples/classification/sample/image.png)
+</pre>""",
+    )
+
+    assert "Preview must not contain raw HTML" in validate_readme(readme)
+
+
 def test_readme_contract_rejects_repeated_bundle_path(tmp_path: Path) -> None:
     readme = write_readme(
         tmp_path,

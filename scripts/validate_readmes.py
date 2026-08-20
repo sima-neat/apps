@@ -93,6 +93,7 @@ PREVIEW_IMAGE_RE = re.compile(
     r"^[ \t]{0,3}!\[[^\]]*\]\(([^)]+)\)[ \t]*$", re.MULTILINE
 )
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>")
 FENCE_START_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
 PREVIEW_IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 
@@ -208,6 +209,9 @@ def validate_portal_content(
 
     preview = HTML_COMMENT_RE.sub("", sections.get("Preview", ""))
     preview = strip_fenced_code(preview)
+    if HTML_TAG_RE.search(preview):
+        errors.append("Preview must not contain raw HTML")
+        return errors
     match = PREVIEW_IMAGE_RE.search(preview)
     if not match:
         errors.append("Preview must contain a Markdown image")
