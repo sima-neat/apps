@@ -1405,7 +1405,7 @@ function abortResponse() {
   const assistantMessages = chatMessages.querySelectorAll('.message.assistant');
   const currentAssistantMessage = assistantMessages[assistantMessages.length - 1];
   if (currentAssistantMessage) {
-    currentAssistantMessage.classList.remove('speaking');
+    currentAssistantMessage.classList.remove('speaking', 'streaming-text');
 
     // Hide the audio visualizer
     currentAssistantMessage.classList.remove('audio-playing');
@@ -2387,6 +2387,11 @@ function handleTranscriptionTimeUpdate(data) {
 
 socket.on('update', handleTextUpdate);
 socket.on('generation_error', (data) => {
+  const assistantMessages = chatMessages.querySelectorAll('.message.assistant');
+  const currentAssistantMessage = assistantMessages[assistantMessages.length - 1];
+  if (currentAssistantMessage) {
+    currentAssistantMessage.classList.remove('speaking', 'streaming-text');
+  }
   const message = (data && data.message) || 'Response generation failed. Please try again.';
   addChatMessage(`⚠️ ${message}`, false, false);
 });
@@ -2400,7 +2405,7 @@ socket.on('end', (data) => {
   const assistantMessages = chatMessages.querySelectorAll('.message.assistant');
   const currentAssistantMessage = assistantMessages[assistantMessages.length - 1];
   if (currentAssistantMessage) {
-    currentAssistantMessage.classList.remove('speaking');
+    currentAssistantMessage.classList.remove('speaking', 'streaming-text');
 
     // Final Markdown render + syntax highlighting + copy buttons on the reply.
     // Cancel any pending throttle render first, else it fires next frame and
