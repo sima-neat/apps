@@ -25,7 +25,10 @@ SCOPE_PYTHON="${TEST_SCOPE_PYTHON_BIN:-${PYTHON_TEST_BIN:-python3}}"
 VERSION_PYTHON="${PYTHON_TEST_BIN:-python3}"
 export SIMA_CLI_CHECK_FOR_UPDATE="${SIMA_CLI_CHECK_FOR_UPDATE:-0}"
 
-detect_platform_version() {
+# Model assets follow the published Model Zoo release, which can lag the platform
+# release. modelzoo-version selects it; platform-version is the fallback for
+# manifests written before the two versions were separated.
+detect_modelzoo_version() {
     "$VERSION_PYTHON" - "$ROOT/deps/manifest.json" <<'PY'
 import json
 import sys
@@ -36,24 +39,27 @@ try:
     manifest = json.loads(path.read_text(encoding="utf-8"))
 except FileNotFoundError:
     print(
-        f"ERROR: Missing manifest: {path}. Set NEAT_APPS_PLATFORM_VERSION to override.",
+        f"ERROR: Missing manifest: {path}. Set NEAT_APPS_MODELZOO_VERSION to override.",
         file=sys.stderr,
     )
     raise SystemExit(1)
 
-platform_version = manifest.get("platform-version")
-if not isinstance(platform_version, str) or not platform_version.strip():
-    print(f"ERROR: {path} must define platform-version as a non-empty string.", file=sys.stderr)
+version = manifest.get("modelzoo-version") or manifest.get("platform-version")
+if not isinstance(version, str) or not version.strip():
+    print(
+        f"ERROR: {path} must define modelzoo-version or platform-version as a non-empty string.",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
-print(platform_version.strip())
+print(version.strip())
 PY
 }
 
-PLATFORM_VERSION="${NEAT_APPS_PLATFORM_VERSION:-}"
+MODELZOO_VERSION="${NEAT_APPS_MODELZOO_VERSION:-}"
 
-ensure_platform_version() {
-    if [[ -z "$PLATFORM_VERSION" ]]; then
-        PLATFORM_VERSION="$(detect_platform_version)"
+ensure_modelzoo_version() {
+    if [[ -z "$MODELZOO_VERSION" ]]; then
+        MODELZOO_VERSION="$(detect_modelzoo_version)"
     fi
 }
 
@@ -67,7 +73,7 @@ Options:
   --scope-file <path>   Test scope source file or directory (default: examples)
   --kind <kind>         Scope kind to resolve (default: e2e)
   --language <lang>     Scope language to include; repeatable (python, cpp)
-  NEAT_APPS_PLATFORM_VERSION can override the platform version.
+  NEAT_APPS_MODELZOO_VERSION can override the Model Zoo version.
   -h, --help            Show help
 EOF
 }
@@ -196,12 +202,12 @@ download_modelzoo_model() {
         return 0
     fi
     ensure_sima_cli_bin
-    ensure_platform_version
+    ensure_modelzoo_version
 
     local before
     before=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
-    echo "[download] $model_id (modelzoo: $model_name, platform-version: $PLATFORM_VERSION)"
-    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$PLATFORM_VERSION" get "$model_name")
+    echo "[download] $model_id (modelzoo: $model_name, modelzoo-version: $MODELZOO_VERSION)"
+    (cd "$MODELS_DIR" && "$SIMA_CLI_BIN" modelzoo -v "$MODELZOO_VERSION" get "$model_name")
 
     local after
     after=$(find "$MODELS_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)
@@ -220,9 +226,16 @@ download_url_model() {
     local expected_file="$3"
     local tmpdir
     local downloaded_files=()
-    if [[ "$url" == *"{platform_version}"* ]]; then
-        ensure_platform_version
-        url="${url//\{platform_version\}/$PLATFORM_VERSION}"
+    if [[ "$url" == *"{modelzoo_version}"* ]]; then
+        ensure_modelzoo_version
+        url="${url//\{modelzoo_version\}/$MODELZOO_VERSION}"
+    fi
+
+    # An unsubstituted placeholder would otherwise reach sima-cli verbatim and
+    # fail as an opaque 404 rather than naming the scope file mistake.
+    if [[ "$url" == *"{"*"}"* ]]; then
+        echo "[error] $model_id has an unsupported URL placeholder: $url" >&2
+        return 1
     fi
 
     if model_exists "$model_id" "$expected_file"; then
@@ -271,11 +284,126 @@ download_huggingface_model() {
     return 1
 }
 
+download_model_registry_group() {
+    local registry_name="$1"
+    local registry_ref="$2"
+    local registry_spec="$3"
+    shift 3
+    local resource="models/${registry_name}@${registry_ref}:${registry_spec}"
+    local all_present=1
+    local row model_id name expected_file ref spec fields
+
+    for row in "$@"; do
+        fields=()
+        split_tsv_row "$row" fields
+        name="${fields[2]:-}"
+        expected_file="${fields[4]:-}"
+        ref="${fields[7]:-}"
+        spec="${fields[8]:-}"
+        if [[ "$name" == "$registry_name" && "$ref" == "$registry_ref" && \
+              "$spec" == "$registry_spec" && \
+              ! -f "${MODELS_DIR}/${expected_file}" ]]; then
+            all_present=0
+        fi
+    done
+
+    if [[ "$all_present" -eq 1 ]]; then
+        for row in "$@"; do
+            fields=()
+            split_tsv_row "$row" fields
+            model_id="${fields[0]:-}"
+            name="${fields[2]:-}"
+            ref="${fields[7]:-}"
+            spec="${fields[8]:-}"
+            if [[ "$name" == "$registry_name" && "$ref" == "$registry_ref" && \
+                  "$spec" == "$registry_spec" ]]; then
+                echo "[skip] $model_id already exists"
+            fi
+        done
+        return 0
+    fi
+
+    ensure_sima_cli_bin || return 1
+    local tmpdir
+    if ! tmpdir="$(mktemp -d)"; then
+        echo "[error] failed to create temporary directory for $resource" >&2
+        return 1
+    fi
+    echo "[download] $resource (model-registry)"
+    local environment_args=()
+    if [[ "$registry_ref" != "main" ]]; then
+        environment_args+=(--stg)
+    fi
+    if ! "$SIMA_CLI_BIN" neat install "${environment_args[@]}" "$resource" --install-dir "$tmpdir"; then
+        rm -rf "$tmpdir"
+        echo "[error] failed to install model-registry resource $resource" >&2
+        return 1
+    fi
+
+    local failed=0
+    local installed_file destination destination_dir staged_file
+    for row in "$@"; do
+        fields=()
+        split_tsv_row "$row" fields
+        model_id="${fields[0]:-}"
+        name="${fields[2]:-}"
+        expected_file="${fields[4]:-}"
+        ref="${fields[7]:-}"
+        spec="${fields[8]:-}"
+        if [[ "$name" != "$registry_name" || "$ref" != "$registry_ref" || \
+              "$spec" != "$registry_spec" ]]; then
+            continue
+        fi
+        destination="${MODELS_DIR}/${expected_file}"
+        if [[ -f "$destination" ]]; then
+            echo "[skip] $model_id already exists"
+            continue
+        fi
+        installed_file="${tmpdir}/${expected_file}"
+        if [[ ! -f "$installed_file" ]]; then
+            echo "[error] $model_id: requested file $expected_file was not installed by $resource" >&2
+            failed=1
+            continue
+        fi
+        destination_dir="$(dirname "$destination")"
+        if ! mkdir -p "$destination_dir"; then
+            echo "[error] $model_id: failed to create model directory $destination_dir" >&2
+            failed=1
+            continue
+        fi
+        if ! staged_file="$(mktemp "${destination}.tmp.XXXXXX")"; then
+            echo "[error] $model_id: failed to stage $expected_file in $destination_dir" >&2
+            failed=1
+            continue
+        fi
+        if ! cp "$installed_file" "$staged_file"; then
+            rm -f "$staged_file"
+            echo "[error] $model_id: failed to copy $expected_file into $MODELS_DIR" >&2
+            failed=1
+            continue
+        fi
+        if ! mv -f "$staged_file" "$destination"; then
+            rm -f "$staged_file"
+            echo "[error] $model_id: failed to publish $expected_file into $MODELS_DIR" >&2
+            failed=1
+            continue
+        fi
+        echo "[ok] $model_id"
+    done
+    rm -rf "$tmpdir"
+    return "$failed"
+}
+
 split_tsv_row() {
     local row="$1"
     local -n out="$2"
     local normalized="${row//$'\t'/$'\x1f'}"
     IFS=$'\x1f' read -r -a out <<<"$normalized"
+}
+
+model_registry_file_is_safe() {
+    local file="$1"
+    [[ -n "$file" && "$file" != "." && "$file" != ".." && "$file" != */* ]]
 }
 
 download_scoped_models() {
@@ -313,6 +441,7 @@ download_scoped_models() {
     acquire_lock
 
     local failed=0
+    local registry_rows=()
     local row model_id source name url expected_file repo path fields
     for row in "${rows[@]}"; do
         fields=()
@@ -334,11 +463,47 @@ download_scoped_models() {
             huggingface)
                 download_huggingface_model "$model_id" "$repo" "$path" || failed=1
                 ;;
+            model-registry)
+                if ! model_registry_file_is_safe "$expected_file"; then
+                    echo "[error] $model_id has unsafe model-registry file: $expected_file" >&2
+                    failed=1
+                else
+                    registry_rows+=("$row")
+                fi
+                ;;
             *)
                 echo "[error] $model_id has unsupported source: $source" >&2
                 failed=1
                 ;;
         esac
+    done
+
+    local registry_names=()
+    local registry_refs=()
+    local registry_specs=()
+    local ref spec seen index
+    for row in "${registry_rows[@]}"; do
+        fields=()
+        split_tsv_row "$row" fields
+        name="${fields[2]:-}"
+        ref="${fields[7]:-}"
+        spec="${fields[8]:-}"
+        seen=0
+        for index in "${!registry_names[@]}"; do
+            if [[ "${registry_names[$index]}" == "$name" && \
+                  "${registry_refs[$index]}" == "$ref" && \
+                  "${registry_specs[$index]}" == "$spec" ]]; then
+                seen=1
+                break
+            fi
+        done
+        if [[ "$seen" -eq 1 ]]; then
+            continue
+        fi
+        registry_names+=("$name")
+        registry_refs+=("$ref")
+        registry_specs+=("$spec")
+        download_model_registry_group "$name" "$ref" "$spec" "${registry_rows[@]}" || failed=1
     done
     return "$failed"
 }

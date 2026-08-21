@@ -8,13 +8,13 @@
 | Difficulty | Beginner |
 | Tags | object-detection, yolo26, folder-inference |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | yolo26-object-detector |
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
 
-Minimal image-folder detection with a YOLO26 model. Each image is inferred, annotated with boxes and labels, and written to an output folder.
+Detects objects in a folder of images with YOLO26 and saves copies annotated with boxes, labels, and confidence scores.
 
 ## Preview
 
@@ -31,6 +31,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/yolo26-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -47,14 +48,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 | `yolo26m-det-int8-b1.tar.gz` | Supported |
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-detection/<model-file>"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
 cd ..
 ```
 
@@ -62,38 +62,24 @@ Set `model.path` in the config to the downloaded package.
 
 ## Configure
 
-Edit `examples/object-detection/yolo26-object-detector/src/common/config.yaml`.
-
-```yaml
-model:
-  path: <model-path>
-  labels: examples/object-detection/yolo26-object-detector/src/common/coco_label.txt
-
-io:
-  input_dir: assets/datasets/coco
-  output_dir: sandbox/yolo26-object-detector
-
-decode:
-  score_threshold: 0.40
-  nms_iou: 0.60
-```
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`. Change the score threshold only if you want to show more or fewer detections.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/object-detection/yolo26-object-detector/src/cpp/pre-built/yolo26-object-detector \
-  --config examples/object-detection/yolo26-object-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/yolo26-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/yolo26-object-detector/src/python/requirements.txt
-python3 examples/object-detection/yolo26-object-detector/src/python/main.py \
-  --config examples/object-detection/yolo26-object-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

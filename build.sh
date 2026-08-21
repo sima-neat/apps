@@ -8,6 +8,7 @@ NEAT_CORE_METADATA="${DEPS_DIR}/neat-core.json"
 NEAT_DEBS_DIR="${DEPS_DIR}/debs"
 NEAT_INSTALLER_URL="${NEAT_INSTALLER_URL:-https://tools.sima-neat.com/install-neat.sh}"
 NEAT_ARTIFACTS_BASE_URL="${NEAT_ARTIFACTS_BASE_URL:-https://artifacts.neat.sima.ai/core}"
+ELXR_SDK_RELEASE_FILE="${ELXR_SDK_RELEASE_FILE:-/etc/sdk-release}"
 NEAT_CORE_INSTALL_DIR=""
 NEAT_CORE_INSTALL_DIR_OWNED=0
 LATEST_TAG_CACHE_DIR="$(mktemp -d /tmp/neat-apps-latest.XXXXXX)"
@@ -55,6 +56,7 @@ Environment:
                             (default: fresh /tmp/neat-apps-core-install.XXXXXX)
   NEAT_CORE_INSTALL_MODE    legacy or vulcan. Defaults to vulcan when NEAT_VULCAN_ENV is set.
   NEAT_VULCAN_ENV           Vulcan artifact environment for sima-cli core installs (default: production)
+  NEAT_SYNC_SYSROOT         Set to ON to align the eLxr SDK sysroot with the selected Core artifact
   CMAKE_TOOLCHAIN_FILE      Optional CMake toolchain file (auto-detected for cross)
   SYSROOT                   Target sysroot (used by the default cross toolchain file)
 EOF
@@ -235,6 +237,7 @@ PY
     cp "${src_file}" "${target_dir}/"
   done < <(
     find "${ROOT_DIR}/examples" -type f \
+      ! -path '*/tests/*' \
       ! -path '*/__pycache__/*' \
       ! -name '*.pyc' \
       ! -name '*.pyo' \
@@ -550,6 +553,10 @@ core = data.get("components", {}).get("core", {})
 channel = str(core.get("channel", "")).strip()
 tag = str(core.get("tag", "")).strip()
 actual_env = str(core.get("provenance", {}).get("vulcanEnvironment", "")).strip()
+runtime_version = str(data.get("components", {}).get("runtime", {}).get("version", "")).strip()
+gst_plugins_version = str(
+    data.get("components", {}).get("gstPlugins", {}).get("version", "")
+).strip()
 
 def normalize_env(value: str) -> str:
     if value in {"production", "prod", "prd"}:
@@ -566,6 +573,17 @@ if tag != expected_version:
     raise SystemExit(1)
 if expected_env and normalize_env(actual_env) != expected_env:
     raise SystemExit(1)
+
+# The Core provenance marker is not sufficient on a persistent runner: an
+# interrupted installation can leave the requested Core package beside runtime
+# and GStreamer packages from another branch. Those mixed packages made
+# `neat --json` report the requested Core tag while BoxDecode still loaded an
+# older plugin. Require the installed board-side components to come from the
+# same branch before skipping installation.
+expected_component_prefix = f"+{expected_branch_key}."
+for version in (runtime_version, gst_plugins_version):
+    if expected_component_prefix not in version:
+        raise SystemExit(1)
 PY
   then
     return 1
@@ -847,8 +865,185 @@ run_sima_cli_core_install() {
   rm -f "${log_path}"
 }
 
+is_elxr_sdk() {
+  local sdk_version elxr_version
+  [[ -f "${ELXR_SDK_RELEASE_FILE}" ]] || return 1
+  sdk_version="$(sed -n 's/^SDK Version[[:space:]]*=[[:space:]]*//p' "${ELXR_SDK_RELEASE_FILE}" | head -n1)"
+  elxr_version="$(sed -n 's/^eLXr Version[[:space:]]*=[[:space:]]*//p' "${ELXR_SDK_RELEASE_FILE}" | head -n1)"
+  [[ -n "${sdk_version}" && -n "${elxr_version}" ]]
+}
+
+run_privileged() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "ERROR: root privileges are required to update the SDK sysroot." >&2
+    return 1
+  fi
+}
+
+sync_sysroot_from_core_artifact() (
+  local sima_cli_bin="$1"
+  local branch="$2"
+  local version="$3"
+  local vulcan_env="$4"
+  [[ "${NEAT_SYNC_SYSROOT:-OFF}" == "ON" ]] || return 0
+
+  if ! is_elxr_sdk; then
+    echo "ERROR: NEAT_SYNC_SYSROOT requires an eLxr SDK." >&2
+    return 1
+  fi
+  if ! command -v sysroot >/dev/null 2>&1; then
+    echo "ERROR: NEAT_SYNC_SYSROOT requires the sysroot command." >&2
+    return 1
+  fi
+
+  local resolve_output metadata_url
+  if ! resolve_output="$("${sima_cli_bin}" neat install \
+      --env "${vulcan_env}" -t minimal --json "core@${branch}:${version}")"; then
+    echo "ERROR: Failed to resolve Core metadata for sysroot alignment." >&2
+    return 1
+  fi
+  if ! metadata_url="$(RESOLVE_OUTPUT="${resolve_output}" python3 - "${branch}" "${version}" <<'PY'
+import json
+import os
+import sys
+
+text = os.environ["RESOLVE_OUTPUT"]
+start = text.find("{")
+if start < 0:
+    raise SystemExit("missing JSON object in sima-cli output")
+payload = json.loads(text[start:])
+if payload.get("repository") != "core":
+    raise SystemExit("resolved repository is not core")
+if payload.get("ref") != sys.argv[1] or payload.get("resolved_spec") != sys.argv[2]:
+    raise SystemExit("resolved Core target does not match the requested target")
+metadata_url = payload.get("metadata_url")
+if not isinstance(metadata_url, str) or not metadata_url:
+    raise SystemExit("resolved Core metadata URL is missing")
+print(metadata_url)
+PY
+  )"; then
+    echo "ERROR: Cannot verify resolved Core metadata identity." >&2
+    return 1
+  fi
+
+  local tmp_dir metadata_file manifest_file
+  tmp_dir="$(mktemp -d /tmp/neat-apps-sysroot.XXXXXX)"
+  trap 'rm -rf "${tmp_dir}"' EXIT
+  metadata_file="${tmp_dir}/metadata-minimal.json"
+  manifest_file="${tmp_dir}/internals-manifest.json"
+  if ! download_file "${metadata_url}" "${metadata_file}"; then
+    echo "ERROR: Failed to download selected Core metadata." >&2
+    return 1
+  fi
+
+  local resource_info manifest_url expected_checksum
+  if ! resource_info="$(python3 - "${metadata_file}" "${metadata_url}" <<'PY'
+import json
+import re
+import sys
+from urllib.parse import urljoin
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    metadata = json.load(handle)
+resource = "internals-manifest.json"
+if metadata.get("resources", []).count(resource) != 1:
+    raise SystemExit("Core metadata must contain exactly one Internals manifest")
+checksum = metadata.get("resources-checksum", {}).get(resource)
+if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+    raise SystemExit("Core metadata has no valid Internals manifest checksum")
+print(urljoin(sys.argv[2], resource) + "\t" + checksum)
+PY
+  )"; then
+    echo "ERROR: Cannot verify the Core Internals manifest resource." >&2
+    return 1
+  fi
+  manifest_url="${resource_info%%$'\t'*}"
+  expected_checksum="${resource_info#*$'\t'}"
+  if ! download_file "${manifest_url}" "${manifest_file}"; then
+    echo "ERROR: Failed to download the Core Internals manifest." >&2
+    return 1
+  fi
+
+  local receipt
+  if ! receipt="$(python3 - "${manifest_file}" "${APPS_MANIFEST}" "${expected_checksum}" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != sys.argv[3]:
+    raise SystemExit("Internals manifest checksum mismatch")
+artifact = json.loads(manifest_path.read_text(encoding="utf-8"))
+consumer = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+receipt = artifact["sysroot-version"]
+consumer_base = consumer["platform-version"]
+if not isinstance(receipt, str) or (
+    receipt
+    and not re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}(?:~pre[0-9]+)?", receipt)
+):
+    raise SystemExit("invalid sysroot-version")
+if receipt and consumer_base != receipt.split("~pre", 1)[0]:
+    raise SystemExit("platform-version does not match the Internals receipt")
+print(receipt)
+PY
+  )"; then
+    echo "ERROR: Cannot verify the Core Internals build receipt." >&2
+    return 1
+  fi
+  if [[ -z "${receipt}" ]]; then
+    echo "Apps is using the existing SDK sysroot."
+    return 0
+  fi
+
+  if [[ "${receipt}" == *"~pre"* ]]; then
+    echo "Updating SDK sysroot to Core's Internals receipt ${receipt}"
+    if ! run_privileged sysroot update "${receipt}"; then
+      echo "ERROR: Failed to update SDK sysroot to ${receipt}." >&2
+      return 1
+    fi
+    if ! sysroot status; then
+      echo "ERROR: Failed to read SDK sysroot status." >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  local status_output image_platform overlay_state overlay_revision
+  if ! status_output="$(sysroot status)"; then
+    echo "ERROR: Failed to read SDK sysroot status." >&2
+    return 1
+  fi
+  printf '%s\n' "${status_output}"
+  image_platform="$(sed -nE \
+    's/^SDK image platform:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+    <<< "${status_output}" | head -n1)"
+  overlay_state="$(sed -nE \
+    's/^Sysroot overlay state:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+    <<< "${status_output}" | head -n1)"
+  overlay_revision="$(sed -nE \
+    's/^Sysroot overlay revision:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+    <<< "${status_output}" | head -n1)"
+
+  if [[ "${image_platform}" != "${receipt}" ]]; then
+    echo "ERROR: SDK image platform ${image_platform:-unknown} does not match required stable platform ${receipt}." >&2
+    return 1
+  fi
+  if [[ "${overlay_state}" != "inactive" || "${overlay_revision}" != "none" ]]; then
+    echo "ERROR: Stable platform ${receipt} requires the image-default sysroot, but overlay ${overlay_revision:-unknown} is ${overlay_state:-unknown}." >&2
+    echo "ERROR: Recreate the SDK container to remove the prerelease sysroot overlay." >&2
+    return 1
+  fi
+  echo "Using stable SDK sysroot ${image_platform} with no active overlay."
+)
+
 ensure_neat_core() {
-  local branch install_mode sima_cli_bin version vulcan_env
+  local branch install_mode sima_cli_bin="" version vulcan_env
   mkdir -p "${DEPS_DIR}" "${NEAT_DEBS_DIR}"
   load_neat_core_target
   branch="${NEAT_CORE_TARGET_BRANCH}"
@@ -872,6 +1067,18 @@ ensure_neat_core() {
   NEAT_CORE_TARGET_VERSION="${version}"
   write_neat_core_metadata "${branch}" "${version}"
 
+  if [[ "${NEAT_SYNC_SYSROOT:-OFF}" == "ON" ]]; then
+    if [[ "${install_mode}" != "vulcan" ]]; then
+      echo "ERROR: NEAT_SYNC_SYSROOT requires NEAT_CORE_INSTALL_MODE=vulcan." >&2
+      exit 1
+    fi
+    if ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
+      echo "ERROR: NEAT_SYNC_SYSROOT requires sima-cli on PATH or SIMA_CLI_BIN." >&2
+      exit 1
+    fi
+    sync_sysroot_from_core_artifact "${sima_cli_bin}" "${branch}" "${version}" "${vulcan_env}"
+  fi
+
   local expected_tag="${branch}/${version}"
   if neat_core_installed_matches "${branch}" "${version}" "${vulcan_env:-}"; then
     echo "NEAT core already installed (${expected_tag}). Skipping install."
@@ -882,7 +1089,7 @@ ensure_neat_core() {
 
   if [[ "${install_mode}" == "vulcan" ]]; then
     local install_status
-    if ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
+    if [[ -z "${sima_cli_bin}" ]] && ! sima_cli_bin="$(resolve_sima_cli_bin)"; then
       echo "ERROR: NEAT_CORE_INSTALL_MODE=vulcan requires sima-cli on PATH or SIMA_CLI_BIN." >&2
       exit 1
     fi

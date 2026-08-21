@@ -65,6 +65,8 @@ bool test_validate_config_only_accepts_four_streams(const std::string& binary) {
                                             "  - rtsp://127.0.0.1:8554/src2\n"
                                             "  - rtsp://127.0.0.1:8554/src3\n"
                                             "  - rtsp://127.0.0.1:8554/src4\n"
+                                            "input:\n"
+                                            "  codec: hevc\n"
                                             "inference:\n"
                                             "  max_inflight_per_stream: 3\n"
                                             "  max_inflight_total: 12\n"

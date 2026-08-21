@@ -1,6 +1,7 @@
 #include "example_utils.h"
 
 #include "asset_utils.h"
+#include "ffprobe_command.h"
 #include "support/object_detection/obj_detection_utils.h"
 
 #include <neat.h>
@@ -91,15 +92,6 @@ std::string gst_escape(const std::string& s) {
   return out;
 }
 
-std::string shell_quote(const std::string& value) {
-  std::string out = "'";
-  for (const char c : value) {
-    out += c == '\'' ? "'\\''" : std::string(1, c);
-  }
-  out += "'";
-  return out;
-}
-
 int fps_from_rate(const std::string& value) {
   if (value.empty() || value == "0/0" || value == "0/1")
     return 0;
@@ -129,12 +121,9 @@ void fill_missing_stream_info(RtspStreamInfo& dst, const RtspStreamInfo& src) {
     dst.fps = src.fps;
 }
 
-RtspStreamInfo probe_ffprobe_rtsp_stream_info(const std::string& url) {
+RtspStreamInfo probe_ffprobe_rtsp_stream_info(const std::string& url, bool rtsp_tcp) {
   RtspStreamInfo info;
-  const std::string command =
-      "ffprobe -v error -rw_timeout 5000000 -select_streams v:0 "
-      "-show_entries stream=width,height,r_frame_rate,avg_frame_rate -of default=nw=1 " +
-      shell_quote(url) + " 2>/dev/null";
+  const std::string command = build_ffprobe_rtsp_stream_info_command(url, rtsp_tcp);
 
   FILE* pipe = popen(command.c_str(), "r");
   if (!pipe) {
@@ -351,9 +340,8 @@ bool parse_fps_from_caps(const std::string& caps, int& fps_out) {
 
 bool probe_rtsp_stream_info(const std::string& url, const RtspProbeOptions& opt,
                             RtspStreamInfo& out) {
-  (void)opt;
   out = RtspStreamInfo{};
-  fill_missing_stream_info(out, probe_ffprobe_rtsp_stream_info(url));
+  fill_missing_stream_info(out, probe_ffprobe_rtsp_stream_info(url, opt.rtsp_tcp));
   fill_missing_stream_info(out, probe_opencv_rtsp_stream_info(url));
 
   return out.width > 0 && out.height > 0;

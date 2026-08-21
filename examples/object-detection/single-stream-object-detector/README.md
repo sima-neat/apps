@@ -8,13 +8,15 @@
 | Difficulty | Intermediate |
 | Tags | object-detection, yolo26, rtsp, insight |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | single-stream-object-detector |
 | Model | yolo26m-det-bf16-mla_tess-b1 |
 
 ## Concept
 
-This focused example ingests one RTSP H.264/MJPEG or HTTP MJPEG stream, decodes it, runs YOLO26 detection, and sends H.264 video plus detection metadata to Insight.
+Detects objects in one RTSP or MJPEG stream with YOLO26 and sends synchronized H.264 video and detection metadata to Insight.
+
+The decoded frame branches inside a single graph to the detector and to the H.264 sender. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each detection on the frame it came from. Setting `output.save_dir` adds a third branch that returns the decoded frame to the application so it can write annotated JPEGs.
 
 ## Preview
 
@@ -23,7 +25,7 @@ This focused example ingests one RTSP H.264/MJPEG or HTTP MJPEG stream, decodes 
 ## Prerequisites
 
 - `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
-- An RTSP H.264, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
+- An RTSP H.264, RTSP H.265, RTSP MJPEG, or HTTP MJPEG source and an [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the target.
 
 ## Install Apps
 
@@ -32,6 +34,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/single-stream-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -48,14 +51,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | `yolo26m-det-bf16-b1.tar.gz` | Supported |
 | `yolo26m-det-int8-b1.tar.gz` | Supported |
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Replace `<model-file>` with a file from the table.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-detection/<model-file>"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
 cd ..
 ```
 
@@ -65,51 +67,30 @@ Set `model.path` in the config to the downloaded package.
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render the video and detection metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.type`, `source.codec`, and `source.url` to match the selected transport. Use the host and UDP port ranges reported by `neat` for the output settings below.
+In the Insight Web UI, start the required stream and copy its source URL. Use RTSP for H.264 or H.265; for MJPEG, Insight supports both RTSP and HTTP URLs. Set `source.codec` to `h264`/`avc`, `h265`/`hevc`, or `mjpeg`. Decoded frames are encoded as H.264 for Insight output.
 
 ## Configure
 
-Edit `examples/object-detection/single-stream-object-detector/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, the source type, codec, and URL, and the Insight host and video and metadata ports.
 
-```yaml
-model:
-  path: <model-path>
-  labels: examples/object-detection/single-stream-object-detector/src/common/coco_label.txt
-
-source:
-  type: rtsp
-  codec: h264
-  url: <rtsp-url>
-  tcp: true
-  fps: 0
-
-inference:
-  frames: 0
-  min_score: 0.30
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port: <videoUDP-start-port>
-    metadata_port: <metadataUDP-start-port>
-```
+The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Keep `inference.frames` at `0` to run until you stop the application.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/object-detection/single-stream-object-detector/src/cpp/pre-built/single-stream-object-detector \
-  --config examples/object-detection/single-stream-object-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/single-stream-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/single-stream-object-detector/src/python/requirements.txt
-python3 examples/object-detection/single-stream-object-detector/src/python/main.py \
-  --config examples/object-detection/single-stream-object-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

@@ -1,0 +1,7 @@
+# Isolated venv for allowlisted dedicated language voices. Japanese is handled
+# by the MIT-licensed Piper Plus runtime, so no Japanese Piper extra is needed.
+# piper-tts ships a top-level `piper` package that collides
+# with piper-plus, so it lives in its OWN venv (.venv-pipertts) and the app
+# reaches it through pipertts_worker.py. Installed by setup.sh.
+piper-tts==1.7.0
+onnx>=1.17,<2

@@ -48,15 +48,17 @@ The validator requires these sections in order:
 
 1. `Metadata`
 2. `Concept`
-3. `Prerequisites`
-4. `Install Apps`
-5. `Prepare the Model`
-6. `Run`
-7. `Source Files`
-8. `Development From Source`
+3. `Preview`
+4. `Prerequisites`
+5. `Install Apps`
+6. `Prepare the Model`
+7. `Configure`
+8. `Run`
+9. `Source Files`
+10. `Development From Source`
 
-Optional sections such as `Preview`, `Configure`, `Expected Result`, and
-`Troubleshooting` belong where they support that sequence.
+Optional sections such as `Expected Result` and `Troubleshooting` belong where
+they support that sequence.
 
 The installed workflow must:
 
@@ -83,8 +85,10 @@ Each example README must identify:
 - the corresponding `sima-cli` command when that source supports it
 - the downloaded package selected by `model.path`
 
-Use `models/` for user-managed packages. Before downloading a model, read the
-installed platform version from `DISTRO_VERSION` in `/etc/buildinfo`.
+Use `models/` for user-managed packages. Model downloads use the Model Zoo
+version, which can differ from the installed platform version. Take it from
+`modelzoo-version` in `deps/manifest.json`, and keep the literal documented in
+example READMEs in sync with that field.
 
 Do not infer application support from every model declared in
 `tests/test-scope.yaml`. That file owns test acquisition. Confirm supported
@@ -107,8 +111,26 @@ README metadata fields are:
 - `Binary Name`
 - `Model`
 
-For portal-facing examples, add `Preview` after `Concept` and store the image
-under `portal/assets/examples/<category>/<example>/image.*`.
+The first paragraph under `Concept` becomes the portal card summary. Write one
+or two plain-English sentences, no more than 200 normalized characters, that
+say what the application does and produces. Name the main model family when it
+helps users understand the application. Do not use Markdown, executable names,
+implementation details, or filler such as "This example" in the summary.
+
+Every portal example needs a `Preview` section immediately after `Concept` and
+an application-specific image under
+`portal/assets/examples/<category>/<example>/image.*`. Check that it is clear in
+both the catalog card and detail page and contains no sensitive information.
+
+Treat the packaged `src/common/config.yaml` as the source of truth. Point users
+to it and name only the settings they must change. Do not copy the full file
+into the README. A focused snippet is appropriate only for an override or
+generated configuration that the package does not provide.
+
+Bundle instructions run from `prebuilt-apps/`. Define
+`APP_DIR=examples/<category>/<example>` once and reuse it so commands remain
+readable without changing relative model, asset, label, or output paths.
+Pretty-print structured output examples.
 
 ## Test Scope
 

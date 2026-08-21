@@ -14,19 +14,19 @@
 
 ## Concept
 
-This example runs one shared YOLO26 detector across fixed 16-, 24-, and 48-stream RTSP profiles and publishes encoded video with synchronized detection metadata to Insight.
+Runs one YOLO26 detector across 16, 24, or 48 RTSP streams and sends synchronized video and detection metadata to Insight.
 
-It complements `multi-stream-object-detector`. That example demonstrates the general multi-stream API; this example demonstrates the tuned high-density pipeline.
+Unlike the general multi-stream detector, this application tunes the pipeline for high stream counts.
 
 Each RTSP source is depacketized once, then Core fuses two branches into the same source pipeline:
 
 ```text
-RTSP H.264
+RTSP H.264/H.265
   ├─ latest encoded edge ─> VideoSender ─> Insight video channel N
   └─ decode ─> shared YOLO26 detector ─> timestamped metadata ─> channel N
 ```
 
-The application expresses this fan-out with ordinary `Graph::connect()` and starts it with ordinary `Graph::build()`. Core fuses the eligible topology internally. `VideoSender` consumes the read-only H.264 access unit before the decoder, so the application does not open a second RTSP session, copy a decoded EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc. The UDP sender uses `async=false` so its sink cannot hold the shared live pipeline in `PAUSED` while waiting for preroll from every stream. The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can drop stale encoded work without blocking that stream's decoder branch.
+The application expresses this fan-out with ordinary `Graph::connect()` and starts it with ordinary `Graph::build()`. Core fuses the eligible topology internally. `VideoSender` consumes the read-only encoded access unit before the decoder, so the application does not open a second RTSP session, copy a decoded EV buffer, run an encoder, or shuttle encoded frames through appsink/appsrc. The UDP sender uses `async=false` so its sink cannot hold the shared live pipeline in `PAUSED` while waiting for preroll from every stream. The encoded edge uses `RealtimeLatestByStream`; a congested Insight channel can drop stale encoded work without blocking that stream's decoder branch.
 
 Detection metadata includes the source `rtp_timestamp` and is sent with nonblocking UDP. A compatible Insight receiver holds complete encoded RTP frames for 400 ms and matches metadata to that source timestamp before WebRTC forwarding. Keep one active viewer while validating metadata, as described below.
 
@@ -34,7 +34,7 @@ The three checked-in profiles use the same application and model:
 
 | Config | Streams | Source resolution and FPS | Expected FPS per channel |
 | --- | ---: | --- | ---: |
-| `config.yaml` | 16 | 1280×720 at 25 FPS | 25 FPS |
+| `config.yaml` | 16 | 1280×720 at 30 FPS | 30 FPS |
 | `config-24x720p20fps.yaml` | 24 | 1280×720 at 20 FPS | 20 FPS |
 | `config-48x720p10fps.yaml` | 48 | 1280×720 at 10 FPS | 10 FPS |
 
@@ -50,8 +50,10 @@ The 48-stream profile running in Insight:
 
 - A Modalix DevKit compatible with the selected Apps release, with the decoder service running.
 - An [Insight](https://developer.sima.ai/software/tools/insight/) URL reachable from the DevKit.
-- 16, 24, or 48 H.264 RTSP sources matching the selected profile.
-- Constant source frame rate, 1280×720 resolution, no H.264 B-frames, and a short, regular IDR interval. The validated sources use one IDR per second.
+- 16, 24, or 48 H.264 or H.265 RTSP sources matching `input.codec` and the selected profile.
+- For H.265, the computer running the Insight viewer must support hardware HEVC decoding; Chromium does not provide a software decoder fallback for WebRTC H.265.
+- H.265 playback in Chrome on macOS renders, but is not stable. Chrome's WebRTC HEVC decoder can stop producing frames mid-stream and fall back to a null decoder that discards what follows, at which point the tile stalls until the viewer reconnects it.
+- Constant source frame rate, 1280×720 resolution, no B-frames in the selected codec, and a short, regular IDR interval. The validated sources use one IDR per second.
 - The `yolo26n-det-int8-b1.tar.gz` model pack.
 
 The application starts all source graphs together. Start every RTSP publisher before starting the application.
@@ -63,6 +65,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/high-density-multi-stream-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -73,14 +76,13 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `yolo26n-det-int8-b1.tar.gz` | Default | Direct artifact |
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${PLATFORM_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
 cd ..
 ```
 
@@ -100,15 +102,17 @@ ffprobe -v error \
   <rtsp-url>
 ```
 
-The result must report H.264, `1280x720`, the selected profile FPS, and no B-frames. Using a different source FPS changes the output rate and is not the documented profile. The encoded Insight edge retains the latest complete access unit under congestion, so a one-second-or-shorter IDR interval bounds receiver recovery if an older access unit is replaced.
+The result must report the codec selected by `input.codec`, `1280x720`, the selected profile FPS, and no B-frames. Using a different source FPS changes the output rate and is not the documented profile. The encoded Insight edge retains the latest complete access unit under congestion, so a one-second-or-shorter IDR interval bounds receiver recovery if an older access unit is replaced.
 
 ## Configure
 
-Choose one config under `src/common/` and edit:
+Choose one config under `${APP_DIR}/src/common/` and edit:
 
 - `model.path`
 - every entry under `streams`
 - `output.insight.host`
+
+Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all checked-in density profiles and remains the validated high-density configuration.
 
 `inference.max_inflight_per_stream` and `inference.max_inflight_total` bound raw decoder-backed frames admitted to the shared detector. The 16- and 48-stream profiles use a total limit of eight; the 24-stream profile uses 24 so one aggregate frame interval can be admitted without an unbounded queue. The realtime mux retains only the latest pending frame for each stream.
 
@@ -130,7 +134,7 @@ Set the example and selected profile from the `prebuilt-apps/` root:
 
 ```bash
 APP_DIR=examples/object-detection/high-density-multi-stream-object-detector
-APP=./examples/object-detection/high-density-multi-stream-object-detector/src/cpp/pre-built/high-density-multi-stream-object-detector
+APP=./${APP_DIR}/src/cpp/pre-built/high-density-multi-stream-object-detector
 CONFIG="$APP_DIR/src/common/config.yaml"
 ```
 
@@ -169,7 +173,7 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
-- Video and metadata advance at 25 FPS for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
+- Video and metadata advance at 30 FPS for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
 - Final per-stream counters show every stream advancing; the application fails with the missing channel IDs if a stream never starts or later stops.
 - No detection timeout or stalled channel is reported. Metadata sender counters expose any nonblocking UDP drops without stalling inference.
 

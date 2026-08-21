@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from enum import Enum, auto
 import glob
 import json
 import os
@@ -16,7 +17,10 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 MAX_STREAMS = 80
 DEFAULT_INITIAL_DETECTION_TIMEOUT_MS = 30_000
-DETECTOR_RESULT_TIMEOUT_MS = 5_000
+DEFAULT_STREAM_DETECTION_TIMEOUT_MS = 30_000
+DEFAULT_NO_DETECTION_TIMEOUT_MS = 30_000
+DETECTION_PRIMING_OBSERVATIONS = 2
+WATCHDOG_CHECK_INTERVAL_S = 0.1
 DEFAULT_QUEUE_DEPTH = 4
 DEFAULT_INTERNAL_QUEUE_DEPTH = 1
 DEFAULT_MAX_INFLIGHT_PER_STREAM = 4
@@ -39,6 +43,9 @@ class AppConfig:
     model_path: str
     labels_path: Path
     rtsp_urls: list[str]
+    # Encoded RTSP path used for every stream: "h264" or "h265". Kept as a
+    # string because load_app_config runs before the lazy pyneat import.
+    codec: str = "h264"
     decode_type: str = "yolo26"
     workers: int = 1
     queue_depth: int = DEFAULT_QUEUE_DEPTH
@@ -61,6 +68,8 @@ class AppConfig:
     profile: bool = False
     warmup_frames: int = 30
     initial_detection_timeout_ms: int = DEFAULT_INITIAL_DETECTION_TIMEOUT_MS
+    stream_detection_timeout_ms: int = DEFAULT_STREAM_DETECTION_TIMEOUT_MS
+    no_detection_timeout_ms: int = DEFAULT_NO_DETECTION_TIMEOUT_MS
     insight_host: str = "127.0.0.1"
     video_port_base: int = 9000
     metadata_port_base: int = 9100
@@ -175,43 +184,141 @@ class AppRuntime:
     sources: list[SourceRuntime]
 
 
+class DetectionFailureKind(Enum):
+    NONE = auto()
+    STARTUP = auto()
+    STREAM_STARVATION = auto()
+    GLOBAL_STALL = auto()
+
+
+@dataclass(frozen=True)
+class DetectionFailure:
+    kind: DetectionFailureKind = DetectionFailureKind.NONE
+    streams: tuple[int, ...] = ()
+
+    def __bool__(self) -> bool:
+        return self.kind is not DetectionFailureKind.NONE
+
+
 class DetectionWatchdog:
-    """Fail when any configured stream never starts or later goes silent."""
+    """Check detector progress without assuming fair per-stream completion order."""
 
     def __init__(
         self,
         stream_count: int,
+        priming_observations: int,
         startup_timeout_s: float,
-        cadence_timeout_s: float,
+        stream_timeout_s: float,
+        no_progress_timeout_s: float,
         start: float | None = None,
     ) -> None:
         if stream_count <= 0:
             raise ValueError("detection watchdog requires at least one stream")
-        if startup_timeout_s <= 0 or cadence_timeout_s <= 0:
+        if priming_observations <= 0:
+            raise ValueError("detection watchdog requires at least one priming observation")
+        if (
+            startup_timeout_s <= 0
+            or stream_timeout_s <= 0
+            or no_progress_timeout_s <= 0
+        ):
             raise ValueError("detection watchdog timeouts must be positive")
         start = time.monotonic() if start is None else start
-        self._last_seen: list[float | None] = [None] * stream_count
+        self._priming_counts = [0] * stream_count
+        self._last_seen = [start] * stream_count
+        self._starvation_latched = [False] * stream_count
+        self._startup_failure_streams: tuple[int, ...] | None = None
+        self._priming_observations = priming_observations
+        self._primed_streams = 0
         self._startup_deadline = start + startup_timeout_s
-        self._cadence_timeout_s = cadence_timeout_s
+        self._stream_timeout_s = stream_timeout_s
+        self._no_progress_timeout_s = no_progress_timeout_s
+        self._last_any_seen = start
+        self._running = False
+        self._global_stall_latched = False
 
     def observe(self, stream_index: int, now: float | None = None) -> None:
         if stream_index < 0 or stream_index >= len(self._last_seen):
             raise IndexError("detection watchdog stream index is out of range")
-        self._last_seen[stream_index] = time.monotonic() if now is None else now
+        now = time.monotonic() if now is None else now
+        if (
+            not self._running
+            and self._startup_failure_streams is None
+            and now >= self._startup_deadline
+        ):
+            # Preserve the streams that had not completed priming before the
+            # deadline. A late result in the same drain batch must not erase
+            # an already-expired startup interval.
+            self._startup_failure_streams = tuple(
+                index
+                for index, count in enumerate(self._priming_counts)
+                if count < self._priming_observations
+            )
+        # Preserve an expired detector-wide interval before recovered progress
+        # advances the timestamp between periodic checks.
+        if now >= self._last_any_seen + self._no_progress_timeout_s:
+            self._global_stall_latched = True
+        self._last_any_seen = now
+        if self._running:
+            # Check the returning stream before advancing its timestamp. This
+            # keeps the completion path constant-time while ensuring recovery
+            # cannot erase an already-crossed deadline. check() finds other
+            # expired streams.
+            if now >= self._last_seen[stream_index] + self._stream_timeout_s:
+                self._starvation_latched[stream_index] = True
+            self._last_seen[stream_index] = now
+            return
+
+        if self._startup_failure_streams is not None:
+            return
+
+        if self._priming_counts[stream_index] < self._priming_observations:
+            self._priming_counts[stream_index] += 1
+            if self._priming_counts[stream_index] == self._priming_observations:
+                self._primed_streams += 1
+        if self._primed_streams == len(self._priming_counts):
+            self._running = True
+            # Exclude staggered startup from steady-state liveness accounting.
+            self._last_seen = [now] * len(self._last_seen)
 
     def startup_complete(self) -> bool:
-        return all(seen is not None for seen in self._last_seen)
+        return self._running
 
-    def expired_streams(self, now: float | None = None) -> list[int]:
+    def check(self, now: float | None = None) -> DetectionFailure:
         now = time.monotonic() if now is None else now
-        started = self.startup_complete()
-        if not started and now < self._startup_deadline:
-            return []
-        return [
+        if self._global_stall_latched or (
+            now >= self._last_any_seen + self._no_progress_timeout_s
+        ):
+            return DetectionFailure(DetectionFailureKind.GLOBAL_STALL)
+
+        if self._startup_failure_streams is not None:
+            return DetectionFailure(
+                DetectionFailureKind.STARTUP, self._startup_failure_streams
+            )
+
+        if not self._running:
+            if now < self._startup_deadline:
+                return DetectionFailure()
+            return DetectionFailure(
+                DetectionFailureKind.STARTUP,
+                tuple(
+                    index
+                    for index, count in enumerate(self._priming_counts)
+                    if count < self._priming_observations
+                ),
+            )
+
+        streams = tuple(
             index
-            for index, seen in enumerate(self._last_seen)
-            if seen is None or (started and now - seen >= self._cadence_timeout_s)
-        ]
+            for index, (starved, last_seen) in enumerate(
+                zip(self._starvation_latched, self._last_seen, strict=True)
+            )
+            if starved or now >= last_seen + self._stream_timeout_s
+        )
+        return (
+            DetectionFailure(DetectionFailureKind.STREAM_STARVATION, streams)
+            if streams
+            else DetectionFailure()
+        )
 
 
 def load_runtime_dependencies() -> None:
@@ -294,6 +401,15 @@ def bool_or(raw: dict, key: str, default: bool) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{key} must be true or false")
     return value
+
+
+def parse_input_codec(value: str) -> str:
+    lowered = value.lower()
+    if lowered in {"h264", "avc", "h.264"}:
+        return "h264"
+    if lowered in {"h265", "hevc", "h.265"}:
+        return "h265"
+    raise ValueError("input.codec must be h264/avc or h265/hevc")
 
 
 def parse_streams(raw: dict) -> list[str]:
@@ -399,6 +515,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("runtime.warmup_frames must be >= 0")
     if cfg.initial_detection_timeout_ms <= 0:
         raise ValueError("runtime.initial_detection_timeout_ms must be > 0")
+    if cfg.stream_detection_timeout_ms <= 0:
+        raise ValueError("runtime.stream_detection_timeout_ms must be > 0")
+    if cfg.no_detection_timeout_ms <= 0:
+        raise ValueError("runtime.no_detection_timeout_ms must be > 0")
     if cfg.video_port_base <= 0:
         raise ValueError("output.insight.video_port_base must be > 0")
     if cfg.video_port_base > 65535:
@@ -490,6 +610,7 @@ def load_app_config(config_path: Path) -> AppConfig:
         decode_type=normalize_box_decode_type(string_or(model, "decode_type", "yolo26")),
         labels_path=Path(labels_path_value).expanduser(),
         rtsp_urls=rtsp_urls,
+        codec=parse_input_codec(string_or(input_cfg, "codec", "h264")),
         workers=int_or(inference, "workers", 1),
         queue_depth=queue_depth,
         internal_queue_depth=int_or(
@@ -518,6 +639,14 @@ def load_app_config(config_path: Path) -> AppConfig:
         warmup_frames=int_or(runtime, "warmup_frames", 30),
         initial_detection_timeout_ms=int_or(
             runtime, "initial_detection_timeout_ms", DEFAULT_INITIAL_DETECTION_TIMEOUT_MS
+        ),
+        stream_detection_timeout_ms=int_or(
+            runtime,
+            "stream_detection_timeout_ms",
+            DEFAULT_STREAM_DETECTION_TIMEOUT_MS,
+        ),
+        no_detection_timeout_ms=int_or(
+            runtime, "no_detection_timeout_ms", DEFAULT_NO_DETECTION_TIMEOUT_MS
         ),
         insight_host=string_or(insight, "host"),
         video_port_base=int_or(insight, "video_port_base", 9000),
@@ -813,24 +942,6 @@ def graph_realtime_link(
     return link
 
 
-def apply_h264_caps(opt, width: int, height: int, fps: int) -> tuple[int, int, int]:
-    width_out = 0
-    height_out = 0
-    fps_out = 0
-    if width > 0 and height > 0:
-        opt.fallback_h264_width = width
-        opt.fallback_h264_height = height
-        opt.output_caps.width = width
-        opt.output_caps.height = height
-        width_out = width
-        height_out = height
-    if fps > 0:
-        opt.fallback_h264_fps = fps
-        opt.output_caps.fps = fps
-        fps_out = fps
-    return width_out, height_out, fps_out
-
-
 def probe_rtsp(url: str) -> tuple[int, int, int]:
     load_cv_dependency()
     cap = cv2.VideoCapture(url)
@@ -847,6 +958,11 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
+def rtsp_codec(codec: str):
+    """Map the parsed `input.codec` config token onto the Core RTSP codec selector."""
+    return pyneat.RtspCodec.H265 if codec == "h265" else pyneat.RtspCodec.H264
+
+
 def make_source_options(
     cfg: AppConfig,
     url: str,
@@ -854,9 +970,15 @@ def make_source_options(
     width: int | None = None,
     height: int | None = None,
 ):
-    width_out = 0
-    height_out = 0
-    fps_out = 0
+    needs_probe = not cfg.skip_rtsp_probe and (
+        cfg.input_width <= 0 or cfg.input_height <= 0 or cfg.input_fps <= 0
+    )
+    if needs_probe and (width is None or height is None or fps is None):
+        width, height, fps = probe_rtsp(url)
+
+    width_out = cfg.input_width if cfg.input_width > 0 else int(width or 0)
+    height_out = cfg.input_height if cfg.input_height > 0 else int(height or 0)
+    fps_out = cfg.input_fps if cfg.input_fps > 0 else int(fps or 0)
 
     opt = pyneat.RtspDecodedInputOptions()
     opt.url = url
@@ -871,70 +993,66 @@ def make_source_options(
     opt.decoder_next_element = "CVU"
     opt.auto_caps_from_stream = not cfg.skip_rtsp_probe
     opt.num_buffers = cfg.decoder_buffers
+    opt.codec = rtsp_codec(cfg.codec)
 
     opt.output_caps.enable = True
     opt.output_caps.format = pyneat.Format.NV12
     opt.output_caps.memory = pyneat.CapsMemory.Any
 
-    if not cfg.skip_rtsp_probe:
-        if width is None or height is None or fps is None:
-            width, height, fps = probe_rtsp(url)
-        w, h, f = apply_h264_caps(opt, int(width or 0), int(height or 0), int(fps or 0))
-        width_out = w or width_out
-        height_out = h or height_out
-        fps_out = f or fps_out
-
-    w, h, f = apply_h264_caps(opt, cfg.input_width, cfg.input_height, cfg.input_fps)
-    width_out = w or width_out
-    height_out = h or height_out
-    fps_out = f or fps_out
+    if width_out > 0 and height_out > 0:
+        opt.dec_width = width_out
+        opt.dec_height = height_out
+        if cfg.codec == "h264":
+            opt.fallback_h264_width = width_out
+            opt.fallback_h264_height = height_out
+        opt.output_caps.width = width_out
+        opt.output_caps.height = height_out
+    if fps_out > 0:
+        opt.source_fps = fps_out
+        opt.output_caps.fps = fps_out
     return opt, fps_out, width_out, height_out
 
 
 
-def make_rtsp_h264_input(opt):
+def make_rtsp_encoded_input(opt):
     encoded = pyneat.RtspEncodedInputOptions()
     encoded.url = opt.url
-    encoded.codec = pyneat.RtspCodec.H264
+    encoded.codec = opt.codec
     encoded.latency_ms = opt.latency_ms
     encoded.tcp = opt.tcp
     encoded.drop_on_latency = opt.drop_on_latency
     encoded.buffer_mode = opt.buffer_mode
     encoded.insert_queue = opt.insert_queue
     encoded.sync_mode = opt.sync_mode
-    encoded.h264_payload_type = opt.payload_type
-    encoded.h264_parse_config_interval = opt.h264_parse_config_interval
-    encoded.h264_fps = opt.h264_fps
-    encoded.h264_width = opt.h264_width
-    encoded.h264_height = opt.h264_height
     encoded.auto_caps_from_stream = opt.auto_caps_from_stream
-    encoded.fallback_h264_fps = opt.fallback_h264_fps
-    encoded.fallback_h264_width = opt.fallback_h264_width
-    encoded.fallback_h264_height = opt.fallback_h264_height
+    encoded.source_fps = opt.source_fps
+    encoded.payload_type = opt.payload_type
+    if opt.codec != pyneat.RtspCodec.H265:
+        encoded.h264_parse_config_interval = opt.h264_parse_config_interval
+        encoded.fallback_h264_width = opt.fallback_h264_width
+        encoded.fallback_h264_height = opt.fallback_h264_height
     return pyneat.groups.rtsp_encoded_input(encoded)
 
 
-def append_h264_decoder(
+def append_decoder(
     graph,
     opt,
     decoder_buffers: int,
     decoder_input_buffers: int,
     decoder_tuning: str,
 ) -> None:
-    dec_w = opt.h264_width if opt.h264_width > 0 else opt.fallback_h264_width
-    dec_h = opt.h264_height if opt.h264_height > 0 else opt.fallback_h264_height
-    dec_fps = opt.h264_fps if opt.h264_fps > 0 else opt.fallback_h264_fps
+    use_h265 = opt.codec == pyneat.RtspCodec.H265
 
     decode = pyneat.SimaDecodeOptions()
-    decode.type = pyneat.SimaDecodeType.H264
+    decode.type = pyneat.SimaDecodeType.H265 if use_h265 else pyneat.SimaDecodeType.H264
     decode.sima_allocator_type = opt.sima_allocator_type
     decode.out_format = pyneat.Format.NV12
     decode.decoder_name = opt.decoder_name
     decode.raw_output = opt.decoder_raw_output
     decode.next_element = opt.decoder_next_element
-    decode.dec_width = dec_w
-    decode.dec_height = dec_h
-    decode.dec_fps = dec_fps
+    decode.dec_width = opt.dec_width
+    decode.dec_height = opt.dec_height
+    decode.dec_fps = opt.source_fps
     decode.num_buffers = decoder_buffers
     decode.input_buffers = decoder_input_buffers
     decode.decoder_tuning = decoder_tuning
@@ -953,14 +1071,14 @@ def append_h264_decoder(
         )
 
 
-def make_h264_decoder(
+def make_decoder(
     opt,
     decoder_buffers: int,
     decoder_input_buffers: int = DEFAULT_DECODER_INPUT_BUFFERS,
     decoder_tuning: str = "auto",
 ):
-    graph = pyneat.Graph("h264_decoder")
-    append_h264_decoder(
+    graph = pyneat.Graph("decoder")
+    append_decoder(
         graph, opt, decoder_buffers, decoder_input_buffers, decoder_tuning
     )
     graph.add(pyneat.nodes.output("detector_frame"))
@@ -985,7 +1103,7 @@ def make_model(cfg: AppConfig):
 
 
 def make_video_options(cfg: AppConfig, source: SourceRuntime):
-    video_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_encoded()
+    video_options = pyneat.VideoSenderOptions.passthrough(rtsp_codec(cfg.codec))
     video_options.host = cfg.insight_host
     video_options.channel = source.index
     video_options.video_port_base = cfg.video_port_base
@@ -1081,10 +1199,10 @@ def connect_source_graph(
     )
 
     # Keep the encoded producer explicit. Core internally fuses this ordinary
-    # fan-out so VideoSender consumes each read-only H.264 AU before decoding,
+    # fan-out so VideoSender consumes each read-only encoded AU before decoding,
     # without retaining decoded EV buffers in the application.
-    rtsp = make_rtsp_h264_input(source.source_options)
-    decoder = make_h264_decoder(
+    rtsp = make_rtsp_encoded_input(source.source_options)
+    decoder = make_decoder(
         source.source_options,
         cfg.decoder_buffers,
         cfg.decoder_input_buffers,
@@ -1145,11 +1263,15 @@ def complete_detection(
 def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: AggregateProfile) -> None:
     watchdog = DetectionWatchdog(
         len(app.sources),
+        DETECTION_PRIMING_OBSERVATIONS,
         cfg.initial_detection_timeout_ms / 1000.0,
-        DETECTOR_RESULT_TIMEOUT_MS / 1000.0,
+        cfg.stream_detection_timeout_ms / 1000.0,
+        cfg.no_detection_timeout_ms / 1000.0,
     )
+    next_watchdog_check = time.monotonic()
     while not _STOP_REQUESTED:
         did_work = False
+        reached_target = False
         for _ in range(MAX_DETECTION_PULLS_PER_ROUND):
             detections = app.run.pull("detections", 0)
             if detections is None:
@@ -1167,13 +1289,27 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
             watchdog.observe(stream_index)
             complete_detection(app.sources[stream_index], cfg, aggregate_profile, detections)
             if target_reached(app.sources):
-                return
+                reached_target = True
+                break
 
-        expired = watchdog.expired_streams()
-        if expired:
-            phase = "detections" if watchdog.startup_complete() else "initial detections"
-            stream_list = ",".join(str(index) for index in expired)
-            raise RuntimeError(f"timed out waiting for {phase} from streams: {stream_list}")
+        now = time.monotonic()
+        check_watchdog = did_work or now >= next_watchdog_check
+        failure = watchdog.check(now) if check_watchdog else DetectionFailure()
+        if check_watchdog:
+            next_watchdog_check = now + WATCHDOG_CHECK_INTERVAL_S
+        if failure:
+            if failure.kind is DetectionFailureKind.GLOBAL_STALL:
+                raise RuntimeError("timed out waiting for any detector progress")
+            stream_list = ",".join(str(index) for index in failure.streams)
+            if failure.kind is DetectionFailureKind.STARTUP:
+                raise RuntimeError(
+                    f"timed out waiting for two initial detections from streams: {stream_list}"
+                )
+            raise RuntimeError(
+                f"timed out waiting for detector progress from streams: {stream_list}"
+            )
+        if reached_target:
+            return
         if not did_work:
             time.sleep(0.001)
 
@@ -1252,6 +1388,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"inference_async={str(INFERENCE_ASYNC).lower()}, "
                 f"max_inflight_per_stream={cfg.max_inflight_per_stream}, "
                 f"max_inflight_total={cfg.max_inflight_total}, "
+                f"stream_detection_timeout_ms={cfg.stream_detection_timeout_ms}, "
+                f"no_detection_timeout_ms={cfg.no_detection_timeout_ms}, "
                 f"insight_visible_streams={effective_insight_visible_streams(cfg)}, "
                 "decoder_admission=core)"
             )

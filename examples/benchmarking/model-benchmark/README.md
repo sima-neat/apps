@@ -8,13 +8,13 @@
 | Difficulty | Beginner |
 | Tags | benchmarking, model, performance, pyneat |
 | Languages | Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | model-benchmark |
 | Model | Any compiled model package |
 
 ## Concept
 
-Benchmark a compiled model before integrating it into a full pipeline. The example runs `pyneat.Model.benchmark()` and writes latency, FPS, power, and energy measurements to JSON.
+Measures latency, throughput, power, and energy for any compiled model package, then saves the results as JSON.
 
 This synthetic model benchmark does not measure input decoding, Insight output, overlays, or application postprocessing.
 
@@ -34,22 +34,22 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/benchmarking/model-benchmark
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-This example accepts any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
+Use any compatible compiled MPK. Apps CI exercises the benchmark with `yolo26m-det-int8-b1.tar.gz`; it is not a required default.
 
-Check the installed platform version, then set `PLATFORM_VERSION` to the displayed `DISTRO_VERSION` value. Download a Model Zoo package:
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Download a Model Zoo package:
 
 ```bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "${PLATFORM_VERSION}" get <model-name>
+sima-cli modelzoo -v "${MODELZOO_VERSION}" get <model-name>
 cd ..
 ```
 
@@ -64,31 +64,22 @@ cd ..
 
 ## Configure
 
-Edit `examples/benchmarking/model-benchmark/src/common/config.yaml`, or provide the same values on the command line.
-
-```yaml
-model:
-  path: <model-path>
-
-benchmark:
-  frames: 1000
-
-output:
-  report_json: sandbox/model-benchmark/report.json
-```
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`. You can also change the number of benchmark frames and the JSON report path, or pass those values on the command line.
 
 ## Run
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/benchmarking/model-benchmark/src/python/requirements.txt
-python3 examples/benchmarking/model-benchmark/src/python/main.py \
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
   --model models/<model-file>.tar.gz \
   --frames 1000 \
   --output-json sandbox/model-benchmark/report.json
 ```
 
 The command prints headline metrics and writes the complete report to the selected JSON path.
+
+Without `--decode-type`, the model runs through the route its package declares. Add `--decode-type yolo26-det` or `--decode-type yolo26-seg` to benchmark a YOLO26 package through its BoxDecode route instead. Every report records the requested decode type and the postprocess Core resolved, so the two routes stay distinguishable.
 
 ## Benchmark Results
 

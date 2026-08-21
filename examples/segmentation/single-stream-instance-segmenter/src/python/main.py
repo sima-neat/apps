@@ -20,6 +20,14 @@ DEFAULT_LABELS = DEFAULT_CONFIG.parent / "coco_label.txt"
 MASK_ALPHA = 0.55
 MASK_THRESHOLD = 0.50
 
+# MetadataSender rejects a payload above 65507 bytes, and pyneat raises on the rejection. Half of
+# that leaves room for the envelope and keeps the datagram count low enough for Insight to
+# reassemble within its 250 ms window.
+METADATA_BYTE_BUDGET = 32768
+#: YOLO26 emits masks at one quarter of the model input per dimension, so a 160x160 head
+#: corresponds to a 640x640 input.
+MASK_STRIDE = 4
+
 cv2 = None
 np = None
 pyneat = None
@@ -62,10 +70,10 @@ class PipelineRuntime:
     model: object
     graph: object
     run: object
-    video_graph: object
-    video_run: object
     metadata_sender: object
     labels: list[str]
+    #: Run output the loop pulls: the segments alone, or the frame-joined bundle when saving.
+    output_name: str
     frame_w: int
     frame_h: int
     output_fps: int
@@ -81,21 +89,19 @@ class ProfileWindow:
     def reset(self) -> None:
         self.frames = 0
         self.instances = 0
+        self.dropped_segments = 0
         self.start_ms = 0.0
         self.pull_ms = 0.0
         self.decode_ms = 0.0
-        self.overlay_ms = 0.0
-        self.video_push_ms = 0.0
         self.metadata_ms = 0.0
 
     def add(
         self,
         pull_ms: float,
         decode_ms: float,
-        overlay_ms: float,
-        video_push_ms: float,
         metadata_ms: float,
         instance_count: int,
+        dropped: int,
     ) -> None:
         if not self.enabled:
             return
@@ -103,10 +109,9 @@ class ProfileWindow:
             self.start_ms = time_ms()
         self.frames += 1
         self.instances += instance_count
+        self.dropped_segments += dropped
         self.pull_ms += pull_ms
         self.decode_ms += decode_ms
-        self.overlay_ms += overlay_ms
-        self.video_push_ms += video_push_ms
         self.metadata_ms += metadata_ms
         if self.frames >= self.interval:
             self.flush()
@@ -121,10 +126,9 @@ class ProfileWindow:
             f"output_fps={self.frames * 1000.0 / elapsed_ms} "
             f"avg_pull_ms={self.pull_ms / frames} "
             f"avg_decode_ms={self.decode_ms / frames} "
-            f"avg_overlay_ms={self.overlay_ms / frames} "
-            f"avg_video_push_ms={self.video_push_ms / frames} "
             f"avg_metadata_ms={self.metadata_ms / frames} "
-            f"avg_instances={self.instances / frames}",
+            f"avg_instances={self.instances / frames} "
+            f"dropped_segments={self.dropped_segments}",
             flush=True,
         )
         self.reset()
@@ -223,11 +227,13 @@ def parse_source_type(value: str) -> str:
 
 def parse_source_codec(value: str) -> str:
     lowered = value.lower()
-    if lowered in {"h264", "h.264"}:
+    if lowered in {"h264", "avc", "h.264"}:
         return "h264"
+    if lowered in {"h265", "hevc", "h.265"}:
+        return "h265"
     if lowered in {"mjpeg", "jpeg"}:
         return "mjpeg"
-    raise ValueError("source.codec must be h264 or mjpeg")
+    raise ValueError("source.codec must be h264/avc, h265/hevc, or mjpeg")
 
 
 def validate_config(cfg: AppConfig) -> None:
@@ -360,15 +366,6 @@ def tensor_bgr_from_decoded(tensor):
     return np.ascontiguousarray(frame)
 
 
-def tensor_from_rgb_frame(frame):
-    return pyneat.Tensor.from_numpy(
-        np.ascontiguousarray(frame),
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
-    )
-
-
 def extract_tensors(sample) -> list:
     if isinstance(sample, (list, tuple)) and all(hasattr(item, "to_numpy") for item in sample):
         return list(sample)
@@ -415,9 +412,15 @@ def frame_tensor_from_sample(sample):
 
 
 def segment_tensors_from_sample(sample) -> list:
-    tensors = extract_tensors(joined_field(sample, "segments", 1))
+    # Without save_dir there is nothing to combine, so the pulled sample is the segments payload.
+    field = (
+        joined_field(sample, "segments", 1)
+        if getattr(sample, "kind", None) == pyneat.SampleKind.Bundle
+        else sample
+    )
+    tensors = extract_tensors(field)
     if not tensors:
-        raise RuntimeError("joined segments field has no tensors")
+        raise RuntimeError("segments field has no tensors")
     return tensors
 
 
@@ -483,6 +486,8 @@ def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
         "-of",
         "default=nw=1",
     ]
+    if cfg.source_type == "rtsp" and cfg.tcp:
+        cmd.extend(["-rtsp_transport", "tcp"])
     if not cfg.ssl_strict:
         cmd.extend(["-tls_verify", "0"])
     cmd.append(cfg.source_url)
@@ -535,15 +540,23 @@ def make_rtsp_source_options(cfg: AppConfig, fps: int, width: int, height: int):
     opt.insert_queue = True
     opt.decoder_name = "decoder"
     opt.decoder_raw_output = True
-    opt.codec = pyneat.RtspCodec.H264 if cfg.source_codec == "h264" else pyneat.RtspCodec.MJPEG
+    opt.codec = (
+        pyneat.RtspCodec.H264
+        if cfg.source_codec == "h264"
+        else pyneat.RtspCodec.H265
+        if cfg.source_codec == "h265"
+        else pyneat.RtspCodec.MJPEG
+    )
     opt.source_fps = fps
     if cfg.source_codec == "h264":
-        opt.payload_type = 96
         opt.auto_caps_from_stream = True
         opt.fallback_h264_width = width
         opt.fallback_h264_height = height
+    elif cfg.source_codec == "h265":
+        opt.auto_caps_from_stream = True
+        opt.dec_width = width
+        opt.dec_height = height
     else:
-        opt.mjpeg_payload_type = 26
         opt.dec_width = width
         opt.dec_height = height
     set_output_caps(opt.output_caps, fps, width, height)
@@ -645,16 +658,6 @@ def build_metadata_sender(cfg: AppConfig):
 
 
 def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
-    input_opt = pyneat.InputOptions()
-    input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = pyneat.Format.RGB
-    input_opt.width = width
-    input_opt.height = height
-    input_opt.depth = 3
-    input_opt.fps_n = fps
-    input_opt.fps_d = 1
-    input_opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
-
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
     sender_opt.host = cfg.insight_host
     sender_opt.channel = 0
@@ -662,16 +665,8 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     sender_opt.encoder.bitrate_kbps = 1000
 
     graph = pyneat.Graph("video")
-    graph.add(pyneat.nodes.input(input_opt))
-    graph.add(pyneat.groups.video_sender(sender_opt))
-
-    seed = pyneat.Tensor.from_numpy(
-        np.zeros((height, width, 3), dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
-    )
-    return graph, graph.build([seed]), sender_opt.video_port
+    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_opt))
+    return graph, sender_opt.video_port
 
 
 def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
@@ -684,11 +679,15 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     model = make_model(cfg, frame_w, frame_h)
     labels = load_labels(cfg.labels_path)
 
-    source = make_source_graph(cfg, fps, frame_w, frame_h)
-    branch = pyneat.graphs.branch("source", ["frame", "model"])
+    video_graph, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
 
-    frame_graph = pyneat.Graph("frame")
-    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    # Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
+    # segments must stay in one Run and therefore on one GStreamer timeline.
+    save_frames = bool(cfg.output.save_dir)
+    source = make_source_graph(cfg, fps, frame_w, frame_h)
+    branch = pyneat.graphs.branch(
+        "source", ["video", "model", "frame"] if save_frames else ["video", "model"]
+    )
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
@@ -696,17 +695,21 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     segments_graph = pyneat.Graph("segments")
     segments_graph.add(pyneat.nodes.output("segments", pyneat.OutputOptions.every_frame(4)))
 
-    joined = pyneat.graphs.combine(
-        ["frame", "segments"], "segmentation_output", pyneat.CombinePolicy.ByFrame
-    )
-
     graph = pyneat.Graph()
     graph.connect(source, branch)
-    graph.connect(branch, frame_graph)
+    graph.connect(branch, video_graph)
     graph.connect(branch, model_graph)
     graph.connect(model_graph, segments_graph)
-    graph.connect(frame_graph, joined)
-    graph.connect(segments_graph, joined)
+    if save_frames:
+        frame_graph = pyneat.Graph("frame")
+        frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+        joined = pyneat.graphs.combine(
+            ["frame", "segments"], "segmentation_output", pyneat.CombinePolicy.ByFrame
+        )
+        graph.connect(branch, frame_graph)
+        graph.connect(frame_graph, joined)
+        graph.connect(segments_graph, joined)
+    output_name = "segmentation_output" if save_frames else "segments"
     if cfg.profile:
         print(f"Backend:\n{graph.describe_backend()}")
 
@@ -717,7 +720,6 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     run = graph.build(run_options)
 
-    video_graph, video_run, video_port = build_video_graph(cfg, frame_w, frame_h, fps)
     metadata_sender = build_metadata_sender(cfg)
     print(
         f"source={cfg.source_url} type={cfg.source_type} codec={cfg.source_codec} "
@@ -729,10 +731,9 @@ def build_pipeline(cfg: AppConfig) -> PipelineRuntime:
         model=model,
         graph=graph,
         run=run,
-        video_graph=video_graph,
-        video_run=video_run,
         metadata_sender=metadata_sender,
         labels=labels,
+        output_name=output_name,
         frame_w=frame_w,
         frame_h=frame_h,
         output_fps=fps,
@@ -778,8 +779,8 @@ def mask_rect_for_frame_rect(
 ) -> tuple[int, int, int, int]:
     frame_h, frame_w = frame_shape[:2]
     mask_h, mask_w = mask_shape[:2]
-    model_w = mask_w * 4
-    model_h = mask_h * 4
+    model_w = mask_w * MASK_STRIDE
+    model_h = mask_h * MASK_STRIDE
     scale = min(model_w / frame_w, model_h / frame_h)
     pad_x = (model_w - frame_w * scale) * 0.5
     pad_y = (model_h - frame_h * scale) * 0.5
@@ -840,7 +841,7 @@ def overlay_segmentation(
         if mask is None:
             continue
         mask = np.asarray(mask, dtype=np.uint8)
-        threshold = cfg.mask_threshold * (255.0 if int(mask.max()) > 1 else 1.0)
+        threshold = cfg.mask_threshold * 255.0
         x0, y0, x1, y1 = frame_rect_for_detection(det, frame.shape)
         roi_mask = project_letterbox_mask_roi(mask, frame.shape, (x0, y0, x1, y1))
         _, binary_mask = cv2.threshold(roi_mask, threshold, 255, cv2.THRESH_BINARY)
@@ -857,70 +858,123 @@ def overlay_segmentation(
     return annotated
 
 
-def metadata_boxes(detections: list[dict], labels: list[str], frame_w: int, frame_h: int):
-    objects = []
-    for index, det in enumerate(detections, start=1):
-        x0, y0, x1, y1 = frame_rect_for_detection(det, (frame_h, frame_w, 3))
-        objects.append(
+def mask_polygon(
+    mask,
+    frame_shape: tuple[int, ...],
+    frame_rect: tuple[int, int, int, int],
+    threshold: float,
+) -> list[list[int]]:
+    """Frame-absolute silhouette of ``mask`` inside ``frame_rect``.
+
+    Empty when the thresholded mask holds nothing Insight can draw. ``threshold`` is a fraction of
+    full scale, as ``output.mask_threshold`` is. Upscaling before thresholding is what makes the
+    outline match the rendered overlay.
+    """
+    roi = project_letterbox_mask_roi(mask, frame_shape, frame_rect)
+    _, binary = cv2.threshold(roi, threshold * 255.0, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return []
+    largest = max(contours, key=cv2.contourArea)
+    polygon = cv2.approxPolyDP(largest, 0.004 * cv2.arcLength(largest, True), True)
+    if len(polygon) < 3:
+        return []
+    # Contour points lie inside frame_rect, which is already clamped to the frame, so shifting them
+    # into frame space cannot leave the image.
+    x0, y0 = frame_rect[0], frame_rect[1]
+    return [[int(point[0][0]) + x0, int(point[0][1]) + y0] for point in polygon]
+
+
+def metadata_segments(
+    detections: list[dict],
+    labels: list[str],
+    frame_shape: tuple[int, ...],
+    mask_threshold: float,
+) -> list[dict]:
+    segments = []
+    for det in detections:
+        mask = det.get("mask")
+        if mask is None:
+            continue
+        x0, y0, x1, y1 = frame_rect_for_detection(det, frame_shape)
+        polygon = mask_polygon(mask, frame_shape, (x0, y0, x1, y1), mask_threshold)
+        if not polygon:
+            continue
+        segments.append(
             {
-                "id": f"obj_{index}",
+                "id": f"seg_{len(segments) + 1}",
                 "label": class_name(labels, int(det["class_id"])),
                 "confidence": float(det["score"]),
-                "bbox": [float(x0), float(y0), float(x1 - x0), float(y1 - y0)],
+                "bbox": [x0, y0, x1 - x0, y1 - y0],
+                "mask_format": "polygon",
+                "mask": polygon,
             }
         )
-    return objects
+    return segments
 
 
-def send_metadata(runtime: PipelineRuntime, sample, detections: list[dict]) -> None:
+def encode_segments(segments: list[dict]) -> tuple[str, int]:
+    """``data`` object of a ``segmentation`` metadata message, and how many segments were dropped.
+
+    Segments that do not fit the byte budget are dropped lowest-confidence first.
+    """
+    ordered = sorted(segments, key=lambda segment: segment["confidence"], reverse=True)
+    kept = []
+    total = len('{"segments":[]}')
+    for segment in ordered:
+        entry_bytes = len(json.dumps(segment, separators=(",", ":"))) + 1
+        if total + entry_bytes > METADATA_BYTE_BUDGET:
+            break
+        total += entry_bytes
+        kept.append(segment)
+    return json.dumps({"segments": kept}, separators=(",", ":")), len(ordered) - len(kept)
+
+
+def send_metadata(
+    runtime: PipelineRuntime, sample, detections: list[dict], mask_threshold: float
+) -> int:
+    """Sends one ``segmentation`` message and reports how many segments the byte budget dropped."""
+    data_json, dropped = encode_segments(
+        metadata_segments(
+            detections, runtime.labels, (runtime.frame_h, runtime.frame_w), mask_threshold
+        )
+    )
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
-    runtime.metadata_sender.send_metadata(
-        "instance-segmentation",
-        json.dumps(
-            {"objects": metadata_boxes(detections, runtime.labels, runtime.frame_w, runtime.frame_h)},
-            separators=(",", ":"),
-        ),
-        timestamp_ms,
-        frame_id,
-    )
+    if not runtime.metadata_sender.send_metadata(
+        "segmentation", data_json, timestamp_ms, frame_id
+    ):
+        print("[warn] insight metadata send failed", file=sys.stderr)
+    return dropped
 
 
-def push_annotated_video(runtime: PipelineRuntime, sample, annotated_bgr) -> None:
-    rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
-    video_sample = pyneat.make_tensor_sample("", tensor_from_rgb_frame(rgb))
-    video_sample.pts_ns = sample.pts_ns
-    video_sample.dts_ns = sample.dts_ns
-    video_sample.duration_ns = sample.duration_ns
-    video_sample.frame_id = sample.frame_id
-    video_sample.stream_id = sample.stream_id
-    if not runtime.video_run.push([video_sample]):
-        raise RuntimeError("Insight video push failed")
-
-
-def maybe_save_frame(cfg: AppConfig, processed: int, annotated_bgr) -> None:
+def maybe_save_frame(
+    cfg: AppConfig, processed: int, sample, detections: list[dict], labels: list[str]
+) -> None:
     if not cfg.output.save_dir or cfg.output.save_every <= 0:
         return
     if processed % cfg.output.save_every != 0:
         return
+    frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
+    annotated = overlay_segmentation(frame, detections, cfg.min_score, cfg.output, labels)
     out_path = Path(cfg.output.save_dir) / f"frame_{processed}.jpg"
-    if not cv2.imwrite(str(out_path), annotated_bgr):
+    if not cv2.imwrite(str(out_path), annotated):
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
 def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
+    dropped_total = 0
     while cfg.frames <= 0 or processed < cfg.frames:
         pull_start = time_ms()
-        sample = runtime.run.pull("segmentation_output", 20000)
+        sample = runtime.run.pull(runtime.output_name, 20000)
         pull_end = time_ms()
         if sample is None:
             print("[warn] timed out waiting for segmentation output", file=sys.stderr)
             continue
 
         decode_start = time_ms()
-        frame = tensor_bgr_from_decoded(frame_tensor_from_sample(sample))
         detections = decode_segmentation_output(
             segment_tensors_from_sample(sample),
             runtime.frame_w,
@@ -929,31 +983,31 @@ def run_pipeline(runtime: PipelineRuntime, cfg: AppConfig) -> int:
         )
         decode_end = time_ms()
 
-        overlay_start = time_ms()
-        annotated = overlay_segmentation(frame, detections, cfg.min_score, cfg.output, runtime.labels)
-        overlay_end = time_ms()
-
-        video_start = time_ms()
-        push_annotated_video(runtime, sample, annotated)
-        video_end = time_ms()
-
         metadata_start = time_ms()
-        send_metadata(runtime, sample, detections)
+        dropped = send_metadata(runtime, sample, detections, cfg.output.mask_threshold)
         metadata_end = time_ms()
+        if dropped > 0 and dropped_total == 0:
+            print(
+                f"[warn] metadata byte budget exceeded, dropped {dropped} segments",
+                file=sys.stderr,
+            )
+        dropped_total += dropped
 
         processed += 1
-        maybe_save_frame(cfg, processed, annotated)
+        maybe_save_frame(cfg, processed, sample, detections, runtime.labels)
         profile.add(
             pull_end - pull_start,
             decode_end - decode_start,
-            overlay_end - overlay_start,
-            video_end - video_start,
             metadata_end - metadata_start,
             len(detections),
+            dropped,
         )
 
     profile.flush()
-    print(f"processed={processed} video_sender={cfg.insight_host}:{runtime.video_port}")
+    print(
+        f"processed={processed} dropped_segments={dropped_total} "
+        f"video_sender={cfg.insight_host}:{runtime.video_port}"
+    )
     return processed
 
 
@@ -977,7 +1031,6 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return 0 if run_pipeline(runtime, cfg) > 0 else 3
         finally:
-            runtime.video_run.close()
             runtime.run.close()
     except KeyboardInterrupt:
         return 130

@@ -36,6 +36,9 @@ source before writing code or explaining behavior.
 - `Sample`, bundles, frame IDs, timestamps, and metadata-carrying payloads
   - Inspect `include/pipeline/Tensor.h`
   - Read `docs/develop-apps/development-workflow/core_types.mdx`
+- Per-frame string attributes that must stay attached through decode and graph branches
+  - Inspect `Sample::attributes` in `include/pipeline/Tensor.h`
+  - Read `docs/develop-apps/advanced-concepts/data-model-contracts/frame_attributes.md`
 - Encoded media helpers and payload types
   - Inspect `include/pipeline/EncodedSampleUtil.h`
   - Inspect `include/pipeline/PayloadType.h`
@@ -52,13 +55,14 @@ source before writing code or explaining behavior.
   - Inspect `include/nodes/common/Queue.h`
   - Inspect `include/nodes/common/Caps.h`
 - Image, video, RTSP, UDP, and metadata I/O
+  - Inspect `include/nodes/io/CameraInput.h`
   - Inspect `include/nodes/io/RTSPInput.h`
   - Inspect `include/nodes/io/StillImageInput.h`
   - Inspect `include/nodes/io/UdpOutput.h`
   - Inspect `include/nodes/io/MetadataSender.h`
 - Pre-built node groups for common application plumbing
   - Inspect `include/nodes/groups/*.h`
-  - Start with `RtspDecodedInput.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
+  - Start with `RtspEncodedInput.h`, `RtspDecodedInput.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
 
 ## Model Pre/Post And Decode Helpers
 
@@ -68,8 +72,15 @@ source before writing code or explaining behavior.
 - Detection and segmentation decode helpers
   - Inspect `include/pipeline/DetectionTypes.h`
   - Inspect `include/pipeline/BoxDecodeType.h`
+  - Inspect `include/pipeline/BoxDecodeOptions.h`
+  - Inspect `include/pipeline/SuperPointTypes.h`
   - Inspect `include/nodes/sima/SimaBoxDecode.h`
   - Read `docs/reference/boxdecode_decode_types.md`
+  - Treat `BoxDecodeType::Ssd` as a selector for the supported prepared SSD recipes, not as a generic shape-inferred SSD decoder
+  - Inspect the SuperPoint profile and output format instead of decoding its result layout from tensor shape alone
+- Native H.264, H.265/HEVC, JPEG, and MJPEG decoding
+  - Inspect `include/nodes/sima/SimaDecode.h`
+  - Prefer codec-neutral `payload_type` and `VideoSenderOptions::Passthrough(codec)` in new encoded-media code
 - Fixed-function Sima nodes when composing lower-level graph routes
   - Inspect `include/nodes/sima/*.h`
 
@@ -85,7 +96,9 @@ source before writing code or explaining behavior.
   - Inspect `include/genai/GenAIServer.h`
   - Inspect `include/genai/GraphFragments.h`
   - Inspect `include/genai/GenAIOptions.h`
-  - Read `docs/develop-apps/development-workflow/genai-model.mdx`
+  - Read `docs/develop-apps/development-workflow/genai-model/index.mdx`
+  - Read `docs/develop-apps/development-workflow/genai-model/direct-api.mdx`
+  - Read `docs/develop-apps/development-workflow/genai-model/genai-server.mdx`
 
 ## Diagnostics And Measurement
 

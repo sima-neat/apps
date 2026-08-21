@@ -209,13 +209,21 @@ render_readme() {
 | Difficulty | Intermediate |
 | Tags | ${category} |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | ${example_name} |
 | Model | <default-model> |
 
 ## Concept
 
-TODO: describe what this example demonstrates.
+TODO: In one or two plain-English sentences under 200 characters, say what this application does and produces. Name the main model family when useful.
+
+## Preview
+
+TODO: Add an application-specific preview at:
+
+\`\`\`md
+![${example_name} preview](../../../portal/assets/examples/${category}/${example_name}/image.png)
+\`\`\`
 
 ## Prerequisites
 
@@ -229,6 +237,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 \`\`\`bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/${category}/${example_name}
 \`\`\`
 
 Run the remaining commands from \`prebuilt-apps/\`.
@@ -242,16 +251,15 @@ The default model is \`<default-model>\`.
 | \`<default-model>\` | Default | <Model Zoo / direct artifact> |
 | \`<supported-model>\` | Supported | <Model Zoo / direct artifact> |
 
-Check the installed platform version, then set \`PLATFORM_VERSION\` to the displayed \`DISTRO_VERSION\` value. Use the command that matches the model source and delete the other command.
+Model packages come from the Model Zoo release below, which can differ from the installed platform version. Use the command that matches the model source and delete the other command.
 
 Model Zoo:
 
 \`\`\`bash
-cat /etc/buildinfo
-export PLATFORM_VERSION="<platform-version>"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli modelzoo -v "\${PLATFORM_VERSION}" get <model-name>
+sima-cli modelzoo -v "\${MODELZOO_VERSION}" get <model-name>
 cd ..
 \`\`\`
 
@@ -266,20 +274,26 @@ cd ..
 
 Set \`model.path\` in the example config to the downloaded package.
 
+## Configure
+
+Open \`\${APP_DIR}/src/common/config.yaml\` and name only the values users must change.
+
+Do not copy the packaged configuration into this README. Use a focused snippet only for an override or generated configuration that the package does not already provide.
+
 ## Run
 
 ### C++
 
 \`\`\`bash
-./examples/${category}/${example_name}/src/cpp/pre-built/${example_name}
+./\${APP_DIR}/src/cpp/pre-built/${example_name}
 \`\`\`
 
 ### Python
 
 \`\`\`bash
 source ~/pyneat/bin/activate
-pip install -r examples/${category}/${example_name}/src/python/requirements.txt
-python3 examples/${category}/${example_name}/src/python/main.py
+pip install -r \${APP_DIR}/src/python/requirements.txt
+python3 \${APP_DIR}/src/python/main.py
 \`\`\`
 
 ## Source Files

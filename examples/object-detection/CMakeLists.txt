@@ -1,7 +1,9 @@
 foreach(example IN ITEMS
     high-density-multi-stream-object-detector
+    pcie-high-density-multi-stream-object-detector
     detr-object-detector
     single-stream-object-detector
+    ssd-mobilenet-object-detector
     yolo26-object-detector
 )
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/src/cpp/CMakeLists.txt")

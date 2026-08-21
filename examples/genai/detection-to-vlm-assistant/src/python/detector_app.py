@@ -239,6 +239,36 @@ def parse_boxes(result) -> list[dict]:
     return boxes
 
 
+def find_field(sample, label: str):
+    if getattr(sample, "stream_label", "") == label:
+        return sample
+    for field in getattr(sample, "fields", []):
+        found = find_field(field, label)
+        if found is not None:
+            return found
+    return None
+
+
+def joined_field(sample, label: str, bundle_index: int):
+    """Return one branch of the combined output, by label or by combine order."""
+    field = find_field(sample, label)
+    if field is not None:
+        return field
+    fields = list(getattr(sample, "fields", []))
+    if sample.kind == pyneat.SampleKind.Bundle and len(fields) > bundle_index:
+        return fields[bundle_index]
+    raise RuntimeError(f"detector output missing {label} field")
+
+
+def decoded_frame_tensor(sample):
+    field = joined_field(sample, "frame", 0)
+    if field.kind == pyneat.SampleKind.Tensor and field.tensor is not None:
+        return field.tensor
+    if field.kind == pyneat.SampleKind.TensorSet and field.tensors:
+        return field.tensors[0]
+    raise RuntimeError("detector output did not contain a decoded frame tensor")
+
+
 def metadata_json(boxes: list[dict], labels: list[str], classes: tuple[str, ...] = ()) -> str:
     objects = []
     allowed = set(classes)
@@ -352,7 +382,7 @@ class GenAICommenter:
             self.worker.start()
             self.started = True
 
-    def try_enqueue(self, frame: np.ndarray, boxes: list[dict]) -> None:
+    def try_enqueue(self, sample, boxes: list[dict]) -> None:
         if not self.cfg.genai_enabled:
             return
         now = time.monotonic()
@@ -367,6 +397,7 @@ class GenAICommenter:
         if box is None:
             return
 
+        frame = decoded_tensor_to_rgb(decoded_frame_tensor(sample))
         try:
             self.queue.put_nowait(crop_box(frame, box).copy())
             self.last_enqueue_at = now
@@ -437,7 +468,7 @@ class GenAICommenter:
             return False
 
 
-def build_rtsp_run(cfg: Config, width: int, height: int, fps: int):
+def build_source_graph(cfg: Config, width: int, height: int, fps: int):
     opt = pyneat.RtspDecodedInputOptions()
     opt.url = cfg.rtsp_url
     opt.payload_type = 96
@@ -447,62 +478,34 @@ def build_rtsp_run(cfg: Config, width: int, height: int, fps: int):
     opt.fallback_h264_height = height
     opt.fallback_h264_fps = fps
     opt.sima_allocator_type = 2
-    opt.decoder_raw_output = False
-    opt.use_videoconvert = False
-    opt.use_videoscale = True
+    opt.decoder_raw_output = True
     opt.output_caps.enable = True
+    opt.output_caps.format = pyneat.Format.NV12
     opt.output_caps.width = width
     opt.output_caps.height = height
     opt.output_caps.fps = fps
-    opt.output_caps.memory = pyneat.CapsMemory.SystemMemory
-
-    graph = pyneat.Graph("rtsp_source")
-    graph.add(pyneat.groups.rtsp_decoded_input(opt))
-    graph.add(pyneat.nodes.output(pyneat.OutputOptions.every_frame(1)))
-
-    run_opt = pyneat.RunOptions()
-    run_opt.queue_depth = 4
-    run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_opt.output_memory = pyneat.OutputMemory.Owned
-    return graph, graph.build(run_opt)
+    opt.output_caps.memory = pyneat.CapsMemory.Any
+    return pyneat.groups.rtsp_decoded_input(opt)
 
 
-def build_video_run(cfg: Config, width: int, height: int, fps: int):
-    input_opt = pyneat.InputOptions()
-    input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = pyneat.Format.RGB
-    input_opt.width = width
-    input_opt.height = height
-    input_opt.depth = 3
-    input_opt.fps_n = max(1, fps)
-    input_opt.fps_d = 1
-    input_opt.caps_override = (
-        f"video/x-raw,format=RGB,width={width},height={height},framerate={max(1, fps)}/1"
-    )
-    input_opt.memory_policy = pyneat.InputMemoryPolicy.Ev74
-
+def build_video_graph(cfg: Config, width: int, height: int, fps: int):
     sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, max(1, fps))
     sender_opt.host = cfg.insight_host
     sender_opt.channel = cfg.channel
     sender_opt.video_port_base = cfg.video_port
 
-    graph = pyneat.Graph("insight_video")
-    graph.add(pyneat.nodes.input(input_opt))
-    graph.add(pyneat.groups.video_sender(sender_opt))
-    seed = pyneat.Tensor.from_numpy(
-        np.zeros((height, width, 3), dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
-    )
-    return graph, graph.build([seed])
+    graph = pyneat.Graph("video")
+    graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_opt))
+    return graph
 
 
-def build_model(cfg: Config):
+def build_model(cfg: Config, width: int, height: int):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
+    opt.preprocess.input_max_width = width
+    opt.preprocess.input_max_height = height
     opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
     opt.decode_type = pyneat.BoxDecodeType.YoloV26
     opt.score_threshold = cfg.min_score
@@ -511,32 +514,43 @@ def build_model(cfg: Config):
     return pyneat.Model(cfg.model_path, opt)
 
 
-def build_detector_run(cfg: Config, width: int, height: int):
-    model = build_model(cfg)
+def build_pipeline(cfg: Config, width: int, height: int, fps: int):
+    model = build_model(cfg, width, height)
+    source = build_source_graph(cfg, width, height, fps)
+    video_graph = build_video_graph(cfg, width, height, fps)
 
-    input_opt = model.input_appsrc_options(False)
-    input_opt.payload_type = pyneat.PayloadType.Image
-    input_opt.format = pyneat.Format.BGR
-    input_opt.width = width
-    input_opt.height = height
-    input_opt.depth = 3
+    # Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
+    # detections must stay in one Run and therefore on one GStreamer timeline. The frame branch
+    # returns the decoded frame the GenAI commenter crops.
+    branch = pyneat.graphs.branch("source", ["video", "model", "frame"])
 
-    graph = pyneat.Graph("detector")
-    graph.add(pyneat.nodes.input(input_opt))
-    graph.add(model.graph())
-    graph.add(pyneat.nodes.output())
+    model_graph = pyneat.Graph("model")
+    model_graph.connect(pyneat.nodes.input("model"), model)
 
-    seed = pyneat.Tensor.from_numpy(
-        np.zeros((height, width, 3), dtype=np.uint8),
-        copy=True,
-        image_format=pyneat.PixelFormat.BGR,
-        memory=pyneat.TensorMemory.EV74,
+    detections_graph = pyneat.Graph("detections")
+    detections_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+
+    frame_graph = pyneat.Graph("frame")
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+
+    joined = pyneat.graphs.combine(
+        ["frame", "detections"], "detector_output", pyneat.CombinePolicy.ByFrame
     )
+
+    graph = pyneat.Graph()
+    graph.connect(source, branch)
+    graph.connect(branch, video_graph)
+    graph.connect(branch, model_graph)
+    graph.connect(model_graph, detections_graph)
+    graph.connect(branch, frame_graph)
+    graph.connect(frame_graph, joined)
+    graph.connect(detections_graph, joined)
+
     run_opt = pyneat.RunOptions()
     run_opt.queue_depth = 4
     run_opt.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     run_opt.output_memory = pyneat.OutputMemory.Owned
-    return model, graph, graph.build([seed], run_opt)
+    return model, graph, graph.build(run_opt)
 
 
 def build_metadata_sender(cfg: Config):
@@ -566,13 +580,11 @@ def main() -> int:
         print("config requires genai.model or genai_server.model.name", file=sys.stderr)
         return 2
 
-    rtsp_run = detector_run = video_run = commenter = None
+    detector_run = commenter = None
     try:
         labels = load_labels(cfg.labels_path)
         width, height, fps = probe_rtsp(cfg.rtsp_url)
-        _model, _detector_graph, detector_run = build_detector_run(cfg, width, height)
-        _rtsp_graph, rtsp_run = build_rtsp_run(cfg, width, height, fps)
-        _video_graph, video_run = build_video_run(cfg, width, height, fps)
+        _model, _detector_graph, detector_run = build_pipeline(cfg, width, height, fps)
         metadata = build_metadata_sender(cfg)
         commenter = GenAICommenter(cfg, labels)
         commenter.start()
@@ -590,44 +602,17 @@ def main() -> int:
 
         processed = 0
         while cfg.frames <= 0 or processed < cfg.frames:
-            source_sample = rtsp_run.pull(timeout_ms=cfg.timeout_ms)
-            if source_sample is None:
+            sample = detector_run.pull("detector_output", cfg.timeout_ms)
+            if sample is None:
                 print("RTSP stream ended or pull timed out", file=sys.stderr)
                 break
-            if source_sample.kind == pyneat.SampleKind.Tensor and source_sample.tensor is not None:
-                decoded_frame = source_sample.tensor
-            elif source_sample.kind == pyneat.SampleKind.TensorSet and source_sample.tensors:
-                decoded_frame = source_sample.tensors[0]
-            else:
-                raise RuntimeError("RTSP output did not contain a decoded frame tensor")
-            rgb_frame = decoded_tensor_to_rgb(decoded_frame)
-            model_input = pyneat.Tensor.from_numpy(
-                rgb_to_bgr(rgb_frame),
-                copy=True,
-                image_format=pyneat.PixelFormat.BGR,
-                memory=pyneat.TensorMemory.EV74,
-            )
-            boxes = parse_boxes(detector_run.run([model_input], timeout_ms=cfg.timeout_ms))
-            commenter.try_enqueue(rgb_frame, boxes)
-            video_tensor = pyneat.Tensor.from_numpy(
-                rgb_frame,
-                copy=True,
-                image_format=pyneat.PixelFormat.RGB,
-                memory=pyneat.TensorMemory.EV74,
-            )
-            video_sample = pyneat.make_tensor_sample("", video_tensor)
-            video_sample.pts_ns = source_sample.pts_ns
-            video_sample.dts_ns = source_sample.dts_ns
-            video_sample.duration_ns = source_sample.duration_ns
-            video_sample.frame_id = source_sample.frame_id
-            video_sample.stream_id = source_sample.stream_id
-            if not video_run.push([video_sample]):
-                raise RuntimeError("Insight video push failed")
+            boxes = parse_boxes(joined_field(sample, "detections", 1))
+            commenter.try_enqueue(sample, boxes)
             ok = metadata.send_metadata(
                 "object-detection",
                 metadata_json(boxes, labels, cfg.classes),
-                int(source_sample.pts_ns // 1_000_000) if source_sample.pts_ns >= 0 else -1,
-                str(source_sample.frame_id) if source_sample.frame_id >= 0 else "",
+                int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1,
+                str(sample.frame_id) if sample.frame_id >= 0 else "",
             )
             if not ok:
                 raise RuntimeError("failed to send metadata to Insight")
@@ -643,9 +628,8 @@ def main() -> int:
     finally:
         if commenter is not None:
             commenter.close()
-        for run in (video_run, detector_run, rtsp_run):
-            if run is not None:
-                run.close()
+        if detector_run is not None:
+            detector_run.close()
 
 
 if __name__ == "__main__":

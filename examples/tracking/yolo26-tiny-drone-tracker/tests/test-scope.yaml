@@ -1,0 +1,17 @@
+models:
+  yolo26-tiny-drone-int8-qat-mla-tess:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
+    file: yolo26n_p2_tiny_drone_int8_qat_b1_mpk.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+      - yolo26-tiny-drone-int8-qat-mla-tess
+  cpp:
+    enabled: true
+    models:
+      - yolo26-tiny-drone-int8-qat-mla-tess

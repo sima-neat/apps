@@ -7,7 +7,6 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +41,7 @@ def write_config(
     decode_type: str | None = None,
     input_extra: str = "",
     inference_extra: str = "",
+    runtime_extra: str = "",
     output_extra: str = "",
 ) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
@@ -63,6 +63,7 @@ def write_config(
             f"  workers: {workers}",
         ]
         + _extra_lines(inference_extra)
+        + (["runtime:"] + _extra_lines(runtime_extra) if runtime_extra else [])
         + [
             "output:",
             "  insight:",
@@ -117,14 +118,14 @@ class TestConfigLoading:
             "max_inflight_total",
         ),
         [
-            ("config.yaml", 16, 25, 8, 2, "auto", 16, 1, 1, 8),
+            ("config.yaml", 16, 30, 8, 2, "throughput-low-latency", 16, 1, 1, 8),
             (
                 "config-24x720p20fps.yaml",
                 24,
                 20,
                 16,
                 2,
-                "auto",
+                "throughput-low-latency",
                 4,
                 2,
                 4,
@@ -172,6 +173,8 @@ class TestConfigLoading:
         assert cfg.internal_queue_depth == internal_queue_depth
         assert cfg.max_inflight_per_stream == max_inflight_per_stream
         assert cfg.max_inflight_total == max_inflight_total
+        assert cfg.stream_detection_timeout_ms == 30_000
+        assert cfg.no_detection_timeout_ms == 30_000
         assert effective_insight_visible_streams(cfg) == streams
         assert (cfg.video_port_base, cfg.video_port_base + streams - 1) == (
             9000,
@@ -185,10 +188,10 @@ class TestConfigLoading:
         assert not Path(raw["model"]["path"]).is_absolute()
         assert not Path(raw["model"]["labels"]).is_absolute()
 
-    def test_default_config_is_the_16x25_profile(self):
+    def test_default_config_is_the_16x30_profile(self):
         default = yaml.safe_load((COMMON_DIR / "config.yaml").read_text(encoding="utf-8"))
         assert len(default["streams"]) == 16
-        assert default["input"]["fps"] == 25
+        assert default["input"]["fps"] == 30
 
     def test_config_rejects_overlapping_insight_port_ranges(self, tmp_path: Path):
         from main import load_app_config
@@ -242,6 +245,32 @@ class TestConfigLoading:
         assert cfg.input_fps == 20
         assert cfg.insight_host == "127.0.0.1"
         assert cfg.warmup_frames == 30
+        assert cfg.stream_detection_timeout_ms == 30_000
+        assert cfg.no_detection_timeout_ms == 30_000
+
+    @pytest.mark.parametrize(
+        ("setting", "message"),
+        [
+            ("no_detection_timeout_ms", "no_detection_timeout_ms must be > 0"),
+            (
+                "stream_detection_timeout_ms",
+                "stream_detection_timeout_ms must be > 0",
+            ),
+        ],
+    )
+    def test_config_rejects_invalid_liveness_settings(
+        self, tmp_path: Path, setting: str, message: str
+    ):
+        from main import load_app_config
+
+        config_path = write_config(
+            tmp_path,
+            ["rtsp://127.0.0.1:8554/src1"],
+            runtime_extra=f"{setting}: 0",
+        )
+
+        with pytest.raises(ValueError, match=message):
+            load_app_config(config_path)
 
     def test_config_rejects_legacy_fan_in_policy(self, tmp_path: Path):
         from main import load_app_config
@@ -377,6 +406,7 @@ output:
             workers=1,
             input_extra=textwrap.dedent(
                 """
+                  codec: hevc
                   decoder_buffers: 7
                   decoder_input_buffers: 2
                   decoder_tuning: throughput_low_latency
@@ -393,6 +423,7 @@ output:
         assert cfg.decoder_buffers == 7
         assert cfg.decoder_input_buffers == 2
         assert cfg.decoder_tuning == "throughput-low-latency"
+        assert cfg.codec == "h265"
 
     @pytest.mark.parametrize("depth", [-1, 33])
     def test_load_app_config_rejects_invalid_internal_queue_depth(
@@ -567,6 +598,8 @@ output:
         assert "queue_depth=4" in result.stdout
         assert "max_inflight_per_stream=4" in result.stdout
         assert "max_inflight_total=8" in result.stdout
+        assert "stream_detection_timeout_ms=30000" in result.stdout
+        assert "no_detection_timeout_ms=30000" in result.stdout
         assert "insight_visible_streams=2" in result.stdout
         assert "decoder_admission=core" in result.stdout
 
@@ -588,6 +621,7 @@ class TestRuntimeOptions:
 
         fake_pyneat = SimpleNamespace(
             RtspDecodedInputOptions=FakeRtspDecodedInputOptions,
+            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
             Format=SimpleNamespace(NV12="NV12"),
             CapsMemory=SimpleNamespace(Any="Any"),
         )
@@ -597,6 +631,7 @@ class TestRuntimeOptions:
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
+            codec="h265",
         )
 
         opt, fps, width, height = main.make_source_options(
@@ -606,6 +641,10 @@ class TestRuntimeOptions:
         assert opt.out_format == "NV12"
         assert opt.decoder_raw_output is True
         assert opt.decoder_next_element == "CVU"
+        assert opt.codec == "H265"
+        assert opt.dec_width == 640
+        assert opt.dec_height == 480
+        assert opt.source_fps == 30
         assert opt.auto_caps_from_stream is True
         assert opt.num_buffers == main.DEFAULT_DECODER_BUFFERS
         assert opt.output_caps.enable is True
@@ -632,6 +671,7 @@ class TestRuntimeOptions:
 
         fake_pyneat = SimpleNamespace(
             RtspDecodedInputOptions=FakeRtspDecodedInputOptions,
+            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
             Format=SimpleNamespace(NV12="NV12"),
             CapsMemory=SimpleNamespace(Any="Any"),
         )
@@ -646,11 +686,21 @@ class TestRuntimeOptions:
             input_fps=20,
             decoder_tuning="throughput-low-latency",
         )
-
-        opt, fps, width, height = main.make_source_options(
-            cfg, cfg.rtsp_urls[0], fps=30, width=640, height=480
+        monkeypatch.setattr(
+            main,
+            "probe_rtsp",
+            lambda _url: pytest.fail("fully configured source must not be probed"),
         )
 
+        opt, fps, width, height = main.make_source_options(cfg, cfg.rtsp_urls[0])
+
+        assert opt.codec == "H264"
+        assert opt.dec_width == 1280
+        assert opt.dec_height == 720
+        assert opt.source_fps == 20
+        assert opt.fallback_h264_width == 1280
+        assert opt.fallback_h264_height == 720
+        assert getattr(opt, "fallback_h264_fps", -1) == -1
         assert opt.output_caps.width == 1280
         assert opt.output_caps.height == 720
         assert opt.output_caps.fps == 20
@@ -682,18 +732,22 @@ class TestRuntimeOptions:
 
         class FakeVideoSenderOptions:
             @staticmethod
-            def h264_rtp_udp_from_encoded():
-                return SimpleNamespace(async_=True)
+            def passthrough(codec):
+                return SimpleNamespace(codec=codec, async_=True)
 
         monkeypatch.setattr(
             main,
             "pyneat",
-            SimpleNamespace(VideoSenderOptions=FakeVideoSenderOptions),
+            SimpleNamespace(
+                VideoSenderOptions=FakeVideoSenderOptions,
+                RtspCodec=SimpleNamespace(H264="h264", H265="h265"),
+            ),
         )
         cfg = main.AppConfig(
             model_path=MODEL_PATH,
             labels_path=Path("labels.txt"),
             rtsp_urls=["rtsp://127.0.0.1:8554/src1"],
+            codec="h265",
             insight_host="192.0.2.10",
             video_port_base=9200,
         )
@@ -701,6 +755,7 @@ class TestRuntimeOptions:
         options = main.make_video_options(cfg, SimpleNamespace(index=3))
 
         assert options.async_ is False
+        assert options.codec == "h265"
         assert options.host == "192.0.2.10"
         assert options.channel == 3
         assert options.video_port_base == 9200
@@ -750,7 +805,8 @@ class TestRuntimeOptions:
             Graph=FakeGraph,
             Format=SimpleNamespace(NV12="NV12"),
             SimaDecodeOptions=FakeDecodeOptions,
-            SimaDecodeType=SimpleNamespace(H264="H264"),
+            SimaDecodeType=SimpleNamespace(H264="H264", H265="H265"),
+            RtspCodec=SimpleNamespace(H264="H264", H265="H265"),
             nodes=SimpleNamespace(
                 sima_decode=lambda options: options,
                 output=lambda name: ("output", name),
@@ -759,12 +815,10 @@ class TestRuntimeOptions:
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
 
         source_options = SimpleNamespace(
-            h264_width=1280,
-            h264_height=720,
-            h264_fps=20,
-            fallback_h264_width=-1,
-            fallback_h264_height=-1,
-            fallback_h264_fps=-1,
+            codec="H264",
+            dec_width=1280,
+            dec_height=720,
+            source_fps=20,
             sima_allocator_type=2,
             decoder_name="decoder",
             decoder_raw_output=True,
@@ -772,7 +826,7 @@ class TestRuntimeOptions:
             output_caps=SimpleNamespace(enable=False),
         )
 
-        graph = main.make_h264_decoder(
+        graph = main.make_decoder(
             source_options,
             decoder_buffers=16,
             decoder_input_buffers=2,
@@ -780,13 +834,16 @@ class TestRuntimeOptions:
         )
 
         decode = graph.nodes[0]
+        assert decode.dec_width == 1280
+        assert decode.dec_height == 720
+        assert decode.dec_fps == 20
         assert decode.num_buffers == 16
         assert decode.input_buffers == 2
         assert decode.decoder_tuning == "throughput-low-latency"
         assert decode.memory_opt is True
         assert graph.nodes[1] == ("output", "detector_frame")
 
-        default_graph = main.make_h264_decoder(
+        default_graph = main.make_decoder(
             source_options,
             decoder_buffers=8,
             decoder_input_buffers=2,
@@ -861,24 +918,164 @@ class TestRuntimeDelivery:
             20,
         )
         app = AppRuntime(model=None, graph=None, run=ClosedRun(), sources=[source])
-        cfg = SimpleNamespace(initial_detection_timeout_ms=1000)
+        cfg = SimpleNamespace(
+            initial_detection_timeout_ms=1000,
+            stream_detection_timeout_ms=1000,
+            no_detection_timeout_ms=1000,
+        )
         with pytest.raises(RuntimeError, match="detections output closed unexpectedly"):
             pull_detections(app, cfg, AggregateProfile(False, 0))
 
-    def test_detection_watchdog_requires_each_stream_to_remain_live(self):
-        from main import DetectionWatchdog
+    def test_target_completion_cannot_hide_latched_starvation(self, monkeypatch):
+        import main
+        from main import AppRuntime, pull_detections
 
-        watchdog = DetectionWatchdog(3, startup_timeout_s=10.0, cadence_timeout_s=2.0, start=0.0)
+        detections = [0, 0, 1, 1, 0, 1]
+
+        class FakeRun:
+            def pull(self, _name, _timeout_ms):
+                return detections.pop(0)
+
+        target_checks = 0
+
+        def reached_target(_sources):
+            nonlocal target_checks
+            target_checks += 1
+            return not detections
+
+        monkeypatch.setattr(
+            main, "stream_index_from_detection", lambda sample, _count: sample
+        )
+        monkeypatch.setattr(main, "complete_detection", lambda *_args: None)
+        monkeypatch.setattr(main, "target_reached", reached_target)
+        monotonic_values = iter((0.0, 0.0, 0.1, 0.2, 0.3, 0.4, 0.9, 1.4, 1.4))
+        monkeypatch.setattr(main.time, "monotonic", lambda: next(monotonic_values))
+        main._STOP_REQUESTED = False
+        app = AppRuntime(
+            model=None, graph=None, run=FakeRun(), sources=[object(), object()]
+        )
+        cfg = SimpleNamespace(
+            initial_detection_timeout_ms=10_000,
+            stream_detection_timeout_ms=1000,
+            no_detection_timeout_ms=10_000,
+        )
+
+        with pytest.raises(
+            RuntimeError, match="timed out waiting for detector progress from streams: 1"
+        ):
+            pull_detections(app, cfg, object())
+        assert target_checks == 6
+
+    def test_detection_watchdog_tracks_deadlines(self):
+        from main import DetectionFailureKind, DetectionWatchdog
+
+        watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=10.0,
+            stream_timeout_s=20.0,
+            no_progress_timeout_s=50.0,
+            start=0.0,
+        )
         watchdog.observe(0, 1.0)
+        watchdog.observe(0, 1.1)
         watchdog.observe(2, 2.0)
-        assert watchdog.expired_streams(9.99) == []
-        assert watchdog.expired_streams(10.0) == [1]
+        watchdog.observe(1, 3.0)
+        watchdog.observe(1, 3.1)
+        assert not watchdog.check(9.99)
+        startup_failure = watchdog.check(10.0)
+        assert startup_failure.kind is DetectionFailureKind.STARTUP
+        assert startup_failure.streams == (2,)
 
+        watchdog.observe(2, 10.0)
+        assert not watchdog.startup_complete()
+        late_startup_failure = watchdog.check(10.0)
+        assert late_startup_failure.kind is DetectionFailureKind.STARTUP
+        assert late_startup_failure.streams == (2,)
+
+        watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=100.0,
+            stream_timeout_s=5.0,
+            no_progress_timeout_s=50.0,
+            start=0.0,
+        )
+        watchdog.observe(0, 1.0)
+        watchdog.observe(0, 1.1)
+        watchdog.observe(2, 2.0)
         watchdog.observe(1, 10.1)
+        watchdog.observe(1, 10.2)
         watchdog.observe(0, 10.5)
         watchdog.observe(2, 10.5)
         assert watchdog.startup_complete()
-        assert watchdog.expired_streams(12.2) == [1]
+        watchdog.observe(0, 14.0)
+        watchdog.observe(2, 14.1)
+        assert not watchdog.check(15.49)
+        watchdog.observe(0, 15.5)
+        watchdog.observe(1, 15.5)
+        starvation = watchdog.check(15.5)
+        assert starvation.kind is DetectionFailureKind.STREAM_STARVATION
+        assert starvation.streams == (1,)
+
+        global_stall = watchdog.check(65.5)
+        assert global_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert global_stall.streams == ()
+
+        startup_stall_watchdog = DetectionWatchdog(
+            3,
+            priming_observations=2,
+            startup_timeout_s=100.0,
+            stream_timeout_s=20.0,
+            no_progress_timeout_s=5.0,
+            start=0.0,
+        )
+        startup_stall_watchdog.observe(0, 1.0)
+        assert not startup_stall_watchdog.check(5.999)
+        startup_stall = startup_stall_watchdog.check(6.0)
+        assert startup_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert startup_stall.streams == ()
+
+        recovered_stall_watchdog = DetectionWatchdog(
+            1,
+            priming_observations=1,
+            startup_timeout_s=100.0,
+            stream_timeout_s=20.0,
+            no_progress_timeout_s=5.0,
+            start=0.0,
+        )
+        recovered_stall_watchdog.observe(0, 5.0)
+        recovered_stall = recovered_stall_watchdog.check(5.0)
+        assert recovered_stall.kind is DetectionFailureKind.GLOBAL_STALL
+        assert recovered_stall.streams == ()
+
+    def test_detection_watchdog_allows_sustained_48_stream_scheduler_skew(self):
+        from main import DetectionWatchdog
+
+        stream_count = 48
+        watchdog = DetectionWatchdog(
+            stream_count,
+            priming_observations=2,
+            startup_timeout_s=60.0,
+            stream_timeout_s=5.0,
+            no_progress_timeout_s=30.0,
+            start=0.0,
+        )
+        for stream_index in range(stream_count):
+            watchdog.observe(stream_index, stream_index * 0.01)
+            watchdog.observe(stream_index, stream_index * 0.01 + 0.001)
+        assert watchdog.startup_complete()
+
+        now = 1.0
+        for _ in range(10):
+            watchdog.observe(0, now)
+            now += 0.01
+            for _ in range(5):
+                for stream_index in range(1, stream_count):
+                    watchdog.observe(stream_index, now)
+                    now += 0.01
+
+        assert not watchdog.check(now)
 
     def test_source_topology_connects_encoded_video_with_a_distinct_latest_link(
         self, monkeypatch
@@ -915,13 +1112,13 @@ class TestRuntimeDelivery:
         rtsp_graph = object()
         rtsp_calls = []
 
-        def make_rtsp_h264_input(options):
+        def make_rtsp_encoded_input(options):
             rtsp_calls.append(options)
             return rtsp_graph
 
         monkeypatch.setattr(main, "pyneat", fake_pyneat)
-        monkeypatch.setattr(main, "make_rtsp_h264_input", make_rtsp_h264_input)
-        monkeypatch.setattr(main, "make_h264_decoder", lambda *_args: "decoder")
+        monkeypatch.setattr(main, "make_rtsp_encoded_input", make_rtsp_encoded_input)
+        monkeypatch.setattr(main, "make_decoder", lambda *_args: "decoder")
         monkeypatch.setattr(main, "graph_realtime_link", lambda *_args: "latest")
         monkeypatch.setattr(
             main, "make_video_options", lambda *_args: SimpleNamespace(video_port=9000)

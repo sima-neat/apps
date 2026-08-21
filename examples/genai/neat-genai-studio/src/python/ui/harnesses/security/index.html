@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="Zero-dependency, air-gapped AI security & surveillance harness with vision, voice, and Ollama/OpenAI support." />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' http: https:; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'" />
+  <title>SiMaSentry-Sec</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/png" href="SiMaSentry-Sec.png" />
+</head>
+<body>
+  <a class="skip-link" href="#composer-input">Skip to input</a>
+
+  <header class="app-header" role="banner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <img src="SiMaSentry-Sec.png" alt="" width="32" height="32" />
+      </span>
+      <h1 class="brand-title">SiMaSentry-Sec</h1>
+    </div>
+
+    <nav class="tab-nav" role="tablist" aria-label="Console views">
+      <button id="tab-btn-workbench" class="tab-btn" type="button"
+        role="tab" aria-selected="true" aria-controls="tab-workbench" data-tab="workbench" tabindex="0">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 4h7v7H3zm11 0h7v7h-7zM3 13h7v7H3zm11 0h7v7h-7z"/></svg>
+        <span>Workbench</span>
+      </button>
+      <button id="tab-btn-threat-analysis" class="tab-btn" type="button"
+        role="tab" aria-selected="false" aria-controls="tab-threat-analysis" data-tab="threat-analysis" tabindex="-1">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2 1 21h22Zm0 6 7.5 13h-15Zm-1 4v4h2v-4Zm0 5v2h2v-2Z"/></svg>
+        <span>Threat Analysis</span>
+      </button>
+      <button id="tab-btn-change-detection" class="tab-btn" type="button"
+        role="tab" aria-selected="false" aria-controls="tab-change-detection" data-tab="change-detection" tabindex="-1">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 5h7v14H3zm11 0h7v14h-7zM5 8h3v3H5zm0 5h3v3H5zm11-5h3v3h-3zm0 5h3v3h-3z"/></svg>
+        <span>Change Detection</span>
+      </button>
+    </nav>
+
+    <div class="header-actions">
+      <button id="home-button" class="icon-button" type="button"
+        aria-label="Return to Mission Control">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/>
+        </svg>
+      </button>
+      <span id="provider-chip" class="provider-chip" data-provider="ollama" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="provider-chip-label">Ollama (local)</span>
+      </span>
+      <button id="settings-button" class="icon-button" type="button"
+        aria-label="Open settings" aria-haspopup="dialog" aria-controls="settings-drawer">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 8a4 4 0 1 0 4 4 4 4 0 0 0-4-4Zm8.94 4a7.94 7.94 0 0 0-.13-1.4l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.78 7.78 0 0 0-2.42-1.4l-.38-2.65A.5.5 0 0 0 14.66 1h-4a.5.5 0 0 0-.49.42l-.38 2.65a7.78 7.78 0 0 0-2.42 1.4l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65A7.94 7.94 0 0 0 3.06 12a7.94 7.94 0 0 0 .13 1.4l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1a7.78 7.78 0 0 0 2.42 1.4l.38 2.65a.5.5 0 0 0 .49.42h4a.5.5 0 0 0 .49-.42l.38-2.65a7.78 7.78 0 0 0 2.42-1.4l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65A7.94 7.94 0 0 0 20.94 12Z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="disclaimer" role="note">
+    <strong>Operator advisory:</strong> AI threat assessments are advisory. A trained operator must verify every alert before action.
+  </div>
+
+  <div class="tab-panels">
+    <section id="tab-workbench" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-workbench">
+      <div class="workbench">
+        <div class="workbench-main">
+          <main class="app-main">
+            <ol id="messages" class="messages" aria-live="polite" aria-relevant="additions" aria-label="Threat log"></ol>
+            <div id="empty-state" class="empty-state">
+              <h2>Threat log is empty</h2>
+              <p>Attach a CCTV snapshot or capture a frame from a recorded clip, then describe what to look for. For object-level investigation, switch to <button type="button" class="link-button" data-action="goto-threat-analysis">Threat Analysis</button>. Configure your provider in <button type="button" class="link-button" data-action="open-settings">Settings</button>.</p>
+            </div>
+          </main>
+
+          <div id="image-preview" class="image-preview" hidden>
+            <img id="image-preview-img" alt="Surveillance frame preview" />
+            <span id="image-preview-meta" class="image-preview-meta"></span>
+            <button type="button" id="image-remove" class="icon-button danger" aria-label="Remove attached frame">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+            </button>
+          </div>
+
+          <form id="composer" class="composer" autocomplete="off">
+            <label for="composer-input" class="visually-hidden">Operator query</label>
+            <textarea id="composer-input" name="message" rows="1"
+              placeholder="Describe the area, ask what to look for, or attach a frame…"
+              aria-label="Operator query"></textarea>
+
+            <div class="composer-actions">
+              <input id="image-input" type="file" accept="image/*" hidden />
+              <button id="image-button" class="icon-button" type="button" aria-label="Attach surveillance image">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5Z"/></svg>
+              </button>
+
+              <input id="video-input" type="file" accept="video/*" hidden />
+              <button id="video-button" class="icon-button" type="button" aria-label="Capture frame from video clip">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M4 6h12v12H4zm14 2.5L22 6v12l-4-2.5z"/></svg>
+              </button>
+
+              <button id="mic-button" class="icon-button" type="button"
+                aria-label="Start voice input" aria-pressed="false" disabled>
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11Z"/></svg>
+              </button>
+
+              <button id="speaker-button" class="icon-button" type="button"
+                aria-label="Toggle audio alerts (auto-read)" aria-pressed="false">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3 10v4a1 1 0 0 0 1 1h3l4 4a1 1 0 0 0 1.71-.71V5.71A1 1 0 0 0 11 5l-4 4H4a1 1 0 0 0-1 1Zm13.5 2A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12ZM14 3.23v2.06a6.99 6.99 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23Z"/></svg>
+              </button>
+
+              <button id="stop-speaking-button" class="icon-button" type="button"
+                aria-label="Stop speaking" disabled>
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>
+              </button>
+
+              <button id="clear-button" class="icon-button" type="button" aria-label="Clear threat log">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6Zm3.17-7.83 1.42-1.41L12 11.17l1.41-1.41 1.42 1.41L13.41 12.59l1.42 1.41-1.42 1.42L12 14l-1.41 1.42-1.42-1.42 1.42-1.41ZM15.5 4l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+              </button>
+
+              <button id="send-button" class="primary-button" type="submit">
+                <span>Send Alert</span>
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m3 20 18-8L3 4v7l13 1-13 1Z"/></svg>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <aside class="alerts-sidebar" aria-label="Current alerts">
+          <header class="alerts-header">
+            <h2>Current Alerts</h2>
+            <button type="button" class="link-button" id="alerts-clear" hidden>Clear all</button>
+          </header>
+          <ol id="alerts-list" class="alerts-list" aria-live="polite" aria-relevant="additions"></ol>
+          <p id="alerts-empty" class="alerts-empty">
+            No alerts yet. Each AI assessment with a detected threat level posts here automatically.
+          </p>
+        </aside>
+      </div>
+    </section>
+
+    <section id="tab-threat-analysis" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-threat-analysis" hidden>
+      <div class="ta-layout">
+        <div class="ta-canvas-pane">
+          <div class="ta-canvas-toolbar">
+            <input id="ta-image-input" type="file" accept="image/*" hidden />
+            <button type="button" class="secondary-button" id="ta-load-image">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5Z"/></svg>
+              <span>Load surveillance frame</span>
+            </button>
+            <button type="button" class="secondary-button" id="ta-clear-mark" disabled>Clear box</button>
+            <span id="ta-readout" class="ta-readout">No image loaded.</span>
+          </div>
+          <div class="ta-canvas-wrap">
+            <canvas id="ta-canvas" tabindex="0" aria-label="Surveillance frame — click and drag to outline a suspicious object"></canvas>
+            <div id="ta-empty" class="ta-empty">
+              <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><path fill="currentColor" opacity="0.5" d="M4 4h16v3H4zm0 5h10v3H4zm0 5h7v3H4zm9 0h2v6h-2zm3 0h6v3h-6zm0 5h6v3h-6z"/></svg>
+              <p><strong>Load a CCTV snapshot.</strong></p>
+              <p>Then click and drag to outline a person, bag, or vehicle for analysis.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ta-controls">
+          <h2 class="ta-title">Contextual Investigation</h2>
+          <p class="ta-helper">Drag a bounding box around the object on the frame. The outlined frame is sent to the VLM with the prompt:</p>
+          <blockquote class="ta-prompt-preview" id="ta-prompt-preview">Analyze this specific object. Is it a weapon, an unauthorized person in a restricted area, or a suspicious abandoned package? Assess the threat level (Low/Medium/High).</blockquote>
+
+          <label class="field">
+            <span class="field-label">Additional context (optional)</span>
+            <textarea id="ta-context" rows="3"
+              placeholder="e.g. Loading bay 3, after-hours, shift change at 18:00"></textarea>
+          </label>
+
+          <div class="ta-buttons">
+            <button type="button" class="primary-button" id="ta-analyze" disabled>
+              <span>Analyze marked object</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m3 20 18-8L3 4v7l13 1-13 1Z"/></svg>
+            </button>
+          </div>
+
+          <div id="ta-result" class="ta-result" hidden>
+            <div class="ta-result-header">
+              <span class="threat-pill" id="ta-result-pill" hidden></span>
+              <time class="ta-result-time" id="ta-result-time"></time>
+            </div>
+            <div class="ta-result-content message-content" id="ta-result-content"></div>
+            <div class="message-stats" id="ta-result-stats" hidden></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-change-detection" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-change-detection" hidden>
+      <div class="ta-layout">
+        <div class="cd-canvas-pane">
+          <div class="cd-slot" data-slot="baseline">
+            <div class="cd-slot-toolbar">
+              <span class="cd-slot-label">Baseline Reference <span class="cd-slot-tag">A</span></span>
+              <input id="cd-baseline-input" type="file" accept="image/*" hidden />
+              <button type="button" class="secondary-button" id="cd-baseline-load">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5Z"/></svg>
+                <span>Load…</span>
+              </button>
+              <span class="cd-slot-readout" id="cd-baseline-readout">Not loaded</span>
+            </div>
+            <div class="cd-canvas-wrap">
+              <canvas id="cd-baseline-canvas" aria-label="Baseline reference frame"></canvas>
+              <div class="cd-slot-empty">
+                <p>Load a known-good baseline snapshot of the area.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="cd-slot" data-slot="current">
+            <div class="cd-slot-toolbar">
+              <span class="cd-slot-label">Current Feed <span class="cd-slot-tag">B</span></span>
+              <input id="cd-current-input" type="file" accept="image/*" hidden />
+              <button type="button" class="secondary-button" id="cd-current-load">
+                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5Z"/></svg>
+                <span>Load…</span>
+              </button>
+              <span class="cd-slot-readout" id="cd-current-readout">Not loaded</span>
+            </div>
+            <div class="cd-canvas-wrap">
+              <canvas id="cd-current-canvas" aria-label="Current feed frame with discrepancy overlays"></canvas>
+              <div class="cd-slot-empty">
+                <p>Load the live frame to compare against the baseline.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ta-controls">
+          <h2 class="ta-title">Differential Change Detection</h2>
+          <p class="ta-helper">Load both frames, then run a comparison. The VLM is sent both images with the prompt:</p>
+          <blockquote class="ta-prompt-preview">Compare Image A (Baseline) and Image B (Current). Perform a professional security audit. Identify any "New Objects" (potential threats/packages), "Missing Objects" (theft/tampering), or "Structural Changes" (forced entry/open doors). Provide a list of discrepancies.</blockquote>
+
+          <label class="field">
+            <span class="field-label">Additional context (optional)</span>
+            <textarea id="cd-context" rows="3"
+              placeholder="e.g. Server room, baseline taken 06:00, last access logged 17:30"></textarea>
+          </label>
+
+          <div class="cd-legend" aria-label="Discrepancy categories">
+            <span class="cd-legend-chip" data-category="new"><span class="cd-legend-swatch"></span>New / suspicious</span>
+            <span class="cd-legend-chip" data-category="missing"><span class="cd-legend-swatch"></span>Missing</span>
+            <span class="cd-legend-chip" data-category="structural"><span class="cd-legend-swatch"></span>Structural</span>
+          </div>
+
+          <div class="ta-buttons">
+            <button type="button" class="primary-button" id="cd-analyze" disabled>
+              <span>Compare &amp; Detect</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9.4 16.6 4.8 12l4.6-4.6L8 6l-6 6 6 6Zm5.2 0L19.2 12l-4.6-4.6L16 6l6 6-6 6Z"/></svg>
+            </button>
+          </div>
+
+          <div id="cd-result" class="ta-result" hidden>
+            <div class="ta-result-header">
+              <time class="ta-result-time" id="cd-result-time"></time>
+            </div>
+            <div class="ta-result-content message-content" id="cd-result-content"></div>
+            <div class="message-stats" id="cd-result-stats" hidden></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <nav class="mobile-nav" role="tablist" aria-label="Console views">
+    <button class="mobile-nav-btn" type="button"
+      role="tab" aria-selected="true" aria-controls="tab-workbench" data-tab="workbench">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3 4h7v7H3zm11 0h7v7h-7zM3 13h7v7H3zm11 0h7v7h-7z"/></svg>
+      <span>Workbench</span>
+    </button>
+    <button class="mobile-nav-btn" type="button"
+      role="tab" aria-selected="false" aria-controls="tab-threat-analysis" data-tab="threat-analysis">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2 1 21h22Zm0 6 7.5 13h-15Zm-1 4v4h2v-4Zm0 5v2h2v-2Z"/></svg>
+      <span>Threat</span>
+    </button>
+    <button class="mobile-nav-btn" type="button"
+      role="tab" aria-selected="false" aria-controls="tab-change-detection" data-tab="change-detection">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3 5h7v14H3zm11 0h7v14h-7zM5 8h3v3H5zm0 5h3v3H5zm11-5h3v3h-3zm0 5h3v3h-3z"/></svg>
+      <span>Compare</span>
+    </button>
+  </nav>
+
+  <div id="status" class="status" aria-live="polite" role="status"></div>
+
+  <aside id="settings-drawer" class="drawer" role="dialog" aria-modal="true"
+    aria-labelledby="settings-title" hidden>
+    <div class="drawer-backdrop" data-action="close-settings" aria-hidden="true"></div>
+    <div class="drawer-panel" role="document">
+      <header class="drawer-header">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="icon-button" data-action="close-settings" aria-label="Close settings">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+        </button>
+      </header>
+
+      <form id="settings-form" class="drawer-body">
+        <fieldset class="field-group">
+          <legend>Provider</legend>
+          <div class="radio-row">
+            <label class="radio">
+              <input type="radio" name="provider" value="ollama" />
+              <span>Ollama (local)</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="provider" value="openai" />
+              <span>OpenAI</span>
+            </label>
+          </div>
+          <small class="field-hint">Ollama is the recommended path on air-gapped terminals.</small>
+        </fieldset>
+
+        <label class="field">
+          <span class="field-label">Base URL</span>
+          <input type="text" name="baseUrl" id="setting-base-url"
+            placeholder="http://localhost:11434/v1/chat/completions" inputmode="url" />
+          <small class="field-hint">OpenAI-compatible <code>/v1/chat/completions</code> endpoint.</small>
+        </label>
+
+        <label class="field" id="api-key-field">
+          <span class="field-label">API Key</span>
+          <input type="password" name="apiKey" id="setting-api-key"
+            placeholder="sk-…" autocomplete="off" spellcheck="false" />
+          <small class="field-hint">Stored locally in your browser only. Leave blank for Ollama.</small>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Vision model</span>
+          <input type="text" name="model" id="setting-model"
+            placeholder="gemma3, llava, llama3.2-vision, gpt-4o…" autocomplete="off" spellcheck="false" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Language (BCP-47)</span>
+          <select name="language" id="setting-language">
+            <option value="en-US">English (US)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="es-ES">Español (España)</option>
+            <option value="es-MX">Español (México)</option>
+            <option value="pt-BR">Português (Brasil)</option>
+            <option value="fr-FR">Français</option>
+            <option value="de-DE">Deutsch</option>
+            <option value="it-IT">Italiano</option>
+            <option value="nl-NL">Nederlands</option>
+            <option value="ru-RU">Русский</option>
+            <option value="ar-SA">العربية</option>
+            <option value="hi-IN">हिन्दी</option>
+            <option value="zh-CN">中文 (简体)</option>
+            <option value="zh-TW">中文 (繁體)</option>
+            <option value="ja-JP">日本語</option>
+            <option value="ko-KR">한국어</option>
+          </select>
+          <small class="field-hint">Drives speech recognition language and offline-voice selection for audio alerts.</small>
+        </label>
+
+        <label class="field">
+          <span class="field-label">System prompt</span>
+          <textarea name="systemPrompt" id="setting-system-prompt" rows="8"></textarea>
+          <button type="button" class="link-button" data-action="reset-system-prompt">Reset to default</button>
+        </label>
+
+        <label class="field-inline">
+          <input type="checkbox" name="autoRead" id="setting-auto-read" />
+          <span>Auto-read AI alerts aloud (audio alarm)</span>
+        </label>
+
+        <label class="field-inline">
+          <input type="checkbox" name="sttDisabled" id="setting-stt-disabled" />
+          <span>Disable microphone (recommended on air-gapped terminals)</span>
+        </label>
+
+        <label class="field-inline">
+          <input type="checkbox" name="highContrast" id="setting-high-contrast" />
+          <span>High-contrast SOC theme</span>
+        </label>
+
+        <div class="drawer-footer">
+          <button type="button" class="link-button danger" data-action="clear-storage">Clear stored settings</button>
+          <button type="button" class="secondary-button" data-action="close-settings">Cancel</button>
+          <button type="submit" class="primary-button">Save</button>
+        </div>
+      </form>
+    </div>
+  </aside>
+
+  <template id="message-template">
+    <li class="message">
+      <div class="message-avatar" aria-hidden="true"></div>
+      <div class="message-body">
+        <div class="message-header">
+          <span class="message-role"></span>
+          <span class="threat-pill" hidden></span>
+        </div>
+        <div class="message-content"></div>
+        <div class="message-attachments"></div>
+        <div class="message-stats" hidden></div>
+      </div>
+    </li>
+  </template>
+
+  <template id="alert-template">
+    <li class="alert-item">
+      <button type="button" class="alert-button">
+        <span class="alert-snapshot-wrap">
+          <img class="alert-snapshot" alt="" />
+        </span>
+        <span class="alert-meta">
+          <span class="alert-meta-row">
+            <span class="threat-pill alert-pill"></span>
+            <time class="alert-time"></time>
+          </span>
+          <span class="alert-source"></span>
+          <span class="alert-summary"></span>
+        </span>
+      </button>
+    </li>
+  </template>
+
+  <video id="frame-extractor-video" hidden muted playsinline preload="auto"></video>
+
+  <nav class="mc-bottom-nav" role="navigation" aria-label="Quick navigation">
+    <button type="button" data-tab="workbench" aria-label="Switch to Workbench">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4h7v7H3zm11 0h7v7h-7zM3 13h7v7H3zm11 0h7v7h-7z"/></svg>
+      <span>Workbench</span>
+    </button>
+    <button type="button" data-tab="threat-analysis" aria-label="Switch to Threat Analysis">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 1 21h22Zm0 6 7.5 13h-15Zm-1 4v4h2v-4Zm0 5v2h2v-2Z"/></svg>
+      <span>Threats</span>
+    </button>
+    <button type="button" data-action="home" aria-label="Return to Mission Control">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/></svg>
+      <span>Home</span>
+    </button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>

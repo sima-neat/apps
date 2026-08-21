@@ -25,11 +25,13 @@ pytestmark = pytest.mark.unit
 def write_config(
     tmp_path: Path,
     streams: list[str],
+    codec: str | None = None,
     max_inflight_per_stream: int | None = None,
     max_inflight_total: int | None = None,
 ) -> Path:
     stream_lines = "\n".join(f"  - {stream}" for stream in streams)
     inference = []
+    input_config = ["input:", f"  codec: {codec}"] if codec else []
     if max_inflight_per_stream is not None or max_inflight_total is not None:
         inference.append("inference:")
         if max_inflight_per_stream is not None:
@@ -44,6 +46,7 @@ def write_config(
                 "  path: models/yolo26m-det-int8-b1.tar.gz",
                 "streams:",
                 stream_lines,
+                *input_config,
                 *inference,
                 "output:",
                 "  insight:",
@@ -105,6 +108,14 @@ class TestConfigLoading:
         assert cfg.tracker_max_missing == 15
         assert cfg.max_inflight_per_stream == 4
         assert cfg.max_inflight_total == 16
+
+    def test_load_app_config_accepts_hevc(self, tmp_path: Path):
+        from main import load_app_config
+
+        cfg = load_app_config(
+            write_config(tmp_path, ["rtsp://127.0.0.1:8554/src1"], codec="hevc")
+        )
+        assert cfg.codec == "h265"
 
     def test_load_app_config_accepts_custom_inflight_limits(self, tmp_path: Path):
         from main import load_app_config
@@ -202,6 +213,31 @@ class TestConfigLoading:
 
 
 class TestRuntimeOptions:
+    def test_encoded_input_options_carry_codec_format(self, monkeypatch):
+        import main
+
+        class FakeInputOptions:
+            format = ""
+
+        fake_pyneat = SimpleNamespace(
+            InputOptions=FakeInputOptions,
+            PayloadType=SimpleNamespace(Encoded="encoded"),
+            Format=SimpleNamespace(H264="h264", H265="h265"),
+            RtspCodec=SimpleNamespace(H264="codec-h264", H265="codec-h265"),
+            InputMemoryPolicy=SimpleNamespace(Ev74="ev74", SystemMemory="system"),
+        )
+        monkeypatch.setattr(main, "pyneat", fake_pyneat)
+
+        decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H265)
+        video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H265)
+        h264_decode = main.encoded_decode_input_options(fake_pyneat.RtspCodec.H264)
+        h264_video = main.encoded_video_input_options(fake_pyneat.RtspCodec.H264)
+
+        assert decode.format == "h265"
+        assert video.format == "h265"
+        assert h264_decode.format == "h264"
+        assert h264_video.format == "h264"
+
     def test_realtime_link_sets_inflight_limits(self, monkeypatch):
         import main
 
