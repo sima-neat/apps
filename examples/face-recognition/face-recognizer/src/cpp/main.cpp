@@ -952,16 +952,9 @@ int main(int argc, char** argv) {
         const auto& matches = cached_matches;
         const auto tc2 = Clock::now();
 
-        // For streaming or file output: convert NV12→BGR then use draw_overlay (OpenCV)
-        // for pixel-accurate annotation matching the earlier BGR overlay path.
-        // VideoConvert in the VideoSender chain handles BGR→NV12→H264 encoding.
-        // Without streaming or file output: draw_overlay_nv12 directly (faster).
-        // NV12 path: annotate the NV12 buffer in place. draw_overlay_nv12 converts only
-        // a small ROI per face and reuses the OpenCV drawing code, so the result matches
-        // the BGR path while keeping the encoder fed with NV12 — VideoConvert then
-        // degenerates to a passthrough instead of a full-frame software BGR→NV12 pass
-        // (which capped the stream at ~45 fps).
-        // A full-frame BGR copy is produced only when a file writer actually needs one.
+        // NV12 path: annotate the NV12 buffer in place (fast). A full-frame NV12→BGR
+        // conversion is produced only when a file writer actually needs one; the encoder
+        // does its own NV12→BGR conversion separately before pushing to VideoSender.
         if (use_nv12_path) {
             face_recog::draw_overlay_nv12(curr_nv12_buf.data(), curr_nv12_w, curr_nv12_h,
                                           detections, matches, cfg.overlay);
@@ -994,16 +987,12 @@ int main(int argc, char** argv) {
                     ? std::clamp((int)std::lround(detected_fps), 1, 120)
                     : 60;
 
-                // On the NV12 path, pin NV12 input caps so VideoConvert inside
-                // VideoSender degenerates to a passthrough. Letting the SDK negotiate
-                // BGR instead costs a full-frame software BGR→NV12 per frame, which
-                // capped the delivered stream at ~45 fps (vs ~57 fps on NV12).
-                if (use_nv12_path) {
-                    enc_in_opt.caps_override =
-                        "video/x-raw,format=NV12,width=" + std::to_string(curr_nv12_w) +
-                        ",height=" + std::to_string(curr_nv12_h) +
-                        ",framerate=" + std::to_string(enc_fps) + "/1";
-                }
+                // Feed BGR to VideoSender so videoconvert performs a real BGR→NV12
+                // conversion (allocating a fresh buffer from neatencoder's DMA pool).
+                // Passing NV12 directly causes videoconvert to degenerate to a
+                // passthrough (NV12→NV12, same buffer), which leaves neatencoder with
+                // system-malloc memory that the HW encoder rejects with "Failed to
+                // prepare input buffer".
                 simaai::neat::nodes::groups::VideoSenderOptions vsopt =
                     simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
                         curr_nv12_w, curr_nv12_h, enc_fps);
@@ -1043,13 +1032,8 @@ int main(int argc, char** argv) {
                 // Seeding with a raw Tensor was causing VideoConvert to NOT degenerate to a
                 // passthrough because GStreamer saw an ambiguous [H*3/2, W] shape instead
                 // of a recognised single-channel NV12 buffer.
-                if (use_nv12_path) {
-                    cv::Mat seed_nv12(curr_nv12_h * 3 / 2, curr_nv12_w, CV_8UC1, cv::Scalar(0));
-                    enc_run = enc_graph.build(std::vector<cv::Mat>{seed_nv12}, enc_run_opt);
-                } else {
-                    cv::Mat seed_bgr(curr_nv12_h, curr_nv12_w, CV_8UC3, cv::Scalar(0, 0, 0));
-                    enc_run = enc_graph.build(std::vector<cv::Mat>{seed_bgr}, enc_run_opt);
-                }
+                cv::Mat seed_bgr(curr_nv12_h, curr_nv12_w, CV_8UC3, cv::Scalar(0, 0, 0));
+                enc_run = enc_graph.build(std::vector<cv::Mat>{seed_bgr}, enc_run_opt);
                 std::cout << "[stream] HW encoder opened -> udp://"
                           << cfg.stream_host << ":" << cfg.stream_port
                           << "  (" << curr_nv12_w << "x" << curr_nv12_h << " @ " << enc_fps
@@ -1061,7 +1045,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Push the annotated NV12 frame to the HW encoder (fire-and-forget, no pull).
+        // Push the annotated frame (as BGR) to the HW encoder (fire-and-forget, no pull).
         // try_push returning false means the encoder's input queue was full and the
         // frame was dropped (OverflowPolicy::DropIncoming) — that is the gap between
         // the loop FPS and what the receiver actually sees.
@@ -1069,14 +1053,15 @@ int main(int argc, char** argv) {
             const auto te0 = Clock::now();
             bool pushed = false;
             if (use_nv12_path && !curr_nv12_buf.empty()) {
-                // Wrap curr_nv12_buf as a single-channel NV12 Mat (H*3/2 rows × W cols).
-                // Clone it so the encoder pipeline holds its own ref-counted copy that
-                // stays valid across the curr/rtsp buffer swap at end-of-loop.
-                cv::Mat enc_nv12(curr_nv12_h * 3 / 2, curr_nv12_w, CV_8UC1,
+                // Convert annotated NV12→BGR for the encoder. videoconvert inside
+                // VideoSender then does BGR→NV12 using neatencoder's DMA pool,
+                // which is required because neatencoder rejects system-memory buffers.
+                cv::Mat nv12_mat(curr_nv12_h * 3 / 2, curr_nv12_w, CV_8UC1,
                                  curr_nv12_buf.data());
-                pushed = enc_run->try_push(std::vector<cv::Mat>{enc_nv12.clone()});
+                cv::Mat bgr_enc;
+                cv::cvtColor(nv12_mat, bgr_enc, cv::COLOR_YUV2BGR_NV12);
+                pushed = enc_run->try_push(std::vector<cv::Mat>{bgr_enc});
             } else if (!frame.empty()) {
-                // File/webcam path: BGR in, VideoConvert handles BGR→NV12.
                 pushed = enc_run->try_push(std::vector<cv::Mat>{frame});
             }
             if (pushed) ++enc_push_ok; else ++enc_push_drop;
@@ -1155,6 +1140,8 @@ int main(int argc, char** argv) {
                        i, matches[i].name.c_str(), matches[i].score,
                        matches[i].second_name.c_str(), matches[i].second_score,
                        matches[i].score - matches[i].second_score);
+            if (enc_run.has_value())
+                printf("  enc_ok=%ld drop=%ld", enc_push_ok, enc_push_drop);
             std::cout << "\n";
         }
 
