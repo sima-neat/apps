@@ -42,13 +42,16 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Install its staging
-Model Registry package:
+The tested model is SSD-MobileNetV2 INT8 with tessellation inside the MLA. Download its SDK
+2.1.3 artifact:
 
 ```bash
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
-sima-cli neat install --stg models/ssd_mobilenet_v2@develop:latest \
-  --install-dir ./models
+cd models
+sima-cli download \
+  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/ssd_mobilenet_v2_modalix_int8_tess_mla_mpk.tar.gz"
+cd ..
 ```
 
 The configuration below uses
