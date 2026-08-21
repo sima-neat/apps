@@ -43,17 +43,28 @@ echo "  DEVKIT     : ${DEVKIT_USER}@${DEVKIT_IP}"
 BUILD_DIR="${APPS_ROOT}/build"
 echo ""
 echo "[1/3] Configuring CMake..."
+# The SDK toolchain keeps multiarch cmake configs under lib/aarch64-linux-gnu/cmake/
+# which cmake does not search automatically in cross-compile mode. Pass explicit
+# _DIR vars and PKG_CONFIG_SYSROOT_DIR so GStreamer/OpenCV headers resolve
+# from the sysroot rather than the host.
+_ARCH_CMAKE="${SYSROOT:-/opt/toolchain/aarch64/modalix}/usr/lib/aarch64-linux-gnu/cmake"
+PKG_CONFIG_SYSROOT_DIR="${SYSROOT:-/opt/toolchain/aarch64/modalix}" \
 cmake -S "${APPS_ROOT}" \
       -B "${BUILD_DIR}" \
       -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_SYSTEM_NAME=Linux \
-      -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
       -DSIMANEAT_APPS_BUILD_CPP=ON \
+      -DCMAKE_PREFIX_PATH="${SYSROOT:-/opt/toolchain/aarch64/modalix}/usr" \
+      -DCMAKE_SYSROOT="${SYSROOT:-/opt/toolchain/aarch64/modalix}" \
+      -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
+      -DSimaLMM_DIR="${_ARCH_CMAKE}/SimaLMM" \
+      -Dfmt_DIR="${_ARCH_CMAKE}/fmt" \
+      -Dspdlog_DIR="${_ARCH_CMAKE}/spdlog" \
+      -DNeatInternals_DIR="${_ARCH_CMAKE}/NeatInternals" \
       2>&1 | tail -5
 
 echo "[2/3] Building face-recognizer, face-enroll, face-model-test..."
 cmake --build "${BUILD_DIR}" --target face-recognizer face-enroll face-model-test \
-      --parallel "$(nproc)" 2>&1 | tail -10
+      --parallel 2 2>&1 | tail -10
 
 echo "[2/3] Build complete."
 
