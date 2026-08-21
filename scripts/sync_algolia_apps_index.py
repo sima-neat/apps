@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 SOURCE = "examples"
+SUPPORTED_LANGUAGES = ["en", "ko", "ja", "zh-Hant", "uk"]
 DEFAULT_MAX_RECORD_BYTES = 9_500
 DEFAULT_BATCH_SIZE = 500
 
@@ -124,6 +125,10 @@ def generate_records(catalog_path: Path, site_base_url: str, max_record_bytes: i
         record = {
             "objectID": f"{SOURCE}:{hashlib.sha1(app_id.encode('utf-8')).hexdigest()}",
             "source": SOURCE,
+            # Example catalog metadata is not localized, so it remains useful
+            # in every documentation language rather than disappearing from
+            # language-filtered Developer Center searches.
+            "language": SUPPORTED_LANGUAGES,
             "url": url,
             "route": route,
             "path": str(example.get("readme_path") or example.get("source_path") or app_id),
@@ -165,20 +170,34 @@ class AlgoliaClient:
         }
 
     def post(self, path: str, payload: dict) -> dict:
+        return self.request("POST", path, payload)
+
+    def request(self, method: str, path: str, payload: dict | None = None) -> dict:
         request = urllib.request.Request(
             self.host + path,
-            data=json.dumps(payload).encode("utf-8"),
+            data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers=self.headers,
-            method="POST",
+            method=method,
         )
         try:
             with urllib.request.urlopen(request, timeout=45) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
-            if error.code == 404 and path.endswith("/browse"):
+            if error.code == 404 and (
+                path.endswith("/browse") or (method == "GET" and path.endswith("/settings"))
+            ):
                 return {"hits": []}
             raise SystemExit(f"Algolia API error: HTTP {error.code} on {path}\n{body}") from error
+
+    def ensure_language_filter(self) -> None:
+        path = f"/1/indexes/{self.index}/settings"
+        settings = self.request("GET", path)
+        attributes = list(settings.get("attributesForFaceting") or [])
+        configured = any(re.fullmatch(r"(?:(?:filterOnly|searchable)\()?language\)?", item) for item in attributes)
+        if not configured:
+            self.request("PUT", path, {"attributesForFaceting": [*attributes, "filterOnly(language)"]})
+            print("[algolia-index] configured filterOnly(language)")
 
     def browse_source_object_ids(self, source: str) -> list[str]:
         object_ids: list[str] = []
@@ -205,6 +224,7 @@ def sync_records(args: argparse.Namespace, records: list[dict]) -> None:
         raise SystemExit("--app-id, --api-key, and --index-name are required for --sync")
 
     client = AlgoliaClient(args.app_id, args.api_key, args.index_name)
+    client.ensure_language_filter()
     desired_ids = {record["objectID"] for record in records}
     existing_ids = set(client.browse_source_object_ids(SOURCE))
     stale_ids = sorted(existing_ids - desired_ids)

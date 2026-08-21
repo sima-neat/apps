@@ -282,6 +282,7 @@ def test_algolia_apps_records_use_examples_source_and_route(tmp_path):
 
     assert summary["count"] == 1
     assert records[0]["source"] == "examples"
+    assert records[0]["language"] == module.SUPPORTED_LANGUAGES
     assert records[0]["url"] == "https://build.neat.sima.ai/examples/app/tracking/demo-example"
     assert records[0]["route"] == "/examples/app/tracking/demo-example"
     assert records[0]["hierarchy"]["lvl1"] == "tracking"
