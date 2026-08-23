@@ -1,0 +1,39 @@
+models:
+  yolo_26n:
+    source: modelzoo
+    name: yolo_26n
+    file: yolo_26n_mpk.tar.gz
+  yolo_26n_pose:
+    source: modelzoo
+    name: yolo_26n_pose
+    file: yolo_26n_pose_mpk.tar.gz
+  yolo_26n_seg:
+    source: modelzoo
+    name: yolo_26n_seg
+    file: yolo_26n_seg_mpk.tar.gz
+  ssd_mobilenet_v3:
+    source: model-registry
+    name: ssd_mobilenet_v3
+    ref: develop
+    spec: latest
+    file: ssd_mobilenet_v3_mpk.tar.gz
+  resnet_50:
+    source: modelzoo
+    name: resnet_50
+    file: resnet_50_mpk.tar.gz
+  midas_v21_small_256:
+    source: modelzoo
+    name: midas_v21_small_256
+    file: midas_v21_small_256_mpk.tar.gz
+unit:
+  python: true
+  cpp: false
+e2e:
+  python:
+    enabled: false
+    reason: Requires a Modalix target with a configured MIPI camera and matching libcamera stack.
+    models: []
+  cpp:
+    enabled: false
+    reason: Python-only MIPI inference example.
+    models: []
