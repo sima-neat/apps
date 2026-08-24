@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
-import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +25,6 @@ class Profile:
     decode_type: str | None = None
     modelzoo_id: str | None = None
     registry_target: str | None = None
-    decoder_policy_required: bool = False
     preprocessing: str | None = None
 
     @property
@@ -38,18 +35,8 @@ class Profile:
 
 
 @dataclass(frozen=True)
-class DecoderPolicy:
-    score_threshold: float
-    nms_iou_threshold: float
-    top_k: int
-
-
-@dataclass(frozen=True)
 class ModelPackage:
     path: Path
-    name: str
-    sdk_version: str
-    decoder_policy: DecoderPolicy | None
 
 
 PROFILES = {
@@ -62,7 +49,6 @@ PROFILES = {
             "yolo_26n_mpk.tar.gz",
             decode_type="YoloV26",
             modelzoo_id="yolo_26n",
-            decoder_policy_required=True,
         ),
         Profile(
             "pose",
@@ -71,7 +57,6 @@ PROFILES = {
             "yolo_26n_pose_mpk.tar.gz",
             decode_type="YoloV26Pose",
             modelzoo_id="yolo_26n_pose",
-            decoder_policy_required=True,
         ),
         Profile(
             "segment",
@@ -80,7 +65,6 @@ PROFILES = {
             "yolo_26n_seg_mpk.tar.gz",
             decode_type="YoloV26Seg",
             modelzoo_id="yolo_26n_seg",
-            decoder_policy_required=True,
         ),
         Profile(
             "ssd",
@@ -117,68 +101,16 @@ def profile_named(name: str) -> Profile:
         raise ModelPackageError(f"unknown profile {name!r}; choose one of: {choices}") from exc
 
 
-def _json_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> dict:
-    stream = archive.extractfile(member)
-    if stream is None:
-        raise ModelPackageError(f"cannot read {member.name}")
-    value = json.load(stream)
-    if not isinstance(value, dict):
-        raise ModelPackageError(f"{member.name} must contain a JSON object")
-    return value
-
-
 def inspect_package(path: Path, profile: Profile) -> ModelPackage:
-    """Validate a directly consumable Model SDK 2.1.3 MPK archive."""
+    """Resolve an MPK path; Neat owns package parsing and compatibility checks."""
+    del profile
     path = path.expanduser().resolve()
     if not path.is_file():
         raise ModelPackageError(f"model package does not exist: {path}")
     if not path.name.endswith("_mpk.tar.gz"):
         raise ModelPackageError(f"model must be a directly consumable *_mpk.tar.gz: {path}")
 
-    try:
-        with tarfile.open(path, "r:gz") as archive:
-            members = [member for member in archive.getmembers() if member.isfile()]
-            metadata = [member for member in members if member.name.endswith("_mpk.json")]
-            executables = [member for member in members if member.name.endswith("_mla.elf")]
-            decoders = [member for member in members if member.name.endswith("boxdecoder.json")]
-            if len(metadata) != 1:
-                raise ModelPackageError(
-                    f"package must contain one *_mpk.json; found {len(metadata)}"
-                )
-            if not executables:
-                raise ModelPackageError("package contains no MLA executable (*_mla.elf)")
-            if len(decoders) > 1:
-                raise ModelPackageError("package contains multiple boxdecoder.json files")
-            manifest = _json_member(archive, metadata[0])
-            decoder = _json_member(archive, decoders[0]) if decoders else None
-    except ModelPackageError:
-        raise
-    except (OSError, tarfile.TarError, json.JSONDecodeError) as exc:
-        raise ModelPackageError(f"invalid model package {path}: {exc}") from exc
-
-    name = manifest.get("name")
-    sdk_version = manifest.get("model_sdk_version")
-    if not isinstance(name, str) or not name:
-        raise ModelPackageError(f"{metadata[0].name} has no model name")
-    if sdk_version != MODEL_ZOO_VERSION:
-        raise ModelPackageError(
-            f"{path.name} uses Model SDK {sdk_version}; expected {MODEL_ZOO_VERSION}"
-        )
-
-    policy = None
-    if decoder is not None:
-        try:
-            policy = DecoderPolicy(
-                score_threshold=float(decoder["detection_threshold"]),
-                nms_iou_threshold=float(decoder["nms_iou_threshold"]),
-                top_k=int(decoder["topk"]),
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ModelPackageError(f"invalid decoder policy in {path.name}: {exc}") from exc
-    if profile.decoder_policy_required and policy is None:
-        raise ModelPackageError(f"{path.name} has no packaged decoder policy")
-
-    return ModelPackage(path, name, sdk_version, policy)
+    return ModelPackage(path)
 
 
 def fetch_profile(profile: Profile, models_dir: Path) -> ModelPackage:
