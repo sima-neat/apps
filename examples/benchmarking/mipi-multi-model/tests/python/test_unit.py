@@ -125,6 +125,25 @@ def test_package_validation_rejects_wrong_sdk(tmp_path: Path) -> None:
         inspect_package(package_path, profile_named("detect"))
 
 
+@pytest.mark.unit
+def test_registry_fetch_selects_exact_flat_artifact(tmp_path: Path, monkeypatch) -> None:
+    import model_profiles
+
+    profile = model_profiles.profile_named("ssd")
+
+    def fake_install(command, *, check) -> None:
+        assert check is True
+        staging = Path(command[-1])
+        write_package(staging / profile.archive)
+        write_package(staging / "ssd_mobilenet_v3_modalix_bf16_tess_mla_mpk.tar.gz")
+
+    monkeypatch.setattr(model_profiles.subprocess, "run", fake_install)
+    package = model_profiles.fetch_profile(profile, tmp_path / "models")
+
+    assert package.path == (tmp_path / "models" / profile.archive).resolve()
+    assert package.name == "fixture"
+
+
 class FakeOptions:
     def __init__(self) -> None:
         self.decode_type = "auto"

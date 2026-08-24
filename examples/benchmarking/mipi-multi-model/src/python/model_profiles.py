@@ -86,7 +86,7 @@ PROFILES = {
             "ssd",
             "SSD-MobileNet V3 object detection",
             "detection",
-            "ssd_mobilenet_v3_mpk.tar.gz",
+            "ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz",
             decode_type="Ssd",
             registry_target="models/ssd_mobilenet_v3@develop:latest",
             preprocessing="torchvision_ssdlite",
@@ -218,14 +218,11 @@ def fetch_profile(profile: Profile, models_dir: Path) -> ModelPackage:
                     ],
                     check=True,
                 )
-                candidates = sorted(staging.glob("**/*_mpk.tar.gz"))
-                preferred = [
-                    path for path in candidates if "modalix_int8_tess_mla" in path.parts
-                ]
-                selected = preferred or candidates
+                selected = sorted(staging.glob(f"**/{profile.archive}"))
                 if len(selected) != 1:
                     raise ModelPackageError(
-                        f"registry install produced {len(selected)} candidate MPKs"
+                        f"registry install produced {len(selected)} copies of "
+                        f"{profile.archive}"
                     )
                 shutil.copy2(selected[0], destination)
         else:

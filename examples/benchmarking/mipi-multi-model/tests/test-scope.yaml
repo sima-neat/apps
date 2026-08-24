@@ -16,7 +16,7 @@ models:
     name: ssd_mobilenet_v3
     ref: develop
     spec: latest
-    file: ssd_mobilenet_v3_mpk.tar.gz
+    file: ssd_mobilenet_v3_modalix_int8_tess_mla_mpk.tar.gz
   resnet_50:
     source: modelzoo
     name: resnet_50
