@@ -14,7 +14,7 @@
 
 ## Concept
 
-Runs a selected detection, pose, segmentation, classification, or depth model directly from a zero-copy MIPI camera and prints one compact result per frame.
+Runs a selected detection, pose, segmentation, classification, or depth model directly from a zero-copy MIPI camera and prints one compact result per frame. Detection and segmentation profiles can also stream synchronized H.264 video and inference metadata to Insight.
 
 The application loads one profile per process, keeping MLA memory use predictable while making each task independently testable.
 
@@ -78,14 +78,14 @@ The SSD fetch requires credentials for the staging artifact registry. The helper
 
 Open `${APP_DIR}/src/common/config.yaml`. Change only `model.profile`; set `model.path` only when using a package outside `models/`. `runtime.frames` controls how many results are pulled.
 
-Camera format, dimensions, rate, resize geometry, tensor layout, and queue policy are left to Neat and the model package. The application provides only the NV12 source hint required while the model graph is planned.
+The camera path captures 1920x1080 NV12 at 30 FPS. Neat owns MPK parsing, model compatibility, decoding, and the EV74 preprocessing/postprocessing stages.
 
 The graph ends with a manually added, named output so the composition is explicit:
 
 ```python
-graph.add(pyneat.nodes.camera_input())
-graph.add(model.graph(route))
-graph.add(pyneat.nodes.output("results"))
+camera_graph.add(pyneat.nodes.camera_input(camera_options, capture_buffer_count=32))
+model_graph = model.graph(route)
+model_graph.add(pyneat.nodes.output("results"))
 ```
 
 ## Run
@@ -110,7 +110,26 @@ python3 ${APP_DIR}/src/python/main.py \
   --profile pose
 ```
 
+Stream YOLO26 detection or segmentation to Insight:
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
+  --profile segment \
+  --model /path/to/yolo26_seg_mpk.tar.gz \
+  --continuous \
+  --insight-host 192.168.1.127 \
+  --insight-video-port 9000 \
+  --insight-metadata-port 9100 \
+  --insight-channel 0
+```
+
+The Insight graph uses `RealtimeLatestByStream` independently for the model and video branches, preventing either consumer from building a stale camera-frame backlog. Segmentation metadata includes per-instance polygons, class labels, confidence, and bounding boxes.
+
 The application rejects the graph before execution unless the negotiated backend requires zero-copy and contains no CPU camera bridge.
+
+On a bring-up image whose libcamera stack cannot provide the required downstream DMA-BUF pool,
+use `--allow-camera-copy` to opt into Neat's camera bridge explicitly. Strict zero-copy remains
+the default.
 
 ## Expected Result
 
@@ -124,7 +143,7 @@ PASS strict-zero-copy MIPI -> YOLO26n object detection -> results
 ## Troubleshooting
 
 - If camera discovery fails, confirm that `cam -l` reports a camera and that the correct overlay is installed.
-- If model validation fails, confirm the file is a directly consumable `*_mpk.tar.gz` built with Model SDK 2.1.3.
+- If model loading fails, confirm the file is a directly consumable `*_mpk.tar.gz` compatible with the installed Neat runtime. Neat owns MPK parsing and compatibility validation.
 - If the strict zero-copy check fails, confirm that Neat, libcamera, and the camera pipeline were built with compatible downstream-owned buffer support.
 - Run with `--validate-model-only` to inspect the package without loading Neat or opening the camera.
 
