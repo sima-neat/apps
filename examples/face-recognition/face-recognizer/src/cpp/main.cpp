@@ -41,6 +41,7 @@ struct AppConfig {
     std::string scrfd_model  = "models/scrfd_2.5g_bnkps.mla_mpk.tar.gz";
     std::string arcface_model= "models/w600k_mbf.surgery_mpk.tar.gz";
     std::string gallery_path = "gallery.bin";
+    bool        gallery_path_set = false;  // true when --gallery was explicitly passed
     std::string input_uri;          // RTSP URL, video file path, or empty for webcam 0
     std::string output_sink;        // file path, "display", or empty (no output)
     std::string stream_host;        // host IP for overlay UDP stream; empty = no streaming
@@ -109,7 +110,7 @@ static AppConfig parse_args(int argc, char** argv) {
         if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else if (arg == "--input"      && i + 1 < argc) { cfg.input_uri      = argv[++i]; }
-        else if (arg == "--gallery"      && i + 1 < argc) { cfg.gallery_path   = argv[++i]; }
+        else if (arg == "--gallery"      && i + 1 < argc) { cfg.gallery_path = argv[++i]; cfg.gallery_path_set = true; }
         else if (arg == "--scrfd-model"  && i + 1 < argc) { cfg.scrfd_model    = argv[++i]; }
         else if (arg == "--arcface-model"&& i + 1 < argc) { cfg.arcface_model  = argv[++i]; }
         else if (arg == "--output"       && i + 1 < argc) { cfg.output_sink = argv[++i]; cfg.output_sink_explicit = true; }
@@ -143,7 +144,7 @@ static AppConfig parse_args(int argc, char** argv) {
 
     auto yaml_cfg = load_config(config_path);
     if (cfg.input_uri.empty())    cfg.input_uri    = yaml_cfg.input_uri;
-    if (cfg.gallery_path.empty() || cfg.gallery_path == "gallery.bin")
+    if (!cfg.gallery_path_set)
         cfg.gallery_path = yaml_cfg.gallery_path;
     if (!cfg.output_sink_explicit && cfg.output_sink.empty()) cfg.output_sink = yaml_cfg.output_sink;
     if (cfg.scrfd_model.empty())   cfg.scrfd_model   = yaml_cfg.scrfd_model;

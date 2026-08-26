@@ -34,7 +34,7 @@ output:
 
 # ── Matching ──────────────────────────────────────────────────────────────────
 match:
-  threshold:        0.62      # Cosine similarity threshold; below → Unknown
+  threshold:        0.55      # Cosine similarity threshold; below → Unknown
   margin:           0.12      # Min gap between best and 2nd-best score; below → Unknown
                               # Raise margin when >1 person enrolled to prevent cross-ID false positives
   unknown_label:    Unknown
