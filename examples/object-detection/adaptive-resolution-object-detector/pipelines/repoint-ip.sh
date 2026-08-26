@@ -240,7 +240,7 @@ if ! ssh "${SSH_OPTS[@]}" "${DEVKIT_USER}@${DEVKIT_IP}" true 2>/dev/null; then
 else
   ssh "${SSH_OPTS[@]}" "${DEVKIT_USER}@${DEVKIT_IP}" bash -s -- "$OLD_IP" "$NEW_IP" "$DEVKIT_ROOT" "$NFS_EXPORT" <<'REMOTE'
 set -u
-OLD_IP="$1"; NEW_IP="$2"; DEVKIT_ROOT="$3"; NFS_EXPORT="$4"
+OLD_IP="${1-}"; NEW_IP="${2-}"; DEVKIT_ROOT="${3-}"; NFS_EXPORT="${4-}"
 
 # The export path is this board's existing mount source, so a new user does
 # not have to know the previous owner's home directory. fstab first, then the
