@@ -378,6 +378,16 @@ streams:
 input:
   tcp: true
   latency_ms: 100
+  # Same fused app as `scale`, so it needs the same decoder pools. Omitting
+  # these keys is not neutral: the loader then falls back to 4 buffers +
+  # throughput-low-latency, which turns memory_opt ON - the setting the app's
+  # own AppConfig comment blames for stutter/freezes under jitter. That is what
+  # made a group lag on a 1080p source while `scale` ran the same stream clean.
+  # "auto" is not a literal the decoder sees: core treats auto/default/empty as
+  # "resolve tuning from the admission lease" and leaves memory_opt off.
+  decoder_buffers: 8
+  decoder_input_buffers: 2
+  decoder_tuning: auto
 
 runtime:
   profile: false
@@ -386,8 +396,13 @@ runtime:
 inference:
   frames: 0
   fps: 0                      # 0 = follow each source's own rate; never capped
-  max_inflight_per_stream: 4
-  max_inflight_total: 16
+  # Shallow, not deep - every stream in THIS group shares one detector input
+  # port, so depth buys staleness rather than throughput: queued frames age out
+  # and get dropped by KeepLatest, which shows up as detections stopping.
+  # per_stream:1 is the binding cap here (a group holds at most GROUP_SIZE
+  # streams), matching the profile that sustains 16 streams under `scale`.
+  max_inflight_per_stream: 1
+  max_inflight_total: 8
   min_score: 0.30
   nms_iou: 0.60
   max_detections: 50
