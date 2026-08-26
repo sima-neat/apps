@@ -42,7 +42,12 @@ int main(int argc, char** argv) {
 
   const std::string binary = argv[1];
 
-  const std::vector<std::string> rtsp_urls = rtsp_urls_from_env();
+  // The support API split the generic RTSP helper into codec-specific
+  // variants; this pipeline is codec-agnostic, so take whichever the
+  // environment supplies (h264 first, then h265).
+  std::vector<std::string> rtsp_urls = rtsp_h264_urls_from_env();
+  const std::vector<std::string> rtsp_h265 = rtsp_h265_urls_from_env();
+  rtsp_urls.insert(rtsp_urls.end(), rtsp_h265.begin(), rtsp_h265.end());
   if (rtsp_urls.size() < 2) {
     return skip_or_fail("need at least two RTSP URLs for adaptive multistream e2e");
   }
