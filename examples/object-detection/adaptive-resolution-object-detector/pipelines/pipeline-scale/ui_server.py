@@ -28,8 +28,10 @@ their native resolution and count against the shared decode budget as-is.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -572,9 +574,19 @@ _MIME = {".png": "image/png", ".woff2": "font/woff2", ".svg": "image/svg+xml",
 
 def serve_asset(handler, name: str) -> bool:
     """Write ASSETS/name to the client. False if it is missing or unsafe."""
-    if "/" in name or ".." in name:
+    # Reduce to a bare filename, then prove the resolved path is still inside
+    # ASSETS. The basename alone already stops ../ and absolute paths; resolving
+    # and re-checking containment keeps that true if a symlink ever lands in
+    # web-assets, and is the form the path-injection scanners recognise as
+    # sanitised (the bare "/" and ".." rejects were sound but not provable).
+    safe = os.path.basename(name)
+    if not safe or safe in (".", ".."):
         return False
-    path = ASSETS / name
+    base = os.path.realpath(ASSETS)
+    resolved = os.path.realpath(os.path.join(base, safe))
+    if resolved != base and not resolved.startswith(base + os.sep):
+        return False
+    path = Path(resolved)
     if not path.is_file():
         return False
     body = path.read_bytes()
@@ -668,13 +680,24 @@ class Handler(BaseHTTPRequestHandler):
             if not fname:
                 self._json({"error": "no file in upload"}, 400)
                 return
-            tmp = Path("/tmp") / fname
-            tmp.write_bytes(data)
-            r = subprocess.run(
-                ["curl", "-sk", "--max-time", "600", "-F", f"file=@{tmp}",
-                 f"{pipeline.INSIGHT_API}/api/upload/media"],
-                capture_output=True, text=True)
-            tmp.unlink(missing_ok=True)
+            # Reduce the client-supplied name to a bare basename before it touches
+            # a filesystem path - an absolute path or ../ components in `fname`
+            # would otherwise let this unauthenticated (0.0.0.0) endpoint overwrite
+            # then delete any file the service account can write. The bytes land in
+            # a private tempfile; the sanitised name only travels as multipart
+            # metadata to Insight.
+            safe_name = Path(fname).name
+            if not safe_name or safe_name in (".", ".."):
+                self._json({"error": "invalid filename"}, 400)
+                return
+            with tempfile.NamedTemporaryFile(dir="/tmp", prefix="upload-") as tmp:
+                tmp.write(data)
+                tmp.flush()
+                r = subprocess.run(
+                    ["curl", "-sk", "--max-time", "600", "-F",
+                     f"file=@{tmp.name};filename={safe_name}",
+                     f"{pipeline.INSIGHT_API}/api/upload/media"],
+                    capture_output=True, text=True)
             self._json({"ok": "complete" in r.stdout.lower(), "detail": r.stdout.strip()[:200]})
             return
 

@@ -22,6 +22,7 @@ each pipeline is, what it is good at, and what it costs you.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -175,9 +176,19 @@ _MIME = {".png": "image/png", ".woff2": "font/woff2", ".svg": "image/svg+xml",
 
 
 def serve_asset(handler, name: str) -> bool:
-    if "/" in name or ".." in name:
+    # Reduce to a bare filename, then prove the resolved path is still inside
+    # ASSETS. The basename alone already stops ../ and absolute paths; resolving
+    # and re-checking containment keeps that true if a symlink ever lands in
+    # web-assets, and is the form the path-injection scanners recognise as
+    # sanitised (the bare "/" and ".." rejects were sound but not provable).
+    safe = os.path.basename(name)
+    if not safe or safe in (".", ".."):
         return False
-    path = ASSETS / name
+    base = os.path.realpath(ASSETS)
+    resolved = os.path.realpath(os.path.join(base, safe))
+    if resolved != base and not resolved.startswith(base + os.sep):
+        return False
+    path = Path(resolved)
     if not path.is_file():
         return False
     body = path.read_bytes()
