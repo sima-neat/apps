@@ -79,7 +79,7 @@ echo "[3/3] Deploying to ${DEVKIT_USER}@${DEVKIT_IP}:${DEPLOY_DIR} ..."
 
 # Create directories
 ssh -o StrictHostKeyChecking=no "${DEVKIT_USER}@${DEVKIT_IP}" \
-    "mkdir -p ${DEPLOY_DIR}/assets/models ${DEPLOY_DIR}/gallery_images"
+    "mkdir -p ${DEPLOY_DIR}/models ${DEPLOY_DIR}/gallery_images"
 
 # Copy binaries
 for BIN in face-recognizer face-enroll face-model-test; do
@@ -92,32 +92,25 @@ for BIN in face-recognizer face-enroll face-model-test; do
   fi
 done
 
-# Copy models
-MODELS_DIR="${MOD_ROOT}/assets/models"
+# Copy models — config.yaml uses models/ relative to DEPLOY_DIR so they land here.
+MODELS_DIR="${MOD_ROOT}/models"
 for MODEL in scrfd_2.5g_bnkps.mla_mpk.tar.gz w600k_r50.surgery_mpk.tar.gz; do
   if [[ -f "${MODELS_DIR}/${MODEL}" ]]; then
     scp -o StrictHostKeyChecking=no "${MODELS_DIR}/${MODEL}" \
-        "${DEVKIT_USER}@${DEVKIT_IP}:${DEPLOY_DIR}/assets/models/"
+        "${DEVKIT_USER}@${DEVKIT_IP}:${DEPLOY_DIR}/models/"
     echo "  Deployed model: ${MODEL}"
   else
     echo "  WARNING: model not found: ${MODELS_DIR}/${MODEL}"
   fi
 done
 
-# Copy config and rewrite paths to be relative to the deploy directory.
-# config.yaml paths are authored relative to the apps/ root (e.g.
-# examples/face-recognition/face-recognizer/assets/models/...) so they resolve
-# when running from apps/.  After deployment the user runs from DEPLOY_DIR, so
-# the prefix must be stripped to match the local assets/ and gallery.bin layout.
+# Copy config — paths in config.yaml are already relative to DEPLOY_DIR
+# (models/ and gallery.bin), so only the display sink needs to be cleared.
 CONF="${SCRIPT_DIR}/../src/common/config.yaml"
 scp -o StrictHostKeyChecking=no "${CONF}" "${DEVKIT_USER}@${DEVKIT_IP}:${DEPLOY_DIR}/config.yaml"
 ssh -o StrictHostKeyChecking=no "${DEVKIT_USER}@${DEVKIT_IP}" \
-    "sed -i \
-       's|examples/face-recognition/face-recognizer/assets/models/|assets/models/|g; \
-        s|examples/face-recognition/face-recognizer/gallery\.bin|gallery.bin|g; \
-        s|sink:[[:space:]]*display|sink: \"\"|g' \
-       ${DEPLOY_DIR}/config.yaml"
-echo "  Deployed: config.yaml (paths rewritten for deploy dir)"
+    "sed -i 's|sink:[[:space:]]*display|sink: \"\"|g' ${DEPLOY_DIR}/config.yaml"
+echo "  Deployed: config.yaml"
 
 # Copy gallery if provided
 if [[ -n "${GALLERY_FILE}" && -f "${GALLERY_FILE}" ]]; then

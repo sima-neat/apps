@@ -3,7 +3,7 @@
 
 # ── Models ────────────────────────────────────────────────────────────────────
 scrfd:
-  model:            examples/face-recognition/face-recognizer/assets/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
+  model:            models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
   conf_threshold:   0.65      # Minimum face confidence (sigmoid score)
   nms_iou:          0.40      # IoU threshold for NMS
   top_k:            5000      # Max candidates before NMS
@@ -13,7 +13,7 @@ scrfd:
   scale_by_stride:  true      # Multiply distance preds by stride before decode
 
 arcface:
-  model:            examples/face-recognition/face-recognizer/assets/models/w600k_r50.surgery_mpk.tar.gz
+  model:            models/w600k_r50.surgery_mpk.tar.gz
 
 # ── Gallery ───────────────────────────────────────────────────────────────────
 gallery:

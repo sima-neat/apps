@@ -110,6 +110,8 @@ static AppConfig parse_args(int argc, char** argv) {
             config_path = argv[++i];
         } else if (arg == "--input"      && i + 1 < argc) { cfg.input_uri      = argv[++i]; }
         else if (arg == "--gallery"      && i + 1 < argc) { cfg.gallery_path   = argv[++i]; }
+        else if (arg == "--scrfd-model"  && i + 1 < argc) { cfg.scrfd_model    = argv[++i]; }
+        else if (arg == "--arcface-model"&& i + 1 < argc) { cfg.arcface_model  = argv[++i]; }
         else if (arg == "--output"       && i + 1 < argc) { cfg.output_sink = argv[++i]; cfg.output_sink_explicit = true; }
         else if (arg == "--stream-host"  && i + 1 < argc) { cfg.stream_host    = argv[++i]; }
         else if (arg == "--stream-port"  && i + 1 < argc) { cfg.stream_port    = std::stoi(argv[++i]); }
@@ -121,8 +123,8 @@ static AppConfig parse_args(int argc, char** argv) {
         else if (arg == "--display")    { cfg.show_display = true;  }
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: face-recognizer [--config <path>] [--input <uri>]\n"
-                      << "       [--gallery <path>] [--output <sink>]\n"
-                      << "       [--stream-host <host>] [--stream-port N]\n"
+                      << "       [--gallery <path>] [--scrfd-model <path>] [--arcface-model <path>]\n"
+                      << "       [--output <sink>] [--stream-host <host>] [--stream-port N]\n"
                       << "       [--test] [--display] [--no-display]\n"
                       << "\n"
                       << "  --stream-host HOST  Burn overlay onto frames and stream H.264 over UDP.\n"
@@ -140,12 +142,12 @@ static AppConfig parse_args(int argc, char** argv) {
     }
 
     auto yaml_cfg = load_config(config_path);
-    if (cfg.input_uri.empty())   cfg.input_uri   = yaml_cfg.input_uri;
+    if (cfg.input_uri.empty())    cfg.input_uri    = yaml_cfg.input_uri;
     if (cfg.gallery_path.empty() || cfg.gallery_path == "gallery.bin")
         cfg.gallery_path = yaml_cfg.gallery_path;
     if (!cfg.output_sink_explicit && cfg.output_sink.empty()) cfg.output_sink = yaml_cfg.output_sink;
-    cfg.scrfd_model   = yaml_cfg.scrfd_model;
-    cfg.arcface_model = yaml_cfg.arcface_model;
+    if (cfg.scrfd_model.empty())   cfg.scrfd_model   = yaml_cfg.scrfd_model;
+    if (cfg.arcface_model.empty()) cfg.arcface_model = yaml_cfg.arcface_model;
     cfg.timeout_ms      = yaml_cfg.timeout_ms;
     cfg.queue_depth     = yaml_cfg.queue_depth;
     cfg.recog_interval  = yaml_cfg.recog_interval;

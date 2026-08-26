@@ -76,7 +76,7 @@ python3 examples/face-recognition/scripts/arcface_to_mla.py \
 
 ### Step 3 — Compile for Modalix (BF16 + MLA tessellation)
 
-`compile_models.sh` compiles both prepared ONNX files with `--bf16-activations --mla-tesselation` and copies the resulting packages directly into `assets/models/`:
+`compile_models.sh` compiles both prepared ONNX files with `--bf16-activations --mla-tesselation` and copies the resulting packages directly into `models/`:
 
 ```bash
 bash examples/face-recognition/scripts/compile_models.sh \
@@ -90,8 +90,8 @@ bash examples/face-recognition/scripts/compile_models.sh \
 After the script completes the compiled packages are placed at:
 
 ```
-examples/face-recognition/face-recognizer/assets/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
-examples/face-recognition/face-recognizer/assets/models/w600k_r50.surgery_mpk.tar.gz
+examples/face-recognition/face-recognizer/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
+examples/face-recognition/face-recognizer/models/w600k_r50.surgery_mpk.tar.gz
 ```
 
 **Why BF16 + MLA tessellation?**
@@ -116,7 +116,7 @@ recognition test to confirm the result.
 - SiMa Modalix DevKit or board accessible over the network.
 - Workspace NFS-mounted at `/workspace` on both the host (SDK container) and the board.
 - RTSP camera stream available on the network.
-- Model artifacts compiled and placed in `assets/models/` (see Model Compilation above).
+- Model artifacts compiled and placed in `models/` (see Model Compilation above).
 
 ## Get The Apps Repo
 
@@ -141,15 +141,15 @@ Edit `examples/face-recognition/face-recognizer/src/common/config.yaml`:
 
 ```yaml
 scrfd:
-  model: examples/face-recognition/face-recognizer/assets/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
+  model: models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
   conf_threshold: 0.60    # Minimum face confidence
   nms_iou:        0.40    # NMS IoU threshold
 
 arcface:
-  model: examples/face-recognition/face-recognizer/assets/models/w600k_r50.surgery_mpk.tar.gz
+  model: models/w600k_r50.surgery_mpk.tar.gz
 
 gallery:
-  path: examples/face-recognition/face-recognizer/gallery.bin
+  path: gallery.bin
 
 input:
   uri: rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME>
@@ -371,7 +371,7 @@ Config changes take effect on the next pipeline run — no rebuild required.
 - `SIMA_PROCESSCVU_RUN_TARGET=EV74` is required for the EV74 CVU preproc path (`InputKind::Image`). Without it the runtime routes CVU ops to the A65, which has a memory leak that crashes long runs at ~64000 frames.
 - `SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY=1` is required alongside `EV74` so the pipeline can copy the NV12 buffer from the HW decoder to CPU memory for the overlay step. Omitting it causes a runtime error when `draw_overlay_nv12` tries to access the HW-mapped NV12 buffer.
 - If SCRFD produces spurious high-confidence detections (chair detected as a face, landmarks on background objects), the CVU preproc normalize or pad settings are wrong. The `[preproc-meta]` line printed at startup shows what the CVU actually applied — confirm `norm=1` and `pad L/R/T/B=0/0/140/140` (black letterbox bars) for a 1280×720 source. `normalize.enable = AutoFlag::Auto` silently resolves to OFF, scaling inputs by 255×; `pad_value` defaults to 114 (YOLO gray) instead of 0 (SCRFD expects black padding).
-- If `face-enroll` fails with `QuantTessOptions` errors, the models in `assets/models/` are INT8 packages; re-compile with `--bf16-activations --mla-tesselation` as described above.
+- If `face-enroll` fails with `QuantTessOptions` errors, the models in `models/` are INT8 packages; re-compile with `--bf16-activations --mla-tesselation` as described above.
 - Similarity scores in the range 0.4–0.7 indicate a confident match. Scores below `match.threshold` are labelled Unknown.
 - The pipeline prints encoder push stats on exit (`enc_push_ok` / `enc_push_drop`). Non-zero `enc_push_drop` means the HW encoder queue was full on those frames; increase `enc_run_opt.queue_depth` in `main.cpp` (default 16) if drops persist.
 - To view SDK model graph details, set `Model::Options.verbose.level = Verbose` in the source and rebuild.
