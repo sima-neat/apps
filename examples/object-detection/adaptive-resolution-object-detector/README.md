@@ -43,9 +43,7 @@ browser without changing anything else.
 
 - Installed Neat Development Environment and Neat Library.
 - RTSP sources in Insight, or your own cameras.
-- A YOLO26n model pack (below). Model artifacts are user-managed under `assets/models/`.
-- On a Modalix DevKit, run `bash /usr/bin/fix_devkit_runtime.sh` first if the
-  runtime has been used by earlier ML/video apps.
+- A YOLO26n model pack (below). Model artifacts are user-managed under `models/`.
 
 ## Install Apps
 
@@ -94,7 +92,7 @@ The two modes read different files.
 
 ```yaml
 model:
-  path: assets/models/yolo26n-det-int8-b1.tar.gz
+  path: models/yolo26n-det-int8-b1.tar.gz
   labels: src/common/coco_label.txt
 
 streams:
@@ -114,7 +112,7 @@ output:
 
 ```yaml
 model:
-  path: assets/models/yolo26n-det-int8-b1.tar.gz
+  path: models/yolo26n-det-int8-b1.tar.gz
   labels: src/common/coco_label.txt
 
 streams:

@@ -41,7 +41,7 @@ Then open **`http://<board-ip>:8080/`**.
 - `neat update` has been run on the DevKit (`/home/sima/pyneat/bin/python`).
 - Key-based SSH from the container to the DevKit.
 - **The YOLO26n model pack.** All three pipelines use the standard Model Zoo
-  build; download it into `assets/models/` (gitignored, so it is never shipped):
+  build; download it into `models/` (gitignored, so it is never shipped):
 
   ```bash
   cd <apps-root>/assets/models

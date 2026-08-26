@@ -191,7 +191,10 @@ LOG = str(BUNDLE / "logs" / f"{PIPELINE}-py.log")
 # not create the directory - make sure it exists before any run.
 Path(LOG).parent.mkdir(parents=True, exist_ok=True)
 
-MODELS = str(APPS_ROOT / "assets" / "models")
+# `models/` is where download_models.sh and the READMEs put packs. The older
+# assets/models/ is still accepted so an existing checkout keeps working.
+_MODEL_DIRS = (APPS_ROOT / "models", APPS_ROOT / "assets" / "models")
+MODELS = str(next((d for d in _MODEL_DIRS if d.is_dir()), _MODEL_DIRS[0]))
 LABELS = str(EXAMPLE / "src" / "common" / "coco_label.txt")
 
 _SSL = ssl.create_default_context()
