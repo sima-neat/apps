@@ -93,7 +93,7 @@ The two modes read different files.
 ```yaml
 model:
   path: models/yolo26n-det-int8-b1.tar.gz
-  labels: src/common/coco_label.txt
+  labels: examples/object-detection/adaptive-resolution-object-detector/src/common/coco_label.txt
 
 streams:
   max_streams: 16              # default 8 if omitted
@@ -113,7 +113,7 @@ output:
 ```yaml
 model:
   path: models/yolo26n-det-int8-b1.tar.gz
-  labels: src/common/coco_label.txt
+  labels: examples/object-detection/adaptive-resolution-object-detector/src/common/coco_label.txt
 
 streams:
   - <first-rtsp-url>

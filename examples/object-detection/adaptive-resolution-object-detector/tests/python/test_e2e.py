@@ -33,7 +33,8 @@ class TestE2E:
         self,
         e2e_model_path,
         tmp_output_dir,
-        rtsp_urls,
+        rtsp_h264_urls,
+        rtsp_h265_urls,
         test_timeout_ms,
         skip_unless_e2e_ready,
         e2e_config_writer,
@@ -44,6 +45,9 @@ class TestE2E:
             _runtime_deps_ready(),
             "python runtime dependencies (cv2, numpy, pyneat) are not available",
         )
+        # The shared fixtures are codec-specific; this pipeline is codec-agnostic,
+        # so take whichever the environment supplies (h264 first, then h265).
+        rtsp_urls = [*rtsp_h264_urls, *rtsp_h265_urls]
         skip_unless_e2e_ready(
             len(rtsp_urls) >= 2, "need at least two RTSP URLs for adaptive multistream e2e"
         )

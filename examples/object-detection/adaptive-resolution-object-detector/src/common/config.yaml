@@ -2,7 +2,7 @@ model:
   # int8 is the default because it is what the published numbers were measured on;
   # yolo26n-det-bf16-mla_tess-b1.tar.gz is a drop-in swap if you want bf16.
   path: models/yolo26n-det-int8-b1.tar.gz
-  labels: src/common/coco_label.txt
+  labels: examples/object-detection/adaptive-resolution-object-detector/src/common/coco_label.txt
 
 
 streams:                         # RTSP inputs. Add/remove entries while running to change stream count.
