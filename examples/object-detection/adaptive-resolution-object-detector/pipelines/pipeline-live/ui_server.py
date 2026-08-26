@@ -28,7 +28,6 @@ their native resolution and count against the shared decode budget as-is.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -574,20 +573,17 @@ _MIME = {".png": "image/png", ".woff2": "font/woff2", ".svg": "image/svg+xml",
 
 def serve_asset(handler, name: str) -> bool:
     """Write ASSETS/name to the client. False if it is missing or unsafe."""
-    # Reduce to a bare filename, then prove the resolved path is still inside
-    # ASSETS. The basename alone already stops ../ and absolute paths; resolving
-    # and re-checking containment keeps that true if a symlink ever lands in
-    # web-assets, and is the form the path-injection scanners recognise as
-    # sanitised (the bare "/" and ".." rejects were sound but not provable).
-    safe = os.path.basename(name)
-    if not safe or safe in (".", ".."):
+    # Look the request up in an index built by enumerating web-assets, so the
+    # path handed to the filesystem is one WE produced rather than one derived
+    # from the request. The request string is only ever a dictionary key, which
+    # leaves no traversal to defend against: a name carrying "/" or ".." simply
+    # is not a key. Rebuilt per request so a new asset needs no restart.
+    try:
+        index = {entry.name: entry for entry in ASSETS.iterdir() if entry.is_file()}
+    except OSError:
         return False
-    base = os.path.realpath(ASSETS)
-    resolved = os.path.realpath(os.path.join(base, safe))
-    if resolved != base and not resolved.startswith(base + os.sep):
-        return False
-    path = Path(resolved)
-    if not path.is_file():
+    path = index.get(name)
+    if path is None:
         return False
     body = path.read_bytes()
     handler.send_response(200)
