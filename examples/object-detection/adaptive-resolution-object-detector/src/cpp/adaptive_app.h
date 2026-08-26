@@ -536,12 +536,19 @@ make_source_options(const AppConfig& cfg, const StreamRuntime& rt) {
   return opt;
 }
 
-std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg, const std::string& model_path) {
+std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg, const std::string& model_path,
+                                                int frame_w = 0, int frame_h = 0) {
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
   model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+  // The preprocess envelope defaults to 1920x1080; anything larger (a 4K source)
+  // fails the graph compile with "input width N exceeds configured capacity".
+  if (frame_w > 0 && frame_h > 0) {
+    model_opt.preprocess.input_max_width = frame_w;
+    model_opt.preprocess.input_max_height = frame_h;
+  }
   model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
   model_opt.score_threshold = cfg.min_score;
   model_opt.nms_iou_threshold = cfg.nms_iou;
@@ -551,7 +558,7 @@ std::unique_ptr<simaai::neat::Model> make_model(const AppConfig& cfg, const std:
 
 // One pipeline build attempt. Assumes rt.run/graph/model have been cleared.
 void build_pipeline_once(const AppConfig& cfg, StreamRuntime& rt) {
-  rt.model = make_model(cfg, cfg.model_path);
+  rt.model = make_model(cfg, cfg.model_path, rt.frame_w, rt.frame_h);
   rt.graph = std::make_unique<simaai::neat::Graph>();
   auto& graph = *rt.graph;
 

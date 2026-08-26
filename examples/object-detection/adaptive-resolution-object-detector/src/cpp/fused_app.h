@@ -69,6 +69,12 @@ struct AppConfig {
   std::vector<std::string> rtsp_urls;
   int latency_ms = 100;
   bool tcp = true;
+  // Decoder pool sizing, tuned by the pipeline config for the advertised high
+  // stream counts. The untuned element defaults exhaust the decoder pool well
+  // before then.
+  int decoder_buffers = 4;
+  int decoder_input_buffers = 2;
+  std::string decoder_tuning = "throughput-low-latency";
   int frames = 0;
   int fps = 0;
   int max_inflight_per_stream = 4;
@@ -142,6 +148,8 @@ struct StreamRuntime {
   std::optional<cv::Mat> latest_debug_frame;
   int frame_w = 0;
   int frame_h = 0;
+  int det_w = 0;
+  int det_h = 0;
   int output_fps = 0;
   int video_port = 0;
   int processed = 0;
@@ -292,6 +300,9 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.rtsp_urls = parse_streams(config_path);
   cfg.tcp = raw.bool_or("input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
+  cfg.decoder_buffers = raw.int_or("input.decoder_buffers", 4);
+  cfg.decoder_input_buffers = raw.int_or("input.decoder_input_buffers", 2);
+  cfg.decoder_tuning = raw.string_or("input.decoder_tuning", "throughput-low-latency");
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.fps = raw.int_or("inference.fps", 0);
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);
@@ -381,9 +392,22 @@ std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<o
   return metadata_boxes;
 }
 
-simaai::neat::nodes::groups::RtspDecodedInputOptions
-build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, int& width_out,
-                     int& height_out) {
+// Largest upscale the hardware scaler will actually perform. Past this it emits
+// nothing at all - silently, with no error - so the shared detector geometry is
+// clamped against it (see pick_detector_geometry). Measured on Modalix: 2x
+// works, 3x does not.
+constexpr int kMaxUpscale = 2;
+// The detector's own input size; clamping below this would throw away detail
+// the model is going to use anyway.
+constexpr int kModelInput = 640;
+
+struct ProbedStream {
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+};
+
+ProbedStream probe_stream(const AppConfig& cfg, const std::string& url) {
   sima_examples::RtspStreamInfo probe;
   sima_examples::RtspProbeOptions probe_options;
   probe_options.payload_type = 96;
@@ -391,7 +415,43 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
   probe_options.rtsp_tcp = cfg.tcp;
   probe_options.debug = cfg.profile;
   (void)sima_examples::probe_rtsp_stream_info(url, probe_options, probe);
+  return ProbedStream{probe.width, probe.height, probe.fps};
+}
 
+// The shared detector needs ONE input geometry, so pick the largest native
+// probed size and scale the other detector legs to it - largest (rather than
+// smallest) avoids discarding detail small objects need. Video delivery is
+// unaffected: it is the encoded passthrough, so it stays native per stream.
+//
+// ...but never ask the scaler for more than kMaxUpscale on the SMALLEST
+// source; the hardware scaler silently produces nothing past ~2x upscale, so
+// clamping to what it can actually do is what lets a small source share a
+// detector with a large one. Downscaling is unconstrained. Keep the clamp at
+// or above the model's own input so it never becomes the accuracy bottleneck,
+// but never above the largest source either, or a single small stream would
+// be upscaled for no reason. NV12 needs even dimensions.
+void pick_detector_geometry(const std::vector<ProbedStream>& probes, int& det_w, int& det_h) {
+  // Every entry is validated (width/height > 0) by the caller before this
+  // runs, so the first probe is a safe seed for both extremes.
+  int max_w = probes.front().width, max_h = probes.front().height;
+  int min_w = probes.front().width, min_h = probes.front().height;
+  for (const auto& p : probes) {
+    max_w = std::max(max_w, p.width);
+    max_h = std::max(max_h, p.height);
+    min_w = std::min(min_w, p.width);
+    min_h = std::min(min_h, p.height);
+  }
+  int capped_w = std::min(max_w, kMaxUpscale * min_w);
+  int capped_h = std::min(max_h, kMaxUpscale * min_h);
+  capped_w = std::min(max_w, std::max(kModelInput, capped_w));
+  capped_h = std::min(max_h, std::max(kModelInput, capped_h));
+  det_w = capped_w - (capped_w % 2);
+  det_h = capped_h - (capped_h % 2);
+}
+
+simaai::neat::nodes::groups::RtspDecodedInputOptions
+build_source_options(const AppConfig& cfg, const std::string& url, const ProbedStream& probe,
+                     int det_w, int det_h, int& fps_out, int& width_out, int& height_out) {
   simaai::neat::nodes::groups::RtspDecodedInputOptions opt;
   opt.url = url;
   opt.latency_ms = cfg.latency_ms;
@@ -402,6 +462,11 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
   opt.decoder_name = "decoder";
   opt.decoder_raw_output = true;
   opt.auto_caps_from_stream = true;
+  opt.num_buffers = cfg.decoder_buffers;
+  opt.decoder_input_buffers = cfg.decoder_input_buffers;
+  opt.decoder_tuning = cfg.decoder_tuning;
+  opt.decoder_memory_opt =
+      (cfg.decoder_tuning == "low-memory" || cfg.decoder_tuning == "throughput-low-latency");
   if (probe.width > 0 && probe.height > 0) {
     opt.fallback_h264_width = probe.width;
     opt.fallback_h264_height = probe.height;
@@ -413,10 +478,22 @@ build_source_options(const AppConfig& cfg, const std::string& url, int& fps_out,
     fps_out = probe.fps;
   }
   if (width_out > 0 && height_out > 0 && fps_out > 0) {
+    // A single shared model has a single input port, so streams of different
+    // native sizes must be normalised to one geometry before it ("input spec
+    // mismatch for port 'in'"). Only the detector leg is scaled - the video
+    // sent to Insight is the encoded passthrough, which keeps each camera's
+    // native resolution. Box coordinates stay correct because detections are
+    // rescaled back to the native frame size before being sent (see
+    // process_output_sample).
+    const int scale_w = det_w > 0 ? det_w : width_out;
+    const int scale_h = det_h > 0 ? det_h : height_out;
+    if (scale_w != width_out || scale_h != height_out) {
+      opt.use_videoscale = true;
+    }
     opt.output_caps.enable = true;
     opt.output_caps.format = "NV12";
-    opt.output_caps.width = width_out;
-    opt.output_caps.height = height_out;
+    opt.output_caps.width = scale_w;
+    opt.output_caps.height = scale_h;
     opt.output_caps.fps = fps_out;
     opt.output_caps.memory = simaai::neat::CapsMemory::Any;
   }
@@ -510,12 +587,19 @@ build_video_sender_graph(const std::string& input_name,
   return video;
 }
 
-std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg) {
+std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg, int det_w = 0,
+                                                 int det_h = 0) {
   simaai::neat::Model::Options model_opt;
   model_opt.preprocess.kind = simaai::neat::InputKind::Image;
   model_opt.preprocess.enable = simaai::neat::AutoFlag::On;
   model_opt.preprocess.color_convert.input_format = simaai::neat::PreprocessColorFormat::NV12;
   model_opt.preprocess.preset = simaai::neat::NormalizePreset::COCO_YOLO;
+  // The preprocess envelope defaults to 1920x1080; anything larger (a 4K source)
+  // fails the graph compile with "input width N exceeds configured capacity".
+  if (det_w > 0 && det_h > 0) {
+    model_opt.preprocess.input_max_width = det_w;
+    model_opt.preprocess.input_max_height = det_h;
+  }
   model_opt.decode_type = simaai::neat::BoxDecodeType::YoloV26;
   model_opt.score_threshold = cfg.min_score;
   model_opt.nms_iou_threshold = cfg.nms_iou;
@@ -572,9 +656,9 @@ simaai::neat::GraphLinkOptions realtime_link(int stream_index, int queue_depth,
   return link;
 }
 
-simaai::neat::Graph build_detector_graph(const AppConfig& cfg,
+simaai::neat::Graph build_detector_graph(const AppConfig& cfg, int det_w, int det_h,
                                          std::unique_ptr<simaai::neat::Model>& model) {
-  model = build_model(cfg);
+  model = build_model(cfg, det_w, det_h);
   auto input_options = model->input_appsrc_options(false);
   input_options.block = true;
 
@@ -599,15 +683,19 @@ simaai::neat::Graph build_debug_frame_graph(int stream_index) {
 }
 
 StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const std::string& url,
-                                   const std::vector<std::string>& labels) {
+                                   const std::vector<std::string>& labels,
+                                   const ProbedStream& probe, int det_w, int det_h) {
   StreamRuntime runtime;
   runtime.index = stream_index;
   runtime.url = url;
   const auto source_options =
-      build_source_options(cfg, url, runtime.output_fps, runtime.frame_w, runtime.frame_h);
+      build_source_options(cfg, url, probe, det_w, det_h, runtime.output_fps, runtime.frame_w,
+                           runtime.frame_h);
   sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
                          "failed to probe RTSP frame dimensions");
   sima_examples::require(runtime.output_fps > 0, "failed to probe RTSP frame rate");
+  runtime.det_w = det_w > 0 ? det_w : runtime.frame_w;
+  runtime.det_h = det_h > 0 ? det_h : runtime.frame_h;
   if (cfg.fps > 0) {
     runtime.output_fps = cfg.fps;
   }
@@ -733,8 +821,24 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
     throw std::runtime_error("stream " + std::to_string(stream.index) +
                              " bbox extract failed: " + err);
   }
-  const auto boxes = objdet::parse_boxes_strict(payload, stream.frame_w, stream.frame_h,
-                                                cfg.max_detections, false);
+  // Detections are emitted in the detector's input geometry, which is shared
+  // across streams. Clamp in that space, then scale to this stream's native
+  // size so boxes line up with the natively-delivered video. This is a plain
+  // per-axis ratio, not a letterbox correction: the output caps in
+  // build_source_options pin width/height and leave pixel-aspect-ratio free,
+  // so videoscale stretches the pixels instead of adding bars.
+  auto boxes =
+      objdet::parse_boxes_strict(payload, stream.det_w, stream.det_h, cfg.max_detections, false);
+  if (stream.det_w != stream.frame_w || stream.det_h != stream.frame_h) {
+    const float sx = static_cast<float>(stream.frame_w) / static_cast<float>(stream.det_w);
+    const float sy = static_cast<float>(stream.frame_h) / static_cast<float>(stream.det_h);
+    for (auto& box : boxes) {
+      box.x1 *= sx;
+      box.x2 *= sx;
+      box.y1 *= sy;
+      box.y2 *= sy;
+    }
+  }
 
   ++stream.processed;
   const bool warming_up = stream.processed <= cfg.warmup_frames;
@@ -822,14 +926,32 @@ void run_app(const AppConfig& cfg) {
   }
 
   const auto labels = load_labels(cfg.labels_path);
+
+  // Probe every source first: the shared detector needs ONE input geometry
+  // (see pick_detector_geometry), which has to be known before any stream's
+  // source options - or the model's preprocess capacity - can be built.
+  std::vector<ProbedStream> probes;
+  probes.reserve(cfg.rtsp_urls.size());
+  for (const auto& url : cfg.rtsp_urls) {
+    probes.push_back(probe_stream(cfg, url));
+  }
+  for (const auto& p : probes) {
+    sima_examples::require(p.width > 0 && p.height > 0, "failed to probe RTSP frame dimensions");
+    sima_examples::require(p.fps > 0, "failed to probe RTSP frame rate");
+  }
+
+  int det_w = 0;
+  int det_h = 0;
+  pick_detector_geometry(probes, det_w, det_h);
+
   AppRuntime app;
   app.streams.reserve(cfg.rtsp_urls.size());
-  auto detector_graph = build_detector_graph(cfg, app.model);
+  auto detector_graph = build_detector_graph(cfg, det_w, det_h, app.model);
   auto detections_graph = build_detections_graph();
 
   for (std::size_t index = 0; index < cfg.rtsp_urls.size(); ++index) {
-    app.streams.push_back(
-        build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index], labels));
+    app.streams.push_back(build_stream_runtime(cfg, static_cast<int>(index), cfg.rtsp_urls[index],
+                                               labels, probes[index], det_w, det_h));
     connect_stream_graph(app, cfg, app.streams.back(), detector_graph);
   }
   app.graph.connect(detector_graph, detections_graph);
