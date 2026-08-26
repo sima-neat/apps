@@ -38,8 +38,8 @@ using Ms     = std::chrono::duration<double, std::milli>;
 // ── config ────────────────────────────────────────────────────────────────────
 
 struct AppConfig {
-    std::string scrfd_model  = "assets/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz";
-    std::string arcface_model= "assets/models/w600k_mbf.surgery_mpk.tar.gz";
+    std::string scrfd_model  = "models/scrfd_2.5g_bnkps.mla_mpk.tar.gz";
+    std::string arcface_model= "models/w600k_mbf.surgery_mpk.tar.gz";
     std::string gallery_path = "gallery.bin";
     std::string input_uri;          // RTSP URL, video file path, or empty for webcam 0
     std::string output_sink;        // file path, "display", or empty (no output)

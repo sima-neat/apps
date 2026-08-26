@@ -4,7 +4,7 @@
 # Prerequisites:
 #   - Neat SDK container running with NFS mounted at /workspace
 #   - DevKit reachable at DEVKIT_IP (default: set via --ip or DEVKIT_IP env var)
-#   - Models placed at: examples/face-recognition/face-recognizer/assets/models/
+#   - Models placed at: examples/face-recognition/face-recognizer/models/
 #       scrfd_2.5g_bnkps.mla_mpk.tar.gz, w600k_r50.surgery_mpk.tar.gz
 #
 # Usage:

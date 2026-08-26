@@ -47,8 +47,8 @@ echo ""
 check "face-recognizer binary exists"  "[[ -f ${DEPLOY_DIR}/face-recognizer ]]"
 check "face-enroll binary exists"      "[[ -f ${DEPLOY_DIR}/face-enroll ]]"
 check "face-model-test binary exists"  "[[ -f ${DEPLOY_DIR}/face-model-test ]]"
-check "SCRFD model exists"    "[[ -f ${DEPLOY_DIR}/assets/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz ]]"
-check "ArcFace model exists"  "[[ -f ${DEPLOY_DIR}/assets/models/w600k_r50.surgery_mpk.tar.gz ]]"
+check "SCRFD model exists"    "[[ -f ${DEPLOY_DIR}/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz ]]"
+check "ArcFace model exists"  "[[ -f ${DEPLOY_DIR}/models/w600k_r50.surgery_mpk.tar.gz ]]"
 
 # ── 2. Unit tests ─────────────────────────────────────────────────────────────
 if [[ -f "${DEPLOY_DIR}/face_recog_unit_test" ]]; then
