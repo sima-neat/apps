@@ -5,8 +5,8 @@ logs/
 *.log
 # Live UI state: rewritten as streams are added/removed.
 ui-state.json
-# repoint-ip.sh backups.
-*.bak-repoint
+# setup-adaptive-pipeline.sh backups.
+*.bak-setup
 __pycache__/
 *.pyc
 # UI language toggle (python|cpp) - user state, not source.

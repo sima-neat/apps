@@ -23,7 +23,7 @@ this SDK container's IP (as the board and your browser see it) and your DevKit's
 
 ```bash
 cd <clone>/examples/object-detection/adaptive-resolution-object-detector/pipelines
-./repoint-ip.sh <host-ip> <board-ip>      # e.g. ./repoint-ip.sh 192.168.131.68 192.168.135.72
+./setup-adaptive-pipeline.sh <host-ip> <board-ip>      # e.g. ./setup-adaptive-pipeline.sh 192.168.131.68 192.168.135.72
 ```
 
 It rewrites both addresses across the bundle, fixes the container's
@@ -44,7 +44,7 @@ Then open **`http://<board-ip>:8080/`**.
   build; download it into `models/` (gitignored, so it is never shipped):
 
   ```bash
-  cd <apps-root>/assets/models
+  cd <apps-root>/models
   sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
   ```
 
@@ -84,7 +84,7 @@ with no detections.
 
 ```
 pipelines/
-  repoint-ip.sh          one-shot setup / re-point
+  setup-adaptive-pipeline.sh   one-shot setup / re-point
   launcher.py .sh .html  the chooser on :8080
   web-assets/            fonts and logo shared by all four pages
   pipeline-{scale,live,group}/

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# repoint-ip.sh <new-ip>
+# setup-adaptive-pipeline.sh <new-ip>
 #
 # Run this ON the SDK container (not the DevKit) any time this machine's own
 # network changes - wifi <-> ethernet, a different wifi network, anything -
@@ -36,10 +36,10 @@
 #   8. verify every piece end-to-end and print a pass/fail summary.
 #
 # Usage:
-#   ./repoint-ip.sh <host-ip> [board-ip]
+#   ./setup-adaptive-pipeline.sh <host-ip> [board-ip]
 #
-#   ./repoint-ip.sh 192.168.131.68                  # host moved, same board
-#   ./repoint-ip.sh 192.168.131.68 192.168.135.72   # fresh clone: both
+#   ./setup-adaptive-pipeline.sh 192.168.131.68                  # host moved, same board
+#   ./setup-adaptive-pipeline.sh 192.168.131.68 192.168.135.72   # fresh clone: both
 #
 # FIRST RUN ON A NEW MACHINE: pass BOTH. <host-ip> is this SDK container's
 # address as the board and your browser see it; <board-ip> is your DevKit.
@@ -178,9 +178,9 @@ for cfg in "$REPO_ROOT"/pipeline-*/*-run.yaml; do
   mapfile -t stale < <(grep -ohE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$cfg" 2>/dev/null \
     | sort -u | grep -vE "^(${NEW_IP//./\\.}|127\.0\.0\.1|0\.0\.0\.0)$" || true)
   [[ "${#stale[@]}" -eq 0 ]] && continue
-  cp -f "$cfg" "${cfg}.bak-repoint"
+  cp -f "$cfg" "${cfg}.bak-setup"
   for old in "${stale[@]}"; do sed -i "s/$old/$NEW_IP/g" "$cfg"; done
-  warn "$(basename "$cfg"): stale ${stale[*]} -> $NEW_IP (backup: $(basename "$cfg").bak-repoint)"
+  warn "$(basename "$cfg"): stale ${stale[*]} -> $NEW_IP (backup: $(basename "$cfg").bak-setup)"
   STALE_TOTAL=$((STALE_TOTAL + 1))
 done
 [[ "$STALE_TOTAL" -eq 0 ]] && ok "generated run configs carry no stale addresses"

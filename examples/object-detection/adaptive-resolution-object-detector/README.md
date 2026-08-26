@@ -58,10 +58,10 @@ Run the remaining commands from `prebuilt-apps/`.
 ## Prepare the Model
 
 ```bash
-mkdir -p assets/models
-cd assets/models
+mkdir -p models
+cd models
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK<modelzoo-version>/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
-cd ../..
+cd ..
 ```
 
 `<modelzoo-version>` is the `modelzoo-version` field in `deps/manifest.json`.
@@ -160,7 +160,7 @@ switches implementation language without editing anything:
 
 ```bash
 cd examples/object-detection/adaptive-resolution-object-detector/pipelines
-./repoint-ip.sh <host-ip> <board-ip>     # one-time: rewrites both addresses
+./setup-adaptive-pipeline.sh <host-ip> <board-ip>     # one-time: rewrites both addresses
 ```
 
 Open `http://<board-ip>:8080/`.
