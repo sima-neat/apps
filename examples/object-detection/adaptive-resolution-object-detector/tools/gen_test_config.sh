@@ -16,7 +16,7 @@
 # otherwise it becomes rtsp://RTSP_HOST:8554/SRC.
 # Tune behaviour with env vars (defaults in parentheses):
 #   MIN_SCORE(0.30) FPS(0) FRAMES(0) MAX_STREAMS(8) VIDEO(true) PROFILE(true)
-#   DEBUG_DIR(/tmp/adaptive_out) SAVE_EVERY(20) MODEL_DIR(assets/models)
+#   DEBUG_DIR(/tmp/adaptive_out) SAVE_EVERY(20) MODEL_DIR(models/, falling back to assets/models/)
 set -euo pipefail
 
 OUT="${1:?OUT.yaml required}"; INSIGHT_HOST="${2:?INSIGHT_HOST required}"; RTSP_HOST="${3:?RTSP_HOST required}"
@@ -24,7 +24,18 @@ shift 3
 [ "$#" -ge 1 ] || { echo "need at least one SRC (e.g. src1 src2)"; exit 2; }
 
 APPS_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
-MODEL_DIR="${MODEL_DIR:-$APPS_ROOT/assets/models}"
+# models/ is where download_models.sh and the READMEs put packs; assets/models/
+# is the older location, kept for a checkout that predates the move. Mirrors
+# pipelines/pipeline-scale/pipeline.py's _MODEL_DIRS - a fresh install has no
+# assets/models/ at all, so defaulting to it left every TESTING.md command that
+# omits MODEL_DIR pointing at a path that does not exist.
+if [ -n "${MODEL_DIR:-}" ]; then
+  :
+elif [ -d "$APPS_ROOT/models" ]; then
+  MODEL_DIR="$APPS_ROOT/models"
+else
+  MODEL_DIR="$APPS_ROOT/assets/models"
+fi
 
 {
 echo "model:"

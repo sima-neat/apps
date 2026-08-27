@@ -959,8 +959,51 @@ class TestFusedDecoderFpsCap:
     def test_cpp_gates_admission_the_same_way_python_does(self):
         cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
         assert "decoder_fps_cap" in cpp
-        assert "dec.dec_fps = capped ? -1 : opt.source_fps;" in cpp
-        assert "opt.output_caps.fps = capped ? 0 : fps_out;" in cpp
+        assert "dec.dec_fps = capped ? -1 : decode_fps;" in cpp
+        assert "opt.output_caps.fps = capped ? 0 : decode_fps;" in cpp
+
+
+class TestFusedEffectiveDecodeFps:
+    """inference.fps must throttle the DECODER, before the shared detector ever
+    sees a frame - not only drop frames after inference already ran. The
+    passthrough branch that feeds Insight is a separate concern and must keep
+    the source's true native rate regardless of this cap.
+    """
+
+    @staticmethod
+    def _cfg(fps):
+        return SimpleNamespace(fps=fps)
+
+    def test_uncapped_keeps_the_source_rate(self):
+        import fused_app
+
+        assert fused_app.effective_decode_fps(self._cfg(0), 60) == 60
+
+    def test_a_lower_request_throttles_the_decoder(self):
+        import fused_app
+
+        assert fused_app.effective_decode_fps(self._cfg(10), 60) == 10
+
+    def test_a_request_above_the_source_rate_has_no_effect(self):
+        """Asking for more than the source provides cannot speed up the decoder;
+        the source's own rate is still the ceiling."""
+        import fused_app
+
+        assert fused_app.effective_decode_fps(self._cfg(120), 60) == 60
+
+    def test_cpp_computes_the_same_effective_rate(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        assert "int effective_decode_fps(const AppConfig& cfg, int source_fps)" in cpp
+        assert "effective_decode_fps(cfg, fps_out)" in cpp, "output_caps.fps must use it"
+        assert "effective_decode_fps(cfg, opt.source_fps)" in cpp, "dec.dec_fps must use it"
+
+    def test_passthrough_branch_is_not_throttled_in_either_language(self):
+        """encoded_opt.source_fps / EncodedSourceGraph must read the raw probed
+        rate, never effective_decode_fps() - Insight always gets the native rate."""
+        py = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        assert "encoded_opt.source_fps = opt.source_fps" in py
+        assert "encoded_opt.source_fps = opt.source_fps;" in cpp
 
 
 class TestE2eCodecFixtures:
@@ -981,3 +1024,100 @@ class TestE2eCodecFixtures:
         source = (EXAMPLE_DIR / "tests" / "cpp" / "test_e2e.cpp").read_text(encoding="utf-8")
         assert "rtsp_h265_urls_from_env" not in source
         assert "rtsp_h264_urls_from_env()" in source
+
+
+class TestMemoryEstimateMatchesConfiguredBuffers:
+    """The panel's decoder-memory estimate must charge the pool size the
+    pipeline actually configures, not an unrelated guess.
+
+    All three panels hardcoded n_visible=18 with a comment claiming "scale app
+    runs decoder num_buffers=18" - but _config_scale() writes decoder_buffers: 8
+    for scale/group, and the live pipeline never sets the key at all, so it
+    runs on adaptive_app.py's own default of 4. The estimate overcharged scale/
+    group by 10 buffers per stream and live by 14, and would have made
+    ENFORCE_LIMITS (an intentional, switchable safety guard) reject
+    configurations the app can actually run, had anyone flipped it on.
+    """
+
+    @pytest.mark.parametrize(
+        "name,expected", [("scale", 8), ("group", 8), ("live", 4)]
+    )
+    def test_ui_server_uses_the_pipeline_s_own_decoder_buffers(self, name, expected):
+        ui = _load_ui_server(name)
+        assert ui.pipeline.DECODER_BUFFERS == expected
+
+        # Recompute stream_pool_bytes' "visible" term independently, using the
+        # EXPECTED buffer count, and confirm it is exactly what got charged -
+        # not just that the constant has the right value in isolation.
+        w, h = 1280, 720
+        n_hidden = 24 if h <= 720 else 20
+        hidden = n_hidden * (ui._align(w, 64) * ui._align(h, 64) * 3 // 2)
+        visible = expected * (ui._align(w, 256) * ui._align(h, 64) * 3 // 2)
+        inp = 2 * (w * h * 3 // 4)
+        assert ui.stream_pool_bytes(w, h) == inp + hidden + visible
+
+    @pytest.mark.parametrize("name", ["scale", "group", "live"])
+    def test_no_pipeline_still_hardcodes_the_stale_estimate(self, name):
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "ui_server.py").read_text(encoding="utf-8")
+        assert "n_visible = 18" not in source
+        assert "pipeline.DECODER_BUFFERS" in source
+
+    def test_scale_and_group_configs_still_render_the_same_value(self):
+        """The constant must be read by the YAML template too, not just named
+        for the estimate - otherwise the two could still drift independently."""
+        for name in ("scale", "group"):
+            mod = _load_ui_server(name).pipeline
+            rendered = mod._config_scale(["rtsp://x/1"], "test")
+            assert f"decoder_buffers: {mod.DECODER_BUFFERS}" in rendered
+
+
+class TestGenTestConfigModelDir:
+    """A fresh install has no assets/models/ at all - models/ is where
+    download_models.sh and the README put packs (see pipeline-scale/pipeline.py's
+    _MODEL_DIRS). Every TESTING.md command invokes this generator without
+    MODEL_DIR set, so defaulting to the old path produced a config pointing at
+    a model that does not exist on a clean checkout.
+    """
+
+    @staticmethod
+    def _run_resolution(tmp_path, apps_root_has, model_dir_env=None):
+        """Extract gen_test_config.sh's own MODEL_DIR-resolution block and run
+        it for real in a subprocess, against a fake APPS_ROOT - not a
+        hand-copied duplicate of the logic, so a future edit that breaks it
+        here fails this test.
+        """
+        source = (EXAMPLE_DIR / "tools" / "gen_test_config.sh").read_text(encoding="utf-8")
+        start = source.index('APPS_ROOT="$(cd "$(dirname "$0")')
+        end = source.index("\n\n{", start)
+        block = source[start:end]
+        assert "MODEL_DIR" in block
+
+        apps_root = tmp_path / "apps"
+        for name in apps_root_has:
+            (apps_root / name).mkdir(parents=True)
+
+        script = f'APPS_ROOT="{apps_root}"\n' + block.split("\n", 1)[1] + "\necho \"$MODEL_DIR\"\n"
+        env = {"PATH": "/usr/bin:/bin"}
+        if model_dir_env is not None:
+            env["MODEL_DIR"] = model_dir_env
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    def test_fresh_install_uses_models(self, tmp_path):
+        resolved = self._run_resolution(tmp_path, apps_root_has=["models"])
+        assert resolved == str(tmp_path / "apps" / "models")
+
+    def test_old_checkout_falls_back_to_assets_models(self, tmp_path):
+        resolved = self._run_resolution(tmp_path, apps_root_has=["assets/models"])
+        assert resolved == str(tmp_path / "apps" / "assets" / "models")
+
+    def test_neither_present_still_falls_back_without_erroring(self, tmp_path):
+        resolved = self._run_resolution(tmp_path, apps_root_has=[])
+        assert resolved == str(tmp_path / "apps" / "assets" / "models")
+
+    def test_explicit_model_dir_overrides_both(self, tmp_path):
+        resolved = self._run_resolution(
+            tmp_path, apps_root_has=["models"], model_dir_env="/custom/path"
+        )
+        assert resolved == "/custom/path"

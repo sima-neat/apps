@@ -333,7 +333,7 @@ def _align(x: int, n: int) -> int:
 def stream_pool_bytes(w: int, h: int) -> int:
     """Decoder input + hidden(DPB) + visible(output) pool reservation for one stream."""
     n_hidden = 24 if h <= 720 else 20
-    n_visible = 18  # scale app runs decoder num_buffers=18 (smooth, matches high-density)
+    n_visible = pipeline.DECODER_BUFFERS  # the decoder pool size this pipeline actually runs
     inp = 2 * (w * h * 3 // 4)   # decoder_input_buffers=2
     hidden = n_hidden * (_align(w, 64) * _align(h, 64) * 3 // 2)
     visible = n_visible * (_align(w, 256) * _align(h, 64) * 3 // 2)

@@ -231,6 +231,13 @@ TIERS: list[Tier] = [
 
 FPS = 25
 
+# _config_live() below does not set input.decoder_buffers, so this pipeline
+# actually runs on adaptive_app.py's own default (see decoder_buffers there).
+# Named here, not just left as a bare literal, so
+# pipelines/pipeline-live/ui_server.py's memory estimate can cite the real
+# value's source instead of carrying an unrelated guess.
+DECODER_BUFFERS = 4
+
 # The app's own output budget fair-shares DELIVERED resolution and forces a
 # high-res source (e.g. a pinned 4K) to downscale when other streams exist - and
 # that 4K re-adapt rebuild is broken (it leaves the channel dead / blank). We

@@ -233,6 +233,12 @@ TIERS: list[Tier] = [
 
 FPS = 25
 
+# Named so pipelines/pipeline-scale/ui_server.py's memory estimate can read the
+# real value instead of carrying its own guess - that drift (an estimate of 18
+# against this actual 8) is what let ENFORCE_LIMITS's budget check reject
+# configurations the app can actually run, had it ever been switched on.
+DECODER_BUFFERS = 8
+
 # The app's own output budget fair-shares DELIVERED resolution and forces a
 # high-res source (e.g. a pinned 4K) to downscale when other streams exist - and
 # that 4K re-adapt rebuild is broken (it leaves the channel dead / blank). We
@@ -327,7 +333,7 @@ input:
   # proven 16-stream high-density profile runs. "auto" is not a literal the
   # decoder sees: core treats auto/default/empty as "resolve tuning from the
   # admission lease" and leaves memory_opt off.
-  decoder_buffers: 8
+  decoder_buffers: {DECODER_BUFFERS}
   decoder_input_buffers: 2
   decoder_tuning: auto
 

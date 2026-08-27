@@ -201,6 +201,12 @@ MAX_GROUPS = 4            # GROUP_SIZE * MAX_GROUPS is the total stream ceiling
 VIDEO_PORT_BASE = 9000
 METADATA_PORT_BASE = 9100
 
+# Named so pipelines/pipeline-group/ui_server.py's memory estimate can read the
+# real value instead of carrying its own guess - that drift (an estimate of 18
+# against this actual 8) is what let ENFORCE_LIMITS's budget check reject
+# configurations the app can actually run, had it ever been switched on.
+DECODER_BUFFERS = 8
+
 def config_path(group: int) -> Path:
     """Config file for one group's app instance."""
     return HERE / f"{PIPELINE}{group}-run.yaml"
@@ -347,7 +353,7 @@ input:
   # made a group lag on a 1080p source while `scale` ran the same stream clean.
   # "auto" is not a literal the decoder sees: core treats auto/default/empty as
   # "resolve tuning from the admission lease" and leaves memory_opt off.
-  decoder_buffers: 8
+  decoder_buffers: {DECODER_BUFFERS}
   decoder_input_buffers: 2
   decoder_tuning: auto
 
