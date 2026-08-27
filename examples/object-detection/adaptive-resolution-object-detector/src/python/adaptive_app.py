@@ -811,15 +811,32 @@ def build_pipeline_once(cfg: AppConfig, runtime: StreamRuntime) -> None:
     except Exception:  # noqa: BLE001 - introspection is best-effort
         pass
     restamped = "do-timestamp=true" in backend
+    # Encoded passthrough is the SECOND way an exact key cannot match, and the
+    # restamp probe above cannot see it: passthrough forwards the source's own
+    # H.264 through a payloader whose RTP base is random, because
+    # VideoSenderOptions.rtp exposes no timestamp-offset in pyneat (the same
+    # reason src/python/fused_app.py's send_metadata never emits the key). A key
+    # derived from PTS then matches nothing, and Insight - which stops falling
+    # back to arrival order the moment the field is present - renders NO boxes.
+    # That is the shipped default's combination (encoded_passthrough true,
+    # metadata_rtp_timestamp auto), so "auto" must decline it here.
     if cfg.metadata_rtp_timestamp == "on":
         runtime.emit_rtp_timestamp = True
+        if passthrough:
+            print(f"[warn] stream {runtime.id}: metadata_rtp_timestamp is 'on' with "
+                  f"encoded_passthrough - the passthrough payloader's RTP base is "
+                  f"random, so Insight will match nothing and render no boxes. Use "
+                  f"'auto'/'off', or set output.encoded_passthrough: false.",
+                  file=sys.stderr)
     elif cfg.metadata_rtp_timestamp == "off":
         runtime.emit_rtp_timestamp = False
     else:
-        runtime.emit_rtp_timestamp = not restamped
+        runtime.emit_rtp_timestamp = not restamped and not passthrough
     if not runtime.emit_rtp_timestamp:
+        reason = ("encoded passthrough uses a random RTP base" if passthrough
+                  else "graph restamps PTS")
         print(f"[stream {runtime.id}] metadata rtp_timestamp DISABLED "
-              f"(graph restamps PTS; Insight will match by arrival order)", flush=True)
+              f"({reason}; Insight will match by arrival order)", flush=True)
 
     # Detection runs on whatever frame the model actually receives. Under
     # passthrough nothing rescales, so that is the NATIVE size; using out_w/out_h
@@ -1101,18 +1118,37 @@ class StreamManager:
         managed.thread.start()
         return True
 
-    def remove(self, stream_id: str) -> None:
+    def _release_channel(self, managed: ManagedStream) -> None:
+        with self.lock:
+            if managed.channel not in self.free_channels:
+                self.free_channels.append(managed.channel)
+                self.free_channels.sort()
+        print(f"[stream {managed.id}] removed (channel {managed.channel} released)", flush=True)
+
+    def remove(self, stream_id: str, join_timeout: float = 15.0) -> None:
         with self.lock:
             managed = self.streams.pop(stream_id, None)
         if managed is None:
             return
         managed.stop_event.set()
         if managed.thread is not None:
-            managed.thread.join(timeout=15.0)
-        with self.lock:
-            self.free_channels.append(managed.channel)
-            self.free_channels.sort()
-        print(f"[stream {stream_id}] removed (channel {managed.channel} released)", flush=True)
+            managed.thread.join(timeout=join_timeout)
+        # A worker mid-build does not observe stop_event until the build returns,
+        # and a build takes 30-90s (see README). Returning its channel on the
+        # 15s timeout let the next add bind the SAME Insight video/metadata ports
+        # while the old worker was still running - two streams on one channel.
+        # Hand a still-live worker to a reaper and release only once it is gone.
+        if managed.thread is not None and managed.thread.is_alive():
+            print(f"[stream {stream_id}] still shutting down; holding channel "
+                  f"{managed.channel} until it exits", file=sys.stderr)
+
+            def reap() -> None:
+                managed.thread.join()
+                self._release_channel(managed)
+
+            threading.Thread(target=reap, name=f"reap-{stream_id}", daemon=True).start()
+            return
+        self._release_channel(managed)
 
     def apply_sources(self, sources: list[StreamSource]) -> None:
         with self.lock:

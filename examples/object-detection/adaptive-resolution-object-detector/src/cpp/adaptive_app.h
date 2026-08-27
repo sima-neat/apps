@@ -101,6 +101,13 @@ struct AppConfig {
   bool profile = false;
   int warmup_frames = 30;
   double config_watch_seconds = 1.0;
+  // This implementation has NO encoded-passthrough topology: it always builds a
+  // decoded source plus a raw video sender, i.e. it re-encodes every stream,
+  // unlike src/python/adaptive_app.py which honours the flag. Rather than
+  // silently do the opposite of what a config asks, an explicit `true` is
+  // rejected in validate_config(). Defaults to false so a config that omits the
+  // key - including the shipped src/common/config.yaml - runs exactly as before.
+  bool encoded_passthrough = false;
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
@@ -317,6 +324,11 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.config_watch_seconds > 0.0, "runtime.config_watch_seconds must be > 0");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0, "output.insight.metadata_port must be > 0");
+  sima_examples::require(
+      !cfg.encoded_passthrough,
+      "output.encoded_passthrough: true is not supported by the C++ implementation - "
+      "it re-encodes every stream. Use --mode adaptive with the Python "
+      "implementation for passthrough, or set output.encoded_passthrough: false.");
   sima_examples::require(cfg.metadata_rtp_timestamp == "auto" ||
                              cfg.metadata_rtp_timestamp == "on" ||
                              cfg.metadata_rtp_timestamp == "off",
@@ -345,6 +357,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.profile = raw.bool_or("runtime.profile", false);
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
   cfg.config_watch_seconds = raw.double_or("runtime.config_watch_seconds", 1.0);
+  cfg.encoded_passthrough = raw.bool_or("output.encoded_passthrough", false);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.metadata_rtp_timestamp = raw.string_or("output.metadata_rtp_timestamp", "auto");
   cfg.video_port_base =

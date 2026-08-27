@@ -1146,6 +1146,12 @@ def run_app(cfg: AppConfig) -> None:
         if cfg.profile:
             print(f"Backend:\n{app.graph.describe_backend()}")
         app.run = app.graph.build(build_run_options(len(app.streams)))
+        # Printed ONLY after the shared graph builds. Each stream's "] rtsp="
+        # banner is emitted by build_stream_runtime() well before this, so a
+        # build failure left every banner on disk and pipelines/'s
+        # wait_for_streams() reported a successful run over a detector that had
+        # already exited. That check now requires this line too.
+        print(f"[app] graph running: {len(app.streams)} stream(s)", flush=True)
         while not _stop_requested and not all_streams_done(app.streams, cfg.frames):
             process_run_once(app, cfg, "detections")
     except KeyboardInterrupt:

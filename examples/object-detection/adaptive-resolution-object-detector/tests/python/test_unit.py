@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import dataclasses
 import importlib.util
 import io
 import os
@@ -1455,3 +1456,137 @@ class TestReloadHonoursMaxStreams:
         cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
         reload_site = cpp[cpp.index("[config] reload:") - 900:]
         assert "channels this run started with" in reload_site
+
+
+class TestPassthroughDisablesExactTimestamps:
+    """Encoded passthrough and an exact rtp_timestamp cannot both work.
+
+    Passthrough forwards the source's own H.264 through a payloader whose RTP
+    base is random (VideoSenderOptions.rtp exposes no timestamp-offset in
+    pyneat - see send_metadata in fused_app.py, which declines the key for
+    exactly this reason). A PTS-derived key then matches nothing, and Insight
+    stops falling back to arrival order the moment the field is present, so it
+    renders NO boxes. That is the shipped default's combination:
+    encoded_passthrough true + metadata_rtp_timestamp auto.
+    """
+
+    def test_shipped_defaults_are_the_affected_combination(self):
+        """If either default changes, this test should be revisited."""
+        import adaptive_app
+
+        cfg_path = EXAMPLE_DIR / "src" / "common" / "config.yaml"
+        text = cfg_path.read_text(encoding="utf-8")
+        assert "encoded_passthrough" not in text
+        assert "metadata_rtp_timestamp" not in text
+        fields = {f.name: f for f in dataclasses.fields(adaptive_app.AppConfig)}
+        assert fields["encoded_passthrough"].default is True
+        assert fields["metadata_rtp_timestamp"].default == "auto"
+
+    def test_auto_declines_the_key_under_passthrough(self):
+        source = (EXAMPLE_DIR / "src" / "python" / "adaptive_app.py").read_text(encoding="utf-8")
+        assert "not restamped and not passthrough" in source, (
+            "auto must decline the exact key when passthrough is on"
+        )
+
+    def test_explicit_on_still_wins_but_warns(self):
+        source = (EXAMPLE_DIR / "src" / "python" / "adaptive_app.py").read_text(encoding="utf-8")
+        block = source[source.index('if cfg.metadata_rtp_timestamp == "on":'):]
+        block = block[: block.index("elif ")]
+        assert "runtime.emit_rtp_timestamp = True" in block
+        assert "random" in block, "an explicit 'on' under passthrough must warn"
+
+
+class TestRemovedStreamHoldsItsChannel:
+    """A worker mid-build does not see stop_event until the build returns, and a
+    build takes 30-90s. Releasing its channel on the 15s join timeout let the
+    next add bind the same Insight video/metadata ports as a worker that was
+    still running."""
+
+    @staticmethod
+    def _manager(tmp_path, monkeypatch, init):
+        import adaptive_app
+
+        monkeypatch.setattr(adaptive_app, "init_stream_runtime", init)
+        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
+        return adaptive_app, adaptive_app.StreamManager(cfg, ["person"])
+
+    def test_channel_is_not_reused_while_the_worker_is_still_building(self, tmp_path, monkeypatch):
+        building = threading.Event()
+        finish = threading.Event()
+
+        def slow_init(cfg, channel, source, labels):
+            building.set()
+            finish.wait(timeout=30)       # simulates a 30-90s build
+            raise RuntimeError("aborted after the build")
+
+        adaptive_app, manager = self._manager(tmp_path, monkeypatch, slow_init)
+        try:
+            manager.add(adaptive_app.StreamSource("cam-1", "rtsp://127.0.0.1:8554/src1"))
+            assert building.wait(timeout=10)
+            taken = manager.streams["cam-1"].channel
+
+            # Short timeout: the point is the TIMEOUT path, not waiting out 15s.
+            manager.remove("cam-1", join_timeout=0.2)
+            assert taken not in manager.free_channels, (
+                "channel reused while its worker was still building"
+            )
+
+            finish.set()
+            assert _wait_for(lambda: taken in manager.free_channels), (
+                "channel never came back after the worker exited"
+            )
+        finally:
+            finish.set()
+            manager.shutdown()
+
+    def test_a_worker_that_has_already_exited_releases_immediately(self, tmp_path, monkeypatch):
+        adaptive_app, manager = self._manager(tmp_path, monkeypatch, _fake_init_stream_runtime)
+        try:
+            manager.add(adaptive_app.StreamSource("cam-1", "rtsp://127.0.0.1:8554/src1"))
+            assert _wait_for(lambda: manager.active_count() == 1)
+            taken = manager.streams["cam-1"].channel
+            manager.remove("cam-1")
+            assert taken in manager.free_channels
+        finally:
+            manager.shutdown()
+
+
+class TestFusedRunMarker:
+    """wait_for_streams() counted per-stream banners that the fused app prints
+    BEFORE building the shared graph, so a build failure reported success."""
+
+    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
+    def test_marker_is_emitted_after_the_build(self, path):
+        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
+        build = source.index("graph.build(build_run_options(")
+        marker = source.index("[app] graph running", build)
+        assert marker > build, "the marker must follow the build, not precede it"
+
+    @requires_pipelines
+    @pytest.mark.parametrize("name", ["scale", "live", "group"])
+    def test_wait_requires_the_marker_for_fused(self, name):
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
+        assert '"[app] graph running" in text' in source
+        # The bare banner-only check must be gone.
+        assert 'if text.count("] rtsp=") >= n:\n            return True' not in source
+
+
+class TestCppRejectsUnsupportedPassthrough:
+    """C++ adaptive has no passthrough topology - it re-encodes every stream.
+    Silently doing the opposite of what the config asks is the defect; it now
+    refuses an explicit `true` instead."""
+
+    def test_cpp_reads_and_rejects_the_key(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
+        assert 'raw.bool_or("output.encoded_passthrough", false)' in cpp
+        assert "not supported by the C++ implementation" in cpp
+
+    def test_cpp_defaults_to_false_so_existing_configs_are_unaffected(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
+        assert "bool encoded_passthrough = false;" in cpp
+
+    @requires_pipelines
+    @pytest.mark.parametrize("name", ["scale", "live"])
+    def test_the_shipped_pipelines_set_it_false(self, name):
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
+        assert "encoded_passthrough: false" in source

@@ -558,7 +558,14 @@ def wait_for_streams(n: int, timeout_s: int = 300) -> bool:
     while time.time() < deadline:
         log = Path(LOG)
         text = log.read_text() if log.exists() else ""
-        if text.count("] rtsp=") >= n or text.count("] channel=") >= n:
+        # The fused app prints each stream's "] rtsp=" banner BEFORE building the
+        # shared graph, so banners alone meant a build failure still looked like
+        # a successful run. Require its post-build marker too. The adaptive app's
+        # "] channel=" banner is printed after that stream's own build, so it
+        # stands on its own.
+        if text.count("] channel=") >= n:
+            return True
+        if "[app] graph running" in text and text.count("] rtsp=") >= n:
             return True
         if "Traceback" in text or "Decoder plugin pool" in text:
             return False

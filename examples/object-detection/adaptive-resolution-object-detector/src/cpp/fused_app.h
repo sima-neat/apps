@@ -1094,6 +1094,10 @@ void run_app(const AppConfig& cfg) {
   }
 
   app.run = app.graph.build(build_run_options());
+  // Printed ONLY after the shared graph builds - see the note in
+  // src/python/fused_app.py. pipelines/'s wait_for_streams() requires this line
+  // because the per-stream "] rtsp=" banners are emitted before the build.
+  std::cout << "[app] graph running: " << app.streams.size() << " stream(s)\n" << std::flush;
   while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
     (void)process_run_once(app, cfg, "detections");
   }

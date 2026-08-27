@@ -527,7 +527,10 @@ def wait_for_group(group: int, n: int, timeout_s: int = 300) -> bool:
     log = Path(log_path(group))
     while time.time() < deadline:
         text = log.read_text() if log.exists() else ""
-        if text.count("] rtsp=") >= n:
+        # Requires the fused app's post-build marker, not just the per-stream
+        # banners it prints before building the shared graph - see the note in
+        # wait_for_streams().
+        if "[app] graph running" in text and text.count("] rtsp=") >= n:
             return True
         if "Traceback" in text or "Decoder plugin pool" in text:
             return False
