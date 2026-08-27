@@ -1590,3 +1590,142 @@ class TestCppRejectsUnsupportedPassthrough:
     def test_the_shipped_pipelines_set_it_false(self, name):
         source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
         assert "encoded_passthrough: false" in source
+
+
+class TestDeferredAddIsRetried:
+    """Holding a removed stream's channel must not silently drop the add.
+
+    At capacity, a reload that replaces one stream removes the old one - whose
+    channel is now held until its worker exits - and immediately adds the new
+    one. That add finds no free channel. Without a retry the requested source is
+    dropped for good, leaving the run one stream short of the config on disk.
+    """
+
+    def test_a_blocked_add_starts_once_the_channel_comes_back(self, tmp_path, monkeypatch):
+        import adaptive_app
+
+        building = threading.Event()
+        finish = threading.Event()
+        started: list[str] = []
+
+        def init(cfg, channel, source, labels):
+            started.append(source.id)
+            if source.id == "cam-old":
+                building.set()
+                finish.wait(timeout=30)
+                raise RuntimeError("aborted after the build")
+            return _fake_init_stream_runtime(cfg, channel, source, labels)
+
+        monkeypatch.setattr(adaptive_app, "init_stream_runtime", init)
+        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
+        object.__setattr__(cfg, "max_streams", 1)          # capacity of exactly one
+        manager = adaptive_app.StreamManager(cfg, ["person"])
+        try:
+            manager.add(adaptive_app.StreamSource("cam-old", "rtsp://127.0.0.1:8554/old"))
+            assert building.wait(timeout=10)
+
+            # The reload swaps cam-old for cam-new at full capacity.
+            manager.remove("cam-old", join_timeout=0.2)
+            manager.apply_sources([adaptive_app.StreamSource("cam-new", "rtsp://127.0.0.1:8554/new")])
+            assert "cam-new" not in started, "no channel was free; it cannot have started yet"
+            assert any(p.id == "cam-new" for p in manager.pending_adds)
+
+            finish.set()                                    # old worker exits, channel frees
+            assert _wait_for(lambda: "cam-new" in started), (
+                "the deferred add was never retried"
+            )
+            assert _wait_for(lambda: manager.active_count() == 1)
+        finally:
+            finish.set()
+            manager.shutdown()
+
+    def test_a_source_dropped_from_the_config_is_not_retried(self, tmp_path, monkeypatch):
+        """A queued add must not resurrect after the config stops asking for it."""
+        import adaptive_app
+
+        monkeypatch.setattr(adaptive_app, "init_stream_runtime", _fake_init_stream_runtime)
+        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
+        manager = adaptive_app.StreamManager(cfg, ["person"])
+        try:
+            queued = adaptive_app.StreamSource("cam-x", "rtsp://127.0.0.1:8554/x")
+            manager.pending_adds.append(queued)
+            manager.apply_sources([])                        # config no longer names cam-x
+            assert manager.pending_adds == []
+        finally:
+            manager.shutdown()
+
+
+@requires_pipelines
+class TestPanelSurfacesReadinessFailure:
+    """wait_for_streams()/wait_for_group() became a trustworthy signal only once
+    the post-build marker was required - and every caller was discarding it, so
+    the panel still reported "done" over a detector that never came up."""
+
+    @pytest.mark.parametrize("name", ["scale", "live"])
+    def test_rebuild_raises_when_the_detector_is_not_ready(self, name, monkeypatch):
+        ui = _load_ui_server(name)
+        monkeypatch.setattr(ui, "plan", lambda s: (["rtsp://x/1"], [], ui.pipeline.TIERS[0]))
+        monkeypatch.setattr(ui, "stage_insight", lambda staging: None)
+        monkeypatch.setattr(ui, "save_streams", lambda v: None)
+        monkeypatch.setattr(ui.pipeline, "write_config_urls", lambda *a, **k: None)
+        monkeypatch.setattr(ui.pipeline, "start_app", lambda: None)
+        monkeypatch.setattr(ui.pipeline, "wait_for_streams", lambda *a, **k: False)
+        with pytest.raises(RuntimeError, match="ready"):
+            ui.rebuild([{"kind": "external", "url": "rtsp://x/1"}])
+
+    @pytest.mark.parametrize("name", ["scale", "live"])
+    def test_rebuild_succeeds_when_it_is_ready(self, name, monkeypatch):
+        ui = _load_ui_server(name)
+        monkeypatch.setattr(ui, "plan", lambda s: (["rtsp://x/1"], [], ui.pipeline.TIERS[0]))
+        monkeypatch.setattr(ui, "stage_insight", lambda staging: None)
+        monkeypatch.setattr(ui, "save_streams", lambda v: None)
+        monkeypatch.setattr(ui.pipeline, "write_config_urls", lambda *a, **k: None)
+        monkeypatch.setattr(ui.pipeline, "start_app", lambda: None)
+        monkeypatch.setattr(ui.pipeline, "wait_for_streams", lambda *a, **k: True)
+        ui.rebuild([{"kind": "external", "url": "rtsp://x/1"}])
+
+
+@requires_pipelines
+class TestForeignKillForcesRuntimeReclaim:
+    """A foreign detector killed after its grace period strands pools exactly as
+    ours does, and once it is gone nothing can discover that later - so its
+    result has to reach the reset_runtime() decision, not just a warning."""
+
+    @pytest.mark.parametrize("name", ["scale", "live"])
+    def test_start_app_resets_when_a_foreign_detector_was_killed(self, name, monkeypatch):
+        mod = _load_ui_server(name).pipeline
+        reset = []
+        monkeypatch.setattr(mod, "stop_app", lambda: True)          # OUR stop was clean
+        monkeypatch.setattr(mod, "stop_any_detector", lambda: False)  # a foreign one was killed
+        monkeypatch.setattr(mod, "reset_runtime", lambda: reset.append(True))
+        monkeypatch.setattr(mod, "exec_devkit", lambda *a, **k: None)
+        mod.start_app()
+        assert reset == [True], "a killed foreign detector must force a reclaim"
+
+    @pytest.mark.parametrize("name", ["scale", "live"])
+    def test_no_reset_when_everything_stopped_cleanly(self, name, monkeypatch):
+        mod = _load_ui_server(name).pipeline
+        reset = []
+        monkeypatch.setattr(mod, "stop_app", lambda: True)
+        monkeypatch.setattr(mod, "stop_any_detector", lambda: True)
+        monkeypatch.setattr(mod, "reset_runtime", lambda: reset.append(True))
+        monkeypatch.setattr(mod, "exec_devkit", lambda *a, **k: None)
+        mod.start_app()
+        assert reset == [], "a clean stop must not pay the ~60s reclaim"
+
+
+class TestUnexpectedFusedClosureFails:
+    """A continuous fused run that loses its shared output produces no further
+    metadata; exiting 0 would tell a supervisor the experiment succeeded."""
+
+    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
+    def test_closure_is_reported_as_a_failure(self, path):
+        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
+        assert "closed unexpectedly" in source
+        # ...but only for a continuous run that nobody asked to stop.
+        assert "frames <= 0" in source
+
+    def test_a_requested_stop_is_still_a_clean_exit(self):
+        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        block = source[source.index("if _output_closed_unexpectedly"):]
+        assert "not _stop_requested" in block[: block.index("raise")]

@@ -1096,6 +1096,12 @@ class StreamManager:
         # released so the run can report them and so all_failed() can tell "every
         # stream broke" apart from "the panel is empty".
         self.failed: dict[str, str] = {}
+        # Sources a reload asked for that had no free channel at the time. A
+        # removed stream now holds its channel until its worker exits, so at
+        # capacity a replace-one-stream reload can arrive before the channel is
+        # back; without this the request was dropped and never retried, silently
+        # leaving the run one stream short of the config on disk.
+        self.pending_adds: list[StreamSource] = []
 
     def active_count(self) -> int:
         with self.lock:
@@ -1112,6 +1118,7 @@ class StreamManager:
             managed = ManagedStream(source.id, source.rtsp_url, channel, threading.Event())
             self.streams[source.id] = managed
             self.failed.pop(source.id, None)
+            self.pending_adds = [p for p in self.pending_adds if p.id != source.id]
         managed.thread = threading.Thread(
             target=self._consume, args=(managed,), name=f"stream-{source.id}"
         )
@@ -1124,6 +1131,21 @@ class StreamManager:
                 self.free_channels.append(managed.channel)
                 self.free_channels.sort()
         print(f"[stream {managed.id}] removed (channel {managed.channel} released)", flush=True)
+        self._drain_pending_adds()
+
+    def _drain_pending_adds(self) -> None:
+        """Start whatever queued sources now fit. Stops at the first that still
+        does not, so a genuinely over-capacity request waits rather than spins."""
+        while True:
+            with self.lock:
+                if not self.pending_adds or not self.free_channels:
+                    return
+                source = self.pending_adds.pop(0)
+            print(f"[stream {source.id}] retrying deferred add", flush=True)
+            if not self.add(source):
+                with self.lock:
+                    self.pending_adds.insert(0, source)
+                return
 
     def remove(self, stream_id: str, join_timeout: float = 15.0) -> None:
         with self.lock:
@@ -1163,8 +1185,15 @@ class StreamManager:
             # deleting the bad stream in the panel clears the failed state.
             for stream_id in [sid for sid in self.failed if sid not in new_by_id]:
                 del self.failed[stream_id]
+            # Same for anything still queued: this config no longer wants it.
+            self.pending_adds = [s for s in self.pending_adds if s.id in new_by_id]
         for source in to_add:
-            self.add(source)
+            if not self.add(source):
+                with self.lock:
+                    if all(p.id != source.id for p in self.pending_adds):
+                        self.pending_adds.append(source)
+        # A channel freed by a worker that exited between the loops above.
+        self._drain_pending_adds()
 
     def all_failed(self) -> bool:
         """True when every stream is gone and each one left because it failed."""

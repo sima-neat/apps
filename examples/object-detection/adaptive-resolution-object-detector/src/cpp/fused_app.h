@@ -64,6 +64,12 @@ void request_stop(int) {
   g_stop_requested = 1;
 }
 
+// Set when the shared detection output closes without anyone asking it to. A
+// continuous run (frames == 0) that loses its output produces no further
+// metadata at all, so finishing normally would hand supervisors a zero exit for
+// a detector that had silently stopped detecting.
+bool g_output_closed_unexpectedly = false;
+
 // Decoder profile shared by the struct defaults and load_app_config()'s
 // fallbacks, so the two cannot drift apart.
 constexpr int kDefaultDecoderBuffers = 8;
@@ -1021,6 +1027,7 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
     // process alive and spinning at full CPU on an output that was never coming
     // back, reported as running but unable to emit another detection.
     std::cerr << "[warn] detection output closed; ending run\n";
+    g_output_closed_unexpectedly = true;
     for (auto& stream : app.streams) {
       stream.closed = true;
     }
@@ -1041,6 +1048,7 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
 
 void run_app(const AppConfig& cfg) {
   g_stop_requested = 0;
+  g_output_closed_unexpectedly = false;
   auto previous_sigint = std::signal(SIGINT, request_stop);
   // SIGTERM is the NORMAL stop signal here: every pipelines/ panel and CLI
   // `down` sends it (see stop_app/stop_group). Without a handler the default
@@ -1101,6 +1109,10 @@ void run_app(const AppConfig& cfg) {
   while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
     (void)process_run_once(app, cfg, "detections");
   }
+  // Sampled before the teardown below, which is unconditional.
+  const bool closed_unexpectedly =
+      g_output_closed_unexpectedly && g_stop_requested == 0 && cfg.frames <= 0;
+
   app.run.close();
 
   for (auto& stream : app.streams) {
@@ -1109,6 +1121,14 @@ void run_app(const AppConfig& cfg) {
   }
   std::signal(SIGINT, previous_sigint);
   std::signal(SIGTERM, previous_sigterm);
+
+  // A continuous run has no natural end, so getting here without a stop request
+  // means the output went away underneath us. Exiting 0 would tell a supervisor
+  // the experiment succeeded. Thrown after teardown so the graph still closes.
+  if (closed_unexpectedly) {
+    throw std::runtime_error(
+        "detection output closed unexpectedly; the run produced no further metadata");
+  }
 }
 
 } // namespace

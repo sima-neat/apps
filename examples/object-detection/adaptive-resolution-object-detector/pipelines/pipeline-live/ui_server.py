@@ -114,12 +114,21 @@ def rebuild(streams: list[dict]) -> None:
     urls, staging, tier = plan(streams)
     stage_insight(staging)
     pipeline.write_config_urls(urls, header=f"{len(streams)} stream(s), managed tier {tier.name}")
+    ready = True
     if streams:
         pipeline.start_app()
-        pipeline.wait_for_streams(len(streams), timeout_s=300)
+        ready = pipeline.wait_for_streams(len(streams), timeout_s=300)
     else:
         pipeline.stop_app()
+    # Save first either way, so the panel still reflects what was asked for and
+    # Stop has something to clear - then fail loudly. Discarding this result let
+    # submit()'s worker report "done" over a detector that never came up.
     save_streams(streams)
+    if not ready:
+        raise RuntimeError(
+            f"detector did not report {len(streams)} stream(s) ready - check the "
+            f"log with `pipeline.py status` or the activity panel"
+        )
 
 
 def live_or_rebuild_add(new: dict) -> str:
@@ -178,7 +187,11 @@ def live_or_rebuild_add_many(news: list[dict]) -> str:
         for url in urls:
             pipeline.append_source(url)
         save_streams(combined)
-        pipeline.wait_for_streams(len(combined), timeout_s=180)
+        if not pipeline.wait_for_streams(len(combined), timeout_s=180):
+            raise RuntimeError(
+                f"detector did not pick up the new stream(s) within 180s - the "
+                f"config was updated, so `status` will show whether it arrives late"
+            )
         return "live"
 
     rebuild(combined)

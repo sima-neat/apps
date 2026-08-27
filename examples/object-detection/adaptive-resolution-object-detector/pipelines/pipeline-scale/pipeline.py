@@ -534,7 +534,7 @@ def _term_then_kill(pattern: str, grace_s: int = 20) -> bool:
     return False
 
 
-def stop_any_detector() -> None:
+def stop_any_detector() -> bool:
     """Stop BOTH pipelines' detector apps.
 
     The two pipelines share one MLA and one set of Insight ports, so only one
@@ -545,19 +545,26 @@ def stop_any_detector() -> None:
     # Every pipeline's config filename, in either language. Kept as literals
     # rather than derived from one mapping, because each pipeline module only
     # knows its own PIPELINE name.
+    all_clean = True
     for pattern in ALL_PIPELINE_PATTERNS:
         if not _term_then_kill(pattern):
+            all_clean = False
             print(f"warning: {pattern} did not exit in time and was killed; "
                   f"its decoder/MLA pools may need fix_devkit_runtime.sh", flush=True)
+    return all_clean
 
 
 def start_app() -> None:
     # fix_devkit_runtime.sh costs ~60 s. It only matters when pools were leaked,
     # which happens on an unclean (SIGKILL) stop - so pay for it only then.
     clean = stop_app()
-    stop_any_detector()  # also clear the other pipeline's detector (shared MLA)
-    if not clean:
-        print("previous stop was unclean - reclaiming decoder/MLA pools", flush=True)
+    # A FOREIGN detector that had to be killed strands pools just as ours does,
+    # and once it is gone no later probe can discover that - so its result has
+    # to be folded in here, not just warned about.
+    foreign_clean = stop_any_detector()  # shared MLA: only one detector at a time
+    if not clean or not foreign_clean:
+        why = "previous stop" if not clean else "another pipeline's detector"
+        print(f"{why} was unclean - reclaiming decoder/MLA pools", flush=True)
         reset_runtime()
     log_q = shlex.quote(str(LOG))
     exec_devkit(f'rm -f {log_q}; setsid nohup {app_command()} '

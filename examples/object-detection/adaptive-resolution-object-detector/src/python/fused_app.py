@@ -907,6 +907,13 @@ def _request_stop(*_args) -> None:
     _stop_requested = True
 
 
+# Set when the shared detection output closes without anyone asking it to. A
+# continuous run (frames == 0) that loses its output produces no further
+# metadata at all, so finishing normally would hand supervisors a zero exit for
+# a detector that had silently stopped detecting.
+_output_closed_unexpectedly = False
+
+
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     if not streams:
         return True
@@ -1064,6 +1071,8 @@ def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
             # indistinguishable from a timeout, leaving the process alive and
             # spinning on an output that was never coming back.
             print("[warn] detection output closed; ending run", file=sys.stderr)
+            global _output_closed_unexpectedly
+            _output_closed_unexpectedly = True
             for stream in app.streams:
                 stream.closed = True
         return False
@@ -1138,8 +1147,9 @@ def run_app(cfg: AppConfig) -> None:
     # and the decoder/CVU pools it would have released stay allocated in the
     # reserved region - the exact failure stop_app's docstring warns about,
     # while the caller sees the PID vanish and reports a clean stop.
-    global _stop_requested
+    global _stop_requested, _output_closed_unexpectedly
     _stop_requested = False
+    _output_closed_unexpectedly = False
     previous_sigterm = signal.signal(signal.SIGTERM, _request_stop)
 
     try:
@@ -1154,6 +1164,14 @@ def run_app(cfg: AppConfig) -> None:
         print(f"[app] graph running: {len(app.streams)} stream(s)", flush=True)
         while not _stop_requested and not all_streams_done(app.streams, cfg.frames):
             process_run_once(app, cfg, "detections")
+        # A continuous run has no natural end, so reaching here without a stop
+        # request means the output went away underneath us. Exiting 0 would tell
+        # a supervisor the experiment succeeded.
+        if _output_closed_unexpectedly and not _stop_requested and cfg.frames <= 0:
+            raise RuntimeError(
+                "detection output closed unexpectedly; the run produced no further "
+                "metadata"
+            )
     except KeyboardInterrupt:
         raise
     finally:

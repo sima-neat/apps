@@ -150,12 +150,18 @@ def rebuild_group(group: int, streams: list[dict]) -> None:
     """
     urls, staging = plan_group(group, streams)
     stage_group(group, staging)
+    ready = True
     if streams:
         pipeline.write_config_group(group, urls)
         pipeline.start_group(group)
-        pipeline.wait_for_group(group, len(streams), timeout_s=300)
+        ready = pipeline.wait_for_group(group, len(streams), timeout_s=300)
     else:
         pipeline.stop_group(group)
+    if not ready:
+        raise RuntimeError(
+            f"group {group} did not report {len(streams)} stream(s) ready - check "
+            f"its log in the activity panel"
+        )
 
 
 def add_many(news: list[dict]) -> str:

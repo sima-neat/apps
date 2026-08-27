@@ -486,17 +486,20 @@ def _term_then_kill(pattern: str, grace_s: int = 20) -> bool:
     return False
 
 
-def stop_foreign_detectors() -> None:
+def stop_foreign_detectors() -> bool:
     """Stop the scale and live pipelines' detectors - never a sibling group.
 
     Grouped mode runs the same binary as the scale pipeline, so matching on the
     app path alone would kill our own groups. Both are therefore identified by
     their CONFIG filename instead, which is unique per deployment.
     """
+    all_clean = True
     for pattern in ("[s]cale-run.yaml", "[l]ive-run.yaml"):
         if not _term_then_kill(pattern):
+            all_clean = False
             print(f"warning: {pattern} did not exit in time and was killed; "
                   f"its decoder/MLA pools may need fix_devkit_runtime.sh", flush=True)
+    return all_clean
 
 
 def stop_all_groups() -> None:
@@ -507,7 +510,9 @@ def stop_all_groups() -> None:
 def start_group(group: int) -> None:
     """(Re)start ONE group's app instance, leaving every sibling untouched."""
     clean = stop_group(group)
-    stop_foreign_detectors()
+    # A foreign detector that had to be killed strands pools too, and once it is
+    # gone nothing can discover that later - fold its result into `clean`.
+    clean = stop_foreign_detectors() and clean
     # reset_runtime() restarts the shared runtime services, which would disrupt
     # any sibling group mid-flight. Only safe when nothing else is running, so
     # an unclean stop with siblings up is left for the next idle moment.
