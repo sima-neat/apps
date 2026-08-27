@@ -429,6 +429,22 @@ class TestStreamFailureIsolation:
 
 
 PIPELINES_DIR = EXAMPLE_DIR / "pipelines"
+TOOLS_DIR = EXAMPLE_DIR / "tools"
+
+# pipelines/ and tools/ are development and demonstration tooling, not part of
+# the packaged runtime - scripts/ci/validate_apps_runtime_archive.sh ships src/
+# and the CI "Test Apps Runtime" job runs this suite against that INSTALLED
+# tree, where neither directory exists. Tests that read them are meaningful from
+# a source checkout and skip where the directory was not shipped; without this
+# they fail with FileNotFoundError on every CI run.
+requires_pipelines = pytest.mark.skipif(
+    not PIPELINES_DIR.is_dir(),
+    reason="pipelines/ is dev tooling and is not in the packaged runtime",
+)
+requires_tools = pytest.mark.skipif(
+    not TOOLS_DIR.is_dir(),
+    reason="tools/ is dev tooling and is not in the packaged runtime",
+)
 
 
 class TestFusedRunTermination:
@@ -500,6 +516,7 @@ def _multipart(payload: bytes, filename: str = "clip.mp4", boundary: str = "----
     return body, f"multipart/form-data; boundary={declared}"
 
 
+@requires_pipelines
 class TestUploadBounds:
     """/api/upload is unauthenticated on 0.0.0.0 and runs on a memory-tight board.
 
@@ -596,6 +613,7 @@ class TestUploadBounds:
         assert "def parse_multipart_file" not in source, "the unbounded parser came back"
 
 
+@requires_pipelines
 class TestGroupStaging:
     """Grouped mode owns a fixed slot range per group and must leave it clean."""
 
@@ -686,6 +704,7 @@ class TestFusedDebugFramePairing:
         assert capsys.readouterr().err == "", "the warning must not repeat every frame"
 
 
+@requires_pipelines
 class TestLauncherBounds:
     """The chooser on :8080 is the fourth unauthenticated 0.0.0.0 server."""
 
@@ -718,11 +737,13 @@ class TestMetadataRtpTimestampParity:
         assert "send_raw_json" in cpp, "the convenience API cannot carry rtp_timestamp"
         assert "do-timestamp=true" in cpp, "auto must read what Core actually lowered"
 
+    @requires_pipelines
     def test_live_config_places_it_as_a_sibling_of_insight(self):
         live = (PIPELINES_DIR / "pipeline-live" / "pipeline.py").read_text(encoding="utf-8")
         assert 'metadata_rtp_timestamp: "on"\n  insight:' in live
 
 
+@requires_pipelines
 class TestScaleAddRebuildsInstead(object):
     """The fused app has no config watch, so scale mode has no live add.
 
@@ -768,6 +789,7 @@ class TestScaleAddRebuildsInstead(object):
         assert calls == [3]
 
 
+@requires_pipelines
 class TestGroupPlan:
     """Grouped mode's CLI must actually partition streams into groups.
 
@@ -1026,6 +1048,7 @@ class TestE2eCodecFixtures:
         assert "rtsp_h264_urls_from_env()" in source
 
 
+@requires_pipelines
 class TestMemoryEstimateMatchesConfiguredBuffers:
     """The panel's decoder-memory estimate must charge the pool size the
     pipeline actually configures, not an unrelated guess.
@@ -1071,6 +1094,7 @@ class TestMemoryEstimateMatchesConfiguredBuffers:
             assert f"decoder_buffers: {mod.DECODER_BUFFERS}" in rendered
 
 
+@requires_tools
 class TestGenTestConfigModelDir:
     """A fresh install has no assets/models/ at all - models/ is where
     download_models.sh and the README put packs (see pipeline-scale/pipeline.py's
