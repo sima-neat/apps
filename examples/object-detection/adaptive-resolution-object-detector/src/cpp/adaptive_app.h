@@ -104,9 +104,12 @@ struct AppConfig {
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
-  // "auto" | "on" | "off". Mirrors src/python/adaptive_app.py - the panel writes
-  // this key into the config both languages read, so ignoring it here left C++
-  // runs silently matching by arrival order while Python matched exactly.
+  // "auto" | "on" | "off". Sibling of `insight:` under `output:`, not nested
+  // inside it - see _config_live() in pipelines/pipeline-live/pipeline.py and
+  // adaptive_app.py's string_or(output, ...). Mirrors src/python/adaptive_app.py
+  // - the panel writes this key into the config both languages read, so
+  // ignoring it here left C++ runs silently matching by arrival order while
+  // Python matched exactly.
   std::string metadata_rtp_timestamp = "auto";
   bool video_enabled = true;
   fs::path save_dir;
@@ -317,7 +320,7 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.metadata_rtp_timestamp == "auto" ||
                              cfg.metadata_rtp_timestamp == "on" ||
                              cfg.metadata_rtp_timestamp == "off",
-                         "output.insight.metadata_rtp_timestamp must be auto, on or off");
+                         "output.metadata_rtp_timestamp must be auto, on or off");
   sima_examples::require(cfg.save_every >= 0, "output.save_every must be >= 0");
 }
 
@@ -343,7 +346,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
   cfg.config_watch_seconds = raw.double_or("runtime.config_watch_seconds", 1.0);
   cfg.insight_host = raw.string_or("output.insight.host", "");
-  cfg.metadata_rtp_timestamp = raw.string_or("output.insight.metadata_rtp_timestamp", "auto");
+  cfg.metadata_rtp_timestamp = raw.string_or("output.metadata_rtp_timestamp", "auto");
   cfg.video_port_base =
       raw.int_or("output.insight.video_port_base", raw.int_or("output.insight.video_port", 9000));
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base",

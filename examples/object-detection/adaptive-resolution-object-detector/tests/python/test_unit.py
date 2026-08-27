@@ -699,17 +699,28 @@ class TestLauncherBounds:
 
 
 class TestMetadataRtpTimestampParity:
-    """The panel writes metadata_rtp_timestamp into the config both languages read."""
+    """The panel writes metadata_rtp_timestamp into the config both languages read.
 
-    def test_python_and_cpp_both_honour_the_setting(self):
+    It is a SIBLING of `insight:` under `output:`, not nested inside it - the
+    C++ parser first read it from output.insight.metadata_rtp_timestamp, a key
+    the generated config never has, so it silently kept the "auto" default
+    every time regardless of what the panel actually requested.
+    """
+
+    def test_python_and_cpp_read_the_same_key_path(self):
+        py = (EXAMPLE_DIR / "src" / "python" / "adaptive_app.py").read_text(encoding="utf-8")
         cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
-        assert "output.insight.metadata_rtp_timestamp" in cpp
+        assert 'string_or(output, "metadata_rtp_timestamp"' in py
+        assert 'raw.string_or("output.metadata_rtp_timestamp"' in cpp
+        assert "output.insight.metadata_rtp_timestamp" not in cpp, (
+            "regression: reads a key the generated config never sets"
+        )
         assert "send_raw_json" in cpp, "the convenience API cannot carry rtp_timestamp"
         assert "do-timestamp=true" in cpp, "auto must read what Core actually lowered"
 
-    def test_live_config_requests_it(self):
+    def test_live_config_places_it_as_a_sibling_of_insight(self):
         live = (PIPELINES_DIR / "pipeline-live" / "pipeline.py").read_text(encoding="utf-8")
-        assert 'metadata_rtp_timestamp: "on"' in live
+        assert 'metadata_rtp_timestamp: "on"\n  insight:' in live
 
 
 class TestScaleAddRebuildsInstead(object):
@@ -832,6 +843,47 @@ class TestGroupPlan:
         assert not any(path == "/api/mediasrc/stop-all" for path, _p in calls), (
             "grouped staging must never touch every other group's sources"
         )
+
+    def test_shrinking_a_group_releases_the_positions_it_no_longer_uses(self, monkeypatch):
+        """4 streams -> 2 must stop positions 2 and 3, not just leave them be.
+
+        stage_group_sources() used to stop only range(count) - the NEW, smaller
+        count - so the vacated higher positions kept playing in Insight with no
+        detector referencing them: a resource leak on every shrink, not just the
+        drop-to-zero case cmd_up() handles separately.
+        """
+        mod = self._pipeline()
+        monkeypatch.setattr(mod, "media_files", lambda prefix: ["a.mp4"])
+        stopped = []
+        monkeypatch.setattr(mod, "_stop_insight_slot", stopped.append)
+        monkeypatch.setattr(mod, "api", lambda *a, **kw: None)
+        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+        tier = mod.Tier("720p", 1280, 720, "video", 8)
+        mod.stage_group_sources(1, tier, 2)  # group 1 shrinking to 2 streams
+
+        expected = {mod.channel_for(1, pos) + 1 for pos in range(mod.GROUP_SIZE)}
+        assert set(stopped) == expected
+
+    def test_dropping_a_group_to_zero_also_releases_its_slots(self, monkeypatch):
+        """count == 0 skips stage_group_sources() entirely in cmd_up() - it must
+        release the group's slots on that path too, not only stop the process."""
+        mod = self._pipeline()
+        monkeypatch.setattr(mod, "media_files", lambda prefix: sys.exit("must not be called"))
+        monkeypatch.setattr(mod, "stop_group", lambda _g: True)
+        monkeypatch.setattr(mod, "start_group", lambda _g: None)
+        monkeypatch.setattr(mod, "wait_for_group", lambda _g, _n: True)
+        monkeypatch.setattr(mod, "delivered_group", lambda _g: {})
+        monkeypatch.setattr(mod, "api", lambda *a, **kw: None)
+        stopped = []
+        monkeypatch.setattr(mod, "_stop_insight_slot", stopped.append)
+
+        mod.cmd_up(0)  # every group's count is 0
+
+        for group in range(mod.MAX_GROUPS):
+            expected = {mod.channel_for(group, pos) + 1 for pos in range(mod.GROUP_SIZE)}
+            got = {s for s in stopped if s in expected}
+            assert got == expected, f"group {group} slots not fully released"
 
     def test_up_never_calls_the_removed_single_instance_path(self):
         """The scale-topology leftovers this bug traced back to must be gone,

@@ -621,20 +621,33 @@ def _stop_insight_slot(slot: int) -> None:
         pass
 
 
+def release_group_slots(group: int) -> None:
+    """Stop every Insight slot in this group's fixed range.
+
+    A shrinking group (4 streams -> 2) or one going to zero must give back the
+    positions it no longer uses, not just the ones its NEW count still needs -
+    those higher positions are still playing in Insight with no detector
+    referencing them otherwise, exactly the leak the web panel's stage_group()
+    was fixed to avoid.
+    """
+    for pos in range(GROUP_SIZE):
+        _stop_insight_slot(channel_for(group, pos) + 1)
+
+
 def stage_group_sources(group: int, tier: Tier, count: int) -> None:
     """Point this group's own Insight slots at this tier's media and start them.
 
     Never calls mediasrc/stop-all - that is global and would cut every other
     group's sources, which is exactly the coupling grouped mode exists to avoid.
-    Each slot is stopped before being reassigned for the same reason stage_group
-    does it in the web panel: Insight 500s on /start for a slot already playing.
     """
     files = media_files(tier.prefix)
     if not files:
         sys.exit(f"no '{tier.prefix}*' media in Insight - see README.md (Media)")
+    # Stop the FULL range, not just the positions the new count still needs -
+    # see release_group_slots(). This also covers the same-count case: Insight
+    # 500s on /start for a slot already playing.
+    release_group_slots(group)
     slots = [channel_for(group, pos) + 1 for pos in range(count)]
-    for slot in slots:
-        _stop_insight_slot(slot)
     for i, slot in enumerate(slots):
         api("/api/mediasrc/assign", {"index": slot, "file": files[i % len(files)]})
     for slot in slots:
@@ -653,6 +666,7 @@ def cmd_up(n: int) -> None:
     for group, count in enumerate(counts):
         if count == 0:
             stop_group(group)
+            release_group_slots(group)
             continue
         tier = tier_for(count)
         print(f"group {group}: tier {tier.name} ({tier.width}x{tier.height}) "
