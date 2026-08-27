@@ -1123,6 +1123,20 @@ def run_app(cfg: AppConfig) -> None:
     capped_h = min(max_h, max(MODEL_INPUT, capped_h))
     det_w = capped_w - (capped_w % 2)
     det_h = capped_h - (capped_h % 2)
+    # Raising the clamp to MODEL_INPUT can re-cross the scaler limit the line
+    # above it just enforced: 320x180 alongside 1080p gives 2*180=360, then 640,
+    # which asks the smallest source for a 3.5x upscale. Past MAX_UPSCALE the
+    # scaler emits nothing at all, silently - that stream keeps sending video and
+    # simply stops producing boxes. There is no geometry that satisfies both
+    # bounds, so say which stream is affected rather than let it go quiet.
+    worst = max(max(det_w / p[0], det_h / p[1]) for p in probes)
+    if worst > MAX_UPSCALE:
+        smallest = min(probes, key=lambda p: p[0] * p[1])
+        print(f"[warn] detector geometry {det_w}x{det_h} needs a "
+              f"{worst:.1f}x upscale from the smallest source "
+              f"({smallest[0]}x{smallest[1]}), past the {MAX_UPSCALE}x the scaler "
+              f"performs - that stream will deliver video but no detections. Use "
+              f"sources within {MAX_UPSCALE}x of each other.", file=sys.stderr)
     if len({(p[0], p[1]) for p in probes}) > 1:
         note = ""
         if (det_w, det_h) != (max(p[0] for p in probes), max(p[1] for p in probes)):
@@ -1164,14 +1178,26 @@ def run_app(cfg: AppConfig) -> None:
         print(f"[app] graph running: {len(app.streams)} stream(s)", flush=True)
         while not _stop_requested and not all_streams_done(app.streams, cfg.frames):
             process_run_once(app, cfg, "detections")
-        # A continuous run has no natural end, so reaching here without a stop
-        # request means the output went away underneath us. Exiting 0 would tell
-        # a supervisor the experiment succeeded.
-        if _output_closed_unexpectedly and not _stop_requested and cfg.frames <= 0:
-            raise RuntimeError(
-                "detection output closed unexpectedly; the run produced no further "
-                "metadata"
-            )
+        # The output went away underneath us. A continuous run has no natural
+        # end, so this is always a failure; a finite run fails only if it closed
+        # SHORT - a batch that had already met its frame budget is complete
+        # whatever the output did afterwards. Exiting 0 either way would tell a
+        # supervisor the experiment succeeded.
+        if _output_closed_unexpectedly and not _stop_requested:
+            if cfg.frames <= 0:
+                raise RuntimeError(
+                    "detection output closed unexpectedly; the run produced no "
+                    "further metadata"
+                )
+            short = [s for s in app.streams if s.processed < cfg.frames]
+            if short:
+                detail = ", ".join(
+                    f"stream {s.index} got {s.processed}/{cfg.frames}" for s in short
+                )
+                raise RuntimeError(
+                    f"detection output closed before every stream reached "
+                    f"inference.frames ({detail})"
+                )
     except KeyboardInterrupt:
         raise
     finally:

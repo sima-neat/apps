@@ -484,7 +484,29 @@ def stop_app(grace_s: int = 20) -> bool:
         time.sleep(1)
 
     ssh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    mark_runtime_dirty("this pipeline's detector")
     return False
+
+
+# A SIGKILLed detector leaves decoder and CVU pools allocated in the reserved
+# region, and the next start must run fix_devkit_runtime.sh to reclaim them.
+# But by then the process is gone, so no probe can discover that it was killed -
+# `down` used to print that the next `up` would reclaim, and the next `up` then
+# saw no PID, judged the stop clean and skipped the reclaim. Record it where the
+# next invocation will see it, on the DevKit itself, so the promise holds across
+# separate CLI runs and across the CLI/panel split.
+RUNTIME_DIRTY_MARKER = "/tmp/sima-detector-unclean-stop"
+
+
+def mark_runtime_dirty(what: str) -> None:
+    exec_devkit(f"touch {RUNTIME_DIRTY_MARKER}")
+    print(f"warning: {what} had to be killed - decoder/MLA pools may be stranded; "
+          f"the next start will reclaim them", flush=True)
+
+
+def runtime_dirty() -> bool:
+    return bool(exec_devkit(
+        f"test -f {RUNTIME_DIRTY_MARKER} && echo dirty").stdout.strip())
 
 
 def reset_runtime() -> None:
@@ -497,6 +519,7 @@ def reset_runtime() -> None:
     app has used the runtime.
     """
     ssh("bash /usr/bin/fix_devkit_runtime.sh >/dev/null 2>&1 || true", timeout=600)
+    exec_devkit(f"rm -f {RUNTIME_DIRTY_MARKER}")
 
 
 def _term_then_kill(pattern: str, grace_s: int = 20) -> bool:
@@ -518,6 +541,7 @@ def _term_then_kill(pattern: str, grace_s: int = 20) -> bool:
             return True
         time.sleep(1)
     ssh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    mark_runtime_dirty(pattern)
     return False
 
 
@@ -549,8 +573,13 @@ def start_app() -> None:
     # and once it is gone no later probe can discover that - so its result has
     # to be folded in here, not just warned about.
     foreign_clean = stop_any_detector()  # shared MLA: only one detector at a time
-    if not clean or not foreign_clean:
-        why = "previous stop" if not clean else "another pipeline's detector"
+    # runtime_dirty() carries a kill from a PREVIOUS invocation - notably
+    # `down`, which killed the detector and then exited, leaving nothing for the
+    # two checks above to see.
+    if not clean or not foreign_clean or runtime_dirty():
+        why = ("previous stop" if not clean
+               else "another pipeline's detector" if not foreign_clean
+               else "an earlier forced stop")
         print(f"{why} was unclean - reclaiming decoder/MLA pools", flush=True)
         reset_runtime()
     log_q = shlex.quote(str(LOG))

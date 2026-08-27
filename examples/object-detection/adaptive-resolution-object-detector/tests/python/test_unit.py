@@ -1708,6 +1708,7 @@ class TestForeignKillForcesRuntimeReclaim:
         reset = []
         monkeypatch.setattr(mod, "stop_app", lambda: True)
         monkeypatch.setattr(mod, "stop_any_detector", lambda: True)
+        monkeypatch.setattr(mod, "runtime_dirty", lambda: False)
         monkeypatch.setattr(mod, "reset_runtime", lambda: reset.append(True))
         monkeypatch.setattr(mod, "exec_devkit", lambda *a, **k: None)
         mod.start_app()
@@ -1729,3 +1730,96 @@ class TestUnexpectedFusedClosureFails:
         source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
         block = source[source.index("if _output_closed_unexpectedly"):]
         assert "not _stop_requested" in block[: block.index("raise")]
+
+
+class TestFiniteRunFailsWhenClosedShort:
+    """A batch run whose output dies early is incomplete, not successful.
+
+    The first version of this guard only fired for frames == 0, so a finite run
+    that lost its output before every stream reached the budget still exited 0.
+    """
+
+    def test_guard_covers_both_run_kinds(self):
+        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        block = source[source.index("if _output_closed_unexpectedly"):]
+        block = block[: block.index("\n    except")] if "\n    except" in block else block
+        assert "if cfg.frames <= 0:" in block, "continuous runs must still fail"
+        assert "s.processed < cfg.frames" in block, "finite runs must fail when short"
+
+    def test_a_completed_batch_is_not_failed(self):
+        """A run that met its budget is complete whatever the output did after."""
+        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        block = source[source.index("short = [s for s in app.streams"):]
+        assert "if short:" in block[:200], "only a SHORT batch may fail"
+
+
+class TestUncleanStopSurvivesTheProcess:
+    """`down` killed the detector and printed that the next `up` would reclaim
+    the pools - then exited. The next `up` saw no PID, judged the stop clean and
+    skipped the reclaim, so the promise was never kept."""
+
+    @requires_pipelines
+    @pytest.mark.parametrize("name", ["scale", "live", "group"])
+    def test_a_forced_kill_records_a_marker(self, name):
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
+        assert "RUNTIME_DIRTY_MARKER" in source
+        # Every kill -9 path must record it.
+        for chunk in source.split("kill -9 {pids}")[1:]:
+            assert "mark_runtime_dirty" in chunk[:200], f"{name}: a kill site records nothing"
+
+    @requires_pipelines
+    @pytest.mark.parametrize("name", ["scale", "live"])
+    def test_start_app_reclaims_on_a_stale_marker(self, name, monkeypatch):
+        mod = _load_ui_server(name).pipeline
+        reset = []
+        monkeypatch.setattr(mod, "stop_app", lambda: True)            # nothing running now
+        monkeypatch.setattr(mod, "stop_any_detector", lambda: True)
+        monkeypatch.setattr(mod, "runtime_dirty", lambda: True)       # ...but `down` killed one
+        monkeypatch.setattr(mod, "reset_runtime", lambda: reset.append(True))
+        monkeypatch.setattr(mod, "exec_devkit", lambda *a, **k: None)
+        mod.start_app()
+        assert reset == [True], "a kill from a previous invocation must still be reclaimed"
+
+    @requires_pipelines
+    def test_reset_runtime_clears_the_marker(self):
+        source = (PIPELINES_DIR / "pipeline-scale" / "pipeline.py").read_text(encoding="utf-8")
+        body = source[source.index("def reset_runtime"):]
+        body = body[: body.index("\ndef ")]
+        assert "rm -f {RUNTIME_DIRTY_MARKER}" in body
+
+    @requires_pipelines
+    def test_group_says_so_when_it_cannot_reclaim(self):
+        """Deferring the reset to protect siblings is deliberate, but the group
+        still starts against unreclaimed pools - that must not be silent."""
+        source = (PIPELINES_DIR / "pipeline-group" / "pipeline.py").read_text(encoding="utf-8")
+        assert "pools were not reclaimed because sibling groups" in source
+        assert "may fail to" in source
+
+
+class TestOverUpscaleIsReported:
+    """Raising the detector clamp to the model input can re-cross the scaler's
+    2x limit; past it the scaler emits nothing, silently."""
+
+    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
+    def test_both_languages_warn(self, path):
+        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
+        assert "no detections" in source and "upscale from the smallest source" in source
+
+    def test_the_ratio_is_the_worst_across_streams_and_axes(self):
+        """A per-tuple max() would compare lexicographically, not by ratio."""
+        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        assert "worst = max(max(det_w / p[0], det_h / p[1]) for p in probes)" in source
+
+
+class TestCppRunQueueScales:
+    """Python sizes the run queue to the stream count; a fixed 4 in C++ meant
+    switching the panel language changed throughput at high stream counts."""
+
+    def test_cpp_uses_the_same_bounded_sizing(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        assert "std::max(4, std::min(32, stream_count))" in cpp
+        assert "build_run_options(static_cast<int>(app.streams.size()))" in cpp
+
+    def test_python_formula_is_unchanged(self):
+        py = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        assert "max(4, min(32, stream_count))" in py

@@ -405,6 +405,27 @@ def exec_devkit(cmd: str, timeout: int = 120) -> subprocess.CompletedProcess:
 ssh = exec_devkit
 
 
+# A SIGKILLed detector leaves decoder and CVU pools allocated in the reserved
+# region, and the next start must run fix_devkit_runtime.sh to reclaim them.
+# But by then the process is gone, so no probe can discover that it was killed -
+# `down` used to print that the next `up` would reclaim, and the next `up` then
+# saw no PID, judged the stop clean and skipped the reclaim. Record it where the
+# next invocation will see it, on the DevKit itself, so the promise holds across
+# separate CLI runs and across the CLI/panel split.
+RUNTIME_DIRTY_MARKER = "/tmp/sima-detector-unclean-stop"
+
+
+def mark_runtime_dirty(what: str) -> None:
+    exec_devkit(f"touch {RUNTIME_DIRTY_MARKER}")
+    print(f"warning: {what} had to be killed - decoder/MLA pools may be stranded; "
+          f"the next start will reclaim them", flush=True)
+
+
+def runtime_dirty() -> bool:
+    return bool(exec_devkit(
+        f"test -f {RUNTIME_DIRTY_MARKER} && echo dirty").stdout.strip())
+
+
 def reset_runtime() -> None:
     """Reclaim MLA/decoder memory left behind by a previous run.
 
@@ -415,6 +436,7 @@ def reset_runtime() -> None:
     app has used the runtime.
     """
     ssh("bash /usr/bin/fix_devkit_runtime.sh >/dev/null 2>&1 || true", timeout=600)
+    exec_devkit(f"rm -f {RUNTIME_DIRTY_MARKER}")
 
 
 # --------------------------------------------------------------------------
@@ -461,6 +483,7 @@ def stop_group(group: int, grace_s: int = 20) -> bool:
             return True
         time.sleep(1)
     ssh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    mark_runtime_dirty(f"group {group}")
     return False
 
 
@@ -483,6 +506,7 @@ def _term_then_kill(pattern: str, grace_s: int = 20) -> bool:
             return True
         time.sleep(1)
     ssh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    mark_runtime_dirty(pattern)
     return False
 
 
@@ -516,9 +540,21 @@ def start_group(group: int) -> None:
     # reset_runtime() restarts the shared runtime services, which would disrupt
     # any sibling group mid-flight. Only safe when nothing else is running, so
     # an unclean stop with siblings up is left for the next idle moment.
-    if not clean and not running_groups():
-        print(f"group {group} stop was unclean - reclaiming decoder/MLA pools", flush=True)
-        reset_runtime()
+    if not clean or runtime_dirty():
+        if running_groups():
+            # reset_runtime() restarts shared services and would disrupt the
+            # siblings this pipeline exists to keep isolated, so it is deferred -
+            # but this group is about to start against pools that were NOT
+            # reclaimed, which can fail allocation. The marker survives, so the
+            # next start with no siblings running does the reclaim.
+            print(f"group {group}: pools were not reclaimed because sibling groups "
+                  f"{running_groups()} are running - this start may fail to "
+                  f"allocate. Stop every group and start again to reclaim.",
+                  flush=True)
+        else:
+            print(f"group {group} stop was unclean - reclaiming decoder/MLA pools",
+                  flush=True)
+            reset_runtime()
     log_q = shlex.quote(log_path(group))
     exec_devkit(f'rm -f {log_q}; setsid nohup {app_command()} '
                 f'--config {shlex.quote(str(config_path(group)))} '

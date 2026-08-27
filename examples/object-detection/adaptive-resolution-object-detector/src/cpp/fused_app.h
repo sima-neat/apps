@@ -479,6 +479,30 @@ void pick_detector_geometry(const std::vector<ProbedStream>& probes, int& det_w,
   capped_h = std::min(max_h, std::max(kModelInput, capped_h));
   det_w = capped_w - (capped_w % 2);
   det_h = capped_h - (capped_h % 2);
+  // Raising the clamp to kModelInput can re-cross the scaler limit enforced
+  // just above: 320x180 alongside 1080p gives 2*180=360, then 640, asking the
+  // smallest source for a 3.5x upscale. Past kMaxUpscale the scaler emits
+  // nothing at all, silently - that stream keeps sending video and stops
+  // producing boxes. No geometry satisfies both bounds, so name the stream
+  // rather than let it go quiet. Mirrors src/python/fused_app.py.
+  double worst = 0.0;
+  const ProbedStream* smallest = nullptr;
+  for (const auto& p : probes) {
+    if (p.width <= 0 || p.height <= 0)
+      continue;
+    worst = std::max({worst, static_cast<double>(det_w) / p.width,
+                      static_cast<double>(det_h) / p.height});
+    if (smallest == nullptr || p.width * p.height < smallest->width * smallest->height)
+      smallest = &p;
+  }
+  if (worst > kMaxUpscale && smallest != nullptr) {
+    std::cerr << "[warn] detector geometry " << det_w << "x" << det_h << " needs a "
+              << worst << "x upscale from the smallest source (" << smallest->width << "x"
+              << smallest->height << "), past the " << kMaxUpscale
+              << "x the scaler performs - that stream will deliver video but "
+                 "no detections. Use sources within "
+              << kMaxUpscale << "x of each other.\n";
+  }
 }
 
 simaai::neat::nodes::groups::RtspDecodedInputOptions
@@ -659,10 +683,15 @@ std::unique_ptr<simaai::neat::Model> build_model(const AppConfig& cfg, int det_w
   return std::make_unique<simaai::neat::Model>(cfg.model_path, model_opt);
 }
 
-simaai::neat::RunOptions build_run_options() {
+simaai::neat::RunOptions build_run_options(int stream_count) {
   simaai::neat::RunOptions run_options;
   run_options.preset = simaai::neat::RunPreset::Realtime;
-  run_options.queue_depth = 4;
+  // One ingress/internal queue slot per stream, floor 4, matching
+  // src/python/fused_app.py - the proven 16-stream profile sets queue_depth to
+  // its stream count. A fixed 4 meant switching the panel to C++ silently
+  // changed throughput at the advertised higher stream counts, because
+  // KeepLatest starts discarding shared outputs far earlier.
+  run_options.queue_depth = std::max(4, std::min(32, stream_count));
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   return run_options;
@@ -1101,7 +1130,7 @@ void run_app(const AppConfig& cfg) {
     std::cout << "Backend:\n" << app.graph.describe_backend() << "\n";
   }
 
-  app.run = app.graph.build(build_run_options());
+  app.run = app.graph.build(build_run_options(static_cast<int>(app.streams.size())));
   // Printed ONLY after the shared graph builds - see the note in
   // src/python/fused_app.py. pipelines/'s wait_for_streams() requires this line
   // because the per-stream "] rtsp=" banners are emitted before the build.
