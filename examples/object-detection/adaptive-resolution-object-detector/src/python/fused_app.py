@@ -48,6 +48,15 @@ np = None
 pyneat = None
 
 
+# Decoder profile shared by the dataclass defaults and load_app_config()'s
+# fallbacks, so the two cannot drift again - they disagreed before (18/auto
+# declared, 4/throughput-low-latency actually applied). Matches what
+# pipelines/pipeline-{scale,group}/pipeline.py generate.
+DEFAULT_DECODER_BUFFERS = 8
+DEFAULT_DECODER_INPUT_BUFFERS = 2
+DEFAULT_DECODER_TUNING = "auto"
+
+
 @dataclass(frozen=True)
 class AppConfig:
     model_path: str
@@ -59,18 +68,16 @@ class AppConfig:
     fps: int = 0
     max_inflight_per_stream: int = 4
     max_inflight_total: int = 16
-    # Decoder pool sizing. The untuned defaults (input 8 / output 14 frames)
-    # are what exhaust the decoder pool at higher stream counts; the
-    # high-density profiles run 4/2 with the low-latency tuning to fit 48.
-    # Proven-smooth values from the high-density example (16 streams, long-run
-    # tested). num_buffers=4 (my earlier value) starves the decoder output pool
-    # under any network jitter and produces the stutter/freezes; 18 gives the
-    # jitter headroom. auto tuning, not throughput-low-latency, is what that
-    # smooth config actually runs. Lower these only when pushing past ~16 streams,
-    # where the memory trade becomes worth it.
-    decoder_buffers: int = 18
-    decoder_input_buffers: int = 2
-    decoder_tuning: str = "auto"
+    # Decoder pool sizing. num_buffers=4 with throughput-low-latency (which
+    # turns memory_opt ON) starves the decoder output pool under network jitter
+    # and produces stutter/freezes - that was the old fallback here, and nothing
+    # ever got the value declared on this line because load_app_config() always
+    # passed its own literal. 8/auto is what pipelines/ generates and runs at 16
+    # streams, so the loader fallback below matches it exactly. Lower only when
+    # pushing past ~16 streams, where the memory trade becomes worth it.
+    decoder_buffers: int = DEFAULT_DECODER_BUFFERS
+    decoder_input_buffers: int = DEFAULT_DECODER_INPUT_BUFFERS
+    decoder_tuning: str = DEFAULT_DECODER_TUNING
     # DECODER-side fps cap for admission. A source's native rate is declared to
     # the decoder for capacity admission; a very high rate (e.g. 500 fps) x many
     # streams exceeds the decoder core and the whole graph is REJECTED before it
@@ -313,9 +320,11 @@ def load_app_config(config_path: Path) -> AppConfig:
         labels_path=Path(string_or(model, "labels", str(default_labels))),
         rtsp_urls=rtsp_urls,
         latency_ms=int_or(input_cfg, "latency_ms", 100),
-        decoder_buffers=int_or(input_cfg, "decoder_buffers", 4),
-        decoder_input_buffers=int_or(input_cfg, "decoder_input_buffers", 2),
-        decoder_tuning=string_or(input_cfg, "decoder_tuning", "throughput-low-latency"),
+        decoder_buffers=int_or(input_cfg, "decoder_buffers", DEFAULT_DECODER_BUFFERS),
+        decoder_input_buffers=int_or(
+            input_cfg, "decoder_input_buffers", DEFAULT_DECODER_INPUT_BUFFERS
+        ),
+        decoder_tuning=string_or(input_cfg, "decoder_tuning", DEFAULT_DECODER_TUNING),
         tcp=bool_or(input_cfg, "tcp", True),
         frames=int_or(inference, "frames", 0),
         fps=int_or(inference, "fps", 0),

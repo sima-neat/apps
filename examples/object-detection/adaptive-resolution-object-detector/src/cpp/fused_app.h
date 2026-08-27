@@ -64,6 +64,12 @@ void request_stop(int) {
   g_stop_requested = 1;
 }
 
+// Decoder profile shared by the struct defaults and load_app_config()'s
+// fallbacks, so the two cannot drift apart.
+constexpr int kDefaultDecoderBuffers = 8;
+constexpr int kDefaultDecoderInputBuffers = 2;
+constexpr const char* kDefaultDecoderTuning = "auto";
+
 struct AppConfig {
   std::string model_path;
   fs::path labels_path;
@@ -73,9 +79,12 @@ struct AppConfig {
   // Decoder pool sizing, tuned by the pipeline config for the advertised high
   // stream counts. The untuned element defaults exhaust the decoder pool well
   // before then.
-  int decoder_buffers = 4;
-  int decoder_input_buffers = 2;
-  std::string decoder_tuning = "throughput-low-latency";
+  // 8/auto matches src/python/fused_app.py and what pipelines/ generates.
+  // 4 + throughput-low-latency (which turns memory_opt ON) starves the decoder
+  // output pool under network jitter and produces stutter/freezes.
+  int decoder_buffers = kDefaultDecoderBuffers;
+  int decoder_input_buffers = kDefaultDecoderInputBuffers;
+  std::string decoder_tuning = kDefaultDecoderTuning;
   // DECODER-side fps cap for admission, not exposed via config (matches
   // src/python/fused_app.py). A source's native rate is declared to the
   // decoder for capacity admission; a very high rate (e.g. 500 fps) x many
@@ -316,9 +325,10 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.rtsp_urls = parse_streams(config_path);
   cfg.tcp = raw.bool_or("input.tcp", true);
   cfg.latency_ms = raw.int_or("input.latency_ms", 100);
-  cfg.decoder_buffers = raw.int_or("input.decoder_buffers", 4);
-  cfg.decoder_input_buffers = raw.int_or("input.decoder_input_buffers", 2);
-  cfg.decoder_tuning = raw.string_or("input.decoder_tuning", "throughput-low-latency");
+  cfg.decoder_buffers = raw.int_or("input.decoder_buffers", kDefaultDecoderBuffers);
+  cfg.decoder_input_buffers =
+      raw.int_or("input.decoder_input_buffers", kDefaultDecoderInputBuffers);
+  cfg.decoder_tuning = raw.string_or("input.decoder_tuning", kDefaultDecoderTuning);
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.fps = raw.int_or("inference.fps", 0);
   cfg.max_inflight_per_stream = raw.int_or("inference.max_inflight_per_stream", 4);

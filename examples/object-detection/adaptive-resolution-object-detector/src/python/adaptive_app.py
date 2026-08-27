@@ -267,11 +267,33 @@ def load_app_config(config_path: Path) -> AppConfig:
     return cfg
 
 
-def reload_sources(config_path: Path) -> list[StreamSource]:
+def reload_sources(config_path: Path, capacity: int | None = None) -> list[StreamSource]:
+    """Parse a live config edit, applying the same count check as startup.
+
+    Startup rejects a file whose stream count exceeds streams.max_streams
+    (see validate_config). Dropping that check here meant a live edit was
+    PARTIALLY applied instead - the manager started what fitted and warned per
+    stream about the rest, leaving the file naming more streams than were
+    running. Raising instead lets run_app's handler ignore the whole reload,
+    which is the documented behaviour for an invalid edit.
+
+    `capacity` is the manager's real channel count, fixed at startup from the
+    ORIGINAL max_streams. Raising max_streams in a live edit cannot conjure new
+    channels, so the reload is checked against both.
+    """
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError("config root must be a mapping")
-    sources, _ = parse_sources_from_raw(raw)
+    sources, file_max = parse_sources_from_raw(raw)
+    if len(sources) > file_max:
+        raise ValueError(
+            f"streams count ({len(sources)}) exceeds streams.max_streams ({file_max})"
+        )
+    if capacity is not None and len(sources) > capacity:
+        raise ValueError(
+            f"streams count ({len(sources)}) exceeds the {capacity} channels this "
+            f"run started with; max_streams cannot be raised without a restart"
+        )
     return sources
 
 
@@ -1343,7 +1365,7 @@ def run_app(cfg: AppConfig) -> None:
             if mtime != last_mtime:
                 last_mtime = mtime
                 try:
-                    sources = reload_sources(cfg.config_path)
+                    sources = reload_sources(cfg.config_path, cfg.max_streams)
                 except Exception as exc:  # noqa: BLE001 - a bad edit shouldn't kill the app
                     print(f"[warn] ignoring invalid config reload: {exc}", file=sys.stderr)
                     continue

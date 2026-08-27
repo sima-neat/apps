@@ -433,18 +433,31 @@ class TestStreamFailureIsolation:
 PIPELINES_DIR = EXAMPLE_DIR / "pipelines"
 TOOLS_DIR = EXAMPLE_DIR / "tools"
 
-# pipelines/ and tools/ are development and demonstration tooling, not part of
-# the packaged runtime - scripts/ci/validate_apps_runtime_archive.sh ships src/
-# and the CI "Test Apps Runtime" job runs this suite against that INSTALLED
-# tree, where neither directory exists. Tests that read them are meaningful from
-# a source checkout and skip where the directory was not shipped; without this
-# they fail with FileNotFoundError on every CI run.
+# pipelines/ and tools/ are development and demonstration tooling. The CI "Test
+# Apps Runtime" job runs this suite against the INSTALLED tree, which does not
+# carry them, so tests that read those sources are meaningful from a source
+# checkout and skip elsewhere.
+#
+# Probe the FILES, not the directories. The install tree turned out to contain a
+# pipelines/ directory without the panel sources in it, so an is_dir() guard
+# passed and every one of these tests still failed with FileNotFoundError.
+def _all_present(*paths: Path) -> bool:
+    return all(path.is_file() for path in paths)
+
+
+_PIPELINE_SOURCES = (
+    PIPELINES_DIR / "launcher.py",
+    *(PIPELINES_DIR / f"pipeline-{name}" / part
+      for name in ("scale", "live", "group")
+      for part in ("ui_server.py", "pipeline.py")),
+)
+
 requires_pipelines = pytest.mark.skipif(
-    not PIPELINES_DIR.is_dir(),
-    reason="pipelines/ is dev tooling and is not in the packaged runtime",
+    not _all_present(*_PIPELINE_SOURCES),
+    reason="pipelines/ panel sources are dev tooling and are not in the packaged runtime",
 )
 requires_tools = pytest.mark.skipif(
-    not TOOLS_DIR.is_dir(),
+    not _all_present(TOOLS_DIR / "gen_test_config.sh"),
     reason="tools/ is dev tooling and is not in the packaged runtime",
 )
 
@@ -1345,3 +1358,100 @@ class TestStopRacesInFlightOperation:
         source = (PIPELINES_DIR / f"pipeline-{name}" / "ui_server.py").read_text(encoding="utf-8")
         down = source.index('if path == "/api/down":')
         assert source.index("begin_stop()", down) < source.index("def do_down():", down)
+
+
+class TestFusedDecoderDefaults:
+    """The declared default and the loader fallback must be the same profile.
+
+    fused_app declared 18/auto with a comment defending it, while
+    load_app_config() hardcoded 4/throughput-low-latency - and since the loader
+    always passes explicit values, the declared default was dead code and
+    everyone got the 4-buffer, memory_opt-ON profile the comment blames for
+    stutter and freezes under jitter. Both now resolve to 8/auto, matching what
+    pipelines/pipeline-{scale,group} generate and run at 16 streams.
+    """
+
+    def test_declared_default_is_what_an_omitted_key_actually_gets(self, tmp_path):
+        import fused_app
+
+        cfg_path = tmp_path / "fused.yaml"
+        cfg_path.write_text(
+            "model:\n  path: /tmp/m.tar.gz\n  labels: /tmp/l.txt\n"
+            "streams:\n  - rtsp://127.0.0.1:8554/src1\n"
+            "output:\n  insight:\n    host: 127.0.0.1\n",
+            encoding="utf-8",
+        )
+        cfg = fused_app.load_app_config(cfg_path)
+        assert cfg.decoder_buffers == fused_app.DEFAULT_DECODER_BUFFERS == 8
+        assert cfg.decoder_tuning == fused_app.DEFAULT_DECODER_TUNING == "auto"
+
+    def test_the_unstable_profile_is_gone_from_both_languages(self):
+        py = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        assert '"decoder_tuning", "throughput-low-latency"' not in py
+        assert '"input.decoder_tuning", "throughput-low-latency"' not in cpp
+        assert "kDefaultDecoderBuffers = 8" in cpp
+        assert 'kDefaultDecoderTuning = "auto"' in cpp
+
+    def test_an_explicit_config_value_still_wins(self, tmp_path):
+        """pipelines/ sets these keys explicitly; that must be unaffected."""
+        import fused_app
+
+        cfg_path = tmp_path / "fused.yaml"
+        cfg_path.write_text(
+            "model:\n  path: /tmp/m.tar.gz\n  labels: /tmp/l.txt\n"
+            "streams:\n  - rtsp://127.0.0.1:8554/src1\n"
+            "input:\n  decoder_buffers: 18\n  decoder_tuning: low-memory\n"
+            "output:\n  insight:\n    host: 127.0.0.1\n",
+            encoding="utf-8",
+        )
+        cfg = fused_app.load_app_config(cfg_path)
+        assert cfg.decoder_buffers == 18
+        assert cfg.decoder_tuning == "low-memory"
+
+
+class TestReloadHonoursMaxStreams:
+    """Startup rejects an over-limit file; a live reload used to accept it
+    partially - starting what fitted and warning per stream about the rest."""
+
+    @staticmethod
+    def _config(tmp_path, count, max_streams):
+        sources = "\n".join(
+            f"    - id: cam-{i + 1}\n      rtsp_url: rtsp://127.0.0.1:8554/src{i + 1}"
+            for i in range(count)
+        )
+        path = tmp_path / "live.yaml"
+        path.write_text(
+            "model:\n  path: /tmp/m.tar.gz\n"
+            f"streams:\n  max_streams: {max_streams}\n  sources:\n{sources}\n"
+            "output:\n  insight:\n    host: 127.0.0.1\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_a_reload_within_the_limit_is_accepted(self, tmp_path):
+        import adaptive_app
+
+        path = self._config(tmp_path, count=3, max_streams=8)
+        assert len(adaptive_app.reload_sources(path, 8)) == 3
+
+    def test_a_reload_over_the_files_own_maximum_is_rejected(self, tmp_path):
+        import adaptive_app
+
+        path = self._config(tmp_path, count=9, max_streams=8)
+        with pytest.raises(ValueError, match="max_streams"):
+            adaptive_app.reload_sources(path, 8)
+
+    def test_max_streams_cannot_be_raised_by_a_live_edit(self, tmp_path):
+        """Channels are allocated once at startup, so a raised ceiling in the
+        edited file cannot conjure more of them."""
+        import adaptive_app
+
+        path = self._config(tmp_path, count=12, max_streams=16)
+        with pytest.raises(ValueError, match="channels this run started with"):
+            adaptive_app.reload_sources(path, 8)
+
+    def test_cpp_reload_applies_the_same_check(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
+        reload_site = cpp[cpp.index("[config] reload:") - 900:]
+        assert "channels this run started with" in reload_site

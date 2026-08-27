@@ -1259,6 +1259,17 @@ void run_app(const AppConfig& cfg) {
       last_write = now;
       try {
         const auto sources = parse_stream_sources(cfg.config_path);
+        // Same count check startup applies (see validate_config). Without it a
+        // live edit was PARTIALLY applied - the manager started what fitted and
+        // warned per stream about the rest - instead of the whole reload being
+        // ignored, which is the documented behaviour for an invalid edit. The
+        // channel count is fixed at startup, so max_streams cannot be raised
+        // by a live edit either.
+        if (static_cast<int>(sources.size()) > cfg.max_streams) {
+          throw std::runtime_error(
+              "streams count (" + std::to_string(sources.size()) + ") exceeds the " +
+              std::to_string(cfg.max_streams) + " channels this run started with");
+        }
         std::cout << "[config] reload: " << sources.size() << " stream(s)\n";
         manager.apply_sources(sources);
       } catch (const std::exception& e) {
