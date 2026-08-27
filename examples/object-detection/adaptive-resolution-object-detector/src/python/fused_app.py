@@ -27,6 +27,7 @@ import glob
 import json
 import os
 import struct
+import signal
 import sys
 import time
 
@@ -446,21 +447,6 @@ def probe_rtsp(url: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def effective_decode_fps(cfg: AppConfig, source_fps: int) -> int:
-    """The rate to declare for the DECODE/MODEL branch of one stream.
-
-    inference.fps, when set below the source's native rate, throttles HERE - at
-    decode/admission, before the shared detector ever sees the frame - not only
-    at output (see should_throttle_fps). The encoded PASSTHROUGH branch
-    (build_encoded_source_graph) uses opt.source_fps directly and is
-    deliberately untouched: Insight always receives the source's native rate
-    regardless of this cap.
-    """
-    if cfg.fps > 0 and cfg.fps < source_fps:
-        return cfg.fps
-    return source_fps
-
-
 def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height: int,
                          det_w: int = 0, det_h: int = 0):
     """Source options for one stream.
@@ -497,9 +483,8 @@ def build_source_options(cfg: AppConfig, url: str, fps: int, width: int, height:
     # a caps framerate that differs from the real stream fails negotiation
     # ("framerate mismatch"). 0 leaves it unconstrained so the decoder emits
     # whatever rate it achieves. Only pin fps for normal (uncapped) sources.
-    decode_fps = effective_decode_fps(cfg, fps)
-    capped = cfg.decoder_fps_cap > 0 and decode_fps > cfg.decoder_fps_cap
-    opt.output_caps.fps = 0 if capped else decode_fps
+    capped = cfg.decoder_fps_cap > 0 and fps > cfg.decoder_fps_cap
+    opt.output_caps.fps = 0 if capped else fps
     opt.output_caps.memory = pyneat.CapsMemory.Any
     opt.num_buffers = cfg.decoder_buffers
     return opt
@@ -567,13 +552,13 @@ def build_decode_graph(input_name: str, opt, cfg=None) -> pyneat.Graph:
     # (~30 fps) AND leaves caps unpinned, so the decoder admits and then processes
     # what it can, dropping the rest. Normal sources keep their exact rate.
     #
-    # The rate being capped here is effective_decode_fps(), not opt.source_fps
-    # directly: inference.fps throttles the decoder itself when it asks for less
-    # than the source provides, so the shared detector never sees those frames,
-    # rather than only dropping them after inference in process_output_sample.
-    decode_fps = effective_decode_fps(cfg, opt.source_fps) if cfg is not None else opt.source_fps
+    # inference.fps deliberately does NOT feed this. Pinning a rate BELOW the
+    # real stream is exactly what the paragraph above rules out, so there is no
+    # safe way to make the decoder emit at a requested lower rate here - only
+    # the source's true rate, or unpinned. inference.fps is applied after the
+    # pull instead; see should_throttle_fps().
     cap = cfg.decoder_fps_cap if cfg is not None else 0
-    dec.dec_fps = -1 if (cap > 0 and decode_fps > cap) else decode_fps
+    dec.dec_fps = -1 if (cap > 0 and opt.source_fps > cap) else opt.source_fps
     dec.num_buffers = opt.num_buffers
     if cfg is not None:
         dec.input_buffers = cfg.decoder_input_buffers
@@ -902,6 +887,17 @@ def maybe_save_debug_frame(
         print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
 
 
+# Set by the SIGTERM/SIGINT handler installed in run_app(). Mirrors
+# g_stop_requested in src/cpp/fused_app.h: the fused topology has no per-stream
+# manager to signal, so the run loop polls this instead.
+_stop_requested = False
+
+
+def _request_stop(*_args) -> None:
+    global _stop_requested
+    _stop_requested = True
+
+
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     if not streams:
         return True
@@ -917,15 +913,15 @@ def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
 def should_throttle_fps(cfg: AppConfig, stream: StreamRuntime, now: float) -> bool:
     """True when inference.fps says this stream must wait before processing again.
 
-    This is a BACKSTOP, not the primary cap: effective_decode_fps() (used in
-    build_source_options/build_decode_graph) already throttles the decoder
-    itself, before the shared detector runs the model, so most streams should
-    rarely trip this. It exists because a negotiated decoder rate is not an
-    exact guarantee - jitter can still let a frame through early - and it costs
-    nothing extra: skipping here still avoids the metadata/debug-frame work for
-    any frame that does. Setting output_fps from cfg.fps at build time changed
-    only the startup banner; nothing consulted it at all until both of these
-    were added (mirrors src/cpp/fused_app.h).
+    Scope, stated plainly: this caps the rate at which THIS STREAM parses boxes
+    and emits metadata and debug frames. It does NOT reduce MLA work - the
+    shared detector has already inferred the sample by the time it is pulled,
+    and the decoder cannot be asked for a lower rate (pinning one below the real
+    stream fails caps negotiation; see build_decode_graph). Nor does it change
+    the video Insight receives, which is the encoded passthrough at the source's
+    own rate. Setting output_fps from cfg.fps at build time changed only the
+    startup banner and nothing ever consulted it, so before this the setting did
+    nothing at all (mirrors src/cpp/fused_app.h).
     """
     if cfg.fps <= 0:
         return False
@@ -1127,15 +1123,26 @@ def run_app(cfg: AppConfig) -> None:
         connect_stream_graph(app, cfg, stream, detector_graph)
     app.graph.connect(detector_graph, detections_graph)
 
+    # SIGTERM is the NORMAL stop signal here: every pipelines/ panel and CLI
+    # `down` sends it (see stop_app/stop_group). Without a handler the default
+    # disposition terminates the process outright, so app.run.close() never runs
+    # and the decoder/CVU pools it would have released stay allocated in the
+    # reserved region - the exact failure stop_app's docstring warns about,
+    # while the caller sees the PID vanish and reports a clean stop.
+    global _stop_requested
+    _stop_requested = False
+    previous_sigterm = signal.signal(signal.SIGTERM, _request_stop)
+
     try:
         if cfg.profile:
             print(f"Backend:\n{app.graph.describe_backend()}")
         app.run = app.graph.build(build_run_options(len(app.streams)))
-        while not all_streams_done(app.streams, cfg.frames):
+        while not _stop_requested and not all_streams_done(app.streams, cfg.frames):
             process_run_once(app, cfg, "detections")
     except KeyboardInterrupt:
         raise
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
         if app.run is not None:
             app.run.close()
         for stream in app.streams:

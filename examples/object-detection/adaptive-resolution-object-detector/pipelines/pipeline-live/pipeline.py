@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import ssl
 import subprocess
 import sys
@@ -165,8 +166,8 @@ def app_command() -> str:
                 "language is 'cpp' but no binary was found. Build it with "
                 "./build.sh --clean, or switch back to Python. Looked in:\n  "
                 + "\n  ".join(str(c) for c in CPP_APP_CANDIDATES))
-        return f"{binary} --mode {APP_MODE}"
-    return f"{PYTHON} -u {PY_APP} --mode {APP_MODE}"
+        return f"{shlex.quote(str(binary))} --mode {APP_MODE}"
+    return f"{shlex.quote(PYTHON)} -u {shlex.quote(str(PY_APP))} --mode {APP_MODE}"
 
 
 # pgrep pattern for THIS pipeline's detector in EITHER language. Matching the
@@ -498,6 +499,28 @@ def reset_runtime() -> None:
     ssh("bash /usr/bin/fix_devkit_runtime.sh >/dev/null 2>&1 || true", timeout=600)
 
 
+def _term_then_kill(pattern: str, grace_s: int = 20) -> bool:
+    """SIGTERM a pattern's processes and WAIT for them, SIGKILL only if they hang.
+
+    Same contract as stop_app(): the app releases decoder/CVU pools during its
+    SIGTERM teardown, and killing before that finishes strands them in the
+    reserved region so the next start fails to allocate. A fixed two-second
+    sleep was long enough only while SIGTERM was unhandled and killed instantly;
+    now that the detector actually tears down on TERM, graph teardown needs the
+    full grace period. Returns True if the processes exited on their own.
+    """
+    pids = ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip()
+    if not pids:
+        return True
+    ssh(f'kill -TERM {pids} 2>/dev/null || true')
+    for _ in range(grace_s):
+        if not ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip():
+            return True
+        time.sleep(1)
+    ssh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    return False
+
+
 def stop_any_detector() -> None:
     """Stop BOTH pipelines' detector apps.
 
@@ -510,10 +533,9 @@ def stop_any_detector() -> None:
     # rather than derived from one mapping, because each pipeline module only
     # knows its own PIPELINE name.
     for pattern in ALL_PIPELINE_PATTERNS:
-        pids = ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip()
-        if pids:
-            ssh(f'kill -TERM {pids} 2>/dev/null || true; sleep 2; '
-                f'kill -9 {pids} 2>/dev/null || true')
+        if not _term_then_kill(pattern):
+            print(f"warning: {pattern} did not exit in time and was killed; "
+                  f"its decoder/MLA pools may need fix_devkit_runtime.sh", flush=True)
 
 
 def start_app() -> None:
@@ -524,8 +546,10 @@ def start_app() -> None:
     if not clean:
         print("previous stop was unclean - reclaiming decoder/MLA pools", flush=True)
         reset_runtime()
-    exec_devkit(f'rm -f {LOG}; setsid nohup {app_command()} --config {CONFIG} '
-        f'> {LOG} 2>&1 < /dev/null & sleep 2', timeout=180)
+    log_q = shlex.quote(str(LOG))
+    exec_devkit(f'rm -f {log_q}; setsid nohup {app_command()} '
+                f'--config {shlex.quote(str(CONFIG))} '
+                f'> {log_q} 2>&1 < /dev/null & sleep 2', timeout=180)
 
 
 def wait_for_streams(n: int, timeout_s: int = 300) -> bool:

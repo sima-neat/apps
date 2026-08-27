@@ -22,7 +22,9 @@ each pipeline is, what it is good at, and what it costs you.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -51,6 +53,28 @@ def sh(cmd: str, timeout: int = 30) -> str:
                               text=True, timeout=timeout).stdout.strip()
     except Exception:  # noqa: BLE001 - status probing is best effort
         return ""
+
+
+def stop_detector(pattern: str, grace_s: int = 20) -> bool:
+    """SIGTERM a pattern's processes and WAIT for them, SIGKILL only if they hang.
+
+    The detector releases its decoder/CVU pools during SIGTERM teardown, and
+    killing before that finishes strands them in the reserved region so the next
+    start fails to allocate. A fixed two-second sleep was long enough only while
+    SIGTERM was unhandled and killed instantly; now that the detector actually
+    tears down on TERM, graph teardown needs the full grace period. Mirrors
+    stop_app()/_term_then_kill() in the pipeline modules.
+    """
+    pids = sh(f'pgrep -f "{pattern}" | tr "\\n" " "')
+    if not pids:
+        return True
+    sh(f'kill -TERM {pids} 2>/dev/null || true')
+    for _ in range(grace_s):
+        if not sh(f'pgrep -f "{pattern}" | tr "\\n" " "'):
+            return True
+        time.sleep(1)
+    sh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    return False
 
 
 def detector_running(name: str) -> bool:
@@ -124,10 +148,7 @@ def set_language(value: str) -> dict:
     # A detector already running was started in the OLD language; stop them all
     # so the next Start actually uses the new one.
     for cfg in PIPELINES.values():
-        pids = sh(f'pgrep -f "{cfg["pattern"]}" | tr "\\n" " "')
-        if pids:
-            sh(f'kill -TERM {pids} 2>/dev/null || true; sleep 2; '
-               f'kill -9 {pids} 2>/dev/null || true')
+        stop_detector(cfg["pattern"])
     LANGUAGE_FILE.write_text(value + "\n", encoding="utf-8")
     return {"ok": True, "language": value, "status": status()}
 
@@ -159,13 +180,10 @@ def activate(name: str) -> dict:
     for other, cfg in PIPELINES.items():
         if other == name:
             continue
-        pids = sh(f'pgrep -f "{cfg["pattern"]}" | tr "\\n" " "')
-        if pids:
-            sh(f'kill -TERM {pids} 2>/dev/null || true; sleep 2; '
-               f'kill -9 {pids} 2>/dev/null || true')
+        stop_detector(cfg["pattern"])
     ui = HERE / PIPELINES[name]["dir"] / "ui.sh"
     if ui.exists():
-        sh(f'bash "{ui}" start', timeout=90)
+        sh(f'bash {shlex.quote(str(ui))} start', timeout=90)
     return {"ok": True, "pipeline": name, "port": PIPELINES[name]["port"],
             "status": status()}
 

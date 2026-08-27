@@ -1219,6 +1219,13 @@ void interruptible_sleep(double seconds, const StreamManager& manager) {
 void run_app(const AppConfig& cfg) {
   g_stop_requested = 0;
   auto previous_sigint = std::signal(SIGINT, request_stop);
+  // SIGTERM is the NORMAL stop signal here: every pipelines/ panel and CLI
+  // `down` sends it (see stop_app/stop_group). Without a handler the default
+  // disposition terminates the process outright, so the teardown below never
+  // runs and the decoder/CVU pools it would have released stay allocated in the
+  // reserved region - the exact failure stop_app's docstring warns about, while
+  // the caller sees the PID vanish and reports a clean stop.
+  auto previous_sigterm = std::signal(SIGTERM, request_stop);
   if (cfg.profile) {
     setenv("SIMA_GST_ELEMENT_TIMINGS", "1", 0);
     setenv("SIMA_GST_FLOW_DEBUG", "1", 0);
@@ -1265,6 +1272,7 @@ void run_app(const AppConfig& cfg) {
   const bool nothing_survived = manager.all_failed();
   manager.shutdown();
   std::signal(SIGINT, previous_sigint);
+  std::signal(SIGTERM, previous_sigterm);
 
   for (const auto& kv : manager.failed())
     std::cerr << "[warn] stream " << kv.first << " did not run: " << kv.second << "\n";

@@ -7,7 +7,9 @@ from pathlib import Path
 import importlib.util
 import io
 import os
+import signal
 import subprocess
+import threading
 import sys
 import textwrap
 import time
@@ -812,11 +814,30 @@ class TestGroupPlan:
         assert mod.group_plan(16) == [4, 4, 4, 4]
 
     def test_plan_caps_at_the_group_ceiling(self):
-        """More streams than GROUP_SIZE * MAX_GROUPS cannot fit; cmd_up() warns
-        about this separately rather than group_plan() raising."""
+        """group_plan() lays out at most GROUP_SIZE * MAX_GROUPS. It stays a
+        pure layout function; refusing an impossible request is cmd_up()'s job
+        (see test_up_rejects_counts_above_the_ceiling)."""
         mod = self._pipeline()
         ceiling = mod.GROUP_SIZE * mod.MAX_GROUPS
         assert sum(mod.group_plan(ceiling + 5)) == ceiling
+
+    def test_up_rejects_counts_above_the_ceiling(self, monkeypatch):
+        """Asking for more than fits must fail, not quietly run a smaller
+        experiment and report that as success."""
+        mod = self._pipeline()
+        touched = []
+        monkeypatch.setattr(mod, "stop_group", lambda g: touched.append(g))
+        monkeypatch.setattr(mod, "start_group", lambda g: touched.append(g))
+        monkeypatch.setattr(mod, "stage_group_sources", lambda *a: touched.append(a))
+
+        ceiling = mod.GROUP_SIZE * mod.MAX_GROUPS
+        with pytest.raises(SystemExit) as excinfo:
+            mod.cmd_up(ceiling + 1)
+        assert str(ceiling) in str(excinfo.value)
+        assert touched == [], "nothing may be started or stopped on a refused request"
+
+        # The ceiling itself is still accepted.
+        assert sum(mod.group_plan(ceiling)) == ceiling
 
     def test_total_streams_counts_only_running_groups(self, tmp_path, monkeypatch):
         mod = self._pipeline()
@@ -981,51 +1002,42 @@ class TestFusedDecoderFpsCap:
     def test_cpp_gates_admission_the_same_way_python_does(self):
         cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
         assert "decoder_fps_cap" in cpp
-        assert "dec.dec_fps = capped ? -1 : decode_fps;" in cpp
-        assert "opt.output_caps.fps = capped ? 0 : decode_fps;" in cpp
+        assert "dec.dec_fps = capped ? -1 : opt.source_fps;" in cpp
+        assert "opt.output_caps.fps = capped ? 0 : fps_out;" in cpp
 
 
-class TestFusedEffectiveDecodeFps:
-    """inference.fps must throttle the DECODER, before the shared detector ever
-    sees a frame - not only drop frames after inference already ran. The
-    passthrough branch that feeds Insight is a separate concern and must keep
-    the source's true native rate regardless of this cap.
+class TestFusedDecoderRateIsNeverPinnedBelowTheSource:
+    """inference.fps must NOT reach dec_fps / output_caps.fps.
+
+    Pinning a decoded rate below the real stream fails caps negotiation
+    ("framerate mismatch") - the modules say so themselves. A previous attempt
+    to throttle pre-inference fed the requested rate into both fields, which
+    would have made a 30-fps source with inference.fps=10 fail to negotiate
+    instead of rate-limiting: worse than the original bug, where the setting
+    merely did nothing. Only the source's true rate or an unpinned value are
+    safe, so the throttle lives after the pull (see should_throttle_fps).
     """
 
-    @staticmethod
-    def _cfg(fps):
-        return SimpleNamespace(fps=fps)
+    @pytest.mark.parametrize(
+        "path", ["src/python/fused_app.py", "src/cpp/fused_app.h"]
+    )
+    def test_only_the_admission_cap_chooses_the_decoder_rate(self, path):
+        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
+        assert "effective_decode_fps" not in source, (
+            "regression: inference.fps is feeding a pinned decoder rate again"
+        )
+        # The admission cap may still swap in an UNPINNED value; that is safe.
+        assert "decoder_fps_cap" in source
 
-    def test_uncapped_keeps_the_source_rate(self):
-        import fused_app
+    def test_python_decoder_rate_comes_from_the_probed_source_rate(self):
+        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        assert "dec.dec_fps = -1 if (cap > 0 and opt.source_fps > cap) else opt.source_fps" in source
+        assert "opt.output_caps.fps = 0 if capped else fps" in source
 
-        assert fused_app.effective_decode_fps(self._cfg(0), 60) == 60
-
-    def test_a_lower_request_throttles_the_decoder(self):
-        import fused_app
-
-        assert fused_app.effective_decode_fps(self._cfg(10), 60) == 10
-
-    def test_a_request_above_the_source_rate_has_no_effect(self):
-        """Asking for more than the source provides cannot speed up the decoder;
-        the source's own rate is still the ceiling."""
-        import fused_app
-
-        assert fused_app.effective_decode_fps(self._cfg(120), 60) == 60
-
-    def test_cpp_computes_the_same_effective_rate(self):
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        assert "int effective_decode_fps(const AppConfig& cfg, int source_fps)" in cpp
-        assert "effective_decode_fps(cfg, fps_out)" in cpp, "output_caps.fps must use it"
-        assert "effective_decode_fps(cfg, opt.source_fps)" in cpp, "dec.dec_fps must use it"
-
-    def test_passthrough_branch_is_not_throttled_in_either_language(self):
-        """encoded_opt.source_fps / EncodedSourceGraph must read the raw probed
-        rate, never effective_decode_fps() - Insight always gets the native rate."""
-        py = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
-        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
-        assert "encoded_opt.source_fps = opt.source_fps" in py
-        assert "encoded_opt.source_fps = opt.source_fps;" in cpp
+    def test_cpp_decoder_rate_comes_from_the_probed_source_rate(self):
+        source = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        assert "dec.dec_fps = capped ? -1 : opt.source_fps;" in source
+        assert "opt.output_caps.fps = capped ? 0 : fps_out;" in source
 
 
 class TestE2eCodecFixtures:
@@ -1145,3 +1157,191 @@ class TestGenTestConfigModelDir:
             tmp_path, apps_root_has=["models"], model_dir_env="/custom/path"
         )
         assert resolved == "/custom/path"
+
+
+class TestGracefulSigterm:
+    """SIGTERM is the normal stop signal from every panel and CLI `down`.
+
+    Unhandled, it terminates the process outright: manager.shutdown() /
+    run.close() never run, the decoder and CVU pools they would have released
+    stay allocated in the reserved region, and the caller sees the PID vanish
+    and reports a clean stop - the exact failure stop_app()'s own docstring
+    warns about.
+    """
+
+    def test_a_real_sigterm_reaches_the_handler_instead_of_killing(self, tmp_path):
+        """Spawns a process, signals it for real, and checks it exits 0 through
+        the handler rather than 143 (killed). Nothing about this is mocked."""
+        probe = tmp_path / "probe.py"
+        probe.write_text(
+            "import signal, sys, time\n"
+            f"sys.path.insert(0, {str(PYTHON_DIR)!r})\n"
+            "import fused_app\n"
+            "fused_app._stop_requested = False\n"
+            "signal.signal(signal.SIGTERM, fused_app._request_stop)\n"
+            "print('READY', flush=True)\n"
+            "for _ in range(200):\n"
+            "    if fused_app._stop_requested:\n"
+            "        print('GRACEFUL', flush=True); sys.exit(0)\n"
+            "    time.sleep(0.05)\n"
+            "sys.exit(1)\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            [sys.executable, str(probe)], stdout=subprocess.PIPE, text=True
+        )
+        try:
+            assert proc.stdout.readline().strip() == "READY"
+            proc.send_signal(signal.SIGTERM)
+            out = proc.stdout.read()
+            rc = proc.wait(timeout=20)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        assert rc == 0, f"exited {rc} (143 means SIGTERM killed it outright)"
+        assert "GRACEFUL" in out
+
+    @pytest.mark.parametrize("module", ["adaptive_app.py", "fused_app.py"])
+    def test_python_run_app_installs_a_sigterm_handler(self, module):
+        source = (PYTHON_DIR / module).read_text(encoding="utf-8")
+        assert "signal.signal(signal.SIGTERM" in source
+
+    @pytest.mark.parametrize("header", ["adaptive_app.h", "fused_app.h"])
+    def test_cpp_run_app_installs_a_sigterm_handler(self, header):
+        source = (EXAMPLE_DIR / "src" / "cpp" / header).read_text(encoding="utf-8")
+        assert "std::signal(SIGTERM, request_stop)" in source
+        assert "std::signal(SIGTERM, previous_sigterm)" in source, "must be restored"
+
+
+@requires_pipelines
+class TestForeignDetectorStopWaits:
+    """Killing a detector before its SIGTERM teardown finishes strands the pools
+    it was releasing. Now that SIGTERM is actually handled, a fixed two-second
+    sleep is no longer long enough - these paths must poll like stop_app() does.
+    """
+
+    @pytest.mark.parametrize("name", ["scale", "live", "group"])
+    def test_pipelines_wait_rather_than_sleeping_two_seconds(self, name):
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
+        assert "true; sleep 2; " not in source, "unconditional SIGKILL after 2s"
+        assert "_term_then_kill" in source
+
+    def test_launcher_waits_rather_than_sleeping_two_seconds(self):
+        source = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
+        assert "true; sleep 2; " not in source, "unconditional SIGKILL after 2s"
+        assert "def stop_detector" in source
+
+    def test_the_wait_polls_for_the_full_grace_period(self):
+        """A helper that polls but only once would pass a substring check."""
+        source = (PIPELINES_DIR / "pipeline-scale" / "pipeline.py").read_text(encoding="utf-8")
+        helper = source[source.index("def _term_then_kill"):]
+        helper = helper[: helper.index("\ndef ")]
+        assert "for _ in range(grace_s)" in helper
+        assert "time.sleep(1)" in helper
+        assert "kill -9" in helper, "must still force-kill a genuinely hung process"
+
+
+@requires_pipelines
+class TestShellPathsAreQuoted:
+    """Paths all derive from __file__, so a clone path containing whitespace or
+    a shell metacharacter would split these commands into the wrong tokens."""
+
+    @pytest.mark.parametrize("name", ["scale", "live", "group"])
+    def test_start_commands_quote_interpolated_paths(self, name):
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "pipeline.py").read_text(encoding="utf-8")
+        assert "import shlex" in source
+        assert "shlex.quote(PYTHON)" in source
+        assert "setsid nohup {app_command()}" in source
+        # The bare, unquoted forms must not come back.
+        assert "rm -f {LOG};" not in source
+        assert "rm -f {log};" not in source
+        assert "--config {CONFIG}" not in source
+
+    def test_launcher_quotes_the_ui_script_path(self):
+        source = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
+        assert "import shlex" in source
+        assert 'bash "{ui}" start' not in source
+        assert "shlex.quote(str(ui))" in source
+
+
+@requires_pipelines
+class TestStopRacesInFlightOperation:
+    """Stop deliberately bypasses the job queue so it stays responsive during a
+    long rebuild - but that let it race the very operation it interrupted.
+
+    Sequence: the operator hits Add, its worker stages sources and is about to
+    start the detector; the operator hits Stop, which stops everything and
+    clears the saved list; the worker then resumes, starts the detector and
+    re-saves its stale list. The panel shows "pipeline stopped" over a pipeline
+    that is back up with the pre-Stop streams.
+    """
+
+    @pytest.mark.parametrize("name", ["scale", "live", "group"])
+    def test_a_stop_mid_operation_wins(self, name, monkeypatch):
+        ui = _load_ui_server(name)
+        started = threading.Event()
+        release = threading.Event()
+        state = {"running": False, "streams": ["cam-1", "cam-2"]}
+
+        def slow_add():
+            started.set()
+            release.wait(timeout=10)      # Stop happens during this window
+            state["running"] = True       # the worker brings the pipeline back up
+            state["streams"] = ["cam-1", "cam-2", "cam-3"]
+
+        def fake_stop():
+            state["running"] = False
+
+        # Route both the worker's undo and Stop's own teardown at our fake state.
+        if name == "group":
+            monkeypatch.setattr(ui.pipeline, "stop_all_groups", fake_stop)
+            monkeypatch.setattr(ui, "save_groups", lambda v: state.update(streams=list(v)))
+        else:
+            monkeypatch.setattr(ui.pipeline, "stop_app", fake_stop)
+            monkeypatch.setattr(ui, "save_streams", lambda v: state.update(streams=list(v)))
+
+        assert ui.submit(slow_add, "add cam-3") is True
+        assert started.wait(timeout=10)
+
+        ui.begin_stop()               # what POST /api/down does first
+        fake_stop()
+        state["streams"] = []
+
+        release.set()
+        for _ in range(200):          # let the worker finish and reconcile
+            if not ui.STATUS["busy"]:
+                break
+            time.sleep(0.05)
+
+        assert ui.STATUS["busy"] is False
+        assert state["running"] is False, "the interrupted worker restarted the pipeline"
+        assert state["streams"] == [], "the interrupted worker restored its stale stream list"
+        assert ui.STATUS["message"] == "pipeline stopped"
+
+    @pytest.mark.parametrize("name", ["scale", "live", "group"])
+    def test_an_uninterrupted_operation_still_reports_done(self, name, monkeypatch):
+        """The guard must not fire when no Stop happened."""
+        ui = _load_ui_server(name)
+        if name == "group":
+            monkeypatch.setattr(ui.pipeline, "stop_all_groups", lambda: None)
+            monkeypatch.setattr(ui, "save_groups", lambda v: None)
+        else:
+            monkeypatch.setattr(ui.pipeline, "stop_app", lambda: None)
+            monkeypatch.setattr(ui, "save_streams", lambda v: None)
+
+        done = threading.Event()
+        assert ui.submit(done.set, "add cam-3") is True
+        assert done.wait(timeout=10)
+        for _ in range(200):
+            if not ui.STATUS["busy"]:
+                break
+            time.sleep(0.05)
+        assert ui.STATUS["message"] == "done: add cam-3"
+
+    @pytest.mark.parametrize("name", ["scale", "live", "group"])
+    def test_down_invalidates_before_doing_any_work(self, name):
+        """begin_stop() must run before the teardown thread starts, or a worker
+        finishing in between would still see a fresh token."""
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "ui_server.py").read_text(encoding="utf-8")
+        down = source.index('if path == "/api/down":')
+        assert source.index("begin_stop()", down) < source.index("def do_down():", down)

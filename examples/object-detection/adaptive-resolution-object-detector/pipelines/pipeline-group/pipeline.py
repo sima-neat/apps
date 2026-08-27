@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import ssl
 import subprocess
 import sys
@@ -165,8 +166,8 @@ def app_command() -> str:
                 "language is 'cpp' but no binary was found. Build it with "
                 "./build.sh --clean, or switch back to Python. Looked in:\n  "
                 + "\n  ".join(str(c) for c in CPP_APP_CANDIDATES))
-        return f"{binary} --mode {APP_MODE}"
-    return f"{PYTHON} -u {PY_APP} --mode {APP_MODE}"
+        return f"{shlex.quote(str(binary))} --mode {APP_MODE}"
+    return f"{shlex.quote(PYTHON)} -u {shlex.quote(str(PY_APP))} --mode {APP_MODE}"
 
 
 # ==========================================================================
@@ -463,6 +464,28 @@ def stop_group(group: int, grace_s: int = 20) -> bool:
     return False
 
 
+def _term_then_kill(pattern: str, grace_s: int = 20) -> bool:
+    """SIGTERM a pattern's processes and WAIT for them, SIGKILL only if they hang.
+
+    Same contract as stop_app(): the app releases decoder/CVU pools during its
+    SIGTERM teardown, and killing before that finishes strands them in the
+    reserved region so the next start fails to allocate. A fixed two-second
+    sleep was long enough only while SIGTERM was unhandled and killed instantly;
+    now that the detector actually tears down on TERM, graph teardown needs the
+    full grace period. Returns True if the processes exited on their own.
+    """
+    pids = ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip()
+    if not pids:
+        return True
+    ssh(f'kill -TERM {pids} 2>/dev/null || true')
+    for _ in range(grace_s):
+        if not ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip():
+            return True
+        time.sleep(1)
+    ssh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    return False
+
+
 def stop_foreign_detectors() -> None:
     """Stop the scale and live pipelines' detectors - never a sibling group.
 
@@ -471,10 +494,9 @@ def stop_foreign_detectors() -> None:
     their CONFIG filename instead, which is unique per deployment.
     """
     for pattern in ("[s]cale-run.yaml", "[l]ive-run.yaml"):
-        pids = ssh(f'pgrep -f "{pattern}" | tr "\n" " "').stdout.strip()
-        if pids:
-            ssh(f'kill -TERM {pids} 2>/dev/null || true; sleep 2; '
-                f'kill -9 {pids} 2>/dev/null || true')
+        if not _term_then_kill(pattern):
+            print(f"warning: {pattern} did not exit in time and was killed; "
+                  f"its decoder/MLA pools may need fix_devkit_runtime.sh", flush=True)
 
 
 def stop_all_groups() -> None:
@@ -492,9 +514,10 @@ def start_group(group: int) -> None:
     if not clean and not running_groups():
         print(f"group {group} stop was unclean - reclaiming decoder/MLA pools", flush=True)
         reset_runtime()
-    log = log_path(group)
-    exec_devkit(f'rm -f {log}; setsid nohup {app_command()} '
-                f'--config {config_path(group)} > {log} 2>&1 < /dev/null & sleep 2',
+    log_q = shlex.quote(log_path(group))
+    exec_devkit(f'rm -f {log_q}; setsid nohup {app_command()} '
+                f'--config {shlex.quote(str(config_path(group)))} '
+                f'> {log_q} 2>&1 < /dev/null & sleep 2',
                 timeout=180)
 
 
@@ -665,8 +688,12 @@ def stage_group_sources(group: int, tier: Tier, count: int) -> None:
 def cmd_up(n: int) -> None:
     ceiling = GROUP_SIZE * MAX_GROUPS
     if n > ceiling:
-        print(f"WARNING: {n} exceeds the {ceiling}-stream ceiling "
-              f"({MAX_GROUPS} groups x {GROUP_SIZE} streams each)")
+        # Refuse rather than warn: group_plan() can only lay out `ceiling`
+        # streams, so continuing would silently run a SMALLER experiment than
+        # asked for and then report it as a success at that lower count.
+        sys.exit(f"{n} streams exceeds the {ceiling}-stream ceiling "
+                 f"({MAX_GROUPS} groups x {GROUP_SIZE} streams each). "
+                 f"Nothing was changed - ask for at most {ceiling}.")
     counts = group_plan(n)
     active = [g for g, count in enumerate(counts) if count > 0]
     for group, count in enumerate(counts):
@@ -739,7 +766,12 @@ def cmd_status() -> None:
 
 
 def cmd_down() -> None:
-    clean = all(stop_group(g) for g in range(MAX_GROUPS))
+    # Evaluate every group BEFORE aggregating: all() over a generator stops at
+    # the first False, so one group needing a kill used to leave every
+    # higher-numbered group running while `down` went on to stop the Insight
+    # sources and report only that "some groups were killed".
+    results = [stop_group(g) for g in range(MAX_GROUPS)]
+    clean = all(results)
     print("all groups stopped cleanly" if clean
           else "some groups did not exit in time and were killed; "
                "the next `up` runs fix_devkit_runtime.sh to reclaim their pools")

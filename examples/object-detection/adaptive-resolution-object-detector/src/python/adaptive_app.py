@@ -33,6 +33,7 @@ import glob
 import json
 import os
 import struct
+import signal
 import sys
 import threading
 import time
@@ -1317,6 +1318,14 @@ def run_app(cfg: AppConfig) -> None:
     for source in cfg.sources:
         manager.add(source)
 
+    # SIGTERM is the NORMAL stop signal here: every pipelines/ panel and CLI
+    # `down` sends it (see stop_app/stop_group). Without a handler the default
+    # disposition terminates the process outright, so manager.shutdown() never
+    # runs and the decoder/CVU pools it would have released stay allocated in
+    # the reserved region - the exact failure stop_app's docstring warns about,
+    # while the caller sees the PID vanish and reports a clean stop.
+    previous_sigterm = signal.signal(signal.SIGTERM, lambda *_: manager.stop_event.set())
+
     try:
         while not manager.stop_event.is_set():
             if manager.all_done():
@@ -1343,6 +1352,7 @@ def run_app(cfg: AppConfig) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
         manager.shutdown()
 
     for stream_id, reason in sorted(manager.failed.items()):

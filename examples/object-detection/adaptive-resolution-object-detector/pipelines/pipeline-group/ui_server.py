@@ -425,10 +425,32 @@ def blocked_if_over(prospective: list[dict]):
 _busy = threading.Lock()
 STATUS = {"busy": False, "message": "idle", "error": None}
 
+# Bumped by every Stop. Stop deliberately bypasses _busy so it stays responsive
+# during a long rebuild, but that let it race the operation it interrupted: the
+# worker would resume after Stop finished, start the detector again and re-save
+# its stale stream list, leaving "pipeline stopped" on screen over a pipeline
+# that had come back up. A worker that finishes holding a stale token knows a
+# Stop landed while it ran, and re-asserts the stopped state so Stop wins.
+_stop_token = 0
+_stop_token_lock = threading.Lock()
+
+
+def current_stop_token() -> int:
+    with _stop_token_lock:
+        return _stop_token
+
+
+def begin_stop() -> None:
+    """Invalidate any operation currently in flight."""
+    global _stop_token
+    with _stop_token_lock:
+        _stop_token += 1
+
 
 def submit(fn, desc: str) -> bool:
     if not _busy.acquire(blocking=False):
         return False
+    token = current_stop_token()
     STATUS.update(busy=True, message=desc, error=None)
 
     def worker():
@@ -439,11 +461,29 @@ def submit(fn, desc: str) -> bool:
             STATUS.update(error=str(exc), message=f"failed: {desc}")
             traceback.print_exc()
         finally:
+            if current_stop_token() != token:
+                # A Stop landed while this ran - including one that finished
+                # before we did. Undo whatever we brought back up.
+                reassert_stopped()
+                STATUS.update(message="pipeline stopped", error=None)
             STATUS["busy"] = False
             _busy.release()
 
     threading.Thread(target=worker, daemon=True).start()
     return True
+
+def reassert_stopped() -> None:
+    """Re-apply Stop after an operation that raced it. Best effort by design:
+    this runs on the worker's way out and must not raise into it."""
+    try:
+        pipeline.stop_all_groups()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        save_groups([])
+    except Exception:  # noqa: BLE001
+        pass
+
 
 
 # --------------------------------------------------------------------------
@@ -810,6 +850,10 @@ class Handler(BaseHTTPRequestHandler):
 
         # Stop bypasses the job queue so it always works, even mid-operation.
         if path == "/api/down":
+            # Invalidate any in-flight operation BEFORE doing anything, so a
+            # worker that finishes mid-Stop sees a stale token and undoes itself.
+            begin_stop()
+
             def do_down():
                 # See the note in the scale/live copy: clearing our own saved
                 # state must not depend on Insight being reachable.
