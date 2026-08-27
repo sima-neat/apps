@@ -617,12 +617,22 @@ def stream_multipart_file(rfile, length: int, content_type: str, dest) -> str | 
     The body is consumed in chunks and the file bytes go straight to `dest`, so
     peak memory is the chunk size rather than the payload size. Reading the whole
     request first - and splitting it, which copies it again - is what made a large
-    upload a memory event on the DevKit. Returns None when the body carries no
-    named file part.
+    upload a memory event on the DevKit. Returns None - having possibly written
+    part of the body to `dest`, which the caller discards - when the body carries
+    no named file part or never reaches its closing boundary.
     """
     if "boundary=" not in content_type:
         return None
-    boundary = b"--" + content_type.split("boundary=", 1)[1].strip().encode()
+    # The boundary parameter may be quoted and may be followed by further
+    # parameters (RFC 2045). Taking the rest of the header verbatim leaves the
+    # quotes in, and a boundary that never matches means the closing marker is
+    # never found - which used to look like a successful upload.
+    raw_boundary = content_type.split("boundary=", 1)[1].split(";", 1)[0].strip()
+    if len(raw_boundary) >= 2 and raw_boundary[0] == '"' and raw_boundary[-1] == '"':
+        raw_boundary = raw_boundary[1:-1]
+    if not raw_boundary:
+        return None
+    boundary = b"--" + raw_boundary.encode()
     remaining = length
     buf = b""
 
@@ -664,10 +674,11 @@ def stream_multipart_file(rfile, length: int, content_type: str, dest) -> str | 
             break
         remaining -= len(chunk)
         buf += chunk
-    # Truncated body: no closing boundary arrived. Keep what we have, minus the
-    # CRLF that would have introduced the boundary.
-    dest.write(buf[:-2] if buf.endswith(b"\r\n") else buf)
-    return fname
+    # No closing boundary. The body was truncated, or its boundary parameter did
+    # not match the one we parsed - either way what reached `dest` is a partial
+    # file, or a whole one with the multipart trailer stuck to the end. Refuse it
+    # rather than forward it to Insight and report the upload as complete.
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):

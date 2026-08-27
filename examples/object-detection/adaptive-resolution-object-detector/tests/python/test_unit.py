@@ -468,6 +468,10 @@ class TestFusedRunTermination:
 def _load_ui_server(name: str):
     """Import one pipeline's ui_server.py under its own module name."""
     directory = PIPELINES_DIR / f"pipeline-{name}"
+    # Every pipeline directory has its own pipeline.py. Leaving one cached under
+    # the bare name would silently bind the next panel server to the wrong one,
+    # making these tests order-dependent.
+    cached = sys.modules.pop("pipeline", None)
     sys.path.insert(0, str(directory))
     try:
         spec = importlib.util.spec_from_file_location(
@@ -478,9 +482,13 @@ def _load_ui_server(name: str):
         return module
     finally:
         sys.path.remove(str(directory))
+        sys.modules.pop("pipeline", None)
+        if cached is not None:
+            sys.modules["pipeline"] = cached
 
 
-def _multipart(payload: bytes, filename: str = "clip.mp4", boundary: str = "----bnd42"):
+def _multipart(payload: bytes, filename: str = "clip.mp4", boundary: str = "----bnd42",
+               quote_boundary: bool = False):
     raw = boundary.encode()
     body = (
         b"--" + raw + b"\r\n"
@@ -488,7 +496,8 @@ def _multipart(payload: bytes, filename: str = "clip.mp4", boundary: str = "----
         b"Content-Type: video/mp4\r\n\r\n" + payload + b"\r\n"
         b"--" + raw + b"--\r\n"
     )
-    return body, f"multipart/form-data; boundary={boundary}"
+    declared = f'"{boundary}"' if quote_boundary else boundary
+    return body, f"multipart/form-data; boundary={declared}"
 
 
 class TestUploadBounds:
@@ -538,6 +547,32 @@ class TestUploadBounds:
         assert ui.stream_multipart_file(Trickle(body), len(body), ctype, dest) == "clip.mp4"
         assert dest.getvalue() == payload
 
+    def test_quoted_boundary_parameter_is_understood(self):
+        """RFC 2045 allows boundary="...". Keeping the quotes means the closing
+        marker is never matched, which used to read as a successful upload."""
+        ui = _load_ui_server("live")
+        payload = os.urandom(50_000)
+        body, ctype = _multipart(payload, quote_boundary=True)
+        dest = io.BytesIO()
+        assert ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, dest) == "clip.mp4"
+        assert dest.getvalue() == payload
+
+    def test_upload_without_a_closing_boundary_is_refused(self):
+        """A partial file, or one carrying the multipart trailer, must not be
+        forwarded to Insight and reported complete."""
+        ui = _load_ui_server("live")
+        body, ctype = _multipart(os.urandom(20_000))
+        truncated = body[: len(body) - 40]
+        assert ui.stream_multipart_file(
+            io.BytesIO(truncated), len(truncated), ctype, io.BytesIO()
+        ) is None
+
+        # A boundary that does not match the body is the same failure: nothing
+        # ever terminates the part.
+        assert ui.stream_multipart_file(
+            io.BytesIO(body), len(body), "multipart/form-data; boundary=wrong", io.BytesIO()
+        ) is None
+
     def test_malformed_uploads_are_refused(self):
         ui = _load_ui_server("live")
         assert ui.stream_multipart_file(io.BytesIO(b"x"), 1, "application/json", io.BytesIO()) is None
@@ -559,3 +594,47 @@ class TestUploadBounds:
         assert "MAX_JSON_BYTES" in source
         assert "def stream_multipart_file" in source
         assert "def parse_multipart_file" not in source, "the unbounded parser came back"
+
+
+class TestGroupStaging:
+    """Grouped mode owns a fixed slot range per group and must leave it clean."""
+
+    def test_compaction_stops_every_position_in_the_range(self, monkeypatch):
+        """An external stream holds a position without staging a slot.
+
+        Stopping only positions past the new stream count therefore left a
+        dropped Insight source playing: [pinned, external] losing the pinned
+        stream leaves one stream, so position 0 - now backed by the external -
+        was never stopped even though its media source was still running.
+        """
+        ui = _load_ui_server("group")
+        stopped = []
+        monkeypatch.setattr(ui, "_stop_slot", stopped.append)
+
+        streams = [{"kind": "external", "url": "rtsp://cam/1"}]
+        urls, staging = ui.plan_group(0, streams)
+        assert staging == [], "an external stream must not claim an Insight slot"
+
+        ui.stage_group(0, staging)
+        assert stopped == [ui.insight_slot(0, pos) for pos in range(ui.GROUP_SIZE)]
+
+    def test_staging_stays_inside_the_group_range(self, monkeypatch):
+        """Whatever it stops, it must never touch a sibling group's slots."""
+        ui = _load_ui_server("group")
+        stopped = []
+        monkeypatch.setattr(ui, "_stop_slot", stopped.append)
+        monkeypatch.setattr(ui.pipeline, "api", lambda *args, **kwargs: None)
+        # Staging a slot waits for the RTSP mount; nothing here is really coming up.
+        monkeypatch.setattr(ui.time, "sleep", lambda _s: None)
+
+        _urls, staging = ui.plan_group(1, [{"kind": "pinned", "video": "clip.mp4"}])
+        ui.stage_group(1, staging)
+
+        own = {ui.insight_slot(1, pos) for pos in range(ui.GROUP_SIZE)}
+        assert set(stopped) <= own
+
+    def test_activity_panel_reads_the_per_group_logs(self):
+        """pipeline.LOG is the single-instance path and is never written here."""
+        source = (PIPELINES_DIR / "pipeline-group" / "ui_server.py").read_text(encoding="utf-8")
+        assert "pipeline.log_path(g)" in source
+        assert "tail -n 40 {pipeline.LOG}" not in source

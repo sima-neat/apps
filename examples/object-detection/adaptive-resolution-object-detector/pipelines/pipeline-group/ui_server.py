@@ -114,8 +114,8 @@ def _stop_slot(slot: int) -> None:
         pass
 
 
-def stage_group(group: int, staging: list[tuple[int, str]], drop_from: int) -> None:
-    """Start this group's Insight sources; stop only the ones it no longer uses.
+def stage_group(group: int, staging: list[tuple[int, str]]) -> None:
+    """Start this group's Insight sources; stop every slot it no longer uses.
 
     Deliberately never calls mediasrc/stop-all - that is global and would cut
     every other group's sources, which is exactly the coupling this pipeline
@@ -125,16 +125,19 @@ def stage_group(group: int, staging: list[tuple[int, str]], drop_from: int) -> N
     Each slot is stopped before being (re)assigned: Insight returns 500 when
     /mediasrc/start is called on a source that is already playing, which is
     what the global stop-all used to mask.
+
+    Every position in the range is stopped, not just the ones past the new stream
+    count. An external stream occupies a position without staging a slot, so
+    counting streams understates which slots are now free: a group going from
+    [pinned, external] to [external] left the dropped pinned source playing in
+    position 0 forever, holding Insight resources no detector referenced.
     """
-    for slot, _ in staging:
-        _stop_slot(slot)
+    for pos in range(GROUP_SIZE):
+        _stop_slot(insight_slot(group, pos))
     for slot, video in staging:
         pipeline.api("/api/mediasrc/assign", {"index": slot, "file": video})
     for slot, _ in staging:
         pipeline.api("/api/mediasrc/start", {"index": slot})
-    # positions this group no longer occupies (after a removal / shrink)
-    for pos in range(drop_from, GROUP_SIZE):
-        _stop_slot(insight_slot(group, pos))
     if staging:
         time.sleep(3)  # let RTSP mounts come up before the app connects
 
@@ -146,7 +149,7 @@ def rebuild_group(group: int, streams: list[dict]) -> None:
     sibling config rewritten, no sibling Insight slot stopped.
     """
     urls, staging = plan_group(group, streams)
-    stage_group(group, staging, drop_from=len(streams))
+    stage_group(group, staging)
     if streams:
         pipeline.write_config_group(group, urls)
         pipeline.start_group(group)
@@ -635,12 +638,22 @@ def stream_multipart_file(rfile, length: int, content_type: str, dest) -> str | 
     The body is consumed in chunks and the file bytes go straight to `dest`, so
     peak memory is the chunk size rather than the payload size. Reading the whole
     request first - and splitting it, which copies it again - is what made a large
-    upload a memory event on the DevKit. Returns None when the body carries no
-    named file part.
+    upload a memory event on the DevKit. Returns None - having possibly written
+    part of the body to `dest`, which the caller discards - when the body carries
+    no named file part or never reaches its closing boundary.
     """
     if "boundary=" not in content_type:
         return None
-    boundary = b"--" + content_type.split("boundary=", 1)[1].strip().encode()
+    # The boundary parameter may be quoted and may be followed by further
+    # parameters (RFC 2045). Taking the rest of the header verbatim leaves the
+    # quotes in, and a boundary that never matches means the closing marker is
+    # never found - which used to look like a successful upload.
+    raw_boundary = content_type.split("boundary=", 1)[1].split(";", 1)[0].strip()
+    if len(raw_boundary) >= 2 and raw_boundary[0] == '"' and raw_boundary[-1] == '"':
+        raw_boundary = raw_boundary[1:-1]
+    if not raw_boundary:
+        return None
+    boundary = b"--" + raw_boundary.encode()
     remaining = length
     buf = b""
 
@@ -682,10 +695,11 @@ def stream_multipart_file(rfile, length: int, content_type: str, dest) -> str | 
             break
         remaining -= len(chunk)
         buf += chunk
-    # Truncated body: no closing boundary arrived. Keep what we have, minus the
-    # CRLF that would have introduced the boundary.
-    dest.write(buf[:-2] if buf.endswith(b"\r\n") else buf)
-    return fname
+    # No closing boundary. The body was truncated, or its boundary parameter did
+    # not match the one we parsed - either way what reached `dest` is a partial
+    # file, or a whole one with the multipart trailer stuck to the end. Refuse it
+    # rather than forward it to Insight and report the upload as complete.
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -739,8 +753,13 @@ class Handler(BaseHTTPRequestHandler):
             # Truncate each line: the app prints whole GStreamer pipelines on one
             # line (thousands of chars), which bloats the payload and is unreadable
             # in a status panel.
+            # One tail across every group's log, not pipeline.LOG - that is the
+            # single-instance path and is never written in grouped mode, so the
+            # panel used to sit blank through every build and failure. -v labels
+            # each block with its filename; missing logs are skipped.
+            logs = " ".join(pipeline.log_path(g) for g in range(MAX_GROUPS))
             out = pipeline.exec_devkit(
-                f"tail -n 40 {pipeline.LOG} 2>/dev/null | cut -c1-200")
+                f"tail -v -n 20 {logs} 2>/dev/null | cut -c1-200")
             self._json({"log": out.stdout})
         else:
             self._json({"error": "not found"}, 404)
