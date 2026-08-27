@@ -114,6 +114,10 @@ class StreamRuntime:
     processed: int = 0
     closed: bool = False
     debug_pairing_warned: bool = False
+    # Wall-clock throttle state for inference.fps. See process_output_sample():
+    # this used to be set from the probed rate and then never consulted again,
+    # so the cap only ever changed the startup banner.
+    last_process_ms: float = -1e12
 
 
 @dataclass
@@ -888,9 +892,30 @@ def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
     )
 
 
+def should_throttle_fps(cfg: AppConfig, stream: StreamRuntime, now: float) -> bool:
+    """True when inference.fps says this stream must wait before processing again.
+
+    Caps the rate at which THIS STREAM processes and emits (metadata, debug
+    frames) - not the rate the shared detector runs the model, and not the video
+    Insight receives, which is the encoded passthrough at the source's own rate
+    regardless. Setting output_fps from cfg.fps at build time changed only the
+    startup banner; nothing ever consulted it again, so a cap did nothing
+    (mirrors src/cpp/fused_app.h).
+    """
+    if cfg.fps <= 0:
+        return False
+    min_interval_ms = 1000.0 / cfg.fps
+    return now < stream.last_process_ms + min_interval_ms
+
+
 def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float) -> None:
     if cfg.frames > 0 and stream.processed >= cfg.frames:
         return
+
+    now = time_ms()
+    if should_throttle_fps(cfg, stream, now):
+        return
+    stream.last_process_ms = now
 
     payload = extract_bbox_payload(sample)
     # Detections are emitted in the detector's input geometry, which is shared

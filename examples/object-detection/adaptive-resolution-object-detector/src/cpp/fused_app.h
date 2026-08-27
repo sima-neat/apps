@@ -76,6 +76,12 @@ struct AppConfig {
   int decoder_buffers = 4;
   int decoder_input_buffers = 2;
   std::string decoder_tuning = "throughput-low-latency";
+  // DECODER-side fps cap for admission, not exposed via config (matches
+  // src/python/fused_app.py). A source's native rate is declared to the
+  // decoder for capacity admission; a very high rate (e.g. 500 fps) x many
+  // streams exceeds the decoder core and the whole graph is REJECTED before it
+  // starts ("decoder processing capacity unavailable"). See build_decode_graph.
+  int decoder_fps_cap = 30;
   int frames = 0;
   int fps = 0;
   int max_inflight_per_stream = 4;
@@ -160,6 +166,10 @@ struct StreamRuntime {
   int processed = 0;
   bool closed = false;
   bool debug_pairing_warned = false;
+  // Wall-clock throttle state for inference.fps. See process_output_sample():
+  // this used to be set from the probed rate and then never consulted again,
+  // so the cap only ever changed the startup banner.
+  double last_process_ms = -1e12;
 };
 
 struct AppRuntime {
@@ -500,7 +510,13 @@ build_source_options(const AppConfig& cfg, const std::string& url, const ProbedS
     opt.output_caps.format = "NV12";
     opt.output_caps.width = scale_w;
     opt.output_caps.height = scale_h;
-    opt.output_caps.fps = fps_out;
+    // Do NOT pin the decoded framerate when the source will be admission-capped
+    // (see build_decode_graph): a caps framerate that differs from the real
+    // stream fails negotiation ("framerate mismatch"). 0 leaves it unconstrained
+    // so the decoder emits whatever rate it achieves. Only pin fps for normal
+    // (uncapped) sources.
+    const bool capped = cfg.decoder_fps_cap > 0 && fps_out > cfg.decoder_fps_cap;
+    opt.output_caps.fps = capped ? 0 : fps_out;
     opt.output_caps.memory = simaai::neat::CapsMemory::Any;
   }
   return opt;
@@ -545,7 +561,8 @@ build_encoded_source_graph(const simaai::neat::nodes::groups::RtspDecodedInputOp
 
 simaai::neat::Graph
 build_decode_graph(const std::string& input_name,
-                   const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt) {
+                   const simaai::neat::nodes::groups::RtspDecodedInputOptions& opt,
+                   const AppConfig& cfg) {
   simaai::neat::Graph decode("decode");
   const int dec_w = (opt.h264_width > 0) ? opt.h264_width : opt.fallback_h264_width;
   const int dec_h = (opt.h264_height > 0) ? opt.h264_height : opt.fallback_h264_height;
@@ -559,7 +576,14 @@ build_decode_graph(const std::string& input_name,
   dec.next_element = opt.decoder_next_element;
   dec.dec_width = dec_w;
   dec.dec_height = dec_h;
-  dec.dec_fps = opt.source_fps;
+  // High-fps sources: leave dec_fps UNSPECIFIED (-1) rather than pinning a
+  // value. Pinning the source rate (e.g. 500) makes admission reject the graph
+  // ("processing capacity unavailable"); pinning a lower cap (e.g. 30) fails
+  // caps negotiation ("framerate mismatch"). -1 lets admission use its default
+  // (~30 fps) AND leaves caps unpinned, so the decoder admits and then processes
+  // what it can, dropping the rest. Normal sources keep their exact rate.
+  const bool capped = cfg.decoder_fps_cap > 0 && opt.source_fps > cfg.decoder_fps_cap;
+  dec.dec_fps = capped ? -1 : opt.source_fps;
   dec.num_buffers = opt.num_buffers;
   dec.input_buffers = opt.decoder_input_buffers;
   dec.decoder_tuning = opt.decoder_tuning;
@@ -742,7 +766,7 @@ StreamRuntime build_stream_runtime(const AppConfig& cfg, int stream_index, const
 void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRuntime& stream,
                           const simaai::neat::Graph& detector_graph) {
   auto source = build_encoded_source_graph(stream.source_options);
-  auto decoder = build_decode_graph("decode_h264", stream.source_options);
+  auto decoder = build_decode_graph("decode_h264", stream.source_options, cfg);
 
   if (cfg.video_enabled) {
     auto encoded_branch = simaai::neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
@@ -846,11 +870,33 @@ cv::Mat* take_debug_frame(StreamRuntime& stream, int64_t frame_id) {
   return &stream.debug_frames.rbegin()->second;
 }
 
+// True when inference.fps says this stream must wait before processing again.
+//
+// Caps the rate at which THIS STREAM processes and emits (metadata, debug
+// frames) - not the rate the shared detector runs the model, and not the video
+// Insight receives, which is the encoded passthrough at the source's own rate
+// regardless. Setting output_fps from cfg.fps at build time changed only the
+// startup banner; nothing ever consulted it again, so a cap did nothing
+// (mirrors src/python/fused_app.py).
+bool should_throttle_fps(const AppConfig& cfg, const StreamRuntime& stream, double now) {
+  if (cfg.fps <= 0) {
+    return false;
+  }
+  const double min_interval_ms = 1000.0 / static_cast<double>(cfg.fps);
+  return now < stream.last_process_ms + min_interval_ms;
+}
+
 void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
                            const simaai::neat::Sample& sample, double detection_pull_ms) {
   if (cfg.frames > 0 && stream.processed >= cfg.frames) {
     return;
   }
+
+  const double now = sima_examples::time_ms();
+  if (should_throttle_fps(cfg, stream, now)) {
+    return;
+  }
+  stream.last_process_ms = now;
 
   std::vector<std::uint8_t> payload;
   std::string err;

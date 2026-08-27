@@ -34,7 +34,6 @@ class TestE2E:
         e2e_model_path,
         tmp_output_dir,
         rtsp_h264_urls,
-        rtsp_h265_urls,
         test_timeout_ms,
         skip_unless_e2e_ready,
         e2e_config_writer,
@@ -45,11 +44,14 @@ class TestE2E:
             _runtime_deps_ready(),
             "python runtime dependencies (cv2, numpy, pyneat) are not available",
         )
-        # The shared fixtures are codec-specific; this pipeline is codec-agnostic,
-        # so take whichever the environment supplies (h264 first, then h265).
-        rtsp_urls = [*rtsp_h264_urls, *rtsp_h265_urls]
+        # This pipeline is NOT codec-agnostic - src/python/adaptive_app.py hardcodes
+        # pyneat.SimaDecodeType.H264 - so unlike a truly codec-agnostic e2e test this
+        # must not fall back to h265 URLs: an environment with fewer than two h264
+        # URLs but enough combined would otherwise feed an H.265 stream into an
+        # H.264-only decoder and fail on a fixture mismatch, not a real defect.
+        rtsp_urls = rtsp_h264_urls
         skip_unless_e2e_ready(
-            len(rtsp_urls) >= 2, "need at least two RTSP URLs for adaptive multistream e2e"
+            len(rtsp_urls) >= 2, "need at least two H.264 RTSP URLs for adaptive multistream e2e"
         )
         output_cfg = e2e_config_section(EXAMPLE_NAME, "testing.e2e.output")
         total_saved_frames = int(output_cfg["total_saved_frames"])

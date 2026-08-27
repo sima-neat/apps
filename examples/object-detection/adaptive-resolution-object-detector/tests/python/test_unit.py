@@ -843,3 +843,89 @@ class TestGroupPlan:
             assert name not in source, f"{name} should have been removed, not left dead"
         assert "def write_config_group" in source
         assert "def stage_group_sources" in source
+
+
+class TestFusedFpsCap:
+    """inference.fps must actually pace processing, not just label the banner.
+
+    output_fps was set from cfg.fps at build time and never consulted again, so
+    a configured cap changed nothing about the rate detection actually ran at -
+    experiments relying on it measured the uncapped workload.
+    """
+
+    @staticmethod
+    def _cfg(fps):
+        return SimpleNamespace(fps=fps)
+
+    @staticmethod
+    def _stream(last_process_ms):
+        return SimpleNamespace(last_process_ms=last_process_ms)
+
+    def test_uncapped_never_throttles(self):
+        import fused_app
+
+        cfg = self._cfg(0)
+        stream = self._stream(fused_app.time_ms())
+        assert fused_app.should_throttle_fps(cfg, stream, fused_app.time_ms()) is False
+
+    def test_throttles_before_the_target_interval_elapses(self):
+        import fused_app
+
+        cfg = self._cfg(10)  # 100 ms between frames
+        now = fused_app.time_ms()
+        stream = self._stream(now)
+        assert fused_app.should_throttle_fps(cfg, stream, now + 50.0) is True
+
+    def test_admits_once_the_target_interval_has_elapsed(self):
+        import fused_app
+
+        cfg = self._cfg(10)
+        now = fused_app.time_ms()
+        stream = self._stream(now)
+        assert fused_app.should_throttle_fps(cfg, stream, now + 150.0) is False
+
+    def test_a_throttled_sample_never_reaches_bbox_extraction(self, monkeypatch):
+        """The whole point is skipping the parse/send work, not just the send."""
+        import fused_app
+
+        def boom(*_a, **_kw):
+            raise AssertionError("extract_bbox_payload must not run while throttled")
+
+        monkeypatch.setattr(fused_app, "extract_bbox_payload", boom)
+        cfg = SimpleNamespace(fps=10, frames=0)
+        stream = SimpleNamespace(last_process_ms=fused_app.time_ms(), processed=0)
+        fused_app.process_output_sample(stream, cfg, sample=object(), detection_pull_ms=0.0)
+        assert stream.processed == 0
+
+
+class TestFusedDecoderFpsCap:
+    """A high-fps source must not be declared to decoder admission at its literal
+    rate - that gets the whole graph rejected before it starts. See
+    src/python/fused_app.py's decoder_fps_cap for the mechanism this mirrors in
+    C++ (src/cpp/fused_app.h), which previously had no equivalent at all."""
+
+    def test_cpp_gates_admission_the_same_way_python_does(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        assert "decoder_fps_cap" in cpp
+        assert "dec.dec_fps = capped ? -1 : opt.source_fps;" in cpp
+        assert "opt.output_caps.fps = capped ? 0 : fps_out;" in cpp
+
+
+class TestE2eCodecFixtures:
+    """The adaptive e2e tests must not silently mix H.264 and H.265 sources.
+
+    adaptive_app.py/adaptive_app.h hardcode H.264 decode. Concatenating
+    rtsp_h264_urls with rtsp_h265_urls to reach the "at least two" threshold
+    meant an environment with, say, one URL of each would feed an H.265 stream
+    into an H.264-only decoder and fail on a fixture mismatch, not a real defect.
+    """
+
+    def test_python_e2e_requires_h264_only(self):
+        source = (EXAMPLE_DIR / "tests" / "python" / "test_e2e.py").read_text(encoding="utf-8")
+        assert "rtsp_h265_urls" not in source
+        assert "rtsp_urls = rtsp_h264_urls" in source
+
+    def test_cpp_e2e_requires_h264_only(self):
+        source = (EXAMPLE_DIR / "tests" / "cpp" / "test_e2e.cpp").read_text(encoding="utf-8")
+        assert "rtsp_h265_urls_from_env" not in source
+        assert "rtsp_h264_urls_from_env()" in source
