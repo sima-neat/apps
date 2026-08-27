@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import importlib.util
+import io
+import os
 import subprocess
 import sys
 import textwrap
@@ -423,3 +426,136 @@ class TestStreamFailureIsolation:
             assert not manager.stop_event.is_set()
         finally:
             manager.shutdown()
+
+
+PIPELINES_DIR = EXAMPLE_DIR / "pipelines"
+
+
+class TestFusedRunTermination:
+    """A fused run must end when its shared output closes.
+
+    all_streams_done() used to return False outright for frame_limit <= 0, so a
+    continuous run could never satisfy it. Once the detection output closed, the
+    loop spun on a dead output at full CPU - a process reported as running that
+    could never emit another detection.
+    """
+
+    @staticmethod
+    def _streams(*specs):
+        return [SimpleNamespace(processed=p, closed=c) for p, c in specs]
+
+    def test_closed_streams_end_a_continuous_run(self):
+        import fused_app
+
+        streams = self._streams((123, True), (98, True))
+        assert fused_app.all_streams_done(streams, 0) is True
+
+    def test_open_streams_keep_a_continuous_run_going(self):
+        import fused_app
+
+        streams = self._streams((123, False), (98, True))
+        assert fused_app.all_streams_done(streams, 0) is False
+
+    def test_frame_limit_still_ends_a_batch_run(self):
+        import fused_app
+
+        assert fused_app.all_streams_done(self._streams((10, False), (10, False)), 10) is True
+        assert fused_app.all_streams_done(self._streams((10, False), (9, False)), 10) is False
+        # A stream that closed early does not hold up the rest.
+        assert fused_app.all_streams_done(self._streams((10, False), (2, True)), 10) is True
+
+
+def _load_ui_server(name: str):
+    """Import one pipeline's ui_server.py under its own module name."""
+    directory = PIPELINES_DIR / f"pipeline-{name}"
+    sys.path.insert(0, str(directory))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            f"ui_server_{name}", directory / "ui_server.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(directory))
+
+
+def _multipart(payload: bytes, filename: str = "clip.mp4", boundary: str = "----bnd42"):
+    raw = boundary.encode()
+    body = (
+        b"--" + raw + b"\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="' + filename.encode() + b'"\r\n'
+        b"Content-Type: video/mp4\r\n\r\n" + payload + b"\r\n"
+        b"--" + raw + b"--\r\n"
+    )
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+class TestUploadBounds:
+    """/api/upload is unauthenticated on 0.0.0.0 and runs on a memory-tight board.
+
+    Reading the whole declared body into memory - and splitting it, which copied
+    it again - meant one large or concurrent upload could OOM the DevKit before a
+    byte reached disk. The body now streams to the tempfile a chunk at a time
+    behind a declared-size ceiling.
+    """
+
+    def test_upload_streams_to_disk_without_buffering_the_body(self):
+        ui = _load_ui_server("live")
+        payload = os.urandom(4 * 1024 * 1024)
+        body, ctype = _multipart(payload)
+        dest = io.BytesIO()
+        name = ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, dest)
+        assert name == "clip.mp4"
+        assert dest.getvalue() == payload
+
+    def test_payload_containing_boundary_like_bytes_survives(self):
+        ui = _load_ui_server("live")
+        payload = b"--not-the-boundary--\r\n" * 500
+        body, ctype = _multipart(payload)
+        dest = io.BytesIO()
+        assert ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, dest) == "clip.mp4"
+        assert dest.getvalue() == payload
+
+    def test_boundary_split_across_reads_is_still_found(self):
+        ui = _load_ui_server("live")
+
+        class Trickle(io.RawIOBase):
+            """Hands back 7 bytes at a time, straddling every marker."""
+
+            def __init__(self, data):
+                self.data, self.pos = data, 0
+
+            def read(self, size=-1):
+                take = 7 if size < 0 else min(7, size)
+                chunk = self.data[self.pos:self.pos + take]
+                self.pos += len(chunk)
+                return chunk
+
+        payload = os.urandom(60_000)
+        body, ctype = _multipart(payload)
+        dest = io.BytesIO()
+        assert ui.stream_multipart_file(Trickle(body), len(body), ctype, dest) == "clip.mp4"
+        assert dest.getvalue() == payload
+
+    def test_malformed_uploads_are_refused(self):
+        ui = _load_ui_server("live")
+        assert ui.stream_multipart_file(io.BytesIO(b"x"), 1, "application/json", io.BytesIO()) is None
+
+        body, ctype = _multipart(b"data", filename="")
+        assert ui.stream_multipart_file(io.BytesIO(body), len(body), ctype, io.BytesIO()) is None
+
+        # Part headers that never terminate must not be buffered without limit.
+        runaway = b"--B\r\n" + b"X" * (ui.MAX_PART_HEADER_BYTES + 1024)
+        assert ui.stream_multipart_file(
+            io.BytesIO(runaway), len(runaway), "multipart/form-data; boundary=B", io.BytesIO()
+        ) is None
+
+    @pytest.mark.parametrize("name", ["live", "scale", "group"])
+    def test_every_panel_server_carries_the_ceilings(self, name):
+        """All three copies are maintained together; none may drift back."""
+        source = (PIPELINES_DIR / f"pipeline-{name}" / "ui_server.py").read_text(encoding="utf-8")
+        assert "MAX_UPLOAD_BYTES" in source
+        assert "MAX_JSON_BYTES" in source
+        assert "def stream_multipart_file" in source
+        assert "def parse_multipart_file" not in source, "the unbounded parser came back"

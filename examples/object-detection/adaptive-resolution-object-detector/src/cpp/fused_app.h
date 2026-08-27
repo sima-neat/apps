@@ -801,11 +801,14 @@ void maybe_save_debug_frame(const AppConfig& cfg, const StreamRuntime& stream, c
 }
 
 bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit) {
-  if (frame_limit <= 0) {
-    return false;
+  if (streams.empty()) {
+    return true;
   }
+  // A closed stream is done at any frame limit. Returning false outright for
+  // frames<=0 meant a continuous run could never finish, so once the shared
+  // output closed the loop spun on it forever.
   return std::all_of(streams.begin(), streams.end(), [frame_limit](const StreamRuntime& stream) {
-    return stream.processed >= frame_limit || stream.closed;
+    return stream.closed || (frame_limit > 0 && stream.processed >= frame_limit);
   });
 }
 
@@ -829,7 +832,17 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
   // so videoscale stretches the pixels instead of adding bars.
   auto boxes =
       objdet::parse_boxes_strict(payload, stream.det_w, stream.det_h, cfg.max_detections, false);
-  if (stream.det_w != stream.frame_w || stream.det_h != stream.frame_h) {
+  // The debug frame is tapped off the decoded branch, which build_source_options
+  // normalised to the shared detector geometry - so it needs the boxes in THAT
+  // space. Copy them before the rescale below, or every non-native leg saves
+  // images whose overlays are scaled wrong against a correct frame.
+  const bool rescale_to_native =
+      stream.det_w != stream.frame_w || stream.det_h != stream.frame_h;
+  std::vector<objdet::Box> debug_boxes;
+  if (rescale_to_native && save_frames_enabled(cfg)) {
+    debug_boxes = boxes;
+  }
+  if (rescale_to_native) {
     const float sx = static_cast<float>(stream.frame_w) / static_cast<float>(stream.det_w);
     const float sy = static_cast<float>(stream.frame_h) / static_cast<float>(stream.det_h);
     for (auto& box : boxes) {
@@ -847,8 +860,9 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
     send_metadata(stream, sample, boxes);
     const double metadata_end = sima_examples::time_ms();
     if (save_frames_enabled(cfg)) {
-      maybe_save_debug_frame(
-          cfg, stream, stream.latest_debug_frame ? &*stream.latest_debug_frame : nullptr, boxes);
+      maybe_save_debug_frame(cfg, stream,
+                             stream.latest_debug_frame ? &*stream.latest_debug_frame : nullptr,
+                             rescale_to_native ? debug_boxes : boxes);
     }
     stream.profile.add(detection_pull_ms, metadata_end - metadata_start,
                        static_cast<int>(boxes.size()));
@@ -900,7 +914,18 @@ bool process_run_once(AppRuntime& app, const AppConfig& cfg, const std::string& 
   simaai::neat::PullError pull_error;
   const auto status = app.run.pull(output_name, kPullTimeoutMs, sample, &pull_error);
   const double pull_end = sima_examples::time_ms();
-  if (status == simaai::neat::PullStatus::Timeout || status == simaai::neat::PullStatus::Closed) {
+  if (status == simaai::neat::PullStatus::Closed) {
+    // The shared graph is gone, so no later pull can succeed. Mark every stream
+    // closed and let the run loop end: treating this as a timeout left the
+    // process alive and spinning at full CPU on an output that was never coming
+    // back, reported as running but unable to emit another detection.
+    std::cerr << "[warn] detection output closed; ending run\n";
+    for (auto& stream : app.streams) {
+      stream.closed = true;
+    }
+    return false;
+  }
+  if (status == simaai::neat::PullStatus::Timeout) {
     return false;
   }
   if (status != simaai::neat::PullStatus::Ok) {

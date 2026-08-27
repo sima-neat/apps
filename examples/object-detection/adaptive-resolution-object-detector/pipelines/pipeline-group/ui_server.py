@@ -28,6 +28,7 @@ their native resolution and count against the shared decode budget as-is.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -618,19 +619,73 @@ def serve_asset(handler, name: str) -> bool:
 # --------------------------------------------------------------------------
 
 
-def parse_multipart_file(body: bytes, content_type: str):
-    """Extract (filename, bytes) from a single-file multipart/form-data body."""
+# Ceilings for this unauthenticated 0.0.0.0 server. Without them a single POST is
+# read whole into DevKit memory, which the media pools have already claimed most
+# of, so one oversized upload - or a few concurrent ones, since this is a
+# ThreadingHTTPServer - can push the board into OOM before a byte reaches disk.
+MAX_UPLOAD_BYTES = int(os.environ.get("UI_MAX_UPLOAD_BYTES", 512 * 1024 * 1024))
+MAX_JSON_BYTES = int(os.environ.get("UI_MAX_JSON_BYTES", 1024 * 1024))
+MAX_PART_HEADER_BYTES = 64 * 1024
+READ_CHUNK_BYTES = 1024 * 1024
+
+
+def stream_multipart_file(rfile, length: int, content_type: str, dest) -> str | None:
+    """Copy a single-file multipart/form-data body to `dest`, returning its filename.
+
+    The body is consumed in chunks and the file bytes go straight to `dest`, so
+    peak memory is the chunk size rather than the payload size. Reading the whole
+    request first - and splitting it, which copies it again - is what made a large
+    upload a memory event on the DevKit. Returns None when the body carries no
+    named file part.
+    """
     if "boundary=" not in content_type:
-        return None, None
-    boundary = content_type.split("boundary=", 1)[1].strip().encode()
-    for part in body.split(b"--" + boundary):
-        if b"filename=" in part and b"\r\n\r\n" in part:
-            head, data = part.split(b"\r\n\r\n", 1)
-            fname = head.split(b'filename="', 1)[1].split(b'"', 1)[0].decode()
-            if not fname:
-                continue
-            return fname, data.rsplit(b"\r\n", 1)[0]  # strip trailing CRLF
-    return None, None
+        return None
+    boundary = b"--" + content_type.split("boundary=", 1)[1].strip().encode()
+    remaining = length
+    buf = b""
+
+    # The part headers are small: read until the blank line that ends them.
+    while remaining > 0 and b"\r\n\r\n" not in buf:
+        chunk = rfile.read(min(remaining, READ_CHUNK_BYTES))
+        if not chunk:
+            break
+        remaining -= len(chunk)
+        buf += chunk
+        # Only a header that never terminates is oversized - a chunk that ran on
+        # past the blank line is carrying file bytes, not headers.
+        if b"\r\n\r\n" not in buf and len(buf) > MAX_PART_HEADER_BYTES:
+            return None
+    if b"\r\n\r\n" not in buf:
+        return None
+    head, buf = buf.split(b"\r\n\r\n", 1)
+    if b"filename=" not in head:
+        return None
+    fname = head.split(b'filename="', 1)[1].split(b'"', 1)[0].decode(errors="replace")
+    if not fname:
+        return None
+
+    # Then the file bytes. Hold back enough tail to recognise the closing boundary
+    # even when it straddles two chunks, and write everything before it.
+    tail = len(boundary) + 8
+    while True:
+        cut = buf.find(b"\r\n" + boundary)
+        if cut != -1:
+            dest.write(buf[:cut])
+            return fname
+        if len(buf) > tail:
+            dest.write(buf[:-tail])
+            buf = buf[-tail:]
+        if remaining <= 0:
+            break
+        chunk = rfile.read(min(remaining, READ_CHUNK_BYTES))
+        if not chunk:
+            break
+        remaining -= len(chunk)
+        buf += chunk
+    # Truncated body: no closing boundary arrived. Keep what we have, minus the
+    # CRLF that would have introduced the boundary.
+    dest.write(buf[:-2] if buf.endswith(b"\r\n") else buf)
+    return fname
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -646,8 +701,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _body(self) -> dict:
-        n = int(self.headers.get("Content-Length", 0))
-        if not n:
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return {}
+        if n <= 0:
+            return {}
+        if n > MAX_JSON_BYTES:
+            # Treated as an unusable body, the same as malformed JSON below. No
+            # control endpoint here takes a payload anywhere near this size.
             return {}
         raw = self.rfile.read(n)
         try:
@@ -689,23 +751,33 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/upload":
             ctype = self.headers.get("Content-Type", "")
-            n = int(self.headers.get("Content-Length", 0))
-            fname, data = parse_multipart_file(self.rfile.read(n), ctype)
-            if not fname:
-                self._json({"error": "no file in upload"}, 400)
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                n = -1
+            if n < 0:
+                self._json({"error": "bad Content-Length"}, 400)
                 return
-            # Reduce the client-supplied name to a bare basename before it touches
-            # a filesystem path - an absolute path or ../ components in `fname`
-            # would otherwise let this unauthenticated (0.0.0.0) endpoint overwrite
-            # then delete any file the service account can write. The bytes land in
-            # a private tempfile; the sanitised name only travels as multipart
-            # metadata to Insight.
-            safe_name = Path(fname).name
-            if not safe_name or safe_name in (".", ".."):
-                self._json({"error": "invalid filename"}, 400)
+            if n > MAX_UPLOAD_BYTES:
+                # Refused on the header, before the body is read at all.
+                self.close_connection = True
+                self._json({"error": f"upload exceeds {MAX_UPLOAD_BYTES} bytes"}, 413)
                 return
             with tempfile.NamedTemporaryFile(dir="/tmp", prefix="upload-") as tmp:
-                tmp.write(data)
+                fname = stream_multipart_file(self.rfile, n, ctype, tmp)
+                if not fname:
+                    self._json({"error": "no file in upload"}, 400)
+                    return
+                # Reduce the client-supplied name to a bare basename before it
+                # touches a filesystem path - an absolute path or ../ components in
+                # `fname` would otherwise let this unauthenticated (0.0.0.0)
+                # endpoint overwrite then delete any file the service account can
+                # write. The bytes land in a private tempfile; the sanitised name
+                # only travels as multipart metadata to Insight.
+                safe_name = Path(fname).name
+                if not safe_name or safe_name in (".", ".."):
+                    self._json({"error": "invalid filename"}, 400)
+                    return
                 tmp.flush()
                 r = subprocess.run(
                     ["curl", "-sk", "--max-time", "600", "-F",

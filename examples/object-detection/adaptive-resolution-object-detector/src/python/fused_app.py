@@ -873,9 +873,15 @@ def maybe_save_debug_frame(
 
 
 def all_streams_done(streams: list[StreamRuntime], frame_limit: int) -> bool:
-    if frame_limit <= 0:
-        return False
-    return all(stream.processed >= frame_limit or stream.closed for stream in streams)
+    if not streams:
+        return True
+    # A closed stream is done at any frame limit. Returning False outright for
+    # frame_limit <= 0 meant a continuous run could never finish, so once the
+    # shared output closed the loop spun on it forever.
+    return all(
+        stream.closed or (frame_limit > 0 and stream.processed >= frame_limit)
+        for stream in streams
+    )
 
 
 def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detection_pull_ms: float) -> None:
@@ -887,7 +893,14 @@ def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detecti
     # across streams. Clamp in that space, then scale to this stream's native size
     # so boxes line up with the natively-delivered video.
     boxes = parse_boxes_strict(payload, stream.det_w, stream.det_h, cfg.max_detections)
-    if (stream.det_w, stream.det_h) != (stream.frame_w, stream.frame_h):
+    # The debug frame is tapped off the decoded branch, which build_source_options
+    # normalised to the shared detector geometry - so it needs the boxes in THAT
+    # space. Copy them before the rescale below, or every non-native leg saves
+    # images whose overlays are scaled wrong against a correct frame.
+    rescale_to_native = (stream.det_w, stream.det_h) != (stream.frame_w, stream.frame_h)
+    debug_boxes = ([dict(b) for b in boxes]
+                   if rescale_to_native and save_frames_enabled(cfg) else boxes)
+    if rescale_to_native:
         # Independent per-axis ratios, because the scale to the shared detector
         # geometry is a STRETCH, not a letterbox. That is worth stating: the
         # videoscale element defaults to add-borders=true, so letterboxing looks
@@ -910,7 +923,7 @@ def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detecti
         send_metadata(stream, sample, boxes)
         metadata_end = time_ms()
         if save_frames_enabled(cfg):
-            maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, boxes)
+            maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, debug_boxes)
         stream.profile.add(detection_pull_ms, metadata_end - metadata_start, len(boxes))
 
 
@@ -942,6 +955,15 @@ def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:
         last_error = last_error_fn() if callable(last_error_fn) else ""
         if last_error:
             raise RuntimeError(f"runtime error: {last_error}")
+        running_fn = getattr(app.run, "running", None)
+        if callable(running_fn) and not running_fn():
+            # The shared graph is gone, so no later pull can succeed. Mark every
+            # stream closed and let the run loop end: an empty pull was otherwise
+            # indistinguishable from a timeout, leaving the process alive and
+            # spinning on an output that was never coming back.
+            print("[warn] detection output closed; ending run", file=sys.stderr)
+            for stream in app.streams:
+                stream.closed = True
         return False
     stream_index = stream_index_from_sample(sample, len(app.streams))
     process_output_sample(app.streams[stream_index], cfg, sample, pull_end - pull_start)
