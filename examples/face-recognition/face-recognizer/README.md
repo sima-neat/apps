@@ -32,21 +32,36 @@ A companion tool, `face-enroll`, builds a gallery of face embeddings from video 
 
 **Throughput:** ~56.5 FPS on a 1280×720 @ 45 FPS RTSP stream (CVU preproc ~0.01 ms, SCRFD ~5.4 ms, ArcFace ~5.5 ms).
 
-## Model Download and Preparation
+## Prepare the Model
 
-The models are not available from the SiMa modelzoo and must be downloaded from public sources and prepared for MLA compilation. All steps run inside the **Neat Development Environment** with the Model Compiler activated.
+| Model file | Role | Source |
+|---|---|---|
+| `scrfd_2.5g_bnkps.mla_mpk.tar.gz` | Face detection (SCRFD 2.5G, BF16+MLA-tess) | SiMa modelzoo |
+| `w600k_r50.surgery_mpk.tar.gz` | Face recognition (ArcFace R50, BF16+MLA-tess) | SiMa modelzoo |
 
-Preparation scripts are in `examples/face-recognition/scripts/`.
+Model zoo version: 2.1.3
 
-### Step 1 — Activate the Model Compiler
+```bash
+export MODELZOO_VERSION="2.1.3"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/w600k_r50.surgery_mpk.tar.gz"
+cd ..
+```
+
+<details>
+<summary>Recompile from source (advanced)</summary>
+
+The pre-built packages above are compiled with `--bf16-activations --mla-tesselation`. To recompile from the original ONNX weights, all steps run inside the **Neat Development Environment** with the Model Compiler activated.
+
+**Step 1 — Activate the Model Compiler**
 
 ```bash
 source /sdk-extensions/model-compiler/bin/activate
 ```
 
-### Step 2 — Download models and apply graph surgery
-
-`prepare_models.py` downloads both models and applies the graph transformations required for MLA compilation in one step:
+**Step 2 — Download and apply graph surgery**
 
 ```bash
 mkdir -p /workspace/face-recog-models
@@ -55,28 +70,10 @@ python3 examples/face-recognition/scripts/prepare_models.py \
 ```
 
 This produces:
-- `scrfd_2.5g_bnkps.mla.onnx` — SCRFD with renamed stride outputs and static input shape; postprocess tails removed so the entire model maps to a single MLA segment
-- `w600k_r50.surgery.onnx` — ArcFace R50 with BN→Mul+Add, Flatten→Reshape, Gemm→MatMul+Add rewrites for MLA compatibility
+- `scrfd_2.5g_bnkps.mla.onnx` — SCRFD with renamed stride outputs, static input shape, postprocess tails removed
+- `w600k_r50.surgery.onnx` — ArcFace R50 with BN→Mul+Add, Flatten→Reshape, Gemm→MatMul+Add rewrites
 
-**Alternatively**, run the surgery scripts individually for more control:
-
-```bash
-# SCRFD: rename outputs, freeze input to 640×640, cut Transpose+Reshape+Sigmoid heads
-python3 examples/face-recognition/scripts/scrfd_to_mla.py \
-  /workspace/face-recog-models/scrfd_2.5g_bnkps.onnx \
-  --out /workspace/face-recog-models/scrfd_2.5g_bnkps.mla.onnx \
-  --validate
-
-# ArcFace R50: BN→Mul+Add, Flatten→Reshape, Gemm→MatMul+Add
-python3 examples/face-recognition/scripts/arcface_to_mla.py \
-  /workspace/face-recog-models/w600k_r50.onnx \
-  --out /workspace/face-recog-models/w600k_r50.surgery.onnx \
-  --validate
-```
-
-### Step 3 — Compile for Modalix (BF16 + MLA tessellation)
-
-`compile_models.sh` compiles both prepared ONNX files with `--bf16-activations --mla-tesselation` and copies the resulting packages directly into `models/`:
+**Step 3 — Compile for Modalix (BF16 + MLA tessellation)**
 
 ```bash
 bash examples/face-recognition/scripts/compile_models.sh \
@@ -85,17 +82,9 @@ bash examples/face-recognition/scripts/compile_models.sh \
   --calib-dir  /workspace/calib_images
 ```
 
-`--calib-dir` is optional but recommended for accurate BF16 quantization. It should contain representative face images (JPEG/PNG). Without it, random data is used.
+`--calib-dir` is optional but recommended for accurate BF16 quantization (representative face images). After compilation the packages are placed at `models/`.
 
-After the script completes the compiled packages are placed at:
-
-```
-examples/face-recognition/face-recognizer/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
-examples/face-recognition/face-recognizer/models/w600k_r50.surgery_mpk.tar.gz
-```
-
-**Why BF16 + MLA tessellation?**
-The CVU BF16 tessellate kernels (`CastTess`/`DetessCast`) are unsupported on current Modalix DevKit firmware. Compiling with `--mla-tesselation` moves tessellation inside the MLA ELF. An EV74 APU `cast_0` node (FP32→BF16) is automatically included in the compiled package and invoked via `graph.add(model)` at runtime.
+</details>
 
 ## Agentic Setup
 
@@ -387,7 +376,7 @@ ctest --test-dir build -L unit -R 'face-recognizer' --output-on-failure -V
 
 ```bash
 # E2E test — runs on the board, skips if RTSP or gallery are absent
-export SIMANEAT_APPS_TEST_MODELS_DIR=examples/face-recognition/face-recognizer/assets/models
+export SIMANEAT_APPS_TEST_MODELS_DIR=examples/face-recognition/face-recognizer/models
 export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME>
 export SIMANEAT_APPS_TEST_GALLERY_BIN=examples/face-recognition/face-recognizer/gallery.bin
 ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
@@ -417,4 +406,4 @@ The script expects `reference_images/<PersonName>/*.jpg` subdirectories and runs
 - Model preparation: `../scripts/prepare_models.py` — download + graph surgery (SCRFD + ArcFace R50)
 - SCRFD surgery: `../scripts/scrfd_to_mla.py` — rename outputs, freeze input, cut postprocess heads
 - ArcFace surgery: `../scripts/arcface_to_mla.py` — BN→Mul+Add, Flatten→Reshape, Gemm→MatMul+Add
-- Compilation: `../scripts/compile_models.sh` — BF16+MLA-tess compile + copy to assets/
+- Compilation: `../scripts/compile_models.sh` — BF16+MLA-tess compile + copy to models/

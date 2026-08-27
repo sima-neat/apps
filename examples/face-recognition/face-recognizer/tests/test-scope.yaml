@@ -1,11 +1,11 @@
 models:
   scrfd:
-    source: local
-    name: scrfd_2.5g_bnkps.mla
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz
     file: scrfd_2.5g_bnkps.mla_mpk.tar.gz
   arcface:
-    source: local
-    name: w600k_r50.surgery
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/w600k_r50.surgery_mpk.tar.gz
     file: w600k_r50.surgery_mpk.tar.gz
 
 unit:
