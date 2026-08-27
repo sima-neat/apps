@@ -104,6 +104,10 @@ struct AppConfig {
   std::string insight_host = "127.0.0.1";
   int video_port_base = 9000;
   int metadata_port_base = 9100;
+  // "auto" | "on" | "off". Mirrors src/python/adaptive_app.py - the panel writes
+  // this key into the config both languages read, so ignoring it here left C++
+  // runs silently matching by arrival order while Python matched exactly.
+  std::string metadata_rtp_timestamp = "auto";
   bool video_enabled = true;
   fs::path save_dir;
   int save_every = 0;
@@ -310,6 +314,10 @@ void validate_config(const AppConfig& cfg) {
   sima_examples::require(cfg.config_watch_seconds > 0.0, "runtime.config_watch_seconds must be > 0");
   sima_examples::require(cfg.video_port_base > 0, "output.insight.video_port must be > 0");
   sima_examples::require(cfg.metadata_port_base > 0, "output.insight.metadata_port must be > 0");
+  sima_examples::require(cfg.metadata_rtp_timestamp == "auto" ||
+                             cfg.metadata_rtp_timestamp == "on" ||
+                             cfg.metadata_rtp_timestamp == "off",
+                         "output.insight.metadata_rtp_timestamp must be auto, on or off");
   sima_examples::require(cfg.save_every >= 0, "output.save_every must be >= 0");
 }
 
@@ -335,6 +343,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
   cfg.config_watch_seconds = raw.double_or("runtime.config_watch_seconds", 1.0);
   cfg.insight_host = raw.string_or("output.insight.host", "");
+  cfg.metadata_rtp_timestamp = raw.string_or("output.insight.metadata_rtp_timestamp", "auto");
   cfg.video_port_base =
       raw.int_or("output.insight.video_port_base", raw.int_or("output.insight.video_port", 9000));
   cfg.metadata_port_base = raw.int_or("output.insight.metadata_port_base",
@@ -509,6 +518,10 @@ struct StreamRuntime {
   std::string output_name;
   int video_port = 0;
   int processed = 0;
+  // False when the lowered graph restamps PTS: an rtp_timestamp that cannot
+  // match is worse than none, because Insight stops falling back to arrival
+  // order the moment the field is present. Decided in build_pipeline().
+  bool emit_rtp_timestamp = true;
   ProfileWindow profile;
 };
 
@@ -623,6 +636,29 @@ void build_pipeline_once(const AppConfig& cfg, StreamRuntime& rt) {
   run_options.overflow_policy = simaai::neat::OverflowPolicy::KeepLatest;
   run_options.output_memory = simaai::neat::OutputMemory::ZeroCopy;
   rt.run = graph.build(run_options);
+
+  // Decide rtp_timestamp from what Core ACTUALLY lowered, not from hope. If a
+  // bridging appsrc still restamps PTS, an rtp_timestamp can never match and
+  // Insight discards every message silently; omitting the field instead lets the
+  // browser fall back to arrival order, so boxes render with small bounded lag.
+  std::string backend;
+  try {
+    backend = graph.describe_backend();
+  } catch (...) {  // introspection is best-effort
+  }
+  const bool restamped = backend.find("do-timestamp=true") != std::string::npos;
+  if (cfg.metadata_rtp_timestamp == "on") {
+    rt.emit_rtp_timestamp = true;
+  } else if (cfg.metadata_rtp_timestamp == "off") {
+    rt.emit_rtp_timestamp = false;
+  } else {
+    rt.emit_rtp_timestamp = !restamped;
+  }
+  if (!rt.emit_rtp_timestamp) {
+    std::cout << "[stream " << rt.id
+              << "] metadata rtp_timestamp DISABLED (graph restamps PTS; Insight will"
+                 " match by arrival order)\n";
+  }
 }
 
 // (Re)build the RTSP -> {video, model} graph for one stream.
@@ -715,16 +751,56 @@ StreamRuntime init_stream_runtime(const AppConfig& cfg, int channel, const Strea
 }
 
 
+// Insight's 32-bit RTP clock, at the 90 kHz rate an H.264 stream is stamped on.
+int64_t rtp_timestamp_from_pts_ns(int64_t pts_ns) {
+  if (pts_ns < 0) {
+    return 0;
+  }
+  // Split seconds from the remainder before scaling. The direct pts_ns * 90000
+  // overflows int64 at ~28 h of stream time, which a soak run reaches - and a
+  // wrong rtp_timestamp is worse than none, since Insight then matches nothing.
+  // Python gets this free from arbitrary-precision ints.
+  const int64_t seconds = pts_ns / 1000000000;
+  const int64_t remainder = pts_ns % 1000000000;
+  return (seconds * 90000 + (remainder * 90000) / 1000000000) & 0xFFFFFFFF;
+}
+
 void send_metadata(StreamRuntime& rt, const simaai::neat::Sample& sample,
                    const std::vector<objdet::Box>& boxes, int stream_count) {
+  // Publish detections on the frame's own source clock.
+  //
+  // Insight matches metadata to a held video frame by an EXACT 32-bit
+  // `rtp_timestamp` key, with no arrival-order fallback once the field is
+  // present - so a payload without it renders by arrival order, with small
+  // bounded lag, while one with a WRONG value never renders a box at all. The
+  // convenience send_metadata() API cannot carry that field (MetadataSender.h has
+  // no such parameter), which is why this builds the full envelope and ships it
+  // with send_raw_json, exactly as src/python/adaptive_app.py does.
   const std::string data_json =
       metadata_payload(boxes, rt.labels, rt.frame_w, rt.frame_h, stream_count, rt.id);
-  const int64_t timestamp_ms =
-      sample.pts_ns >= 0 ? sample.pts_ns / 1000000 : fallback_timestamp_ms();
-  const int64_t frame_id = sample.frame_id >= 0 ? sample.frame_id : 0;
+  const int64_t pts_ns = sample.pts_ns;
+  const int64_t timestamp_ms = pts_ns >= 0 ? pts_ns / 1000000 : fallback_timestamp_ms();
+
+  std::string payload = "{\"type\":\"object-detection\",\"data\":";
+  payload += data_json;
+  payload += ",\"timestamp\":" + std::to_string(timestamp_ms);
+  payload += ",\"frame_id\":\"";
+  if (sample.frame_id >= 0) {
+    payload += std::to_string(sample.frame_id);
+  }
+  payload += "\",\"stream_id\":\"" + json_escape(rt.id) + "\"";
+  payload += ",\"stream_index\":" + std::to_string(rt.channel);
+  payload += ",\"pts_ns\":" + std::to_string(pts_ns);
+  payload += ",\"dts_ns\":" + std::to_string(sample.dts_ns);
+  payload += ",\"duration_ns\":" + std::to_string(sample.duration_ns);
+  payload += ",\"input_seq\":" + std::to_string(sample.input_seq);
+  if (pts_ns >= 0 && rt.emit_rtp_timestamp) {
+    payload += ",\"rtp_timestamp\":" + std::to_string(rtp_timestamp_from_pts_ns(pts_ns));
+  }
+  payload += "}";
+
   std::string err;
-  if (!rt.metadata_sender->send_metadata("object-detection", data_json, timestamp_ms,
-                                         std::to_string(frame_id), &err)) {
+  if (!rt.metadata_sender->send_raw_json(payload, &err)) {
     std::cerr << "[warn] stream " << rt.id << " metadata send failed: " << err << "\n";
   }
 }

@@ -99,7 +99,10 @@ class StreamRuntime:
     metadata_sender: object
     labels: list[str]
     profile: "ProfileWindow"
-    latest_debug_frame: object | None
+    # Decoded frames awaiting their detection, keyed by frame id. See
+    # drain_debug_frames(): the two branches are queued independently, so the
+    # newest decoded frame is not the one the next detection describes.
+    debug_frames: dict
     frame_w: int
     frame_h: int
     # Geometry the detector leg was normalised to. Detections come back in
@@ -110,6 +113,7 @@ class StreamRuntime:
     video_port: int
     processed: int = 0
     closed: bool = False
+    debug_pairing_warned: bool = False
 
 
 @dataclass
@@ -721,7 +725,7 @@ def build_stream_runtime(
         metadata_sender=metadata_sender,
         labels=labels,
         profile=ProfileWindow(cfg.profile, stream_index),
-        latest_debug_frame=None,
+        debug_frames={},
         frame_w=frame_w,
         frame_h=frame_h,
         det_w=det_w if det_w > 0 else frame_w,
@@ -923,7 +927,9 @@ def process_output_sample(stream: StreamRuntime, cfg: AppConfig, sample, detecti
         send_metadata(stream, sample, boxes)
         metadata_end = time_ms()
         if save_frames_enabled(cfg):
-            maybe_save_debug_frame(cfg, stream, stream.latest_debug_frame, debug_boxes)
+            frame = take_debug_frame(stream, int(getattr(sample, "frame_id", -1) or -1))
+            if frame is not None:
+                maybe_save_debug_frame(cfg, stream, frame, debug_boxes)
         stream.profile.add(detection_pull_ms, metadata_end - metadata_start, len(boxes))
 
 
@@ -931,7 +937,20 @@ def debug_frame_output_name(stream_index: int) -> str:
     return f"debug_frame_{stream_index}"
 
 
+# Decoded frames held per stream while their detection catches up. Inference is
+# a few frames behind the decoder; past that the detection is never coming.
+DEBUG_FRAME_CACHE = 16
+
+
 def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
+    """Collect decoded frames KEYED BY FRAME ID.
+
+    The decoded and detector branches run on independent realtime queues, so the
+    newest decoded frame is not the one the next detection describes. Keeping only
+    the newest paired every saved image with whatever had arrived by then: correct
+    geometry, wrong moment, which reads as drift on anything moving. Frames are
+    held by id until their detection turns up or ages out.
+    """
     if not save_frames_enabled(cfg):
         return
     for stream in app.streams:
@@ -941,8 +960,36 @@ def drain_debug_frames(app: AppRuntime, cfg: AppConfig) -> None:
             if sample is None:
                 break
             tensor = first_tensor_from_sample(sample)
-            if tensor is not None:
-                stream.latest_debug_frame = tensor_bgr_from_decoded(tensor)
+            if tensor is None:
+                continue
+            frame_id = int(getattr(sample, "frame_id", -1) or -1)
+            stream.debug_frames[frame_id] = tensor_bgr_from_decoded(tensor)
+            while len(stream.debug_frames) > DEBUG_FRAME_CACHE:
+                stream.debug_frames.pop(next(iter(stream.debug_frames)))
+
+
+def take_debug_frame(stream: StreamRuntime, frame_id: int):
+    """The decoded frame this detection came from, or None if nothing is held.
+
+    A match also clears everything older: those frames' detections have already
+    gone past, so they can never be claimed.
+    """
+    frame = stream.debug_frames.pop(frame_id, None)
+    if frame is not None:
+        for stale in [fid for fid in stream.debug_frames if fid < frame_id]:
+            del stream.debug_frames[stale]
+        return frame
+    if not stream.debug_frames:
+        return None
+    # Nothing carries this id. Rather than stop saving images altogether, fall
+    # back to the newest frame - the old behaviour - but say so once, because
+    # those images are the approximate pairing this function exists to avoid.
+    if not stream.debug_pairing_warned:
+        stream.debug_pairing_warned = True
+        print(f"[warn] stream {stream.index} debug frames carry no id matching "
+              f"their detections; saved images fall back to the newest frame",
+              file=sys.stderr)
+    return stream.debug_frames.pop(next(reversed(stream.debug_frames)))
 
 
 def process_run_once(app: AppRuntime, cfg: AppConfig, output_name: str) -> bool:

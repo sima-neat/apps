@@ -638,3 +638,75 @@ class TestGroupStaging:
         source = (PIPELINES_DIR / "pipeline-group" / "ui_server.py").read_text(encoding="utf-8")
         assert "pipeline.log_path(g)" in source
         assert "tail -n 40 {pipeline.LOG}" not in source
+
+
+class TestFusedDebugFramePairing:
+    """Saved debug images must show the frame their boxes came from.
+
+    The decoded and detector branches are queued independently, so keeping only
+    the newest decoded frame paired every image with whatever had arrived by
+    then. Geometry was right, the moment was not - which reads as drift on
+    anything moving.
+    """
+
+    @staticmethod
+    def _stream(frames):
+        return SimpleNamespace(index=0, debug_frames=dict(frames), debug_pairing_warned=False)
+
+    def test_detection_gets_its_own_frame_not_the_newest(self):
+        import fused_app
+
+        stream = self._stream({10: "frame-10", 11: "frame-11", 12: "frame-12"})
+        assert fused_app.take_debug_frame(stream, 11) == "frame-11"
+
+    def test_matching_clears_the_frames_behind_it(self):
+        import fused_app
+
+        stream = self._stream({10: "frame-10", 11: "frame-11", 12: "frame-12"})
+        fused_app.take_debug_frame(stream, 11)
+        # 10's detection has already gone past; only 12 can still be claimed.
+        assert list(stream.debug_frames) == [12]
+
+    def test_no_frames_held_yields_nothing(self):
+        import fused_app
+
+        assert fused_app.take_debug_frame(self._stream({}), 7) is None
+
+    def test_unmatched_id_falls_back_to_newest_and_warns_once(self, capsys):
+        """Saving must keep working even if ids never line up - but say so."""
+        import fused_app
+
+        stream = self._stream({10: "frame-10", 12: "frame-12"})
+        assert fused_app.take_debug_frame(stream, 99) == "frame-12"
+        assert stream.debug_pairing_warned is True
+        assert "no id matching" in capsys.readouterr().err
+
+        stream.debug_frames = {13: "frame-13"}
+        fused_app.take_debug_frame(stream, 99)
+        assert capsys.readouterr().err == "", "the warning must not repeat every frame"
+
+
+class TestLauncherBounds:
+    """The chooser on :8080 is the fourth unauthenticated 0.0.0.0 server."""
+
+    def test_launcher_bounds_request_bodies(self):
+        source = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
+        assert "MAX_BODY_BYTES" in source
+        # The read must be gated, not reached with a client-declared length.
+        gate = source.index("MAX_BODY_BYTES:")
+        read = source.index("self.rfile.read(n)")
+        assert gate < read, "the ceiling must be checked before the body is read"
+
+
+class TestMetadataRtpTimestampParity:
+    """The panel writes metadata_rtp_timestamp into the config both languages read."""
+
+    def test_python_and_cpp_both_honour_the_setting(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "adaptive_app.h").read_text(encoding="utf-8")
+        assert "output.insight.metadata_rtp_timestamp" in cpp
+        assert "send_raw_json" in cpp, "the convenience API cannot carry rtp_timestamp"
+        assert "do-timestamp=true" in cpp, "auto must read what Core actually lowered"
+
+    def test_live_config_requests_it(self):
+        live = (PIPELINES_DIR / "pipeline-live" / "pipeline.py").read_text(encoding="utf-8")
+        assert 'metadata_rtp_timestamp: "on"' in live

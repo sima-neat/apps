@@ -47,6 +47,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -145,7 +146,11 @@ struct StreamRuntime {
   std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
   std::vector<std::string> labels;
   ProfileWindow profile;
-  std::optional<cv::Mat> latest_debug_frame;
+  // Decoded frames awaiting their detection, keyed by frame id. See
+  // drain_debug_frames(): the two branches are queued independently, so the
+  // newest decoded frame is not the one the next detection describes. Ordered,
+  // so evicting the oldest and reaching the newest are both cheap.
+  std::map<int64_t, cv::Mat> debug_frames;
   int frame_w = 0;
   int frame_h = 0;
   int det_w = 0;
@@ -154,6 +159,7 @@ struct StreamRuntime {
   int video_port = 0;
   int processed = 0;
   bool closed = false;
+  bool debug_pairing_warned = false;
 };
 
 struct AppRuntime {
@@ -812,6 +818,34 @@ bool all_streams_done(const std::vector<StreamRuntime>& streams, int frame_limit
   });
 }
 
+// Decoded frames held per stream while their detection catches up. Inference is
+// a few frames behind the decoder; past that the detection is never coming.
+constexpr std::size_t kDebugFrameCache = 16;
+
+// The decoded frame this detection came from, or nullptr if nothing is held. A
+// match also clears everything older: those frames' detections have already gone
+// past, so they can never be claimed.
+cv::Mat* take_debug_frame(StreamRuntime& stream, int64_t frame_id) {
+  auto it = stream.debug_frames.find(frame_id);
+  if (it != stream.debug_frames.end()) {
+    stream.debug_frames.erase(stream.debug_frames.begin(), it);
+    return &stream.debug_frames.begin()->second;
+  }
+  if (stream.debug_frames.empty()) {
+    return nullptr;
+  }
+  // Nothing carries this id. Rather than stop saving images altogether, fall
+  // back to the newest frame - the old behaviour - but say so once, because
+  // those images are the approximate pairing this function exists to avoid.
+  if (!stream.debug_pairing_warned) {
+    stream.debug_pairing_warned = true;
+    std::cerr << "[warn] stream " << stream.index
+              << " debug frames carry no id matching their detections; saved images"
+                 " fall back to the newest frame\n";
+  }
+  return &stream.debug_frames.rbegin()->second;
+}
+
 void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
                            const simaai::neat::Sample& sample, double detection_pull_ms) {
   if (cfg.frames > 0 && stream.processed >= cfg.frames) {
@@ -860,8 +894,7 @@ void process_output_sample(StreamRuntime& stream, const AppConfig& cfg,
     send_metadata(stream, sample, boxes);
     const double metadata_end = sima_examples::time_ms();
     if (save_frames_enabled(cfg)) {
-      maybe_save_debug_frame(cfg, stream,
-                             stream.latest_debug_frame ? &*stream.latest_debug_frame : nullptr,
+      maybe_save_debug_frame(cfg, stream, take_debug_frame(stream, sample.frame_id),
                              rescale_to_native ? debug_boxes : boxes);
     }
     stream.profile.add(detection_pull_ms, metadata_end - metadata_start,
@@ -901,7 +934,10 @@ void drain_debug_frames(AppRuntime& app, const AppConfig& cfg) {
         std::cerr << "[warn] failed to prepare debug frame: " << err << "\n";
         continue;
       }
-      stream.latest_debug_frame = std::move(bgr);
+      stream.debug_frames[sample.frame_id] = std::move(bgr);
+      while (stream.debug_frames.size() > kDebugFrameCache) {
+        stream.debug_frames.erase(stream.debug_frames.begin());
+      }
     }
   }
 }

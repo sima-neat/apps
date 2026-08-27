@@ -30,6 +30,10 @@ from urllib.parse import urlparse
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "launcher.html"
 PORT = 8080
+# Both POST endpoints take one short string. Reading a client-declared length
+# unbounded on an unauthenticated 0.0.0.0 ThreadingHTTPServer is what lets a
+# single request - or a few concurrent ones - exhaust the DevKit.
+MAX_BODY_BYTES = 64 * 1024
 
 # Each pipeline is identified by its CONFIG filename, never by the app path:
 # scale and group run the SAME binary, so an argv match cannot tell them apart.
@@ -234,7 +238,18 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ("/api/activate", "/api/language"):
             self._json({"error": "not found"}, 404)
             return
-        n = int(self.headers.get("Content-Length", 0))
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            n = -1
+        if n < 0:
+            self._json({"error": "bad Content-Length"}, 400)
+            return
+        if n > MAX_BODY_BYTES:
+            # Refused on the header, before the body is read at all.
+            self.close_connection = True
+            self._json({"error": f"request body exceeds {MAX_BODY_BYTES} bytes"}, 413)
+            return
         try:
             body = json.loads(self.rfile.read(n)) if n else {}
         except json.JSONDecodeError:
