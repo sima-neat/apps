@@ -17,7 +17,7 @@ The tier table below is measured on this DevKit, not derived. See README.md.
 
 Usage:
   python3 pipeline.py up 1        start with 1 stream (4K)
-  python3 pipeline.py add         add one stream, no restart
+  python3 pipeline.py add         add one stream, restarting to rebuild
   python3 pipeline.py set 5       change to 5 streams, restart for a uniform tier
   python3 pipeline.py status      per-channel resolution, bitrate, live FPS
   python3 pipeline.py down        stop application and sources
@@ -422,28 +422,27 @@ def write_config(tier: Tier, streams: int) -> None:
 
 
 def config_streams() -> list[str]:
+    """Streams in the running config, in `- url` order.
+
+    _config_scale() writes a bare list under `streams:`, one URL per line, with
+    no `id:` key at all - unlike the adaptive pipeline's rich schema. Counting
+    "- id:" lines here always found zero, so cmd_add() below always believed no
+    stream was running and clobbered slot 1 on every call.
+    """
     if not CONFIG.exists():
         return []
-    return [ln.split("id:")[1].strip()
-            for ln in CONFIG.read_text().splitlines() if "- id:" in ln]
-
-
-def append_stream(index: int) -> None:
-    """Append one Insight source to the running config; the app picks it up."""
-    append_source(insight_url(index))
-
-
-def append_source(url: str) -> None:
-    """Append one source (any RTSP URL) to the running config for live pickup.
-
-    The cam id is derived from the current source count, so managed and external
-    sources can be interleaved without collision.
-    """
-    text = CONFIG.read_text().rstrip("\n")
-    n = text.count("- id: cam-") + 1
-    marker = "\ninput:"
-    entry = f"    - id: cam-{n}\n      rtsp_url: {url}\n"
-    CONFIG.write_text(text.replace(marker, "\n" + entry + marker, 1) + "\n")
+    lines = CONFIG.read_text().splitlines()
+    try:
+        start = lines.index("streams:") + 1
+    except ValueError:
+        return []
+    out = []
+    for ln in lines[start:]:
+        if ln.startswith("  - "):
+            out.append(ln[len("  - "):].strip())
+        elif ln.strip() == "" or not ln.startswith("  "):
+            break
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -637,32 +636,14 @@ def cmd_up(n: int) -> None:
 
 
 def cmd_add() -> None:
-    current = config_streams()
-    n = len(current) + 1
-    tier = tier_for(len(current))          # tier the running app was built for
-
-    # Crossing a tier boundary means the SOURCES have to change resolution, not
-    # just the delivered video - the decoder always works at native size, and
-    # its pools are what run out. Restaging sources means a restart, which also
-    # re-tiers every existing stream uniformly.
-    if n > tier.max_streams:
-        lower = tier_for(n)
-        print(f"{n} streams exceeds the {tier.name} ceiling ({tier.max_streams}); "
-              f"restaging sources at {lower.name} and restarting")
-        cmd_up(n)
-        return
-
-    files = media_files(tier.prefix)
-    api("/api/mediasrc/assign", {"index": n, "file": files[(n - 1) % len(files)]})
-    api("/api/mediasrc/start", {"index": n})
-    append_stream(n)
-    print(f"added cam-{n} to the running config (no restart)")
-    print("the app rebuilds in ~30-90 s; existing streams KEEP their resolution")
-    if wait_for_streams(n, timeout_s=180):
-        for cam, res in sorted(delivered().items()):
-            print(f"  {cam}: delivered {res}")
-    else:
-        print("not picked up yet - re-run `status` shortly")
+    # The fused app builds ONE graph for every stream and has no config watch
+    # (see src/python/fused_app.py / fused_app.h): unlike the adaptive pipeline,
+    # there is no live add here. Appending a source into the running config would
+    # neither restart the app nor even parse next time - _config_scale()'s bare
+    # list has no `id:` key to append onto. A full rebuild is the only option.
+    n = len(config_streams()) + 1
+    print(f"scale mode has no live add - restarting for {n} stream(s)")
+    cmd_up(n)
 
 
 def cmd_set(n: int) -> None:
@@ -708,7 +689,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_up = sub.add_parser("up", help="start with N streams")
     p_up.add_argument("streams", type=int)
-    sub.add_parser("add", help="add one stream without restarting")
+    sub.add_parser("add", help="add one stream (restarts to rebuild)")
     p_set = sub.add_parser("set", help="change stream count, restart for a uniform tier")
     p_set.add_argument("streams", type=int)
     sub.add_parser("status", help="show delivered resolution, bitrate and live FPS")

@@ -710,3 +710,136 @@ class TestMetadataRtpTimestampParity:
     def test_live_config_requests_it(self):
         live = (PIPELINES_DIR / "pipeline-live" / "pipeline.py").read_text(encoding="utf-8")
         assert 'metadata_rtp_timestamp: "on"' in live
+
+
+class TestScaleAddRebuildsInstead(object):
+    """The fused app has no config watch, so scale mode has no live add.
+
+    config_streams() used to search for "- id:" lines, a key that only exists
+    in the adaptive pipeline's rich schema - _config_scale() writes a bare list
+    with no id at all. It always read back zero streams, so cmd_add() always
+    reused slot 1 and appended a rich {id, rtsp_url} entry into a bare-list
+    config the fused loader cannot parse next run.
+    """
+
+    @staticmethod
+    def _pipeline():
+        return _load_ui_server("scale").pipeline
+
+    def test_config_streams_reads_the_bare_list_schema(self, tmp_path, monkeypatch):
+        mod = self._pipeline()
+        config = tmp_path / "scale-run.yaml"
+        config.write_text(
+            "model:\n  path: /tmp/model.tar.gz\n\n"
+            "streams:\n  - rtsp://127.0.0.1:8554/src1\n  - rtsp://127.0.0.1:8554/src2\n\n"
+            "input:\n  tcp: true\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(mod, "CONFIG", config)
+        assert mod.config_streams() == [
+            "rtsp://127.0.0.1:8554/src1",
+            "rtsp://127.0.0.1:8554/src2",
+        ]
+
+    def test_config_streams_empty_when_no_config_yet(self, tmp_path, monkeypatch):
+        mod = self._pipeline()
+        monkeypatch.setattr(mod, "CONFIG", tmp_path / "missing.yaml")
+        assert mod.config_streams() == []
+
+    def test_add_counts_the_real_total_and_rebuilds(self, monkeypatch):
+        """cmd_add() must see 2 existing streams as 2, not 0, and must go
+        through a full rebuild - there is no live-append path any more."""
+        mod = self._pipeline()
+        monkeypatch.setattr(mod, "config_streams", lambda: ["u1", "u2"])
+        calls = []
+        monkeypatch.setattr(mod, "cmd_up", calls.append)
+        mod.cmd_add()
+        assert calls == [3]
+
+
+class TestGroupPlan:
+    """Grouped mode's CLI must actually partition streams into groups.
+
+    cmd_up()/cmd_add() previously called the single-instance write_config()/
+    start_app(), which wrote group-run.yaml (explicitly unused in grouped mode)
+    and ran ONE fused process for every stream - the plain `scale` topology,
+    silently losing per-group failure and rebuild isolation.
+    """
+
+    @staticmethod
+    def _pipeline():
+        return _load_ui_server("group").pipeline
+
+    def test_plan_fills_groups_in_order(self):
+        mod = self._pipeline()
+        assert mod.group_plan(0) == [0, 0, 0, 0]
+        assert mod.group_plan(1) == [1, 0, 0, 0]
+        assert mod.group_plan(4) == [4, 0, 0, 0]
+        assert mod.group_plan(10) == [4, 4, 2, 0]
+        assert mod.group_plan(16) == [4, 4, 4, 4]
+
+    def test_plan_caps_at_the_group_ceiling(self):
+        """More streams than GROUP_SIZE * MAX_GROUPS cannot fit; cmd_up() warns
+        about this separately rather than group_plan() raising."""
+        mod = self._pipeline()
+        ceiling = mod.GROUP_SIZE * mod.MAX_GROUPS
+        assert sum(mod.group_plan(ceiling + 5)) == ceiling
+
+    def test_total_streams_counts_only_running_groups(self, tmp_path, monkeypatch):
+        mod = self._pipeline()
+        monkeypatch.setattr(mod, "HERE", tmp_path)
+        monkeypatch.setattr(mod, "running_groups", lambda: [0, 2])
+
+        (tmp_path / "group0-run.yaml").write_text(
+            "streams:\n  - rtsp://a\n  - rtsp://b\n\ninput:\n  tcp: true\n",
+            encoding="utf-8",
+        )
+        # group 1 has a leftover config from a previous, now-stopped run - it
+        # must not be counted since running_groups() excludes it.
+        (tmp_path / "group1-run.yaml").write_text(
+            "streams:\n  - rtsp://stale\n\ninput:\n  tcp: true\n", encoding="utf-8"
+        )
+        (tmp_path / "group2-run.yaml").write_text(
+            "streams:\n  - rtsp://c\n\ninput:\n  tcp: true\n", encoding="utf-8"
+        )
+
+        assert mod.total_streams() == 3
+
+    def test_add_counts_the_real_total_and_rebuilds(self, monkeypatch):
+        mod = self._pipeline()
+        monkeypatch.setattr(mod, "total_streams", lambda: 5)
+        calls = []
+        monkeypatch.setattr(mod, "cmd_up", calls.append)
+        mod.cmd_add()
+        assert calls == [6]
+
+    def test_stage_group_sources_uses_this_groups_own_channel_range(self, monkeypatch):
+        """Slots must be channel_for(group, pos) + 1 - the group's own fixed
+        range - never the group-unaware 1..count slots the old stage_sources()
+        used, which collided with every other group's sources."""
+        mod = self._pipeline()
+        monkeypatch.setattr(mod, "media_files", lambda prefix: ["a.mp4", "b.mp4"])
+        calls = []
+        monkeypatch.setattr(mod, "api", lambda path, payload=None, **kw: calls.append((path, payload)))
+        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+        tier = mod.Tier("720p", 1280, 720, "video", 8)
+        mod.stage_group_sources(2, tier, 3)
+
+        expected_slots = [mod.channel_for(2, pos) + 1 for pos in range(3)]
+        assigned = [p["index"] for path, p in calls if path == "/api/mediasrc/assign"]
+        assert assigned == expected_slots
+        assert not any(path == "/api/mediasrc/stop-all" for path, _p in calls), (
+            "grouped staging must never touch every other group's sources"
+        )
+
+    def test_up_never_calls_the_removed_single_instance_path(self):
+        """The scale-topology leftovers this bug traced back to must be gone,
+        not just unreachable - so nothing can wire the CLI back to them."""
+        source = (PIPELINES_DIR / "pipeline-group" / "pipeline.py").read_text(encoding="utf-8")
+        for name in ("def stage_sources", "def write_config(", "def start_app",
+                     "def stop_app", "def app_running", "def config_streams",
+                     "def append_stream", "def append_source"):
+            assert name not in source, f"{name} should have been removed, not left dead"
+        assert "def write_config_group" in source
+        assert "def stage_group_sources" in source
