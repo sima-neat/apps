@@ -140,7 +140,8 @@ struct AppConfig {
   fs::path save_dir;
   int save_every = 0;
   double mask_alpha = 0.55;
-  double mask_threshold = 0.50;
+  // Sigmoid-space foreground cutoff; see src/common/config.yaml for why 0.08, not 0.5.
+  double mask_threshold = 0.08;
   bool draw_boxes = true;
 };
 
@@ -215,7 +216,7 @@ AppConfig load_app_config(const fs::path& config_path) {
   cfg.save_dir = raw.string_or("output.save_dir", "");
   cfg.save_every = raw.int_or("output.save_every", 0);
   cfg.mask_alpha = raw.double_or("output.mask_alpha", 0.55);
-  cfg.mask_threshold = raw.double_or("output.mask_threshold", 0.50);
+  cfg.mask_threshold = raw.double_or("output.mask_threshold", 0.08);
   cfg.draw_boxes = raw.bool_or("output.draw_boxes", true);
   validate_config(cfg);
   return cfg;
@@ -911,8 +912,13 @@ int main(int argc, char** argv) {
       fs::create_directories(cfg.save_dir);
 
     const SourceGeometry geometry = probe_source_geometry(cfg);
-    PipelineRuntime runtime = build_graph(cfg, geometry);
+    // Load the two on-device models before starting the RTSP graph below: model load can take
+    // several seconds (real MLA .elf loads), and the RTSP source starts decoding and queueing
+    // frames the instant its Run is built. Building it first left that queue filling with no
+    // consumer, and the run failed with a backpressure timeout by the time we reached the first
+    // pull.
     Pipeline pipe(cfg.model_root, /*timeout_ms=*/30000);
+    PipelineRuntime runtime = build_graph(cfg, geometry);
 
     const int processed = run_pipeline(runtime, pipe, cfg);
 

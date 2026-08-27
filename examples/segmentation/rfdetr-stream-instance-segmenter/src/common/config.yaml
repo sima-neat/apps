@@ -21,7 +21,10 @@ output:
   save_dir: ""                # Optional directory for annotated frames.
   save_every: 0                # Save every Nth output frame. 0 disables saving.
   mask_alpha: 0.55             # Mask overlay opacity in saved frames.
-  mask_threshold: 0.50         # Mask threshold (post-sigmoid), for both the metadata polygon and saved frames.
+  mask_threshold: 0.08         # Foreground cutoff on the sigmoid-activated mask (post-sigmoid, 0-1).
+                                # The device seg-head's BF16 quantization affine-shifts mask logits, so
+                                # the true foreground boundary sits near sigmoid(-2.4..-3.0) ~= 0.05-0.08,
+                                # not 0.5. Verify against your own model export before trusting this default.
   draw_boxes: true             # Draw boxes and labels over mask overlays in saved frames.
   insight:
     host: <insight-host-ip>    # Host running the Insight receiver/viewer.

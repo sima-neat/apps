@@ -15,7 +15,9 @@ import argparse
 from dataclasses import dataclass
 import glob
 import json
+import multiprocessing as mp
 from pathlib import Path
+import queue as queue_module
 import subprocess
 import sys
 import time
@@ -46,8 +48,6 @@ METADATA_BYTE_BUDGET = 32768
 cv2 = None
 np = None
 pyneat = None
-tvm = None
-graph_executor = None
 
 
 @dataclass(frozen=True)
@@ -75,11 +75,17 @@ class AppConfig:
     insight_host: str = ""
     video_port: int = 9000
     metadata_port: int = 9100
-    output: OutputConfig = OutputConfig("", 0, 0.55, 0.50, True)
+    # Foreground cutoff on the sigmoid-activated mask. The device seg-head's BF16
+    # quantization affine-shifts the mask logits (empirically device_logit ~=
+    # 0.59*onnx_logit - 3.07), so the ONNX true foreground boundary (logit > 0)
+    # maps to a *raw* device logit around -2.4 to -3.0, i.e. sigmoid(-2.4..-3.0)
+    # ~= 0.05-0.08 -- not the 0.5 a plain sigmoid boundary would suggest. Verify
+    # against your own model export before trusting this default.
+    output: OutputConfig = OutputConfig("", 0, 0.55, 0.08, True)
 
 
 def load_runtime_dependencies() -> None:
-    global cv2, np, pyneat, tvm, graph_executor
+    global cv2, np, pyneat
     if pyneat is not None:
         return
 
@@ -90,14 +96,10 @@ def load_runtime_dependencies() -> None:
     import cv2 as cv2_module
     import numpy as np_module
     import pyneat as pyneat_module
-    import tvm as tvm_module
-    from tvm.contrib import graph_executor as graph_executor_module
 
     cv2 = cv2_module
     np = np_module
     pyneat = pyneat_module
-    tvm = tvm_module
-    graph_executor = graph_executor_module
 
 
 def time_ms() -> float:
@@ -249,7 +251,9 @@ def load_labels(labels_path: Path) -> list[str]:
 
 
 def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
+    # np.exp(-x) overflows for very negative logits (masks_dev holds raw pre-sigmoid values, which
+    # run well past -700 in the background); clip first since sigmoid saturates long before that.
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -60.0, 60.0)))
 
 
 # ── model options (preprocess is stretch-resize, matching the compiled graph) ──
@@ -288,20 +292,74 @@ def transformer_options():
     return opt
 
 
-# ── in-process TVM top-k gather (host-side hop between the two MLA stages) ──
-class TopkTvm:
-    def __init__(self, so_path: str) -> None:
-        self._device = tvm.cpu(0)
-        lib = tvm.runtime.load_module(so_path)
-        self._gmod = graph_executor.GraphModule(lib["default"](self._device))
+def _topk_worker(so_path: str, req_q, resp_q) -> None:
+    """Runs in its own process: the standalone Python TVM runtime conflicts with
+    the TVM/GStreamer symbols pyneat already has loaded when both share one
+    process, so the top-k gather stage never imports tvm in the main process."""
+    try:
+        for path in glob.glob("/usr/lib/python3*/dist-packages"):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        import tvm
+        from tvm.contrib import graph_executor
 
-    def run(self, concat, reduce_):
-        concat_nd = tvm.nd.array(concat.reshape(1, 1296, 4).astype("float32"), self._device)
-        reduce_nd = tvm.nd.array(reduce_.reshape(1, 1296).astype("float32"), self._device)
-        self._gmod.set_input("arm_0_i0", concat_nd)
-        self._gmod.set_input("arm_0_i1", reduce_nd)
-        self._gmod.run()
-        return self._gmod.get_output(0).numpy().reshape(200 * 4).astype("float32")
+        device = tvm.cpu(0)
+        lib = tvm.runtime.load_module(so_path)
+        gmod = graph_executor.GraphModule(lib["default"](device))
+        resp_q.put(("ready", None))
+        while True:
+            item = req_q.get()
+            if item is None:
+                return
+            concat, reduce_ = item
+            try:
+                gmod.set_input("arm_0_i0", tvm.nd.array(concat.reshape(1, 1296, 4).astype("float32"), device))
+                gmod.set_input("arm_0_i1", tvm.nd.array(reduce_.reshape(1, 1296).astype("float32"), device))
+                gmod.run()
+                resp_q.put(("ok", gmod.get_output(0).numpy().reshape(200 * 4).astype("float32")))
+            except BaseException as exc:  # noqa: BLE001 - report to parent, keep worker alive
+                resp_q.put(("error", f"{type(exc).__name__}: {exc}"))
+    except BaseException as exc:  # noqa: BLE001 - report startup failure to parent
+        resp_q.put(("fatal", f"{type(exc).__name__}: {exc}"))
+
+
+class TopkProcess:
+    """Host-side top-k gather stage (A65-only .so, no MLA), driven via the TVM
+    C++ graph executor in a subprocess. See `_topk_worker` for why it is out of
+    process."""
+
+    def __init__(self, so_path: str, startup_timeout_s: float = 60.0) -> None:
+        ctx = mp.get_context("spawn")
+        self._req_q = ctx.Queue(maxsize=2)
+        self._resp_q = ctx.Queue(maxsize=2)
+        self._proc = ctx.Process(target=_topk_worker, args=(so_path, self._req_q, self._resp_q), daemon=True)
+        self._proc.start()
+        try:
+            status, payload = self._resp_q.get(timeout=startup_timeout_s)
+        except queue_module.Empty as exc:
+            self.close()
+            raise RuntimeError(f"topk helper did not start within {startup_timeout_s}s") from exc
+        if status != "ready":
+            self.close()
+            raise RuntimeError(f"topk helper failed to start: {payload}")
+
+    def run(self, concat, reduce_, timeout_s: float = 30.0):
+        self._req_q.put((concat, reduce_), timeout=timeout_s)
+        status, payload = self._resp_q.get(timeout=timeout_s)
+        if status != "ok":
+            raise RuntimeError(f"topk_to_gather failed: {payload}")
+        return payload
+
+    def close(self) -> None:
+        try:
+            if self._proc.is_alive():
+                self._req_q.put(None, timeout=0.2)
+                self._proc.join(timeout=2.0)
+            if self._proc.is_alive():
+                self._proc.terminate()
+                self._proc.join(timeout=2.0)
+        except Exception:
+            pass
 
 
 def collect_tensors(sample) -> list:
@@ -343,27 +401,38 @@ class Pipeline:
         self._timeout_ms = timeout_ms
         backbone = pyneat.Model(f"{model_root}/{BACKBONE_NAME}", backbone_options())
         seed_img = np.zeros((IMAGE_H, IMAGE_W, 3), dtype=np.uint8)
-        self._backbone_run = backbone.build(
-            [pyneat.Tensor.from_numpy(seed_img, memory=pyneat.TensorMemory.EV74)]
-        )
+        self._backbone_run = backbone.build([self._image_tensor(seed_img)])
 
         transformer = pyneat.Model(f"{model_root}/{TRANSFORMER_NAME}", transformer_options())
         fseed = np.zeros((36, 36, 256), dtype=np.float32)
         gseed = np.zeros((1, 200, 4), dtype=np.float32)
         self._transformer_run = transformer.build(
             [
-                pyneat.Tensor.from_numpy(fseed, memory=pyneat.TensorMemory.EV74),
-                pyneat.Tensor.from_numpy(gseed, memory=pyneat.TensorMemory.EV74),
+                pyneat.Tensor.from_numpy(fseed, copy=True),
+                pyneat.Tensor.from_numpy(gseed, copy=True),
             ]
         )
 
-        self._topk = TopkTvm(f"{model_root}/{TOPK_NAME}/lib/{TOPK_SO}")
+        self._topk = TopkProcess(f"{model_root}/{TOPK_NAME}/lib/{TOPK_SO}")
+
+    @staticmethod
+    def _image_tensor(bgr):
+        # image_format/memory matter only for the image input; the intermediate
+        # feature/gather tensors below are plain host arrays (see TopkProcess
+        # docstring for why the two MLA stages never share this tensor path with
+        # the TVM subprocess).
+        return pyneat.Tensor.from_numpy(
+            np.ascontiguousarray(bgr, dtype=np.uint8),
+            copy=True,
+            image_format=pyneat.PixelFormat.BGR,
+            memory=pyneat.TensorMemory.EV74,
+        )
 
     def run_one(self, bgr_432) -> FrameOut:
-        img = pyneat.Tensor.from_numpy(bgr_432, memory=pyneat.TensorMemory.EV74)
+        img = self._image_tensor(bgr_432)
         if not self._backbone_run.push([img]):
             raise RuntimeError("backbone push failed")
-        backbone_sample = self._backbone_run.pull(self._timeout_ms)
+        backbone_sample = self._backbone_run.pull(timeout_ms=self._timeout_ms)
         if backbone_sample is None:
             raise RuntimeError("backbone pull empty")
 
@@ -382,18 +451,19 @@ class Pipeline:
         if feature is None or reduce_ is None or concat is None:
             raise RuntimeError("backbone split failed")
 
-        gather = self._topk.run(concat, reduce_)
+        gather = self._topk.run(concat, reduce_, timeout_s=max(1.0, self._timeout_ms / 1000.0))
 
-        feat_in = pyneat.Tensor.from_numpy(feature, memory=pyneat.TensorMemory.EV74)
-        gath_in = pyneat.Tensor.from_numpy(
-            gather.reshape(1, 200, 4), memory=pyneat.TensorMemory.EV74
-        )
+        # Fresh CPU tensors, not the live device-backed backbone output: pushing the backbone's
+        # own output tensor straight into the transformer's 2-input stage has been observed to
+        # scramble that stage's packed multi-input buffer on this NEAT build.
+        feat_in = pyneat.Tensor.from_numpy(feature, copy=True)
+        gath_in = pyneat.Tensor.from_numpy(gather.reshape(1, 200, 4), copy=True)
         if not self._transformer_run.push([feat_in, gath_in]):
             raise RuntimeError("transformer push failed")
-        transformer_sample = self._transformer_run.pull(self._timeout_ms)
+        transformer_sample = self._transformer_run.pull(timeout_ms=self._timeout_ms)
         tries = 0
         while transformer_sample is None and tries < 5:
-            transformer_sample = self._transformer_run.pull(self._timeout_ms)
+            transformer_sample = self._transformer_run.pull(timeout_ms=self._timeout_ms)
             tries += 1
         if transformer_sample is None:
             raise RuntimeError("transformer pull empty")
@@ -420,6 +490,7 @@ class Pipeline:
                 run.close()
             except Exception:
                 pass
+        self._topk.close()
 
 
 # ── per-query select + stretch-space box/mask projection ───────────────────
@@ -875,8 +946,13 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.output.save_dir:
             Path(cfg.output.save_dir).mkdir(parents=True, exist_ok=True)
 
-        runtime = build_graph(cfg)
+        # Load the two on-device models before starting the RTSP graph below: model load can take
+        # several seconds (real MLA .elf loads), and the RTSP source starts decoding and queueing
+        # frames the instant its Run is built. Building it first left that queue filling with no
+        # consumer, and the run failed with a backpressure timeout by the time we reached the
+        # first pull.
         pipe = Pipeline(cfg.model_root, timeout_ms=30000)
+        runtime = build_graph(cfg)
         try:
             processed = run_pipeline(runtime, pipe, cfg)
             return 0 if processed > 0 else 3
