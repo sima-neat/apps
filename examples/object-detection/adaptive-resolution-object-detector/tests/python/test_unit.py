@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -309,3 +311,115 @@ class TestModeDispatch:
         )
         cfg = fused_app.load_app_config(cfg_path)
         assert len(cfg.rtsp_urls) == 8
+
+
+def _wait_for(predicate, timeout: float = 10.0) -> bool:
+    """Poll a manager predicate; stream workers settle on their own threads."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+class _IdleRun:
+    """A runtime that stays up and never yields a sample."""
+
+    def pull(self, output_name, timeout_ms):
+        time.sleep(0.01)
+        return None
+
+    def running(self):
+        return True
+
+    def last_error(self):
+        return ""
+
+    def close(self):
+        pass
+
+
+def _fake_init_stream_runtime(cfg, channel, source, labels):
+    """Builds for any stream except the ones named "bad-*"."""
+    if source.id.startswith("bad"):
+        raise RuntimeError(f"cannot build {source.id}")
+    return SimpleNamespace(
+        channel=channel,
+        processed=0,
+        run=_IdleRun(),
+        profile=None,
+        output_name="out",
+        frame_w=640,
+        frame_h=640,
+    )
+
+
+class TestStreamFailureIsolation:
+    """A stream that fails must not take the healthy streams with it.
+
+    The live panel adds streams into a running app, so an unreachable camera or a
+    typo'd URL is an ordinary event, not a reason to stop the world. These tests
+    pin that: a failing worker retires its own slot and leaves stop_event alone.
+    """
+
+    @staticmethod
+    def _manager(tmp_path, monkeypatch):
+        import adaptive_app
+
+        monkeypatch.setattr(adaptive_app, "init_stream_runtime", _fake_init_stream_runtime)
+        cfg = adaptive_app.load_app_config(write_config(tmp_path, RICH_TWO))
+        return adaptive_app, adaptive_app.StreamManager(cfg, ["person"])
+
+    def test_failed_add_leaves_healthy_streams_running(self, tmp_path, monkeypatch):
+        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
+        try:
+            manager.add(adaptive_app.StreamSource("good-1", "rtsp://127.0.0.1:8554/src1"))
+            assert _wait_for(lambda: manager.active_count() == 1)
+
+            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
+            assert _wait_for(lambda: "bad-1" in manager.failed)
+
+            assert not manager.stop_event.is_set(), "a stream failure set the app-wide stop event"
+            assert manager.active_count() == 1, "the healthy stream was torn down"
+            assert not manager.all_failed()
+        finally:
+            manager.shutdown()
+
+    def test_failed_stream_releases_its_channel(self, tmp_path, monkeypatch):
+        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
+        try:
+            manager.add(adaptive_app.StreamSource("good-1", "rtsp://127.0.0.1:8554/src1"))
+            assert _wait_for(lambda: manager.active_count() == 1)
+            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
+            assert _wait_for(lambda: "bad-1" in manager.failed)
+
+            # Channel 0 belongs to good-1; bad-1 took 1 and must have given it back,
+            # or repeated bad adds would exhaust max_streams.
+            assert _wait_for(lambda: 1 in manager.free_channels)
+            assert sorted(manager.free_channels) == [1, 2, 3, 4, 5, 6, 7]
+        finally:
+            manager.shutdown()
+
+    def test_dropping_a_bad_source_clears_its_failed_state(self, tmp_path, monkeypatch):
+        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
+        try:
+            good = adaptive_app.StreamSource("good-1", "rtsp://127.0.0.1:8554/src1")
+            manager.add(good)
+            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
+            assert _wait_for(lambda: "bad-1" in manager.failed)
+
+            manager.apply_sources([good])
+            assert "bad-1" not in manager.failed
+        finally:
+            manager.shutdown()
+
+    def test_all_failed_reports_a_total_failure(self, tmp_path, monkeypatch):
+        adaptive_app, manager = self._manager(tmp_path, monkeypatch)
+        try:
+            manager.add(adaptive_app.StreamSource("bad-1", "rtsp://127.0.0.1:8554/nope"))
+            assert _wait_for(manager.all_failed)
+            # all_failed() is what ends a batch run; it still is not stop_event.
+            assert not manager.stop_event.is_set()
+        finally:
+            manager.shutdown()

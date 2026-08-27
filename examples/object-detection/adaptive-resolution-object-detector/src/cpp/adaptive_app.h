@@ -766,6 +766,22 @@ struct ManagedStream {
   std::thread thread;
 };
 
+// Describes the exception being handled; only valid inside a catch block.
+std::string describe_current_exception() {
+  try {
+    throw;
+  } catch (const std::exception& e) {
+    return e.what();
+  } catch (...) {
+    return "unknown error";
+  }
+}
+
+// A stream failure is isolated to that stream: the worker retires its own slot
+// and the rest keep running. stop_ means "the whole app is going down" (shutdown
+// or signal), never "one stream broke" - a bad source added from the panel, or a
+// bad one left in the config from a previous run, must not take the healthy
+// streams with it.
 class StreamManager {
 public:
   StreamManager(const AppConfig& cfg, std::vector<std::string> labels)
@@ -799,6 +815,7 @@ public:
       managed->channel = channel;
       raw = managed.get();
       streams_[source.id] = std::move(managed);
+      failed_.erase(source.id);
     }
     raw->thread = std::thread(&StreamManager::consume, this, raw);
     return true;
@@ -839,10 +856,32 @@ public:
       if (!by_id.count(id))
         remove(id);
     }
+    {
+      // A source dropped from the config stops counting as failed, so deleting
+      // the bad stream in the panel clears the failed state.
+      std::lock_guard<std::mutex> lock(mtx_);
+      for (auto it = failed_.begin(); it != failed_.end();) {
+        if (by_id.count(it->first))
+          ++it;
+        else
+          it = failed_.erase(it);
+      }
+    }
     for (const auto& kv : by_id) {
       if (!current.count(kv.first))
         add(kv.second);
     }
+  }
+
+  // True when every stream is gone and each one left because it failed.
+  bool all_failed() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return !failed_.empty() && streams_.empty();
+  }
+
+  std::map<std::string, std::string> failed() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return failed_;
   }
 
   bool all_done() {
@@ -866,6 +905,9 @@ public:
       for (auto& kv : streams_)
         drained.push_back(std::move(kv.second));
       streams_.clear();
+      for (auto& m : retired_)
+        drained.push_back(std::move(m));
+      retired_.clear();
     }
     for (auto& m : drained)
       m->stop.store(true);
@@ -882,6 +924,28 @@ public:
   }
 
 private:
+  // Release a failed stream's slot from inside that stream's own worker. Cannot
+  // go through remove(): that joins the thread we are running on, and dropping
+  // the unique_ptr here would destroy that still-running thread. The entry moves
+  // to retired_ instead, where shutdown() joins and frees it. The identity check
+  // keeps a late failure from evicting a same-id stream that has since been
+  // re-added.
+  void retire(ManagedStream* managed, const std::string& reason) {
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      auto it = streams_.find(managed->id);
+      if (it != streams_.end() && it->second.get() == managed) {
+        free_channels_.push_back(managed->channel);
+        std::sort(free_channels_.begin(), free_channels_.end());
+        retired_.push_back(std::move(it->second));
+        streams_.erase(it);
+      }
+      failed_[managed->id] = reason;
+    }
+    std::cerr << "[warn] stream " << managed->id << " failed (" << reason << "); channel "
+              << managed->channel << " released, other streams keep running\n";
+  }
+
   // A source-side close (RTSP drop, EOS at a loop boundary, RTCP timeout) is not
   // fatal: rebuild this stream and rejoin, with bounded
   // exponential backoff. Returns true once reconnected; false only if we should
@@ -914,6 +978,9 @@ private:
   void consume(ManagedStream* managed) {
     StreamRuntime rt;
     bool built = false;
+    // Set when this stream ends because it broke rather than because it was asked
+    // to stop or finished its frame budget; drives retire() below.
+    std::string failure;
     int transient_recoveries = 0;
     // Desync identical streams so a fleet-wide recovery rolls through rather
     // than every stream rebuilding in the same instant.
@@ -963,8 +1030,11 @@ private:
           // exit cleanly; otherwise it's a source drop -- reconnect and rejoin.
           if (managed->stop.load() || stop_.load() || g_stop_requested != 0)
             break;
-          if (!reconnect_stream(managed, rt))
+          if (!reconnect_stream(managed, rt)) {
+            if (!managed->stop.load() && !stop_.load() && g_stop_requested == 0)
+              failure = "source closed and the reconnect budget ran out";
             break;
+          }
           last_process_ms = -1e12;
           consecutive_transient = 0;
           continue;
@@ -1021,12 +1091,14 @@ private:
         rt.profile.add(pull_end - pull_start, static_cast<int>(boxes.size()));
       }
     } catch (...) {
+      // Deliberately NOT stop_: one stream failing to build or dying mid-run must
+      // not tear down the streams around it.
       {
         std::lock_guard<std::mutex> lock(error_mtx_);
         if (!first_error_)
           first_error_ = std::current_exception();
       }
-      stop_.store(true);
+      failure = describe_current_exception();
     }
     if (built) {
       rt.profile.flush();
@@ -1034,6 +1106,8 @@ private:
       std::cout << "[stream " << managed->id << "] processed=" << rt.processed << "\n";
     }
     managed->finished.store(true);
+    if (!failure.empty())
+      retire(managed, failure);
   }
 
   const AppConfig& cfg_;
@@ -1042,6 +1116,13 @@ private:
   std::map<std::string, std::unique_ptr<ManagedStream>> streams_;
   std::vector<int> free_channels_;
   std::atomic_bool stop_{false};
+  // Failed streams, kept alive until shutdown(): each one owns the thread that
+  // retired it, so it cannot be destroyed from inside that thread.
+  std::vector<std::unique_ptr<ManagedStream>> retired_;
+  // id -> reason, for streams that died on their own. Kept after the slot is
+  // released so the run can report them and so all_failed() can tell "every
+  // stream broke" apart from "the panel is empty".
+  std::map<std::string, std::string> failed_;
   std::mutex error_mtx_;
   std::exception_ptr first_error_;
 };
@@ -1079,6 +1160,11 @@ void run_app(const AppConfig& cfg) {
   while (!manager.stopped() && g_stop_requested == 0) {
     if (manager.all_done())
       break;
+    // A batch run (--frames N) has nothing left to wait for once every stream has
+    // failed. A live run keeps going: the panel is allowed to sit at zero streams
+    // until the next config edit adds one.
+    if (cfg.frames > 0 && manager.all_failed())
+      break;
     interruptible_sleep(cfg.config_watch_seconds, manager);
     const auto now = fs::last_write_time(cfg.config_path, ec);
     if (ec)
@@ -1095,9 +1181,19 @@ void run_app(const AppConfig& cfg) {
     }
   }
 
+  // Sampled before shutdown(), which drains streams_ and would make every run
+  // look like a total failure.
+  const bool nothing_survived = manager.all_failed();
   manager.shutdown();
   std::signal(SIGINT, previous_sigint);
-  manager.rethrow_if_error();
+
+  for (const auto& kv : manager.failed())
+    std::cerr << "[warn] stream " << kv.first << " did not run: " << kv.second << "\n";
+
+  // Individual stream failures are reported, not fatal - they are expected on a
+  // live panel. The run only fails when no stream survived at all.
+  if (nothing_survived)
+    manager.rethrow_if_error();
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────

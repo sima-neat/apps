@@ -1035,7 +1035,14 @@ class ManagedStream:
 
 
 class StreamManager:
-    """Owns the live set of streams, channel allocation, and shared stop/error state."""
+    """Owns the live set of streams, channel allocation, and shared stop/error state.
+
+    A stream failure is isolated to that stream: the worker retires its own slot
+    and the rest keep running. stop_event means "the whole app is going down"
+    (shutdown or signal), never "one stream broke" - a bad source added from the
+    panel, or a bad one left in the config from a previous run, must not take the
+    healthy streams with it.
+    """
 
     def __init__(self, cfg: AppConfig, labels: list[str]) -> None:
         self.cfg = cfg
@@ -1045,6 +1052,10 @@ class StreamManager:
         self.free_channels = list(range(cfg.max_streams))
         self.stop_event = threading.Event()
         self.errors: list[Exception] = []
+        # id -> reason, for streams that died on their own. Kept after the slot is
+        # released so the run can report them and so all_failed() can tell "every
+        # stream broke" apart from "the panel is empty".
+        self.failed: dict[str, str] = {}
 
     def active_count(self) -> int:
         with self.lock:
@@ -1060,6 +1071,7 @@ class StreamManager:
             channel = self.free_channels.pop(0)
             managed = ManagedStream(source.id, source.rtsp_url, channel, threading.Event())
             self.streams[source.id] = managed
+            self.failed.pop(source.id, None)
         managed.thread = threading.Thread(
             target=self._consume, args=(managed,), name=f"stream-{source.id}"
         )
@@ -1087,8 +1099,18 @@ class StreamManager:
         to_add = [s for sid, s in new_by_id.items() if sid not in current_ids]
         for stream_id in to_remove:
             self.remove(stream_id)
+        with self.lock:
+            # A source dropped from the config stops counting as failed, so
+            # deleting the bad stream in the panel clears the failed state.
+            for stream_id in [sid for sid in self.failed if sid not in new_by_id]:
+                del self.failed[stream_id]
         for source in to_add:
             self.add(source)
+
+    def all_failed(self) -> bool:
+        """True when every stream is gone and each one left because it failed."""
+        with self.lock:
+            return bool(self.failed) and not self.streams
 
     def all_done(self) -> bool:
         with self.lock:
@@ -1096,6 +1118,25 @@ class StreamManager:
         if not managed:
             return False
         return all(m.thread is not None and not m.thread.is_alive() for m in managed)
+
+    def _retire(self, managed: ManagedStream, reason: str) -> None:
+        """Release a failed stream's slot from inside that stream's own worker.
+
+        Cannot go through remove(): that joins the thread we are running on. The
+        identity check keeps a late failure from evicting a same-id stream that
+        has since been re-added.
+        """
+        with self.lock:
+            if self.streams.get(managed.id) is managed:
+                del self.streams[managed.id]
+                self.free_channels.append(managed.channel)
+                self.free_channels.sort()
+            self.failed[managed.id] = reason
+        print(
+            f"[warn] stream {managed.id} failed ({reason}); channel "
+            f"{managed.channel} released, other streams keep running",
+            file=sys.stderr,
+        )
 
     def shutdown(self) -> None:
         self.stop_event.set()
@@ -1148,6 +1189,9 @@ class StreamManager:
     def _consume(self, managed: ManagedStream) -> None:
         cfg = self.cfg
         runtime = None
+        # Set when this stream ends because it broke rather than because it was
+        # asked to stop or finished its frame budget; drives _retire() below.
+        failure = None
         transient_recoveries = 0
         # Desync identical streams so a fleet-wide recovery rolls through rather
         # than every stream rebuilding in the same instant.
@@ -1217,6 +1261,8 @@ class StreamManager:
                         if stopping:
                             break
                         if not self._reconnect_stream(managed, runtime):
+                            if not (managed.stop_event.is_set() or self.stop_event.is_set()):
+                                failure = "source closed and the reconnect budget ran out"
                             break
                         last_process_ms = -1e12
                         consecutive_transient = 0
@@ -1235,9 +1281,11 @@ class StreamManager:
                 send_metadata(runtime, sample, boxes, self.active_count())
                 maybe_save_debug_frame(cfg, runtime, sample, boxes, self.active_count())
                 runtime.profile.add(pull_end - pull_start, len(boxes))
-        except Exception as exc:  # noqa: BLE001 - surface to main thread
+        except Exception as exc:  # noqa: BLE001 - isolate to this stream
+            # Deliberately NOT self.stop_event: one stream failing to build or
+            # dying mid-run must not tear down the streams around it.
             self.errors.append(exc)
-            self.stop_event.set()
+            failure = str(exc) or exc.__class__.__name__
         finally:
             if runtime is not None:
                 if runtime.profile is not None:
@@ -1247,6 +1295,8 @@ class StreamManager:
                 except Exception:
                     pass
                 print(f"[stream {managed.id}] processed={runtime.processed}", flush=True)
+            if failure is not None:
+                self._retire(managed, failure)
 
 
 def run_app(cfg: AppConfig) -> None:
@@ -1271,6 +1321,11 @@ def run_app(cfg: AppConfig) -> None:
         while not manager.stop_event.is_set():
             if manager.all_done():
                 break
+            # A batch run (--frames N) has nothing left to wait for once every
+            # stream has failed. A live run keeps going: the panel is allowed to
+            # sit at zero streams until the next config edit adds one.
+            if cfg.frames > 0 and manager.all_failed():
+                break
             time.sleep(cfg.config_watch_seconds)
             try:
                 mtime = cfg.config_path.stat().st_mtime
@@ -1290,7 +1345,12 @@ def run_app(cfg: AppConfig) -> None:
     finally:
         manager.shutdown()
 
-    if manager.errors:
+    for stream_id, reason in sorted(manager.failed.items()):
+        print(f"[warn] stream {stream_id} did not run: {reason}", file=sys.stderr)
+
+    # Individual stream failures are reported, not fatal - they are expected on a
+    # live panel. The run only fails when no stream survived at all.
+    if manager.errors and manager.all_failed():
         raise manager.errors[0]
 
 
