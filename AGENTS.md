@@ -31,8 +31,7 @@ test registration, and validation commands.
 ## Tests and documentation
 
 - Use `tests/test-scope.yaml` as the source of truth for enabled tests and test
-  models. For C++ tests, also pass the matching test option to
-  `sima_neat_apps_module` in `src/cpp/CMakeLists.txt`.
+  models. Ensure enabled C++ tests are also registered with CMake.
 - End-to-end tests must prove useful output, not only that the process starts.
   Unit tests must not download models or require live services.
 - Fail clearly when a test prerequisite is broken. Never silently skip or fall
