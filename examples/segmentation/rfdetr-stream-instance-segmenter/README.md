@@ -50,16 +50,13 @@ The default model is `rfdetr-seg-432-base`, a three-stage split package (backbon
 | `rfdetr-seg-432-base` | Default | Direct artifact |
 
 ```bash
-mkdir -p models
-cd models
-sima-cli download <model-archive-url>
-tar -xzf <model-archive-name>.tar.gz
-cd ..
+sima-cli download "https://drive.usercontent.google.com/download?id=1jN7igMyQPvRlknuZ5KT9SRA3M9NOTOX5&export=download&confirm=t"
+unzip download
 ```
 
-> TODO (before merging): host `rfdetr_seg_432_base.tar.gz` at a stable direct-download URL (for example a GitHub Releases asset or an internal artifact store) and fill in `<model-archive-url>` above. The archive must extract to one folder containing the three stage subfolders: `rfdetr_seg_432_simplified_backbone_before_topk_base_mpk/`, `rfdetr_seg_432_simplified_topk_to_gather_base_mpk/`, and `rfdetr_seg_432_simplified_transformer_after_gather_base_mpk/`.
+`sima-cli download` has no output-filename option, so the archive lands as `download` with no extension. `unzip` reads it regardless and creates `models/` holding the three stage subfolders: `rfdetr_seg_432_simplified_backbone_before_topk_base_mpk/`, `rfdetr_seg_432_simplified_topk_to_gather_base_mpk/`, and `rfdetr_seg_432_simplified_transformer_after_gather_base_mpk/`.
 
-Set `model.path` in the config to the extracted folder (the one containing the three subfolders above), not to the archive itself.
+Set `model.path` in the config to the extracted `models` folder (the one containing the three subfolders above), not to the archive itself.
 
 ## Prepare Insight
 

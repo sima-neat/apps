@@ -1,11 +1,8 @@
 models:
   rfdetr-seg-432-base:
     source: url
-    # TODO: replace with the real hosted archive once rfdetr_seg_432_base.tar.gz is published
-    # (see README.md "Prepare the Model"). Placeholder so CI does not attempt to fetch it while
-    # e2e coverage below stays disabled.
-    url: https://example.invalid/rfdetr-seg-432/rfdetr_seg_432_base.tar.gz
-    file: rfdetr_seg_432_base.tar.gz
+    url: https://drive.usercontent.google.com/download?id=1jN7igMyQPvRlknuZ5KT9SRA3M9NOTOX5&export=download&confirm=t
+    file: models.zip
 unit:
   python: true
   cpp: true
@@ -13,14 +10,14 @@ e2e:
   python:
     enabled: false
     reason: >-
-      Model archive is not hosted yet (see README.md TODO under "Prepare the Model").
-      Enable once rfdetr_seg_432_base.tar.gz has a real download URL and an RTSP test
-      fixture is available.
+      Needs an RTSP H.264 test fixture, which CI does not provide yet. The model archive
+      is hosted and the pipeline is verified on Modalix hardware; enable once an RTSP
+      source is available to the runner.
     models: []
   cpp:
     enabled: false
     reason: >-
-      Model archive is not hosted yet (see README.md TODO under "Prepare the Model").
-      Enable once rfdetr_seg_432_base.tar.gz has a real download URL and an RTSP test
-      fixture is available.
+      Needs an RTSP H.264 test fixture, which CI does not provide yet. The model archive
+      is hosted and the pipeline is verified on Modalix hardware; enable once an RTSP
+      source is available to the runner.
     models: []
