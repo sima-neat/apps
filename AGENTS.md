@@ -23,16 +23,16 @@ test registration, and validation commands.
 - New applications normally include `src/common/config.yaml`, C++ and Python
   implementations, and unit and end-to-end tests. Explain every omission in the
   pull request.
-- Keep credentials, customer information, internal material, generated files,
-  and local artifacts out of this public repository.
+- Keep credentials, customer information, internal material, and disposable
+  build or runtime artifacts out of this public repository.
 - Keep agent plans, scratch notes, generated reports, and work records outside
   this repository.
 
 ## Tests and documentation
 
 - Use `tests/test-scope.yaml` as the source of truth for enabled tests and test
-  models. Register tests only there so the same coverage runs locally and in
-  Vulcan CI.
+  models. For C++ tests, also pass the matching test option to
+  `sima_neat_apps_module` in `src/cpp/CMakeLists.txt`.
 - End-to-end tests must prove useful output, not only that the process starts.
   Unit tests must not download models or require live services.
 - Fail clearly when a test prerequisite is broken. Never silently skip or fall
