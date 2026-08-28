@@ -55,6 +55,11 @@ def sh(cmd: str, timeout: int = 30) -> str:
         return ""
 
 
+# Shared with pipelines/pipeline-*/pipeline.py - the launcher and the pipeline
+# modules must agree on this path or a kill by one is invisible to the other.
+RUNTIME_DIRTY_MARKER = "/tmp/sima-detector-unclean-stop"
+
+
 def stop_detector(pattern: str, grace_s: int = 20) -> bool:
     """SIGTERM a pattern's processes and WAIT for them, SIGKILL only if they hang.
 
@@ -74,6 +79,14 @@ def stop_detector(pattern: str, grace_s: int = 20) -> bool:
             return True
         time.sleep(1)
     sh(f'kill -9 {pids} 2>/dev/null || true; sleep 2')
+    # Same marker the pipeline modules write and consume: a SIGKILLed detector
+    # strands decoder/CVU pools, and by the next Start the PID is gone, so
+    # nothing else can tell that this happened. Without it a language or
+    # pipeline switch that had to force-kill launched the next detector against
+    # stranded pools with no reclaim.
+    sh(f"touch {RUNTIME_DIRTY_MARKER}")
+    print(f"warning: {pattern} had to be killed - decoder/MLA pools may be "
+          f"stranded; the next start will reclaim them", flush=True)
     return False
 
 

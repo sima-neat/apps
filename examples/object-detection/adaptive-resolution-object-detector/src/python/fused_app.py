@@ -806,7 +806,21 @@ def send_metadata(stream: StreamRuntime, sample, boxes: list[dict]) -> None:
     # the high-density C++ app does), but VideoSenderOptions.rtp exposes no such
     # field in pyneat, so the passthrough video keeps a random RTP base the
     # metadata key can never match.
-    metadata_boxes = build_metadata_boxes(boxes, stream.labels, stream.frame_w, stream.frame_h)
+    # Compact exactly as adaptive_app.metadata_payload() does, and for the same
+    # reason: Insight DROPS metadata datagrams past the ~1500-byte MTU rather
+    # than reassembling them. The full form - "id":"obj_N", full-precision
+    # confidence and float bboxes - is ~95 bytes a box, so a crowded frame
+    # exceeded one datagram at ~15 detections and lost the whole overlay, with
+    # max_detections defaulting to 50. Dropping the id Insight never reads,
+    # rounding confidence and using integer pixels is ~59 bytes, fitting ~25.
+    metadata_boxes = [
+        {
+            "label": b["label"],
+            "confidence": round(float(b["confidence"]), 2),
+            "bbox": [int(v) for v in b["bbox"]],
+        }
+        for b in build_metadata_boxes(boxes, stream.labels, stream.frame_w, stream.frame_h)
+    ]
     timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
     frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
     stream.metadata_sender.send_metadata(

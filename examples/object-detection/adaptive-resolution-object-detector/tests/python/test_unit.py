@@ -1823,3 +1823,90 @@ class TestCppRunQueueScales:
     def test_python_formula_is_unchanged(self):
         py = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
         assert "max(4, min(32, stream_count))" in py
+
+
+class TestCppFiniteRunFailsWhenClosedShort:
+    """The Python guard was widened to cover finite runs; C++ still excluded
+    them, so a batch whose output closed early exited 0 from the binary."""
+
+    def test_cpp_checks_each_stream_against_the_budget(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        assert "stream.processed < cfg.frames" in cpp
+        assert "closed_detail" in cpp
+        # The old blanket exclusion of finite runs must be gone.
+        assert "g_stop_requested == 0 && cfg.frames <= 0" not in cpp
+
+    @pytest.mark.parametrize("path", ["src/python/fused_app.py", "src/cpp/fused_app.h"])
+    def test_both_languages_agree(self, path):
+        source = (EXAMPLE_DIR / path).read_text(encoding="utf-8")
+        assert "closed unexpectedly" in source
+        assert "frames <= 0" in source, "continuous runs still fail unconditionally"
+
+
+@requires_pipelines
+class TestLauncherRecordsForcedKills:
+    """The launcher force-kills detectors when switching pipeline or language.
+    Without the shared marker, the next Start saw no PID and no marker and
+    skipped the reclaim, launching against pools this path had just stranded."""
+
+    def test_launcher_writes_the_same_marker_the_pipelines_read(self):
+        launcher = (PIPELINES_DIR / "launcher.py").read_text(encoding="utf-8")
+        pipeline = (PIPELINES_DIR / "pipeline-scale" / "pipeline.py").read_text(encoding="utf-8")
+        marker = '"/tmp/sima-detector-unclean-stop"'
+        assert marker in launcher and marker in pipeline, (
+            "launcher and pipelines must agree on the marker path"
+        )
+        block = launcher[launcher.index("def stop_detector"):]
+        block = block[: block.index("\ndef ")]
+        assert "kill -9" in block and "RUNTIME_DIRTY_MARKER" in block
+
+
+class TestFusedMetadataIsCompact:
+    """Insight DROPS metadata datagrams past the ~1500-byte MTU rather than
+    reassembling them - adaptive_app.metadata_payload() says so and compacts
+    accordingly. Fused sent the full form: an "id" Insight never reads, full
+    precision confidence and float bboxes, ~95 bytes a box, so a crowded frame
+    lost its whole overlay at ~15 detections with max_detections defaulting to 50.
+    """
+
+    def test_python_payload_drops_the_id_and_rounds(self):
+        import fused_app
+
+        boxes = [
+            {"x1": 10.0, "y1": 20.0, "x2": 60.0, "y2": 100.0,
+             "class_id": 0, "score": 0.9234567284584045}
+        ]
+        built = fused_app.build_metadata_boxes(boxes, ["person"], 640, 480)
+        assert "id" in built[0], "the shared builder still emits it"
+
+        source = (EXAMPLE_DIR / "src" / "python" / "fused_app.py").read_text(encoding="utf-8")
+        sender = source[source.index("def send_metadata(stream"):]
+        sender = sender[: sender.index("\ndef ")]
+        # Strip comments: the explanation of the bug naturally mentions "id".
+        code = "\n".join(
+            ln for ln in sender.splitlines() if not ln.lstrip().startswith("#")
+        )
+        assert '"id"' not in code, "send_metadata must not serialise the id"
+        assert 'round(float(b["confidence"]), 2)' in code
+        assert '[int(v) for v in b["bbox"]]' in code
+
+    def test_compaction_roughly_doubles_what_fits_in_a_datagram(self):
+        """Guards the size claim itself, not just the field list."""
+        full = json.dumps(
+            {"id": "obj_12", "label": "person", "confidence": 0.9234567284584045,
+             "bbox": [100.0, 200.0, 50.0, 80.0]}, separators=(",", ":"))
+        compact = json.dumps(
+            {"label": "person", "confidence": 0.92, "bbox": [100, 200, 50, 80]},
+            separators=(",", ":"))
+        assert len(compact) < len(full)
+        assert 1500 // len(compact) >= (1500 // len(full)) + 8
+
+    def test_cpp_emits_the_same_compact_shape(self):
+        cpp = (EXAMPLE_DIR / "src" / "cpp" / "fused_app.h").read_text(encoding="utf-8")
+        sender = cpp[cpp.index("void send_metadata(StreamRuntime& stream"):]
+        sender = sender[: sender.index("\nvoid maybe_save_debug_frame")]
+        assert '\\"label\\"' in sender and '\\"confidence\\"' in sender
+        assert '\\"id\\"' not in sender, "the id must not be serialised"
+        assert "metadata_boxes_data_json" not in sender, (
+            "the generic helper emits the full form"
+        )

@@ -393,6 +393,21 @@ bool extract_bbox_payload(const simaai::neat::Sample& sample, std::vector<std::u
   return objdet::extract_bbox_payload(sample, payload, err);
 }
 
+// Local copy: adaptive_app.h's is in its own anonymous namespace, and the two
+// apps are otherwise independent translation-unit-local units. Only the two
+// characters that can break a JSON string literal here - labels come from the
+// model's label file, not from the network.
+std::string json_escape(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char c : value) {
+    if (c == '"' || c == '\\')
+      out.push_back('\\');
+    out.push_back(c);
+  }
+  return out;
+}
+
 std::vector<sima_examples::MetadataBox> build_metadata_boxes(const std::vector<objdet::Box>& boxes,
                                                              const std::vector<std::string>& labels,
                                                              int frame_w, int frame_h) {
@@ -851,9 +866,29 @@ void connect_stream_graph(AppRuntime& app, const AppConfig& cfg, const StreamRun
 
 void send_metadata(StreamRuntime& stream, const simaai::neat::Sample& sample,
                    const std::vector<objdet::Box>& boxes) {
+  // Compact exactly as src/cpp/adaptive_app.h's metadata_payload() does, and
+  // for the same reason: Insight DROPS metadata datagrams past the ~1500-byte
+  // MTU rather than reassembling them. The generic helper emits the id Insight
+  // never reads plus full-precision confidence and float bboxes (~95 bytes a
+  // box), so a crowded frame exceeded one datagram at ~15 detections and lost
+  // the whole overlay, with max_detections defaulting to 50. This form is ~59
+  // bytes, fitting ~25.
   const auto metadata_boxes =
       build_metadata_boxes(boxes, stream.labels, stream.frame_w, stream.frame_h);
-  const std::string data_json = sima_examples::metadata_boxes_data_json("objects", metadata_boxes);
+  std::string data_json = "{\"objects\":[";
+  for (std::size_t i = 0; i < metadata_boxes.size(); ++i) {
+    char conf[16];
+    std::snprintf(conf, sizeof(conf), "%.2f", metadata_boxes[i].confidence);
+    if (i)
+      data_json.push_back(',');
+    data_json += "{\"label\":\"" + json_escape(metadata_boxes[i].label) +
+                 "\",\"confidence\":" + conf + ",\"bbox\":[" +
+                 std::to_string(static_cast<int>(metadata_boxes[i].x)) + "," +
+                 std::to_string(static_cast<int>(metadata_boxes[i].y)) + "," +
+                 std::to_string(static_cast<int>(metadata_boxes[i].w)) + "," +
+                 std::to_string(static_cast<int>(metadata_boxes[i].h)) + "]}";
+  }
+  data_json += "]}";
   const int64_t timestamp_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
   const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
   std::string err;
@@ -1138,9 +1173,26 @@ void run_app(const AppConfig& cfg) {
   while (g_stop_requested == 0 && !all_streams_done(app.streams, cfg.frames)) {
     (void)process_run_once(app, cfg, "detections");
   }
-  // Sampled before the teardown below, which is unconditional.
-  const bool closed_unexpectedly =
-      g_output_closed_unexpectedly && g_stop_requested == 0 && cfg.frames <= 0;
+  // Sampled before the teardown below, which is unconditional. A continuous run
+  // has no natural end, so any unexpected closure fails it; a finite run fails
+  // only if it closed SHORT - a batch that already met its budget is complete
+  // whatever the output did afterwards. Mirrors src/python/fused_app.py.
+  std::string closed_detail;
+  if (g_output_closed_unexpectedly && g_stop_requested == 0) {
+    if (cfg.frames <= 0) {
+      closed_detail = "the run produced no further metadata";
+    } else {
+      for (const auto& stream : app.streams) {
+        if (stream.processed < cfg.frames) {
+          if (!closed_detail.empty())
+            closed_detail += ", ";
+          closed_detail += "stream " + std::to_string(stream.index) + " got " +
+                           std::to_string(stream.processed) + "/" +
+                           std::to_string(cfg.frames);
+        }
+      }
+    }
+  }
 
   app.run.close();
 
@@ -1154,9 +1206,8 @@ void run_app(const AppConfig& cfg) {
   // A continuous run has no natural end, so getting here without a stop request
   // means the output went away underneath us. Exiting 0 would tell a supervisor
   // the experiment succeeded. Thrown after teardown so the graph still closes.
-  if (closed_unexpectedly) {
-    throw std::runtime_error(
-        "detection output closed unexpectedly; the run produced no further metadata");
+  if (!closed_detail.empty()) {
+    throw std::runtime_error("detection output closed unexpectedly; " + closed_detail);
   }
 }
 
