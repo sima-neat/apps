@@ -49,6 +49,9 @@ test registration, and validation commands.
 - Report only concrete problems introduced or exposed by the change. Anchor
   each finding to the smallest relevant changed line range and explain the
   condition, the breakage, and its impact.
+- Write comments in plain English. Avoid unexplained jargon and state the
+  expected behavior and what should change so the contributor can act without
+  guessing.
 - Report one finding per root cause. Skip style preferences, vague risks, and
   test requests that do not name the behavior that could regress.
 - Flag changes to dependency pins, `build.sh`, or
