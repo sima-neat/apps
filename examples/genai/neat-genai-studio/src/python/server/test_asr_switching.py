@@ -1,8 +1,10 @@
+import io
 import shutil
 import sys
 import tempfile
 import types
 import unittest
+import wave
 from pathlib import Path
 from unittest.mock import patch
 
@@ -149,6 +151,87 @@ class AsrSwitchingTests(unittest.TestCase):
         status = manager.status()
         self.assertEqual(status["asrModel"], "whisper-medium-a16w8")
         self.assertEqual(status["configuredAsrModel"], "whisper-small-a16w8")
+
+
+class AsrWarmupBehaviourTests(AsrSwitchingTests):
+    """Warming forces the deferred MLA load; a non-MLA failure must not undo it."""
+
+    def manager(self, loaded=("whisper-small-a16w8",), asr="whisper-small-a16w8"):
+        server = FakeServer(loaded)
+        manager = ModelManager(
+            server,
+            catalog_dir=self.tmp,
+            max_resident_chat_models=1,
+            asr_name=asr,
+            hub=HubConfig(allow_download=False),
+            openai_base_url="http://127.0.0.1:9998",
+            warmup=True,
+            asr_warmup=True,
+            switch_settle_s=0.0,
+        )
+        return manager, server
+
+    def setUp(self):
+        super().setUp()
+        # Every inherited case now runs with warming on, against a stub probe.
+        self.warm = patch.object(ModelManager, "_warm_check_asr",
+                                 return_value=(True, ""))
+        self.warm.start()
+        self.addCleanup(self.warm.stop)
+        chat = patch.object(ModelManager, "_warm_check", return_value=(True, ""))
+        chat.start()
+        self.addCleanup(chat.stop)
+
+    def test_switching_warms_the_new_model(self):
+        manager, _ = self.manager()
+        with patch.object(ModelManager, "_warm_check_asr",
+                          return_value=(True, "")) as warm:
+            manager.set_active_asr("whisper-medium-a16w8")
+        warm.assert_called_once_with("whisper-medium-a16w8")
+
+    def test_a_non_mla_warm_failure_leaves_the_model_active(self):
+        manager, _ = self.manager()
+        with patch.object(ModelManager, "_warm_check_asr",
+                          return_value=(False, "HTTP 400: bad audio")):
+            result = manager.set_active_asr("whisper-medium-a16w8")
+
+        self.assertEqual(result["state"], "ready")
+        self.assertIn("bad audio", result["warm_warning"])
+        self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
+
+    def test_an_mla_warm_failure_rolls_the_switch_back(self):
+        manager, server = self.manager()
+        with patch.object(ModelManager, "_warm_check_asr",
+                          return_value=(False, "MLA_LOAD_FAILED: bulk load")):
+            with self.assertRaisesRegex(RuntimeError, "accelerator"):
+                manager.set_active_asr("whisper-medium-a16w8")
+
+        self.assertIsNone(manager.active_asr())
+        self.assertNotIn("whisper-medium-a16w8", server.model_names())
+
+
+class AsrWarmupPayloadTests(unittest.TestCase):
+    """The warm-up probe is built with the stdlib only (no requests in pyneat)."""
+
+    def test_silence_payload_is_a_16k_mono_16bit_wav(self):
+        with wave.open(io.BytesIO(ModelManager._silence_wav()), "rb") as clip:
+            self.assertEqual(clip.getnchannels(), 1)
+            self.assertEqual(clip.getsampwidth(), 2)
+            self.assertEqual(clip.getframerate(), 16000)
+            self.assertEqual(clip.getnframes(), 16000)
+
+    def test_multipart_body_carries_the_model_name_and_clip(self):
+        body, content_type = ModelManager._multipart_body(
+            {"model": "whisper-medium-a16w8", "language": "en"},
+            "file", "warmup.wav", b"RIFFdata", "audio/wav",
+        )
+        boundary = content_type.split("boundary=", 1)[1]
+        self.assertTrue(content_type.startswith("multipart/form-data; "))
+        self.assertIn(b'name="model"', body)
+        self.assertIn(b"whisper-medium-a16w8", body)
+        self.assertIn(b'filename="warmup.wav"', body)
+        self.assertIn(b"RIFFdata", body)
+        self.assertTrue(body.endswith(f"--{boundary}--\r\n".encode()))
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ disturbs the resident chat/VLM model (and vice versa).
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import wave
 from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
@@ -74,6 +76,10 @@ def parse_quantization(name: str) -> str | None:
     return None
 
 # Substrings that identify an MLA (accelerator) load failure in an error message.
+# Whisper builds are ~1.5 GB at most — an order of magnitude below a 7B VLM —
+# so they do not need the chat warm-up's 600s ceiling.
+_ASR_WARM_TIMEOUT_S = 300
+
 _MLA_FAILURE_MARKERS = (
     "mlashm",
     "mla_load",
@@ -414,7 +420,35 @@ class ModelManager:
                 # add_model only registers; the real MLA load is deferred to first
                 # inference. Warm synchronously so a load failure is catchable and
                 # so we can time the load (this is where the wait actually happens).
-                if is_asr or not self._warmup:
+                if is_asr:
+                    if not (self._warmup and self._asr_warmup):
+                        return {"name": served, "state": "ready", "evicted": evicted,
+                                "cold_start": True,
+                                "load_seconds": round(time.monotonic() - started, 1)}
+                    ok, detail = self._warm_check_asr(served)
+                    if ok:
+                        self._record_load_duration(name, size_bytes,
+                                                   time.monotonic() - started)
+                        return {"name": served, "state": "ready", "evicted": evicted,
+                                "cold_start": True,
+                                "load_seconds": round(time.monotonic() - started, 1)}
+                    if _is_mla_failure(detail):
+                        with self._lock:
+                            self._active_asr = None
+                        return self._handle_mla_failure(served, detail)
+                    # Soft failure: unlike the chat probe, this one depends on the
+                    # runtime's multipart handling and on how a given Whisper
+                    # artifact reacts to pure silence. A non-MLA error here most
+                    # likely means the model is fine, so keep it active — it will
+                    # load on first use, exactly as it did before warming existed.
+                    logging.warning("ASR warm-up for '%s' did not complete: %s",
+                                    served, detail)
+                    return {"name": served, "state": "ready", "evicted": evicted,
+                            "cold_start": True,
+                            "load_seconds": round(time.monotonic() - started, 1),
+                            "warm_warning": detail[:500]}
+
+                if not self._warmup:
                     return {"name": served, "state": "ready", "evicted": evicted,
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
@@ -929,6 +963,65 @@ class ModelManager:
             except Exception:
                 body = ""
             return False, f"HTTP {exc.code}: {body}".strip()
+        except Exception as exc:  # noqa: BLE001 - surfaced to caller
+            return False, str(exc)
+
+    @staticmethod
+    def _silence_wav(seconds: float = 1.0, rate: int = 16000) -> bytes:
+        """16 kHz mono 16-bit PCM silence — the shape Whisper preprocessing wants."""
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(rate)
+            out.writeframes(b"\x00\x00" * int(rate * seconds))
+        return buf.getvalue()
+
+    @staticmethod
+    def _multipart_body(fields: dict, file_field: str, filename: str,
+                        content: bytes, content_type: str) -> tuple[bytes, str]:
+        """Encode a multipart/form-data body (this process is stdlib-only)."""
+        boundary = "----neat" + os.urandom(16).hex()
+        body = bytearray()
+        for key, value in fields.items():
+            body += (f"--{boundary}\r\n"
+                     f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+                     f"{value}\r\n").encode("utf-8")
+        body += (f"--{boundary}\r\n"
+                 f'Content-Disposition: form-data; name="{file_field}"; '
+                 f'filename="{filename}"\r\n'
+                 f"Content-Type: {content_type}\r\n\r\n").encode("utf-8")
+        body += content + b"\r\n" + f"--{boundary}--\r\n".encode("utf-8")
+        return bytes(body), f"multipart/form-data; boundary={boundary}"
+
+    def _warm_check_asr(self, name: str) -> tuple[bool, str]:
+        """Force an ASR model's deferred MLA load by transcribing silence.
+
+        The chat ``_warm_check`` sends a completion an ASR model cannot serve,
+        so speech models need their own probe. A silent clip is a legitimate
+        request: Whisper answers 200 with empty/low-confidence text, which is
+        all we need to know the weights reached the accelerator.
+        """
+        body, content_type = self._multipart_body(
+            {"model": name, "language": "en"},
+            "file", "warmup.wav", self._silence_wav(), "audio/wav",
+        )
+        req = urllib.request.Request(
+            f"{self._openai_base_url}/v1/audio/transcriptions",
+            data=body,
+            headers={"Content-Type": content_type},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_ASR_WARM_TIMEOUT_S) as resp:
+                resp.read()
+            return True, ""
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", "replace")
+            except Exception:
+                detail = ""
+            return False, f"HTTP {exc.code}: {detail}".strip()
         except Exception as exc:  # noqa: BLE001 - surfaced to caller
             return False, str(exc)
 
