@@ -48,8 +48,6 @@ Run the remaining commands from `prebuilt-apps/`.
 | --- | --- | --- |
 | `superpoint_mpk.tar.gz` | Default | Direct artifact |
 
-The model package comes from the Model Zoo release below, which can differ from the installed platform version.
-
 ```bash
 export MODELZOO_VERSION="2.1.3"
 mkdir -p models
