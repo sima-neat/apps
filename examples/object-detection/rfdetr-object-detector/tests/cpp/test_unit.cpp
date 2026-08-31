@@ -25,8 +25,10 @@ int main(int argc, char** argv) {
   if (parse_source_codec("h264") != SourceCodec::H264 ||
       parse_source_codec("AVC") != SourceCodec::H264 ||
       parse_source_codec("h265") != SourceCodec::H265 ||
-      parse_source_codec("HEVC") != SourceCodec::H265) {
-    std::cerr << "[FAIL] source codec aliases must resolve to H.264 or H.265\n";
+      parse_source_codec("HEVC") != SourceCodec::H265 ||
+      parse_source_codec("mjpeg") != SourceCodec::Mjpeg ||
+      parse_source_codec("JPEG") != SourceCodec::Mjpeg) {
+    std::cerr << "[FAIL] source codec aliases must resolve to H.264, H.265, or MJPEG\n";
     ++failures;
   }
 
@@ -34,9 +36,9 @@ int main(int argc, char** argv) {
   const SourceGeometry fallback{640, 480, 30};
   const auto resolved = resolve_geometry(probed, fallback);
   const auto partial = resolve_geometry({1280, 0, 0}, fallback);
-  if (resolved.width != 1280 || resolved.height != 720 || resolved.fps != 60 ||
+  if (resolved.width != 1280 || resolved.height != 720 || resolved.fps != 30 ||
       partial.width != 1280 || partial.height != 480 || partial.fps != 30) {
-    std::cerr << "[FAIL] probed geometry must take precedence over configured fallbacks\n";
+    std::cerr << "[FAIL] configured FPS must override the probe and dimensions remain fallbacks\n";
     ++failures;
   }
 

@@ -44,7 +44,7 @@ void request_stop(int) {
   g_stop.store(true);
 }
 
-enum class SourceCodec { H264, H265 };
+enum class SourceCodec { H264, H265, Mjpeg };
 
 struct SourceGeometry {
   int width = 0;
@@ -66,18 +66,24 @@ SourceCodec parse_source_codec(const std::string& value) {
   if (codec == "h265" || codec == "hevc" || codec == "h.265") {
     return SourceCodec::H265;
   }
-  throw std::runtime_error("source.codec must be h264/avc or h265/hevc");
+  if (codec == "mjpeg" || codec == "jpeg") {
+    return SourceCodec::Mjpeg;
+  }
+  throw std::runtime_error("source.codec must be h264/avc, h265/hevc, or mjpeg");
 }
 
 const char* source_codec_name(SourceCodec codec) {
-  return codec == SourceCodec::H264 ? "h264" : "h265";
+  if (codec == SourceCodec::H264) {
+    return "h264";
+  }
+  return codec == SourceCodec::H265 ? "h265" : "mjpeg";
 }
 
-SourceGeometry resolve_geometry(const SourceGeometry& probed, const SourceGeometry& fallback) {
+SourceGeometry resolve_geometry(const SourceGeometry& probed, const SourceGeometry& configured) {
   return {
-      probed.width > 0 ? probed.width : fallback.width,
-      probed.height > 0 ? probed.height : fallback.height,
-      probed.fps > 0 ? probed.fps : fallback.fps,
+      probed.width > 0 ? probed.width : configured.width,
+      probed.height > 0 ? probed.height : configured.height,
+      configured.fps > 0 ? configured.fps : probed.fps,
   };
 }
 
@@ -93,7 +99,7 @@ struct Config {
   int latency_ms = 100;
   int fallback_width = 0;
   int fallback_height = 0;
-  int fallback_fps = 0;
+  int source_fps = 0;
   int frames = 0;
   float min_score = 0.5F;
   int max_detections = 100;
@@ -149,7 +155,7 @@ Config load_config(const fs::path& path) {
   cfg.latency_ms = raw.int_or("source.latency_ms", 100);
   cfg.fallback_width = raw.int_or("source.width", 0);
   cfg.fallback_height = raw.int_or("source.height", 0);
-  cfg.fallback_fps = raw.int_or("source.fps", 0);
+  cfg.source_fps = raw.int_or("source.fps", 0);
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.min_score = static_cast<float>(raw.double_or("inference.min_score", 0.5));
   cfg.max_detections = raw.int_or("inference.max_detections", 100);
@@ -166,8 +172,7 @@ Config load_config(const fs::path& path) {
                          "source.rtsp_url must be an RTSP URL");
   sima_examples::require(cfg.latency_ms >= 0 && cfg.frames >= 0,
                          "source.latency_ms and inference.frames must be >= 0");
-  sima_examples::require(cfg.fallback_width >= 0 && cfg.fallback_height >= 0 &&
-                             cfg.fallback_fps >= 0,
+  sima_examples::require(cfg.fallback_width >= 0 && cfg.fallback_height >= 0 && cfg.source_fps >= 0,
                          "source.width, source.height, and source.fps must be >= 0");
   sima_examples::require(cfg.min_score >= 0.0F && cfg.min_score <= 1.0F,
                          "inference.min_score must be in [0, 1]");
@@ -417,7 +422,10 @@ SourceGeometry probe_source_geometry(const Config& cfg) {
 
   const SourceGeometry geometry =
       resolve_geometry({stream.width, stream.height, stream.fps},
-                       {cfg.fallback_width, cfg.fallback_height, cfg.fallback_fps});
+                       {cfg.fallback_width, cfg.fallback_height, cfg.source_fps});
+  if (cfg.codec == SourceCodec::Mjpeg && geometry.fps <= 0) {
+    throw std::runtime_error("MJPEG source did not provide an FPS; set source.fps");
+  }
   sima_examples::require(
       geometry.width > 0 && geometry.height > 0 && geometry.fps > 0,
       "failed to resolve RTSP width, height, and FPS; set source fallbacks if probing fails");
@@ -425,12 +433,18 @@ SourceGeometry probe_source_geometry(const Config& cfg) {
 }
 
 neat::nodes::groups::RtspCodec rtsp_codec(SourceCodec codec) {
-  return codec == SourceCodec::H264 ? neat::nodes::groups::RtspCodec::H264
-                                    : neat::nodes::groups::RtspCodec::H265;
+  if (codec == SourceCodec::H264) {
+    return neat::nodes::groups::RtspCodec::H264;
+  }
+  return codec == SourceCodec::H265 ? neat::nodes::groups::RtspCodec::H265
+                                    : neat::nodes::groups::RtspCodec::MJPEG;
 }
 
 neat::SimaDecodeType decode_type(SourceCodec codec) {
-  return codec == SourceCodec::H264 ? neat::SimaDecodeType::H264 : neat::SimaDecodeType::H265;
+  if (codec == SourceCodec::H264) {
+    return neat::SimaDecodeType::H264;
+  }
+  return codec == SourceCodec::H265 ? neat::SimaDecodeType::H265 : neat::SimaDecodeType::MJPEG;
 }
 
 int run(const Config& cfg) {
@@ -505,10 +519,12 @@ int run(const Config& cfg) {
   decode_options.dec_fps = geometry.fps;
   neat::Graph decode("decoder");
   decode.add(neat::nodes::SimaDecode(decode_options));
-  decode.add(neat::nodes::CapsRaw("NV12", geometry.width, geometry.height, geometry.fps,
-                                  neat::CapsMemory::Any));
 
-  auto video_options = neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
+  auto video_options =
+      cfg.codec == SourceCodec::Mjpeg
+          ? neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
+                geometry.width, geometry.height, geometry.fps)
+          : neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   video_options.host = cfg.insight_host;
   video_options.video_port_base = cfg.video_port;
   video_options.channel = 0;
@@ -525,7 +541,11 @@ int run(const Config& cfg) {
   link.stream_id = "stream0";
   neat::Graph graph("rfdetr");
   graph.connect(source, decode);
-  graph.connect(source, video, link);
+  if (cfg.codec == SourceCodec::Mjpeg) {
+    graph.connect(decode, video);
+  } else {
+    graph.connect(source, video);
+  }
   graph.connect(decode, backbone_graph, link);
   graph.connect(backbone_graph, backbone_output);
 

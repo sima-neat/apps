@@ -10,14 +10,14 @@ model:                          # RF-DETR model selection and artifacts.
     transformer: models/rfdetr-medium-transformer.tar.gz # Medium second stage.
     input_size: 576             # Compiled square input size.
 
-source:                         # H.264 or H.265 RTSP source properties.
+source:                         # H.264, H.265, or MJPEG RTSP source properties.
   rtsp_url: rtsp://<rtsp-source-ip>:<port>/<stream-name> # Input stream URL.
-  codec: h264                   # h264/avc or h265/hevc.
+  codec: h264                   # h264/avc, h265/hevc, or mjpeg/jpeg.
   tcp: true                     # Use RTSP over TCP.
   latency_ms: 100               # RTSP receive latency.
   width: 0                      # Optional width fallback. 0 uses the probe.
   height: 0                     # Optional height fallback. 0 uses the probe.
-  fps: 0                        # Optional FPS fallback. 0 uses the probe.
+  fps: 0                        # Optional FPS override. 0 uses the probe.
 
 inference:                      # Detection output settings.
   frames: 0                    # 0 runs continuously.

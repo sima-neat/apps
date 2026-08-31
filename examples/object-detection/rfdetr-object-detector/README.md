@@ -14,14 +14,15 @@
 
 ## Concept
 
-Run RF-DETR Small or Medium on one H.264 or H.265 RTSP stream and publish the source
+Run RF-DETR Small or Medium on one H.264, H.265, or MJPEG RTSP stream and publish the source
 video plus object-detection metadata to Insight.
 
 The application decodes to NV12 once. EV74 converts, resizes, and normalizes
 each frame for the selected backbone. A small host bridge selects the top 300
 proposals, gathers their boxes, and sends those boxes together with the
 matching backbone feature tensor to the transformer. The encoded source is
-forwarded directly to Insight, so the display path does not re-encode it.
+forwarded directly to Insight for H.264 and H.265. MJPEG is encoded to H.264
+from the shared decoded frame because Insight does not accept MJPEG passthrough.
 
 ## Preview
 
@@ -32,7 +33,7 @@ forwarded directly to Insight, so the display path does not re-encode it.
 - `sima-cli` 2.1.15 or newer
   ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a
   supported Modalix or DevKit target.
-- An H.264 or H.265 RTSP source and an
+- An H.264, H.265, or MJPEG RTSP source and an
   [Insight](https://developer.sima.ai/software/tools/insight/) endpoint
   reachable from the target.
 
@@ -79,9 +80,9 @@ cd ..
 Edit `$APP_DIR/src/common/config.yaml`:
 
 - Set `model.variant` to `small` or `medium`.
-- Set `source.rtsp_url` and select `source.codec` as `h264` or `h265`.
-- Leave `source.width`, `height`, and `fps` at `0` to probe the stream. Set a
-  positive value only as a fallback when the stream does not expose it.
+- Set `source.rtsp_url` and select `source.codec` as `h264`, `h265`, or `mjpeg`.
+- Leave `source.width`, `height`, and `fps` at `0` to probe the stream. Width
+  and height are fallbacks; a positive FPS overrides the detected value.
 - Set `output.insight.host`, `video_port`, and `metadata_port` to the values
   reported by Insight.
 - Keep `inference.frames: 0` to run continuously, or set a finite frame count.
@@ -108,9 +109,9 @@ python3 "$APP_DIR/src/python/main.py" \
   --config "$APP_DIR/src/common/config.yaml"
 ```
 
-Insight receives the original H.264 or H.265 video on `video_port` and matching
-`object-detection` metadata on `metadata_port`. Stop a continuous run with
-Ctrl-C.
+Insight receives the original H.264 or H.265 video, or H.264 video converted
+from MJPEG, on `video_port`. Matching `object-detection` metadata arrives on
+`metadata_port`. Stop a continuous run with Ctrl-C.
 
 ## Source Files
 

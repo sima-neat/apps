@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+import cv2
 import numpy as np
 import yaml
 
@@ -61,7 +62,9 @@ def parse_source_codec(value: str) -> str:
         return "h264"
     if codec in {"h265", "hevc", "h.265"}:
         return "h265"
-    raise ValueError("source.codec must be h264/avc or h265/hevc")
+    if codec in {"mjpeg", "jpeg"}:
+        return "mjpeg"
+    raise ValueError("source.codec must be h264/avc, h265/hevc, or mjpeg")
 
 
 def load_config(path: Path) -> Config:
@@ -144,37 +147,50 @@ def probe_rtsp(cfg: Config) -> tuple[int, int, int]:
     if cfg.tcp:
         command.extend(["-rtsp_transport", "tcp"])
     command.append(cfg.rtsp_url)
+    width = height = fps = 0
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=5, check=False
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return 0, 0, 0
-    if result.returncode != 0:
-        return 0, 0, 0
+        result = None
+    if result is not None and result.returncode == 0:
+        values = dict(
+            line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+        )
+        fps = _probe_fps(values.get("avg_frame_rate", "")) or _probe_fps(
+            values.get("r_frame_rate", "")
+        )
+        try:
+            width = int(values.get("width", 0))
+            height = int(values.get("height", 0))
+        except ValueError:
+            width = height = 0
 
-    values = dict(
-        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
-    )
-    fps = _probe_fps(values.get("avg_frame_rate", "")) or _probe_fps(
-        values.get("r_frame_rate", "")
-    )
-    try:
-        return int(values.get("width", 0)), int(values.get("height", 0)), fps
-    except ValueError:
-        return 0, 0, fps
+    if width <= 0 or height <= 0 or fps <= 0:
+        capture = cv2.VideoCapture(cfg.rtsp_url)
+        if capture.isOpened():
+            width = width or int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = height or int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            fps = fps or round(capture.get(cv2.CAP_PROP_FPS) or 0)
+        capture.release()
+    return width, height, fps
 
 
 def resolve_geometry(
-    probed: tuple[int, int, int], fallback: tuple[int, int, int]
+    probed: tuple[int, int, int], configured: tuple[int, int, int]
 ) -> tuple[int, int, int]:
-    return tuple(
-        value if value > 0 else fallback[index] for index, value in enumerate(probed)
+    return (
+        probed[0] if probed[0] > 0 else configured[0],
+        probed[1] if probed[1] > 0 else configured[1],
+        configured[2] if configured[2] > 0 else probed[2],
     )
 
 
 def probe_source_geometry(cfg: Config) -> tuple[int, int, int]:
     geometry = resolve_geometry(probe_rtsp(cfg), (cfg.width, cfg.height, cfg.fps))
+    if cfg.codec == "mjpeg" and geometry[2] <= 0:
+        raise RuntimeError("MJPEG source did not provide an FPS; set source.fps")
     if any(value <= 0 for value in geometry):
         raise RuntimeError(
             "failed to resolve RTSP width, height, and FPS; set source fallbacks if probing fails"
@@ -328,14 +344,15 @@ def run(cfg: Config) -> int:
     _runtime_pyneat = pyneat
     labels = load_labels(cfg.labels)
     width, height, fps = probe_source_geometry(cfg)
-    source_codec = (
-        pyneat.RtspCodec.H264 if cfg.codec == "h264" else pyneat.RtspCodec.H265
-    )
-    decoder_type = (
-        pyneat.SimaDecodeType.H264
-        if cfg.codec == "h264"
-        else pyneat.SimaDecodeType.H265
-    )
+    if cfg.codec == "h264":
+        source_codec = pyneat.RtspCodec.H264
+        decoder_type = pyneat.SimaDecodeType.H264
+    elif cfg.codec == "h265":
+        source_codec = pyneat.RtspCodec.H265
+        decoder_type = pyneat.SimaDecodeType.H265
+    else:
+        source_codec = pyneat.RtspCodec.MJPEG
+        decoder_type = pyneat.SimaDecodeType.MJPEG
 
     backbone_options = pyneat.ModelOptions()
     backbone_options.preprocess.kind = pyneat.InputKind.Image
@@ -405,9 +422,12 @@ def run(cfg: Config) -> int:
     decode_options.dec_fps = fps
     decoder = pyneat.Graph("decoder")
     decoder.add(pyneat.nodes.sima_decode(decode_options))
-    decoder.add(pyneat.nodes.caps_raw("NV12", width, height, fps, pyneat.CapsMemory.Any))
 
-    video_options = pyneat.VideoSenderOptions.passthrough(source_codec)
+    video_options = (
+        pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
+        if cfg.codec == "mjpeg"
+        else pyneat.VideoSenderOptions.passthrough(source_codec)
+    )
     video_options.host = cfg.insight_host
     video_options.video_port_base = cfg.video_port
     video_options.channel = 0
@@ -424,7 +444,10 @@ def run(cfg: Config) -> int:
     link.stream_id = "stream0"
     graph = pyneat.Graph("rfdetr")
     graph.connect(source, decoder)
-    graph.connect(source, video, link)
+    if cfg.codec == "mjpeg":
+        graph.connect(decoder, video)
+    else:
+        graph.connect(source, video)
     graph.connect(decoder, backbone_graph, link)
     graph.connect(backbone_graph, backbone_output)
 

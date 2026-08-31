@@ -61,6 +61,7 @@ int main(int argc, char** argv) {
   const std::vector<SourceCase> sources = {
       {"h264", "SIMANEAT_TEST_RTSP_H264_URL"},
       {"h265", "SIMANEAT_TEST_RTSP_H265_URL"},
+      {"mjpeg", "SIMANEAT_TEST_RTSP_MJPEG_URL"},
   };
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
@@ -131,6 +132,6 @@ int main(int argc, char** argv) {
       remove_dir(output_dir);
     }
   }
-  std::cout << "[OK] RF-DETR Small and Medium published valid H.264 and H.265 metadata\n";
+  std::cout << "[OK] RF-DETR Small and Medium published valid H.264, H.265, and MJPEG metadata\n";
   return 0;
 }

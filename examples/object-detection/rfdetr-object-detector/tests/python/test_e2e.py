@@ -30,7 +30,11 @@ def _env_int(name: str, default: int) -> int:
 @pytest.mark.parametrize("variant", ["small", "medium"])
 @pytest.mark.parametrize(
     ("codec", "stream_fixture"),
-    [("h264", "rtsp_h264_url"), ("h265", "rtsp_h265_url")],
+    [
+        ("h264", "rtsp_h264_url"),
+        ("h265", "rtsp_h265_url"),
+        ("mjpeg", "rtsp_mjpeg_url"),
+    ],
 )
 def test_variant_publishes_insight_metadata(
     variant,

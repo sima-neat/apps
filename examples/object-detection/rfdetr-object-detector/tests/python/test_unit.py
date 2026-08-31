@@ -92,6 +92,8 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
         ("h.264", "h264"),
         ("h265", "h265"),
         ("HEVC", "h265"),
+        ("mjpeg", "mjpeg"),
+        ("JPEG", "mjpeg"),
     ],
 )
 def test_source_codec_aliases(value, expected):
@@ -99,8 +101,8 @@ def test_source_codec_aliases(value, expected):
 
 
 @pytest.mark.unit
-def test_probed_geometry_wins_and_config_is_a_fallback():
-    assert main.resolve_geometry((1280, 720, 60), (640, 480, 30)) == (1280, 720, 60)
+def test_probed_geometry_uses_configured_fallbacks_and_fps_override():
+    assert main.resolve_geometry((1280, 720, 60), (640, 480, 30)) == (1280, 720, 30)
     assert main.resolve_geometry((1280, 0, 0), (640, 480, 30)) == (1280, 480, 30)
 
 
