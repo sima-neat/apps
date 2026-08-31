@@ -17,6 +17,7 @@ EXAMPLE_KEY = "feature-extraction/superpoint-feature-extractor"
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
 REFERENCE = EXAMPLE_DIR / "tests" / "data" / "fp32-a65-tum-desk.npz"
 ACCURACY_MODELS = {
+    "superpoint_mpk.tar.gz": (0.990, "int8-mla-tessellation"),
     "superpoint_modalix_int8_tessellation_mla_mpk.tar.gz": (
         0.990,
         "int8-mla-tessellation",
