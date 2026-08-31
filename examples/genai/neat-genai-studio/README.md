@@ -96,6 +96,11 @@ Other useful environment variables:
 
 - `CHAT_MODEL_REPO`: optionally download **and preload** one chat/VLM model at
   startup (empty by default, i.e. none).
+- `ASR_MODEL_REPO`: the speech-to-text model installed and made active at
+  startup (default `simaai/whisper-small-a16w8`; set to `""` to install none).
+- `ASR_CATALOG_MODEL_REPOS`: space-separated extra ASR repos to seed the
+  catalog, e.g. `simaai/whisper-medium-a16w8`, so you can switch between them
+  at runtime from **Settings → Models**.
 - `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
   chat/VLM model is resident and loading a new one clears the others.
 - `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
@@ -126,7 +131,7 @@ server:
       # To preload a model at startup instead, list it here, e.g.:
       # - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
       #   path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-    asr:
+    asr:                                    # active at startup; switchable at runtime
       name: whisper-small-a16w8
       path: /media/nvme/llima/models/whisper-small-a16w8
   hub:
@@ -287,14 +292,42 @@ curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
-to load it at runtime and unload all other chat/VLM models (whisper is always
-kept), so the MLA holds just the active model. A **Load status** panel pins to the
+to load it at runtime and unload all other chat/VLM models (speech-to-text has
+its own slot and is untouched), so the MLA holds just the active model. A **Load status** panel pins to the
 top of the tab and shows the live progress bar while it loads. The studio cancels
 the outgoing model's in-flight generation and waits for its memory to be released
 before loading the new one, then warms it so your first message is instant.
 
 If a switch hits an accelerator error, the Studio rolls back the failed model
 registration and reports the error. It does not restart or reset board services.
+
+### Switch the speech-to-text model
+The same tab lists your speech-to-text (ASR) models in their own
+**Speech-to-text** group, because they never compete with chat models for the
+same slot. Exactly one is active — marked `● active` — and pressing **Use** on
+another evicts it and makes the new one active, without restarting and without
+clearing the conversation. The chat model stays loaded throughout.
+
+`setup.sh` installs `simaai/whisper-small-a16w8` by default. To install a
+different or additional model:
+
+```bash
+# Replace the default:
+ASR_MODEL_REPO="simaai/whisper-medium-a16w8" ./setup.sh
+
+# Or keep whisper-small and seed extra models to switch between at runtime:
+ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8" ./setup.sh
+```
+
+You can also download any Whisper build from **Settings → Add Model** while the
+studio is running; it appears in the Speech-to-text group ready to use. Larger
+models transcribe more accurately at the cost of load time and memory.
+
+Switching is **not persistent**: `server.models.asr` in `config.local.yaml` is
+what a restart re-selects, and the model it names carries a `startup default`
+badge. Edit it to make a different choice permanent. Set `STUDIO_ASR_WARMUP=0`
+to skip the warm-up a switch performs (the first transcription then pays the
+load cost instead).
 
 ### Download models from Hugging Face
 When the board is online, the **Settings → Add Model** tab appears (it's hidden
@@ -554,6 +587,13 @@ curl -s http://127.0.0.1:9997/control/load \
 curl -s http://127.0.0.1:9997/control/unload \
   -H 'Content-Type: application/json' \
   -d '{"name":"<catalog-model-name>"}' | python3 -m json.tool
+
+# Make another speech-to-text model active (evicts the previous one). The
+# status above reports the active one as "asrModel" and the one a restart
+# re-selects as "configuredAsrModel".
+curl -s http://127.0.0.1:9997/control/asr \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"whisper-medium-a16w8"}' | python3 -m json.tool
 ```
 
 Check text chat:
@@ -640,6 +680,7 @@ Then test the browser UI:
 - RAG sample document: `src/common/rag/neat.md`
 - UI assets: `src/python/ui/templates/`, `src/python/ui/static/` (including `static/vendor/` and `static/fonts/`), `src/python/ui/assets/`, `src/python/ui/certs/`
 - SiMaSentry Solutions harnesses (vendored from `apps-llima-harnesses`): `src/python/ui/harnesses/`
+- Unit tests (host-runnable): `src/python/server/test_asr_switching.py`, `src/python/server/test_hub_security.py`, `src/python/ui/test_asr_metadata.py`, `src/python/ui/test_tts_text.py`, `src/python/ui/test_voice_catalog.py`
 - Manual API scripts: `src/python/ui/apitest/`
 - Test scope: `tests/test-scope.yaml`
 
