@@ -1,0 +1,35 @@
+models:
+  rfdetr-small-backbone:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-small-backbone.tar.gz
+    file: rfdetr-small-backbone.tar.gz
+  rfdetr-small-transformer:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-small-transformer.tar.gz
+    file: rfdetr-small-transformer.tar.gz
+  rfdetr-medium-backbone:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-medium-backbone.tar.gz
+    file: rfdetr-medium-backbone.tar.gz
+  rfdetr-medium-transformer:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-medium-transformer.tar.gz
+    file: rfdetr-medium-transformer.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+      - rfdetr-small-backbone
+      - rfdetr-small-transformer
+      - rfdetr-medium-backbone
+      - rfdetr-medium-transformer
+  cpp:
+    enabled: true
+    models:
+      - rfdetr-small-backbone
+      - rfdetr-small-transformer
+      - rfdetr-medium-backbone
+      - rfdetr-medium-transformer
