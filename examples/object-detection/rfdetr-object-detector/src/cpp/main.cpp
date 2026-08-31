@@ -44,6 +44,43 @@ void request_stop(int) {
   g_stop.store(true);
 }
 
+enum class SourceCodec { H264, H265 };
+
+struct SourceGeometry {
+  int width = 0;
+  int height = 0;
+  int fps = 0;
+};
+
+std::string lower_copy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+SourceCodec parse_source_codec(const std::string& value) {
+  const std::string codec = lower_copy(value);
+  if (codec == "h264" || codec == "avc" || codec == "h.264") {
+    return SourceCodec::H264;
+  }
+  if (codec == "h265" || codec == "hevc" || codec == "h.265") {
+    return SourceCodec::H265;
+  }
+  throw std::runtime_error("source.codec must be h264/avc or h265/hevc");
+}
+
+const char* source_codec_name(SourceCodec codec) {
+  return codec == SourceCodec::H264 ? "h264" : "h265";
+}
+
+SourceGeometry resolve_geometry(const SourceGeometry& probed, const SourceGeometry& fallback) {
+  return {
+      probed.width > 0 ? probed.width : fallback.width,
+      probed.height > 0 ? probed.height : fallback.height,
+      probed.fps > 0 ? probed.fps : fallback.fps,
+  };
+}
+
 struct Config {
   std::string variant;
   std::string backbone;
@@ -51,11 +88,12 @@ struct Config {
   int input_size = 0;
   fs::path labels;
   std::string rtsp_url;
+  SourceCodec codec = SourceCodec::H264;
   bool tcp = true;
   int latency_ms = 100;
-  int width = 0;
-  int height = 0;
-  int fps = 0;
+  int fallback_width = 0;
+  int fallback_height = 0;
+  int fallback_fps = 0;
   int frames = 0;
   float min_score = 0.5F;
   int max_detections = 100;
@@ -96,9 +134,7 @@ CliOptions parse_args(int argc, char** argv) {
 Config load_config(const fs::path& path) {
   const auto raw = sima_examples::ScalarConfig::load(path);
   Config cfg;
-  cfg.variant = raw.string_or("model.variant", "small");
-  std::transform(cfg.variant.begin(), cfg.variant.end(), cfg.variant.begin(),
-                 [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+  cfg.variant = lower_copy(raw.string_or("model.variant", "small"));
   if (cfg.variant != "small" && cfg.variant != "medium") {
     throw std::runtime_error("model.variant must be small or medium");
   }
@@ -108,11 +144,12 @@ Config load_config(const fs::path& path) {
   cfg.input_size = raw.int_or(prefix + "input_size", 0);
   cfg.labels = raw.string_or("model.labels", "");
   cfg.rtsp_url = raw.string_or("source.rtsp_url", "");
+  cfg.codec = parse_source_codec(raw.string_or("source.codec", "h264"));
   cfg.tcp = raw.bool_or("source.tcp", true);
   cfg.latency_ms = raw.int_or("source.latency_ms", 100);
-  cfg.width = raw.int_or("source.width", 0);
-  cfg.height = raw.int_or("source.height", 0);
-  cfg.fps = raw.int_or("source.fps", 0);
+  cfg.fallback_width = raw.int_or("source.width", 0);
+  cfg.fallback_height = raw.int_or("source.height", 0);
+  cfg.fallback_fps = raw.int_or("source.fps", 0);
   cfg.frames = raw.int_or("inference.frames", 0);
   cfg.min_score = static_cast<float>(raw.double_or("inference.min_score", 0.5));
   cfg.max_detections = raw.int_or("inference.max_detections", 100);
@@ -129,8 +166,9 @@ Config load_config(const fs::path& path) {
                          "source.rtsp_url must be an RTSP URL");
   sima_examples::require(cfg.latency_ms >= 0 && cfg.frames >= 0,
                          "source.latency_ms and inference.frames must be >= 0");
-  sima_examples::require(cfg.width > 0 && cfg.height > 0 && cfg.fps > 0,
-                         "source.width, source.height, and source.fps must be > 0");
+  sima_examples::require(cfg.fallback_width >= 0 && cfg.fallback_height >= 0 &&
+                             cfg.fallback_fps >= 0,
+                         "source.width, source.height, and source.fps must be >= 0");
   sima_examples::require(cfg.min_score >= 0.0F && cfg.min_score <= 1.0F,
                          "inference.min_score must be in [0, 1]");
   sima_examples::require(cfg.max_detections > 0, "inference.max_detections must be > 0");
@@ -370,13 +408,43 @@ std::vector<sima_examples::MetadataBox> postprocess(const std::vector<float>& bo
   return objects;
 }
 
+SourceGeometry probe_source_geometry(const Config& cfg) {
+  sima_examples::RtspStreamInfo stream;
+  sima_examples::RtspProbeOptions options;
+  options.latency_ms = cfg.latency_ms;
+  options.rtsp_tcp = cfg.tcp;
+  (void)sima_examples::probe_rtsp_stream_info(cfg.rtsp_url, options, stream);
+
+  const SourceGeometry geometry =
+      resolve_geometry({stream.width, stream.height, stream.fps},
+                       {cfg.fallback_width, cfg.fallback_height, cfg.fallback_fps});
+  sima_examples::require(
+      geometry.width > 0 && geometry.height > 0 && geometry.fps > 0,
+      "failed to resolve RTSP width, height, and FPS; set source fallbacks if probing fails");
+  return geometry;
+}
+
+neat::nodes::groups::RtspCodec rtsp_codec(SourceCodec codec) {
+  return codec == SourceCodec::H264 ? neat::nodes::groups::RtspCodec::H264
+                                    : neat::nodes::groups::RtspCodec::H265;
+}
+
+neat::FormatTag encoded_format(SourceCodec codec) {
+  return codec == SourceCodec::H264 ? neat::FormatTag::H264 : neat::FormatTag::H265;
+}
+
+neat::SimaDecodeType decode_type(SourceCodec codec) {
+  return codec == SourceCodec::H264 ? neat::SimaDecodeType::H264 : neat::SimaDecodeType::H265;
+}
+
 int run(const Config& cfg) {
+  const SourceGeometry geometry = probe_source_geometry(cfg);
   const auto labels = load_labels(cfg.labels);
   neat::Model::Options backbone_options;
   backbone_options.preprocess.kind = neat::InputKind::Image;
   backbone_options.preprocess.enable = neat::AutoFlag::On;
-  backbone_options.preprocess.input_max_width = cfg.width;
-  backbone_options.preprocess.input_max_height = cfg.height;
+  backbone_options.preprocess.input_max_width = geometry.width;
+  backbone_options.preprocess.input_max_height = geometry.height;
   backbone_options.preprocess.input_max_depth = 3;
   backbone_options.preprocess.resize.enable = neat::AutoFlag::On;
   backbone_options.preprocess.resize.mode = neat::ResizeMode::Stretch;
@@ -422,45 +490,47 @@ int run(const Config& cfg) {
 
   neat::nodes::groups::RtspEncodedInputOptions encoded_options;
   encoded_options.url = cfg.rtsp_url;
-  encoded_options.codec = neat::nodes::groups::RtspCodec::H264;
+  encoded_options.codec = rtsp_codec(cfg.codec);
   encoded_options.latency_ms = cfg.latency_ms;
   encoded_options.tcp = cfg.tcp;
-  encoded_options.source_fps = cfg.fps;
-  encoded_options.fallback_h264_width = cfg.width;
-  encoded_options.fallback_h264_height = cfg.height;
+  encoded_options.source_fps = geometry.fps;
+  if (cfg.codec == SourceCodec::H264) {
+    encoded_options.fallback_h264_width = geometry.width;
+    encoded_options.fallback_h264_height = geometry.height;
+  }
   neat::Graph source("rtsp_source");
   source.add(neat::nodes::groups::RtspEncodedInput(encoded_options));
 
-  auto branch = neat::graphs::Branch("encoded", {"decode_h264", "video_h264"});
+  auto branch = neat::graphs::Branch("encoded", {"decode", "video"});
 
   neat::InputOptions decode_input;
   decode_input.payload_type = neat::PayloadType::Encoded;
-  decode_input.format = neat::FormatTag::H264;
+  decode_input.format = encoded_format(cfg.codec);
   decode_input.memory_policy = neat::InputMemoryPolicy::Ev74;
   neat::SimaDecodeOptions decode_options;
-  decode_options.type = neat::SimaDecodeType::H264;
+  decode_options.type = decode_type(cfg.codec);
   decode_options.out_format = neat::FormatTag::NV12;
   decode_options.raw_output = true;
-  decode_options.dec_width = cfg.width;
-  decode_options.dec_height = cfg.height;
-  decode_options.dec_fps = cfg.fps;
+  decode_options.dec_width = geometry.width;
+  decode_options.dec_height = geometry.height;
+  decode_options.dec_fps = geometry.fps;
   neat::Graph decode("decoder");
-  decode.connect(neat::nodes::Input("decode_h264", decode_input),
+  decode.connect(neat::nodes::Input("decode", decode_input),
                  neat::nodes::SimaDecode(decode_options));
-  decode.add(neat::nodes::CapsRaw("NV12", cfg.width, cfg.height, cfg.fps, neat::CapsMemory::Any));
+  decode.add(neat::nodes::CapsRaw("NV12", geometry.width, geometry.height, geometry.fps,
+                                  neat::CapsMemory::Any));
 
   neat::InputOptions video_input;
   video_input.payload_type = neat::PayloadType::Encoded;
-  video_input.format = neat::FormatTag::H264;
+  video_input.format = encoded_format(cfg.codec);
   video_input.memory_policy = neat::InputMemoryPolicy::SystemMemory;
-  auto video_options =
-      neat::nodes::groups::VideoSenderOptions::Passthrough(neat::nodes::groups::RtspCodec::H264);
+  auto video_options = neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   video_options.host = cfg.insight_host;
   video_options.video_port_base = cfg.video_port;
   video_options.channel = 0;
   video_options.async = true;
   neat::Graph video("video");
-  video.connect(neat::nodes::Input("video_h264", video_input),
+  video.connect(neat::nodes::Input("video", video_input),
                 neat::nodes::groups::VideoSender(video_options));
 
   neat::Graph backbone_graph = backbone.graph();
@@ -506,8 +576,9 @@ int run(const Config& cfg) {
   std::string metadata_error;
   neat::MetadataSender metadata_sender(metadata_options, &metadata_error);
   sima_examples::require(metadata_sender.ok(), metadata_error);
-  std::cout << "RF-DETR " << cfg.variant << ": " << cfg.rtsp_url << " (" << cfg.width << "x"
-            << cfg.height << "@" << cfg.fps << ") -> Insight video=" << video_options.video_port()
+  std::cout << "RF-DETR " << cfg.variant << " " << source_codec_name(cfg.codec) << ": "
+            << cfg.rtsp_url << " (" << geometry.width << "x" << geometry.height << "@"
+            << geometry.fps << ") -> Insight video=" << video_options.video_port()
             << " metadata=" << metadata_sender.metadata_port() << "\n";
 
   const int proposal_count = (cfg.input_size / 16) * (cfg.input_size / 16);
@@ -563,8 +634,8 @@ int run(const Config& cfg) {
       }
       auto [box_tensor, logit_tensor] = split_transformer(sample);
       const auto objects =
-          postprocess(read_floats(box_tensor), read_floats(logit_tensor), cfg.width, cfg.height,
-                      labels, cfg.min_score, cfg.max_detections);
+          postprocess(read_floats(box_tensor), read_floats(logit_tensor), geometry.width,
+                      geometry.height, labels, cfg.min_score, cfg.max_detections);
       const auto data = sima_examples::metadata_boxes_data_json("objects", objects);
       const int64_t source_frame_id = sample.frame_id;
       int64_t source_pts_ns = sample.pts_ns;

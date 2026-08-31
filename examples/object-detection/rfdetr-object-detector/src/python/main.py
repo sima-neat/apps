@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +27,7 @@ class Config:
     input_size: int
     labels: Path
     rtsp_url: str
+    codec: str
     tcp: bool
     latency_ms: int
     width: int
@@ -52,6 +55,15 @@ def _mapping(raw: dict, key: str) -> dict:
     return value
 
 
+def parse_source_codec(value: str) -> str:
+    codec = value.lower()
+    if codec in {"h264", "avc", "h.264"}:
+        return "h264"
+    if codec in {"h265", "hevc", "h.265"}:
+        return "h265"
+    raise ValueError("source.codec must be h264/avc or h265/hevc")
+
+
 def load_config(path: Path) -> Config:
     with path.open(encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
@@ -71,6 +83,7 @@ def load_config(path: Path) -> Config:
         input_size=int(selected.get("input_size", 0)),
         labels=Path(labels_path),
         rtsp_url=str(source.get("rtsp_url", "")),
+        codec=parse_source_codec(str(source.get("codec", "h264"))),
         tcp=bool(source.get("tcp", True)),
         latency_ms=int(source.get("latency_ms", 100)),
         width=int(source.get("width", 0)),
@@ -93,8 +106,8 @@ def load_config(path: Path) -> Config:
         raise ValueError("source.rtsp_url must be an RTSP URL")
     if cfg.latency_ms < 0 or cfg.frames < 0:
         raise ValueError("source.latency_ms and inference.frames must be >= 0")
-    if cfg.width <= 0 or cfg.height <= 0 or cfg.fps <= 0:
-        raise ValueError("source.width, source.height, and source.fps must be > 0")
+    if cfg.width < 0 or cfg.height < 0 or cfg.fps < 0:
+        raise ValueError("source.width, source.height, and source.fps must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
         raise ValueError("inference.min_score must be in [0, 1]")
     if cfg.max_detections <= 0:
@@ -104,6 +117,69 @@ def load_config(path: Path) -> Config:
     if not all(0 < port <= 65535 for port in (cfg.video_port, cfg.metadata_port)):
         raise ValueError("Insight ports must be in [1, 65535]")
     return cfg
+
+
+def _probe_fps(value: str) -> int:
+    try:
+        fps = float(Fraction(value))
+    except (ValueError, ZeroDivisionError):
+        return 0
+    return round(fps) if fps > 0 else 0
+
+
+def probe_rtsp(cfg: Config) -> tuple[int, int, int]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-rw_timeout",
+        "5000000",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,r_frame_rate,avg_frame_rate",
+        "-of",
+        "default=nw=1",
+    ]
+    if cfg.tcp:
+        command.extend(["-rtsp_transport", "tcp"])
+    command.append(cfg.rtsp_url)
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=5, check=False
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return 0, 0, 0
+    if result.returncode != 0:
+        return 0, 0, 0
+
+    values = dict(
+        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    )
+    fps = _probe_fps(values.get("avg_frame_rate", "")) or _probe_fps(
+        values.get("r_frame_rate", "")
+    )
+    try:
+        return int(values.get("width", 0)), int(values.get("height", 0)), fps
+    except ValueError:
+        return 0, 0, fps
+
+
+def resolve_geometry(
+    probed: tuple[int, int, int], fallback: tuple[int, int, int]
+) -> tuple[int, int, int]:
+    return tuple(
+        value if value > 0 else fallback[index] for index, value in enumerate(probed)
+    )
+
+
+def probe_source_geometry(cfg: Config) -> tuple[int, int, int]:
+    geometry = resolve_geometry(probe_rtsp(cfg), (cfg.width, cfg.height, cfg.fps))
+    if any(value <= 0 for value in geometry):
+        raise RuntimeError(
+            "failed to resolve RTSP width, height, and FPS; set source fallbacks if probing fails"
+        )
+    return geometry
 
 
 def load_labels(path: Path) -> list[str]:
@@ -251,7 +327,16 @@ def run(cfg: Config) -> int:
 
     _runtime_pyneat = pyneat
     labels = load_labels(cfg.labels)
-    width, height, fps = cfg.width, cfg.height, cfg.fps
+    width, height, fps = probe_source_geometry(cfg)
+    source_codec = (
+        pyneat.RtspCodec.H264 if cfg.codec == "h264" else pyneat.RtspCodec.H265
+    )
+    encoded_format = pyneat.Format.H264 if cfg.codec == "h264" else pyneat.Format.H265
+    decoder_type = (
+        pyneat.SimaDecodeType.H264
+        if cfg.codec == "h264"
+        else pyneat.SimaDecodeType.H265
+    )
 
     backbone_options = pyneat.ModelOptions()
     backbone_options.preprocess.kind = pyneat.InputKind.Image
@@ -303,22 +388,23 @@ def run(cfg: Config) -> int:
 
     encoded_options = pyneat.RtspEncodedInputOptions()
     encoded_options.url = cfg.rtsp_url
-    encoded_options.codec = pyneat.RtspCodec.H264
+    encoded_options.codec = source_codec
     encoded_options.latency_ms = cfg.latency_ms
     encoded_options.tcp = cfg.tcp
     encoded_options.source_fps = fps
-    encoded_options.fallback_h264_width = width
-    encoded_options.fallback_h264_height = height
+    if cfg.codec == "h264":
+        encoded_options.fallback_h264_width = width
+        encoded_options.fallback_h264_height = height
     source = pyneat.Graph("rtsp_source")
     source.add(pyneat.groups.rtsp_encoded_input(encoded_options))
 
-    branch = pyneat.graphs.branch("encoded", ["decode_h264", "video_h264"])
+    branch = pyneat.graphs.branch("encoded", ["decode", "video"])
     decode_input = pyneat.InputOptions()
     decode_input.payload_type = pyneat.PayloadType.Encoded
-    decode_input.format = pyneat.Format.H264
+    decode_input.format = encoded_format
     decode_input.memory_policy = pyneat.InputMemoryPolicy.Ev74
     decode_options = pyneat.SimaDecodeOptions()
-    decode_options.type = pyneat.SimaDecodeType.H264
+    decode_options.type = decoder_type
     decode_options.out_format = pyneat.Format.NV12
     decode_options.raw_output = True
     decode_options.dec_width = width
@@ -326,23 +412,23 @@ def run(cfg: Config) -> int:
     decode_options.dec_fps = fps
     decoder = pyneat.Graph("decoder")
     decoder.connect(
-        pyneat.nodes.input("decode_h264", decode_input),
+        pyneat.nodes.input("decode", decode_input),
         pyneat.nodes.sima_decode(decode_options),
     )
     decoder.add(pyneat.nodes.caps_raw("NV12", width, height, fps, pyneat.CapsMemory.Any))
 
     video_input = pyneat.InputOptions()
     video_input.payload_type = pyneat.PayloadType.Encoded
-    video_input.format = pyneat.Format.H264
+    video_input.format = encoded_format
     video_input.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    video_options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.H264)
+    video_options = pyneat.VideoSenderOptions.passthrough(source_codec)
     video_options.host = cfg.insight_host
     video_options.video_port_base = cfg.video_port
     video_options.channel = 0
     video_options.async_ = True
     video = pyneat.Graph("video")
     video.connect(
-        pyneat.nodes.input("video_h264", video_input),
+        pyneat.nodes.input("video", video_input),
         pyneat.groups.video_sender(video_options),
     )
 
@@ -394,7 +480,7 @@ def run(cfg: Config) -> int:
     metadata_options.channel = 0
     metadata_sender = pyneat.MetadataSender(metadata_options)
     print(
-        f"RF-DETR {cfg.variant}: {cfg.rtsp_url} ({width}x{height}@{fps}) -> "
+        f"RF-DETR {cfg.variant} {cfg.codec}: {cfg.rtsp_url} ({width}x{height}@{fps}) -> "
         f"Insight video={video_port} metadata={metadata_sender.metadata_port()}",
         flush=True,
     )

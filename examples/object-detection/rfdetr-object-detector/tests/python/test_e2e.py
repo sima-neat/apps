@@ -28,13 +28,19 @@ def _env_int(name: str, default: int) -> int:
 
 @pytest.mark.e2e
 @pytest.mark.parametrize("variant", ["small", "medium"])
+@pytest.mark.parametrize(
+    ("codec", "stream_fixture"),
+    [("h264", "rtsp_h264_url"), ("h265", "rtsp_h265_url")],
+)
 def test_variant_publishes_insight_metadata(
     variant,
+    codec,
+    stream_fixture,
     models_dir,
-    rtsp_h264_url,
     test_timeout_ms,
     skip_unless_e2e_ready,
     e2e_config_writer,
+    request,
 ):
     skip_unless_e2e_ready(_runtime_ready(), "numpy and pyneat are required")
     paths = {
@@ -49,6 +55,7 @@ def test_variant_publishes_insight_metadata(
     }
     for path in paths[variant].values():
         skip_unless_e2e_ready(path.exists(), f"missing RF-DETR artifact: {path}")
+    rtsp_url = request.getfixturevalue(stream_fixture)
 
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
     config_path = e2e_config_writer(
@@ -57,7 +64,7 @@ def test_variant_publishes_insight_metadata(
                 "variant": variant,
                 variant: {key: str(value) for key, value in paths[variant].items()},
             },
-            "source": {"rtsp_url": rtsp_h264_url},
+            "source": {"rtsp_url": rtsp_url, "codec": codec},
             "inference": {"frames": 20, "min_score": 0.2},
             "output": {
                 "insight": {

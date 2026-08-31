@@ -67,7 +67,7 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
             "small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz", "input_size": 512},
             "medium": {"backbone": "medium-b.tar.gz", "transformer": "medium-t.tar.gz", "input_size": 576},
         },
-        "source": {"rtsp_url": "rtsp://camera/live", "width": 1280, "height": 720, "fps": 30},
+        "source": {"rtsp_url": "rtsp://camera/live", "codec": "h265"},
         "inference": {"frames": 1, "min_score": 0.5, "max_detections": 10},
         "output": {"insight": {"host": "127.0.0.1", "video_port": 9000, "metadata_port": 9100}},
     }
@@ -79,6 +79,29 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
     assert selected.variant == variant
     assert selected.input_size == size
     assert selected.backbone.startswith(variant)
+    assert selected.codec == "h265"
+    assert (selected.width, selected.height, selected.fps) == (0, 0, 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("h264", "h264"),
+        ("AVC", "h264"),
+        ("h.264", "h264"),
+        ("h265", "h265"),
+        ("HEVC", "h265"),
+    ],
+)
+def test_source_codec_aliases(value, expected):
+    assert main.parse_source_codec(value) == expected
+
+
+@pytest.mark.unit
+def test_probed_geometry_wins_and_config_is_a_fallback():
+    assert main.resolve_geometry((1280, 720, 60), (640, 480, 30)) == (1280, 720, 60)
+    assert main.resolve_geometry((1280, 0, 0), (640, 480, 30)) == (1280, 480, 30)
 
 
 @pytest.mark.unit

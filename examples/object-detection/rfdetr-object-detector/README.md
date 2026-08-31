@@ -14,14 +14,14 @@
 
 ## Concept
 
-Run RF-DETR Small or Medium on one H.264 RTSP stream and publish the source
+Run RF-DETR Small or Medium on one H.264 or H.265 RTSP stream and publish the source
 video plus object-detection metadata to Insight.
 
 The application decodes to NV12 once. EV74 converts, resizes, and normalizes
 each frame for the selected backbone. A small host bridge selects the top 300
 proposals, gathers their boxes, and sends those boxes together with the
-matching backbone feature tensor to the transformer. The encoded H.264 source
-is forwarded directly to Insight, so the display path does not re-encode it.
+matching backbone feature tensor to the transformer. The encoded source is
+forwarded directly to Insight, so the display path does not re-encode it.
 
 ## Preview
 
@@ -32,7 +32,7 @@ is forwarded directly to Insight, so the display path does not re-encode it.
 - `sima-cli` 2.1.15 or newer
   ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a
   supported Modalix or DevKit target.
-- An H.264 RTSP source and an
+- An H.264 or H.265 RTSP source and an
   [Insight](https://developer.sima.ai/software/tools/insight/) endpoint
   reachable from the target.
 
@@ -79,8 +79,9 @@ cd ..
 Edit `$APP_DIR/src/common/config.yaml`:
 
 - Set `model.variant` to `small` or `medium`.
-- Set `source.rtsp_url`, `width`, `height`, and `fps` to match the H.264
-  stream.
+- Set `source.rtsp_url` and select `source.codec` as `h264` or `h265`.
+- Leave `source.width`, `height`, and `fps` at `0` to probe the stream. Set a
+  positive value only as a fallback when the stream does not expose it.
 - Set `output.insight.host`, `video_port`, and `metadata_port` to the values
   reported by Insight.
 - Keep `inference.frames: 0` to run continuously, or set a finite frame count.
@@ -107,7 +108,7 @@ python3 "$APP_DIR/src/python/main.py" \
   --config "$APP_DIR/src/common/config.yaml"
 ```
 
-Insight receives the original H.264 video on `video_port` and matching
+Insight receives the original H.264 or H.265 video on `video_port` and matching
 `object-detection` metadata on `metadata_port`. Stop a continuous run with
 Ctrl-C.
 
