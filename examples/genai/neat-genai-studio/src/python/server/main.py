@@ -146,6 +146,9 @@ def main() -> int:
             catalog_dir=cfg.catalog_dir,
             max_resident_chat_models=cfg.max_resident_chat_models,
             asr_name=cfg.asr_model.name if cfg.asr_model else None,
+            # Switching ASR models warms the new one (a short silent clip) so a
+            # bad load surfaces during the switch, not on the next transcription.
+            asr_warmup=os.environ.get("STUDIO_ASR_WARMUP", "1") != "0",
             hub=cfg.hub,
             openai_base_url=cfg.openai.base_url,
             log_tap=log_tap,

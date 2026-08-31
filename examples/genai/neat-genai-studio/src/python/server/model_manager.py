@@ -8,8 +8,10 @@ additional compatible models from the Hugging Face Hub when the board is
 online.
 
 pyneat's ``add_model`` / ``remove_model`` are thread-safe and may be called
-after ``server.start()``; this class serializes catalog mutations under a lock
-and treats the ASR model as pinned (never evicted).
+after ``server.start()``; this class serializes catalog mutations under a lock.
+ASR (speech-to-text) models get their own slot: exactly one is resident at a
+time and switching to another evicts the previous one, so an ASR switch never
+disturbs the resident chat/VLM model (and vice versa).
 """
 
 from __future__ import annotations
@@ -102,16 +104,23 @@ class ModelManager:
         hub: HubConfig,
         openai_base_url: str,
         warmup: bool = True,
+        asr_warmup: bool = True,
         switch_settle_s: float = 0.6,
         log_tap=None,
     ) -> None:
         self._server = server
         self._catalog_dir = Path(catalog_dir) if catalog_dir else None
         self._max_resident = max(1, int(max_resident_chat_models))
-        self._asr_name = asr_name
+        # What config pins at startup (immutable) vs what serves transcriptions
+        # right now (mutable — the UI can switch it). The active name is only a
+        # cache: eviction victims are DERIVED from the server's loaded set, so a
+        # stale pointer can never strand a resident ASR model.
+        self._configured_asr = asr_name
+        self._active_asr = asr_name
         self._hub = hub
         self._openai_base_url = openai_base_url.rstrip("/")
         self._warmup = warmup
+        self._asr_warmup = asr_warmup
         # After unloading the outgoing model, wait briefly so its RAII free
         # (which returns MLA memory to the dispatcher) completes before loading
         # the replacement — avoids transient double-residency (MLA_LOAD_FAILED).
@@ -212,6 +221,7 @@ class ModelManager:
 
     def catalog(self) -> list[dict]:
         loaded = set(self._server_model_names())
+        active_asr = self._active_asr
         with self._lock:
             infos = list(self._catalog.values())   # snapshot; then walk the FS
         entries = []                                # outside the lock (walks are slow)
@@ -223,7 +233,11 @@ class ModelManager:
                 "supportsVision": bool(info.get("supports_vision")),
                 "imageSize": info.get("image_size"),
                 "loaded": info["name"] in loaded,
-                "pinned": info["name"] == self._asr_name,
+                # "pinned" = the ASR model config re-selects on restart;
+                # "activeAsr" = the one serving transcriptions right now.
+                "pinned": info["name"] == self._configured_asr,
+                "activeAsr": (info.get("type") == "asr"
+                              and info["name"] == active_asr),
                 "sizeBytes": self._size_of(info.get("path")),
                 "complete": complete,
                 "incompleteReason": reason or None,
@@ -249,14 +263,40 @@ class ModelManager:
         except Exception:
             return []
 
-    def _sync_resident_from_server(self) -> None:
+    def _catalog_type(self, name: str) -> str:
         with self._lock:
-            loaded = self._server_model_names()
+            info = self._catalog.get(name)
+        return (info or {}).get("type", "chat")
+
+    def _loaded_asr_names(self) -> list[str]:
+        """ASR models currently registered on the server.
+
+        Derived from the catalog type rather than from ``_active_asr`` so a
+        stale pointer can never leave an ASR model resident forever.
+        """
+        loaded = self._server_model_names()
+        names = [n for n in loaded if self._catalog_type(n) == "asr"]
+        active = self._active_asr
+        if active and active in loaded and active not in names:
+            names.append(active)
+        return names
+
+    def active_asr(self) -> str | None:
+        """The ASR model currently serving transcriptions."""
+        return self._active_asr
+
+    def _sync_resident_from_server(self) -> None:
+        # Exclude ASR models by TYPE, not by name: after a switch the active ASR
+        # has a different name than the configured one, and letting it leak into
+        # _resident would make the next chat load evict it.
+        loaded = self._server_model_names()
+        asr = set(self._loaded_asr_names())
+        with self._lock:
             self._resident = [
-                n for n in self._resident if n in loaded and n != self._asr_name
+                n for n in self._resident if n in loaded and n not in asr
             ]
             for name in loaded:
-                if name != self._asr_name and name not in self._resident:
+                if name not in asr and name not in self._resident:
                     self._resident.append(name)
 
     def touch(self, name: str) -> None:
@@ -289,7 +329,11 @@ class ModelManager:
                 is_asr = info.get("type") == "asr"
 
             if name in self._server_model_names():
-                self.touch(name)
+                if is_asr:
+                    with self._lock:
+                        self._active_asr = name
+                else:
+                    self.touch(name)
                 return {"name": name, "state": "ready", "evicted": [], "cold_start": False,
                         "load_seconds": 0.0}
 
@@ -313,23 +357,26 @@ class ModelManager:
             except Exception:  # noqa: BLE001 - repair is best-effort
                 pass
 
-            with self._lock:
-                # The ASR model is pinned and not tracked in _resident.
-                victims = [] if is_asr else [v for v in self._resident if v != name]
+            # ASR models have their own slot: switching evicts the previous ASR
+            # and leaves the resident chat/VLM model alone (and vice versa).
+            if is_asr:
+                victims = [v for v in self._loaded_asr_names() if v != name]
+            else:
+                with self._lock:
+                    victims = [v for v in self._resident if v != name]
 
             size_bytes = self._size_of(path)
             started = time.monotonic()
             self._last_error = None
-            if not is_asr:
-                self._loading = {
-                    "name": name,
-                    "startedAt": started,
-                    "estTotalS": self._estimate_load_seconds(name, size_bytes),
-                    # Real progress: count completed ELF-stage loads (from the
-                    # stdout tap) minus the baseline against the on-disk total.
-                    "elfTotal": self._count_elf_stages(path),
-                    "elfBase": self._log_tap.loaded_count if self._log_tap else 0,
-                }
+            self._loading = {
+                "name": name,
+                "startedAt": started,
+                "estTotalS": self._estimate_load_seconds(name, size_bytes),
+                # Real progress: count completed ELF-stage loads (from the
+                # stdout tap) minus the baseline against the on-disk total.
+                "elfTotal": self._count_elf_stages(path),
+                "elfBase": self._log_tap.loaded_count if self._log_tap else 0,
+            }
             evicted: list = []
             try:
                 # Clear every other chat/VLM model. _stop_model_streams (an HTTP
@@ -343,30 +390,38 @@ class ModelManager:
                         evicted.append(victim)
                     except Exception:
                         pass
-                if not is_asr:
-                    with self._lock:
+                with self._lock:
+                    if is_asr:
+                        # Honest during the eviction window: nothing can serve a
+                        # transcription until the replacement is registered.
+                        self._active_asr = None
+                    else:
                         self._resident = []
-                    # Let the free complete before loading the replacement, so the
-                    # old and new model are never briefly co-resident.
-                    if evicted and self._switch_settle_s:
-                        time.sleep(self._switch_settle_s)
+                # Let the free complete before loading the replacement, so the
+                # old and new model are never briefly co-resident.
+                if evicted and self._switch_settle_s:
+                    time.sleep(self._switch_settle_s)
 
+                # add_model returns the name the server actually served it under,
+                # which may differ from the requested one — that is the truth.
                 served = self._server.add_model(str(path), name)
-                if not is_asr:
-                    with self._lock:
+                with self._lock:
+                    if is_asr:
+                        self._active_asr = served
+                    else:
                         self._resident = [served]
 
                 # add_model only registers; the real MLA load is deferred to first
                 # inference. Warm synchronously so a load failure is catchable and
                 # so we can time the load (this is where the wait actually happens).
                 if is_asr or not self._warmup:
-                    return {"name": name, "state": "ready", "evicted": evicted,
+                    return {"name": served, "state": "ready", "evicted": evicted,
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
                 ok, detail = self._warm_check(name)
                 if ok:
                     self._record_load_duration(name, size_bytes, time.monotonic() - started)
-                    return {"name": name, "state": "ready", "evicted": evicted,
+                    return {"name": served, "state": "ready", "evicted": evicted,
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
                 if _is_mla_failure(detail):
@@ -383,6 +438,33 @@ class ModelManager:
                 raise RuntimeError(f"Model '{name}' failed to load: {detail}")
             finally:
                 self._loading = None
+
+    def set_active_asr(self, name: str) -> dict:
+        """Make ``name`` the ASR model that serves transcriptions.
+
+        Only one ASR model is resident at a time, so this evicts the previous
+        one. The resident chat/VLM model is untouched.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("An ASR model name is required")
+        if name not in self._catalog:
+            self.scan_catalog()
+        with self._lock:
+            info = self._catalog.get(name)
+        if info is None:
+            raise ValueError(f"Unknown model: {name}")
+        # Refuse anything that is not speech-to-text, rather than quietly
+        # pointing transcription at a chat model that cannot serve it.
+        if info.get("type") != "asr":
+            raise ValueError(f"'{name}' is not a speech-to-text (ASR) model")
+
+        previous = self._active_asr
+        result = self.load(name)
+        active = self._active_asr
+        result["activeAsr"] = active
+        result["previous"] = previous if previous != active else None
+        return result
 
     def _estimate_load_seconds(self, name: str, size_bytes: int | None) -> float | None:
         """Best-effort ETA: the model's own last load time, else a learned rate."""
@@ -687,8 +769,11 @@ class ModelManager:
 
     def unload(self, name: str) -> dict:
         name = (name or "").strip()
-        if name == self._asr_name:
-            raise ValueError("The ASR model cannot be unloaded")
+        if name and name == self._active_asr:
+            raise ValueError(
+                "The active speech-to-text model cannot be unloaded — "
+                "switch to another ASR model instead."
+            )
         with self._op_lock:
             # remove_model frees MLA memory and can block for seconds — keep it
             # out of _lock so concurrent status polls are not held up.
@@ -702,12 +787,17 @@ class ModelManager:
     def delete(self, name: str) -> dict:
         """Unload (if loaded) and delete a model's files from the catalog.
 
-        Guarded: refuses to delete the pinned ASR model or anything outside
-        ``catalog_dir``.
+        Guarded: refuses to delete the active ASR model or anything outside
+        ``catalog_dir``. An ASR model that is merely installed (not active) is
+        deletable — that is how you reclaim the space of a model you switched
+        away from.
         """
         name = (name or "").strip()
-        if name == self._asr_name:
-            raise ValueError("The ASR model cannot be deleted")
+        if name and name == self._active_asr:
+            raise ValueError(
+                "The active speech-to-text model cannot be deleted — "
+                "switch to another ASR model first."
+            )
         if not self._catalog_dir:
             raise ValueError("No catalog_dir configured; refusing to delete")
         with self._op_lock:
@@ -853,6 +943,8 @@ class ModelManager:
         with self._lock:
             if name in self._resident:
                 self._resident = []
+            if name == self._active_asr:
+                self._active_asr = None
         raise RuntimeError(
             f"Model '{name}' could not be loaded because the accelerator (MLA) "
             "reported an error. Check the board runtime before retrying."
@@ -892,7 +984,10 @@ class ModelManager:
             "catalog": self.catalog(),
             "loaded": self._server_model_names(),
             "maxResident": self._max_resident,
-            "asrModel": self._asr_name,
+            # The ASR model serving transcriptions now, and the one a restart
+            # re-selects from config (they differ after a runtime switch).
+            "asrModel": self._active_asr,
+            "configuredAsrModel": self._configured_asr,
             "hubEnabled": self.hub_enabled(),
             "loading": self.loading_status(),
             "disk": self.disk_info(),
