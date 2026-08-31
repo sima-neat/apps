@@ -331,7 +331,6 @@ def run(cfg: Config) -> int:
     source_codec = (
         pyneat.RtspCodec.H264 if cfg.codec == "h264" else pyneat.RtspCodec.H265
     )
-    encoded_format = pyneat.Format.H264 if cfg.codec == "h264" else pyneat.Format.H265
     decoder_type = (
         pyneat.SimaDecodeType.H264
         if cfg.codec == "h264"
@@ -395,14 +394,8 @@ def run(cfg: Config) -> int:
     if cfg.codec == "h264":
         encoded_options.fallback_h264_width = width
         encoded_options.fallback_h264_height = height
-    source = pyneat.Graph("rtsp_source")
-    source.add(pyneat.groups.rtsp_encoded_input(encoded_options))
+    source = pyneat.groups.rtsp_encoded_input(encoded_options)
 
-    branch = pyneat.graphs.branch("encoded", ["decode", "video"])
-    decode_input = pyneat.InputOptions()
-    decode_input.payload_type = pyneat.PayloadType.Encoded
-    decode_input.format = encoded_format
-    decode_input.memory_policy = pyneat.InputMemoryPolicy.Ev74
     decode_options = pyneat.SimaDecodeOptions()
     decode_options.type = decoder_type
     decode_options.out_format = pyneat.Format.NV12
@@ -411,26 +404,15 @@ def run(cfg: Config) -> int:
     decode_options.dec_height = height
     decode_options.dec_fps = fps
     decoder = pyneat.Graph("decoder")
-    decoder.connect(
-        pyneat.nodes.input("decode", decode_input),
-        pyneat.nodes.sima_decode(decode_options),
-    )
+    decoder.add(pyneat.nodes.sima_decode(decode_options))
     decoder.add(pyneat.nodes.caps_raw("NV12", width, height, fps, pyneat.CapsMemory.Any))
 
-    video_input = pyneat.InputOptions()
-    video_input.payload_type = pyneat.PayloadType.Encoded
-    video_input.format = encoded_format
-    video_input.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
     video_options = pyneat.VideoSenderOptions.passthrough(source_codec)
     video_options.host = cfg.insight_host
     video_options.video_port_base = cfg.video_port
     video_options.channel = 0
     video_options.async_ = True
-    video = pyneat.Graph("video")
-    video.connect(
-        pyneat.nodes.input("video", video_input),
-        pyneat.groups.video_sender(video_options),
-    )
+    video = pyneat.groups.video_sender(video_options)
 
     backbone_graph = backbone.graph()
     backbone_output = pyneat.Graph("backbone_output")
@@ -441,9 +423,8 @@ def run(cfg: Config) -> int:
     link.max_inflight_per_stream = 2
     link.stream_id = "stream0"
     graph = pyneat.Graph("rfdetr")
-    graph.connect(source, branch)
-    graph.connect(branch, decoder, link)
-    graph.connect(branch, video, link)
+    graph.connect(source, decoder)
+    graph.connect(source, video, link)
     graph.connect(decoder, backbone_graph, link)
     graph.connect(backbone_graph, backbone_output)
 

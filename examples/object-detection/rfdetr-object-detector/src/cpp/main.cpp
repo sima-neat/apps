@@ -429,10 +429,6 @@ neat::nodes::groups::RtspCodec rtsp_codec(SourceCodec codec) {
                                     : neat::nodes::groups::RtspCodec::H265;
 }
 
-neat::FormatTag encoded_format(SourceCodec codec) {
-  return codec == SourceCodec::H264 ? neat::FormatTag::H264 : neat::FormatTag::H265;
-}
-
 neat::SimaDecodeType decode_type(SourceCodec codec) {
   return codec == SourceCodec::H264 ? neat::SimaDecodeType::H264 : neat::SimaDecodeType::H265;
 }
@@ -498,15 +494,8 @@ int run(const Config& cfg) {
     encoded_options.fallback_h264_width = geometry.width;
     encoded_options.fallback_h264_height = geometry.height;
   }
-  neat::Graph source("rtsp_source");
-  source.add(neat::nodes::groups::RtspEncodedInput(encoded_options));
+  auto source = neat::nodes::groups::RtspEncodedInput(encoded_options);
 
-  auto branch = neat::graphs::Branch("encoded", {"decode", "video"});
-
-  neat::InputOptions decode_input;
-  decode_input.payload_type = neat::PayloadType::Encoded;
-  decode_input.format = encoded_format(cfg.codec);
-  decode_input.memory_policy = neat::InputMemoryPolicy::Ev74;
   neat::SimaDecodeOptions decode_options;
   decode_options.type = decode_type(cfg.codec);
   decode_options.out_format = neat::FormatTag::NV12;
@@ -515,23 +504,16 @@ int run(const Config& cfg) {
   decode_options.dec_height = geometry.height;
   decode_options.dec_fps = geometry.fps;
   neat::Graph decode("decoder");
-  decode.connect(neat::nodes::Input("decode", decode_input),
-                 neat::nodes::SimaDecode(decode_options));
+  decode.add(neat::nodes::SimaDecode(decode_options));
   decode.add(neat::nodes::CapsRaw("NV12", geometry.width, geometry.height, geometry.fps,
                                   neat::CapsMemory::Any));
 
-  neat::InputOptions video_input;
-  video_input.payload_type = neat::PayloadType::Encoded;
-  video_input.format = encoded_format(cfg.codec);
-  video_input.memory_policy = neat::InputMemoryPolicy::SystemMemory;
   auto video_options = neat::nodes::groups::VideoSenderOptions::Passthrough(rtsp_codec(cfg.codec));
   video_options.host = cfg.insight_host;
   video_options.video_port_base = cfg.video_port;
   video_options.channel = 0;
   video_options.async = true;
-  neat::Graph video("video");
-  video.connect(neat::nodes::Input("video", video_input),
-                neat::nodes::groups::VideoSender(video_options));
+  auto video = neat::nodes::groups::VideoSender(video_options);
 
   neat::Graph backbone_graph = backbone.graph();
   neat::Graph backbone_output("backbone_output");
@@ -542,9 +524,8 @@ int run(const Config& cfg) {
   link.max_inflight_per_stream = 2;
   link.stream_id = "stream0";
   neat::Graph graph("rfdetr");
-  graph.connect(source, branch);
-  graph.connect(branch, decode, link);
-  graph.connect(branch, video, link);
+  graph.connect(source, decode);
+  graph.connect(source, video, link);
   graph.connect(decode, backbone_graph, link);
   graph.connect(backbone_graph, backbone_output);
 
