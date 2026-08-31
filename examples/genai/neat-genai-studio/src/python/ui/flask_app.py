@@ -781,7 +781,7 @@ class AppContext:
         self.chat_model_names = ("model",)
         self.chat_model_capabilities = {"model": {"supportsVision": True, "imageSize": None}}
         self.active_chat_model_name = "model"
-        self.asr_model_name = "whisper-small"
+        self.asr_model_name = ""
         self.max_tokens = None
         self.web_host = "0.0.0.0"
         self.web_port = 5000
@@ -796,6 +796,7 @@ class AppContext:
         self.ui_font_family = "Inter"
         self.ui_font_size = 15
         self._catalog_names_cache = (0.0, frozenset())
+        self._asr_name_cache = (0.0, "")
 
         # Conversation history for OpenAI-style chat
         self.conversation_history = []
@@ -979,6 +980,32 @@ class AppContext:
             names = frozenset()
         self._catalog_names_cache = (time.monotonic(), names)
         return names
+
+    def set_asr_model_name(self, name):
+        """Point transcription at a new ASR model after a successful switch."""
+        self.asr_model_name = (name or "").strip()
+        self._asr_name_cache = (time.monotonic(), self.asr_model_name)
+        if self.app is not None:
+            self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
+        return self.asr_model_name
+
+    def resolve_asr_model(self):
+        """The ASR model serving transcriptions, asking the control API if the
+        UI has not been told one yet (short cache, like the catalog names)."""
+        if self.asr_model_name:
+            return self.asr_model_name
+        cached_at, cached = self._asr_name_cache
+        if (time.monotonic() - cached_at) < 5:
+            return cached
+        try:
+            resp = requests.get(
+                f"{self.control_base_url.rstrip('/')}/control/status", timeout=5
+            )
+            name = str((resp.json() or {}).get("asrModel") or "")
+        except Exception:
+            name = ""
+        self._asr_name_cache = (time.monotonic(), name)
+        return name
 
     def resolve_chat_model(self, requested_model=None):
         model_name = str(requested_model or self.chat_model_name).strip()
@@ -1448,6 +1475,28 @@ class AppContext:
         def models_load():
             name = (request.get_json(silent=True) or {}).get('name', '')
             return _proxy_control('POST', '/control/load', 600, {'name': name})
+
+        @self.app.route('/models/asr', methods=['POST'])
+        def models_asr():
+            # Not _proxy_control: the response body carries the name the server
+            # actually served the model under, and transcription must follow it.
+            name = (request.get_json(silent=True) or {}).get('name', '')
+            try:
+                resp = requests.post(
+                    _control_url('/control/asr'), json={'name': name}, timeout=600
+                )
+            except requests.RequestException as exc:
+                logging.warning("Control API ASR switch failed: %s", exc)
+                return jsonify({'error': 'control API unreachable'}), 502
+            if resp.status_code < 300:
+                try:
+                    active = (resp.json() or {}).get('activeAsr') or name
+                except ValueError:
+                    active = name
+                self.set_asr_model_name(active)
+                logging.info("Active ASR model is now %r", active)
+            return Response(resp.content, status=resp.status_code,
+                            mimetype='application/json')
 
         @self.app.route('/models/unload', methods=['POST'])
         def models_unload():
@@ -2550,8 +2599,12 @@ def post_audio_to_mla(audio_bytes, language="auto"):
     files = {
         'file': ('audio.wav', audio_bytes, 'audio/wav')
     }
+    model = genai_app.resolve_asr_model()
+    if not model:
+        logging.error("No speech-to-text model is active; cannot transcribe.")
+        return None
     data = {
-        'model': cfg.get('ASR_MODEL_NAME', 'whisper-small'),
+        'model': model,
         'language': language
     }
 
