@@ -56,8 +56,6 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-The downloaded filename matches the path used by the packaged config. The model expects 640x480 grayscale input.
-
 ## Configure
 
 Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, `io.input`, and `output.insight.host`. Change the Insight port or channel only if your Insight setup uses different values.
