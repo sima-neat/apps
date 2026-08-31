@@ -1,6 +1,7 @@
 """End-to-end tests for the Python SuperPoint example."""
 
 import importlib.util
+import os
 import re
 import subprocess
 import sys
