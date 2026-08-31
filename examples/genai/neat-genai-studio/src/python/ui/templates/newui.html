@@ -317,6 +317,17 @@
                   <div id="modelInstalledList" class="model-list"></div>
                 </div>
 
+                <!-- Speech-to-text has its own slot: exactly one ASR model is
+                     resident, and switching it never disturbs the chat model. -->
+                <div class="model-list-group" id="asrModelGroup">
+                  <div class="model-list-head">
+                    <span class="model-list-title">Speech&#8209;to&#8209;text &mdash; transcribes your voice</span>
+                    <span id="asrActiveName" class="model-list-count"></span>
+                  </div>
+                  <div id="asrModelList" class="model-list"></div>
+                  <div class="hub-note" id="asrModelNote">Your choice applies until the studio restarts. To make it permanent, set <code>server.models.asr</code> in <code>config.local.yaml</code>.</div>
+                </div>
+
               </div>
           </section>
           <section class="settings-tab-panel" data-tab="huggingface" id="hubSection" role="tabpanel">

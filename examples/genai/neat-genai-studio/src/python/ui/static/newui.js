@@ -3949,6 +3949,11 @@ function populateModelSelect(catalog) {
   const select = document.getElementById('chatModelSelect');
   if (!select) return;
   _catalog = catalog || [];
+  // Speech models are tracked separately: they never appear in the chat select,
+  // and exactly one of them is active at a time.
+  const asrModels = _catalog.filter(m => (m.type || 'chat') === 'asr');
+  _asrActive = (asrModels.find(m => m.activeAsr)
+             || asrModels.find(m => m.loaded) || {}).name || '';
   const chatModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
   const previous = select.value;
   while (select.firstChild) select.removeChild(select.firstChild);
@@ -4016,6 +4021,8 @@ function populateModelSelect(catalog) {
 // <select id="chatModelSelect"> stays the source of truth for the rest of the app.
 let _catalog = [];
 let _pendingLoad = '';    // name of the model currently loading (for the row label)
+let _asrActive = '';     // ASR model serving transcriptions
+let _asrPending = '';    // ASR model mid-switch (for the row label)
 
 function escHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -4219,6 +4226,7 @@ function updateHomeModelIndicator() {
 // and composer whenever model state changes.
 function updateManageButtons() {
   renderInstalledList();
+  renderAsrList();
   updateComposerEnabled();
 }
 
@@ -4263,7 +4271,12 @@ function initModelManage() {
     const box = document.getElementById('modelLoadError');
     const target = (box && box.dataset.model) || (sel && sel.value);
     clearModelError();
-    if (target) loadModelAndActivate(target);
+    if (!target) return;
+    // An ASR retry must go through the switch path so the UI process learns
+    // the new name; a plain load would leave transcription on the old model.
+    const entry = _catalog.find(m => m.name === target);
+    if (entry && (entry.type || 'chat') === 'asr') switchAsrModel(target);
+    else loadModelAndActivate(target);
   });
   if (viewLogs) viewLogs.addEventListener('click', () => {
     const det = document.getElementById('modelLogDetails');
@@ -4296,9 +4309,10 @@ async function unloadModel(name) {
   }
 }
 
-async function deleteModel(name) {
+async function deleteModel(name, extraWarning) {
   if (!name) return;
-  if (!window.confirm(`Delete "${name}" from disk? This removes the model weights and cannot be undone.`)) return;
+  if (!window.confirm(`Delete "${name}" from disk? This removes the model weights `
+    + `and cannot be undone.${extraWarning || ''}`)) return;
   setModelStatus(`Deleting ${name}…`, 'loading');
   try {
     const resp = await fetch('/models/delete', {
@@ -4314,6 +4328,151 @@ async function deleteModel(name) {
   } finally {
     await refreshCatalog();
     refreshDiskInfo();    // freeing weights returns space to the NVMe
+  }
+}
+
+// ---- Speech-to-text (ASR) models --------------------------------------------
+// Kept in their own list because they never compete with chat/VLM models for the
+// same slot: exactly one ASR model is resident, and picking another evicts it
+// without disturbing the loaded chat model. The chat filters (LLM/VLM, parameter
+// count, family) are meaningless here, so only the search box applies.
+function renderAsrList() {
+  const list = document.getElementById('asrModelList');
+  if (!list) return;
+  const text = (document.getElementById('modelSearchInput')?.value || '').trim().toLowerCase();
+  const models = _catalog.filter(m => (m.type || 'chat') === 'asr')
+                         .sort((a, b) => a.name.localeCompare(b.name));
+
+  const nameEl = document.getElementById('asrActiveName');
+  if (nameEl) nameEl.textContent = _asrActive || (models.length ? 'none active' : '');
+  const noteEl = document.getElementById('asrModelNote');
+  if (noteEl) noteEl.style.display = models.length > 1 ? '' : 'none';
+
+  list.innerHTML = '';
+  if (!models.length) {
+    list.innerHTML = `<div class="hub-note">No speech-to-text model${_hubEnabled
+      ? ' — download a Whisper model from the “Add Model” tab.' : '.'}</div>`;
+    return;
+  }
+  const filtered = models.filter(m => !text || m.name.toLowerCase().includes(text));
+  if (!filtered.length) {
+    list.innerHTML = '<div class="hub-note">No speech-to-text models match the search.</div>';
+    return;
+  }
+
+  const control = controlEnabled();
+  const busy = _modelBusy;
+  filtered.forEach(m => {
+    const incomplete = m.complete === false;
+    const isActive = !!m.name && m.name === _asrActive;
+    const row = document.createElement('div');
+    row.className = 'hub-result model-row' + (isActive ? ' is-active' : '');
+
+    const meta = document.createElement('div');
+    meta.className = 'hub-result-meta';
+    const size = m.sizeBytes ? fmtBytes(m.sizeBytes) : '';
+    const stateCls = incomplete ? 'is-incomplete' : (isActive ? 'is-loaded' : '');
+    const stateTxt = incomplete ? '⚠ incomplete' : (isActive ? '● active' : '○ downloaded');
+    const badges = `<span class="hub-badge hub-badge-asr">${typeBadge('asr')}</span>`
+      + (size ? `<span class="hub-badge">${size}</span>` : '')
+      + (m.pinned ? '<span class="hub-badge">startup default</span>' : '')
+      + `<span class="hub-badge model-state ${stateCls}">${stateTxt}</span>`;
+    meta.innerHTML = `<span class="hub-repo">${escHtml(m.name)}</span>`
+      + `<span class="hub-badges">${badges}</span>`;
+    row.appendChild(meta);
+
+    const info = document.createElement('button');
+    info.className = 'hub-info';
+    info.type = 'button';
+    info.textContent = 'ℹ';
+    info.title = `Model card & metadata for ${m.name}`;
+    info.addEventListener('click', (e) => { e.stopPropagation(); showModelCard(m.name); });
+    row.appendChild(info);
+
+    if (control) {
+      // The active model has no delete button — the server refuses it anyway.
+      if (!isActive) {
+        const del = document.createElement('button');
+        del.className = 'hub-info hub-danger';
+        del.type = 'button';
+        del.textContent = '🗑';
+        del.title = `Delete ${m.name} from disk`;
+        del.disabled = busy;
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteModel(m.name, m.pinned
+            ? ' It is the startup default, so after a restart no speech-to-text '
+              + 'model will be active until you pick one.'
+            : '');
+        });
+        row.appendChild(del);
+      }
+
+      const btn = document.createElement('button');
+      btn.className = 'setting-button model-action';
+      btn.type = 'button';
+      if (isActive) {
+        btn.textContent = 'Active';
+        btn.disabled = true;
+      } else if (incomplete) {
+        btn.textContent = 'Incomplete';
+        btn.disabled = true;
+        btn.title = `${m.incompleteReason || 'Weights are incomplete'} — re-download from the Add Model tab.`;
+      } else if (busy && m.name === _asrPending) {
+        btn.textContent = 'Switching…';
+        btn.disabled = true;
+      } else {
+        btn.textContent = 'Use';
+        btn.classList.add('model-load');
+        btn.disabled = busy;
+        btn.addEventListener('click', (e) => { e.stopPropagation(); switchAsrModel(m.name); });
+      }
+      row.appendChild(btn);
+    }
+    list.appendChild(row);
+  });
+}
+
+// Make another ASR model active. Mirrors loadModelAndActivate, minus the chat
+// select and minus newChat() — switching how your voice is transcribed is no
+// reason to throw away the conversation.
+async function switchAsrModel(name) {
+  if (!name || _modelBusy || name === _asrActive) return;
+  _modelBusy = true;
+  _asrPending = name;
+  updateManageButtons();
+  clearModelError();
+  await resetLoadLog();
+
+  const note = _asrActive ? `Unloading ${_asrActive} — ` : '';
+  setModelStatus(`${note}Switching speech-to-text to ${name}…`, 'loading');
+  setModelLoadBar('active');
+  startLoadPolling(name);
+  try {
+    const resp = await fetch('/models/asr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || 'switch failed');
+    _asrActive = data.activeAsr || name;
+    const evicted = Array.isArray(data.evicted) ? data.evicted : [];
+    const evictedNote = evicted.length ? ` · unloaded ${evicted.join(', ')}` : '';
+    const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
+    const timeNote = (secs != null && secs > 0) ? ` in ${secs.toFixed(1)}s` : '';
+    setModelStatus(`Speech-to-text ready: ${_asrActive}${timeNote}${evictedNote}`, 'ready');
+  } catch (err) {
+    setModelStatus('Speech-to-text switch failed — see details below', 'error');
+    showModelError(name, err.message);
+  } finally {
+    stopLoadPolling();
+    _modelBusy = false;
+    _asrPending = '';
+    await pollLoadLogsOnce(name);
+    setModelLoadBar(null);
+    await refreshCatalog();   // re-derives _asrActive from the catalog's activeAsr
+    updateManageButtons();
   }
 }
 
@@ -4642,7 +4801,7 @@ async function initHubControls() {
   // Models tab: search + type/size/family/sort filters + rescan act on the
   // DOWNLOADED list only.
   const modelSearch = document.getElementById('modelSearchInput');
-  if (modelSearch) modelSearch.addEventListener('input', renderInstalledList);
+  if (modelSearch) modelSearch.addEventListener('input', updateManageButtons);
   ['modelFilterType', 'modelFilterParams', 'modelFilterFamily', 'modelSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', renderInstalledList);
   });
