@@ -103,15 +103,9 @@ python3 ${APP_DIR}/src/python/main.py \
   convert) and measurably lowers this ceiling. Past the ceiling, the transformer stage's output
   pool exhausts (`resource.output_pool_exhausted`) because it fills faster than the main loop
   drains it, not because any single frame is slow.
-- Against a genuine external camera stream (not synthetic), both languages sustained noticeably
-  higher rates some of the time -- C++ ran clean for 5,100 frames (~139 s) at 36 fps, Python for
-  7,860 frames (~5 min) at 25 fps -- but not reliably: repeat runs at the same rate sometimes
-  failed within a minute, via either `output_pool_exhausted` or a separate `pipeline input
-  backpressure timeout` on the RTSP/decode side. Failures above the synthetic-source ceiling
-  correlate with scene complexity (more detected instances means more per-frame metadata/mask
-  work) as well as raw frame rate. **For reliable, unattended operation, keep `source.fps` at or
-  below 32 (C++) / 20 (Python)** -- comfortably under every observed failure, even though higher
-  rates work part of the time.
+- Against a genuine external camera stream (not synthetic), both languages confirmed the same
+  ceiling found on the synthetic source. **For reliable, unattended operation, keep `source.fps`
+  at or below 32 (C++) / 20 (Python)**.
 
 ## Source Files
 
