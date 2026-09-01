@@ -138,12 +138,13 @@ int main(int argc, char** argv) {
             if (name != "Unknown" && !name.empty()) { has_known_match = true; break; }
         }
         if (!has_known_match) {
-            // Degrade to a warning — gallery faces may simply not appear in 60 frames.
-            std::cerr << "[WARN] no non-Unknown matches in 60 frames; "
-                         "gallery faces may not appear in the test clip\n";
-        } else {
-            std::cout << "[OK] recognition match confirmed\n";
+            std::cerr << "[FAIL] SIMANEAT_APPS_TEST_GALLERY_BIN is set but no "
+                         "non-Unknown match found in 60 frames.\n"
+                         "  Ensure the test clip contains enrolled faces, or "
+                         "unset SIMANEAT_APPS_TEST_GALLERY_BIN to skip this check.\n";
+            return 1;
         }
+        std::cout << "[OK] recognition match confirmed\n";
     }
 
     std::cout << "[OK] face-recognizer processed 60 frames (exit 0)\n";

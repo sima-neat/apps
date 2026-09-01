@@ -32,7 +32,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APPS_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+# src/common/model → src/common → src → face-recognizer → face-recognition → examples → apps
+APPS_ROOT="$(cd "${SCRIPT_DIR}/../../../../../../.." && pwd)"
+MOD_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"  # face-recognizer/
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 MODELS_DIR=""
@@ -171,17 +173,17 @@ if [[ $COMPILE_ARCFACE -eq 1 ]]; then
     "ArcFace W600K R50"
 fi
 
-# ── Copy to assets ────────────────────────────────────────────────────────────
-ASSETS_DIR="${APPS_ROOT}/examples/face-recognition/face-recognizer/assets/models"
-mkdir -p "${ASSETS_DIR}"
+# ── Copy to models/ under face-recognizer ────────────────────────────────────
+MODELS_OUT="${MOD_ROOT}/models"
+mkdir -p "${MODELS_OUT}"
 
-echo "=== Copying compiled packages to assets/models/ ==="
+echo "=== Copying compiled packages to face-recognizer/models/ ==="
 
 if [[ $COMPILE_SCRFD -eq 1 ]]; then
   SCRFD_PKG="$(find "${BUILD_DIR}/scrfd_2.5g_bnkps.mla"* -name "*_mpk.tar.gz" 2>/dev/null | head -1)"
   if [[ -n "${SCRFD_PKG}" ]]; then
-    cp "${SCRFD_PKG}" "${ASSETS_DIR}/scrfd_2.5g_bnkps.mla_mpk.tar.gz"
-    echo "  Copied SCRFD → ${ASSETS_DIR}/scrfd_2.5g_bnkps.mla_mpk.tar.gz"
+    cp "${SCRFD_PKG}" "${MODELS_OUT}/scrfd_2.5g_bnkps.mla_mpk.tar.gz"
+    echo "  Copied SCRFD → ${MODELS_OUT}/scrfd_2.5g_bnkps.mla_mpk.tar.gz"
   else
     echo "  WARNING: SCRFD compiled package not found in ${BUILD_DIR}"
   fi
@@ -190,8 +192,8 @@ fi
 if [[ $COMPILE_ARCFACE -eq 1 ]]; then
   ARCFACE_PKG="$(find "${BUILD_DIR}/w600k_r50.surgery"* -name "*_mpk.tar.gz" 2>/dev/null | head -1)"
   if [[ -n "${ARCFACE_PKG}" ]]; then
-    cp "${ARCFACE_PKG}" "${ASSETS_DIR}/w600k_r50.surgery_mpk.tar.gz"
-    echo "  Copied ArcFace → ${ASSETS_DIR}/w600k_r50.surgery_mpk.tar.gz"
+    cp "${ARCFACE_PKG}" "${MODELS_OUT}/w600k_r50.surgery_mpk.tar.gz"
+    echo "  Copied ArcFace → ${MODELS_OUT}/w600k_r50.surgery_mpk.tar.gz"
   else
     echo "  WARNING: ArcFace compiled package not found in ${BUILD_DIR}"
   fi

@@ -98,7 +98,10 @@ cv::Mat align_face_nv12(const uint8_t* nv12, int W, int H, const Landmarks& lm) 
         min_y = std::min(min_y, lm[i * 2 + 1]);
         max_y = std::max(max_y, lm[i * 2 + 1]);
     }
-    const float margin = std::max(max_x - min_x, max_y - min_y) * 0.35f;
+    // 60% margin (was 35%) keeps more context around the face so the similarity
+    // warp uses real source pixels rather than reflected border pixels for most
+    // head poses, improving parity with the full-frame BGR alignment path.
+    const float margin = std::max(max_x - min_x, max_y - min_y) * 0.60f;
 
     // Round ROI to even boundaries (NV12 chroma is 2×2 subsampled).
     int rx1 = std::max(0,   static_cast<int>(min_x - margin) & ~1);

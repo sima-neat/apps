@@ -7,6 +7,10 @@
 #include "match.h"
 #include "overlay.h"
 
+// Enrollment mode — compiled from tools/enroll.cpp, dispatched when --enroll
+// is the first argument so both recognition and enrollment ship in one binary.
+int run_enrollment_mode(int argc, char** argv);
+
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -346,6 +350,12 @@ static face_recog::Embedding run_arcface(
 static std::atomic<bool> g_stop{false};
 
 int main(int argc, char** argv) {
+    // Dispatch to enrollment mode when --enroll is the first argument.
+    // This keeps a single installed binary that covers both enrollment and recognition.
+    if (argc > 1 && std::string(argv[1]) == "--enroll") {
+        return run_enrollment_mode(argc, argv);
+    }
+
     std::signal(SIGINT,  [](int){ g_stop = true; });
     std::signal(SIGTERM, [](int){ g_stop = true; });
     std::cout.setf(std::ios::unitbuf);
@@ -913,7 +923,10 @@ int main(int argc, char** argv) {
         // new face and forces fresh recognition.
         const bool face_count_changed = detections.size() != cached_matches.size();
         bool boxes_reordered = false;
-        if (!face_count_changed && detections.size() > 1) {
+        // Check for all face counts, including single-face scenes: when one person
+        // leaves and another enters with count staying at 1 the centroid shift still
+        // signals a new face and must trigger fresh recognition.
+        if (!face_count_changed) {
             for (size_t di = 0; di < detections.size() && !boxes_reordered; ++di) {
                 const auto& cur = detections[di];
                 const auto& prv = cached_detections[di];

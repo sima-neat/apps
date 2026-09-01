@@ -65,10 +65,26 @@ macro(_fr_executable _name _source)
   )
 endmacro()
 
-# ── Executables ───────────────────────────────────────────────────────────────
-_fr_executable(face-recognizer "${_SELF_DIR}/main.cpp")
-_fr_executable(face-enroll     "${_MOD_ROOT}/tools/enroll.cpp")
-_fr_executable(face-model-test "${_MOD_ROOT}/tools/model_test.cpp")
+# ── face-recognizer (includes enrollment mode via --enroll flag) ──────────────
+# Enrollment logic lives in tools/enroll.cpp and is dispatched from main() when
+# --enroll is the first argument, so the single installed binary covers both
+# recognition and gallery enrollment without a separate tool.
+add_executable(face-recognizer
+    "${_SELF_DIR}/main.cpp"
+    "${_MOD_ROOT}/tools/enroll.cpp"
+)
+target_link_libraries(face-recognizer
+    PRIVATE
+        face_recog_nodes
+        SimaNeatApps::sima_neat
+        SimaNeatApps::support_runtime
+)
+target_include_directories(face-recognizer
+    PRIVATE "${_SELF_DIR}" "${_APPS_ROOT}"
+)
+target_compile_definitions(face-recognizer
+    PRIVATE SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_SELF_DIR}"
+)
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 if (BUILD_TESTING)

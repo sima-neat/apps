@@ -1,20 +1,16 @@
-/**
- * @file enroll.cpp
- * Offline enrollment tool: scan a labeled image folder, detect + align + embed
- * each face with SCRFD + ArcFace, then write a gallery file.
- *
- * Expected folder layout:
- *   gallery_images/
- *     Alice/
- *       photo1.jpg
- *       photo2.png
- *     Bob/
- *       ...
- *
- * Usage:
- *   face-enroll --images <dir> --gallery <out.bin>
- *               [--config <path>] [--max-per-person <N>]
- */
+// Enrollment mode for face-recognizer.
+// Called via face-recognizer --enroll [options].
+//
+// Folder layout for --images mode:
+//   gallery_images/
+//     Alice/photo1.jpg
+//     Bob/photo2.png
+//
+// Video mode:
+//   face-recognizer --enroll --video clip.mp4 --name "Alice" --gallery gallery.bin
+//
+// Image folder mode:
+//   face-recognizer --enroll --images gallery_images/ --gallery gallery.bin
 #include "neat.h"
 #include "support/runtime/config_utils.h"
 
@@ -158,7 +154,9 @@ static int enroll_from_video(
     return enrolled;
 }
 
-int main(int argc, char** argv) {
+// Entry point called from face-recognizer main() when --enroll is the first argument.
+// argv[0] should still be the binary name; argc/argv are passed through unchanged.
+int run_enrollment_mode(int argc, char** argv) {
     std::cout.setf(std::ios::unitbuf);
 
     std::string images_dir;
@@ -236,6 +234,8 @@ int main(int argc, char** argv) {
         face_recog::GalleryBuilder builder;
 
         // Load existing gallery so new enrollments append rather than overwrite.
+        // Fail hard if the file exists but cannot be read — silently continuing
+        // would save only the new entries and destroy the existing ones.
         if (fs::exists(gallery_out)) {
             try {
                 const auto existing = face_recog::load_gallery(gallery_out);
@@ -245,8 +245,10 @@ int main(int argc, char** argv) {
                           << " existing identit" << (existing.entries.size() == 1 ? "y" : "ies")
                           << " from " << gallery_out << "\n";
             } catch (const std::exception& ex) {
-                std::cerr << "[GALLERY] Could not load existing gallery (will overwrite): "
-                          << ex.what() << "\n";
+                std::cerr << "ERROR: existing gallery cannot be read: " << ex.what() << "\n"
+                          << "  Move or delete '" << gallery_out
+                          << "' to start fresh, or fix the file before enrolling.\n";
+                return 2;
             }
         }
 
@@ -330,7 +332,11 @@ int main(int argc, char** argv) {
         }
 
         const auto gallery = builder.finish();
-        face_recog::save_gallery(gallery, gallery_out);
+        // Atomic save: write to a temp file first, then rename so a crash or
+        // write failure never leaves the destination file partially written.
+        const fs::path tmp_path = gallery_out + ".tmp";
+        face_recog::save_gallery(gallery, tmp_path);
+        fs::rename(tmp_path, gallery_out);
 
         std::cout << "\nEnrollment complete:\n"
                   << "  Frames/images processed : " << total_images << "\n"
