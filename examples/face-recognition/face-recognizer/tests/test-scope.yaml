@@ -1,0 +1,23 @@
+models:
+  scrfd:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz
+    file: scrfd_2.5g_bnkps.mla_mpk.tar.gz
+  arcface:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/w600k_r50.surgery_mpk.tar.gz
+    file: w600k_r50.surgery_mpk.tar.gz
+
+unit:
+  python: false
+  cpp: true
+
+e2e:
+  python:
+    enabled: false
+    reason: No Python implementation; C++ only.
+  cpp:
+    enabled: true
+    models:
+      - scrfd
+      - arcface
