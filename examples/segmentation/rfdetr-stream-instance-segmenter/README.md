@@ -95,16 +95,23 @@ python3 ${APP_DIR}/src/python/main.py \
 - Verify the Insight host and UDP ports if no output arrives.
 - Set `output.save_dir` and `output.save_every` to save sampled frames.
 - Raise `runtime.profile` to see per-stage timings if a stream falls behind.
-- A frame-rate sweep on a 1280x720 stream (no `output.save_dir`) found a real, repeatable ceiling:
-  C++ sustains cleanly through 30-32 fps (confirmed over a 90 s run) with zero dropped segments,
-  and fails at a consistent ~33-35 fps regardless of how much faster the source runs (tested up to
-  100 fps); Python's equivalent ceiling is 18-19 fps, failing at 20 fps. Enabling
-  `output.save_dir` adds real per-frame work (an extra decoded-frame pull and colorspace convert)
-  and measurably lowers this ceiling -- confirmed working at lower rates, but not at C++'s 30 fps
-  ceiling. Past the ceiling, the transformer stage's output pool exhausts
-  (`resource.output_pool_exhausted`) because it fills faster than the main loop drains it, not
-  because any single frame is slow. If your source runs faster than your language's ceiling, lower
-  `source.fps` rather than feeding the model at the source's native rate.
+- A frame-rate sweep on a synthetic 1280x720 stream (no `output.save_dir`) found a real,
+  repeatable ceiling: C++ sustains cleanly through 30-32 fps (confirmed over a 90 s run) with zero
+  dropped segments, and fails at a consistent ~33-35 fps regardless of how much faster the source
+  runs (tested up to 100 fps); Python's equivalent ceiling is 18-19 fps, failing at 20 fps.
+  Enabling `output.save_dir` adds real per-frame work (an extra decoded-frame pull and colorspace
+  convert) and measurably lowers this ceiling. Past the ceiling, the transformer stage's output
+  pool exhausts (`resource.output_pool_exhausted`) because it fills faster than the main loop
+  drains it, not because any single frame is slow.
+- Against a genuine external camera stream (not synthetic), both languages sustained noticeably
+  higher rates some of the time -- C++ ran clean for 5,100 frames (~139 s) at 36 fps, Python for
+  7,860 frames (~5 min) at 25 fps -- but not reliably: repeat runs at the same rate sometimes
+  failed within a minute, via either `output_pool_exhausted` or a separate `pipeline input
+  backpressure timeout` on the RTSP/decode side. Failures above the synthetic-source ceiling
+  correlate with scene complexity (more detected instances means more per-frame metadata/mask
+  work) as well as raw frame rate. **For reliable, unattended operation, keep `source.fps` at or
+  below 32 (C++) / 20 (Python)** -- comfortably under every observed failure, even though higher
+  rates work part of the time.
 
 ## Source Files
 
