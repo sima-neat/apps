@@ -95,11 +95,16 @@ python3 ${APP_DIR}/src/python/main.py \
 - Verify the Insight host and UDP ports if no output arrives.
 - Set `output.save_dir` and `output.save_every` to save sampled frames.
 - Raise `runtime.profile` to see per-stage timings if a stream falls behind.
-- Validated sustained on a 1280x720 stream at 20 fps (C++) and 15 fps (Python) with zero dropped
-  segments. Pushed further -- 30+ fps in this same setup -- the transformer stage's output pool
-  eventually exhausts (`resource.output_pool_exhausted`) because it fills faster than the main loop
-  drains it. If your source runs faster than that, lower `source.fps` or reduce `inference.frames`
-  per burst rather than feeding the model at the source's native rate.
+- A frame-rate sweep on a 1280x720 stream (no `output.save_dir`) found a real, repeatable ceiling:
+  C++ sustains cleanly through 30-32 fps (confirmed over a 90 s run) with zero dropped segments,
+  and fails at a consistent ~33-35 fps regardless of how much faster the source runs (tested up to
+  100 fps); Python's equivalent ceiling is 18-19 fps, failing at 20 fps. Enabling
+  `output.save_dir` adds real per-frame work (an extra decoded-frame pull and colorspace convert)
+  and measurably lowers this ceiling -- confirmed working at lower rates, but not at C++'s 30 fps
+  ceiling. Past the ceiling, the transformer stage's output pool exhausts
+  (`resource.output_pool_exhausted`) because it fills faster than the main loop drains it, not
+  because any single frame is slow. If your source runs faster than your language's ceiling, lower
+  `source.fps` rather than feeding the model at the source's native rate.
 
 ## Source Files
 
