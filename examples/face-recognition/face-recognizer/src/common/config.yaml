@@ -36,7 +36,7 @@ output:
   # Insight Web UI.  Override at runtime with --stream-host / --stream-port.
   insight:
     host:           ""      # set to Insight host IP to enable streaming
-    video_port:     9000
+    video_port:     29656
 
 # ── Matching ──────────────────────────────────────────────────────────────────
 match:
