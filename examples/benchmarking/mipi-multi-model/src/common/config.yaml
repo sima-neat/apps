@@ -1,0 +1,9 @@
+model:
+  # Select: detect, pose, segment, ssd, classify, or depth.
+  profile: detect
+  # Leave empty to use models/<profile-package>.tar.gz.
+  path: ""
+
+runtime:
+  frames: 5
+  timeout_ms: 30000
