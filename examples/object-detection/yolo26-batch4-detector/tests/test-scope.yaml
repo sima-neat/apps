@@ -1,0 +1,17 @@
+models:
+  yolo26m-det-int8-b4:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26m-det-int8-b4.tar.gz
+    file: yolo26m-det-int8-b4.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo26m-det-int8-b4
+  cpp:
+    enabled: true
+    models:
+    - yolo26m-det-int8-b4

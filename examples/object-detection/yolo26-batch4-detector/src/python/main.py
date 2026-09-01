@@ -1,0 +1,998 @@
+"""Batch-4 YOLO26 object detection over four Insight RTSP streams.
+
+One frame is taken from each stream and the four are submitted to the MLA as a
+single `[4, 640, 640, 3]` batch, so four streams cost one dispatch instead of
+four. The six YOLO26 heads come back with a leading batch axis, are decoded per
+lane on the CPU, and each stream's detections are published to Insight on its
+own channel.
+
+Flow: RTSP ingest -> decode to NV12 -> letterbox into a batch lane ->
+one MLA dispatch -> per-lane head decode -> Insight video + metadata.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import math
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
+REPO_ROOT = Path(__file__).resolve().parents[5]
+
+# YOLO26 emits three levels, each as a bbox head and a class head.
+LEVELS = 3
+EXPECTED_OUTPUTS = 2 * LEVELS
+BBOX_CHANNELS = 4
+PAD_VALUE = 114
+BATCH_SIZE = 4
+
+cv2 = None
+np = None
+pyneat = None
+
+
+# --------------------------------------------------------------------------
+# configuration
+# --------------------------------------------------------------------------
+@dataclass(frozen=True)
+class AppConfig:
+    model_path: str
+    labels_path: Path
+    rtsp_urls: list[str]
+    tcp: bool = True
+    latency_ms: int = 100
+    frames: int = 0
+    score_threshold: float = 0.35
+    max_detections: int = 100
+    insight_host: str = ""
+    video_port_base: int = 9000
+    metadata_port_base: int = 9100
+    video_enabled: bool = True
+    debug_dir: str = ""
+    save_every: int = 0
+    timeout_ms: int = 20000
+    warmup_frames: int = 10
+    profile: bool = False
+    profile_interval: int = 50
+
+
+@dataclass(frozen=True)
+class ModelContract:
+    net: int
+    class_count: int
+    grids: tuple[tuple[int, int], ...]
+    bbox_indices: tuple[int, ...]
+    class_indices: tuple[int, ...]
+
+
+def section(raw: dict, key: str) -> dict:
+    value = raw.get(key) or {}
+    if not isinstance(value, dict):
+        raise TypeError(f"{key} must be a mapping")
+    return value
+
+
+def string_or(raw: dict, key: str, default: str = "") -> str:
+    value = raw.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise TypeError(f"{key} must be a string")
+    return value
+
+
+def int_or(raw: dict, key: str, default: int) -> int:
+    value = raw.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{key} must be an integer")
+    return value
+
+
+def float_or(raw: dict, key: str, default: float) -> float:
+    value = raw.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{key} must be numeric")
+    return float(value)
+
+
+def bool_or(raw: dict, key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise TypeError(f"{key} must be true or false")
+    return value
+
+
+def resolve(path_str: str) -> Path:
+    path = Path(path_str)
+    return path if path.is_absolute() else (REPO_ROOT / path)
+
+
+def validate_config(cfg: AppConfig) -> None:
+    if not cfg.model_path or cfg.model_path.startswith("<"):
+        raise ValueError("model.path must be set and must not be a placeholder")
+    if len(cfg.rtsp_urls) != BATCH_SIZE:
+        raise ValueError(f"this example requires exactly {BATCH_SIZE} streams")
+    if any(not url or url.startswith("<") for url in cfg.rtsp_urls):
+        raise ValueError("streams still contains a placeholder URL")
+    if not cfg.insight_host or cfg.insight_host.startswith("<"):
+        raise ValueError("output.insight.host must be set")
+    if not 0.0 < cfg.score_threshold < 1.0:
+        raise ValueError("inference.score_threshold must be between 0 and 1")
+    if cfg.max_detections <= 0:
+        raise ValueError("inference.max_detections must be > 0")
+    if cfg.frames < 0:
+        raise ValueError("inference.frames must be >= 0")
+    if cfg.timeout_ms <= 0:
+        raise ValueError("runtime.timeout_ms must be > 0")
+    if cfg.warmup_frames < 0:
+        raise ValueError("runtime.warmup_frames must be >= 0")
+    if cfg.profile_interval <= 0:
+        raise ValueError("runtime.profile_interval must be > 0")
+    if cfg.save_every < 0:
+        raise ValueError("output.save_every must be >= 0")
+    if cfg.video_port_base <= 0:
+        raise ValueError("output.insight.video_port_base must be > 0")
+    if cfg.metadata_port_base <= 0:
+        raise ValueError("output.insight.metadata_port_base must be > 0")
+
+
+def load_app_config(path: Path) -> AppConfig:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise TypeError("config root must be a mapping")
+
+    model = section(raw, "model")
+    source = section(raw, "input")
+    inference = section(raw, "inference")
+    output = section(raw, "output")
+    insight = section(output, "insight")
+    runtime = section(raw, "runtime")
+
+    streams = raw.get("streams") or []
+    if not isinstance(streams, list) or not all(
+        isinstance(url, str) for url in streams
+    ):
+        raise ValueError("streams must be a list of RTSP URLs")
+
+    default_labels = Path(__file__).resolve().parents[1] / "common" / "coco_label.txt"
+    cfg = AppConfig(
+        model_path=string_or(model, "path"),
+        labels_path=resolve(string_or(model, "labels", str(default_labels))),
+        rtsp_urls=list(streams),
+        tcp=bool_or(source, "tcp", True),
+        latency_ms=int_or(source, "latency_ms", 100),
+        frames=int_or(inference, "frames", 0),
+        score_threshold=float_or(inference, "score_threshold", 0.35),
+        max_detections=int_or(inference, "max_detections", 100),
+        insight_host=string_or(insight, "host"),
+        video_port_base=int_or(insight, "video_port_base", 9000),
+        metadata_port_base=int_or(insight, "metadata_port_base", 9100),
+        video_enabled=bool_or(output, "video_enabled", True),
+        debug_dir=string_or(output, "debug_dir"),
+        save_every=int_or(output, "save_every", 0),
+        timeout_ms=int_or(runtime, "timeout_ms", 20000),
+        warmup_frames=int_or(runtime, "warmup_frames", 10),
+        profile=bool_or(runtime, "profile", False),
+        profile_interval=int_or(runtime, "profile_interval", 50),
+    )
+    validate_config(cfg)
+    return cfg
+
+
+def load_labels(path: Path) -> list[str]:
+    if not path.is_file():
+        raise RuntimeError(f"labels file does not exist: {path}")
+    labels = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+    labels = [label for label in labels if label]
+    if not labels:
+        raise RuntimeError(f"labels file is empty: {path}")
+    return labels
+
+
+# --------------------------------------------------------------------------
+# preprocessing
+# --------------------------------------------------------------------------
+def nv12_to_rgb(tensor, out):
+    """Decoded NV12 straight to RGB in a caller-owned buffer.
+
+    RGB is what both the MLA input and the Insight video sender want, so the
+    frame is converted once here and never touched again.
+    """
+    width = tensor_dim(tensor, "width")
+    height = tensor_dim(tensor, "height")
+    payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
+    expected = width * height * 3 // 2
+    if payload.size < expected:
+        raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
+    nv12 = payload[:expected].reshape((height * 3 // 2, width))
+    cv2.cvtColor(nv12, cv2.COLOR_YUV2RGB_NV12, dst=out)
+    return out
+
+
+def letterbox_into(rgb, lane, net: int):
+    """Aspect-preserving resize into one batch lane, pad 114, centered.
+
+    The scaled pixels are written directly into the lane as normalized float32,
+    so the batch tensor is filled in place instead of being stacked from four
+    freshly allocated frames.
+    """
+    height, width = rgb.shape[:2]
+    scale = min(net / width, net / height)
+    new_w = math.floor(width * scale + 0.5)
+    new_h = math.floor(height * scale + 0.5)
+    dx, dy = (net - new_w) // 2, (net - new_h) // 2
+    lane.fill(PAD_VALUE / 255.0)
+    resized = cv2.resize(rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    np.multiply(
+        resized,
+        np.float32(1.0 / 255.0),
+        out=lane[dy : dy + new_h, dx : dx + new_w],
+        dtype=np.float32,
+    )
+    return scale, dx, dy
+
+
+# --------------------------------------------------------------------------
+# postprocessing
+# --------------------------------------------------------------------------
+def heads_from_outputs(arrays: list, lane: int, contract: ModelContract) -> dict:
+    """Take one lane using the output mapping validated at startup."""
+    if len(arrays) != EXPECTED_OUTPUTS:
+        raise RuntimeError(f"expected {EXPECTED_OUTPUTS} YOLO26 output tensors")
+
+    def plane(index: int, grid: tuple[int, int], channels: int):
+        array = arrays[index]
+        if array.ndim != 4:
+            raise RuntimeError(f"expected [N,H,W,C] outputs, got {array.shape}")
+        if lane >= array.shape[0]:
+            raise RuntimeError(f"lane {lane} out of range for output {array.shape}")
+        expected = (BATCH_SIZE, *grid, channels)
+        if array.shape != expected:
+            raise RuntimeError(
+                f"runtime output shape {array.shape} does not match model contract {expected}"
+            )
+        return array[lane]
+
+    heads = {}
+    for level in range(LEVELS):
+        grid = contract.grids[level]
+        heads[f"bbox_{level}"] = plane(
+            contract.bbox_indices[level], grid, BBOX_CHANNELS
+        )
+        heads[f"class_logit_{level}"] = plane(
+            contract.class_indices[level], grid, contract.class_count
+        )
+    return heads
+
+
+def decode_heads(
+    heads: dict, net: int, score_threshold: float, max_detections: int
+) -> list[dict]:
+    """YOLO26 reg_max=1: raw l/t/r/b distances plus class logits. No NMS.
+
+    The one-to-one head is already deduplicated, so detections are only ranked
+    by score and capped.
+
+    The class heads hold 672 000 logits per frame, so the decode is dominated by
+    whatever runs across all of them. Sigmoid is monotonic, which means a cell
+    clears a probability threshold exactly when its logit clears the matching
+    logit threshold. Thresholding the raw logits keeps the exponential and the
+    per-cell argmax on the handful of surviving cells instead of the whole
+    tensor, and the box arithmetic is done once per level as array operations.
+    """
+    logit_threshold = float(np.log(score_threshold / (1.0 - score_threshold)))
+    detections = []
+    for level in range(LEVELS):
+        box = heads[f"bbox_{level}"]
+        cls = heads[f"class_logit_{level}"]
+        stride_x = net / box.shape[1]
+        stride_y = net / box.shape[0]
+
+        best_logit = cls.max(-1)
+        rows, cols = np.nonzero(best_logit >= logit_threshold)
+        if rows.size == 0:
+            continue
+
+        scores = 1.0 / (1.0 + np.exp(-np.clip(best_logit[rows, cols], -30.0, 30.0)))
+        class_ids = cls[rows, cols].argmax(-1)
+        ltrb = box[rows, cols]
+        anchor_x = cols + 0.5
+        anchor_y = rows + 0.5
+        x1 = (anchor_x - ltrb[:, 0]) * stride_x
+        y1 = (anchor_y - ltrb[:, 1]) * stride_y
+        x2 = (anchor_x + ltrb[:, 2]) * stride_x
+        y2 = (anchor_y + ltrb[:, 3]) * stride_y
+
+        detections.extend(
+            {
+                "score": float(s),
+                "class_id": int(c),
+                "x1": float(a),
+                "y1": float(b),
+                "x2": float(cc),
+                "y2": float(dd),
+            }
+            for s, c, a, b, cc, dd in zip(
+                scores.tolist(),
+                class_ids.tolist(),
+                x1.tolist(),
+                y1.tolist(),
+                x2.tolist(),
+                y2.tolist(),
+            )
+        )
+    detections.sort(key=lambda d: d["score"], reverse=True)
+    return detections[:max_detections]
+
+
+def to_original(
+    detections: list[dict], scale: float, dx: int, dy: int, width: int, height: int
+):
+    """Undo the letterbox so boxes are in source-frame coordinates."""
+    mapped = []
+    for det in detections:
+        x1 = min(max((det["x1"] - dx) / scale, 0.0), width - 1.0)
+        y1 = min(max((det["y1"] - dy) / scale, 0.0), height - 1.0)
+        x2 = min(max((det["x2"] - dx) / scale, 0.0), width - 1.0)
+        y2 = min(max((det["y2"] - dy) / scale, 0.0), height - 1.0)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        mapped.append({**det, "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+    return mapped
+
+
+# --------------------------------------------------------------------------
+# runtime plumbing
+# --------------------------------------------------------------------------
+def load_runtime_dependencies() -> None:
+    global cv2, np, pyneat
+    if pyneat is not None:
+        return
+    for path in glob.glob("/usr/lib/python3*/dist-packages"):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    import cv2 as cv2_module
+    import numpy as np_module
+    import pyneat as pyneat_module
+
+    cv2, np, pyneat = cv2_module, np_module, pyneat_module
+
+
+def time_ms() -> float:
+    return time.perf_counter() * 1000.0
+
+
+def tensor_dim(tensor, name: str) -> int:
+    value = getattr(tensor, name)
+    return int(value() if callable(value) else value)
+
+
+def first_tensor(sample):
+    if sample is None:
+        return None
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
+        return sample.tensor
+    if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
+        return sample.tensors[0]
+    for nested in sample.fields:
+        tensor = first_tensor(nested)
+        if tensor is not None:
+            return tensor
+    return None
+
+
+def pull_latest(run, output_name: str, timeout_ms: int):
+    """Block for one frame, then drain so the caller always gets the newest."""
+    sample = run.pull(output_name, timeout_ms)
+    if sample is None:
+        error = run.last_error()
+        if error:
+            raise RuntimeError(f"failed to pull {output_name}: {error}")
+        # Python's optional-return pull binding does not distinguish timeout
+        # from a closed output. A non-empty run error is the only fatal status
+        # available here; otherwise let the caller retry.
+        return None
+    while True:
+        newer = run.pull(output_name, 0)
+        if newer is None:
+            error = run.last_error()
+            if error:
+                raise RuntimeError(f"failed to drain {output_name}: {error}")
+            return sample
+        sample = newer
+
+
+def probe_rtsp(url: str) -> tuple[int, int, int]:
+    capture = cv2.VideoCapture(url)
+    if not capture.isOpened():
+        raise RuntimeError(f"failed to open RTSP source for probing: {url}")
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = round(capture.get(cv2.CAP_PROP_FPS) or 0)
+    capture.release()
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"failed to probe RTSP frame size: {url}")
+    return width, height, fps if fps > 0 else 30
+
+
+# --------------------------------------------------------------------------
+# graph construction
+# --------------------------------------------------------------------------
+def build_source_options(cfg: AppConfig, url: str, width: int, height: int, fps: int):
+    opt = pyneat.RtspDecodedInputOptions()
+    opt.url = url
+    opt.latency_ms = cfg.latency_ms
+    opt.tcp = cfg.tcp
+    opt.payload_type = 96
+    opt.insert_queue = True
+    opt.decoder_name = "decoder"
+    opt.decoder_raw_output = True
+    opt.auto_caps_from_stream = True
+    opt.fallback_h264_width = width
+    opt.fallback_h264_height = height
+    opt.source_fps = fps
+    opt.output_caps.enable = True
+    opt.output_caps.format = pyneat.Format.NV12
+    opt.output_caps.width = width
+    opt.output_caps.height = height
+    opt.output_caps.fps = fps
+    opt.output_caps.memory = pyneat.CapsMemory.Any
+    return opt
+
+
+# --------------------------------------------------------------------------
+# streams and batching
+# --------------------------------------------------------------------------
+@dataclass
+class Stream:
+    index: int
+    frame_w: int
+    frame_h: int
+    metadata_sender: object
+    processed: int = 0
+
+
+@dataclass(frozen=True)
+class FrameRef:
+    """Metadata retained after the decoder-backed Sample is released."""
+
+    pts_ns: int
+    frame_id: int
+
+
+@dataclass
+class BatchSlot:
+    """One reusable batch: the MLA input plus what the lanes came from."""
+
+    tensor: object
+    rgb: list = field(default_factory=list)
+    geometry: list = field(default_factory=list)
+    samples: list = field(default_factory=list)
+    ready: bool = False
+
+
+def make_batch_slot(net: int, streams: list[Stream]) -> BatchSlot:
+    return BatchSlot(
+        tensor=np.empty((BATCH_SIZE, net, net, 3), dtype=np.float32),
+        rgb=[np.empty((s.frame_h, s.frame_w, 3), dtype=np.uint8) for s in streams],
+        geometry=[(1.0, 0, 0)] * len(streams),
+        samples=[None] * len(streams),
+    )
+
+
+class BatchPrefetcher:
+    """Overlap the next four-lane ingest with the current model dispatch."""
+
+    def __init__(self, run, streams: list[Stream], net: int, timeout_ms: int):
+        self.run = run
+        self.streams = streams
+        self.net = net
+        self.timeout_ms = timeout_ms
+        self.closed = False
+        self.lane_pool = ThreadPoolExecutor(max_workers=len(streams))
+        self.fill_pool = ThreadPoolExecutor(max_workers=1)
+        self.slots = [make_batch_slot(net, streams) for _ in range(2)]
+        self.slot = 0
+        self.pending = self.fill_pool.submit(self._fill, self.slots[0])
+
+    def next(self) -> BatchSlot | None:
+        slot = self.pending.result()
+        self.slot ^= 1
+        self.pending = self.fill_pool.submit(self._fill, self.slots[self.slot])
+        return slot if slot.ready else None
+
+    def _fill(self, slot: BatchSlot) -> BatchSlot:
+        results = list(
+            self.lane_pool.map(
+                lambda stream: self._fill_lane(slot, stream), self.streams
+            )
+        )
+        slot.ready = all(results)
+        return slot
+
+    def _fill_lane(self, slot: BatchSlot, stream: Stream) -> bool:
+        if self.closed:
+            return False
+        sample = pull_latest(self.run, f"frame_{stream.index}", self.timeout_ms)
+        if sample is None:
+            return False
+        tensor = first_tensor(sample)
+        if tensor is None:
+            raise RuntimeError(
+                f"decoded output has no tensor payload for stream {stream.index}"
+            )
+        rgb = nv12_to_rgb(tensor, slot.rgb[stream.index])
+        slot.geometry[stream.index] = letterbox_into(
+            rgb, slot.tensor[stream.index], self.net
+        )
+        # Do not retain the zero-copy decoder Sample across inference. Four
+        # pipeline slots would otherwise pin enough decoder buffers to starve
+        # the live graph. Insight publication only needs these scalar fields.
+        slot.samples[stream.index] = FrameRef(
+            pts_ns=int(getattr(sample, "pts_ns", -1)),
+            frame_id=int(getattr(sample, "frame_id", -1)),
+        )
+        return True
+
+    def close(self) -> None:
+        self.closed = True
+        try:
+            self.pending.result(timeout=self.timeout_ms / 1000.0 + 1.0)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] batch prefetch shutdown failed: {exc}", file=sys.stderr)
+        self.fill_pool.shutdown(wait=True, cancel_futures=True)
+        self.lane_pool.shutdown(wait=True, cancel_futures=True)
+
+
+# --------------------------------------------------------------------------
+# output
+# --------------------------------------------------------------------------
+def send_metadata(
+    stream: Stream, sample, detections: list[dict], labels: list[str]
+) -> None:
+    objects = []
+    for index, det in enumerate(detections, start=1):
+        class_id = det["class_id"]
+        objects.append(
+            {
+                "id": f"obj_{index}",
+                "label": labels[class_id] if 0 <= class_id < len(labels) else "unknown",
+                "confidence": det["score"],
+                "bbox": [
+                    det["x1"],
+                    det["y1"],
+                    det["x2"] - det["x1"],
+                    det["y2"] - det["y1"],
+                ],
+            }
+        )
+    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
+    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
+
+    message = {
+        "type": "object-detection",
+        "data": {"objects": objects},
+        "timestamp": timestamp_ms,
+        "frame_id": frame_id,
+    }
+    if sample.pts_ns >= 0:
+        message["_insight"] = {
+            "rtp_timestamp": ((sample.pts_ns * 90_000) // 1_000_000_000) & 0xFFFFFFFF
+        }
+    stream.metadata_sender.send_raw_json(json.dumps(message, separators=(",", ":")))
+
+
+def save_debug_frame(cfg: AppConfig, stream: Stream, rgb, detections, labels) -> None:
+    if (
+        not cfg.debug_dir
+        or cfg.save_every <= 0
+        or stream.processed % cfg.save_every != 0
+    ):
+        return
+    annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    for det in detections:
+        p1 = (round(det["x1"]), round(det["y1"]))
+        p2 = (round(det["x2"]), round(det["y2"]))
+        cv2.rectangle(annotated, p1, p2, (0, 255, 0), 2)
+        class_id = det["class_id"]
+        label = labels[class_id] if 0 <= class_id < len(labels) else "unknown"
+        cv2.putText(
+            annotated,
+            f"{label} {det['score']:.2f}",
+            (p1[0], max(0, p1[1] - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
+        )
+    out_path = (
+        Path(cfg.debug_dir) / f"stream_{stream.index}_frame_{stream.processed}.jpg"
+    )
+    if not cv2.imwrite(str(out_path), annotated):
+        print(f"[warn] failed to write {out_path}", file=sys.stderr)
+
+
+def publish_stream(
+    cfg: AppConfig,
+    slot: BatchSlot,
+    labels: list[str],
+    stream: Stream,
+    detections: list[dict],
+) -> None:
+    """Send one stream's detections for the exact analysed frame."""
+    sample = slot.samples[stream.index]
+    rgb = slot.rgb[stream.index]
+    send_metadata(stream, sample, detections, labels)
+    save_debug_frame(cfg, stream, rgb, detections, labels)
+
+
+class ProfileWindow:
+    """Throughput and a phase breakdown, printed every `interval` dispatches."""
+
+    def __init__(self, cfg: AppConfig, streams: int) -> None:
+        self.enabled = cfg.profile
+        self.interval = cfg.profile_interval
+        self.streams = streams
+        self.reset()
+
+    def reset(self) -> None:
+        self.dispatches = 0
+        self.batch_ms = 0.0
+        self.infer_ms = 0.0
+        self.decode_ms = 0.0
+        self.publish_ms = 0.0
+        self.detections = 0
+        self.start_ms = 0.0
+
+    def add(self, batch_ms, infer_ms, decode_ms, publish_ms, detections) -> None:
+        if not self.enabled:
+            return
+        if self.dispatches == 0:
+            self.start_ms = time_ms()
+        self.dispatches += 1
+        self.batch_ms += batch_ms
+        self.infer_ms += infer_ms
+        self.decode_ms += decode_ms
+        self.publish_ms += publish_ms
+        self.detections += detections
+        if self.dispatches >= self.interval:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self.enabled or self.dispatches == 0:
+            return
+        elapsed = time_ms() - self.start_ms
+        dispatch_fps = self.dispatches * 1000.0 / elapsed if elapsed > 0 else 0.0
+        n = self.dispatches
+        print(
+            f"[profile] dispatch_fps={dispatch_fps:.2f} "
+            f"per_stream_fps={dispatch_fps:.2f} "
+            f"aggregate_fps={dispatch_fps * self.streams:.2f} | "
+            f"avg_batch_ms={self.batch_ms / n:.1f} "
+            f"avg_infer_ms={self.infer_ms / n:.1f} "
+            f"avg_decode_ms={self.decode_ms / n:.1f} "
+            f"avg_publish_ms={self.publish_ms / n:.1f} | "
+            f"avg_detections={self.detections / n:.1f}",
+            flush=True,
+        )
+        self.reset()
+
+
+# --------------------------------------------------------------------------
+# application
+# --------------------------------------------------------------------------
+def validate_model_contract(
+    input_shapes: list[list[int]], output_shapes: list[list[int]], label_count: int
+) -> ModelContract:
+    if len(input_shapes) != 1:
+        raise RuntimeError("expected exactly one model input")
+    input_shape = input_shapes[0]
+    if len(input_shape) != 4 or any(dim <= 0 for dim in input_shape):
+        raise RuntimeError("model input must be a concrete positive [4,N,N,3] tensor")
+    if (
+        input_shape[0] != BATCH_SIZE
+        or input_shape[1] != input_shape[2]
+        or input_shape[3] != 3
+    ):
+        raise RuntimeError("model input must have shape [4,N,N,3]")
+    if len(output_shapes) != EXPECTED_OUTPUTS:
+        raise RuntimeError("expected exactly six YOLO26 output tensors")
+
+    bbox: list[tuple[tuple[int, int], int]] = []
+    classes: list[tuple[tuple[int, int], int]] = []
+    class_count = 0
+    for index, shape in enumerate(output_shapes):
+        if (
+            len(shape) != 4
+            or any(dim <= 0 for dim in shape)
+            or shape[0] != BATCH_SIZE
+            or shape[1] != shape[2]
+        ):
+            raise RuntimeError(
+                "every model output must be a concrete positive [4,G,G,C] tensor"
+            )
+        grid = (shape[1], shape[2])
+        channels = shape[3]
+        if channels == BBOX_CHANNELS:
+            bbox.append((grid, index))
+        else:
+            if class_count == 0:
+                class_count = channels
+            elif channels != class_count:
+                raise RuntimeError(
+                    "YOLO26 class heads must have one common class count"
+                )
+            classes.append((grid, index))
+
+    if len(bbox) != LEVELS or len(classes) != LEVELS:
+        raise RuntimeError(
+            "expected three bbox heads and three class heads; four-class models are ambiguous"
+        )
+    if label_count != class_count:
+        raise RuntimeError("label count must match the model class-head channel count")
+    bbox.sort(reverse=True)
+    classes.sort(reverse=True)
+    bbox_grids = tuple(grid for grid, _ in bbox)
+    class_grids = tuple(grid for grid, _ in classes)
+    if bbox_grids != class_grids or len(set(bbox_grids)) != LEVELS:
+        raise RuntimeError(
+            "bbox and class heads must form three distinct matching grids"
+        )
+    return ModelContract(
+        net=input_shape[1],
+        class_count=class_count,
+        grids=bbox_grids,
+        bbox_indices=tuple(index for _, index in bbox),
+        class_indices=tuple(index for _, index in classes),
+    )
+
+
+def build_streams(cfg: AppConfig, graph) -> list[Stream]:
+    streams: list[Stream] = []
+    for index, url in enumerate(cfg.rtsp_urls):
+        width, height, fps = probe_rtsp(url)
+
+        metadata_options = pyneat.MetadataSenderOptions()
+        metadata_options.host = cfg.insight_host
+        metadata_options.channel = index
+        metadata_options.metadata_port_base = cfg.metadata_port_base
+        metadata_sender = pyneat.MetadataSender(metadata_options)
+
+        source_options = build_source_options(cfg, url, width, height, fps)
+        encoded = pyneat.RtspEncodedInputOptions()
+        encoded.url = source_options.url
+        encoded.codec = pyneat.RtspCodec.H264
+        encoded.latency_ms = source_options.latency_ms
+        encoded.tcp = source_options.tcp
+        encoded.source_fps = source_options.source_fps
+        encoded.fallback_h264_width = source_options.fallback_h264_width
+        encoded.fallback_h264_height = source_options.fallback_h264_height
+        source = pyneat.Graph(f"rtsp_source_{index}")
+        source.add(pyneat.groups.rtsp_encoded_input(encoded))
+
+        decode_input = pyneat.InputOptions()
+        decode_input.payload_type = pyneat.PayloadType.Encoded
+        decode_input.format = pyneat.Format.H264
+        decode_input.memory_policy = pyneat.InputMemoryPolicy.Ev74
+        decode_options = pyneat.SimaDecodeOptions()
+        decode_options.type = pyneat.SimaDecodeType.H264
+        decode_options.sima_allocator_type = source_options.sima_allocator_type
+        decode_options.out_format = pyneat.Format.NV12
+        decode_options.decoder_name = source_options.decoder_name
+        decode_options.raw_output = source_options.decoder_raw_output
+        decode_options.dec_width = source_options.fallback_h264_width
+        decode_options.dec_height = source_options.fallback_h264_height
+        decode_options.dec_fps = source_options.source_fps
+        decoder = pyneat.Graph(f"decode_{index}")
+        decoder.connect(
+            pyneat.nodes.input("decode_h264", decode_input),
+            pyneat.nodes.sima_decode(decode_options),
+        )
+        decoder.add(
+            pyneat.nodes.caps_raw(
+                "NV12",
+                source_options.output_caps.width,
+                source_options.output_caps.height,
+                source_options.output_caps.fps,
+                source_options.output_caps.memory,
+            )
+        )
+        decoder.add(
+            pyneat.nodes.output(f"frame_{index}", pyneat.OutputOptions.latest())
+        )
+
+        video_port = 0
+        if cfg.video_enabled:
+            # Split the encoded stream: one copy is decoded for detection, the
+            # other goes to Insight untouched.
+            branch = pyneat.graphs.branch(
+                f"encoded_{index}", ["decode_h264", "video_h264"]
+            )
+            graph.connect(source, branch)
+            graph.connect(branch, decoder)
+            video_options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.H264)
+            video_options.host = cfg.insight_host
+            video_options.channel = index
+            video_options.video_port_base = cfg.video_port_base
+            video_options.async_ = True
+            video_port = video_options.video_port
+            video_input = pyneat.InputOptions()
+            video_input.payload_type = pyneat.PayloadType.Encoded
+            video_input.format = pyneat.Format.H264
+            video_input.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
+            sender = pyneat.Graph(f"video_sender_{index}")
+            sender.connect(
+                pyneat.nodes.input("video_h264", video_input),
+                pyneat.groups.video_sender(video_options),
+            )
+            graph.connect(branch, sender)
+        else:
+            graph.connect(source, decoder)
+
+        stream = Stream(
+            index=index,
+            frame_w=width,
+            frame_h=height,
+            metadata_sender=metadata_sender,
+        )
+        print(
+            f"[stream {index}] rtsp={url} {width}x{height}@{fps} "
+            f"video={video_port if cfg.video_enabled else 'disabled'} "
+            f"metadata={metadata_sender.metadata_port()}",
+            flush=True,
+        )
+        streams.append(stream)
+    return streams
+
+
+def run_app(cfg: AppConfig) -> None:
+    labels = load_labels(cfg.labels_path)
+    if cfg.debug_dir:
+        Path(cfg.debug_dir).mkdir(parents=True, exist_ok=True)
+
+    model = pyneat.Model(str(resolve(cfg.model_path)))
+    input_shapes = [[int(x) for x in spec.shape] for spec in model.input_specs()]
+    output_shapes = [[int(x) for x in spec.shape] for spec in model.output_specs()]
+    contract = validate_model_contract(input_shapes, output_shapes, len(labels))
+    print(
+        f"Model loaded: batch={BATCH_SIZE} net={contract.net} "
+        f"classes={contract.class_count} heads={output_shapes}",
+        flush=True,
+    )
+    net = contract.net
+
+    graph = pyneat.Graph()
+    streams = build_streams(cfg, graph)
+    run_options = pyneat.RunOptions()
+    run_options.preset = pyneat.RunPreset.Realtime
+    run_options.queue_depth = 4
+    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    run = graph.build(run_options)
+    profile = ProfileWindow(cfg, len(streams))
+    prefetcher = BatchPrefetcher(run, streams, net, cfg.timeout_ms)
+    decode_pool = ThreadPoolExecutor(max_workers=len(streams))
+
+    def decode_lane(stream: Stream, head_arrays: list, slot: BatchSlot):
+        """One lane's heads -> detections in that stream's source coordinates."""
+        heads = heads_from_outputs(head_arrays, stream.index, contract)
+        detections = decode_heads(heads, net, cfg.score_threshold, cfg.max_detections)
+        scale, dx, dy = slot.geometry[stream.index]
+        return to_original(detections, scale, dx, dy, stream.frame_w, stream.frame_h)
+
+    try:
+        while cfg.frames <= 0 or min(s.processed for s in streams) < cfg.frames:
+            batch_started = time_ms()
+            batch = prefetcher.next()
+            batch_ms = time_ms() - batch_started
+            if batch is None:
+                last_error = run.last_error()
+                if last_error:
+                    raise RuntimeError(f"runtime error: {last_error}")
+                print(
+                    "[warn] timed out waiting for frames", file=sys.stderr, flush=True
+                )
+                continue
+
+            input_tensor = pyneat.Tensor.from_numpy(batch.tensor, copy=False)
+            infer_started = time_ms()
+            head_tensors = model.run([input_tensor], timeout_ms=cfg.timeout_ms)
+            if len(head_tensors) != EXPECTED_OUTPUTS:
+                raise RuntimeError(
+                    f"expected {EXPECTED_OUTPUTS} head tensors, got {len(head_tensors)}"
+                )
+            head_arrays = [tensor.to_numpy() for tensor in head_tensors]
+            infer_ms = time_ms() - infer_started
+
+            decode_started = time_ms()
+            per_stream = list(
+                decode_pool.map(
+                    lambda s, arrays=head_arrays, current_batch=batch: decode_lane(
+                        s, arrays, current_batch
+                    ),
+                    streams,
+                )
+            )
+            decoded = time_ms()
+
+            found = 0
+            publish: list[tuple[Stream, list]] = []
+            for stream, detections in zip(streams, per_stream):
+                found += len(detections)
+                stream.processed += 1
+                if stream.processed > cfg.warmup_frames:
+                    publish.append((stream, detections))
+            # Each stream has its own sender, so the encodes proceed in parallel.
+            list(
+                decode_pool.map(
+                    lambda item, current_batch=batch: publish_stream(
+                        cfg, current_batch, labels, *item
+                    ),
+                    publish,
+                )
+            )
+
+            profile.add(
+                batch_ms,
+                infer_ms,
+                decoded - decode_started,
+                time_ms() - decoded,
+                found,
+            )
+    finally:
+        profile.flush()
+        decode_pool.shutdown(wait=False, cancel_futures=True)
+        prefetcher.close()
+        run.close()
+        for stream in streams:
+            print(f"[stream {stream.index}] processed={stream.processed}")
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Batch-4 YOLO26 detector over four RTSP streams"
+    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--validate-config-only", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = parse_args(argv)
+        if not args.config.is_file():
+            print(f"Error: config file not found: {args.config}", file=sys.stderr)
+            return 2
+        cfg = load_app_config(args.config)
+        if args.validate_config_only:
+            print(
+                f"Config validated: {args.config} (streams={len(cfg.rtsp_urls)}, "
+                f"score_threshold={cfg.score_threshold}, max_detections={cfg.max_detections})"
+            )
+            return 0
+        load_runtime_dependencies()
+        run_app(cfg)
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERR] {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
