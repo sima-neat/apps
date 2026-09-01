@@ -212,8 +212,8 @@ int run_enrollment_mode(int argc, char** argv) {
     }
 
     const auto raw = sima_examples::ScalarConfig::load(config_path_str);
-    const std::string scrfd_model  = raw.string_or("scrfd.model",   "assets/models/scrfd_2.5g_model.tar.gz");
-    const std::string arcface_model= raw.string_or("arcface.model", "assets/models/arcface_mbf_model.tar.gz");
+    const std::string scrfd_model  = raw.string_or("scrfd.model",   "models/scrfd_2.5g_bnkps.mla_mpk.tar.gz");
+    const std::string arcface_model= raw.string_or("arcface.model", "models/w600k_r50.surgery_mpk.tar.gz");
     const int timeout_ms           = raw.int_or("runtime.timeout_ms", 20000);
 
     face_recog::ScrfdConfig scrfd_cfg;

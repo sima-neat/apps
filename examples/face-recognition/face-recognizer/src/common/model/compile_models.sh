@@ -23,11 +23,9 @@
 #   <build-dir>/scrfd_2.5g_bnkps.mla/<basename>_mpk.tar.gz
 #   <build-dir>/w600k_r50.surgery/<basename>_mpk.tar.gz
 #
-# After compilation, copy the packages to the model assets directory:
-#   cp <build-dir>/scrfd_2.5g_bnkps.mla/*_mpk.tar.gz \
-#      examples/face-recognition/face-recognizer/assets/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
-#   cp <build-dir>/w600k_r50.surgery/*_mpk.tar.gz \
-#      examples/face-recognition/face-recognizer/assets/models/w600k_r50.surgery_mpk.tar.gz
+# After compilation, the script copies packages automatically to face-recognizer/models/:
+#   face-recognizer/models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
+#   face-recognizer/models/w600k_r50.surgery_mpk.tar.gz
 
 set -euo pipefail
 
@@ -201,4 +199,4 @@ fi
 
 echo ""
 echo "=== Compilation complete ==="
-echo "  Models ready at: ${ASSETS_DIR}/"
+echo "  Models ready at: ${MODELS_OUT}/"
