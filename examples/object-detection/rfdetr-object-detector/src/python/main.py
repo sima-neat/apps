@@ -213,7 +213,7 @@ def stable_topk_gather(scores: np.ndarray, proposals: np.ndarray) -> tuple[np.nd
     if not np.isfinite(flat_scores).all() or not np.isfinite(flat_proposals).all():
         raise ValueError("backbone output contains non-finite values")
     indices = np.argsort(-flat_scores, kind="stable")[:TOP_K]
-    return np.ascontiguousarray(flat_proposals[indices][None, ...]), indices
+    return flat_proposals[indices].reshape(1, TOP_K, 4), indices
 
 
 def postprocess(
