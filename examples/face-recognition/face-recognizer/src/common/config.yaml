@@ -30,7 +30,13 @@ input:
 # ── Output ────────────────────────────────────────────────────────────────────
 output:
   # "display" → cv::imshow,  file path → video file,  "" → no output
-  sink:             display
+  sink:             ""
+
+  # Insight viewer: set host to the Insight host IP to stream overlay H.264 to the
+  # Insight Web UI.  Override at runtime with --stream-host / --stream-port.
+  insight:
+    host:           ""      # e.g. 192.168.131.96 — leave empty to disable streaming
+    video_port:     9000
 
 # ── Matching ──────────────────────────────────────────────────────────────────
 match:

@@ -48,8 +48,10 @@ struct AppConfig {
     bool        gallery_path_set = false;  // true when --gallery was explicitly passed
     std::string input_uri;          // RTSP URL, video file path, or empty for webcam 0
     std::string output_sink;        // file path, "display", or empty (no output)
-    std::string stream_host;        // host IP for overlay UDP stream; empty = no streaming
-    int  stream_port         = 5000;
+    std::string insight_host;       // Insight host IP for overlay video; read from output.insight.host
+    int  insight_video_port  = 9000;// Insight video UDP port; read from output.insight.video_port
+    std::string stream_host;        // CLI override: redirect overlay to custom receiver instead of Insight
+    int  stream_port         = 5000;// CLI override port (used only when --stream-host is set)
     int  max_frames          = 0;   // 0 = unlimited
     int  rtsp_fps            = -1;  // decoder caps fps hint; -1 = auto-detect from stream
     int  supported_fps       = 45;  // max input FPS the pipeline can sustain (warn above this)
@@ -79,8 +81,10 @@ static AppConfig load_config(const fs::path& path) {
     cfg.scrfd_model   = raw.string_or("scrfd.model",   cfg.scrfd_model);
     cfg.arcface_model = raw.string_or("arcface.model", cfg.arcface_model);
     cfg.gallery_path  = raw.string_or("gallery.path",  cfg.gallery_path);
-    cfg.input_uri     = raw.string_or("input.uri",     "");
-    cfg.output_sink   = raw.string_or("output.sink",   "");
+    cfg.input_uri          = raw.string_or("input.uri",                  "");
+    cfg.output_sink        = raw.string_or("output.sink",                "");
+    cfg.insight_host       = raw.string_or("output.insight.host",        "");
+    cfg.insight_video_port = raw.int_or   ("output.insight.video_port",  9000);
     cfg.timeout_ms      = raw.int_or("runtime.timeout_ms",     cfg.timeout_ms);
     cfg.queue_depth     = raw.int_or("runtime.queue_depth",    cfg.queue_depth);
     cfg.recog_interval  = raw.int_or("runtime.recog_interval", cfg.recog_interval);
@@ -132,10 +136,14 @@ static AppConfig parse_args(int argc, char** argv) {
                       << "       [--output <sink>] [--stream-host <host>] [--stream-port N]\n"
                       << "       [--test] [--display] [--no-display]\n"
                       << "\n"
-                      << "  --stream-host HOST  Burn overlay onto frames and stream H.264 over UDP.\n"
-                      << "                      View with: ffplay -fflags nobuffer udp://@:PORT\n"
-                      << "                               or vlc udp://@:PORT\n"
-                      << "  --stream-port N     UDP port for the overlay stream (default 5000).\n"
+                      << "  output.insight.host / output.insight.video_port (config.yaml):\n"
+                      << "                      Send the overlay H.264 stream to the Insight viewer.\n"
+                      << "                      Set output.insight.host to the Insight host IP and\n"
+                      << "                      open the Insight Web UI to view the annotated stream.\n"
+                      << "\n"
+                      << "  --stream-host HOST  Override: redirect the overlay H.264 stream to a\n"
+                      << "                      custom receiver instead of the Insight host.\n"
+                      << "  --stream-port N     UDP port for the custom receiver (default 5000).\n"
                       << "  --rtsp-fps N        Optional decoder FPS override. Omit to auto-detect\n"
                       << "                      the source rate from the stream (recommended).\n"
                       << "  --cpu-preproc       Force A65 NEON preproc for RTSP instead of the EV74\n"
@@ -153,10 +161,12 @@ static AppConfig parse_args(int argc, char** argv) {
     if (!cfg.output_sink_explicit && cfg.output_sink.empty()) cfg.output_sink = yaml_cfg.output_sink;
     if (cfg.scrfd_model.empty())   cfg.scrfd_model   = yaml_cfg.scrfd_model;
     if (cfg.arcface_model.empty()) cfg.arcface_model = yaml_cfg.arcface_model;
-    cfg.timeout_ms      = yaml_cfg.timeout_ms;
-    cfg.queue_depth     = yaml_cfg.queue_depth;
-    cfg.recog_interval  = yaml_cfg.recog_interval;
-    cfg.supported_fps   = yaml_cfg.supported_fps;
+    cfg.timeout_ms          = yaml_cfg.timeout_ms;
+    cfg.queue_depth         = yaml_cfg.queue_depth;
+    cfg.recog_interval      = yaml_cfg.recog_interval;
+    cfg.supported_fps       = yaml_cfg.supported_fps;
+    cfg.insight_host        = yaml_cfg.insight_host;
+    cfg.insight_video_port  = yaml_cfg.insight_video_port;
     cfg.scrfd         = yaml_cfg.scrfd;
     cfg.match         = yaml_cfg.match;
     cfg.overlay       = yaml_cfg.overlay;
@@ -663,22 +673,21 @@ int main(int argc, char** argv) {
     }
 
     // Overlay UDP stream (RTP/H264 via SiMa HW encoder) — lazy-init on first frame.
-    // NV12 frames are pushed directly; no NV12→BGR conversion required for streaming.
-    // Receive on any host:
-    //   gst-launch-1.0 udpsrc port=PORT caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" \
-    //     ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false
-    //   ffplay -fflags nobuffer -protocol_whitelist file,udp,rtp <stream.sdp>
+    // Default destination: Insight host (output.insight.host / output.insight.video_port).
+    // Override: --stream-host / --stream-port redirects the stream to a custom receiver.
+    const std::string eff_stream_host = cfg.stream_host.empty() ? cfg.insight_host : cfg.stream_host;
+    const int         eff_stream_port = cfg.stream_host.empty() ? cfg.insight_video_port : cfg.stream_port;
+
     std::optional<simaai::neat::Run> enc_run;
     bool   enc_run_failed = false;
     long   enc_push_ok    = 0;   // frames accepted by the encoder input queue
     long   enc_push_drop  = 0;   // frames dropped because that queue was full
     double enc_push_ms    = 0.0; // cumulative time spent in try_push
-    if (!cfg.stream_host.empty()) {
-        std::cout << "[stream] Will send RTP/H264 overlay stream (SiMa HW encoder) -> udp://"
-                  << cfg.stream_host << ":" << cfg.stream_port << "\n"
-                  << "[stream] Receive:  gst-launch-1.0 udpsrc port=" << cfg.stream_port
-                  << " caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96\""
-                  << " ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink sync=false\n";
+    if (!eff_stream_host.empty()) {
+        const bool custom = !cfg.stream_host.empty();
+        std::cout << "[stream] Will send overlay H.264 stream (SiMa HW encoder) -> udp://"
+                  << eff_stream_host << ":" << eff_stream_port
+                  << (custom ? "  [custom receiver]\n" : "  [Insight viewer]\n");
     }
 
     // Async display thread — decouples imshow/waitKey from the pipeline loop.
@@ -985,7 +994,7 @@ int main(int argc, char** argv) {
         const auto tc3 = Clock::now();
 
         // Lazy-init the HW encoder Run on first frame when dimensions are known.
-        if (!cfg.stream_host.empty() && !enc_run.has_value() && !enc_run_failed &&
+        if (!eff_stream_host.empty() && !enc_run.has_value() && !enc_run_failed &&
             curr_nv12_w > 0 && curr_nv12_h > 0) {
             try {
                 simaai::neat::InputOptions enc_in_opt;
@@ -1012,8 +1021,8 @@ int main(int argc, char** argv) {
                 simaai::neat::nodes::groups::VideoSenderOptions vsopt =
                     simaai::neat::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
                         curr_nv12_w, curr_nv12_h, enc_fps);
-                vsopt.host            = cfg.stream_host;
-                vsopt.video_port_base = cfg.stream_port;
+                vsopt.host            = eff_stream_host;
+                vsopt.video_port_base = eff_stream_port;
                 vsopt.channel         = 0;
 
                 // VideoSenderEncoderOptions defaults to profile "baseline", which forces
@@ -1051,7 +1060,7 @@ int main(int argc, char** argv) {
                 cv::Mat seed_bgr(curr_nv12_h, curr_nv12_w, CV_8UC3, cv::Scalar(0, 0, 0));
                 enc_run = enc_graph.build(std::vector<cv::Mat>{seed_bgr}, enc_run_opt);
                 std::cout << "[stream] HW encoder opened -> udp://"
-                          << cfg.stream_host << ":" << cfg.stream_port
+                          << eff_stream_host << ":" << eff_stream_port
                           << "  (" << curr_nv12_w << "x" << curr_nv12_h << " @ " << enc_fps
                           << " fps, " << vsopt.encoder.bitrate_kbps << " kbps, "
                           << vsopt.encoder.profile << " profile)\n";
