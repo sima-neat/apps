@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """RF-DETR-Seg (432) single-camera RTSP Insight example using pyneat.
 
-The model ships as a three-stage split -- INT8 backbone (MLA), a top-k gather step
-(A65, in-process TVM), and a BF16 transformer + seg-head (MLA) -- so, unlike the
-single-model examples in this category, the three stages are driven explicitly
-here instead of being expressed as one graph node. This is a Python port of the
-C++ reference in ``src/cpp/main.cpp``; see that file for the stage-by-stage
-numerics this mirrors.
+The model ships as a two-stage split -- INT8 backbone (MLA) and a BF16
+transformer + seg-head (MLA) -- with a host-side top-k+gather hop between
+them. The backbone runs embedded in the same async graph as the RTSP decode
+and the (passthrough) video sender; a bridge thread does the top-k+gather and
+feeds the transformer, which runs as a separately-built Runner. This mirrors
+the object-detection RF-DETR example in this repo
+(examples/object-detection/rfdetr-object-detector), adapted for the
+segmentation model's extra mask output and third (now-removed) compiled
+top-k stage: the top-k .so this model shipped with was verified bit-exact
+against a plain stable argsort-by-score + gather on captured device tensors,
+so it is not needed (and dropping it also drops the subprocess this port
+used to keep TVM out of the same process as pyneat).
 """
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import glob
 import json
-import multiprocessing as mp
+import signal
 from pathlib import Path
-import queue as queue_module
 import subprocess
 import sys
+import threading
 import time
 
 import yaml
@@ -27,7 +32,7 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 DEFAULT_LABELS = DEFAULT_CONFIG.parent / "coco_label.txt"
 
-# ── model constants (fixed by the compiled RF-DETR-Seg 432 split) ──────────
+# ── model constants (fixed by the compiled RF-DETR-Seg 432 backbone/transformer) ──
 IMAGE_H = IMAGE_W = 432
 NUM_QUERIES = 200
 NUM_CLASSES = 91
@@ -36,8 +41,6 @@ COCO_MEAN = (0.485, 0.456, 0.406)
 COCO_STD = (0.229, 0.224, 0.225)
 
 BACKBONE_NAME = "rfdetr_seg_432_simplified_backbone_before_topk_base_mpk"
-TOPK_NAME = "rfdetr_seg_432_simplified_topk_to_gather_base_mpk"
-TOPK_SO = "rfdetr_seg_432_simplified_topk_to_gather_base_stage1_a65.so"
 TRANSFORMER_NAME = "rfdetr_seg_432_simplified_transformer_after_gather_base_mpk"
 
 # MetadataSender rejects a payload above 65507 bytes, and pyneat raises on the rejection. Half of
@@ -88,11 +91,6 @@ def load_runtime_dependencies() -> None:
     global cv2, np, pyneat
     if pyneat is not None:
         return
-
-    for path in glob.glob("/usr/lib/python3*/dist-packages"):
-        if path not in sys.path:
-            sys.path.insert(0, path)
-
     import cv2 as cv2_module
     import numpy as np_module
     import pyneat as pyneat_module
@@ -232,7 +230,7 @@ def load_app_config(config_path: Path) -> AppConfig:
             save_dir=string_or(output, "save_dir"),
             save_every=int_or(output, "save_every", 0),
             mask_alpha=float_or(output, "mask_alpha", 0.55),
-            mask_threshold=float_or(output, "mask_threshold", 0.50),
+            mask_threshold=float_or(output, "mask_threshold", 0.08),
             draw_boxes=bool_or(output, "draw_boxes", True),
         ),
     )
@@ -256,16 +254,20 @@ def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-np.clip(x, -60.0, 60.0)))
 
 
-# ── model options (preprocess is stretch-resize, matching the compiled graph) ──
-def backbone_options():
+# ── model options ────────────────────────────────────────────────────────
+# The backbone consumes the decoder's NV12 output directly (fed by the graph, not the host), and
+# EV74 resizes from the live stream resolution down to the compiled 432x432 input with a plain
+# stretch (independent x/y scale, no letterbox padding) -- confirmed on real hardware to work at
+# native stream resolution as well as at a pre-resized 432x432 input.
+def backbone_options(stream_w: int, stream_h: int):
     opt = pyneat.ModelOptions()
     opt.preprocess.kind = pyneat.InputKind.Image
     opt.preprocess.enable = pyneat.AutoFlag.On
     opt.preprocess.color_convert.enable = pyneat.AutoFlag.On
-    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
+    opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     opt.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
-    opt.preprocess.input_max_width = IMAGE_W
-    opt.preprocess.input_max_height = IMAGE_H
+    opt.preprocess.input_max_width = stream_w
+    opt.preprocess.input_max_height = stream_h
     opt.preprocess.input_max_depth = 3
     opt.preprocess.resize.enable = pyneat.AutoFlag.On
     opt.preprocess.resize.width = IMAGE_W
@@ -277,8 +279,7 @@ def backbone_options():
     opt.preprocess.normalize.stddev = list(COCO_STD)
     opt.preprocess.normalize.has_explicit_stats = True
     opt.processcvu.pre_run_target = "EV74"
-    opt.processcvu.post_run_target = "EV74"
-    opt.processcvu.async_ = False
+    opt.processcvu.post_run_target = "A65"
     return opt
 
 
@@ -288,78 +289,22 @@ def transformer_options():
     opt.preprocess.enable = pyneat.AutoFlag.Off
     opt.processcvu.pre_run_target = "A65"
     opt.processcvu.post_run_target = "A65"
-    opt.processcvu.async_ = False
     return opt
 
 
-def _topk_worker(so_path: str, req_q, resp_q) -> None:
-    """Runs in its own process: the standalone Python TVM runtime conflicts with
-    the TVM/GStreamer symbols pyneat already has loaded when both share one
-    process, so the top-k gather stage never imports tvm in the main process."""
-    try:
-        for path in glob.glob("/usr/lib/python3*/dist-packages"):
-            if path not in sys.path:
-                sys.path.insert(0, path)
-        import tvm
-        from tvm.contrib import graph_executor
-
-        device = tvm.cpu(0)
-        lib = tvm.runtime.load_module(so_path)
-        gmod = graph_executor.GraphModule(lib["default"](device))
-        resp_q.put(("ready", None))
-        while True:
-            item = req_q.get()
-            if item is None:
-                return
-            concat, reduce_ = item
-            try:
-                gmod.set_input("arm_0_i0", tvm.nd.array(concat.reshape(1, 1296, 4).astype("float32"), device))
-                gmod.set_input("arm_0_i1", tvm.nd.array(reduce_.reshape(1, 1296).astype("float32"), device))
-                gmod.run()
-                resp_q.put(("ok", gmod.get_output(0).numpy().reshape(200 * 4).astype("float32")))
-            except BaseException as exc:  # noqa: BLE001 - report to parent, keep worker alive
-                resp_q.put(("error", f"{type(exc).__name__}: {exc}"))
-    except BaseException as exc:  # noqa: BLE001 - report startup failure to parent
-        resp_q.put(("fatal", f"{type(exc).__name__}: {exc}"))
-
-
-class TopkProcess:
-    """Host-side top-k gather stage (A65-only .so, no MLA), driven via the TVM
-    C++ graph executor in a subprocess. See `_topk_worker` for why it is out of
-    process."""
-
-    def __init__(self, so_path: str, startup_timeout_s: float = 60.0) -> None:
-        ctx = mp.get_context("spawn")
-        self._req_q = ctx.Queue(maxsize=2)
-        self._resp_q = ctx.Queue(maxsize=2)
-        self._proc = ctx.Process(target=_topk_worker, args=(so_path, self._req_q, self._resp_q), daemon=True)
-        self._proc.start()
-        try:
-            status, payload = self._resp_q.get(timeout=startup_timeout_s)
-        except queue_module.Empty as exc:
-            self.close()
-            raise RuntimeError(f"topk helper did not start within {startup_timeout_s}s") from exc
-        if status != "ready":
-            self.close()
-            raise RuntimeError(f"topk helper failed to start: {payload}")
-
-    def run(self, concat, reduce_, timeout_s: float = 30.0):
-        self._req_q.put((concat, reduce_), timeout=timeout_s)
-        status, payload = self._resp_q.get(timeout=timeout_s)
-        if status != "ok":
-            raise RuntimeError(f"topk_to_gather failed: {payload}")
-        return payload
-
-    def close(self) -> None:
-        try:
-            if self._proc.is_alive():
-                self._req_q.put(None, timeout=0.2)
-                self._proc.join(timeout=2.0)
-            if self._proc.is_alive():
-                self._proc.terminate()
-                self._proc.join(timeout=2.0)
-        except Exception:
-            pass
+# ── host-side top-k + gather ────────────────────────────────────────────────
+# Verified bit-exact against the model's compiled top-k .so on captured device tensors (stable
+# argsort by score, descending, then gather the matching boxes) -- see the PR description for the
+# comparison. Removing the compiled stage also removes the subprocess this port used to keep TVM
+# out of the same process as pyneat (they conflict when imported together -- confirmed by an
+# in-process crash during that verification).
+def stable_topk_gather(reduce_scores, concat_boxes):
+    flat_scores = np.asarray(reduce_scores, dtype=np.float32).reshape(-1)
+    flat_boxes = np.asarray(concat_boxes, dtype=np.float32).reshape(-1, 4)
+    if flat_scores.size < NUM_QUERIES or flat_boxes.shape[0] != flat_scores.size:
+        raise RuntimeError("backbone score and box shapes do not match")
+    indices = np.argsort(-flat_scores, kind="stable")[:NUM_QUERIES]
+    return np.ascontiguousarray(flat_boxes[indices][None, ...])
 
 
 def collect_tensors(sample) -> list:
@@ -392,105 +337,53 @@ class FrameOut:
         self.masks_dev = masks_dev  # (108,108,200) raw (pre-sigmoid)
 
 
-class Pipeline:
-    """Explicit three-stage split: backbone (MLA) -> top-k gather (A65/TVM) ->
-    transformer + seg-head (MLA). Kept as a single call per frame so the
-    setup/inference/teardown flow stays visible at the call site in main()."""
+def split_backbone(sample):
+    feature = reduce_ = concat = None
+    for tensor in collect_tensors(sample):
+        shape = tensor_shape(tensor)
+        n = 1
+        for d in shape:
+            n *= d
+        if shape == (1, 36, 36, 256):
+            feature = tensor_to_f32(tensor).reshape(36, 36, 256)
+        elif shape == (1, 1296, 4):
+            concat = tensor_to_f32(tensor).reshape(1296, 4)
+        elif n == 1296:
+            reduce_ = tensor_to_f32(tensor).reshape(1296)
+    if feature is None or reduce_ is None or concat is None:
+        raise RuntimeError("backbone did not produce feature, reduce, and concat tensors")
+    return feature, reduce_, concat
 
-    def __init__(self, model_root: str, timeout_ms: int) -> None:
-        self._timeout_ms = timeout_ms
-        backbone = pyneat.Model(f"{model_root}/{BACKBONE_NAME}", backbone_options())
-        seed_img = np.zeros((IMAGE_H, IMAGE_W, 3), dtype=np.uint8)
-        self._backbone_run = backbone.build([self._image_tensor(seed_img)])
 
-        transformer = pyneat.Model(f"{model_root}/{TRANSFORMER_NAME}", transformer_options())
-        fseed = np.zeros((36, 36, 256), dtype=np.float32)
-        gseed = np.zeros((1, 200, 4), dtype=np.float32)
-        self._transformer_run = transformer.build(
-            [
-                pyneat.Tensor.from_numpy(fseed, copy=True),
-                pyneat.Tensor.from_numpy(gseed, copy=True),
-            ]
-        )
+def split_transformer(sample) -> FrameOut:
+    boxes = logits = masks_dev = None
+    for tensor in collect_tensors(sample):
+        shape = tensor_shape(tensor)
+        n = 1
+        for d in shape:
+            n *= d
+        if shape == (1, 200, 4):
+            boxes = tensor_to_f32(tensor).reshape(200, 4)
+        elif shape == (1, 200, 91):
+            logits = tensor_to_f32(tensor).reshape(200, 91)
+        elif shape == (108, 108, 200) or n == NUM_QUERIES * MASK_HW * MASK_HW:
+            masks_dev = tensor_to_f32(tensor).reshape(108, 108, 200)
+    if boxes is None or logits is None or masks_dev is None:
+        raise RuntimeError("transformer did not produce box, class, and mask tensors")
+    return FrameOut(boxes, logits, masks_dev)
 
-        self._topk = TopkProcess(f"{model_root}/{TOPK_NAME}/lib/{TOPK_SO}")
 
-    @staticmethod
-    def _image_tensor(bgr):
-        # image_format/memory matter only for the image input; the intermediate
-        # feature/gather tensors below are plain host arrays (see TopkProcess
-        # docstring for why the two MLA stages never share this tensor path with
-        # the TVM subprocess).
-        return pyneat.Tensor.from_numpy(
-            np.ascontiguousarray(bgr, dtype=np.uint8),
-            copy=True,
-            image_format=pyneat.PixelFormat.BGR,
-            memory=pyneat.TensorMemory.EV74,
-        )
+def copy_identity(source, target) -> None:
+    for name in (
+        "frame_id", "stream_id", "stream_label", "input_seq", "orig_input_seq",
+        "pts_ns", "dts_ns", "duration_ns",
+    ):
+        setattr(target, name, getattr(source, name))
+    target.attributes = source.attributes
 
-    def run_one(self, bgr_432) -> FrameOut:
-        img = self._image_tensor(bgr_432)
-        if not self._backbone_run.push([img]):
-            raise RuntimeError("backbone push failed")
-        backbone_sample = self._backbone_run.pull(timeout_ms=self._timeout_ms)
-        if backbone_sample is None:
-            raise RuntimeError("backbone pull empty")
 
-        feature = reduce_ = concat = None
-        for tensor in collect_tensors(backbone_sample):
-            shape = tensor_shape(tensor)
-            n = 1
-            for d in shape:
-                n *= d
-            if shape == (1, 36, 36, 256):
-                feature = tensor_to_f32(tensor).reshape(36, 36, 256)
-            elif shape == (1, 1296, 4):
-                concat = tensor_to_f32(tensor).reshape(1296, 4)
-            elif n == 1296:
-                reduce_ = tensor_to_f32(tensor).reshape(1296)
-        if feature is None or reduce_ is None or concat is None:
-            raise RuntimeError("backbone split failed")
-
-        gather = self._topk.run(concat, reduce_, timeout_s=max(1.0, self._timeout_ms / 1000.0))
-
-        # Fresh CPU tensors, not the live device-backed backbone output: pushing the backbone's
-        # own output tensor straight into the transformer's 2-input stage has been observed to
-        # scramble that stage's packed multi-input buffer on this NEAT build.
-        feat_in = pyneat.Tensor.from_numpy(feature, copy=True)
-        gath_in = pyneat.Tensor.from_numpy(gather.reshape(1, 200, 4), copy=True)
-        if not self._transformer_run.push([feat_in, gath_in]):
-            raise RuntimeError("transformer push failed")
-        transformer_sample = self._transformer_run.pull(timeout_ms=self._timeout_ms)
-        tries = 0
-        while transformer_sample is None and tries < 5:
-            transformer_sample = self._transformer_run.pull(timeout_ms=self._timeout_ms)
-            tries += 1
-        if transformer_sample is None:
-            raise RuntimeError("transformer pull empty")
-
-        boxes = logits = masks_dev = None
-        for tensor in collect_tensors(transformer_sample):
-            shape = tensor_shape(tensor)
-            n = 1
-            for d in shape:
-                n *= d
-            if shape == (1, 200, 4):
-                boxes = tensor_to_f32(tensor).reshape(200, 4)
-            elif shape == (1, 200, 91):
-                logits = tensor_to_f32(tensor).reshape(200, 91)
-            elif shape == (108, 108, 200) or n == NUM_QUERIES * MASK_HW * MASK_HW:
-                masks_dev = tensor_to_f32(tensor).reshape(108, 108, 200)
-        if boxes is None or logits is None or masks_dev is None:
-            raise RuntimeError("transformer split failed")
-        return FrameOut(boxes, logits, masks_dev)
-
-    def close(self) -> None:
-        for run in (self._backbone_run, self._transformer_run):
-            try:
-                run.close()
-            except Exception:
-                pass
-        self._topk.close()
+def identity_key(sample) -> int:
+    return sample.frame_id if sample.frame_id >= 0 else sample.input_seq
 
 
 # ── per-query select + stretch-space box/mask projection ───────────────────
@@ -642,7 +535,7 @@ def encode_segments(segments: list[dict]) -> tuple[str, int]:
     return json.dumps({"segments": kept}, separators=(",", ":")), len(ordered) - len(kept)
 
 
-# ── RTSP source + Insight video sender ──────────────────────────────────────
+# ── RTSP source (encoded passthrough + separate decode) + Insight video sender ──
 def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
     cmd = [
         "ffprobe", "-v", "error", "-rw_timeout", "5000000", "-select_streams", "v:0",
@@ -680,7 +573,7 @@ def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
+def probe_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     width, height, fps = probe_ffprobe(cfg)
     if cfg.source_fps > 0:
         fps = cfg.source_fps
@@ -692,34 +585,9 @@ def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
         height = height or int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         fps = fps or int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
         cap.release()
+    if width <= 0 or height <= 0 or fps <= 0:
+        raise RuntimeError("failed to resolve RTSP width, height, and FPS; check source.url")
     return width, height, fps
-
-
-def make_rtsp_source_options(cfg: AppConfig, width: int, height: int, fps: int):
-    opt = pyneat.RtspDecodedInputOptions()
-    opt.url = cfg.source_url
-    opt.latency_ms = cfg.latency_ms
-    opt.tcp = cfg.tcp
-    opt.insert_queue = True
-    opt.decoder_name = "decoder"
-    opt.decoder_raw_output = True
-    opt.codec = pyneat.RtspCodec.H264
-    opt.source_fps = fps
-    opt.auto_caps_from_stream = True
-    opt.fallback_h264_width = width
-    opt.fallback_h264_height = height
-    if width > 0 and height > 0 and fps > 0:
-        opt.output_caps.enable = True
-        opt.output_caps.format = pyneat.Format.NV12
-        opt.output_caps.width = width
-        opt.output_caps.height = height
-        opt.output_caps.fps = fps
-        opt.output_caps.memory = pyneat.CapsMemory.Any
-    return opt
-
-
-def tensor_to_numpy(tensor):
-    return np.asarray(tensor.to_numpy(copy=True))
 
 
 def tensor_dim(tensor, name: str) -> int:
@@ -736,25 +604,12 @@ def tensor_bgr_from_decoded(tensor):
             raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
         nv12 = payload[:expected].reshape((height * 3 // 2, width))
         return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
-    frame = tensor_to_numpy(tensor)
+    frame = np.asarray(tensor.to_numpy(copy=True))
     if frame.ndim == 4 and frame.shape[0] == 1:
         frame = frame[0]
     if frame.dtype != np.uint8:
         frame = np.clip(frame, 0, 255).astype(np.uint8)
     return np.ascontiguousarray(frame)
-
-
-def extract_tensors(sample) -> list:
-    if sample is None or not hasattr(sample, "kind"):
-        return []
-    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
-        return [sample.tensor]
-    if sample.kind == pyneat.SampleKind.TensorSet:
-        return list(sample.tensors)
-    tensors = []
-    for field in getattr(sample, "fields", []):
-        tensors.extend(extract_tensors(field))
-    return tensors
 
 
 class ProfileWindow:
@@ -769,10 +624,10 @@ class ProfileWindow:
         self.dropped_segments = 0
         self.start_ms = 0.0
         self.pull_ms = 0.0
-        self.model_ms = 0.0
+        self.decode_ms = 0.0
         self.metadata_ms = 0.0
 
-    def add(self, pull_ms: float, model_ms: float, metadata_ms: float, instance_count: int,
+    def add(self, pull_ms: float, decode_ms: float, metadata_ms: float, instance_count: int,
            dropped: int) -> None:
         if not self.enabled:
             return
@@ -782,7 +637,7 @@ class ProfileWindow:
         self.instances += instance_count
         self.dropped_segments += dropped
         self.pull_ms += pull_ms
-        self.model_ms += model_ms
+        self.decode_ms += decode_ms
         self.metadata_ms += metadata_ms
         if self.frames >= self.interval:
             self.flush()
@@ -794,7 +649,7 @@ class ProfileWindow:
         frames = float(self.frames)
         print(
             f"[profile] frames={self.frames} output_fps={self.frames * 1000.0 / elapsed_ms} "
-            f"avg_pull_ms={self.pull_ms / frames} avg_model_ms={self.model_ms / frames} "
+            f"avg_pull_ms={self.pull_ms / frames} avg_decode_ms={self.decode_ms / frames} "
             f"avg_metadata_ms={self.metadata_ms / frames} "
             f"avg_instances={self.instances / frames} dropped_segments={self.dropped_segments}",
             flush=True,
@@ -802,52 +657,90 @@ class ProfileWindow:
         self.reset()
 
 
-@dataclass
-class PipelineRuntime:
-    graph: object
-    run: object
-    metadata_sender: object
-    labels: list[str]
-    frame_w: int
-    frame_h: int
-    output_fps: int
-    video_port: int
-
-
-def build_graph(cfg: AppConfig) -> PipelineRuntime:
-    width, height, fps = resolve_source_geometry(cfg)
-    if width <= 0 or height <= 0 or fps <= 0:
-        raise RuntimeError("failed to resolve source frame dimensions/rate")
+def run(cfg: AppConfig) -> int:
+    width, height, fps = probe_source_geometry(cfg)
     labels = load_labels(cfg.labels_path)
+    save_frames = bool(cfg.output.save_dir)
+    if save_frames:
+        Path(cfg.output.save_dir).mkdir(parents=True, exist_ok=True)
 
-    sender_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
-    sender_opt.host = cfg.insight_host
-    sender_opt.channel = 0
-    sender_opt.video_port_base = cfg.video_port
-    sender_opt.encoder.bitrate_kbps = 1000
+    backbone = pyneat.Model(f"{cfg.model_root}/{BACKBONE_NAME}", backbone_options(width, height))
+    transformer = pyneat.Model(f"{cfg.model_root}/{TRANSFORMER_NAME}", transformer_options())
 
-    source = pyneat.groups.rtsp_decoded_input(make_rtsp_source_options(cfg, width, height, fps))
-    branch = pyneat.graphs.branch("source", ["video", "frame"])
+    # ── RTSP source: keep the encoded bitstream for a true passthrough to Insight (no
+    # decode-then-re-encode round trip), and decode once, separately, for the model. ──
+    encoded_options = pyneat.RtspEncodedInputOptions()
+    encoded_options.url = cfg.source_url
+    encoded_options.codec = pyneat.RtspCodec.H264
+    encoded_options.latency_ms = cfg.latency_ms
+    encoded_options.tcp = cfg.tcp
+    encoded_options.source_fps = fps
+    encoded_options.fallback_h264_width = width
+    encoded_options.fallback_h264_height = height
+    source = pyneat.groups.rtsp_encoded_input(encoded_options)
 
-    video_graph = pyneat.Graph("video")
-    video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(sender_opt))
+    decode_options = pyneat.SimaDecodeOptions()
+    decode_options.type = pyneat.SimaDecodeType.H264
+    decode_options.out_format = pyneat.Format.NV12
+    decode_options.raw_output = True
+    decode_options.dec_width = width
+    decode_options.dec_height = height
+    decode_options.dec_fps = fps
+    decoder = pyneat.Graph("decoder")
+    decoder.add(pyneat.nodes.sima_decode(decode_options))
 
-    frame_graph = pyneat.Graph("frame")
-    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(1)))
+    video_options = pyneat.VideoSenderOptions.passthrough(pyneat.RtspCodec.H264)
+    video_options.host = cfg.insight_host
+    video_options.video_port_base = cfg.video_port
+    video_options.channel = 0
+    video_options.async_ = True
+    video = pyneat.groups.video_sender(video_options)
 
-    graph = pyneat.Graph()
-    graph.connect(source, branch)
-    graph.connect(branch, video_graph)
-    graph.connect(branch, frame_graph)
+    # ── backbone runs embedded in the same async graph as decode/video, pipelined two
+    # frames deep, instead of behind a manual push/pull call in the main loop. ──
+    backbone_graph = backbone.graph()
+    backbone_output = pyneat.Graph("backbone_output")
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(2)))
+
+    link = pyneat.GraphLinkOptions()
+    link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
+    link.max_inflight_per_stream = 2
+    link.stream_id = "stream0"
+
+    graph = pyneat.Graph("rfdetr_seg")
+    graph.connect(source, decoder)
+    graph.connect(source, video)
+    graph.connect(decoder, backbone_graph, link)
+    graph.connect(backbone_graph, backbone_output)
+
+    frame_output = pyneat.Graph("frame_output")
+    if save_frames:
+        frame_output.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(2)))
+        graph.connect(decoder, frame_output)
+
     if cfg.profile:
         print(f"Backend:\n{graph.describe_backend()}")
 
-    run_options = pyneat.RunOptions()
-    run_options.preset = pyneat.RunPreset.Realtime
-    run_options.queue_depth = 3
-    run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    run = graph.build(run_options)
+    transformer_run_options = pyneat.RunOptions()
+    transformer_run_options.preset = pyneat.RunPreset.Realtime
+    transformer_run_options.queue_depth = 2
+    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
+    transformer_run_options.output_memory = pyneat.OutputMemory.Owned
+    dummy_inputs = [
+        pyneat.Tensor.from_numpy(np.zeros((36, 36, 256), dtype=np.float32), copy=True),
+        pyneat.Tensor.from_numpy(np.zeros((1, NUM_QUERIES, 4), dtype=np.float32), copy=True),
+    ]
+    transformer_runner = transformer.build(
+        dummy_inputs, route_options=pyneat.ModelRouteOptions(), run_options=transformer_run_options
+    )
+
+    source_run_options = pyneat.RunOptions()
+    source_run_options.preset = pyneat.RunPreset.Realtime
+    source_run_options.queue_depth = 3
+    source_run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    source_run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    source_run_options.advanced.prepare_output_cpu_visible = True
+    source_run = graph.build(source_run_options)
 
     metadata_options = pyneat.MetadataSenderOptions()
     metadata_options.host = cfg.insight_host
@@ -857,79 +750,133 @@ def build_graph(cfg: AppConfig) -> PipelineRuntime:
 
     print(
         f"source={cfg.source_url} stream={width}x{height}@{fps} insight={cfg.insight_host} "
-        f"video={sender_opt.video_port} metadata={metadata_sender.metadata_port()} channel=0"
-    )
-    return PipelineRuntime(
-        graph=graph, run=run, metadata_sender=metadata_sender, labels=labels,
-        frame_w=width, frame_h=height, output_fps=fps, video_port=sender_opt.video_port,
+        f"video={video_options.video_port} metadata={metadata_sender.metadata_port()} channel=0",
+        flush=True,
     )
 
+    # ── bridge thread: pulls the backbone's output, does the (now host-side) top-k +
+    # gather, and feeds the transformer. Runs concurrently with the main loop pulling
+    # transformer output below, so the three stages overlap instead of running one
+    # frame fully to completion before the next starts. ──
+    stop = threading.Event()
+    bridge_error: list[BaseException] = []
+    identity_lock = threading.Lock()
+    source_pts: dict[int, int] = {}
+    pending_frames: dict[int, object] = {}
 
-def send_metadata(runtime: PipelineRuntime, sample, fo: FrameOut, detections: list[dict],
-                  mask_threshold: float) -> int:
-    data_json, dropped = encode_segments(
-        build_metadata_segments(
-            fo, detections, runtime.labels, (runtime.frame_h, runtime.frame_w), mask_threshold
-        )
-    )
-    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
-    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
-    if not runtime.metadata_sender.send_metadata("segmentation", data_json, timestamp_ms, frame_id):
-        print("[warn] insight metadata send failed", file=sys.stderr)
-    return dropped
+    def bridge() -> None:
+        try:
+            while not stop.is_set():
+                sample = source_run.pull("backbone", 500)
+                if sample is None:
+                    continue
+                feature, reduce_, concat = split_backbone(sample)
+                gathered = stable_topk_gather(reduce_, concat)
 
+                # Fresh CPU tensors, not the live device-backed backbone output: pushing the
+                # backbone's own output tensor straight into the transformer's 2-input stage has
+                # been observed to scramble that stage's packed multi-input buffer on this NEAT
+                # build.
+                feat_in = pyneat.Tensor.from_numpy(feature, copy=True)
+                gath_in = pyneat.Tensor.from_numpy(gathered, copy=True)
+                transformer_sample = pyneat.Sample()
+                transformer_sample.kind = pyneat.SampleKind.TensorSet
+                transformer_sample.tensors = [feat_in, gath_in]
+                copy_identity(sample, transformer_sample)
 
-def maybe_save_frame(cfg: AppConfig, processed: int, bgr, fo: FrameOut, detections: list[dict],
-                     labels: list[str]) -> None:
-    if not cfg.output.save_dir or cfg.output.save_every <= 0:
-        return
-    if processed % cfg.output.save_every != 0:
-        return
-    annotated = overlay_segmentation(bgr, fo, detections, labels, cfg.output)
-    out_path = Path(cfg.output.save_dir) / f"frame_{processed}.jpg"
-    if not cv2.imwrite(str(out_path), annotated):
-        print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
+                key = identity_key(sample)
+                with identity_lock:
+                    source_pts[key] = sample.pts_ns
+                    if len(source_pts) > 8:
+                        source_pts.pop(next(iter(source_pts)))
 
+                if save_frames:
+                    frame_sample = source_run.pull("frame", 0)
+                    if frame_sample is not None:
+                        tensors = collect_tensors(frame_sample)
+                        if tensors:
+                            with identity_lock:
+                                pending_frames[identity_key(frame_sample)] = tensor_bgr_from_decoded(
+                                    tensors[0]
+                                )
+                                if len(pending_frames) > 8:
+                                    pending_frames.pop(next(iter(pending_frames)))
 
-def run_pipeline(runtime: PipelineRuntime, pipe: Pipeline, cfg: AppConfig) -> int:
+                if not transformer_runner.push_samples(transformer_sample):
+                    if not stop.is_set():
+                        raise RuntimeError("transformer input closed")
+                    break
+        except BaseException as exc:  # noqa: BLE001 - surface to main thread, then stop
+            if not stop.is_set():
+                bridge_error.append(exc)
+            stop.set()
+
+    previous_handlers = {
+        signum: signal.signal(signum, lambda *_: stop.set())
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
+    worker = threading.Thread(target=bridge, name="rfdetr-seg-bridge", daemon=True)
+    worker.start()
+
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
     dropped_total = 0
-    while cfg.frames <= 0 or processed < cfg.frames:
-        pull_start = time_ms()
-        sample = runtime.run.pull("frame", 20000)
-        pull_end = time_ms()
-        if sample is None:
-            print("[warn] timed out waiting for decoded frame", file=sys.stderr)
-            continue
+    try:
+        while not stop.is_set() and (cfg.frames <= 0 or processed < cfg.frames):
+            pull_start = time_ms()
+            sample = transformer_runner.pull(timeout_ms=500)
+            pull_end = time_ms()
+            if not collect_tensors(sample):
+                continue
 
-        model_start = time_ms()
-        tensors = extract_tensors(sample)
-        if not tensors:
-            raise RuntimeError("decoded frame sample has no tensor")
-        bgr = tensor_bgr_from_decoded(tensors[0])
-        model_in = cv2.resize(bgr, (IMAGE_W, IMAGE_H), interpolation=cv2.INTER_LINEAR)
-        fo = pipe.run_one(model_in)
-        detections = select_dets(fo, cfg.score_threshold, cfg.max_detections)
-        model_end = time_ms()
+            decode_start = time_ms()
+            fo = split_transformer(sample)
+            detections = select_dets(fo, cfg.score_threshold, cfg.max_detections)
+            decode_end = time_ms()
 
-        metadata_start = time_ms()
-        dropped = send_metadata(runtime, sample, fo, detections, cfg.output.mask_threshold)
-        metadata_end = time_ms()
-        if dropped > 0 and dropped_total == 0:
-            print(f"[warn] metadata byte budget exceeded, dropped {dropped} segments",
-                 file=sys.stderr)
-        dropped_total += dropped
+            metadata_start = time_ms()
+            data_json, dropped = encode_segments(
+                build_metadata_segments(fo, detections, labels, (height, width),
+                                        cfg.output.mask_threshold)
+            )
+            with identity_lock:
+                pts_ns = source_pts.pop(identity_key(sample), sample.pts_ns)
+            timestamp_ms = pts_ns // 1_000_000 if pts_ns >= 0 else -1
+            frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
+            if not metadata_sender.send_metadata("segmentation", data_json, timestamp_ms, frame_id):
+                print("[warn] insight metadata send failed", file=sys.stderr)
+            metadata_end = time_ms()
+            if dropped > 0 and dropped_total == 0:
+                print(f"[warn] metadata byte budget exceeded, dropped {dropped} segments",
+                     file=sys.stderr)
+            dropped_total += dropped
 
-        processed += 1
-        maybe_save_frame(cfg, processed, bgr, fo, detections, runtime.labels)
-        profile.add(pull_end - pull_start, model_end - model_start, metadata_end - metadata_start,
-                   len(detections), dropped)
+            processed += 1
+            if save_frames and cfg.output.save_every > 0 and processed % cfg.output.save_every == 0:
+                with identity_lock:
+                    frame = pending_frames.pop(identity_key(sample), None)
+                if frame is not None:
+                    annotated = overlay_segmentation(frame, fo, detections, labels, cfg.output)
+                    out_path = Path(cfg.output.save_dir) / f"frame_{processed}.jpg"
+                    if not cv2.imwrite(str(out_path), annotated):
+                        print(f"[warn] failed to write output frame: {out_path}", file=sys.stderr)
+            profile.add(pull_end - pull_start, decode_end - decode_start,
+                       metadata_end - metadata_start, len(detections), dropped)
+        if bridge_error:
+            raise bridge_error[0]
+    finally:
+        stop.set()
+        source_run.stop()
+        transformer_runner.close()
+        worker.join(timeout=5)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        _ = (backbone, graph)
 
     profile.flush()
     print(
         f"processed={processed} dropped_segments={dropped_total} "
-        f"video_sender={cfg.insight_host}:{runtime.video_port}"
+        f"video_sender={cfg.insight_host}:{video_options.video_port}"
     )
     return processed
 
@@ -943,22 +890,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         load_runtime_dependencies()
-        if cfg.output.save_dir:
-            Path(cfg.output.save_dir).mkdir(parents=True, exist_ok=True)
-
-        # Load the two on-device models before starting the RTSP graph below: model load can take
-        # several seconds (real MLA .elf loads), and the RTSP source starts decoding and queueing
-        # frames the instant its Run is built. Building it first left that queue filling with no
-        # consumer, and the run failed with a backpressure timeout by the time we reached the
-        # first pull.
-        pipe = Pipeline(cfg.model_root, timeout_ms=30000)
-        runtime = build_graph(cfg)
-        try:
-            processed = run_pipeline(runtime, pipe, cfg)
-            return 0 if processed > 0 else 3
-        finally:
-            pipe.close()
-            runtime.run.close()
+        return 0 if run(cfg) > 0 else 3
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

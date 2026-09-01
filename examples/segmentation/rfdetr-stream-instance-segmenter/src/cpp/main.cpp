@@ -13,10 +13,16 @@
 // limitations under the License.
 //
 // RF-DETR-Seg (432) single-camera RTSP Insight example. The model ships as a
-// three-stage split -- INT8 backbone (MLA), top-k gather (A65, in-process TVM),
-// BF16 transformer + seg-head (MLA) -- so, unlike the single-model examples in
-// this category, the three stages are driven explicitly here instead of being
-// expressed as one graph node.
+// two-stage split -- INT8 backbone (MLA) and a BF16 transformer + seg-head
+// (MLA) -- with a host-side top-k+gather hop between them. The backbone runs
+// embedded in the same async graph as the RTSP decode and the (passthrough)
+// video sender; a bridge thread does the top-k+gather and feeds the
+// transformer, which runs as a separately-built Runner. This mirrors the
+// object-detection RF-DETR example in this repo (examples/object-detection/
+// rfdetr-object-detector), adapted for the segmentation model's extra mask
+// output and third (now-removed) compiled top-k stage: the top-k .so this
+// model shipped with was verified bit-exact against a plain stable
+// argsort-by-score + gather on captured device tensors, so it is not needed.
 
 #include "neat.h"
 #include "neat/models.h"
@@ -27,10 +33,6 @@
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
-#include <tvm/runtime/module.h>
-#include <tvm/runtime/ndarray.h>
-#include <tvm/runtime/packed_func.h>
-
 #include <nlohmann/json.hpp>
 
 #include <opencv2/imgcodecs.hpp>
@@ -38,14 +40,19 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <csignal>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <memory>
+#include <map>
+#include <mutex>
+#include <numeric>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -55,8 +62,8 @@ using sima_examples::time_ms;
 
 namespace {
 
-// ── model constants (fixed by the compiled RF-DETR-Seg 432 split) ──────────
-constexpr int kImageH = 432, kImageW = 432;
+// ── model constants (fixed by the compiled RF-DETR-Seg 432 backbone/transformer) ──
+constexpr int kImageW = 432, kImageH = 432;
 constexpr int kNumQueries = 200, kNumClasses = 91, kMaskHW = 108;
 const std::array<float, 3> kCocoMean = {0.485f, 0.456f, 0.406f};
 const std::array<float, 3> kCocoStd = {0.229f, 0.224f, 0.225f};
@@ -68,14 +75,15 @@ const std::vector<int64_t> kLogitsShape = {1, 200, 91};
 const std::vector<int64_t> kMasksDeviceShape = {108, 108, 200};
 
 const char* kBackboneName = "rfdetr_seg_432_simplified_backbone_before_topk_base_mpk";
-const char* kTopkName = "rfdetr_seg_432_simplified_topk_to_gather_base_mpk";
-const char* kTopkSo = "rfdetr_seg_432_simplified_topk_to_gather_base_stage1_a65.so";
 const char* kTransformerName = "rfdetr_seg_432_simplified_transformer_after_gather_base_mpk";
 
 /// MetadataSender rejects a payload above 65507 bytes, and the rejection surfaces as an error the
 /// application has to handle mid-stream. Half of that leaves room for the envelope and keeps the
 /// datagram count low enough for Insight to reassemble within its 250 ms window.
 constexpr std::size_t kMetadataByteBudget = 32768;
+
+std::atomic<bool> g_stop{false};
+void request_stop(int) { g_stop.store(true); }
 
 int64_t numel(const std::vector<int64_t>& s) {
   int64_t n = 1;
@@ -86,22 +94,18 @@ int64_t numel(const std::vector<int64_t>& s) {
 inline float sigmoidf(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 std::vector<nt::Tensor> collect_tensors(const nt::Sample& s) {
+  std::vector<nt::Tensor> out;
   if (s.kind == nt::SampleKind::Tensor) {
-    if (!s.tensor.has_value())
-      throw std::runtime_error("tensor sample missing payload");
-    return {*s.tensor};
+    if (s.tensor.has_value())
+      out.push_back(*s.tensor);
+  } else if (s.kind == nt::SampleKind::TensorSet) {
+    out = s.tensors;
   }
-  if (s.kind == nt::SampleKind::TensorSet)
-    return s.tensors;
-  if (s.kind == nt::SampleKind::Bundle) {
-    std::vector<nt::Tensor> out;
-    for (const auto& f : s.fields) {
-      auto c = collect_tensors(f);
-      out.insert(out.end(), c.begin(), c.end());
-    }
-    return out;
+  for (const auto& f : s.fields) {
+    auto nested = collect_tensors(f);
+    out.insert(out.end(), nested.begin(), nested.end());
   }
-  throw std::runtime_error("unexpected sample kind");
+  return out;
 }
 
 std::vector<float> tensor_to_f32(const nt::Tensor& t) {
@@ -113,12 +117,18 @@ std::vector<float> tensor_to_f32(const nt::Tensor& t) {
   return out;
 }
 
-bool sample_empty(const nt::Sample& s) {
-  try {
-    return collect_tensors(s).empty();
-  } catch (...) {
-    return true;
-  }
+int64_t identity_key(const nt::Sample& s) { return s.frame_id >= 0 ? s.frame_id : s.input_seq; }
+
+void copy_identity(const nt::Sample& source, nt::Sample& target) {
+  target.frame_id = source.frame_id;
+  target.stream_id = source.stream_id;
+  target.stream_label = source.stream_label;
+  target.input_seq = source.input_seq;
+  target.orig_input_seq = source.orig_input_seq;
+  target.pts_ns = source.pts_ns;
+  target.dts_ns = source.dts_ns;
+  target.duration_ns = source.duration_ns;
+  target.attributes = source.attributes;
 }
 
 // ── config ───────────────────────────────────────────────────────────────
@@ -238,16 +248,20 @@ std::vector<std::string> load_labels(const fs::path& labels_path) {
   return labels;
 }
 
-// ── model options (preprocess is stretch-resize, matching the compiled graph) ──
-nt::Model::Options backbone_options() {
+// ── model options ────────────────────────────────────────────────────────
+// The backbone consumes the decoder's NV12 output directly (fed by the graph, not the host), and
+// EV74 resizes from the live stream resolution down to the compiled 432x432 input with a plain
+// stretch (independent x/y scale, no letterbox padding) -- confirmed on real hardware to work at
+// native stream resolution as well as at a pre-resized 432x432 input.
+nt::Model::Options backbone_options(int stream_w, int stream_h) {
   nt::Model::Options opt;
   opt.preprocess.kind = nt::InputKind::Image;
   opt.preprocess.enable = nt::AutoFlag::On;
   opt.preprocess.color_convert.enable = nt::AutoFlag::On;
-  opt.preprocess.color_convert.input_format = nt::PreprocessColorFormat::BGR;
+  opt.preprocess.color_convert.input_format = nt::PreprocessColorFormat::NV12;
   opt.preprocess.color_convert.output_format = nt::PreprocessColorFormat::RGB;
-  opt.preprocess.input_max_width = kImageW;
-  opt.preprocess.input_max_height = kImageH;
+  opt.preprocess.input_max_width = stream_w;
+  opt.preprocess.input_max_height = stream_h;
   opt.preprocess.input_max_depth = 3;
   opt.preprocess.resize.enable = nt::AutoFlag::On;
   opt.preprocess.resize.width = kImageW;
@@ -259,8 +273,7 @@ nt::Model::Options backbone_options() {
   opt.preprocess.normalize.stddev = kCocoStd;
   opt.preprocess.normalize.has_explicit_stats = true;
   opt.processcvu.pre_run_target = "EV74";
-  opt.processcvu.post_run_target = "EV74";
-  opt.processcvu.async = false;
+  opt.processcvu.post_run_target = "A65";
   return opt;
 }
 
@@ -270,46 +283,33 @@ nt::Model::Options transformer_options() {
   opt.preprocess.enable = nt::AutoFlag::Off;
   opt.processcvu.pre_run_target = "A65";
   opt.processcvu.post_run_target = "A65";
-  opt.processcvu.async = false;
   return opt;
 }
 
-// ── in-process TVM top-k gather (host-side hop between the two MLA stages) ──
-class TopkTvm {
-public:
-  explicit TopkTvm(const std::string& so_path) {
-    dev_.device_type = kDLCPU;
-    dev_.device_id = 0;
-    tvm::runtime::Module lib = tvm::runtime::Module::LoadFromFile(so_path);
-    gmod_ = lib.GetFunction("default")(dev_);
-    set_input_ = gmod_.GetFunction("set_input");
-    run_ = gmod_.GetFunction("run");
-    get_output_ = gmod_.GetFunction("get_output");
-    if (set_input_ == nullptr || run_ == nullptr || get_output_ == nullptr)
-      throw std::runtime_error("topk: graph_executor functions not found");
+// ── host-side top-k + gather ────────────────────────────────────────────────
+// Verified bit-exact against the model's compiled top-k .so on captured device tensors (stable
+// argsort by score, descending, then gather the matching boxes) -- see the PR description for the
+// comparison. Removing the compiled stage also removes the TVM runtime dependency entirely
+// (and, in the Python port, the subprocess needed to keep TVM out of the same process as pyneat).
+std::vector<float> stable_topk_gather(const std::vector<float>& reduce_scores,
+                                      const std::vector<float>& concat_boxes) {
+  if (reduce_scores.size() < static_cast<std::size_t>(kNumQueries) ||
+      concat_boxes.size() != reduce_scores.size() * 4U)
+    throw std::runtime_error("backbone score and box shapes do not match");
+  std::vector<int> indices(reduce_scores.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  std::stable_sort(indices.begin(), indices.end(), [&](int a, int b) {
+    return reduce_scores[static_cast<std::size_t>(a)] > reduce_scores[static_cast<std::size_t>(b)];
+  });
+  indices.resize(kNumQueries);
+  std::vector<float> gathered(static_cast<std::size_t>(kNumQueries) * 4U);
+  for (int out = 0; out < kNumQueries; ++out) {
+    const auto src = static_cast<std::size_t>(indices[static_cast<std::size_t>(out)]) * 4U;
+    std::copy_n(concat_boxes.begin() + static_cast<std::ptrdiff_t>(src), 4,
+               gathered.begin() + static_cast<std::ptrdiff_t>(out * 4));
   }
-
-  std::vector<float> run(const std::vector<float>& concat, const std::vector<float>& reduce) {
-    using tvm::runtime::NDArray;
-    DLDataType f32{kDLFloat, 32, 1};
-    NDArray a0 = NDArray::Empty(tvm::runtime::ShapeTuple({1, 1296, 4}), f32, dev_);
-    NDArray a1 = NDArray::Empty(tvm::runtime::ShapeTuple({1, 1296}), f32, dev_);
-    a0.CopyFromBytes(concat.data(), concat.size() * sizeof(float));
-    a1.CopyFromBytes(reduce.data(), reduce.size() * sizeof(float));
-    set_input_("arm_0_i0", a0);
-    set_input_("arm_0_i1", a1);
-    run_();
-    NDArray out = get_output_(0);
-    std::vector<float> gather(200 * 4);
-    out.CopyToBytes(gather.data(), gather.size() * sizeof(float));
-    return gather;
-  }
-
-private:
-  DLDevice dev_{};
-  tvm::runtime::Module gmod_{nullptr};
-  tvm::runtime::PackedFunc set_input_, run_, get_output_;
-};
+  return gathered;
+}
 
 struct FrameOut {
   std::vector<float> boxes;     // 200*4, normalized cx,cy,w,h in [0,1]
@@ -317,109 +317,49 @@ struct FrameOut {
   std::vector<float> masks_dev; // raw device (108,108,200), pre-sigmoid
 };
 
-// Explicit three-stage split: backbone (MLA) -> top-k gather (A65/TVM) ->
-// transformer + seg-head (MLA). Kept as a single-threaded per-frame call so the
-// setup/inference/teardown flow stays visible at the call site in main().
-class Pipeline {
-public:
-  Pipeline(const fs::path& root, int timeout_ms) : timeout_ms_(timeout_ms) {
-    nt::RunOptions ro;
-    ro.queue_depth = 4;
-    ro.startup_preflight = false;
-
-    backbone_ = std::make_unique<nt::Model>((root / kBackboneName).string(), backbone_options());
-    cv::Mat seed(kImageH, kImageW, CV_8UC3, cv::Scalar(0, 0, 0));
-    nt::Tensor seed_img =
-        nt::Tensor::from_cv_mat(seed, nt::ImageSpec::PixelFormat::BGR, nt::TensorMemory::EV74);
-    br_ = backbone_->build(nt::TensorList{seed_img}, nt::Model::RouteOptions{}, ro);
-
-    transformer_ =
-        std::make_unique<nt::Model>((root / kTransformerName).string(), transformer_options());
-    nt::Tensor fseed = nt::Tensor::from_vector(std::vector<float>(36 * 36 * 256, 0.f),
-                                               {36, 36, 256}, nt::TensorMemory::EV74);
-    nt::Tensor gseed =
-        nt::Tensor::from_vector(std::vector<float>(200 * 4, 0.f), {1, 200, 4}, nt::TensorMemory::EV74);
-    tr_ = transformer_->build(nt::TensorList{fseed, gseed}, nt::Model::RouteOptions{}, ro);
-
-    topk_ = std::make_unique<TopkTvm>((root / kTopkName / "lib" / kTopkSo).string());
-  }
-
-  FrameOut run_one(const cv::Mat& bgr_432) {
-    nt::Tensor img =
-        nt::Tensor::from_cv_mat(bgr_432, nt::ImageSpec::PixelFormat::BGR, nt::TensorMemory::EV74);
-    if (!br_.push(nt::TensorList{img}))
-      throw std::runtime_error("backbone push failed");
-    nt::Sample bs = br_.pull(timeout_ms_);
-    if (sample_empty(bs))
-      throw std::runtime_error("backbone pull empty");
-    std::vector<float> feature, reduce, concat;
-    for (const auto& t : collect_tensors(bs)) {
-      const auto& s = t.shape;
-      const int64_t n = numel(s);
-      if (s == kFeatureShape)
-        feature = tensor_to_f32(t);
-      else if (s == kConcatShape)
-        concat = tensor_to_f32(t);
-      else if (n == 1296)
-        reduce = tensor_to_f32(t);
-    }
-    if (feature.empty() || reduce.empty() || concat.empty())
-      throw std::runtime_error("backbone split failed");
-
-    std::vector<float> gather = topk_->run(concat, reduce);
-
-    nt::Tensor feat_in = nt::Tensor::from_vector(feature, {36, 36, 256}, nt::TensorMemory::EV74);
-    nt::Tensor gath_in =
-        nt::Tensor::from_vector(gather, {1, 200, 4}, nt::TensorMemory::EV74);
-    if (!tr_.push(nt::TensorList{feat_in, gath_in}))
-      throw std::runtime_error("transformer push failed");
-    nt::Sample to = tr_.pull(timeout_ms_);
-    int tries = 0;
-    while (sample_empty(to) && tries++ < 5)
-      to = tr_.pull(timeout_ms_);
-    if (sample_empty(to))
-      throw std::runtime_error("transformer pull empty");
-
-    FrameOut fo;
-    std::vector<float> masks_dev;
-    for (const auto& t : collect_tensors(to)) {
-      const auto& s = t.shape;
-      if (s == kGatherShape)
-        fo.boxes = tensor_to_f32(t);
-      else if (s == kLogitsShape)
-        fo.logits = tensor_to_f32(t);
-      else if (s == kMasksDeviceShape || numel(s) == kNumQueries * kMaskHW * kMaskHW)
-        masks_dev = tensor_to_f32(t);
-    }
-    if (fo.boxes.empty() || fo.logits.empty() || masks_dev.empty())
-      throw std::runtime_error("transformer split failed");
-    fo.masks_dev = std::move(masks_dev);
-    return fo;
-  }
-
-  void close() {
-    try {
-      br_.close();
-    } catch (...) {
-    }
-    try {
-      tr_.close();
-    } catch (...) {
-    }
-  }
-
-private:
-  int timeout_ms_;
-  std::unique_ptr<nt::Model> backbone_, transformer_;
-  std::unique_ptr<TopkTvm> topk_;
-  nt::Model::Runner br_, tr_;
+struct BackboneOutputs {
+  std::vector<float> feature; // 36*36*256
+  std::vector<float> reduce;  // 1296
+  std::vector<float> concat;  // 1296*4
 };
 
+BackboneOutputs split_backbone(const nt::Sample& sample) {
+  BackboneOutputs out;
+  for (const auto& t : collect_tensors(sample)) {
+    const auto& s = t.shape;
+    const int64_t n = numel(s);
+    if (s == kFeatureShape)
+      out.feature = tensor_to_f32(t);
+    else if (s == kConcatShape)
+      out.concat = tensor_to_f32(t);
+    else if (n == 1296)
+      out.reduce = tensor_to_f32(t);
+  }
+  if (out.feature.empty() || out.reduce.empty() || out.concat.empty())
+    throw std::runtime_error("backbone did not produce feature, reduce, and concat tensors");
+  return out;
+}
+
+FrameOut split_transformer(const nt::Sample& sample) {
+  FrameOut fo;
+  for (const auto& t : collect_tensors(sample)) {
+    const auto& s = t.shape;
+    if (s == kGatherShape)
+      fo.boxes = tensor_to_f32(t);
+    else if (s == kLogitsShape)
+      fo.logits = tensor_to_f32(t);
+    else if (s == kMasksDeviceShape || numel(s) == kNumQueries * kMaskHW * kMaskHW)
+      fo.masks_dev = tensor_to_f32(t);
+  }
+  if (fo.boxes.empty() || fo.logits.empty() || fo.masks_dev.empty())
+    throw std::runtime_error("transformer did not produce box, class, and mask tensors");
+  return fo;
+}
+
 // ── per-query select + stretch-space box/mask projection ───────────────────
-// The compiled graph resizes with ResizeMode::Stretch (independent x/y scale,
-// no letterbox padding), so, unlike the letterboxed examples in this category,
-// mapping a normalized box or the 108x108 mask grid back to frame pixels is a
-// plain per-axis scale.
+// The compiled graph resizes with ResizeMode::Stretch (independent x/y scale, no letterbox
+// padding), so, unlike the letterboxed examples in this category, mapping a normalized box or the
+// 108x108 mask grid back to frame pixels is a plain per-axis scale.
 struct Detection {
   int query = 0;
   float score = 0.0f;
@@ -641,7 +581,7 @@ std::vector<MetadataSegment> build_metadata_segments(const FrameOut& fo,
   return segments;
 }
 
-// ── RTSP source + Insight video sender ──────────────────────────────────────
+// ── RTSP source (encoded passthrough + separate decode) + Insight video sender ──
 struct SourceGeometry {
   int width = 0;
   int height = 0;
@@ -660,33 +600,9 @@ SourceGeometry probe_source_geometry(const AppConfig& cfg) {
   geometry.width = probe.width;
   geometry.height = probe.height;
   geometry.fps = cfg.source_fps > 0 ? cfg.source_fps : probe.fps;
+  sima_examples::require(geometry.width > 0 && geometry.height > 0 && geometry.fps > 0,
+                         "failed to resolve RTSP width, height, and FPS; check source.url");
   return geometry;
-}
-
-nt::nodes::groups::RtspDecodedInputOptions make_rtsp_source_options(const AppConfig& cfg,
-                                                                    const SourceGeometry& geometry) {
-  nt::nodes::groups::RtspDecodedInputOptions opt;
-  opt.url = cfg.source_url;
-  opt.latency_ms = cfg.latency_ms;
-  opt.tcp = cfg.tcp;
-  opt.insert_queue = true;
-  opt.out_format = "NV12";
-  opt.decoder_name = "decoder";
-  opt.decoder_raw_output = true;
-  opt.codec = nt::nodes::groups::RtspCodec::H264;
-  opt.source_fps = geometry.fps;
-  opt.auto_caps_from_stream = true;
-  opt.fallback_h264_width = geometry.width;
-  opt.fallback_h264_height = geometry.height;
-  if (geometry.width > 0 && geometry.height > 0 && geometry.fps > 0) {
-    opt.output_caps.enable = true;
-    opt.output_caps.format = "NV12";
-    opt.output_caps.width = geometry.width;
-    opt.output_caps.height = geometry.height;
-    opt.output_caps.fps = geometry.fps;
-    opt.output_caps.memory = nt::CapsMemory::Any;
-  }
-  return opt;
 }
 
 cv::Mat tensor_bgr_from_decoded(const nt::Tensor& tensor) {
@@ -697,13 +613,6 @@ cv::Mat tensor_bgr_from_decoded(const nt::Tensor& tensor) {
   return tensor.to_cv_mat_copy(nt::ImageSpec::PixelFormat::BGR);
 }
 
-nt::Tensor frame_tensor_from_sample(const nt::Sample& sample) {
-  const auto tensors = collect_tensors(sample);
-  if (tensors.empty())
-    throw std::runtime_error("decoded frame sample has no tensor");
-  return tensors.front();
-}
-
 struct ProfileWindow {
   bool enabled = false;
   int interval = 100;
@@ -712,10 +621,10 @@ struct ProfileWindow {
   int dropped_segments = 0;
   double start_ms = 0.0;
   double pull_ms = 0.0;
-  double model_ms = 0.0;
+  double decode_ms = 0.0;
   double metadata_ms = 0.0;
 
-  void add(double pull, double model, double metadata, int instance_count, int dropped) {
+  void add(double pull, double decode, double metadata, int instance_count, int dropped) {
     if (!enabled)
       return;
     if (frames == 0)
@@ -724,7 +633,7 @@ struct ProfileWindow {
     instances += instance_count;
     dropped_segments += dropped;
     pull_ms += pull;
-    model_ms += model;
+    decode_ms += decode;
     metadata_ms += metadata;
     if (frames >= interval)
       flush();
@@ -736,7 +645,7 @@ struct ProfileWindow {
     const double elapsed_ms = std::max(time_ms() - start_ms, 1e-6);
     const double n = static_cast<double>(frames);
     std::cout << "[profile] frames=" << frames << " output_fps=" << frames * 1000.0 / elapsed_ms
-              << " avg_pull_ms=" << pull_ms / n << " avg_model_ms=" << model_ms / n
+              << " avg_pull_ms=" << pull_ms / n << " avg_decode_ms=" << decode_ms / n
               << " avg_metadata_ms=" << metadata_ms / n
               << " avg_instances=" << static_cast<double>(instances) / n
               << " dropped_segments=" << dropped_segments << "\n";
@@ -745,153 +654,266 @@ struct ProfileWindow {
     dropped_segments = 0;
     start_ms = 0.0;
     pull_ms = 0.0;
-    model_ms = 0.0;
+    decode_ms = 0.0;
     metadata_ms = 0.0;
   }
 };
 
-struct PipelineRuntime {
-  nt::Graph graph;
-  nt::Run run;
-  std::unique_ptr<nt::MetadataSender> metadata_sender;
-  std::vector<std::string> labels;
-  int frame_w = 0;
-  int frame_h = 0;
-  int output_fps = 30;
-  int video_port = 0;
-};
+int run(const AppConfig& cfg) {
+  const SourceGeometry geometry = probe_source_geometry(cfg);
+  const auto labels = load_labels(cfg.labels_path);
+  const bool save_frames = !cfg.save_dir.empty();
+  if (save_frames)
+    fs::create_directories(cfg.save_dir);
 
-PipelineRuntime build_graph(const AppConfig& cfg, const SourceGeometry& geometry) {
-  PipelineRuntime runtime;
-  runtime.frame_w = geometry.width;
-  runtime.frame_h = geometry.height;
-  runtime.output_fps = geometry.fps;
-  sima_examples::require(runtime.frame_w > 0 && runtime.frame_h > 0,
-                         "failed to probe source frame dimensions");
-  sima_examples::require(runtime.output_fps > 0, "failed to resolve source frame rate");
+  nt::Model backbone((fs::path(cfg.model_root) / kBackboneName).string(),
+                     backbone_options(geometry.width, geometry.height));
+  nt::Model transformer((fs::path(cfg.model_root) / kTransformerName).string(),
+                        transformer_options());
 
-  runtime.labels = load_labels(cfg.labels_path);
+  // ── RTSP source: keep the encoded bitstream for a true passthrough to Insight (no
+  // decode-then-re-encode round trip), and decode once, separately, for the model. ──
+  nt::nodes::groups::RtspEncodedInputOptions encoded_options;
+  encoded_options.url = cfg.source_url;
+  encoded_options.codec = nt::nodes::groups::RtspCodec::H264;
+  encoded_options.latency_ms = cfg.latency_ms;
+  encoded_options.tcp = cfg.tcp;
+  encoded_options.source_fps = geometry.fps;
+  encoded_options.fallback_h264_width = geometry.width;
+  encoded_options.fallback_h264_height = geometry.height;
+  auto source = nt::nodes::groups::RtspEncodedInput(encoded_options);
 
-  auto video_options = nt::nodes::groups::VideoSenderOptions::H264RtpUdpFromRaw(
-      runtime.frame_w, runtime.frame_h, runtime.output_fps);
+  nt::SimaDecodeOptions decode_options;
+  decode_options.type = nt::SimaDecodeType::H264;
+  decode_options.out_format = nt::FormatTag::NV12;
+  decode_options.raw_output = true;
+  decode_options.dec_width = geometry.width;
+  decode_options.dec_height = geometry.height;
+  decode_options.dec_fps = geometry.fps;
+  nt::Graph decode("decoder");
+  decode.add(nt::nodes::SimaDecode(decode_options));
+
+  auto video_options =
+      nt::nodes::groups::VideoSenderOptions::Passthrough(nt::nodes::groups::RtspCodec::H264);
   video_options.host = cfg.insight_host;
-  video_options.channel = 0;
   video_options.video_port_base = cfg.video_port;
-  video_options.encoder.bitrate_kbps = 1000;
-  runtime.video_port = video_options.video_port();
+  video_options.channel = 0;
+  video_options.async = true;
+  auto video = nt::nodes::groups::VideoSender(video_options);
 
-  // Insight correlates the RTP timestamp with the metadata timestamp, so the encoder and the
-  // segments must stay in one Run and therefore on one GStreamer timeline. The app pulls "frame"
-  // to drive the three model stages itself; the "video" branch flows to Insight on its own.
-  auto source = nt::nodes::groups::RtspDecodedInput(make_rtsp_source_options(cfg, geometry));
-  auto branch = nt::graphs::Branch("source", {"video", "frame"});
+  // ── backbone runs embedded in the same async graph as decode/video, pipelined two
+  // frames deep, instead of behind a manual push/pull call in the main loop. ──
+  nt::Graph backbone_graph = backbone.graph();
+  nt::Graph backbone_output("backbone_output");
+  backbone_output.add(nt::nodes::Output("backbone", nt::OutputOptions::EveryFrame(2)));
 
-  nt::Graph video_graph("video");
-  video_graph.connect(nt::nodes::Input("video"), nt::nodes::groups::VideoSender(video_options));
+  nt::GraphLinkOptions link;
+  link.policy = nt::GraphLinkPolicy::RealtimeLatestByStream;
+  link.max_inflight_per_stream = 2;
+  link.stream_id = "stream0";
 
-  nt::Graph frame_graph("frame");
-  frame_graph.add(nt::nodes::Output("frame", nt::OutputOptions::EveryFrame(1)));
+  nt::Graph graph("rfdetr_seg");
+  graph.connect(source, decode);
+  graph.connect(source, video);
+  graph.connect(decode, backbone_graph, link);
+  graph.connect(backbone_graph, backbone_output);
 
-  runtime.graph.connect(source, branch);
-  runtime.graph.connect(branch, video_graph);
-  runtime.graph.connect(branch, frame_graph);
+  nt::Graph frame_output("frame_output");
+  if (save_frames) {
+    frame_output.add(nt::nodes::Output("frame", nt::OutputOptions::EveryFrame(2)));
+    graph.connect(decode, frame_output);
+  }
 
   if (cfg.profile)
-    std::cout << "Backend:\n" << runtime.graph.describe_backend() << "\n";
+    std::cout << "Backend:\n" << graph.describe_backend() << "\n";
 
-  nt::RunOptions run_options;
-  run_options.preset = nt::RunPreset::Realtime;
-  run_options.queue_depth = 3;
-  run_options.overflow_policy = nt::OverflowPolicy::KeepLatest;
-  run_options.output_memory = nt::OutputMemory::ZeroCopy;
-  runtime.run = runtime.graph.build(run_options);
+  nt::RunOptions transformer_run_options;
+  transformer_run_options.preset = nt::RunPreset::Realtime;
+  transformer_run_options.queue_depth = 2;
+  transformer_run_options.overflow_policy = nt::OverflowPolicy::Block;
+  transformer_run_options.output_memory = nt::OutputMemory::Owned;
+  nt::Tensor fseed = nt::Tensor::from_vector(std::vector<float>(36 * 36 * 256, 0.f), {36, 36, 256},
+                                             nt::TensorMemory::EV74);
+  nt::Tensor gseed =
+      nt::Tensor::from_vector(std::vector<float>(kNumQueries * 4, 0.f), {1, kNumQueries, 4},
+                              nt::TensorMemory::EV74);
+  nt::Model::Runner transformer_runner = transformer.build(
+      nt::TensorList{fseed, gseed}, nt::Model::RouteOptions{}, transformer_run_options);
+
+  nt::RunOptions source_options;
+  source_options.preset = nt::RunPreset::Realtime;
+  source_options.queue_depth = 3;
+  source_options.overflow_policy = nt::OverflowPolicy::KeepLatest;
+  source_options.output_memory = nt::OutputMemory::ZeroCopy;
+  source_options.advanced.prepare_output_cpu_visible = true;
+  nt::Run source_run = graph.build(source_options);
 
   nt::MetadataSenderOptions metadata_options;
   metadata_options.host = cfg.insight_host;
   metadata_options.channel = 0;
   metadata_options.metadata_port_base = cfg.metadata_port;
   std::string metadata_err;
-  runtime.metadata_sender = std::make_unique<nt::MetadataSender>(metadata_options, &metadata_err);
-  sima_examples::require(runtime.metadata_sender->ok(), metadata_err);
+  nt::MetadataSender metadata_sender(metadata_options, &metadata_err);
+  sima_examples::require(metadata_sender.ok(), metadata_err);
 
-  std::cout << "source=" << cfg.source_url << " stream=" << runtime.frame_w << "x"
-            << runtime.frame_h << "@" << runtime.output_fps << " insight=" << cfg.insight_host
-            << " video=" << runtime.video_port
-            << " metadata=" << runtime.metadata_sender->metadata_port() << " channel=0\n";
-  return runtime;
-}
+  std::cout << "source=" << cfg.source_url << " stream=" << geometry.width << "x"
+            << geometry.height << "@" << geometry.fps << " insight=" << cfg.insight_host
+            << " video=" << video_options.video_port()
+            << " metadata=" << metadata_sender.metadata_port() << " channel=0\n";
 
-int send_metadata(PipelineRuntime& runtime, const AppConfig& cfg, const nt::Sample& sample,
-                  const FrameOut& fo, const std::vector<Detection>& detections) {
-  const auto encoded = encode_segments(build_metadata_segments(
-      fo, detections, runtime.labels, cv::Size(runtime.frame_w, runtime.frame_h),
-      cfg.mask_threshold));
-  const int64_t ts_ms = sample.pts_ns >= 0 ? sample.pts_ns / 1'000'000 : -1;
-  const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
-  std::string err;
-  if (!runtime.metadata_sender->send_metadata("segmentation", encoded.data_json, ts_ms, frame_id,
-                                              &err))
-    std::cerr << "[warn] insight metadata send failed: " << err << "\n";
-  return encoded.dropped;
-}
+  // ── bridge thread: pulls the backbone's output, does the (now host-side) top-k +
+  // gather, and feeds the transformer. Runs concurrently with the main loop pulling
+  // transformer output below, so the three stages overlap instead of running one
+  // frame fully to completion before the next starts. ──
+  std::string bridge_error;
+  std::mutex identity_mutex;
+  std::map<int64_t, int64_t> source_pts;
+  std::map<int64_t, cv::Mat> pending_frames;
+  std::thread bridge([&] {
+    try {
+      while (!g_stop.load()) {
+        nt::Sample backbone_sample;
+        nt::PullError pull_error;
+        const auto status = source_run.pull("backbone", 500, backbone_sample, &pull_error);
+        if (status == nt::PullStatus::Timeout)
+          continue;
+        if (status == nt::PullStatus::Closed)
+          break;
+        if (status != nt::PullStatus::Ok)
+          throw std::runtime_error("failed to pull backbone output: " + pull_error.message);
 
-void maybe_save_frame(const AppConfig& cfg, int processed, const cv::Mat& bgr, const FrameOut& fo,
-                      const std::vector<Detection>& detections,
-                      const std::vector<std::string>& labels) {
-  if (cfg.save_dir.empty() || cfg.save_every <= 0 || processed % cfg.save_every != 0)
-    return;
-  const cv::Mat annotated = overlay_segmentation(bgr, fo, detections, labels, cfg);
-  const auto out_path = cfg.save_dir / ("frame_" + std::to_string(processed) + ".jpg");
-  if (!cv::imwrite(out_path.string(), annotated))
-    std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
-}
+        const auto backbone_out = split_backbone(backbone_sample);
+        const auto gathered = stable_topk_gather(backbone_out.reduce, backbone_out.concat);
 
-int run_pipeline(PipelineRuntime& runtime, Pipeline& pipe, const AppConfig& cfg) {
+        // Fresh CPU tensors, not the live device-backed backbone output: pushing the backbone's
+        // own output tensor straight into the transformer's 2-input stage has been observed to
+        // scramble that stage's packed multi-input buffer on this NEAT build.
+        nt::Tensor feat_in =
+            nt::Tensor::from_vector(backbone_out.feature, {36, 36, 256}, nt::TensorMemory::EV74);
+        nt::Tensor gath_in = nt::Tensor::from_vector(gathered, {1, kNumQueries, 4},
+                                                     nt::TensorMemory::EV74);
+        nt::Sample transformer_sample;
+        transformer_sample.kind = nt::SampleKind::TensorSet;
+        transformer_sample.tensors = {feat_in, gath_in};
+        copy_identity(backbone_sample, transformer_sample);
+
+        {
+          std::lock_guard<std::mutex> lock(identity_mutex);
+          source_pts[identity_key(backbone_sample)] = backbone_sample.pts_ns;
+          if (source_pts.size() > 8U)
+            source_pts.erase(source_pts.begin());
+        }
+
+        if (save_frames) {
+          nt::Sample frame_sample;
+          nt::PullError frame_error;
+          const auto frame_status = source_run.pull("frame", 0, frame_sample, &frame_error);
+          if (frame_status == nt::PullStatus::Ok) {
+            const auto tensors = collect_tensors(frame_sample);
+            if (!tensors.empty()) {
+              std::lock_guard<std::mutex> lock(identity_mutex);
+              pending_frames[identity_key(frame_sample)] = tensor_bgr_from_decoded(tensors.front());
+              if (pending_frames.size() > 8U)
+                pending_frames.erase(pending_frames.begin());
+            }
+          }
+        }
+
+        if (!transformer_runner.push(transformer_sample)) {
+          if (!g_stop.load())
+            throw std::runtime_error("transformer input closed");
+          break;
+        }
+      }
+    } catch (const std::exception& e) {
+      if (!g_stop.load())
+        bridge_error = e.what();
+      g_stop.store(true);
+    }
+  });
+
   ProfileWindow profile;
   profile.enabled = cfg.profile;
   profile.interval = cfg.profile_interval;
 
   int processed = 0;
   int dropped_total = 0;
-  while (cfg.frames <= 0 || processed < cfg.frames) {
-    nt::Sample sample;
-    nt::PullError pull_error;
-    const double pull_start = time_ms();
-    const auto status = runtime.run.pull("frame", 20000, sample, &pull_error);
-    const double pull_end = time_ms();
-    if (status == nt::PullStatus::Timeout) {
-      std::cerr << "[warn] timed out waiting for decoded frame\n";
-      continue;
+  try {
+    while (!g_stop.load() && (cfg.frames <= 0 || processed < cfg.frames)) {
+      const double pull_start = time_ms();
+      nt::Sample sample = transformer_runner.pull(500);
+      const double pull_end = time_ms();
+      if (collect_tensors(sample).empty())
+        continue;
+
+      const double decode_start = time_ms();
+      const auto fo = split_transformer(sample);
+      const auto detections = select_dets(fo, cfg.score_threshold, cfg.max_detections);
+      const double decode_end = time_ms();
+
+      const double metadata_start = time_ms();
+      const auto encoded = encode_segments(build_metadata_segments(
+          fo, detections, labels, cv::Size(geometry.width, geometry.height), cfg.mask_threshold));
+      int64_t pts_ns = sample.pts_ns;
+      {
+        std::lock_guard<std::mutex> lock(identity_mutex);
+        const auto found = source_pts.find(identity_key(sample));
+        if (found != source_pts.end()) {
+          pts_ns = found->second;
+          source_pts.erase(found);
+        }
+      }
+      const int64_t ts_ms = pts_ns >= 0 ? pts_ns / 1'000'000 : -1;
+      const std::string frame_id = sample.frame_id >= 0 ? std::to_string(sample.frame_id) : "";
+      std::string send_err;
+      if (!metadata_sender.send_metadata("segmentation", encoded.data_json, ts_ms, frame_id,
+                                         &send_err))
+        std::cerr << "[warn] insight metadata send failed: " << send_err << "\n";
+      const double metadata_end = time_ms();
+      if (encoded.dropped > 0 && dropped_total == 0)
+        std::cerr << "[warn] metadata byte budget exceeded, dropped " << encoded.dropped
+                  << " segments\n";
+      dropped_total += encoded.dropped;
+
+      ++processed;
+      if (save_frames && cfg.save_every > 0 && processed % cfg.save_every == 0) {
+        cv::Mat frame;
+        {
+          std::lock_guard<std::mutex> lock(identity_mutex);
+          const auto found = pending_frames.find(identity_key(sample));
+          if (found != pending_frames.end()) {
+            frame = found->second;
+            pending_frames.erase(found);
+          }
+        }
+        if (!frame.empty()) {
+          const cv::Mat annotated = overlay_segmentation(frame, fo, detections, labels, cfg);
+          const auto out_path = cfg.save_dir / ("frame_" + std::to_string(processed) + ".jpg");
+          if (!cv::imwrite(out_path.string(), annotated))
+            std::cerr << "[warn] failed to write output frame: " << out_path.string() << "\n";
+        }
+      }
+      profile.add(pull_end - pull_start, decode_end - decode_start, metadata_end - metadata_start,
+                 static_cast<int>(detections.size()), encoded.dropped);
     }
-    if (status == nt::PullStatus::Closed)
-      break;
-    if (status != nt::PullStatus::Ok)
-      throw std::runtime_error("failed to pull decoded frame: " + pull_error.message);
-
-    const double model_start = time_ms();
-    const cv::Mat bgr = tensor_bgr_from_decoded(frame_tensor_from_sample(sample));
-    cv::Mat model_in;
-    cv::resize(bgr, model_in, cv::Size(kImageW, kImageH), 0, 0, cv::INTER_LINEAR);
-    FrameOut fo = pipe.run_one(model_in);
-    const auto detections = select_dets(fo, cfg.score_threshold, cfg.max_detections);
-    const double model_end = time_ms();
-
-    const double metadata_start = time_ms();
-    const int dropped = send_metadata(runtime, cfg, sample, fo, detections);
-    const double metadata_end = time_ms();
-    if (dropped > 0 && dropped_total == 0)
-      std::cerr << "[warn] metadata byte budget exceeded, dropped " << dropped << " segments\n";
-    dropped_total += dropped;
-
-    ++processed;
-    maybe_save_frame(cfg, processed, bgr, fo, detections, runtime.labels);
-    profile.add(pull_end - pull_start, model_end - model_start, metadata_end - metadata_start,
-               static_cast<int>(detections.size()), dropped);
+  } catch (...) {
+    g_stop.store(true);
+    source_run.stop();
+    transformer_runner.close();
+    bridge.join();
+    throw;
   }
+
+  g_stop.store(true);
+  source_run.stop();
+  transformer_runner.close();
+  bridge.join();
+  if (!bridge_error.empty())
+    throw std::runtime_error(bridge_error);
 
   profile.flush();
   std::cout << "processed=" << processed << " dropped_segments=" << dropped_total
-            << " video_sender=" << cfg.insight_host << ":" << runtime.video_port << "\n";
+            << " video_sender=" << cfg.insight_host << ":" << video_options.video_port() << "\n";
   return processed;
 }
 
@@ -908,22 +930,9 @@ int main(int argc, char** argv) {
       std::cout << "Config validated: " << cli.config_path << "\n";
       return 0;
     }
-    if (!cfg.save_dir.empty())
-      fs::create_directories(cfg.save_dir);
-
-    const SourceGeometry geometry = probe_source_geometry(cfg);
-    // Load the two on-device models before starting the RTSP graph below: model load can take
-    // several seconds (real MLA .elf loads), and the RTSP source starts decoding and queueing
-    // frames the instant its Run is built. Building it first left that queue filling with no
-    // consumer, and the run failed with a backpressure timeout by the time we reached the first
-    // pull.
-    Pipeline pipe(cfg.model_root, /*timeout_ms=*/30000);
-    PipelineRuntime runtime = build_graph(cfg, geometry);
-
-    const int processed = run_pipeline(runtime, pipe, cfg);
-
-    pipe.close();
-    runtime.run.close();
+    std::signal(SIGINT, request_stop);
+    std::signal(SIGTERM, request_stop);
+    const int processed = run(cfg);
     return processed > 0 ? 0 : 3;
   } catch (const std::exception& ex) {
     std::cerr << "Error: " << ex.what() << "\n";

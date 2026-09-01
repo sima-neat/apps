@@ -16,7 +16,7 @@
 
 Segments objects in one RTSP H.264 stream with RF-DETR-Seg and sends synchronized H.264 video and mask metadata to Insight.
 
-The model ships as a three-stage split so it fits the Modalix pipeline: an INT8 backbone (MLA), a small top-k gather step (A65, in-process TVM), and a BF16 transformer and segmentation head (MLA). The application owns the handoff between stages itself, one decoded frame at a time, instead of expressing the model as a single graph node.
+The model ships as a two-stage split -- an INT8 backbone (MLA) and a BF16 transformer and segmentation head (MLA) -- with a top-k+gather hop between them. Following the same pattern as this repo's RF-DETR object-detection example, the backbone runs embedded in the same async graph as the RTSP decode and the (passthrough) video sender, and a bridge thread does the top-k+gather and feeds the transformer, which runs as a separately-built runner; this overlaps the stages across frames instead of running each one to completion before the next starts. The RTSP source is kept encoded and forwarded to Insight as a true passthrough (no decode-then-re-encode round trip); it is decoded once, separately, for the model.
 
 Metadata is sent as `type: "segmentation"` with one `data.segments[]` entry per instance, the same wire format the other segmentation examples in this category use. Each of the 200 query masks is a 108x108 grid over the model's stretched (non-letterboxed) 432x432 input, so a detection's silhouette is mapped back through that plain per-axis scale, upscaled to the detection rectangle, and only then thresholded. The silhouette is sent as `mask_format: "polygon"` in frame pixels. Each frame stays inside a 32 KB payload budget; over it, the lowest-confidence segments are dropped and counted in the run summary.
 
@@ -43,7 +43,7 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The default model is `rfdetr-seg-432-base`, a three-stage split package (backbone, top-k gather, transformer+seg-head). It is not yet in the Model Zoo, so it ships as a direct artifact: a single archive containing all three extracted stage bundles.
+The default model is `rfdetr-seg-432-base`, a two-stage split package (backbone, transformer+seg-head). It is not yet in the Model Zoo, so it ships as a direct artifact.
 
 | Model | Role | Source |
 | --- | --- | --- |
@@ -54,15 +54,15 @@ sima-cli download "https://drive.usercontent.google.com/download?id=1jN7igMyQPvR
 unzip download
 ```
 
-`sima-cli download` has no output-filename option, so the archive lands as `download` with no extension. `unzip` reads it regardless and creates `models/` holding the three stage subfolders: `rfdetr_seg_432_simplified_backbone_before_topk_base_mpk/`, `rfdetr_seg_432_simplified_topk_to_gather_base_mpk/`, and `rfdetr_seg_432_simplified_transformer_after_gather_base_mpk/`.
+`sima-cli download` has no output-filename option, so the archive lands as `download` with no extension. `unzip` reads it regardless and creates `models/` holding the stage subfolders: `rfdetr_seg_432_simplified_backbone_before_topk_base_mpk/` and `rfdetr_seg_432_simplified_transformer_after_gather_base_mpk/`. (The archive also contains a `rfdetr_seg_432_simplified_topk_to_gather_base_mpk/` folder from an earlier compiled top-k stage; this example does not use it -- see "Development From Source" for why.)
 
-Set `model.path` in the config to the extracted `models` folder (the one containing the three subfolders above), not to the archive itself.
+Set `model.path` in the config to the extracted `models` folder (the one containing the subfolders above), not to the archive itself.
 
 ## Prepare Insight
 
 [Insight](https://developer.sima.ai/software/tools/insight/) can host the input stream and render segmentation metadata. Install videos directly from the Insight catalog or through Insight's YouTube support.
 
-In the Insight Web UI, start the required RTSP H.264 stream and copy its source URL. Decoded frames are re-encoded as H.264 for Insight output.
+In the Insight Web UI, start the required RTSP H.264 stream and copy its source URL. The encoded stream is forwarded to Insight as-is (no decode-then-re-encode round trip).
 
 ## Configure
 
@@ -94,7 +94,12 @@ python3 ${APP_DIR}/src/python/main.py \
 - Verify stream reachability if the first frame times out.
 - Verify the Insight host and UDP ports if no output arrives.
 - Set `output.save_dir` and `output.save_every` to save sampled frames.
-- This example runs the three model stages and postprocessing on a single thread per frame, trading some throughput for a readable, linear pipeline. Raise `runtime.profile` to see per-stage timings if a stream falls behind.
+- Raise `runtime.profile` to see per-stage timings if a stream falls behind.
+- Validated sustained on a 1280x720 stream at 20 fps (C++) and 15 fps (Python) with zero dropped
+  segments. Pushed further -- 30+ fps in this same setup -- the transformer stage's output pool
+  eventually exhausts (`resource.output_pool_exhausted`) because it fills faster than the main loop
+  drains it. If your source runs faster than that, lower `source.fps` or reduce `inference.frames`
+  per burst rather than feeding the model at the source's native rate.
 
 ## Source Files
 
@@ -105,5 +110,10 @@ python3 ${APP_DIR}/src/python/main.py \
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
 ## Development From Source
+
+The model's top-k+gather stage was originally compiled as a separate TVM module; captured device
+tensors showed it is bit-exact with a plain stable argsort-by-score + gather, so this example
+implements that step directly (in C++ and Python) instead of loading the compiled stage, and never
+depends on the TVM runtime.
 
 To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
