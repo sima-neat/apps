@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adaptive Pipeline Control</title>
+<style>
+  /* Fonts and colour tokens are Neat Insight's own (extracted from its
+     index.css) so these panels sit beside the viewer as one product. The font
+     files are served from /assets by this same server - linking Insight's
+     copies cross-origin would break on every IP change. */
+  @font-face { font-family:Inter; font-style:normal; font-weight:400 800;
+    font-display:swap; src:url(/assets/inter.woff2) format("woff2"); }
+  @font-face { font-family:Sora; font-style:normal; font-weight:500 800;
+    font-display:swap; src:url(/assets/sora.woff2) format("woff2"); }
+  @font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:400 700;
+    font-display:swap; src:url(/assets/jetbrains-mono.woff2) format("woff2"); }
+
+  :root {
+    --bg:#f2f4f7; --surface:#ffffff; --surface-soft:#f8fafc; --bg-accent:#e7edf4;
+    --ink:#0f1d2b; --ink-soft:#486176;
+    --line:#d8e0ea; --line-strong:#b8c5d4;
+    --accent:#0e5ab8; --accent-strong:#0a468e; --accent-soft:#e7f0ff;
+    --accent-alt:#0f7a74; --accent-alt-soft:#e4f7f5;
+    --ok:#19713e; --ok-soft:#ecf9f0;
+    --danger:#b3425a; --danger-soft:#fff0f3;
+    --radius-sm:10px; --radius-md:14px; --radius-lg:20px;
+    --shadow-sm:0 8px 18px rgba(14,30,43,.07); --shadow-md:0 20px 40px rgba(14,30,43,.1);
+    --font-sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    --font-display:"Sora",var(--font-sans);
+    --font-mono:"JetBrains Mono","SFMono-Regular",Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.55 var(--font-sans); -webkit-font-smoothing:antialiased; }
+
+  /* header: SiMa mark, product name, live state - mirrors Insight's top bar */
+  header { display:flex; align-items:center; gap:14px; padding:12px 20px;
+    background:var(--surface); border-bottom:1px solid var(--line);
+    box-shadow:var(--shadow-sm); position:sticky; top:0; z-index:5; }
+  header img.logo { height:26px; width:auto; display:block; }
+  header .brand { display:flex; align-items:baseline; gap:9px; min-width:0; }
+  header h1 { font-family:var(--font-display); font-size:16px; font-weight:700;
+    margin:0; letter-spacing:-0.01em; white-space:nowrap; }
+  header .brand .sep { color:var(--line-strong); }
+  header .brand .ctx { color:var(--ink-soft); font-size:13px; white-space:nowrap; }
+  .grow { flex:1; }
+  a.backlink { color:var(--ink-soft); text-decoration:none; font-size:13px;
+    white-space:nowrap; padding:5px 10px; border-radius:var(--radius-sm);
+    border:1px solid var(--line); background:var(--surface-soft); }
+  a.backlink:hover { color:var(--accent); border-color:var(--accent); }
+
+  main { max-width:none; margin:0; padding:16px 18px 40px; display:grid; gap:16px; }
+  main > * { min-width:0; }
+  body { overflow-x:hidden; }
+
+  .card { background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius-md); padding:18px; box-shadow:var(--shadow-sm); }
+  .card h2 { font-family:var(--font-display); font-size:12px; text-transform:uppercase;
+    letter-spacing:.07em; color:var(--ink-soft); margin:0 0 14px; font-weight:700; }
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+
+  .pill { padding:3px 10px; border-radius:999px; background:var(--surface-soft);
+    font-size:12px; border:1px solid var(--line); color:var(--ink-soft); white-space:nowrap; }
+  .pill.on { color:var(--ok); border-color:var(--ok); background:var(--ok-soft); }
+  .pill.off { color:var(--ink-soft); }
+  .pill.busy { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+
+  button { background:var(--surface); color:var(--ink); border:1px solid var(--line-strong);
+    border-radius:var(--radius-sm); padding:8px 14px; font:500 13.5px var(--font-sans);
+    cursor:pointer; transition:border-color .15s, background .15s; }
+  button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent);
+    background:var(--accent-soft); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff;
+    font-weight:600; }
+  button.primary:hover:not(:disabled) { background:var(--accent-strong);
+    border-color:var(--accent-strong); color:#fff; }
+  button.stop { border-color:var(--danger); color:var(--danger); background:var(--danger-soft); }
+  button.stop:hover:not(:disabled) { background:var(--danger); color:#fff; border-color:var(--danger); }
+
+  input, select, textarea { background:var(--surface); color:var(--ink);
+    border:1px solid var(--line-strong); border-radius:var(--radius-sm);
+    padding:8px 10px; font:13.5px var(--font-sans); }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 3px var(--accent-soft); }
+  textarea { resize:vertical; }
+  .count { font-family:var(--font-display); font-size:30px; font-weight:800;
+    min-width:46px; text-align:center; color:var(--accent); }
+
+  .table-wrap { overflow-x:auto; max-width:100%; }
+  table { width:100%; border-collapse:collapse; font-size:13px; table-layout:fixed; }
+  td, th { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  td.src { max-width:0; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid var(--line); }
+  thead th { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-soft); font-weight:700; background:var(--surface-soft);
+    border-bottom:1px solid var(--line-strong); }
+  tbody tr:hover td { background:var(--surface-soft); }
+  td.res { font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:12.5px; }
+
+  .tag { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line);
+    color:var(--ink-soft); background:var(--surface-soft); }
+  .tag.auto { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+  .tag.pinned { color:var(--accent-alt); border-color:var(--accent-alt); background:var(--accent-alt-soft); }
+  .tag.external { color:var(--ok); border-color:var(--ok); background:var(--ok-soft); }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block;
+    background:var(--line-strong); }
+  .dot.live { background:var(--ok); box-shadow:0 0 0 3px var(--ok-soft); }
+
+  .msg { color:var(--ink-soft); font-size:13px; }
+  .msg.err { color:var(--danger); }
+  pre { background:var(--surface-soft); border:1px solid var(--line);
+    border-radius:var(--radius-sm); padding:11px; overflow:auto; max-height:180px;
+    font:12px/1.5 var(--font-mono); color:var(--ink-soft); margin:0;
+    max-width:100%; white-space:pre; }
+  a { color:var(--accent); }
+  .hint { font-size:12.5px; color:var(--ink-soft); }
+  .spinner { width:13px; height:13px; border:2px solid var(--line);
+    border-top-color:var(--accent); border-radius:50%; display:inline-block;
+    animation:spin .8s linear infinite; vertical-align:-2px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  select[multiple] { padding:4px; }
+  button.rm { padding:3px 9px; font-size:13px; line-height:1;
+    border-color:var(--line); color:var(--ink-soft); background:var(--surface); }
+  button.rm:hover:not(:disabled) { border-color:var(--danger); color:var(--danger);
+    background:var(--danger-soft); }
+
+  /* --- "Add a specific source" ------------------------------------------ */
+  .src-cols { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .src-col { min-width:0; }
+  .src-h { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-soft); margin:0 0 10px; font-weight:700;
+    padding-bottom:7px; border-bottom:1px solid var(--line); }
+  #rtsp, #videosel { width:100%; min-width:0; height:330px; }
+  #rtsp { font:13px/1.75 var(--font-mono); }
+  #videosel { padding:5px; font-size:13px; }
+  #videosel option { padding:5px 9px; border-radius:6px; }
+  #videosel optgroup { font-style:normal; font-weight:700; color:var(--ink-soft);
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; padding:10px 9px 4px; }
+  .src-actions { display:flex; align-items:center; gap:11px; margin-top:11px; flex-wrap:wrap; }
+  .src-sub { margin-top:24px; }
+  input[type=file] { border:none; padding:0; background:none; font-size:13px;
+    color:var(--ink-soft); max-width:100%; }
+  input[type=file]::file-selector-button { background:var(--surface); color:var(--ink);
+    border:1px solid var(--line-strong); border-radius:var(--radius-sm);
+    padding:7px 13px; font:500 13px var(--font-sans); cursor:pointer; margin-right:11px; }
+  input[type=file]::file-selector-button:hover { border-color:var(--accent); color:var(--accent); }
+
+  /* ticked rows */
+  tbody tr.sel-row td { background:var(--accent-soft); }
+  tbody tr.sel-row td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
+
+  /* draggable column dividers: the grip sits on each header cell's right edge */
+  thead th { position:relative; }
+  .colgrip { position:absolute; top:0; right:-3px; width:7px; height:100%;
+    cursor:col-resize; user-select:none; z-index:2; }
+  .colgrip:hover, .colgrip.dragging { background:var(--accent); opacity:.5; }
+  body.col-resizing { cursor:col-resize; user-select:none; }
+</style>
+</head>
+<body>
+<header>
+  <img class="logo" src="/assets/sima-logo.png" alt="SiMa.ai">
+  <div class="brand">
+    <h1>Adaptive Pipeline</h1>
+    <span class="sep">/</span>
+    <span class="ctx" id="variant">—</span>
+  </div>
+  <span id="p-app" class="pill off">app: —</span>
+  <span class="grow"></span>
+  <a class="backlink" href="#" id="backlink" title="back to the pipeline chooser">pipelines</a>
+  <span id="p-status" class="pill">idle</span>
+</header>
+
+<main>
+  <!-- primary controls -->
+  <div class="card">
+    <h2>Streams</h2>
+    <div class="row" style="justify-content:space-between">
+      <div class="row">
+        <span class="count" id="count">0</span>
+        <span class="hint" id="countlabel">stream(s)</span>
+      </div>
+      <button id="b-stop" class="stop" title="Stop the whole pipeline (always available)">■ Stop pipeline</button>
+    </div>
+  </div>
+
+  <!-- specific sources -->
+  <div class="card">
+    <h2>Add a specific source</h2>
+    <div class="src-cols">
+
+      <div class="src-col">
+        <h3 class="src-h">RTSP cameras</h3>
+        <textarea id="rtsp"
+          placeholder="rtsp://camera-ip:554/stream1&#10;rtsp://camera-ip:554/stream2&#10;rtsp://camera-ip:554/stream3&#10;&#10;one URL per line - resolution detected automatically"></textarea>
+        <div class="src-actions">
+          <button id="b-addrtsp" class="primary">Add camera(s)</button>
+        </div>
+      </div>
+
+      <div class="src-col">
+        <h3 class="src-h">Insight videos</h3>
+        <select id="videosel" multiple></select>
+        <div class="src-actions">
+          <button id="b-addvideo" class="primary">Add selected video(s)</button>
+          <span class="hint">Ctrl / Cmd-click for several</span>
+        </div>
+
+        <div class="src-sub">
+          <h3 class="src-h">Upload a file to Insight</h3>
+          <div class="src-actions" style="margin-top:0">
+            <input id="file" type="file" accept="video/*,.h264">
+            <button id="b-upload">Upload</button>
+          </div>
+          <p class="hint" id="upmsg" style="margin:8px 0 0"></p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- live table -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between; margin-bottom:12px">
+      <h2 style="margin:0">Live status</h2>
+      <div class="row">
+        <button id="b-selall" title="Select / clear all">select all</button>
+        <button id="b-removesel" class="stop" title="Remove all checked streams in one rebuild">✕ Remove selected</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+    <table>
+      <colgroup>
+        <col style="width:3%">   <!-- checkbox -->
+        <col style="width:3%">   <!-- status dot -->
+        <col style="width:7%">   <!-- cam -->
+        <col style="width:6%">   <!-- group -->
+        <col style="width:8%">   <!-- type -->
+        <col style="width:24%">  <!-- source -->
+        <col style="width:10%">  <!-- source res -->
+        <col style="width:7%">   <!-- src fps -->
+        <col style="width:10%">  <!-- delivered -->
+        <col style="width:7%">   <!-- fps -->
+        <col style="width:7%">   <!-- kbps -->
+        <col style="width:8%">   <!-- remove button -->
+      </colgroup>
+      <thead><tr><th></th><th></th><th>cam</th><th>grp</th><th>type</th><th>source</th><th>source&nbsp;res</th><th>src&nbsp;fps</th><th>delivered</th><th>fps</th><th>kbps</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="12" class="msg">not running</td></tr></tbody>
+    </table>
+    </div>
+  </div>
+
+  <!-- viewer link -->
+  <div class="card">
+    <h2>Output</h2>
+    <div class="row">
+      <a id="viewer-link" href="#" target="insight-viewer"><button class="primary">Open in Neat Insight ↗</button></a>
+      <span class="hint">opens the Neat Insight UI (reuses the same tab)</span>
+    </div>
+  </div>
+
+  <!-- activity -->
+  <div class="card">
+    <h2>Activity</h2>
+    <p class="msg" id="activity">idle</p>
+    <pre id="log">—</pre>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let busy = false;
+
+async function api(path, body) {
+  const opt = { method: "POST", headers: {"Content-Type":"application/json"} };
+  if (body) opt.body = JSON.stringify(body);
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+function render(st) {
+  busy = st.busy;
+  // pills
+  const app = $("#p-app");
+  app.textContent = "app: " + (st.app_running ? "running" : "stopped");
+  app.className = "pill " + (st.app_running ? "on" : "off");
+  const ps = $("#p-status");
+  if (st.busy) { ps.className = "pill busy"; ps.innerHTML = '<span class="spinner"></span> ' + st.message; }
+  else if (st.error) { ps.className = "pill"; ps.style.color = "var(--err)"; ps.textContent = "error"; }
+  else { ps.className = "pill"; ps.style.color = ""; ps.textContent = "idle"; }
+
+  $("#count").textContent = st.count;
+  const variant = st.pipeline === "live" ? "Live-Add"
+                : st.pipeline === "group" ? "Grouped" : "High-Scale";
+  $("#variant").textContent = variant;
+  document.title = `Adaptive Pipeline - ${variant}`;
+  // "running" was a lie whenever a saved stream list outlived its detector: the
+  // panel keeps that list per pipeline, so a stopped pipeline still shows a
+  // count. Say which of the two states this actually is.
+  $("#countlabel").textContent = st.app_running
+    ? (st.count === 1 ? "stream running" : "streams running")
+    : (st.count === 1 ? "stream saved - not running" : "streams saved - not running");
+
+  // activity
+  const act = $("#activity");
+  act.textContent = st.error ? ("⚠ " + st.error) : st.message;
+  act.className = "msg" + (st.error ? " err" : "");
+
+  // table
+  const tb = $("#rows");
+  // Preserve which rows are checked across the periodic refresh.
+  const checked = new Set([...document.querySelectorAll(".sel:checked")].map(c => +c.value));
+  if (!st.streams.length) tb.innerHTML = '<tr><td colspan="12" class="msg">not running</td></tr>';
+  else tb.innerHTML = st.streams.map(r => `
+    <tr class="${checked.has(r.channel) ? 'sel-row' : ''}">
+      <td><input type="checkbox" class="sel" value="${r.channel}" ${checked.has(r.channel)?'checked':''}></td>
+      <td><span class="dot ${r.active?'live':''}"></span></td>
+      <td>${r.cam}</td>
+      <td class="res">${r.group ?? "-"}</td>
+      <td><span class="tag ${r.kind}">${r.kind}</span></td>
+      <td class="src" title="${r.source}">${r.source}</td>
+      <td class="res">${r.source_res}</td>
+      <td class="res">${r.source_fps}</td>
+      <td class="res">${r.delivered}</td>
+      <td class="res">${r.fps ? r.fps.toFixed(1) : '—'}</td>
+      <td class="res">${r.kbps || '—'}</td>
+      <td><button class="rm" onclick="removeStream(${r.channel})" title="Remove ${r.cam}">✕</button></td>
+    </tr>`).join("");
+
+  // viewer link (opens Neat Insight in a new tab)
+  $("#viewer-link").href = st.viewer_url;
+
+  // video picker
+  const sel = $("#videosel");
+  if (!sel.dataset.filled || sel.dataset.filled !== JSON.stringify(st.videos)) {
+    sel.dataset.filled = JSON.stringify(st.videos);
+    sel.innerHTML = "";
+    for (const [grp, files] of Object.entries(st.videos)) {
+      if (!files.length) continue;
+      const og = document.createElement("optgroup"); og.label = grp;
+      for (const f of files) { const o = document.createElement("option"); o.value = f; o.textContent = f; og.appendChild(o); }
+      sel.appendChild(og);
+    }
+  }
+
+  // disable actions while busy — except Stop, which must always be available
+  document.querySelectorAll("button").forEach(b => {
+    if (b.id && b.id.startsWith("b-") && b.id !== "b-stop") b.disabled = st.busy;
+  });
+  document.querySelectorAll("button.rm").forEach(b => b.disabled = st.busy);
+}
+
+// alert on a blocked/error response, then refresh
+function handle(r) {
+  if (r && (r.blocked || r.error)) alert(r.error || "blocked");
+  refresh();
+}
+
+// Checkbox value is a stream's position (channel), which every remaining
+// stream gets REASSIGNED after any removal (indices shift to fill the gap).
+// render() preserves ticks across the periodic refresh by that same position
+// number, so leaving old ticks in the DOM after a removal makes a surviving
+// stream that happens to land on a previously-checked position inherit a
+// check mark it never earned. Clearing here, before the state changes
+// underneath it, is what actually clears the tick marks.
+function clearSelection() {
+  document.querySelectorAll(".sel:checked").forEach(c => c.checked = false);
+  syncRowHighlight();   // unchecking in code fires no change event
+}
+
+// remove one specific stream (by 0-based index); the pipeline briefly restarts
+function removeStream(idx) {
+  if (!confirm(`Remove stream cam-${idx + 1}? Remaining streams briefly restart.`)) return;
+  clearSelection();
+  api("/api/remove_stream", {index: idx}).then(handle);
+}
+
+// batch remove: every checked row in ONE rebuild, so you wait once
+$("#b-removesel").onclick = () => {
+  const idxs = [...document.querySelectorAll(".sel:checked")].map(c => +c.value);
+  if (!idxs.length) { alert("Tick the streams to remove first."); return; }
+  if (!confirm(`Remove ${idxs.length} stream(s) in one rebuild?`)) return;
+  clearSelection();
+  api("/api/remove_streams", {indices: idxs}).then(handle);
+};
+$("#b-selall").onclick = () => {
+  const boxes = [...document.querySelectorAll(".sel")];
+  const allOn = boxes.length && boxes.every(b => b.checked);
+  boxes.forEach(b => b.checked = !allOn);
+  syncRowHighlight();
+};
+
+// Highlight every ticked row. Driven off the checkboxes themselves rather than
+// tracked separately, so it cannot drift out of step with what is actually
+// selected. Delegated to the tbody because render() replaces the rows wholesale.
+function syncRowHighlight() {
+  document.querySelectorAll("#rows .sel").forEach(cb =>
+    cb.closest("tr")?.classList.toggle("sel-row", cb.checked));
+}
+$("#rows").addEventListener("change", e => {
+  if (e.target.classList?.contains("sel")) syncRowHighlight();
+});
+
+async function refresh() {
+  try {
+    const st = await (await fetch("/api/state")).json();
+    render(st);
+    if (st.busy) { const l = await (await fetch("/api/logs")).json(); $("#log").textContent = l.log || "—"; }
+  } catch(e) { $("#activity").textContent = "cannot reach server: " + e; }
+}
+
+// actions
+$("#b-stop").onclick    = () => api("/api/down").then(refresh);
+$("#b-addvideo").onclick= () => {
+  const sel = [...$("#videosel").selectedOptions].map(o => o.value);
+  if (!sel.length) { alert("Select at least one video (Ctrl/Cmd-click for several)."); return; }
+  api("/api/add_videos", {videos: sel}).then(handle);
+};
+$("#b-addrtsp").onclick = () => {
+  const urls = $("#rtsp").value.split("\n").map(s => s.trim()).filter(Boolean);
+  if (!urls.length) { alert("Enter at least one rtsp:// URL (one per line)."); return; }
+  const bad = urls.find(u => !u.startsWith("rtsp://"));
+  if (bad) { alert("Not an rtsp:// URL: " + bad); return; }
+  $("#activity").textContent = `probing ${urls.length} camera(s) ...`;
+  api("/api/add_rtsps", {urls}).then(r => { handle(r); if (!r.error) $("#rtsp").value=""; });
+};
+$("#b-upload").onclick = async () => {
+  const f = $("#file").files[0];
+  if (!f) return;
+  $("#upmsg").textContent = "uploading " + f.name + " …";
+  const fd = new FormData(); fd.append("file", f);
+  const r = await (await fetch("/api/upload", {method:"POST", body:fd})).json();
+  $("#upmsg").textContent = r.ok ? ("added " + f.name) : ("failed: " + (r.detail||r.error||""));
+  refresh();
+};
+
+// Draggable column widths. The table is table-layout:fixed, so the <col>
+// elements decide the widths; dragging rewrites them in px and widens the
+// table itself, letting .table-wrap scroll horizontally rather than squeezing
+// every other column. Widths persist per pipeline (localStorage is per-origin,
+// and each pipeline serves on its own port).
+(function initColumnResize() {
+  const table = document.querySelector(".table-wrap table");
+  if (!table) return;
+  const cols = [...table.querySelectorAll("colgroup col")];
+  const ths = [...table.querySelectorAll("thead th")];
+  if (!cols.length || cols.length !== ths.length) return;
+  const KEY = "pipeline-col-widths-v2";   // v2: retires px widths saved
+                                        // under the old 1000px layout
+
+  const applyTableWidth = () => {
+    const total = cols.reduce((sum, c) => sum + (parseFloat(c.style.width) || 0), 0);
+    if (total) table.style.width = total + "px";
+  };
+  const save = () => {
+    try { localStorage.setItem(KEY, JSON.stringify(cols.map(c => c.style.width || ""))); }
+    catch (e) { /* storage disabled - widths just will not persist */ }
+  };
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || "null");
+    if (Array.isArray(saved) && saved.length === cols.length && saved.some(Boolean)) {
+      saved.forEach((w, i) => { if (w) cols[i].style.width = w; });
+      applyTableWidth();
+    }
+  } catch (e) { /* ignore malformed saved widths */ }
+
+  // Convert the responsive % widths to px once, at the moment of the first
+  // drag, so the default layout stays fluid until the user takes control.
+  const freeze = () => {
+    const rendered = ths.map(th => th.getBoundingClientRect().width);
+    cols.forEach((c, i) => { c.style.width = rendered[i] + "px"; });
+    applyTableWidth();
+  };
+
+  ths.forEach((th, i) => {
+    if (i >= cols.length - 1) return;          // no divider after the last column
+    const grip = document.createElement("span");
+    grip.className = "colgrip";
+    th.appendChild(grip);
+    grip.addEventListener("mousedown", ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      freeze();
+      const startX = ev.pageX;
+      const startW = parseFloat(cols[i].style.width) || 0;
+      grip.classList.add("dragging");
+      document.body.classList.add("col-resizing");
+      const onMove = e => {
+        cols[i].style.width = Math.max(28, startW + (e.pageX - startX)) + "px";
+        applyTableWidth();
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        grip.classList.remove("dragging");
+        document.body.classList.remove("col-resizing");
+        save();
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+    // double-click a divider to clear all custom widths
+    grip.addEventListener("dblclick", ev => {
+      ev.preventDefault();
+      cols.forEach(c => { c.style.width = ""; });
+      table.style.width = "";
+      try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+    });
+  });
+})();
+
+// The chooser lives on :8080 of whatever host served this page, so the link
+// keeps working across the network re-points without being rewritten.
+document.getElementById("backlink").href =
+  `http://${window.location.hostname}:8080/`;
+
+refresh();
+setInterval(refresh, 2500);
+</script>
+</body>
+</html>

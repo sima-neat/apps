@@ -1,0 +1,28 @@
+# Both languages ship the SAME two topologies behind one entry point:
+#
+#   src/python/main.py                 --mode adaptive|fused
+#   src/cpp/pre-built/<binary>         --mode adaptive|fused
+#
+# One YOLO26n pack covers every run: nothing rescales and there is no model-tier
+# switching.
+models:
+  yolo26n-det-int8-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz
+    file: yolo26n-det-int8-b1.tar.gz
+  yolo26n-det-bf16-mla_tess-b1:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/yolo26-detection/yolo26n-det-bf16-mla_tess-b1.tar.gz
+    file: yolo26n-det-bf16-mla_tess-b1.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - yolo26n-det-int8-b1
+  cpp:
+    enabled: true
+    models:
+    - yolo26n-det-int8-b1
