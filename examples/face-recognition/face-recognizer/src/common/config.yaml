@@ -1,5 +1,5 @@
 # face-recognizer configuration
-# All paths relative to the apps/ build root unless absolute.
+# All paths relative to the face-recognizer package directory (i.e. where you run the binary from).
 
 # ── Models ────────────────────────────────────────────────────────────────────
 scrfd:
@@ -17,7 +17,7 @@ arcface:
 
 # ── Gallery ───────────────────────────────────────────────────────────────────
 gallery:
-  path:             examples/face-recognition/face-recognizer/gallery.bin
+  path:             gallery.bin
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 input:
