@@ -434,17 +434,15 @@ def run(cfg: Config) -> int:
     video_options.async_ = True
     video = pyneat.groups.video_sender(video_options)
 
-    decoded_output = pyneat.Graph("decoded_output")
-    decoded_output.add(pyneat.nodes.output("decoded", pyneat.OutputOptions.latest()))
-
-    backbone_input_options = backbone.input_appsrc_options(False)
-    backbone_input_options.block = True
-    backbone_input_options.memory_policy = pyneat.InputMemoryPolicy.SystemMemory
-    backbone_input = pyneat.Graph("backbone_input")
-    backbone_input.add(pyneat.nodes.input("frame", backbone_input_options))
-    backbone_route = backbone.graph()
+    queue_options = pyneat.QueueOptions()
+    queue_options.max_buffers = 1
+    queue_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
+    detector = pyneat.Graph("detector")
+    detector.add(pyneat.nodes.queue(queue_options))
+    detector.add(backbone.graph())
     backbone_output = pyneat.Graph("backbone_output")
     backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.latest()))
+    detector.add(backbone_output)
 
     source_graph = pyneat.Graph("rfdetr_source")
     source_graph.connect(source, decoder)
@@ -452,11 +450,7 @@ def run(cfg: Config) -> int:
         source_graph.connect(decoder, video)
     else:
         source_graph.connect(source, video)
-    source_graph.connect(decoder, decoded_output)
-
-    backbone_graph = pyneat.Graph("rfdetr_backbone")
-    backbone_graph.connect(backbone_input, backbone_route)
-    backbone_graph.connect(backbone_route, backbone_output)
+    source_graph.connect(decoder, detector)
 
     transformer_run_options = pyneat.RunOptions()
     transformer_run_options.preset = pyneat.RunPreset.Realtime
@@ -477,15 +471,10 @@ def run(cfg: Config) -> int:
         run_options=transformer_run_options,
     )
 
-    backbone_run_options = pyneat.RunOptions()
-    backbone_run_options.preset = pyneat.RunPreset.Realtime
-    backbone_run_options.output_memory = pyneat.OutputMemory.ZeroCopy
-    backbone_run_options.advanced.prepare_output_cpu_visible = True
-    backbone_run = backbone_graph.build(backbone_run_options)
-
     source_run_options = pyneat.RunOptions()
     source_run_options.preset = pyneat.RunPreset.Realtime
     source_run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    source_run_options.advanced.prepare_output_cpu_visible = True
     source_run = source_graph.build(source_run_options)
     video_port = video_options.video_port
     metadata_options = pyneat.MetadataSenderOptions()
@@ -505,26 +494,10 @@ def run(cfg: Config) -> int:
     source_pts: dict[int, int] = {}
     proposal_count = (cfg.input_size // 16) ** 2
 
-    def decode_bridge() -> None:
-        try:
-            while not stop.is_set():
-                sample = source_run.pull("decoded", 500)
-                if sample is None:
-                    continue
-                if not backbone_run.try_push_samples(sample):
-                    detail = backbone_run.last_error()
-                    if not stop.is_set() and (detail or not backbone_run.running()):
-                        raise RuntimeError(detail or "backbone input closed")
-                    continue
-        except BaseException as exc:
-            if not stop.is_set():
-                bridge_error.append(exc)
-            stop.set()
-
     def transformer_bridge() -> None:
         try:
             while not stop.is_set():
-                sample = backbone_run.pull("backbone", 500)
+                sample = source_run.pull("backbone", 500)
                 if sample is None:
                     continue
                 feature, scores, proposals = split_backbone(sample, proposal_count)
@@ -558,11 +531,9 @@ def run(cfg: Config) -> int:
         signum: signal.signal(signum, lambda *_: stop.set())
         for signum in (signal.SIGINT, signal.SIGTERM)
     }
-    decode_worker = threading.Thread(target=decode_bridge, name="rfdetr-decode", daemon=True)
     transformer_worker = threading.Thread(
         target=transformer_bridge, name="rfdetr-transformer", daemon=True
     )
-    decode_worker.start()
     transformer_worker.start()
     processed = 0
     try:
@@ -598,13 +569,11 @@ def run(cfg: Config) -> int:
     finally:
         stop.set()
         source_run.stop()
-        backbone_run.stop()
         transformer_runner.close()
-        decode_worker.join(timeout=5)
         transformer_worker.join(timeout=5)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        _ = (backbone, source_graph, backbone_graph)
+        _ = (backbone, source_graph)
     print(f"RF-DETR {cfg.variant}: completed {processed} detections", flush=True)
     return 0
 
