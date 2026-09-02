@@ -5645,6 +5645,21 @@ function waitForGenerationEnd(timeoutMs) {
   });
 }
 
+// Each loop pass is a fresh look at the world, so drop the conversation once its
+// answer lands. The server appends a user message per iteration — a base64 frame
+// included — plus the reply, and never trims, so without this a running loop
+// grows history without bound: memory climbs on the board, and with "Include
+// chat history" on the prompt walks into the context limit within a few frames.
+async function clearLoopContext() {
+  chatHistory = [];
+  try {
+    await fetch('/clear-history', { method: 'POST' });
+  } catch (err) {
+    // Non-fatal: the next iteration still asks, it just carries the old turns.
+    console.warn('Could not clear context between loop iterations:', err);
+  }
+}
+
 function setVisionLoopUI(on) {
   const btn = document.getElementById('visionLoopBtn');
   if (!btn) return;
@@ -5670,6 +5685,10 @@ async function visionLoopRun() {
     // Let the request register as active, then wait for it to complete.
     await new Promise((r) => setTimeout(r, 500));
     await waitForGenerationEnd();
+    // Only once the answer is really finished — waitForGenerationEnd also
+    // returns on its 90s timeout, and clearing mid-stream would drop the
+    // generation id out from under the streaming thread and cut the reply off.
+    if (!activeGeneration) await clearLoopContext();
     if (!_visionLoop.on) break;
     await new Promise((r) => setTimeout(r, _visionLoop.delayMs));
   }
@@ -5684,7 +5703,9 @@ function startVisionLoop() {
   _visionLoop.on = true;
   setVisionLoopUI(true);
   setVisionAskHint('Looping — asking about the live camera continuously. Tap Stop to end.');
-  visionLoopRun();
+  // Start from a clean slate too, so the first frame is not judged against
+  // whatever was said in the chat before the loop began.
+  clearLoopContext().then(visionLoopRun);
 }
 
 function stopVisionLoop() {
