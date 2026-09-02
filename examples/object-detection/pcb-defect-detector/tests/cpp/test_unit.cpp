@@ -63,8 +63,11 @@ std::string config_body(const std::string& extra_decode = "", const std::string&
       .append(extra_decode)
       .append("runtime:\n")
       .append("  timeout_ms: 8000\n")
+      .append("  num_runs: 1\n")
       .append("  queue_depth: 8\n")
-      .append(extra_runtime);
+      .append(extra_runtime)
+      .append("output:\n")
+      .append("  overlay: true\n");
 }
 
 bool validate_rejects(const std::string& binary, const std::string& test_name,
@@ -315,6 +318,9 @@ int main(int argc, char** argv) {
                          "zero decode.max_detections");
   ok &= validate_rejects(binary, "test_rejects_zero_timeout", config_body("", "  timeout_ms: 0\n"),
                          "runtime.timeout_ms", "zero runtime.timeout_ms");
+  ok &= validate_rejects(binary, "test_rejects_zero_num_runs",
+                         config_body("", "  num_runs: 0\n"), "runtime.num_runs",
+                         "zero runtime.num_runs");
   ok &= validate_rejects(binary, "test_rejects_zero_queue_depth",
                          config_body("", "  queue_depth: 0\n"), "runtime.queue_depth",
                          "zero runtime.queue_depth");

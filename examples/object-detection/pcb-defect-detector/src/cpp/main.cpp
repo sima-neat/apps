@@ -40,6 +40,7 @@ constexpr float kDefaultScoreThreshold = 0.25f;
 constexpr float kDefaultNmsIou = 0.45f;
 constexpr int kDefaultMaxDetections = 300;
 constexpr int kDefaultTimeoutMs = 8000;
+constexpr int kDefaultNumRuns = 1;
 constexpr int kDefaultQueueDepth = 8;
 constexpr int kDefaultInputSize = 640;
 // Grey pad value used by the YOLO letterbox convention.
@@ -55,8 +56,10 @@ struct Config {
   float nms_iou = kDefaultNmsIou;
   int max_detections = kDefaultMaxDetections;
   int timeout_ms = kDefaultTimeoutMs;
+  int num_runs = kDefaultNumRuns;
   int queue_depth = kDefaultQueueDepth;
   bool profile = false;
+  bool overlay = true;
 };
 
 struct CliOptions {
@@ -130,8 +133,10 @@ Config load_config(const CliOptions& cli) {
   cfg.nms_iou = static_cast<float>(raw.double_or("decode.nms_iou", kDefaultNmsIou));
   cfg.max_detections = raw.int_or("decode.max_detections", kDefaultMaxDetections);
   cfg.timeout_ms = raw.int_or("runtime.timeout_ms", kDefaultTimeoutMs);
+  cfg.num_runs = raw.int_or("runtime.num_runs", kDefaultNumRuns);
   cfg.queue_depth = raw.int_or("runtime.queue_depth", kDefaultQueueDepth);
   cfg.profile = raw.bool_or("runtime.profile", false);
+  cfg.overlay = raw.bool_or("output.overlay", true);
 
   if (cli.score.has_value()) {
     cfg.score_threshold = *cli.score;
@@ -160,6 +165,9 @@ Config load_config(const CliOptions& cli) {
   }
   if (cfg.timeout_ms <= 0) {
     throw std::runtime_error("runtime.timeout_ms must be > 0");
+  }
+  if (cfg.num_runs < 1) {
+    throw std::runtime_error("runtime.num_runs must be >= 1");
   }
   if (cfg.queue_depth < 1) {
     throw std::runtime_error("runtime.queue_depth must be >= 1");
@@ -296,7 +304,7 @@ int clear_output_images(const fs::path& output_dir, const fs::path& input_dir) {
   return removed;
 }
 
-void draw_detections(cv::Mat& frame, const std::vector<simaai::neat::Box>& boxes,
+void draw_boxes(cv::Mat& frame, const std::vector<simaai::neat::Box>& boxes,
                      const std::vector<std::string>& labels) {
   for (const auto& box : boxes) {
     const int x1 = std::max(0, std::min(frame.cols - 1, static_cast<int>(std::round(box.x1))));
@@ -385,7 +393,7 @@ int main(int argc, char** argv) {
               << " score_threshold=" << cv::format("%.2f", cfg.score_threshold)
               << " nms_iou=" << cv::format("%.2f", cfg.nms_iou)
               << " max_detections=" << cfg.max_detections << " timeout_ms=" << cfg.timeout_ms
-              << " queue_depth=" << cfg.queue_depth << "\n";
+              << " num_runs=" << cfg.num_runs << " queue_depth=" << cfg.queue_depth << "\n";
     std::cout << "[validate] configuration OK\n";
     return 0;
   }
@@ -445,13 +453,23 @@ int main(int argc, char** argv) {
     runner.run(std::vector<cv::Mat>{seed_lb.image}, cfg.timeout_ms);
     std::cout << "[WARMUP] done\n";
 
+    std::vector<fs::path> all_images;
+    all_images.reserve(images.size() * static_cast<size_t>(cfg.num_runs));
+    for (int run = 0; run < cfg.num_runs; ++run) {
+      all_images.insert(all_images.end(), images.begin(), images.end());
+    }
+    if (cfg.num_runs > 1) {
+      std::cout << "Looping " << cfg.num_runs << "x over " << images.size() << " images ("
+                << all_images.size() << " total)\n";
+    }
+
     const auto pipeline_start = std::chrono::steady_clock::now();
     int processed = 0;
     int images_with_defects = 0;
     int total_defects = 0;
     std::map<std::string, int> per_class;
 
-    for (const auto& image_path : images) {
+    for (const auto& image_path : all_images) {
       const auto image_start = std::chrono::steady_clock::now();
 
       cv::Mat bgr = cv::imread(image_path.string(), cv::IMREAD_COLOR);
@@ -478,11 +496,13 @@ int main(int argc, char** argv) {
         per_class[name] += count;
       }
 
-      draw_detections(bgr, boxes, labels);
       const fs::path out_path = output_path_for(image_path, output_dir);
-      if (!cv::imwrite(out_path.string(), bgr)) {
-        std::cerr << "Failed to write: " << out_path << "\n";
-        continue;
+      if (cfg.overlay) {
+        draw_boxes(bgr, boxes, labels);
+        if (!cv::imwrite(out_path.string(), bgr)) {
+          std::cerr << "Failed to write: " << out_path << "\n";
+          continue;
+        }
       }
       const auto image_end = std::chrono::steady_clock::now();
 
@@ -492,9 +512,12 @@ int main(int argc, char** argv) {
         ++images_with_defects;
       }
 
-      std::cout << "[" << processed << "/" << images.size() << "] "
-                << image_path.filename().string() << " -> " << out_path.filename().string() << " ("
-                << boxes.size() << " defects) " << format_counts(counts) << "\n";
+      std::cout << "[" << processed << "/" << all_images.size() << "] "
+                << image_path.filename().string();
+      if (cfg.overlay) {
+        std::cout << " -> " << out_path.filename().string();
+      }
+      std::cout << " (" << boxes.size() << " defects) " << format_counts(counts) << "\n";
 
       if (cfg.profile) {
         using ms = std::chrono::duration<double, std::milli>;
@@ -510,7 +533,7 @@ int main(int argc, char** argv) {
 
     const auto elapsed =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - pipeline_start).count();
-    std::cout << "Done: " << processed << "/" << images.size() << " images in "
+    std::cout << "Done: " << processed << "/" << all_images.size() << " images in "
               << cv::format("%.2f", elapsed) << "s | images_with_defects=" << images_with_defects
               << " total_defects=" << total_defects << "\n";
     if (!per_class.empty()) {

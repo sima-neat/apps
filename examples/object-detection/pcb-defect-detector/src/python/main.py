@@ -60,8 +60,10 @@ class AppConfig:
     nms_iou: float
     max_detections: int
     timeout_ms: int
+    num_runs: int
     queue_depth: int
     profile: bool
+    overlay: bool
 
 
 def load_config(path: Path) -> dict:
@@ -75,6 +77,7 @@ def build_app_config(raw: dict) -> AppConfig:
     io_cfg = raw.get("io") or {}
     decode_cfg = raw.get("decode") or {}
     runtime_cfg = raw.get("runtime") or {}
+    output_cfg = raw.get("output") or {}
 
     return AppConfig(
         model_path=str(model_cfg.get("path", "")),
@@ -86,8 +89,10 @@ def build_app_config(raw: dict) -> AppConfig:
         nms_iou=float(decode_cfg.get("nms_iou", 0.45)),
         max_detections=int(decode_cfg.get("max_detections", 300)),
         timeout_ms=int(runtime_cfg.get("timeout_ms", 8000)),
+        num_runs=int(runtime_cfg.get("num_runs", 1)),
         queue_depth=int(runtime_cfg.get("queue_depth", 8)),
         profile=bool(runtime_cfg.get("profile", False)),
+        overlay=bool(output_cfg.get("overlay", True)),
     )
 
 
@@ -109,6 +114,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(f"decode.max_detections must be >= 1, got {cfg.max_detections}")
     if cfg.timeout_ms <= 0:
         raise ValueError(f"runtime.timeout_ms must be > 0, got {cfg.timeout_ms}")
+    if cfg.num_runs < 1:
+        raise ValueError(f"runtime.num_runs must be >= 1, got {cfg.num_runs}")
     if cfg.queue_depth < 1:
         raise ValueError(f"runtime.queue_depth must be >= 1, got {cfg.queue_depth}")
 
@@ -273,7 +280,7 @@ def parse_bbox_payload(
     return detections
 
 
-def draw_detections(bgr, detections: list[dict], labels: list[str], thickness: int = 2) -> None:
+def draw_boxes(bgr, detections: list[dict], labels: list[str], thickness: int = 2) -> None:
     """Draw class-colored defect boxes and labels on a BGR image in place."""
     import cv2
 
@@ -369,7 +376,7 @@ def main() -> int:
             f"input_size={cfg.input_size} "
             f"score_threshold={cfg.score_threshold:.2f} nms_iou={cfg.nms_iou:.2f} "
             f"max_detections={cfg.max_detections} timeout_ms={cfg.timeout_ms} "
-            f"queue_depth={cfg.queue_depth}"
+            f"num_runs={cfg.num_runs} queue_depth={cfg.queue_depth}"
         )
         print("[validate] configuration OK")
         return 0
@@ -426,12 +433,20 @@ def main() -> int:
         runner.run([to_bgr_tensor(seed_lb.image)], timeout_ms=cfg.timeout_ms)
         print("[WARMUP] done")
 
+        all_images = images * cfg.num_runs
+        if cfg.num_runs > 1:
+            print(
+                f"Looping {cfg.num_runs}x over {len(images)} images "
+                f"({len(all_images)} total)",
+                flush=True,
+            )
+
         pipeline_start = time.perf_counter()
         processed = 0
         images_with_defects = 0
         per_class: Counter = Counter()
 
-        for image_path in images:
+        for image_path in all_images:
             image_start = time.perf_counter()
 
             bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
@@ -461,9 +476,10 @@ def main() -> int:
             )
             detections = to_source_coordinates(detections, lb, original_w, original_h)
 
-            draw_detections(bgr, detections, labels)
             out_path = output_path_for(image_path, cfg.output_dir)
-            cv2.imwrite(str(out_path), bgr)
+            if cfg.overlay:
+                draw_boxes(bgr, detections, labels)
+                cv2.imwrite(str(out_path), bgr)
             image_end = time.perf_counter()
 
             counts = Counter(class_name(d["class_id"], labels) for d in detections)
@@ -472,9 +488,11 @@ def main() -> int:
             if detections:
                 images_with_defects += 1
 
+            progress = f"[{processed}/{len(all_images)}] {image_path.name}"
+            if cfg.overlay:
+                progress += f" -> {out_path.name}"
             print(
-                f"[{processed}/{len(images)}] {image_path.name} -> {out_path.name} "
-                f"({len(detections)} defects) {dict(counts)}",
+                f"{progress} ({len(detections)} defects) {dict(counts)}",
                 flush=True,
             )
             if cfg.profile:
@@ -493,7 +511,7 @@ def main() -> int:
 
     elapsed = time.perf_counter() - pipeline_start
     print(
-        f"Done: {processed}/{len(images)} images in {elapsed:.2f}s | "
+        f"Done: {processed}/{len(all_images)} images in {elapsed:.2f}s | "
         f"images_with_defects={images_with_defects} total_defects={sum(per_class.values())}"
     )
     if per_class:

@@ -1,7 +1,7 @@
 model:                       # PCB defect detector model selection.
-  path: models/yolo26n_plc_mpk.tar.gz          # Compiled BF16 model pack.
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
   labels: examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt
-  input_size: 640           # Model input; images are letterboxed to this square.
+  input_size: 640            # Model input; images are letterboxed to this square.
 
 io:                          # Input and output paths.
   input_dir: assets/datasets/pcb                # Folder containing input PCB images.
@@ -14,5 +14,9 @@ decode:                      # YOLO26 on-device box decode settings.
 
 runtime:                     # Runtime settings.
   timeout_ms: 8000           # Inference timeout in milliseconds.
+  num_runs: 1                # Number of repeated runs.
   queue_depth: 8             # Runtime queue depth.
   profile: false             # Print per-image profiling summaries.
+
+output:                      # Output rendering settings.
+  overlay: true              # Draw boxes and labels on output images.

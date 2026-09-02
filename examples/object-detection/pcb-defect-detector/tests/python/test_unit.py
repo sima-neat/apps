@@ -1,6 +1,7 @@
 """Unit tests for pcb-defect-detector (Python)."""
 
 import importlib.util
+import re
 import struct
 import subprocess
 import sys
@@ -15,6 +16,7 @@ COMMON_DIR = EXAMPLE_DIR / "src" / "common"
 CONFIG_YAML = COMMON_DIR / "config.yaml"
 LABELS_TXT = COMMON_DIR / "pcb_label.txt"
 SCOPE_YAML = EXAMPLE_DIR / "tests" / "test-scope.yaml"
+README_MD = EXAMPLE_DIR / "README.md"
 
 _SPEC = importlib.util.spec_from_file_location("pcb_defect_detector_main", MAIN_PY)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -37,7 +39,8 @@ def valid_config() -> dict:
         "model": {"path": "models/pack.tar.gz", "labels": str(LABELS_TXT), "input_size": 640},
         "io": {"input_dir": "assets/datasets/pcb", "output_dir": "sandbox/pcb-defect-detector"},
         "decode": {"score_threshold": 0.25, "nms_iou": 0.45, "max_detections": 300},
-        "runtime": {"timeout_ms": 8000, "queue_depth": 8},
+        "runtime": {"timeout_ms": 8000, "num_runs": 1, "queue_depth": 8},
+        "output": {"overlay": True},
     }
 
 
@@ -91,7 +94,10 @@ class TestConfigLoading:
     def test_shipped_config_is_valid(self):
         """The packaged config.yaml must load and validate as-is."""
         cfg = main.load_app_config(CONFIG_YAML)
-        assert cfg.model_path.endswith(".tar.gz")
+        # Like every other example, the shipped config ships a placeholder the
+        # reader replaces after downloading the pack. A concrete path here would
+        # mean someone committed a machine-local model location.
+        assert cfg.model_path == "<model-path>"
         assert cfg.labels_path.name == "pcb_label.txt"
         assert cfg.input_dir == Path("assets/datasets/pcb")
         assert cfg.input_size == 640
@@ -119,6 +125,7 @@ class TestConfigLoading:
             ("decode", "max_detections", 0),
             ("model", "input_size", 0),
             ("runtime", "timeout_ms", 0),
+            ("runtime", "num_runs", 0),
             ("runtime", "queue_depth", 0),
         ],
     )
@@ -213,12 +220,17 @@ class TestModelAcquisition:
     def scope() -> dict:
         return yaml.safe_load(SCOPE_YAML.read_text(encoding="utf-8"))
 
-    def test_config_model_is_declared_in_test_scope(self):
-        """The package named by model.path must be the one e2e downloads."""
-        configured = Path(main.load_app_config(CONFIG_YAML).model_path).name
+    def test_documented_model_is_declared_in_test_scope(self):
+        """The package the README tells you to download must be the one e2e downloads."""
+        documented = set(
+            re.findall(r"([A-Za-z0-9._-]+\.tar\.gz)", README_MD.read_text(encoding="utf-8"))
+        )
         declared = {model["file"] for model in self.scope()["models"].values()}
 
-        assert configured in declared, f"{configured} is not declared in test-scope.yaml"
+        assert documented, "README documents no model package to download"
+        assert documented <= declared, (
+            f"{sorted(documented - declared)} not declared in test-scope.yaml"
+        )
 
     def test_scope_models_are_downloadable_artifacts(self):
         for model_id, model in self.scope()["models"].items():
@@ -506,7 +518,7 @@ class TestOverlay:
 
         frame = np.zeros((120, 160, 3), dtype=np.uint8)
         before = frame.copy()
-        main.draw_detections(
+        main.draw_boxes(
             frame,
             [{"x1": 20.0, "y1": 30.0, "x2": 90.0, "y2": 100.0, "score": 0.87, "class_id": 4}],
             main.load_labels(LABELS_TXT),
@@ -520,7 +532,7 @@ class TestOverlay:
 
         frame = np.zeros((120, 160, 3), dtype=np.uint8)
         before = frame.copy()
-        main.draw_detections(
+        main.draw_boxes(
             frame,
             [{"x1": 50.0, "y1": 50.0, "x2": 50.0, "y2": 50.0, "score": 0.9, "class_id": 0}],
             main.load_labels(LABELS_TXT),
