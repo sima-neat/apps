@@ -1,0 +1,22 @@
+model:                       # PCB defect detector model selection.
+  path: <model-path>         # Example: models/<model-pack>.tar.gz
+  labels: examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt
+  input_size: 640            # Model input; images are letterboxed to this square.
+
+io:                          # Input and output paths.
+  input_dir: assets/datasets/pcb                # Folder containing input PCB images.
+  output_dir: sandbox/pcb-defect-detector       # Folder for annotated images.
+
+decode:                      # YOLO26 on-device box decode settings.
+  score_threshold: 0.25      # Minimum defect confidence.
+  nms_iou: 0.45              # Overlap threshold for NMS.
+  max_detections: 300        # Max detections to keep per image.
+
+runtime:                     # Runtime settings.
+  timeout_ms: 8000           # Inference timeout in milliseconds.
+  num_runs: 1                # Number of repeated runs.
+  queue_depth: 8             # Runtime queue depth.
+  profile: false             # Print per-image profiling summaries.
+
+output:                      # Output rendering settings.
+  overlay: true              # Draw boxes and labels on output images.
