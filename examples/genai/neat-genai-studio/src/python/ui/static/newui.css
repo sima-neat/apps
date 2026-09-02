@@ -228,8 +228,23 @@ body.spectrum-accents .bench-stats-metric { color: var(--accent-strong); }
 
 /* Metrics strip */
 .metrics-section {
-  flex: 0 0 auto; display: flex; gap: 8px; flex-wrap: wrap;
+  flex: 0 0 auto; display: flex; gap: 8px 18px; flex-wrap: wrap; align-items: flex-start;
 }
+/* One group per pipeline stage: a quiet caption over its own pills. */
+.metric-group { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.metric-group-head {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-3); white-space: nowrap;
+}
+.metric-group-icon { font-size: 11.5px; line-height: 1; }
+.metric-group-model {
+  font-family: var(--code-font); font-size: 10.5px; text-transform: none;
+  letter-spacing: 0; color: var(--accent);
+  max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.metric-group-model:empty { display: none; }
+.metric-group-items { display: flex; gap: 6px; flex-wrap: wrap; }
 .metric-item {
   display: flex; align-items: baseline; gap: 6px;
   background: var(--surface); border: 1px solid var(--border);
@@ -1211,6 +1226,9 @@ body.solutions-open { overflow: hidden; }
   .metrics-section { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .metrics-section::-webkit-scrollbar { display: none; }
   .metric-item { flex: 0 0 auto; }
+  .metric-group { flex: 0 0 auto; }
+  .metric-group-items { flex-wrap: nowrap; }
+  .metric-group-model { max-width: 120px; }
 
   /* 16px input avoids iOS zoom-on-focus; comfortable touch targets */
   .message-input { font-size: 16px; }
@@ -1227,6 +1245,8 @@ body.solutions-open { overflow: hidden; }
   .model-name-pill.header-pill { display: none; }
   .chat-section { padding: 10px 10px max(10px, env(safe-area-inset-bottom)); }
   .metric-label { display: none; }
+  .metric-group-model { display: none; }
+  .metrics-section { gap: 6px 12px; }
 
   /* Declutter the header: benchmark moves to the drawer; full screen is
      redundant on phones (browser chrome auto-hides; unsupported on iOS). */

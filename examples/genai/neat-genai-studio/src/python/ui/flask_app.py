@@ -1165,6 +1165,9 @@ class AppContext:
                 f"window.SIMA_CONFIG.chatModelCapabilities={json.dumps(self.chat_model_capabilities)};"
                 f"window.SIMA_CONFIG.visionImageHeight='{height_val}';"
                 f"window.SIMA_CONFIG.visionImageWidth='{width_val}';"
+                # Seeds the metrics caption before the first catalog fetch (and
+                # is all there is in static mode); the catalog wins once loaded.
+                f"window.SIMA_CONFIG.asrModelName={json.dumps(self.asr_model_name)};"
                 "window.SIMA_CONFIG.controlEnabled='true';"
                 f"window.SIMA_CONFIG.hubOrg={json.dumps(hub_org)};"
                 f"window.SIMA_CONFIG.defaultFontFamily={json.dumps(self.ui_font_family)};"

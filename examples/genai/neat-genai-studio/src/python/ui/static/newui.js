@@ -3954,6 +3954,7 @@ function populateModelSelect(catalog) {
   const asrModels = _catalog.filter(m => (m.type || 'chat') === 'asr');
   _asrActive = (asrModels.find(m => m.activeAsr)
              || asrModels.find(m => m.loaded) || {}).name || '';
+  updateAsrModelIndicator();
   const chatModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
   const previous = select.value;
   while (select.firstChild) select.removeChild(select.firstChild);
@@ -4331,6 +4332,16 @@ async function deleteModel(name, extraWarning) {
   }
 }
 
+// Name the model behind the "Heard you" metrics, so the numbers below it are
+// attributable — they change meaningfully when you switch speech models.
+function updateAsrModelIndicator() {
+  const el = document.getElementById('asrModelName');
+  if (!el) return;
+  const name = _asrActive || window.SIMA_CONFIG?.asrModelName || '';
+  el.textContent = name;
+  el.title = name ? `Transcribed by ${name}` : '';
+}
+
 // ---- Speech-to-text (ASR) models --------------------------------------------
 // Kept in their own list because they never compete with chat/VLM models for the
 // same slot: exactly one ASR model is resident, and picking another evicts it
@@ -4372,7 +4383,7 @@ function renderAsrList() {
     meta.className = 'hub-result-meta';
     const size = m.sizeBytes ? fmtBytes(m.sizeBytes) : '';
     const stateCls = incomplete ? 'is-incomplete' : (isActive ? 'is-loaded' : '');
-    const stateTxt = incomplete ? '⚠ incomplete' : (isActive ? '● active' : '○ downloaded');
+    const stateTxt = incomplete ? '⚠ incomplete' : (isActive ? '🎙 active' : '○ downloaded');
     const badges = `<span class="hub-badge hub-badge-asr">${typeBadge('asr')}</span>`
       + (size ? `<span class="hub-badge">${size}</span>` : '')
       + (m.pinned ? '<span class="hub-badge">startup default</span>' : '')
@@ -4805,6 +4816,7 @@ async function initHubControls() {
   ['modelFilterType', 'modelFilterParams', 'modelFilterFamily', 'modelSortBy'].forEach(id => {
     const el = document.getElementById(id); if (el) el.addEventListener('change', renderInstalledList);
   });
+  updateAsrModelIndicator();
   const modelRefresh = document.getElementById('modelRefreshButton');
   if (modelRefresh) modelRefresh.addEventListener('click', () => refreshCatalog());
 

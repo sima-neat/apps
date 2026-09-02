@@ -91,15 +91,42 @@
       <!-- Chat main -->
       <main id="chatSection" class="chat-section">
 
+        <!-- Grouped by pipeline stage — your voice in, the model's answer, its
+             voice out — so each number reads against the step that produced it. -->
         <div id="metricsSection" class="metrics-section">
-          <div class="metric-item"><span class="metric-value" id="transcribeTime">0s</span><span class="metric-label">Transcribe</span></div>
-          <div class="metric-item"><span class="metric-value" id="asrLanguage">—</span><span class="metric-label">ASR Language</span></div>
-          <div class="metric-item"><span class="metric-value" id="asrNoSpeech">—</span><span class="metric-label">No Speech</span></div>
-          <div class="metric-item"><span class="metric-value" id="asrLogprob">—</span><span class="metric-label">Avg Logprob</span></div>
-          <div class="metric-item"><span class="metric-value" id="firstTokenTime">0s</span><span class="metric-label">First Token</span></div>
-          <div class="metric-item"><span class="metric-value" id="firstAudioTime">0s</span><span class="metric-label">First Audio</span></div>
-          <div class="metric-item"><span class="metric-value" id="tpsValue">0</span><span class="metric-label">TPS</span></div>
-          <div class="metric-item"><span class="metric-value" id="rtfValue">0</span><span class="metric-label">RTF</span></div>
+          <div class="metric-group">
+            <div class="metric-group-head">
+              <span class="metric-group-icon" aria-hidden="true">🎙</span>
+              <span>Heard you</span>
+              <span class="metric-group-model" id="asrModelName" title=""></span>
+            </div>
+            <div class="metric-group-items">
+              <div class="metric-item"><span class="metric-value" id="transcribeTime">0s</span><span class="metric-label">Transcribe</span></div>
+              <div class="metric-item"><span class="metric-value" id="asrLanguage">—</span><span class="metric-label">Language</span></div>
+              <div class="metric-item" title="How likely the clip held no speech at all — lower is better"><span class="metric-value" id="asrNoSpeech">—</span><span class="metric-label">No Speech</span></div>
+              <div class="metric-item" title="Average token log-probability of the transcript — negative, and closer to 0 means more confident"><span class="metric-value" id="asrLogprob">—</span><span class="metric-label">Avg Logprob</span></div>
+            </div>
+          </div>
+          <div class="metric-group">
+            <div class="metric-group-head">
+              <span class="metric-group-icon" aria-hidden="true">💬</span>
+              <span>Answered</span>
+            </div>
+            <div class="metric-group-items">
+              <div class="metric-item" title="Time to first token"><span class="metric-value" id="firstTokenTime">0s</span><span class="metric-label">First Token</span></div>
+              <div class="metric-item" title="Generation speed in tokens per second"><span class="metric-value" id="tpsValue">0</span><span class="metric-label">Tokens/s</span></div>
+            </div>
+          </div>
+          <div class="metric-group">
+            <div class="metric-group-head">
+              <span class="metric-group-icon" aria-hidden="true">🔊</span>
+              <span>Spoke back</span>
+            </div>
+            <div class="metric-group-items">
+              <div class="metric-item"><span class="metric-value" id="firstAudioTime">0s</span><span class="metric-label">First Audio</span></div>
+              <div class="metric-item" title="Real-time factor: seconds of compute per second of speech — below 1 is faster than real time"><span class="metric-value" id="rtfValue">0</span><span class="metric-label">RTF</span></div>
+            </div>
+          </div>
         </div>
 
         <div id="chatMessages" class="chat-messages">
