@@ -533,7 +533,7 @@ int run(const Config& cfg) {
 
   neat::Graph backbone_graph = backbone.graph();
   neat::Graph backbone_output("backbone_output");
-  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::EveryFrame(2)));
+  backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::Latest()));
 
   neat::GraphLinkOptions link;
   link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;

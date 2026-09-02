@@ -436,7 +436,7 @@ def run(cfg: Config) -> int:
 
     backbone_graph = backbone.graph()
     backbone_output = pyneat.Graph("backbone_output")
-    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(2)))
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.latest()))
 
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
