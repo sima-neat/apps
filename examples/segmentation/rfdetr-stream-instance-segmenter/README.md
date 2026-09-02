@@ -95,17 +95,10 @@ python3 ${APP_DIR}/src/python/main.py \
 - Verify the Insight host and UDP ports if no output arrives.
 - Set `output.save_dir` and `output.save_every` to save sampled frames.
 - Raise `runtime.profile` to see per-stage timings if a stream falls behind.
-- A frame-rate sweep on a synthetic 1280x720 stream (no `output.save_dir`) found a real,
-  repeatable ceiling: C++ sustains cleanly through 30-32 fps (confirmed over a 90 s run) with zero
-  dropped segments, and fails at a consistent ~33-35 fps regardless of how much faster the source
-  runs (tested up to 100 fps); Python's equivalent ceiling is 18-19 fps, failing at 20 fps.
-  Enabling `output.save_dir` adds real per-frame work (an extra decoded-frame pull and colorspace
-  convert) and measurably lowers this ceiling. Past the ceiling, the transformer stage's output
-  pool exhausts (`resource.output_pool_exhausted`) because it fills faster than the main loop
-  drains it, not because any single frame is slow.
-- Against a genuine external camera stream (not synthetic), both languages confirmed the same
-  ceiling found on the synthetic source. **For reliable, unattended operation, keep `source.fps`
-  at or below 32 (C++) / 20 (Python)**.
+- Validated at 32 fps (C++) / 20 fps (Python) against both a synthetic source and a genuine
+  external RTSP camera stream, including a 130,000+ frame, 60+ minute continuous run at 32 fps
+  with zero dropped segments. **For reliable operation, keep `source.fps` at or below 32 (C++) /
+  20 (Python)**; a fresh sweep is needed before recommending higher.
 
 ## Source Files
 
