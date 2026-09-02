@@ -531,23 +531,30 @@ int run(const Config& cfg) {
   video_options.async = true;
   auto video = neat::nodes::groups::VideoSender(video_options);
 
-  neat::Graph backbone_graph = backbone.graph();
+  neat::Graph decoded_output("decoded_output");
+  decoded_output.add(neat::nodes::Output("decoded", neat::OutputOptions::Latest()));
+
+  auto backbone_input_options = backbone.input_appsrc_options(false);
+  backbone_input_options.block = true;
+  backbone_input_options.memory_policy = neat::InputMemoryPolicy::SystemMemory;
+  neat::Graph backbone_input("backbone_input");
+  backbone_input.add(neat::nodes::Input("frame", backbone_input_options));
+  neat::Graph backbone_route = backbone.graph();
   neat::Graph backbone_output("backbone_output");
   backbone_output.add(neat::nodes::Output("backbone", neat::OutputOptions::Latest()));
 
-  neat::GraphLinkOptions link;
-  link.policy = neat::GraphLinkPolicy::RealtimeLatestByStream;
-  link.max_inflight_per_stream = 2;
-  link.stream_id = "stream0";
-  neat::Graph graph("rfdetr");
-  graph.connect(source, decode);
+  neat::Graph source_graph("rfdetr_source");
+  source_graph.connect(source, decode);
   if (cfg.codec == SourceCodec::Mjpeg) {
-    graph.connect(decode, video);
+    source_graph.connect(decode, video);
   } else {
-    graph.connect(source, video);
+    source_graph.connect(source, video);
   }
-  graph.connect(decode, backbone_graph, link);
-  graph.connect(backbone_graph, backbone_output);
+  source_graph.connect(decode, decoded_output);
+
+  neat::Graph backbone_graph("rfdetr_backbone");
+  backbone_graph.connect(backbone_input, backbone_route);
+  backbone_graph.connect(backbone_route, backbone_output);
 
   neat::RunOptions transformer_run_options;
   transformer_run_options.preset = neat::RunPreset::Realtime;
@@ -562,13 +569,16 @@ int run(const Config& cfg) {
   neat::Model::Runner transformer_runner =
       transformer.build(transformer_seed, neat::Model::RouteOptions{}, transformer_run_options);
 
-  neat::RunOptions source_options;
-  source_options.preset = neat::RunPreset::Realtime;
-  source_options.queue_depth = 3;
-  source_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
-  source_options.output_memory = neat::OutputMemory::ZeroCopy;
-  source_options.advanced.prepare_output_cpu_visible = true;
-  neat::Run source_run = graph.build(source_options);
+  neat::RunOptions backbone_run_options;
+  backbone_run_options.preset = neat::RunPreset::Realtime;
+  backbone_run_options.output_memory = neat::OutputMemory::ZeroCopy;
+  backbone_run_options.advanced.prepare_output_cpu_visible = true;
+  neat::Run backbone_run = backbone_graph.build(backbone_run_options);
+
+  neat::RunOptions source_run_options;
+  source_run_options.preset = neat::RunPreset::Realtime;
+  source_run_options.output_memory = neat::OutputMemory::ZeroCopy;
+  neat::Run source_run = source_graph.build(source_run_options);
 
   neat::MetadataSenderOptions metadata_options;
   metadata_options.host = cfg.insight_host;
@@ -583,13 +593,36 @@ int run(const Config& cfg) {
             << " metadata=" << metadata_sender.metadata_port() << "\n";
 
   const int proposal_count = (cfg.input_size / 16) * (cfg.input_size / 16);
-  std::string bridge_error;
+  std::string decode_bridge_error;
+  std::string transformer_bridge_error;
   std::mutex identity_mutex;
   std::map<int64_t, int64_t> source_pts;
-  std::thread bridge([&] {
+  std::thread decode_bridge([&] {
     try {
       while (!g_stop.load()) {
-        auto sample = source_run.pull("backbone", 500);
+        auto sample = source_run.pull("decoded", 500);
+        if (!sample.has_value()) {
+          continue;
+        }
+        if (!backbone_run.try_push(*sample)) {
+          const std::string detail = backbone_run.last_error();
+          if (!g_stop.load() && (!detail.empty() || !backbone_run.running())) {
+            throw std::runtime_error(detail.empty() ? "backbone input closed" : detail);
+          }
+          continue;
+        }
+      }
+    } catch (const std::exception& error) {
+      if (!g_stop.load()) {
+        decode_bridge_error = error.what();
+      }
+      g_stop.store(true);
+    }
+  });
+  std::thread transformer_bridge([&] {
+    try {
+      while (!g_stop.load()) {
+        auto sample = backbone_run.pull("backbone", 500);
         if (!sample.has_value()) {
           continue;
         }
@@ -620,7 +653,7 @@ int run(const Config& cfg) {
       }
     } catch (const std::exception& error) {
       if (!g_stop.load()) {
-        bridge_error = error.what();
+        transformer_bridge_error = error.what();
       }
       g_stop.store(true);
     }
@@ -660,17 +693,24 @@ int run(const Config& cfg) {
   } catch (...) {
     g_stop.store(true);
     source_run.stop();
+    backbone_run.stop();
     transformer_runner.close();
-    bridge.join();
+    decode_bridge.join();
+    transformer_bridge.join();
     throw;
   }
 
   g_stop.store(true);
   source_run.stop();
+  backbone_run.stop();
   transformer_runner.close();
-  bridge.join();
-  if (!bridge_error.empty()) {
-    throw std::runtime_error(bridge_error);
+  decode_bridge.join();
+  transformer_bridge.join();
+  if (!decode_bridge_error.empty()) {
+    throw std::runtime_error(decode_bridge_error);
+  }
+  if (!transformer_bridge_error.empty()) {
+    throw std::runtime_error(transformer_bridge_error);
   }
   std::cout << "RF-DETR " << cfg.variant << ": completed " << processed << " detections\n";
   return 0;
