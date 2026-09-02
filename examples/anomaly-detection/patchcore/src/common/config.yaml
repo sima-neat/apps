@@ -2,7 +2,7 @@ model:                                         # PatchCore feature-extractor mod
   path: models/patchcore_wide_resnet50_2_bf16_mla.tar.gz
 
 source:
-  type: video_file
+  type: rtsp
   image_dir: assets/datasets/patchcore/images   # Used when type=image_dir.
   video_path: assets/datasets/patchcore/video/test.mp4
   rtsp:                                          # Used when type=rtsp.

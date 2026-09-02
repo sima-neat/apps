@@ -73,7 +73,7 @@ struct Config {
   double gaussian_sigma = 4.0;
 
   fs::path output_dir;
-  int save_every = 1;
+  int save_every = 0; // image_dir: always saves regardless. video_file/rtsp: 0 disables local saving.
   double overlay_alpha = 0.45;
 
   std::string insight_host; // video_file/rtsp only
@@ -155,7 +155,7 @@ Config load_config(const fs::path& path) {
   cfg.gaussian_sigma = raw.double_or("scoring.gaussian_sigma", 4.0);
 
   cfg.output_dir = raw.string_or("output.dir", "sandbox/patchcore");
-  cfg.save_every = raw.int_or("output.save_every", 1);
+  cfg.save_every = raw.int_or("output.save_every", 0);
   cfg.overlay_alpha = raw.double_or("output.overlay_alpha", 0.45);
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.insight_video_port = raw.int_or("output.insight.video_port", 9000);
@@ -295,7 +295,8 @@ int cmd_calibrate(const Config& cfg) {
   std::vector<patchcore::PatchEmbeddings> per_image;
   per_image.reserve(paths.size());
   std::size_t total_patches = 0;
-  for (const auto& path : paths) {
+  for (std::size_t i = 0; i < paths.size(); ++i) {
+    const auto& path = paths[i];
     cv::Mat bgr = cv::imread(path.string(), cv::IMREAD_COLOR);
     if (bgr.empty()) {
       std::cerr << "[WARN] could not read image: " << path << "\n";
@@ -304,6 +305,10 @@ int cmd_calibrate(const Config& cfg) {
     auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
     total_patches += embedding.patch_count();
     per_image.push_back(std::move(embedding));
+    if ((i + 1) % 10 == 0 || i + 1 == paths.size()) {
+      std::cout << "  [" << (i + 1) << "/" << paths.size() << "] " << path.filename().string()
+                << "\n";
+    }
   }
 
   const auto bank = patchcore::MemoryBank::build(per_image, cfg.coreset_ratio, cfg.seed);
@@ -662,8 +667,8 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
       throw std::runtime_error("failed to pull output: " + pull_error.message);
     }
 
-    const double mla_start = time_ms();
     const cv::Mat bgr = frame_bgr_from_sample(sample);
+    const double mla_start = time_ms();
     const auto embedding = extract_from_bgr(model, bgr, cfg.timeout_ms);
     const double mla_ms = time_ms() - mla_start;
 
@@ -717,6 +722,7 @@ int main(int argc, char** argv) {
       return 2;
     }
     const auto meta = patchcore::load_bank_meta(cfg.bank_meta_path);
+    std::cout << "Verifying model package...\n";
     patchcore::verify_bank_matches_model(meta, cfg.model_path);
     const auto bank = patchcore::MemoryBank::load(cfg.memory_bank_path);
     const auto threshold = static_cast<float>(meta.threshold_value);

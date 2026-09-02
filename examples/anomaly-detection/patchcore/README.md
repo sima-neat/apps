@@ -179,6 +179,7 @@ Open the Insight web viewer pointed at `output.insight.host` to watch the heatma
 - `rtsp`: `failed to resolve source geometry` -- the stream wasn't reachable or didn't expose probeable width/height/fps; for `codec: h265` or `mjpeg`, set `source.rtsp.width`/`height` explicitly -- those caps aren't self-describing the way H.264 SPS is, so Neat needs the hint (H.264 does not need it).
 - Nothing appears in Insight: confirm `output.insight.host` is reachable and Insight is listening on the configured `video_port`/`channel`; check for a `[FATAL]`/`Insight video push failed` line in the app's own output first.
 - Confirm `output.dir` is writable (`image_dir` always, `video_file`/`rtsp` only when `save_every > 0`).
+- `--calibrate` appears to hang on a large nominal set: it prints per-image progress every 10 images, so check that it's advancing rather than stalled. Greedy k-center coreset selection is O(k*n) in the nominal patch count; lowering `calibration.coreset_ratio` reduces both build time and score() cost per frame.
 
 ## Source Files
 
@@ -197,7 +198,7 @@ To modify, compile, or test this example, use the [Apps contributor workflow](ht
 ## Model source and versions
 
 - Backbone: `torchvision.models.wide_resnet50_2`, weights `Wide_ResNet50_2_Weights.IMAGENET1K_V1`.
-- Coreset ratio: 1% (`calibration.coreset_ratio: 0.01`) if unset; smaller values score faster at the cost of a coarser bank.
+- Coreset ratio: 1% (`calibration.coreset_ratio: 0.01`) if unset; smaller values score faster at the cost of a coarser bank. The shipped `config.yaml` sets `0.006` -- measured on-device, `0.01` gave ~19.6fps on `video_file`/`rtsp` (just under a 20fps target), while `0.006` gave ~27fps with no visible loss of detection quality on the bundled test images. Recalibrate (`--calibrate`) after changing this.
 - Neighborhood-reweighting support size: 9 (`scoring.num_neighbors: 9`), matching common PatchCore reference implementations.
 - Anomaly-map Gaussian smoothing: sigma 4 output pixels (`scoring.gaussian_sigma: 4.0`).
 - Validated with Neat 0.4.0 and Model SDK 2.1.3 on a Modalix board.

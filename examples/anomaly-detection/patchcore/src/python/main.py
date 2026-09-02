@@ -123,7 +123,7 @@ class ScoringConfig:
 @dataclass(frozen=True)
 class OutputConfig:
     dir: str = "sandbox/patchcore"
-    save_every: int = 1  # image_dir: always used. video_file/rtsp: 0 disables local saving.
+    save_every: int = 0  # image_dir: always saves regardless. video_file/rtsp: 0 disables local saving.
     overlay_alpha: float = 0.45
     insight_host: str = ""  # video_file/rtsp only.
     insight_video_port: int = 9000
@@ -197,7 +197,7 @@ def load_config(path: Path) -> AppConfig:
         ),
         output=OutputConfig(
             dir=output.get("dir", "sandbox/patchcore"),
-            save_every=int(output.get("save_every", 1)),
+            save_every=int(output.get("save_every", 0)),
             overlay_alpha=float(output.get("overlay_alpha", 0.45)),
             insight_host=insight.get("host", ""),
             insight_video_port=int(insight.get("video_port", 9000)),
@@ -317,12 +317,14 @@ def cmd_calibrate(cfg: AppConfig) -> int:
     model = make_image_model(cfg.model_path)
     print(f"Extracting patch embeddings from {len(paths)} nominal images ...")
     per_image = []
-    for path in paths:
+    for i, path in enumerate(paths, start=1):
         bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
             print(f"[WARN] could not read image: {path}", file=sys.stderr)
             continue
         per_image.append(extract_from_bgr(model, bgr, cfg.timeout_ms))
+        if i % 10 == 0 or i == len(paths):
+            print(f"  [{i}/{len(paths)}] {path.name}")
 
     bank = MemoryBank.build(per_image, cfg.calibration.coreset_ratio, cfg.calibration.seed)
     print(
@@ -658,7 +660,11 @@ def find_field(sample, label: str):
 
 def tensor_dim(tensor, name: str) -> int:
     """`Tensor.width`/`.height` are plain attributes on some pyneat builds and
-    bound methods on others; call through only when it's actually callable."""
+    bound methods on others; call through only when it's actually callable.
+    The exact pyneat version boundary isn't pinned down -- the same pattern is
+    used in examples/segmentation/single-stream-instance-segmenter, discovered
+    the same way. Safe to remove once the minimum supported pyneat version is
+    confirmed to always expose these as plain attributes."""
     value = getattr(tensor, name)
     return int(value() if callable(value) else value)
 
@@ -717,8 +723,8 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float) -> int:
             if sample is None:
                 print("[warn] source closed", file=sys.stderr)
                 break
-            mla_start = time_ms()
             bgr = frame_bgr_from_sample(sample)
+            mla_start = time_ms()
             embedding = extract_from_bgr(model, bgr, cfg.timeout_ms)
             mla_ms = time_ms() - mla_start
 
@@ -784,6 +790,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         meta = load_bank_meta(meta_path)
+        print("Verifying model package...")
         verify_bank_matches_model(meta, cfg.model_path)
         bank = MemoryBank.load(bank_path)
         threshold = float(meta["threshold"]["value"])

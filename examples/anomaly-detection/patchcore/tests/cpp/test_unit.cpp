@@ -9,8 +9,10 @@
 // support_runtime, so it cannot call into that library directly. This test is
 // scoped to what test_unit.cpp binaries in this repo test elsewhere: the CLI
 // surface.
+#include "support/testing/test_config.h"
 #include "support/testing/test_process.h"
 
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -81,8 +83,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Test 5: memory bank missing (a valid config, but --calibrate was never run)
-  // is rejected with a clear, actionable message rather than a crash.
+  // Test 5: --validate-config-only accepts the shipped default config.
   {
     auto r = spawn_and_wait(binary, {"--validate-config-only"}, 20000);
     if (r.exit_code != 0) {
@@ -90,6 +91,38 @@ int main(int argc, char** argv) {
       ++failures;
     } else {
       std::cout << "[OK] --validate-config-only accepts the shipped default config\n";
+    }
+  }
+
+  // Test 6: memory bank missing (a valid config, but --calibrate was never run)
+  // is rejected with a clear, actionable message rather than a crash.
+  {
+    const std::string out_dir =
+        sima_examples::testing::create_test_output_dir("patchcore", "test_missing_bank_rejected");
+    if (out_dir.empty()) {
+      ++failures;
+    } else {
+      const std::filesystem::path run_dir = std::filesystem::path(out_dir).parent_path();
+      const std::filesystem::path config_path = run_dir / "config.yaml";
+      sima_examples::testing::write_e2e_config(
+          "patchcore", config_path,
+          {
+              {"model.path", "dummy-model.tar.gz"},
+              {"memory_bank.path", (run_dir / "memory_bank.npy").string()},
+              {"memory_bank.meta_path", (run_dir / "bank_meta.json").string()},
+          });
+
+      auto r = spawn_and_wait(binary, {"--config", config_path.string()}, 20000);
+      if (r.exit_code != 2) {
+        std::cerr << "[FAIL] missing bank: expected exit 2, got " << r.exit_code << "\n";
+        ++failures;
+      } else if (r.stderr_text.find("memory bank not found") == std::string::npos) {
+        std::cerr << "[FAIL] missing bank: stderr does not explain the failure\n";
+        ++failures;
+      } else {
+        std::cout << "[OK] missing memory bank correctly rejected\n";
+      }
+      sima_examples::testing::remove_dir(out_dir);
     }
   }
 
