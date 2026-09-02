@@ -335,8 +335,12 @@ int cmd_calibrate(const Config& cfg) {
   std::cout << "Threshold: " << threshold << " (p" << cfg.threshold_percentile << " over "
             << threshold_num_images << " nominal images from " << threshold_dir << ")\n";
 
-  fs::create_directories(cfg.memory_bank_path.parent_path());
-  fs::create_directories(cfg.bank_meta_path.parent_path());
+  if (!cfg.memory_bank_path.parent_path().empty()) {
+    fs::create_directories(cfg.memory_bank_path.parent_path());
+  }
+  if (!cfg.bank_meta_path.parent_path().empty()) {
+    fs::create_directories(cfg.bank_meta_path.parent_path());
+  }
   bank.save(cfg.memory_bank_path);
 
   patchcore::BankMeta meta;
@@ -370,7 +374,8 @@ int cmd_calibrate(const Config& cfg) {
 // classification/image-classifier, etc.).
 // ---------------------------------------------------------------------------
 
-int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, float threshold) {
+int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
+                        int num_neighbors) {
   const auto paths = find_images(cfg.image_dir);
   if (paths.empty()) {
     std::cerr << "[FATAL] no images found in " << cfg.image_dir << "\n";
@@ -393,7 +398,7 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
     const double mla_ms = time_ms() - mla_start;
 
     const double host_start = time_ms();
-    const auto scored = bank.score(embedding, cfg.num_neighbors);
+    const auto scored = bank.score(embedding, num_neighbors);
     const cv::Mat overlay = draw_overlay(bgr, scored, embedding.height, embedding.width,
                                          cfg.gaussian_sigma, cfg.overlay_alpha);
     const double host_ms = time_ms() - host_start;
@@ -460,7 +465,8 @@ void stream_frame(simaai::neat::Run& run, const cv::Mat& frame_bgr) {
   }
 }
 
-int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, float threshold) {
+int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
+                         int num_neighbors) {
   cv::VideoCapture video(cfg.video_path.string());
   cv::Mat frame;
   if (!video.isOpened() || !video.read(frame)) {
@@ -494,7 +500,7 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
     const double mla_ms = time_ms() - mla_start;
 
     const double host_start = time_ms();
-    const auto scored = bank.score(embedding, cfg.num_neighbors);
+    const auto scored = bank.score(embedding, num_neighbors);
     const cv::Mat overlay = draw_overlay(frame, scored, embedding.height, embedding.width,
                                          cfg.gaussian_sigma, cfg.overlay_alpha);
     const double host_ms = time_ms() - host_start;
@@ -637,7 +643,8 @@ RtspRuntime build_rtsp_runtime(const Config& cfg, const SourceGeometry& geometry
   return rt;
 }
 
-int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float threshold) {
+int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
+                   int num_neighbors) {
   const auto geometry = probe_rtsp_geometry(cfg);
   if (geometry.width <= 0 || geometry.height <= 0 || geometry.fps <= 0) {
     std::cerr << "[FATAL] failed to resolve source geometry for " << cfg.rtsp_url << "\n";
@@ -673,7 +680,7 @@ int cmd_score_rtsp(const Config& cfg, const patchcore::MemoryBank& bank, float t
     const double mla_ms = time_ms() - mla_start;
 
     const double host_start = time_ms();
-    const auto scored = bank.score(embedding, cfg.num_neighbors);
+    const auto scored = bank.score(embedding, num_neighbors);
     const cv::Mat overlay = draw_overlay(bgr, scored, embedding.height, embedding.width,
                                          cfg.gaussian_sigma, cfg.overlay_alpha);
     const bool anomalous = scored.image_score >= threshold;
@@ -726,14 +733,28 @@ int main(int argc, char** argv) {
     patchcore::verify_bank_matches_model(meta, cfg.model_path);
     const auto bank = patchcore::MemoryBank::load(cfg.memory_bank_path);
     const auto threshold = static_cast<float>(meta.threshold_value);
+    // num_neighbors changes the neighborhood-reweighting term, which changes
+    // the score distribution the threshold above was derived from. Score with
+    // the value the bank was actually calibrated with (like the threshold
+    // itself), not whatever the live config currently says -- otherwise a
+    // config edit after calibration silently compares scores and a threshold
+    // from different distributions.
+    const int num_neighbors = meta.num_neighbors;
+    if (num_neighbors != cfg.num_neighbors) {
+      std::cerr << "[WARN] scoring.num_neighbors=" << cfg.num_neighbors
+                << " in config differs from the bank's calibrated value (" << num_neighbors
+                << "); using " << num_neighbors
+                << " to stay consistent with the saved threshold. Recalibrate to adopt the new "
+                   "value.\n";
+    }
 
     if (cfg.source_type == SourceType::ImageDir) {
-      return cmd_score_image_dir(cfg, bank, threshold);
+      return cmd_score_image_dir(cfg, bank, threshold, num_neighbors);
     }
     if (cfg.source_type == SourceType::VideoFile) {
-      return cmd_score_video_file(cfg, bank, threshold);
+      return cmd_score_video_file(cfg, bank, threshold, num_neighbors);
     }
-    return cmd_score_rtsp(cfg, bank, threshold);
+    return cmd_score_rtsp(cfg, bank, threshold, num_neighbors);
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n";
     return 1;

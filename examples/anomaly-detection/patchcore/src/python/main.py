@@ -381,7 +381,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
 # --------------------------------------------------------------------------
 
 
-def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float) -> int:
+def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int) -> int:
     paths = find_images(Path(cfg.image_dir))
     if not paths:
         print(f"[FATAL] no images found in {cfg.image_dir}", file=sys.stderr)
@@ -402,7 +402,7 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float) -> i
         mla_ms = time_ms() - mla_start
 
         host_start = time_ms()
-        scored = bank.score(embedding, cfg.scoring.num_neighbors)
+        scored = bank.score(embedding, num_neighbors)
         overlay = draw_overlay(bgr, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha)
         host_ms = time_ms() - host_start
 
@@ -461,7 +461,7 @@ def stream_frame(run, frame_bgr) -> None:
         raise RuntimeError("Insight video push failed")
 
 
-def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float) -> int:
+def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int) -> int:
     video = cv2.VideoCapture(cfg.video_path)
     ok, frame = video.read()
     if not video.isOpened() or not ok:
@@ -494,7 +494,7 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float) -> 
             mla_ms = time_ms() - mla_start
 
             host_start = time_ms()
-            scored = bank.score(embedding, cfg.scoring.num_neighbors)
+            scored = bank.score(embedding, num_neighbors)
             overlay = draw_overlay(frame, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha)
             host_ms = time_ms() - host_start
 
@@ -580,20 +580,27 @@ def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
 
 
 def probe_rtsp_capture(url: str) -> tuple[int, int, int]:
+    """Best-effort OpenCV probe. Returns zeros (never raises) on failure --
+    resolve_rtsp_geometry applies the configured source.rtsp.width/height
+    hints and reports one clear failure to the caller instead."""
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
-        raise RuntimeError(f"failed to probe RTSP source: {url}")
+        return 0, 0, 0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
     cap.release()
-    if width <= 0 or height <= 0:
-        raise RuntimeError("failed to probe RTSP frame size")
     return width, height, fps
 
 
 def resolve_rtsp_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     width, height, fps = probe_ffprobe(cfg)
+    # Configured hints take priority over probed values -- required for
+    # h265/mjpeg, whose caps aren't self-describing the way H.264 SPS is, so
+    # probing frequently can't discover dimensions at all (matches main.cpp's
+    # probe_rtsp_geometry).
+    width = cfg.rtsp.width if cfg.rtsp.width > 0 else width
+    height = cfg.rtsp.height if cfg.rtsp.height > 0 else height
     if width <= 0 or height <= 0 or fps <= 0:
         probed_w, probed_h, probed_fps = probe_rtsp_capture(cfg.rtsp.url)
         width = width if width > 0 else probed_w
@@ -699,7 +706,7 @@ def build_rtsp_graph(cfg: AppConfig, width: int, height: int, fps: int):
     return graph.build(run_options)
 
 
-def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float) -> int:
+def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int) -> int:
     width, height, fps = resolve_rtsp_geometry(cfg)
     if width <= 0 or height <= 0 or fps <= 0:
         print(f"[FATAL] failed to resolve source geometry for {cfg.rtsp.url}", file=sys.stderr)
@@ -729,7 +736,7 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float) -> int:
             mla_ms = time_ms() - mla_start
 
             host_start = time_ms()
-            scored = bank.score(embedding, cfg.scoring.num_neighbors)
+            scored = bank.score(embedding, num_neighbors)
             overlay = draw_overlay(bgr, scored.score_map, cfg.scoring.gaussian_sigma, cfg.output.overlay_alpha)
             verdict = "ANOMALOUS" if scored.image_score >= threshold else "normal"
             processed += 1
@@ -794,12 +801,26 @@ def main(argv: list[str] | None = None) -> int:
         verify_bank_matches_model(meta, cfg.model_path)
         bank = MemoryBank.load(bank_path)
         threshold = float(meta["threshold"]["value"])
+        # num_neighbors changes the neighborhood-reweighting term, which changes
+        # the score distribution the threshold above was derived from. Score
+        # with the value the bank was actually calibrated with (like the
+        # threshold itself), not whatever the live config currently says --
+        # otherwise a config edit after calibration silently compares scores
+        # and a threshold from different distributions.
+        num_neighbors = int(meta["num_neighbors"])
+        if num_neighbors != cfg.scoring.num_neighbors:
+            print(
+                f"[WARN] scoring.num_neighbors={cfg.scoring.num_neighbors} in config differs from "
+                f"the bank's calibrated value ({num_neighbors}); using {num_neighbors} to stay "
+                "consistent with the saved threshold. Recalibrate to adopt the new value.",
+                file=sys.stderr,
+            )
 
         if cfg.source_type == "image_dir":
-            return cmd_score_image_dir(cfg, bank, threshold)
+            return cmd_score_image_dir(cfg, bank, threshold, num_neighbors)
         if cfg.source_type == "video_file":
-            return cmd_score_video_file(cfg, bank, threshold)
-        return cmd_score_rtsp(cfg, bank, threshold)
+            return cmd_score_video_file(cfg, bank, threshold, num_neighbors)
+        return cmd_score_rtsp(cfg, bank, threshold, num_neighbors)
     except KeyboardInterrupt:
         return 130
     except Exception as exc:  # noqa: BLE001
