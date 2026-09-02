@@ -1,0 +1,39 @@
+model:
+  path: <model-path>         # Root folder holding the three extracted stage bundles (see README).
+  labels: examples/segmentation/rfdetr-stream-instance-segmenter/src/common/coco_label.txt
+
+source:
+  url: <rtsp-url>             # Example: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+  tcp: true                   # Use TCP for RTSP transport.
+  latency_ms: 200             # RTSP receive latency in milliseconds.
+  fps: 0                      # 0 probes FPS from the stream.
+
+inference:
+  frames: 0                   # Frame limit. 0 means run continuously.
+  score_threshold: 0.30       # Per-query detection score threshold (post-sigmoid).
+  max_detections: 24          # Max instances to keep per frame.
+
+runtime:
+  profile: false              # Print aggregate profiling summaries.
+  profile_interval: 100       # Rolling profile window in published frames.
+
+output:
+  save_dir: ""                # Optional directory for annotated frames.
+  save_every: 0                # Save every Nth output frame. 0 disables saving.
+  mask_alpha: 0.55             # Mask overlay opacity in saved frames.
+  mask_threshold: 0.08         # Foreground cutoff on the sigmoid-activated mask (post-sigmoid, 0-1).
+                                # The device seg-head's BF16 quantization affine-shifts mask logits, so
+                                # the true foreground boundary sits near sigmoid(-2.4..-3.0) ~= 0.05-0.08,
+                                # not 0.5. Verify against your own model export before trusting this default.
+  draw_boxes: true             # Draw boxes and labels over mask overlays in saved frames.
+  insight:
+    host: <insight-host-ip>    # Host running the Insight receiver/viewer.
+    video_port: 9000           # UDP video port.
+    metadata_port: 9100        # UDP metadata port.
+
+# Test harness settings only. Normal example runs ignore this section.
+testing:
+  e2e:
+    output:
+      save_every: 10
+      total_saved_frames: 20

@@ -1,0 +1,23 @@
+models:
+  rfdetr-seg-432-base:
+    source: url
+    url: https://drive.usercontent.google.com/download?id=1jN7igMyQPvRlknuZ5KT9SRA3M9NOTOX5&export=download&confirm=t
+    file: models.zip
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: false
+    reason: >-
+      Needs an RTSP H.264 test fixture, which CI does not provide yet. The model archive
+      is hosted and the pipeline is verified on Modalix hardware; enable once an RTSP
+      source is available to the runner.
+    models: []
+  cpp:
+    enabled: false
+    reason: >-
+      Needs an RTSP H.264 test fixture, which CI does not provide yet. The model archive
+      is hosted and the pipeline is verified on Modalix hardware; enable once an RTSP
+      source is available to the runner.
+    models: []
