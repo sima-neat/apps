@@ -176,6 +176,12 @@ validate_rag_database = None
 wait_for_rag_service = None
 
 
+# How long the UI trusts its copy of the active ASR model name before asking
+# the control API again. Short: the model can be switched out from under this
+# process, and a stale name means a failed transcription.
+_ASR_NAME_TTL_S = 5
+
+
 def save_image_upload_as_base64(image_file, upload_folder):
     filename = secure_filename(image_file.filename or "")
     if not filename:
@@ -990,12 +996,18 @@ class AppContext:
         return self.asr_model_name
 
     def resolve_asr_model(self):
-        """The ASR model serving transcriptions, asking the control API if the
-        UI has not been told one yet (short cache, like the catalog names)."""
-        if self.asr_model_name:
-            return self.asr_model_name
+        """The ASR model serving transcriptions, refreshed on a short TTL.
+
+        The startup name is not permanently authoritative: the active model can
+        change without passing through this process — an operator calling
+        /control/asr directly, as the README documents — and sending an evicted
+        name just fails the transcription. So re-read it from the control API
+        rather than trusting what we were told last. One local request per
+        recording at most; if it cannot be reached we keep using the last known
+        name rather than caching the failure.
+        """
         cached_at, cached = self._asr_name_cache
-        if (time.monotonic() - cached_at) < 5:
+        if cached and (time.monotonic() - cached_at) < _ASR_NAME_TTL_S:
             return cached
         try:
             resp = requests.get(
@@ -1004,6 +1016,11 @@ class AppContext:
             name = str((resp.json() or {}).get("asrModel") or "")
         except Exception:
             name = ""
+        if not name:
+            return cached or self.asr_model_name
+        if name != self.asr_model_name:
+            logging.info("Active ASR model changed out from under the UI: %r", name)
+            return self.set_asr_model_name(name)
         self._asr_name_cache = (time.monotonic(), name)
         return name
 

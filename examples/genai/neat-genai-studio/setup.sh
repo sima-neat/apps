@@ -16,8 +16,10 @@ CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-}"
 # Extra compatible chat/VLM models to seed the catalog (space-separated HF repos).
 # Example: CATALOG_MODEL_REPOS="simaai/Llama-3.2-3B-Instruct-... simaai/..."
 CATALOG_MODEL_REPOS="${CATALOG_MODEL_REPOS:-}"
-# Speech-to-text model downloaded and made active at startup. Set to "" to skip.
-ASR_MODEL_REPO="${ASR_MODEL_REPO:-simaai/whisper-small-a16w8}"
+# Speech-to-text model downloaded and made active at startup.
+# Set ASR_MODEL_REPO="" to install none (note the `-`, not `:-`, so an
+# explicitly empty value is honoured rather than falling back to the default).
+ASR_MODEL_REPO="${ASR_MODEL_REPO-simaai/whisper-small-a16w8}"
 # Extra ASR models to seed the catalog (space-separated HF repos); switch
 # between them at runtime in Settings -> Models. Example:
 #   ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8"
