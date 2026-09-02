@@ -8,15 +8,15 @@
 | Difficulty | Beginner |
 | Tags | retinaface, face-detection |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | face-detector |
 | Model | retinaface_mobilenet25 |
 
 ## Concept
 
-This example runs RetinaFace over an image folder. RetinaFace predicts face boxes, confidence scores, and five landmarks for eyes, nose, and mouth.
+Finds faces in a folder of images with RetinaFace, then saves annotated results with confidence scores and five facial landmarks.
 
-The example decodes the compiled model outputs, filters low-confidence candidates, applies non-maximum suppression, and writes annotated images.
+The application decodes the model output, removes weak and duplicate detections, and writes annotated images.
 
 ## Preview
 
@@ -33,6 +33,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/face-detection/face-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -46,7 +47,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.2"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/retinaface_mobilenet25_mod_0_mpk.tar.gz"
@@ -57,37 +58,24 @@ Set `model.path` in the config to the downloaded package.
 
 ## Configure
 
-Edit `examples/face-detection/face-detector/src/common/config.yaml`.
-
-```yaml
-model:
-  path: <model-path>
-
-io:
-  input_dir: assets/datasets/coco
-  output_dir: sandbox/face-detector
-
-decode:
-  confidence_threshold: 0.40
-  landmarks: true
-```
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`, `io.input_dir`, and `io.output_dir`. You can also change the confidence threshold or turn facial landmarks off.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/face-detection/face-detector/src/cpp/pre-built/face-detector \
-  --config examples/face-detection/face-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/face-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/face-detection/face-detector/src/python/requirements.txt
-python3 examples/face-detection/face-detector/src/python/main.py \
-  --config examples/face-detection/face-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

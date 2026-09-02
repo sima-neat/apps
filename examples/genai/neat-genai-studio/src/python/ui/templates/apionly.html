@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SiMa.ai GenAI Demo</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='icons/neat-logo.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='newui.css') }}">
+  </head>
+  <body style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; text-align: center; font-family: Roboto, sans-serif; background-color: #fff; color: #333;">
+
+    <!-- Logo -->
+    <div class="d-flex justify-content-center mb-4">
+      <h2 class="d-flex align-items-center">
+        <img src="{{ url_for('static', filename='icons/logo.svg') }}" alt="SiMa.ai Logo"
+             style="height: 60px; width: auto; margin-bottom: 20px;">
+      </h2>
+    </div>
+
+    <!-- Message -->
+    <div style="max-width: 600px; padding: 20px; background-color: #f8f9fa; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1);">
+      <h1 style="color: #5998dd; margin-bottom: 15px;">UI Disabled</h1>
+      <p style="font-size: 18px; line-height: 1.6; color: #555;">
+        The system is currently running in <strong>API-only mode</strong>.<br>
+        Please interact with the backend services programmatically.
+      </p>
+    </div>
+
+  </body>
+</html>

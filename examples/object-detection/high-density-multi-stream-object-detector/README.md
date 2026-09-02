@@ -14,9 +14,9 @@
 
 ## Concept
 
-This example runs one shared YOLO26 detector across fixed 16-, 24-, and 48-stream RTSP profiles and publishes encoded video with synchronized detection metadata to Insight.
+Runs one YOLO26 detector across 16, 24, or 48 RTSP streams and sends synchronized video and detection metadata to Insight.
 
-It complements `multi-stream-object-detector`. That example demonstrates the general multi-stream API; this example demonstrates the tuned high-density pipeline.
+Unlike the general multi-stream detector, this application tunes the pipeline for high stream counts.
 
 Each RTSP source is depacketized once, then Core fuses two branches into the same source pipeline:
 
@@ -65,6 +65,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/high-density-multi-stream-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -78,7 +79,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.2"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/yolo26n-det-int8-b1.tar.gz"
@@ -105,7 +106,7 @@ The result must report the codec selected by `input.codec`, `1280x720`, the sele
 
 ## Configure
 
-Choose one config under `src/common/` and edit:
+Choose one config under `${APP_DIR}/src/common/` and edit:
 
 - `model.path`
 - every entry under `streams`
@@ -133,7 +134,7 @@ Set the example and selected profile from the `prebuilt-apps/` root:
 
 ```bash
 APP_DIR=examples/object-detection/high-density-multi-stream-object-detector
-APP=./examples/object-detection/high-density-multi-stream-object-detector/src/cpp/pre-built/high-density-multi-stream-object-detector
+APP=./${APP_DIR}/src/cpp/pre-built/high-density-multi-stream-object-detector
 CONFIG="$APP_DIR/src/common/config.yaml"
 ```
 

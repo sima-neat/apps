@@ -8,13 +8,13 @@
 | Difficulty | Intermediate |
 | Tags | segmentation, yolo26, instance-segmentation, rtsp, insight |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | single-stream-instance-segmenter |
 | Model | yolo26m-seg-bf16-b1 |
 
 ## Concept
 
-This example ingests one RTSP H.264/H.265/MJPEG or HTTP MJPEG stream, runs YOLO26 instance segmentation, and sends H.264 video plus segmentation metadata to Insight, which draws the masks over the video.
+Segments objects in one RTSP or MJPEG stream with YOLO26 and sends synchronized H.264 video and mask metadata to Insight.
 
 The decoded frame branches inside a single graph to the segmenter and to the H.264 sender. Both outputs therefore carry timestamps from the same frame, which is what lets Insight draw each mask on the frame it came from. Setting `output.save_dir` adds a third branch that returns the decoded frame to the application so it can write annotated JPEGs.
 
@@ -36,6 +36,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/segmentation/single-stream-instance-segmenter
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -56,7 +57,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-export MODELZOO_VERSION="2.1.2"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-segmentation/<model-file>"
@@ -73,47 +74,26 @@ In the Insight Web UI, start the required stream and copy its source URL. Use RT
 
 ## Configure
 
-Edit `examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, the source type, codec, and URL, and the Insight host and video and metadata ports.
 
-```yaml
-model:
-  path: <model-path>
-  labels: examples/segmentation/single-stream-instance-segmenter/src/common/coco_label.txt
-
-source:
-  type: rtsp
-  codec: h264
-  url: <rtsp-url>
-  tcp: true
-  fps: 0
-
-inference:
-  frames: 0
-  min_score: 0.55
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port: <videoUDP-start-port>
-    metadata_port: <metadataUDP-start-port>
-```
+The source supports RTSP H.264, H.265, and MJPEG, plus HTTP MJPEG. Set `output.save_dir` only if you also want sampled annotated images.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/segmentation/single-stream-instance-segmenter/src/cpp/pre-built/single-stream-instance-segmenter \
-  --config examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/single-stream-instance-segmenter \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/segmentation/single-stream-instance-segmenter/src/python/requirements.txt
-python3 examples/segmentation/single-stream-instance-segmenter/src/python/main.py \
-  --config examples/segmentation/single-stream-instance-segmenter/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

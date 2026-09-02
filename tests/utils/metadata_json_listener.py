@@ -124,15 +124,19 @@ class MetadataJsonListener:
         metadata_type: str = "object-detection",
         data_array_key: str = "objects",
         require_all_ports: bool = False,
+        min_object_count: int = 0,
     ) -> None:
         if num_ports <= 0:
             raise ValueError("num_ports must be > 0")
         if base_port <= 0:
             raise ValueError("base_port must be > 0")
+        if min_object_count < 0:
+            raise ValueError("min_object_count must be >= 0")
 
         self._metadata_type = metadata_type
         self._data_array_key = data_array_key
         self._require_all_ports = require_all_ports
+        self._min_object_count = min_object_count
         self._sockets: dict[socket.socket, int] = {}
         self._reassemblers: dict[socket.socket, _MetadataReassembler] = {}
         try:
@@ -182,6 +186,12 @@ class MetadataJsonListener:
                     last_error = error
                     continue
                 messages.append(message)
+                if message.object_count < self._min_object_count:
+                    last_error = (
+                        f"data.{self._data_array_key} contains {message.object_count} objects; "
+                        f"expected at least {self._min_object_count}"
+                    )
+                    continue
                 ports_with_valid_json.add(port)
                 if self._success_reached(ports_with_valid_json):
                     return MetadataJsonResult(True, ports_with_valid_json, messages)

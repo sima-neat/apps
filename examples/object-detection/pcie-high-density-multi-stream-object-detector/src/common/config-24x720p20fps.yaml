@@ -1,0 +1,56 @@
+# PCIe profile: 24 x 720p at 20 FPS.
+profile:
+  name: 24x720p20fps
+
+model:
+  path: <model-path>
+  labels: examples/object-detection/high-density-multi-stream-object-detector/src/common/coco_label.txt
+  decode_type: yolo26
+
+card:
+  card_id: 0
+  queue: 0
+
+# Populate exactly 24 URLs.
+streams: []
+
+input:
+  codec: h264
+  tcp: true
+  latency_ms: 100
+  startup_stagger_ms: 50
+  width: 1280
+  height: 720
+  fps: 20
+  decoder_buffers: 16
+  decoder_input_buffers: 2
+  decoder_tuning: throughput-low-latency
+
+pcie:
+  queue_size: 256
+  buffer_size: 4194304
+  pool_size: 2
+  max_inflight_per_stream: 1
+  max_inflight_total: 24
+  result_timeout_ms: 30000
+  correlation_cache_size: 256
+
+inference:
+  queue_depth: 4
+  internal_queue_depth: 2
+  max_inflight_per_stream: 4
+  max_inflight_total: 24
+  min_score: 0.30
+  nms_iou: 0.60
+  max_detections: 50
+
+runtime:
+  profile: false
+  warmup_frames: 30
+
+output:
+  insight:
+    host: <insight-host-ip>
+    video_port_base: 9000
+    metadata_port_base: 9100
+  video_enabled: true

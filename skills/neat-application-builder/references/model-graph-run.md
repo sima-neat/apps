@@ -5,9 +5,8 @@ packaged for Neat as compiled archives, commonly `.tar.gz` MPK artifacts.
 
 ## Model
 
-`Model` loads and validates a compiled model archive. Use it first for classic
-classification, detection, segmentation, depth, embedding, and similar fixed
-shape model workflows.
+`Model` loads and validates a compiled model archive. Use it only when the API
+decision map identifies caller-owned input.
 
 Common application steps:
 
@@ -72,4 +71,3 @@ public input or output. If more than one endpoint exists, use the names.
 
 Use `Sample` when the application needs frame IDs, timestamps, bundled values,
 or other metadata. Use `TensorList` when raw tensor payloads are enough.
-

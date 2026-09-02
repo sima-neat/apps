@@ -235,6 +235,10 @@ MetadataJsonListener::MetadataJsonListener(const MetadataJsonListenerOptions& op
     err_ = "base_port must be > 0";
     return;
   }
+  if (opt_.min_object_count < 0) {
+    err_ = "min_object_count must be >= 0";
+    return;
+  }
   if (!bind_ports() && err_.empty()) {
     err_ = "failed to bind listener ports";
   }
@@ -329,6 +333,13 @@ bool MetadataJsonListener::handle_datagram(SocketState& sock, MetadataJsonListen
   }
 
   result.messages.push_back(std::move(msg));
+  if (result.messages.back().object_count < opt_.min_object_count) {
+    result.error =
+        "data." + opt_.data_array_key + " contains " +
+        std::to_string(result.messages.back().object_count) + " objects; expected at least " +
+        std::to_string(opt_.min_object_count);
+    return true;
+  }
   if (std::find(result.ports_with_valid_json.begin(), result.ports_with_valid_json.end(),
                 sock.port) == result.ports_with_valid_json.end()) {
     result.ports_with_valid_json.push_back(sock.port);
@@ -356,18 +367,22 @@ MetadataJsonListenerResult MetadataJsonListener::wait_for_messages() {
     pfds.push_back(pollfd{sock.fd, POLLIN, 0});
   }
 
-  const int64_t deadline_ms = static_cast<int64_t>(opt_.timeout_ms);
-  int64_t waited_ms = 0;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(opt_.timeout_ms);
   // Poll all sockets from a single loop so the same utility scales from
   // single-port smoke tests to larger multi-port metadata e2e checks.
-  while (waited_ms < deadline_ms) {
-    const int poll_ms = static_cast<int>(std::min<int64_t>(250, deadline_ms - waited_ms));
+  while (true) {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+    if (remaining.count() <= 0) {
+      break;
+    }
+    const int poll_ms = static_cast<int>(std::min<int64_t>(250, remaining.count()));
     const int rc = ::poll(pfds.data(), pfds.size(), poll_ms);
     if (rc < 0) {
       result.error = std::string("poll failed: ") + std::strerror(errno);
       return result;
     }
-    waited_ms += poll_ms;
     if (rc == 0) {
       continue;
     }

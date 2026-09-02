@@ -8,13 +8,13 @@
 | Difficulty | Advanced |
 | Tags | object-detection, rtsp, multistream, insight, yolo26 |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | multi-stream-object-detector |
 | Model | yolo26m-det-int8-b1 |
 
 ## Concept
 
-This example runs a config-driven multi-stream RTSP detection pipeline and publishes video plus detection metadata for each stream to Insight.
+Runs YOLO26 object detection across multiple RTSP streams and sends each stream's video and detection metadata to Insight.
 
 ## Preview
 
@@ -33,6 +33,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/object-detection/multi-stream-object-detector
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -52,7 +53,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version. Replace `<model-file>` with a file from the table.
 
 ```bash
-export MODELZOO_VERSION="2.1.2"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/yolo26-detection/<model-file>"
@@ -69,63 +70,40 @@ In the Insight Web UI, start the required streams and copy their RTSP URLs into 
 
 ## Configure
 
-Edit `examples/object-detection/multi-stream-object-detector/src/common/config.yaml`.
+Open `${APP_DIR}/src/common/config.yaml`. Set `model.path`, add each RTSP URL under `streams`, and set the Insight host and starting video and metadata ports. Set `input.codec` to match the streams.
 
-```yaml
-model:
-  path: <model-path>
-  labels: examples/object-detection/multi-stream-object-detector/src/common/coco_label.txt
-
-streams:
-  - <first-rtsp-url>
-  - <second-rtsp-url>
-
-input:
-  codec: h264  # h264/avc or h265/hevc
-
-inference:
-  frames: 0
-  max_inflight_per_stream: 4
-  max_inflight_total: 16
-  min_score: 0.30
-
-output:
-  insight:
-    host: <insight-host-ip>
-    video_port_base: <videoUDP-start-port>
-    metadata_port_base: <metadataUDP-start-port>
-```
+The checked-in inference limits are a safe starting point. Change them only when tuning throughput or latency.
 
 ## Run
 
 Validate the config without opening streams:
 
 ```bash
-./examples/object-detection/multi-stream-object-detector/src/cpp/pre-built/multi-stream-object-detector \
-  --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml \
+./${APP_DIR}/src/cpp/pre-built/multi-stream-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml \
   --validate-config-only
 ```
 
 ### C++
 
 ```bash
-./examples/object-detection/multi-stream-object-detector/src/cpp/pre-built/multi-stream-object-detector \
-  --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/multi-stream-object-detector \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/object-detection/multi-stream-object-detector/src/python/requirements.txt
-python3 examples/object-detection/multi-stream-object-detector/src/python/main.py \
-  --config examples/object-detection/multi-stream-object-detector/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting
 
 - Replace all placeholder stream URLs and the Insight host before running.
-- This example supports up to four active streams.
+- The application supports up to four active streams.
 - Set either inflight limit to `-1` to use the Core default.
 - Verify host and UDP port ranges if Insight receives no output.
 - Use `output.debug_dir`, `output.save_every`, and profiling output for diagnosis.

@@ -1,5 +1,6 @@
 foreach(example IN ITEMS
     high-density-multi-stream-object-detector
+    pcie-high-density-multi-stream-object-detector
     detr-object-detector
     pcb-defect-detector
     single-stream-object-detector

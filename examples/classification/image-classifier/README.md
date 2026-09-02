@@ -8,13 +8,13 @@
 | Difficulty | Beginner |
 | Tags | classification, model, mpk |
 | Languages | C++, Python |
-| Status | experimental |
+| Status | stable |
 | Binary Name | image-classifier |
 | Model | resnet_50 |
 
 ## Concept
 
-Minimal Model API usage with a compiled ResNet50 package. The example runs single-image inference and prints top-1 and top-5 classification results.
+Classifies one image with ResNet50 and prints the top five predictions with confidence scores.
 
 ## Preview
 
@@ -33,6 +33,7 @@ Install the latest Neat Apps runtime and enter the installed bundle:
 ```bash
 sima-cli neat install apps
 cd prebuilt-apps
+APP_DIR=examples/classification/image-classifier
 ```
 
 Run the remaining commands from `prebuilt-apps/`.
@@ -46,7 +47,7 @@ Run the remaining commands from `prebuilt-apps/`.
 Model packages come from the Model Zoo release below, which can differ from the installed platform version.
 
 ```bash
-export MODELZOO_VERSION="2.1.2"
+export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
 sima-cli modelzoo -v "${MODELZOO_VERSION}" get resnet_50
@@ -57,38 +58,26 @@ Set `model.path` in the config to the downloaded package.
 
 ## Configure
 
-Edit `examples/classification/image-classifier/src/common/config.yaml` to use a different image or threshold.
+Open `${APP_DIR}/src/common/config.yaml` and set `model.path`. To classify your own image, set `io.image` to a readable local path. If you leave it empty, the application downloads the sample goldfish image and needs network access.
 
-```yaml
-model:
-  path: <model-path>
-
-io:
-  image: null
-  fallback_image_url: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n01443537_goldfish.JPEG
-
-validation:
-  min_probability: 0.50
-```
-
-With `io.image: null`, the example downloads `fallback_image_url` and therefore requires network access. For offline use, set `io.image` to a readable local image path; the fallback URL is not used when a local path is configured.
+Change `validation.min_probability` only if you want a different minimum confidence for the result check.
 
 ## Run
 
 ### C++
 
 ```bash
-./examples/classification/image-classifier/src/cpp/pre-built/image-classifier \
-  --config examples/classification/image-classifier/src/common/config.yaml
+./${APP_DIR}/src/cpp/pre-built/image-classifier \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ### Python
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r examples/classification/image-classifier/src/python/requirements.txt
-python3 examples/classification/image-classifier/src/python/main.py \
-  --config examples/classification/image-classifier/src/common/config.yaml
+pip install -r ${APP_DIR}/src/python/requirements.txt
+python3 ${APP_DIR}/src/python/main.py \
+  --config ${APP_DIR}/src/common/config.yaml
 ```
 
 ## Troubleshooting

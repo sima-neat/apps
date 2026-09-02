@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="SiMaSentry-Safe — zero-dependency, air-gapped occupational-safety AI harness with vision, voice, camera capture, zone-based PPE compliance, and local Ollama / OpenAI support." />
+  <title>SiMaSentry-Safe</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/png" href="SiMaSentry-Safe.png" />
+</head>
+<body>
+  <a class="skip-link" href="#composer-input">Skip to input</a>
+
+  <header class="app-header" role="banner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <img src="SiMaSentry-Safe.png" alt="" width="32" height="32" />
+      </span>
+      <h1 class="brand-title">SiMaSentry-Safe</h1>
+    </div>
+    <div class="header-actions">
+      <button id="home-button" class="icon-button" type="button"
+        aria-label="Return to Mission Control">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/>
+        </svg>
+      </button>
+      <span id="provider-chip" class="provider-chip" data-provider="ollama" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="provider-chip-label">Ollama</span>
+      </span>
+      <button id="tts-stop-button" class="icon-button danger tts-stop" type="button"
+        aria-label="Stop voice output" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M6 6h12v12H6z"/>
+        </svg>
+        <span class="tts-stop-label">Stop voice</span>
+      </button>
+      <button id="settings-button" class="icon-button" type="button"
+        aria-label="Open settings" aria-haspopup="dialog" aria-controls="settings-drawer">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 8a4 4 0 1 0 4 4 4 4 0 0 0-4-4Zm8.94 4a7.94 7.94 0 0 0-.13-1.4l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.78 7.78 0 0 0-2.42-1.4l-.38-2.65A.5.5 0 0 0 14.66 1h-4a.5.5 0 0 0-.49.42l-.38 2.65a7.78 7.78 0 0 0-2.42 1.4l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65A7.94 7.94 0 0 0 3.06 12a7.94 7.94 0 0 0 .13 1.4l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1a7.78 7.78 0 0 0 2.42 1.4l.38 2.65a.5.5 0 0 0 .49.42h4a.5.5 0 0 0 .49-.42l.38-2.65a7.78 7.78 0 0 0 2.42-1.4l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65A7.94 7.94 0 0 0 20.94 12Z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="disclaimer" role="note">
+    <strong>Notice:</strong> AI hazard detection is not a substitute for trained safety inspection or regulatory compliance auditing. Verify all findings with a qualified safety officer.
+  </div>
+
+  <nav class="tab-strip" role="tablist" aria-label="Workflow">
+    <button class="tab-button" type="button" role="tab" data-tab="inspector"
+      id="tab-inspector" aria-selected="true" aria-controls="panel-inspector">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm0 14H8V4h12ZM4 6H2v14a2 2 0 0 0 2 2h14v-2H4Z"/></svg>
+      <span>Chat</span>
+    </button>
+    <button class="tab-button" type="button" role="tab" data-tab="compliance"
+      id="tab-compliance" aria-selected="false" aria-controls="panel-compliance" tabindex="-1">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 5h8v6H3zm10 0h8v4h-8zm0 6h8v8h-8zM3 13h8v6H3z"/></svg>
+      <span>PPE Inspector</span>
+    </button>
+  </nav>
+
+  <!-- ──────────────── Tab 1: Inspector (chat) ──────────────── -->
+  <section class="tab-panel tab-panel-inspector" id="panel-inspector" role="tabpanel"
+    aria-labelledby="tab-inspector" data-tab="inspector">
+    <main class="app-main">
+      <ol id="messages" class="messages" aria-live="polite" aria-relevant="additions" aria-label="Safety log"></ol>
+
+      <div id="empty-state" class="empty-state">
+        <h2>Start a safety inspection</h2>
+        <p>Report a hazard, attach a factory-floor snapshot, capture a live frame, or use the microphone. Configure your provider in <button type="button" class="link-button" data-action="open-settings">Settings</button>.</p>
+      </div>
+    </main>
+
+    <div id="image-preview" class="image-preview" hidden>
+      <img id="image-preview-img" alt="Attached safety image preview" />
+      <span id="image-preview-meta" class="image-preview-meta"></span>
+      <button type="button" id="image-remove" class="icon-button danger" aria-label="Remove attached image">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+      </button>
+    </div>
+
+    <div id="camera-panel" class="camera-panel" hidden>
+      <video id="camera-video" playsinline autoplay muted aria-label="Camera preview"></video>
+      <div class="camera-controls">
+        <button id="camera-capture" type="button" class="primary-button">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5Zm0 8a3 3 0 1 1 3-3 3 3 0 0 1-3 3ZM9 4 7.17 6H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.17L15 4Z"/></svg>
+          <span>Capture</span>
+        </button>
+        <button id="camera-cancel" type="button" class="secondary-button">Cancel</button>
+      </div>
+    </div>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <label for="composer-input" class="visually-hidden">Hazard report or question</label>
+      <textarea id="composer-input" name="message" rows="1"
+        placeholder="Describe a hazard, ask a safety question, or attach a snapshot…"
+        aria-label="Message input"></textarea>
+
+      <div class="composer-actions">
+        <input id="image-input" type="file" accept="image/*" hidden />
+        <button id="image-button" class="icon-button" type="button" aria-label="Attach factory floor image">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5Z"/></svg>
+        </button>
+
+        <button id="camera-button" class="icon-button" type="button" aria-label="Capture frame from live camera">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5Zm0 8a3 3 0 1 1 3-3 3 3 0 0 1-3 3ZM9 4 7.17 6H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.17L15 4Z"/></svg>
+        </button>
+
+        <button id="mic-button" class="icon-button" type="button"
+          aria-label="Start voice input" aria-pressed="false" disabled>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11Z"/></svg>
+        </button>
+
+        <button id="speaker-button" class="icon-button" type="button"
+          aria-label="Toggle auto read-aloud" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3 10v4a1 1 0 0 0 1 1h3l4 4a1 1 0 0 0 1.71-.71V5.71A1 1 0 0 0 11 5l-4 4H4a1 1 0 0 0-1 1Zm13.5 2A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12ZM14 3.23v2.06a6.99 6.99 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23Z"/></svg>
+        </button>
+
+        <button id="clear-button" class="icon-button" type="button" aria-label="Clear conversation">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6Zm3.17-7.83 1.42-1.41L12 11.17l1.41-1.41 1.42 1.41L13.41 12.59l1.42 1.41-1.42 1.42L12 14l-1.41 1.42-1.42-1.42 1.42-1.41ZM15.5 4l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+        </button>
+
+        <button id="send-button" class="primary-button" type="submit">
+          <span>Send</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m3 20 18-8L3 4v7l13 1-13 1Z"/></svg>
+        </button>
+      </div>
+    </form>
+
+    <div id="status" class="status" aria-live="polite" role="status"></div>
+  </section>
+
+  <!-- ──────────────── Tab 2: Compliance Monitor ──────────────── -->
+  <section class="tab-panel tab-panel-compliance" id="panel-compliance" role="tabpanel"
+    aria-labelledby="tab-compliance" data-tab="compliance" hidden>
+    <div class="compliance-toolbar">
+      <input id="zone-image-input" type="file" accept="image/*" hidden />
+      <button id="zone-upload-btn" type="button" class="secondary-button">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2ZM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5Z"/></svg>
+        <span>Upload snapshot</span>
+      </button>
+      <button id="zone-camera-btn" type="button" class="secondary-button">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5Zm0 8a3 3 0 1 1 3-3 3 3 0 0 1-3 3ZM9 4 7.17 6H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.17L15 4Z"/></svg>
+        <span>Capture from camera</span>
+      </button>
+      <button id="zone-whole-btn" type="button" class="secondary-button" disabled>
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v10H7V7z"/></svg>
+        <span>Use whole image</span>
+      </button>
+      <button id="zone-clear-btn" type="button" class="secondary-button">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6Zm3.17-7.83 1.42-1.41L12 11.17l1.41-1.41 1.42 1.41L13.41 12.59l1.42 1.41-1.42 1.42L12 14l-1.41 1.42-1.42-1.42 1.42-1.41ZM15.5 4l-1-1h-5l-1 1H5v2h14V4Z"/></svg>
+        <span>Clear all zones</span>
+      </button>
+    </div>
+
+    <div id="zone-camera-panel" class="camera-panel" hidden>
+      <video id="zone-camera-video" playsinline autoplay muted aria-label="Compliance camera preview"></video>
+      <div class="camera-controls">
+        <button id="zone-camera-capture" type="button" class="primary-button">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5Zm0 8a3 3 0 1 1 3-3 3 3 0 0 1-3 3ZM9 4 7.17 6H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.17L15 4Z"/></svg>
+          <span>Capture frame</span>
+        </button>
+        <button id="zone-camera-cancel" type="button" class="secondary-button">Cancel</button>
+      </div>
+    </div>
+
+    <div class="compliance-stage">
+      <div class="canvas-wrap" id="canvas-wrap">
+        <p id="canvas-empty" class="canvas-empty">
+          Upload a factory-floor snapshot or capture one from the camera.<br />
+          Then <strong>click and drag</strong> to mark Safety Zones — each zone is analyzed automatically.
+        </p>
+        <canvas id="zone-canvas" hidden></canvas>
+        <canvas id="zone-overlay" hidden></canvas>
+      </div>
+
+      <aside class="zone-sidebar">
+        <h3>Marked Zones</h3>
+        <ol id="zone-list" class="zone-list" aria-live="polite"></ol>
+      </aside>
+    </div>
+
+    <section class="compliance-log-wrap" aria-label="Zone analyses">
+      <h3>Analyses</h3>
+      <ol id="compliance-log" class="compliance-log" aria-live="polite"></ol>
+    </section>
+
+    <div id="compliance-status" class="status" aria-live="polite" role="status"></div>
+  </section>
+
+  <!-- ──────────────── Bottom navigation (mobile only) ──────────────── -->
+  <nav id="bottom-nav" class="bottom-nav" role="tablist" aria-label="Bottom navigation">
+    <button class="bottom-nav-item" type="button" role="tab" data-tab="inspector"
+      aria-selected="true" aria-controls="panel-inspector" aria-label="Chat tab">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Z"/>
+      </svg>
+      <span>Chat</span>
+    </button>
+    <button class="bottom-nav-item" type="button" role="tab" data-tab="compliance"
+      aria-selected="false" aria-controls="panel-compliance" aria-label="PPE Inspector tab" tabindex="-1">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path fill="currentColor" d="M3 5h8v6H3zm10 0h8v4h-8zm0 6h8v8h-8zM3 13h8v6H3z"/>
+      </svg>
+      <span>PPE Inspector</span>
+    </button>
+    <button class="bottom-nav-item" id="bottom-home-btn" type="button"
+      aria-label="Return to Mission Control">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/>
+      </svg>
+      <span>Home</span>
+    </button>
+  </nav>
+
+  <aside id="settings-drawer" class="drawer" role="dialog" aria-modal="true"
+    aria-labelledby="settings-title" hidden>
+    <div class="drawer-backdrop" data-action="close-settings" aria-hidden="true"></div>
+    <div class="drawer-panel" role="document">
+      <header class="drawer-header">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="icon-button" data-action="close-settings" aria-label="Close settings">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.29 19.71 2.88 18.3 9.17 12 2.88 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"/></svg>
+        </button>
+      </header>
+
+      <form id="settings-form" class="drawer-body">
+        <fieldset class="field-group">
+          <legend>Provider</legend>
+          <div class="radio-row">
+            <label class="radio">
+              <input type="radio" name="provider" value="ollama" />
+              <span>Ollama (local)</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="provider" value="openai" />
+              <span>OpenAI</span>
+            </label>
+          </div>
+          <small class="field-hint">Ollama is recommended for air-gapped factory deployments. OpenAI requires internet egress.</small>
+        </fieldset>
+
+        <label class="field">
+          <span class="field-label">Base URL</span>
+          <input type="text" name="baseUrl" id="setting-base-url"
+            placeholder="http://localhost:11434/v1/chat/completions" inputmode="url" />
+          <small class="field-hint">Endpoint must accept OpenAI-style <code>/v1/chat/completions</code>.</small>
+        </label>
+
+        <label class="field" id="api-key-field">
+          <span class="field-label">API Key</span>
+          <input type="password" name="apiKey" id="setting-api-key"
+            placeholder="sk-…" autocomplete="off" spellcheck="false" />
+          <small class="field-hint">Stored locally in your browser only. Leave blank for Ollama.</small>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Model</span>
+          <input type="text" name="model" id="setting-model"
+            placeholder="gemma3, llava, bakllava, gpt-4o…" autocomplete="off" spellcheck="false" />
+          <small class="field-hint">Vision-capable model required for image, camera, and zone analysis.</small>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Language (BCP-47)</span>
+          <select name="language" id="setting-language">
+            <option value="en-US">English (US)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="es-ES">Español (España)</option>
+            <option value="es-MX">Español (México)</option>
+            <option value="pt-BR">Português (Brasil)</option>
+            <option value="fr-FR">Français</option>
+            <option value="de-DE">Deutsch</option>
+            <option value="it-IT">Italiano</option>
+            <option value="nl-NL">Nederlands</option>
+            <option value="ru-RU">Русский</option>
+            <option value="ar-SA">العربية</option>
+            <option value="hi-IN">हिन्दी</option>
+            <option value="zh-CN">中文 (简体)</option>
+            <option value="zh-TW">中文 (繁體)</option>
+            <option value="ja-JP">日本語</option>
+            <option value="ko-KR">한국어</option>
+          </select>
+          <small class="field-hint">Drives speech recognition and TTS voice selection (local voices preferred).</small>
+        </label>
+
+        <label class="field">
+          <span class="field-label">System Prompt</span>
+          <textarea name="systemPrompt" id="setting-system-prompt" rows="6"></textarea>
+          <button type="button" class="link-button" data-action="reset-system-prompt">Reset to default</button>
+        </label>
+
+        <label class="field-inline">
+          <input type="checkbox" name="autoRead" id="setting-auto-read" />
+          <span>Auto-read assistant warnings aloud</span>
+        </label>
+
+        <div class="drawer-footer">
+          <button type="button" class="secondary-button" data-action="close-settings">Cancel</button>
+          <button type="submit" class="primary-button">Save</button>
+        </div>
+      </form>
+    </div>
+  </aside>
+
+  <template id="message-template">
+    <li class="message">
+      <div class="message-avatar" aria-hidden="true"></div>
+      <div class="message-body">
+        <div class="message-role"></div>
+        <div class="message-content"></div>
+        <div class="message-attachments"></div>
+        <div class="message-metrics" aria-label="Performance metrics"></div>
+      </div>
+    </li>
+  </template>
+
+  <template id="compliance-entry-template">
+    <li class="compliance-entry">
+      <header class="compliance-entry-header">
+        <span class="compliance-entry-dot" aria-hidden="true"></span>
+        <strong class="compliance-entry-title"></strong>
+        <span class="compliance-entry-violation" hidden>Violation</span>
+      </header>
+      <div class="compliance-entry-body">
+        <div class="compliance-entry-thumb">
+          <img alt="Zone preview" />
+        </div>
+        <div class="compliance-entry-content"></div>
+      </div>
+      <div class="compliance-entry-metrics" aria-label="Performance metrics"></div>
+    </li>
+  </template>
+
+  <nav class="mc-bottom-nav" role="navigation" aria-label="Quick navigation">
+    <button type="button" data-tab="inspector" aria-label="Switch to Inspector">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm0 14H8V4h12ZM4 6H2v14a2 2 0 0 0 2 2h14v-2H4Z"/></svg>
+      <span>Inspector</span>
+    </button>
+    <button type="button" data-tab="compliance" aria-label="Switch to Threat Analysis">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 1 21h22zm0 5.5L18.5 19h-13zm-1 4h2v4h-2zm0 5h2v2h-2z"/></svg>
+      <span>Threats</span>
+    </button>
+    <button type="button" data-action="home" aria-label="Return to Mission Control">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3 2 12h3v8h6v-6h2v6h6v-8h3z"/></svg>
+      <span>Home</span>
+    </button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
