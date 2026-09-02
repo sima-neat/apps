@@ -700,7 +700,13 @@ def run(cfg: AppConfig) -> int:
     # frames deep, instead of behind a manual push/pull call in the main loop. ──
     backbone_graph = backbone.graph()
     backbone_output = pyneat.Graph("backbone_output")
-    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.every_frame(2)))
+    # latest(), not every_frame(N): a public Output's own drop policy -- not
+    # RunOptions.overflow_policy -- governs its terminal appsink, and decode/preproc/MLA/dequant
+    # lower into one fused GStreamer segment ending at that appsink. A non-dropping sink
+    # back-pressures straight into neatdecoder, which cannot then recycle its zero-copy output
+    # buffers; the CVU stage raises output_pool_exhausted, the decoder force-restarts, and the
+    # restart races its outstanding loans. Dropping here bounds the stall at one frame instead.
+    backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.latest()))
 
     link = pyneat.GraphLinkOptions()
     link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
@@ -715,7 +721,8 @@ def run(cfg: AppConfig) -> int:
 
     frame_output = pyneat.Graph("frame_output")
     if save_frames:
-        frame_output.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(2)))
+        # Same reasoning as the backbone sink above: this branch hangs off the same decoder.
+        frame_output.add(pyneat.nodes.output("frame", pyneat.OutputOptions.latest()))
         graph.connect(decoder, frame_output)
 
     if cfg.profile:
@@ -724,7 +731,10 @@ def run(cfg: AppConfig) -> int:
     transformer_run_options = pyneat.RunOptions()
     transformer_run_options.preset = pyneat.RunPreset.Realtime
     transformer_run_options.queue_depth = 2
-    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
+    # KeepLatest, not Block: a blocking push stalls the bridge thread, which is the only drainer
+    # of the backbone sink, so main-loop jitter would propagate back into the decoder. Dropping a
+    # stale transformer input degrades output FPS instead of killing the pipeline.
+    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     transformer_run_options.output_memory = pyneat.OutputMemory.Owned
     dummy_inputs = [
         pyneat.Tensor.from_numpy(np.zeros((36, 36, 256), dtype=np.float32), copy=True),
@@ -791,6 +801,8 @@ def run(cfg: AppConfig) -> int:
                         source_pts.pop(next(iter(source_pts)))
 
                 if save_frames:
+                    # Same contract on the decoder's own zero-copy output: copy into a NumPy image
+                    # and release the Sample immediately.
                     frame_sample = source_run.pull("frame", 0)
                     if frame_sample is not None:
                         tensors = collect_tensors(frame_sample)
@@ -801,6 +813,14 @@ def run(cfg: AppConfig) -> int:
                                 )
                                 if len(pending_frames) > 8:
                                     pending_frames.pop(next(iter(pending_frames)))
+                        del tensors
+                    del frame_sample
+
+                # Drop the backbone Sample before the push. It is a ZERO-COPY view of a buffer
+                # from the graph's last CVU stage, whose output pool holds only num-buffers=4;
+                # holding it across a push that can block is what exhausts that pool and takes
+                # the decoder down with it. Everything above has already copied to host memory.
+                del sample
 
                 if not transformer_runner.push_samples(transformer_sample):
                     if not stop.is_set():

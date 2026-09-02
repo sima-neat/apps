@@ -311,10 +311,20 @@ std::vector<float> stable_topk_gather(const std::vector<float>& reduce_scores,
   return gathered;
 }
 
+// Move-only: `masks_map` is a live read mapping of the transformer's own mask tensor.
 struct FrameOut {
-  std::vector<float> boxes;     // 200*4, normalized cx,cy,w,h in [0,1]
-  std::vector<float> logits;    // 200*91, raw (pre-sigmoid)
-  std::vector<float> masks_dev; // raw device (108,108,200), pre-sigmoid
+  std::vector<float> boxes;  // 200*4, normalized cx,cy,w,h in [0,1]
+  std::vector<float> logits; // 200*91, raw (pre-sigmoid)
+
+  // Raw device (108,108,200) mask logits, pre-sigmoid, read in place. Only the <=max_detections
+  // kept queries are ever sampled (see mask_for_query), so materialising all 200 through
+  // tensor_to_f32 -- a 9.3 MB allocate-and-copy, done twice, on every single frame -- was the
+  // dominant term in the main loop's decode time, and that cost is what put the host behind the
+  // stream. `masks_owned` is only populated on the non-contiguous fallback path.
+  nt::Tensor masks_tensor;
+  nt::Mapping masks_map;
+  std::vector<float> masks_owned;
+  const float* masks_dev = nullptr;
 };
 
 struct BackboneOutputs {
@@ -348,10 +358,24 @@ FrameOut split_transformer(const nt::Sample& sample) {
       fo.boxes = tensor_to_f32(t);
     else if (s == kLogitsShape)
       fo.logits = tensor_to_f32(t);
-    else if (s == kMasksDeviceShape || numel(s) == kNumQueries * kMaskHW * kMaskHW)
-      fo.masks_dev = tensor_to_f32(t);
+    else if (s == kMasksDeviceShape || numel(s) == kNumQueries * kMaskHW * kMaskHW) {
+      if (t.dtype != nt::TensorDType::Float32)
+        throw std::runtime_error("expected Float32 mask tensor");
+      constexpr std::size_t kMaskBytes =
+          static_cast<std::size_t>(kMaskHW) * kMaskHW * kNumQueries * sizeof(float);
+      nt::Mapping mapped = t.is_dense() && t.is_contiguous() ? t.view_read() : nt::Mapping{};
+      if (mapped.data != nullptr && mapped.size_bytes >= kMaskBytes) {
+        fo.masks_tensor = t;
+        fo.masks_map = std::move(mapped);
+        fo.masks_dev = static_cast<const float*>(fo.masks_map.data);
+      } else {
+        // Strided or otherwise unmappable output: fall back to the packed copy.
+        fo.masks_owned = tensor_to_f32(t);
+        fo.masks_dev = fo.masks_owned.data();
+      }
+    }
   }
-  if (fo.boxes.empty() || fo.logits.empty() || fo.masks_dev.empty())
+  if (fo.boxes.empty() || fo.logits.empty() || fo.masks_dev == nullptr)
     throw std::runtime_error("transformer did not produce box, class, and mask tensors");
   return fo;
 }
@@ -405,11 +429,11 @@ cv::Rect frame_rect_for_query(const FrameOut& fo, int query, const cv::Size& fra
 
 /// Sigmoid-activated 8-bit mask for query `q`, gathered directly from the raw device
 /// (108,108,200) buffer so only the handful of kept queries are ever touched.
-cv::Mat mask_for_query(const std::vector<float>& masks_dev, int q) {
+cv::Mat mask_for_query(const float* masks_dev, int q) {
   cv::Mat m(kMaskHW, kMaskHW, CV_8UC1);
   for (int hh = 0; hh < kMaskHW; ++hh) {
     uint8_t* dst = m.ptr<uint8_t>(hh);
-    const float* base = &masks_dev[(hh * kMaskHW) * kNumQueries + q];
+    const float* base = masks_dev + (hh * kMaskHW) * kNumQueries + q;
     for (int ww = 0; ww < kMaskHW; ++ww) {
       const float p = sigmoidf(base[ww * kNumQueries]);
       dst[ww] = static_cast<uint8_t>(std::clamp(p * 255.0f, 0.0f, 255.0f));
@@ -704,8 +728,14 @@ int run(const AppConfig& cfg) {
   // ── backbone runs embedded in the same async graph as decode/video, pipelined two
   // frames deep, instead of behind a manual push/pull call in the main loop. ──
   nt::Graph backbone_graph = backbone.graph();
+  // Latest(), not EveryFrame(N): a public Output's own drop policy -- not
+  // RunOptions::overflow_policy -- governs its terminal appsink, and decode/preproc/MLA/dequant
+  // lower into one fused GStreamer segment ending at that appsink. A non-dropping sink therefore
+  // back-pressures straight into neatdecoder, which cannot then recycle its zero-copy output
+  // buffers; the pool starves, the decoder force-restarts, and the restart races the outstanding
+  // loans (output_pool_exhausted). Dropping here bounds the stall at one frame instead.
   nt::Graph backbone_output("backbone_output");
-  backbone_output.add(nt::nodes::Output("backbone", nt::OutputOptions::EveryFrame(2)));
+  backbone_output.add(nt::nodes::Output("backbone", nt::OutputOptions::Latest()));
 
   nt::GraphLinkOptions link;
   link.policy = nt::GraphLinkPolicy::RealtimeLatestByStream;
@@ -720,7 +750,9 @@ int run(const AppConfig& cfg) {
 
   nt::Graph frame_output("frame_output");
   if (save_frames) {
-    frame_output.add(nt::nodes::Output("frame", nt::OutputOptions::EveryFrame(2)));
+    // Same reasoning as the backbone sink above: this branch hangs off the same decoder, so a
+    // non-dropping sink here starves the decoder pool just as effectively.
+    frame_output.add(nt::nodes::Output("frame", nt::OutputOptions::Latest()));
     graph.connect(decode, frame_output);
   }
 
@@ -730,7 +762,10 @@ int run(const AppConfig& cfg) {
   nt::RunOptions transformer_run_options;
   transformer_run_options.preset = nt::RunPreset::Realtime;
   transformer_run_options.queue_depth = 2;
-  transformer_run_options.overflow_policy = nt::OverflowPolicy::Block;
+  // KeepLatest, not Block: a blocking push stalls the bridge thread, which is the only drainer of
+  // the backbone sink, so main-loop jitter would propagate back into the decoder. Dropping a stale
+  // transformer input degrades output FPS instead of killing the pipeline.
+  transformer_run_options.overflow_policy = nt::OverflowPolicy::KeepLatest;
   transformer_run_options.output_memory = nt::OutputMemory::Owned;
   nt::Tensor fseed = nt::Tensor::from_vector(std::vector<float>(36 * 36 * 256, 0.f), {36, 36, 256},
                                              nt::TensorMemory::EV74);
@@ -772,49 +807,64 @@ int run(const AppConfig& cfg) {
   std::thread bridge([&] {
     try {
       while (!g_stop.load()) {
-        nt::Sample backbone_sample;
-        nt::PullError pull_error;
-        const auto status = source_run.pull("backbone", 500, backbone_sample, &pull_error);
-        if (status == nt::PullStatus::Timeout)
-          continue;
-        if (status == nt::PullStatus::Closed)
-          break;
-        if (status != nt::PullStatus::Ok)
-          throw std::runtime_error("failed to pull backbone output: " + pull_error.message);
-
-        const auto backbone_out = split_backbone(backbone_sample);
-        const auto gathered = stable_topk_gather(backbone_out.reduce, backbone_out.concat);
-
-        // Fresh CPU tensors, not the live device-backed backbone output: pushing the backbone's
-        // own output tensor straight into the transformer's 2-input stage has been observed to
-        // scramble that stage's packed multi-input buffer on this NEAT build.
-        nt::Tensor feat_in =
-            nt::Tensor::from_vector(backbone_out.feature, {36, 36, 256}, nt::TensorMemory::EV74);
-        nt::Tensor gath_in = nt::Tensor::from_vector(gathered, {1, kNumQueries, 4},
-                                                     nt::TensorMemory::EV74);
         nt::Sample transformer_sample;
-        transformer_sample.kind = nt::SampleKind::TensorSet;
-        transformer_sample.tensors = {feat_in, gath_in};
-        copy_identity(backbone_sample, transformer_sample);
 
+        // Scoped tightly on purpose. `backbone_sample` is a ZERO-COPY view of a buffer from the
+        // graph's last CVU stage (detessdequant), whose output pool holds only num-buffers=4.
+        // Every instruction executed while this Sample is alive is an instruction that pool
+        // buffer is unavailable, and exhausting it is what actually killed the pipeline:
+        // detessdequant raises output_pool_exhausted, the decoder's downstream push then fails,
+        // it force-restarts, and the restart races its own outstanding zero-copy loans
+        // (gst_mini_object_unref refcount assertion). Everything downstream of this block needs
+        // only host-side copies, so the loan is returned before the push below -- which can
+        // block -- rather than being held across it.
         {
-          std::lock_guard<std::mutex> lock(identity_mutex);
-          source_pts[identity_key(backbone_sample)] = backbone_sample.pts_ns;
-          if (source_pts.size() > 8U)
-            source_pts.erase(source_pts.begin());
-        }
+          nt::Sample backbone_sample;
+          nt::PullError pull_error;
+          const auto status = source_run.pull("backbone", 500, backbone_sample, &pull_error);
+          if (status == nt::PullStatus::Timeout)
+            continue;
+          if (status == nt::PullStatus::Closed)
+            break;
+          if (status != nt::PullStatus::Ok)
+            throw std::runtime_error("failed to pull backbone output: " + pull_error.message);
 
-        if (save_frames) {
-          nt::Sample frame_sample;
-          nt::PullError frame_error;
-          const auto frame_status = source_run.pull("frame", 0, frame_sample, &frame_error);
-          if (frame_status == nt::PullStatus::Ok) {
-            const auto tensors = collect_tensors(frame_sample);
-            if (!tensors.empty()) {
-              std::lock_guard<std::mutex> lock(identity_mutex);
-              pending_frames[identity_key(frame_sample)] = tensor_bgr_from_decoded(tensors.front());
-              if (pending_frames.size() > 8U)
-                pending_frames.erase(pending_frames.begin());
+          const auto backbone_out = split_backbone(backbone_sample);
+          const auto gathered = stable_topk_gather(backbone_out.reduce, backbone_out.concat);
+
+          // Fresh CPU tensors, not the live device-backed backbone output: pushing the backbone's
+          // own output tensor straight into the transformer's 2-input stage has been observed to
+          // scramble that stage's packed multi-input buffer on this NEAT build.
+          nt::Tensor feat_in =
+              nt::Tensor::from_vector(backbone_out.feature, {36, 36, 256}, nt::TensorMemory::EV74);
+          nt::Tensor gath_in = nt::Tensor::from_vector(gathered, {1, kNumQueries, 4},
+                                                       nt::TensorMemory::EV74);
+          transformer_sample.kind = nt::SampleKind::TensorSet;
+          transformer_sample.tensors = {feat_in, gath_in};
+          copy_identity(backbone_sample, transformer_sample);
+
+          {
+            std::lock_guard<std::mutex> lock(identity_mutex);
+            source_pts[identity_key(backbone_sample)] = backbone_sample.pts_ns;
+            if (source_pts.size() > 8U)
+              source_pts.erase(source_pts.begin());
+          }
+
+          if (save_frames) {
+            // Same contract on the decoder's own zero-copy output: copy into a cv::Mat and let
+            // the Sample die immediately.
+            nt::Sample frame_sample;
+            nt::PullError frame_error;
+            const auto frame_status = source_run.pull("frame", 0, frame_sample, &frame_error);
+            if (frame_status == nt::PullStatus::Ok) {
+              const auto tensors = collect_tensors(frame_sample);
+              if (!tensors.empty()) {
+                std::lock_guard<std::mutex> lock(identity_mutex);
+                pending_frames[identity_key(frame_sample)] =
+                    tensor_bgr_from_decoded(tensors.front());
+                if (pending_frames.size() > 8U)
+                  pending_frames.erase(pending_frames.begin());
+              }
             }
           }
         }
