@@ -453,7 +453,7 @@ def run(cfg: Config) -> int:
 
     transformer_run_options = pyneat.RunOptions()
     transformer_run_options.preset = pyneat.RunPreset.Realtime
-    transformer_run_options.queue_depth = 2
+    transformer_run_options.queue_depth = 1
     transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
     transformer_run_options.output_memory = pyneat.OutputMemory.Owned
     dummy_inputs = [

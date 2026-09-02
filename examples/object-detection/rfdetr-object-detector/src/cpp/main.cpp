@@ -551,7 +551,7 @@ int run(const Config& cfg) {
 
   neat::RunOptions transformer_run_options;
   transformer_run_options.preset = neat::RunPreset::Realtime;
-  transformer_run_options.queue_depth = 2;
+  transformer_run_options.queue_depth = 1;
   transformer_run_options.overflow_policy = neat::OverflowPolicy::Block;
   transformer_run_options.output_memory = neat::OutputMemory::Owned;
   neat::TensorList transformer_seed;
