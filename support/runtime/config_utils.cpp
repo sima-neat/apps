@@ -44,6 +44,16 @@ std::string unquote(std::string value) {
   return value;
 }
 
+int leading_indent(const std::string& line) {
+  int indent = 0;
+  while (indent < static_cast<int>(line.size()) &&
+         (line[static_cast<std::size_t>(indent)] == ' ' ||
+          line[static_cast<std::size_t>(indent)] == '\t')) {
+    ++indent;
+  }
+  return indent;
+}
+
 std::string join_stack(const std::vector<std::pair<int, std::string>>& stack) {
   std::ostringstream out;
   bool first = true;
@@ -98,23 +108,21 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     throw std::runtime_error("failed to open config file: " + path.string());
   }
 
+  std::vector<std::string> raw_lines;
+  for (std::string raw_line; std::getline(input, raw_line);) {
+    raw_lines.push_back(raw_line);
+  }
+
   ScalarConfig config;
   std::vector<std::pair<int, std::string>> stack;
   int list_block_indent = -1;
-  std::string raw_line;
-  while (std::getline(input, raw_line)) {
-    const std::string without_comment = strip_inline_comment(raw_line);
+  for (std::size_t index = 0; index < raw_lines.size(); ++index) {
+    const std::string without_comment = strip_inline_comment(raw_lines[index]);
     if (trim_copy(without_comment).empty()) {
       continue;
     }
 
-    int indent = 0;
-    while (indent < static_cast<int>(without_comment.size()) &&
-           (without_comment[static_cast<std::size_t>(indent)] == ' ' ||
-            without_comment[static_cast<std::size_t>(indent)] == '\t')) {
-      ++indent;
-    }
-
+    const int indent = leading_indent(without_comment);
     const std::string line = trim_copy(without_comment);
     if (list_block_indent >= 0) {
       if (indent > list_block_indent) {
@@ -141,6 +149,21 @@ ScalarConfig ScalarConfig::load(const std::filesystem::path& path) {
     if (value.empty() || value == "{}") {
       stack.emplace_back(indent, key);
       continue;
+    }
+
+    // YAML folds a plain scalar across more-indented continuation lines, and
+    // emitters such as PyYAML wrap long values that way. Only a non-empty value
+    // can fold: an empty one opens a nested mapping, which the branch above has
+    // already taken. Without this, a wrapped value parsed in Python but failed
+    // in C++ with "invalid config line".
+    while (index + 1 < raw_lines.size()) {
+      const std::string next = strip_inline_comment(raw_lines[index + 1]);
+      if (trim_copy(next).empty() || leading_indent(next) <= indent) {
+        break;
+      }
+      value += ' ';
+      value += trim_copy(next);
+      ++index;
     }
 
     std::string full_key = join_stack(stack);
