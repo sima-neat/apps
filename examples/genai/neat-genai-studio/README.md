@@ -163,8 +163,8 @@ sidebar. Both methods stop the UI and model server cleanly, just like
 `./run.sh stop`).
 
 ### Terminal chat (CLI)
-Prefer the terminal? `--cli` starts the model server (same MLA reset/clean-slate
-as usual) and drops you into an interactive chat instead of the web UI:
+Prefer the terminal? `--cli` starts the model server (clearing stale processes
+first, as usual) and drops you into an interactive chat instead of the web UI:
 
 ```bash
 ./run.sh --cli    # or `neat-ai --cli`
@@ -198,7 +198,6 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 /system <text>   set a system prompt (empty clears it)
 /new             clear the conversation
 /export [file]   save this chat to a .log file (default neat-chat-<time>.log)
-/reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
 /rag [filter]    inspect the RAG database: list chunks (/docs; filter narrows)
 /rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
