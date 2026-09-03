@@ -1,7 +1,7 @@
 models:
   patchcore_wide_resnet50_2:
-    source: url
-    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/patchcore/patchcore_wide_resnet50_2_bf16_mla.tar.gz
+    source: modelzoo
+    name: patchcore_wide_resnet50_2_bf16_mla
     file: patchcore_wide_resnet50_2_bf16_mla.tar.gz
 unit:
   python: true
