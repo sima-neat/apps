@@ -30,12 +30,8 @@ from the shared decoded frame because Insight does not accept MJPEG passthrough.
 
 ## Prerequisites
 
-- `sima-cli` 2.1.15 or newer
-  ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a
-  supported Modalix or DevKit target.
-- An H.264, H.265, or MJPEG RTSP source and an
-  [Insight](https://developer.sima.ai/software/tools/insight/) endpoint
-  reachable from the target.
+- [`sima-cli` 2.1.15 or newer](https://developer.sima.ai/software/tools/sima-cli/) on a supported Modalix or DevKit target.
+- An H.264, H.265, or MJPEG RTSP source and an [Insight endpoint](https://developer.sima.ai/software/tools/insight/) reachable from the target.
 
 ## Install Apps
 
@@ -57,21 +53,19 @@ Download the Small model, which is selected by the packaged configuration:
 export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli download \
-  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-backbone.tar.gz"
-sima-cli download \
-  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-transformer.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-backbone.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-transformer.tar.gz"
 cd ..
 ```
 
 To use Medium, download its pair instead:
 
 ```bash
+export MODELZOO_VERSION="2.1.3"
+mkdir -p models
 cd models
-sima-cli download \
-  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-backbone.tar.gz"
-sima-cli download \
-  "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-transformer.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-backbone.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-transformer.tar.gz"
 cd ..
 ```
 
