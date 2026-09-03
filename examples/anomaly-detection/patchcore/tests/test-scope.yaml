@@ -1,0 +1,17 @@
+models:
+  patchcore_wide_resnet50_2:
+    source: url
+    url: https://github.com/sima-neat/apps/releases/download/patchcore-model-v1/patchcore_wide_resnet50_2_bf16_mla.tar.gz
+    file: patchcore_wide_resnet50_2_bf16_mla.tar.gz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+    - patchcore_wide_resnet50_2
+  cpp:
+    enabled: true
+    models:
+    - patchcore_wide_resnet50_2

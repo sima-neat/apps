@@ -1,0 +1,46 @@
+model:                                         # PatchCore feature-extractor model selection.
+  path: models/patchcore_wide_resnet50_2_bf16_mla.tar.gz
+
+source:
+  type: rtsp
+  image_dir: assets/datasets/patchcore/images   # Used when type=image_dir.
+  video_path: assets/datasets/patchcore/video/test.mp4
+  rtsp:                                          # Used when type=rtsp.
+    url: rtsp://192.168.130.129:8554/src1
+    codec: h264                                 # h264, h265, or mjpeg.
+    tcp: true                                   # RTSP transport; set false for a UDP-only source.
+    latency_ms: 200                             # RTSP receive latency in milliseconds.
+    width: 0                                    # Only needed for h265/mjpeg; leave 0 for h264.
+    height: 0                                   # Only needed for h265/mjpeg; leave 0 for h264.
+
+memory_bank:                                    # Host-side kNN reference set (not part of the compiled graph).
+  path: sandbox/patchcore/memory_bank.npy       # Coreset, written by --calibrate.
+  meta_path: sandbox/patchcore/bank_meta.json   # Model hash, coreset stats, and threshold.
+
+calibration:                                    # Used only by --calibrate.
+  nominal_images_dir: assets/datasets/patchcore/nominal   # Your own known-good reference images (not shipped).
+  coreset_ratio: 0.006                          # Fraction of nominal patches kept via greedy k-center.
+                                                 # Smaller = faster score() but a coarser bank; recalibrate
+                                                 # (--calibrate) after changing this.
+  seed: 0
+  threshold_percentile: 99.0                    # Decision threshold = this percentile of nominal scores.
+  threshold_images_dir: ""                      # Optional held-out nominal set; "" reuses nominal_images_dir.
+
+scoring:
+  num_neighbors: 9                              # Neighborhood-reweighting support-set size (paper Eq. 7-8).
+  gaussian_sigma: 4.0                           # Anomaly-map smoothing sigma, in output pixels.
+
+output:
+  dir: sandbox/patchcore                        # Folder for annotated overlay images.
+  save_every: 0                                 # image_dir: always saves. video_file/rtsp: 0 disables local saving.
+  overlay_alpha: 0.45                           # Heatmap blend weight in the output overlay image.
+  insight:                                      # video_file/rtsp only: live view.
+    host: 192.168.130.129
+    video_port: 9000
+    channel: 0                                  # Insight channel index.
+    bitrate_kbps: 4000                          # H.264 encoder bitrate for the pushed video stream.
+
+runtime:
+  timeout_ms: 15000                             # Per-frame model-inference timeout (rtsp's own frame wait is unbounded).
+  frames: 0                                     # video_file/rtsp frame limit; 0 = run until the source ends.
+  profile: false                                # Reserved for future per-stage profiling output.

@@ -74,6 +74,8 @@ function(_sima_neat_apps_ensure_support_runtime apps_root)
     "${apps_root}/support/runtime/config_utils.cpp"
     "${apps_root}/support/runtime/example_utils.cpp"
     "${apps_root}/support/object_detection/obj_detection_utils.cpp"
+    "${apps_root}/support/anomaly_detection/patchcore_memory_bank.cpp"
+    "${apps_root}/support/anomaly_detection/sha256.cpp"
   )
   add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 

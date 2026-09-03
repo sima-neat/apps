@@ -3,6 +3,8 @@ add_library(sima_neat_apps_support_runtime STATIC
   runtime/config_utils.cpp
   runtime/example_utils.cpp
   object_detection/obj_detection_utils.cpp
+  anomaly_detection/patchcore_memory_bank.cpp
+  anomaly_detection/sha256.cpp
 )
 add_library(SimaNeatApps::support_runtime ALIAS sima_neat_apps_support_runtime)
 
