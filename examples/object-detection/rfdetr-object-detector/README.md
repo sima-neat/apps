@@ -107,6 +107,16 @@ Insight receives the original H.264 or H.265 video, or H.264 video converted
 from MJPEG, on `video_port`. Matching `object-detection` metadata arrives on
 `metadata_port`. Stop a continuous run with Ctrl-C.
 
+## Performance
+
+Measured end-to-end throughput on Modalix:
+
+| Input Resolution | Codec | RF-DETR Small | RF-DETR Medium |
+| --- | --- | ---: | ---: |
+| 720p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS |
+| 1080p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS |
+| 4K | H.264 | Up to 60 FPS | Up to 50 FPS |
+
 ## Source Files
 
 - C++ implementation: `src/cpp/main.cpp`
