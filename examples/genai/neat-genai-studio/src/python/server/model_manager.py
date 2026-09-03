@@ -160,6 +160,17 @@ class ModelManager:
         self._bench_lock = threading.Lock()
 
         self.scan_catalog()
+        # Only claim the configured ASR is active if the server really loaded it.
+        # main.py skips one whose directory is missing — which is exactly what a
+        # user sees after switching away from the startup default and deleting
+        # it — and advertising an unregistered model sends transcriptions to a
+        # name the server does not serve.
+        if self._active_asr and self._active_asr not in self._server_model_names():
+            logging.info(
+                "configured ASR model %r is not loaded; starting with none active",
+                self._active_asr,
+            )
+            self._active_asr = None
         self._sync_resident_from_server()
 
     # -- catalog ---------------------------------------------------------------
@@ -394,8 +405,18 @@ class ModelManager:
                     try:
                         self._server.remove_model(victim)
                         evicted.append(victim)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        if not is_asr:
+                            continue
+                        # There is only one ASR slot. If the outgoing model will
+                        # not free, adding the replacement leaves two resident —
+                        # which can fail the load outright on double residency —
+                        # and the state below would report no active ASR while
+                        # the old one is still serving. Abort with it untouched.
+                        raise RuntimeError(
+                            f"Could not unload the current speech-to-text model "
+                            f"'{victim}': {exc}"
+                        ) from exc
                 with self._lock:
                     if is_asr:
                         # Honest during the eviction window: nothing can serve a

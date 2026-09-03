@@ -1014,10 +1014,20 @@ class AppContext:
                 f"{self.control_base_url.rstrip('/')}/control/status", timeout=5
             )
             name = str((resp.json() or {}).get("asrModel") or "")
+            reachable = True
         except Exception:
-            name = ""
-        if not name:
+            name, reachable = "", False
+        if not reachable:
+            # Say nothing new: keep using the last known name rather than
+            # caching a failure that says nothing about what is loaded.
             return cached or self.asr_model_name
+        if not name:
+            # A successful status with no active model is real — a switch that
+            # failed after eviction leaves exactly this. Forget the stale name
+            # so recordings report "unavailable" instead of being sent to a
+            # model the server no longer serves.
+            logging.warning("No speech-to-text model is active on the server.")
+            return self.set_asr_model_name("")
         if name != self.asr_model_name:
             logging.info("Active ASR model changed out from under the UI: %r", name)
             return self.set_asr_model_name(name)

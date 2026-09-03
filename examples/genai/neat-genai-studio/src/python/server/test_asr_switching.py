@@ -144,6 +144,33 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertFalse((self.tmp / "whisper-small-a16w8").exists())
         self.assertNotIn("whisper-small-a16w8", [e["name"] for e in manager.catalog()])
 
+    def test_a_configured_asr_the_server_never_loaded_is_not_active(self):
+        # main.py skips a configured ASR whose directory is missing — what you
+        # get after switching away from the startup default and deleting it.
+        manager, _ = self.manager(loaded=(), asr="whisper-small-a16w8")
+
+        self.assertIsNone(manager.active_asr())
+        status = manager.status()
+        self.assertIsNone(status["asrModel"])
+        self.assertEqual(status["configuredAsrModel"], "whisper-small-a16w8")
+        self.assertFalse(self.entry(manager, "whisper-small-a16w8")["activeAsr"])
+
+    def test_a_failed_eviction_aborts_the_switch(self):
+        manager, server = self.manager()
+
+        def refuse(name):
+            raise RuntimeError("MLA busy")
+
+        with patch.object(server, "remove_model", side_effect=refuse):
+            with self.assertRaisesRegex(RuntimeError, "Could not unload"):
+                manager.set_active_asr("whisper-medium-a16w8")
+
+        # The old model is still serving, so it must still be reported active,
+        # and the replacement must not have been added alongside it.
+        self.assertEqual(manager.active_asr(), "whisper-small-a16w8")
+        self.assertIn("whisper-small-a16w8", server.model_names())
+        self.assertNotIn("whisper-medium-a16w8", server.model_names())
+
     def test_status_reports_active_and_configured_asr_separately(self):
         manager, _ = self.manager()
         manager.set_active_asr("whisper-medium-a16w8")
