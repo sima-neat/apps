@@ -1,7 +1,7 @@
 models:
   patchcore_wide_resnet50_2:
-    source: modelzoo
-    name: patchcore_wide_resnet50_2_bf16_mla
+    source: url
+    url: https://drive.usercontent.google.com/download?id=1JLLNCmhcDnuSBULmyfomOznFmAW4dkWD&export=download&confirm=t
     file: patchcore_wide_resnet50_2_bf16_mla.tar.gz
 unit:
   python: true
