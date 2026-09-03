@@ -4,6 +4,7 @@ foreach(example IN ITEMS
     detr-object-detector
     single-stream-object-detector
     ssd-mobilenet-object-detector
+    usb-camera-object-detector
     yolo26-object-detector
 )
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${example}/src/cpp/CMakeLists.txt")
