@@ -58,6 +58,7 @@ from patchcore_scoring import (  # noqa: E402
     percentile_threshold,
     save_bank_meta,
     upsample_and_smooth,
+    verify_bank_hash,
     verify_bank_matches_model,
 )
 
@@ -355,6 +356,7 @@ def cmd_calibrate(cfg: AppConfig) -> int:
     bank.save(bank_path)
     meta = build_bank_meta(
         model_path=cfg.model_path,
+        bank_path=bank_path,
         backbone=BACKBONE,
         torchvision_weights=TORCHVISION_WEIGHTS,
         embed_dim=EMBED_DIM,
@@ -685,9 +687,16 @@ def frame_bgr_from_sample(sample):
     tensor = tensors[0]
     if tensor.is_nv12():
         width, height = tensor_dim(tensor, "width"), tensor_dim(tensor, "height")
-        payload = np.frombuffer(tensor.copy_payload_bytes(), dtype=np.uint8)
-        nv12 = payload[: width * height * 3 // 2].reshape((height * 3 // 2, width))
-        return cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
+        # .contiguous() repacks a row-padded plane before the raw byte copy --
+        # without it, a stride wider than width (common for hardware-aligned
+        # buffers) reads padding as pixel data and shifts every row after the
+        # first. Matches C++'s nv12_to_bgr and every multi-stream Python example.
+        payload = np.frombuffer(tensor.contiguous().copy_payload_bytes(), dtype=np.uint8)
+        expected = width * height * 3 // 2
+        if payload.size < expected:
+            raise RuntimeError(f"NV12 payload too small: {payload.size} < {expected}")
+        nv12 = payload[:expected].reshape((height * 3 // 2, width))
+        return np.ascontiguousarray(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
     return np.asarray(tensor.to_numpy(copy=True))
 
 
@@ -799,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
         meta = load_bank_meta(meta_path)
         print("Verifying model package...")
         verify_bank_matches_model(meta, cfg.model_path)
+        verify_bank_hash(meta, bank_path)
         bank = MemoryBank.load(bank_path)
         threshold = float(meta["threshold"]["value"])
         # num_neighbors changes the neighborhood-reweighting term, which changes

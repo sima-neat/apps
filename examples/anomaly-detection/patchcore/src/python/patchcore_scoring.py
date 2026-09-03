@@ -210,6 +210,7 @@ def percentile_threshold(scores: list[float], percentile: float) -> float:
 def build_bank_meta(
     *,
     model_path: str | Path,
+    bank_path: str | Path,
     backbone: str,
     torchvision_weights: str,
     embed_dim: int,
@@ -227,6 +228,12 @@ def build_bank_meta(
     return {
         "model_sha256": sha256_file(model_path),
         "model_filename": Path(model_path).name,
+        # Pins bank_meta.json to the exact memory_bank.npy it was derived from --
+        # the threshold above is only valid for the score distribution that
+        # specific bank produces, so a bank swapped in from a different
+        # calibration run (same model, different coreset) must not be scored
+        # against this threshold silently.
+        "bank_sha256": sha256_file(bank_path),
         "backbone": backbone,
         "torchvision_weights": torchvision_weights,
         "embed_dim": embed_dim,
@@ -269,4 +276,26 @@ def verify_bank_matches_model(meta: dict, model_path: str | Path) -> None:
             "memory bank was built against a different model package than the one configured "
             f"now (bank_meta.json model_sha256={expected}, configured model sha256={actual}); "
             "rebuild the bank with --calibrate against the current model.path"
+        )
+
+
+def verify_bank_hash(meta: dict, bank_path: str | Path) -> None:
+    """Raises RuntimeError if `memory_bank.npy`'s contents don't match the hash
+    `bank_meta.json` was saved with. The model-hash check above only proves the
+    *model* is consistent; this proves the *bank* and the threshold derived
+    from it are the ones actually paired -- an interrupted calibration or a
+    bank file swapped in from a different run would otherwise still pass
+    verify_bank_matches_model but score against the wrong threshold.
+
+    `bank_sha256` is absent from bank_meta.json files written before this
+    check existed; skip rather than fail so those banks keep working."""
+    expected = meta.get("bank_sha256")
+    if expected is None:
+        return
+    actual = sha256_file(bank_path)
+    if expected != actual:
+        raise RuntimeError(
+            "memory_bank.npy does not match the bank bank_meta.json was saved with "
+            f"(bank_meta.json bank_sha256={expected}, actual={actual}); rebuild both "
+            "together with --calibrate"
         )

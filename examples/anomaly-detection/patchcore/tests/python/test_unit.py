@@ -155,6 +155,7 @@ class TestThresholdAndMeta:
     def test_bank_meta_roundtrip(self, tmp_path):
         meta = pcs.build_bank_meta(
             model_path=__file__,  # any real, stable file to hash
+            bank_path=__file__,  # any real, stable file to hash
             backbone="wide_resnet50_2",
             torchvision_weights="IMAGENET1K_V1",
             embed_dim=1536,
@@ -173,6 +174,7 @@ class TestThresholdAndMeta:
         pcs.save_bank_meta(meta_path, meta)
         loaded = pcs.load_bank_meta(meta_path)
         assert loaded["model_sha256"] == pcs.sha256_file(__file__)
+        assert loaded["bank_sha256"] == pcs.sha256_file(__file__)
         assert loaded["threshold"]["value"] == pytest.approx(12.3)
 
     def test_verify_bank_matches_model_ok(self, tmp_path):
@@ -183,3 +185,15 @@ class TestThresholdAndMeta:
         meta = {"model_sha256": "0" * 64}
         with pytest.raises(RuntimeError):
             pcs.verify_bank_matches_model(meta, __file__)
+
+    def test_verify_bank_hash_ok(self):
+        meta = {"bank_sha256": pcs.sha256_file(__file__)}
+        pcs.verify_bank_hash(meta, __file__)  # should not raise
+
+    def test_verify_bank_hash_mismatch_raises(self):
+        meta = {"bank_sha256": "0" * 64}
+        with pytest.raises(RuntimeError):
+            pcs.verify_bank_hash(meta, __file__)
+
+    def test_verify_bank_hash_skips_when_absent(self):
+        pcs.verify_bank_hash({}, "/nonexistent/path.npy")  # should not raise

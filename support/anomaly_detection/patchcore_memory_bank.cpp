@@ -515,6 +515,7 @@ BankMeta load_bank_meta(const std::filesystem::path& path) {
 
   BankMeta meta;
   meta.model_sha256 = j.value("model_sha256", "");
+  meta.bank_sha256 = j.value("bank_sha256", "");
   meta.model_filename = j.value("model_filename", "");
   meta.backbone = j.value("backbone", "");
   meta.torchvision_weights = j.value("torchvision_weights", "");
@@ -542,6 +543,7 @@ BankMeta load_bank_meta(const std::filesystem::path& path) {
 void save_bank_meta(const std::filesystem::path& path, const BankMeta& meta) {
   nlohmann::json j;
   j["model_sha256"] = meta.model_sha256;
+  j["bank_sha256"] = meta.bank_sha256;
   j["model_filename"] = meta.model_filename;
   j["backbone"] = meta.backbone;
   j["torchvision_weights"] = meta.torchvision_weights;
@@ -575,6 +577,19 @@ void verify_bank_matches_model(const BankMeta& meta, const std::filesystem::path
         "(bank_meta.json model_sha256=" +
         meta.model_sha256 + ", configured model sha256=" + actual +
         "); rebuild the bank with --calibrate against the current model.path");
+  }
+}
+
+void verify_bank_hash(const BankMeta& meta, const std::filesystem::path& bank_path) {
+  if (meta.bank_sha256.empty()) {
+    return;
+  }
+  const std::string actual = sha256_file(bank_path);
+  if (meta.bank_sha256 != actual) {
+    throw std::runtime_error(
+        "memory_bank.npy does not match the bank bank_meta.json was saved with "
+        "(bank_meta.json bank_sha256=" +
+        meta.bank_sha256 + ", actual=" + actual + "); rebuild both together with --calibrate");
   }
 }
 

@@ -345,6 +345,7 @@ int cmd_calibrate(const Config& cfg) {
 
   patchcore::BankMeta meta;
   meta.model_sha256 = patchcore::sha256_file(cfg.model_path);
+  meta.bank_sha256 = patchcore::sha256_file(cfg.memory_bank_path);
   meta.model_filename = fs::path(cfg.model_path).filename().string();
   meta.backbone = kBackbone;
   meta.torchvision_weights = kTorchvisionWeights;
@@ -731,6 +732,7 @@ int main(int argc, char** argv) {
     const auto meta = patchcore::load_bank_meta(cfg.bank_meta_path);
     std::cout << "Verifying model package...\n";
     patchcore::verify_bank_matches_model(meta, cfg.model_path);
+    patchcore::verify_bank_hash(meta, cfg.memory_bank_path);
     const auto bank = patchcore::MemoryBank::load(cfg.memory_bank_path);
     const auto threshold = static_cast<float>(meta.threshold_value);
     // num_neighbors changes the neighborhood-reweighting term, which changes

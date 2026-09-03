@@ -14,7 +14,7 @@
 
 ## Concept
 
-Detects anomalies in industrial images or video with a compiled `wide_resnet50_2` patch-feature extractor and a host-side coreset memory bank, calibrated from your own known-good images.
+Detects visual anomalies in industrial images or video using a compiled WideResNet-50 patch-feature extractor and a host-side coreset memory bank calibrated from your own known-good images.
 
 ## Preview
 
@@ -97,16 +97,23 @@ Run the remaining commands from `prebuilt-apps/`.
 
 | Model | Role | Source |
 | --- | --- | --- |
-| `patchcore_wide_resnet50_2_bf16_mla.tar.gz` | Default | Model Zoo |
+| `patchcore_wide_resnet50_2_bf16_mla.tar.gz` | Default | GitHub release (interim) |
 
-Model packages come from the Model Zoo release below, which can differ from the installed platform version.
+This model is not published to the Model Zoo yet, so it is hosted as a GitHub release asset in the interim:
+
+```bash
+mkdir -p models
+cd models
+curl -L -o patchcore_wide_resnet50_2_bf16_mla.tar.gz \
+  https://github.com/sima-neat/apps/releases/download/patchcore-model-v1/patchcore_wide_resnet50_2_bf16_mla.tar.gz
+cd ..
+```
+
+Once this model is published to the Model Zoo, fetch it the same way as every other example instead:
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
-mkdir -p models
-cd models
 sima-cli modelzoo -v "${MODELZOO_VERSION}" get patchcore_wide_resnet50_2_bf16_mla
-cd ..
 ```
 
 Set `model.path` in the example config to the downloaded package.

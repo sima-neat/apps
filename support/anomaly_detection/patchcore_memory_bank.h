@@ -111,6 +111,11 @@ float percentile_threshold(std::vector<float> scores, double percentile);
 /// interpret `memory_bank.npy` without hard-coding it in application source.
 struct BankMeta {
   std::string model_sha256;
+  // Pins this metadata to the exact memory_bank.npy it was derived from -- the
+  // threshold below is only valid for that bank's score distribution. Empty
+  // for bank_meta.json files written before this field existed; verify_bank_hash
+  // skips the check in that case rather than failing.
+  std::string bank_sha256;
   std::string model_filename;
   std::string backbone;
   std::string torchvision_weights;
@@ -139,5 +144,12 @@ std::string current_utc_timestamp();
 /// of `model_path` -- a mismatched bank silently produces meaningless scores
 /// instead of failing, which this check turns into a load-time error.
 void verify_bank_matches_model(const BankMeta& meta, const std::filesystem::path& model_path);
+
+/// Throws `std::runtime_error` if `meta.bank_sha256` is set and does not match
+/// the sha256 of `bank_path` -- proves the bank and the threshold derived from
+/// it are the ones actually paired, which verify_bank_matches_model alone
+/// cannot: an interrupted calibration or a bank swapped in from a different
+/// run still has the right model hash but the wrong score distribution.
+void verify_bank_hash(const BankMeta& meta, const std::filesystem::path& bank_path);
 
 } // namespace patchcore
