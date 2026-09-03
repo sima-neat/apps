@@ -46,6 +46,12 @@ inference:
 runtime:
   profile: false
   warmup_frames: 30
+  # Stop with an error when frames are still admitted but no result has returned for this
+  # long. 0 = twice pcie.result_timeout_ms. A stalled card must be stopped and rebooted, not
+  # waited on.
+  stall_timeout_ms: 0
+  # Force-exit if the GStreamer teardown does not finish within this time after stop.
+  teardown_timeout_ms: 10000
 
 output:
   insight:
