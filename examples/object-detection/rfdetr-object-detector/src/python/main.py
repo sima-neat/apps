@@ -557,12 +557,13 @@ def run(cfg: Config) -> int:
                 source_pts_ns = source_pts.pop(identity_key(sample), sample.pts_ns)
             timestamp_ms = source_pts_ns // 1_000_000 if source_pts_ns >= 0 else -1
             frame_id = str(source_frame_id) if source_frame_id >= 0 else ""
-            metadata_sender.send_metadata(
+            if not metadata_sender.send_metadata(
                 "object-detection",
                 json.dumps({"objects": objects}, separators=(",", ":")),
                 timestamp_ms,
                 frame_id,
-            )
+            ):
+                print("[warn] Insight metadata send failed", file=sys.stderr)
             processed += 1
         if bridge_error:
             raise bridge_error[0]
