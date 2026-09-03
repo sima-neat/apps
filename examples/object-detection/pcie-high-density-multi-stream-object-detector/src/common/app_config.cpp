@@ -160,6 +160,10 @@ void validate(const AppConfig& config) {
   require(config.inference_max_inflight_per_stream <= config.inference_max_inflight_total,
           "inference.max_inflight_per_stream must be <= inference.max_inflight_total");
   require(config.warmup_frames >= 0, "runtime.warmup_frames must be >= 0");
+  require(config.stall_timeout_ms >= 0, "runtime.stall_timeout_ms must be >= 0");
+  require(config.stall_timeout_ms == 0 || config.stall_timeout_ms >= config.result_timeout_ms,
+          "runtime.stall_timeout_ms must be 0 or >= pcie.result_timeout_ms");
+  require(config.teardown_timeout_ms > 0, "runtime.teardown_timeout_ms must be > 0");
   require(!config.insight_host.empty(), "output.insight.host must be set");
   require(config.video_port_base > 0 && config.video_port_base + config.stream_count - 1 <= 65535,
           "output.insight video port range is invalid");
@@ -214,12 +218,18 @@ AppConfig load_config(const std::filesystem::path& path) {
   config.inference_max_inflight_total = raw.int_or("inference.max_inflight_total", 8);
   config.profile = raw.bool_or("runtime.profile", false);
   config.warmup_frames = raw.int_or("runtime.warmup_frames", 30);
+  // 0 selects the default of twice pcie.result_timeout_ms once the config is validated.
+  config.stall_timeout_ms = raw.int_or("runtime.stall_timeout_ms", 0);
+  config.teardown_timeout_ms = raw.int_or("runtime.teardown_timeout_ms", 10000);
   config.insight_host = raw.string_or("output.insight.host", "");
   config.video_port_base = raw.int_or("output.insight.video_port_base", 9000);
   config.metadata_port_base = raw.int_or("output.insight.metadata_port_base", 9100);
   config.video_enabled = raw.bool_or("output.video_enabled", true);
 
   validate(config);
+  if (config.stall_timeout_ms == 0) {
+    config.stall_timeout_ms = 2 * config.result_timeout_ms;
+  }
   return config;
 }
 
@@ -253,6 +263,8 @@ std::string config_summary(const AppConfig& config) {
       << " inference_internal_queue_depth=" << config.inference_internal_queue_depth
       << " inference_max_inflight_per_stream=" << config.inference_max_inflight_per_stream
       << " inference_max_inflight_total=" << config.inference_max_inflight_total
+      << " stall_timeout_ms=" << config.stall_timeout_ms
+      << " teardown_timeout_ms=" << config.teardown_timeout_ms
       << " insight=" << config.insight_host;
   return out.str();
 }

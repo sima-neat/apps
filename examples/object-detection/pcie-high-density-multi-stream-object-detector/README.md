@@ -156,6 +156,42 @@ ssh -i ~/.ssh/sima_neat_pcie_ed25519 sima@10.0.0.2 \
 
 Do not restart only the host against an old card graph. Stop the launcher and start a new session.
 
+### Stalls and unclean stops
+
+The host application exits with an error when frames are still admitted but no result has
+come back for `runtime.stall_timeout_ms` (default: twice `pcie.result_timeout_ms`). A stalled
+card does not recover on its own: stop the launcher, then reboot the card before starting
+another session. Pressing `Ctrl-C` a second time, or exceeding `runtime.teardown_timeout_ms`,
+exits the host without waiting for the card.
+
+A card application that does not stop on `SIGINT` is killed. That can leave PCIe endpoint queue
+state behind (`si_pep_get_rqe: No context created for Data work queue`,
+`Ran out of output buffers` in the card `dmesg`), and later sessions may stall or crash the
+card. The launcher records such a stop in `card.dirty` under the card runtime directory and
+refuses to start until the card has been rebooted. Use `--allow-dirty-card` only for debugging.
+
+If the card's kernel crashes, the host driver logs `SoC Kernel Crashed` and the
+`veth-simaai` interface disappears; power-cycle the host to recover the card. The card keeps a
+persistent journal, so the previous boot's kernel log is available afterwards:
+
+```bash
+ssh sima@<card-ethernet-address> journalctl -b -1 -k
+```
+
+### Card memory per profile
+
+Each profile allocates decoder pools and PCIe receive pools from the card's CMA region
+(`CmaTotal` in `/proc/meminfo`, 1.8 GB on the Modalix PCIe Card). Approximate steady-state
+usage measured with `yolo26n-det-int8-b1`:
+
+| Profile | CMA in use |
+| --- | ---: |
+| 16 x 720p30 | 0.5 GB |
+| 24 x 720p20 | 1.0 GB |
+| 48 x 720p10 | 1.4 GB |
+
+Lower `input.decoder_buffers` or `pcie.pool_size` if `CmaFree` on the card approaches zero.
+
 ## Source Files
 
 - `run.sh`: host-side launcher.
