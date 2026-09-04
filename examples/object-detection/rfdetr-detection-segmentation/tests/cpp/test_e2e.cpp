@@ -102,9 +102,7 @@ int main(int argc, char** argv) {
     for (const auto& model : detection_models) {
       cases.push_back({"detection", model, source});
     }
-    if (source.codec != "mjpeg") {
-      cases.push_back({"segmentation", segmentation_model, source});
-    }
+    cases.push_back({"segmentation", segmentation_model, source});
   }
   const int video_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000);
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
@@ -134,8 +132,9 @@ int main(int argc, char** argv) {
         {"model.labels", labels.string()},
         {"source.rtsp_url", rtsp_url},
         {"source.codec", test.source.codec},
-        {"inference.frames",
-         test.source.codec == "h265" ? std::to_string(kPerformanceFrames) : "20"},
+        {"inference.frames", test.source.codec == "h265" || test.source.codec == "mjpeg"
+                                 ? std::to_string(kPerformanceFrames)
+                                 : "20"},
         {"inference." + test.task + ".min_score", "0.2"},
         {"output.insight.host", "127.0.0.1"},
         {"output.insight.video_port", std::to_string(video_port)},
@@ -182,7 +181,7 @@ int main(int argc, char** argv) {
                 << "\n";
       return 1;
     }
-    if (test.source.codec == "h265") {
+    if (test.source.codec == "h265" || test.source.codec == "mjpeg") {
       const double measured_fps = output_fps(process.stdout_text);
       std::cout << "[perf] task=" << test.task << " model=" << test.model.name
                 << " codec=" << test.source.codec << " frames=" << kPerformanceFrames

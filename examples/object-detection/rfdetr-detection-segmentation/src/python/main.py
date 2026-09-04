@@ -19,6 +19,7 @@ import yaml
 
 NUM_CLASSES = 91
 MASK_SIZE = 108
+CLASSIFICATION_TOP_K = 300
 METADATA_BYTE_BUDGET = 32_768
 
 
@@ -236,6 +237,19 @@ def load_labels(path: Path) -> list[str]:
     return labels
 
 
+def stable_topk_indices(values: np.ndarray, count: int) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32).reshape(-1)
+    count = min(count, values.size)
+    if count <= 0:
+        return np.empty(0, dtype=np.int64)
+    candidates = np.argpartition(-values, count - 1)[:count]
+    cutoff = values[candidates].min()
+    selected = np.concatenate(
+        (np.flatnonzero(values > cutoff), np.flatnonzero(values == cutoff)[:count])
+    )[:count]
+    return selected[np.lexsort((selected, -values[selected]))]
+
+
 def stable_topk_gather(
     scores: np.ndarray, proposals: np.ndarray, top_k: int
 ) -> np.ndarray:
@@ -245,7 +259,7 @@ def stable_topk_gather(
         raise ValueError("backbone score and proposal shapes do not match")
     if not np.isfinite(flat_scores).all() or not np.isfinite(flat_proposals).all():
         raise ValueError("backbone output contains non-finite values")
-    indices = np.argsort(-flat_scores, kind="stable")[:top_k]
+    indices = stable_topk_indices(flat_scores, top_k)
     return flat_proposals[indices].reshape(1, top_k, 4)
 
 
@@ -262,10 +276,11 @@ def postprocess(
     boxes = np.asarray(boxes, dtype=np.float32).reshape(top_k, 4)
     logits = np.asarray(logits, dtype=np.float32).reshape(top_k, NUM_CLASSES)
     probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
-    ranked = np.argsort(-probabilities.reshape(-1), kind="stable")
+    flat_probabilities = probabilities.reshape(-1)
+    ranked = stable_topk_indices(flat_probabilities, CLASSIFICATION_TOP_K)
     objects: list[dict] = []
     for flat_index in ranked:
-        score = float(probabilities.reshape(-1)[flat_index])
+        score = float(flat_probabilities[flat_index])
         if score < min_score or len(objects) >= max_detections:
             break
         query, class_id = divmod(int(flat_index), NUM_CLASSES)
@@ -302,16 +317,15 @@ def segmentation_metadata(
     logits = np.asarray(logits, dtype=np.float32).reshape(200, NUM_CLASSES)
     masks = np.asarray(masks, dtype=np.float32).reshape(MASK_SIZE, MASK_SIZE, 200)
     probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
-    classes = np.argmax(probabilities, axis=1)
-    scores = probabilities[np.arange(200), classes]
-    queries = np.argsort(-scores, kind="stable")
+    flat_probabilities = probabilities.reshape(-1)
+    ranked = stable_topk_indices(flat_probabilities, CLASSIFICATION_TOP_K)
 
     segments: list[dict] = []
-    for query in queries:
-        class_id = int(classes[query])
-        score = float(scores[query])
+    for flat_index in ranked:
+        score = float(flat_probabilities[flat_index])
         if score < min_score or len(segments) >= max_segments:
             break
+        query, class_id = divmod(int(flat_index), NUM_CLASSES)
         if class_id == 0 or labels[class_id] == "unused":
             continue
 
@@ -326,7 +340,6 @@ def segmentation_metadata(
         mx1 = max(mx0 + 1, min(MASK_SIZE, int(np.ceil(x1 * MASK_SIZE / width))))
         my1 = max(my0 + 1, min(MASK_SIZE, int(np.ceil(y1 * MASK_SIZE / height))))
         mask = 1.0 / (1.0 + np.exp(-np.clip(masks[my0:my1, mx0:mx1, query], -80.0, 80.0)))
-        mask = cv2.resize(mask, (x1 - x0, y1 - y0), interpolation=cv2.INTER_LINEAR)
         binary = (mask >= mask_threshold).astype(np.uint8)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
@@ -335,8 +348,13 @@ def segmentation_metadata(
         polygon = cv2.approxPolyDP(contour, 0.004 * cv2.arcLength(contour, True), True)
         if len(polygon) < 3:
             continue
+        scale_x = (x1 - x0 - 1) / max(binary.shape[1] - 1, 1)
+        scale_y = (y1 - y0 - 1) / max(binary.shape[0] - 1, 1)
         points = [
-            [int(point[0][0]) + x0, int(point[0][1]) + y0]
+            [
+                min(x1 - 1, x0 + round(int(point[0][0]) * scale_x)),
+                min(y1 - 1, y0 + round(int(point[0][1]) * scale_y)),
+            ]
             for point in polygon
         ]
         segments.append(

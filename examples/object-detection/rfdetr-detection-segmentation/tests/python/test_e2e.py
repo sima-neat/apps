@@ -46,8 +46,8 @@ def _output_fps(stdout: str) -> float:
         for variant in ("small", "medium")
     ]
     + [
-        ("segmentation", "medium", "h264", "rtsp_h264_url"),
-        ("segmentation", "medium", "h265", "rtsp_h265_url"),
+        ("segmentation", "medium", codec, f"rtsp_{codec}_url")
+        for codec in ("h264", "h265", "mjpeg")
     ],
 )
 def test_publishes_insight_metadata(
@@ -83,7 +83,7 @@ def test_publishes_insight_metadata(
             "model": model_config,
             "source": {"rtsp_url": rtsp_url, "codec": codec},
             "inference": {
-                "frames": PERFORMANCE_FRAMES if codec == "h265" else 20,
+                "frames": PERFORMANCE_FRAMES if codec in ("h265", "mjpeg") else 20,
                 task: {"min_score": 0.2},
             },
             "output": {
@@ -137,7 +137,7 @@ def test_publishes_insight_metadata(
                 len(point) == 2 and all(value >= 0.0 for value in point)
                 for point in entry["mask"]
             )
-    if codec == "h265":
+    if codec in ("h265", "mjpeg"):
         threshold = MIN_OUTPUT_FPS[
             "segmentation" if task == "segmentation" else variant
         ]

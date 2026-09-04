@@ -164,10 +164,11 @@ def test_segmentation_metadata_contains_polygons():
     boxes[0, 0] = [0.5, 0.5, 0.5, 0.5]
     boxes[0, 1] = [0.5, 0.5, 0.5, 0.5]
     logits = np.full((1, 200, 91), -20.0, dtype=np.float32)
+    logits[0, 0, 0] = 12.0
     logits[0, 0, 1] = 11.0
     logits[0, 1, 1] = 10.0
     masks = np.full((108, 108, 200), -20.0, dtype=np.float32)
-    masks[40:68, 40:68, 1] = 10.0
+    masks[40:68, 40:68, 0] = 10.0
 
     payload = main.segmentation_metadata(
         boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08

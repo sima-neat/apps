@@ -94,11 +94,12 @@ Insight receives `object-detection` metadata for detection or `segmentation` pol
 
 ## Performance
 
-Measured end-to-end throughput on Modalix:
+Measured end-to-end throughput on Modalix. The 720p MJPEG row reports Python / C++ results from a 90 FPS source over 300 completed outputs; the other rows summarize validated limits.
 
 | Input Resolution | Codec | Detection Small | Detection Medium | Segmentation Medium |
 | --- | --- | ---: | ---: | ---: |
-| 720p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS | Up to 39 FPS |
+| 720p | H.264, H.265 | Up to 70 FPS | Up to 50 FPS | Up to 39 FPS |
+| 720p | MJPEG | 68.9 / 68.9 FPS | 50.1 / 50.0 FPS | 38.6 / 38.7 FPS |
 | 1080p | H.264, H.265 | Up to 70 FPS | Up to 50 FPS | Up to 39 FPS |
 | 1080p | MJPEG | Up to 70 FPS | Up to 50 FPS | Not verified |
 | 4K | H.264 | Up to 60 FPS | Up to 50 FPS | Up to 39 FPS |

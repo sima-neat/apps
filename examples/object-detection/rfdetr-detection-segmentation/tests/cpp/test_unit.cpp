@@ -86,12 +86,13 @@ int main(int argc, char** argv) {
   segmentation_boxes[3] = 0.5F;
   std::copy_n(segmentation_boxes.begin(), 4, segmentation_boxes.begin() + 4);
   std::vector<float> segmentation_logits(200U * 91U, -20.0F);
+  segmentation_logits[0] = 12.0F;
   segmentation_logits[1] = 11.0F;
   segmentation_logits[91U + 1U] = 10.0F;
   std::vector<float> masks(108U * 108U * 200U, -20.0F);
   for (int y = 40; y < 68; ++y) {
     for (int x = 40; x < 68; ++x) {
-      masks[static_cast<std::size_t>((y * 108 + x) * 200 + 1)] = 10.0F;
+      masks[static_cast<std::size_t>((y * 108 + x) * 200)] = 10.0F;
     }
   }
   TransformerOutputs segmentation_output{

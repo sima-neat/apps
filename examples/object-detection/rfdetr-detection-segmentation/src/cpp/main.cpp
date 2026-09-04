@@ -44,6 +44,7 @@ namespace {
 
 constexpr int kNumClasses = 91;
 constexpr int kMaskSize = 108;
+constexpr int kClassificationTopK = 300;
 constexpr std::size_t kMetadataByteBudget = 32'768;
 std::atomic<bool> g_stop{false};
 
@@ -290,6 +291,21 @@ std::vector<float> read_floats(const neat::Tensor& tensor) {
   return values;
 }
 
+std::vector<int> stable_topk_indices(const std::vector<float>& values, std::size_t count) {
+  count = std::min(count, values.size());
+  std::vector<int> indices(values.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  const auto higher_score = [&values](int left, int right) {
+    const float left_score = values[static_cast<std::size_t>(left)];
+    const float right_score = values[static_cast<std::size_t>(right)];
+    return left_score != right_score ? left_score > right_score : left < right;
+  };
+  std::partial_sort(indices.begin(), indices.begin() + static_cast<std::ptrdiff_t>(count),
+                    indices.end(), higher_score);
+  indices.resize(count);
+  return indices;
+}
+
 std::vector<float> stable_topk_gather(const std::vector<float>& scores,
                                       const std::vector<float>& proposals, int top_k) {
   if (scores.size() < static_cast<std::size_t>(top_k) || proposals.size() != scores.size() * 4U) {
@@ -301,12 +317,7 @@ std::vector<float> stable_topk_gather(const std::vector<float>& scores,
                    [](float value) { return std::isfinite(value); })) {
     throw std::runtime_error("backbone output contains non-finite values");
   }
-  std::vector<int> indices(scores.size());
-  std::iota(indices.begin(), indices.end(), 0);
-  std::stable_sort(indices.begin(), indices.end(), [&scores](int left, int right) {
-    return scores[static_cast<std::size_t>(left)] > scores[static_cast<std::size_t>(right)];
-  });
-  indices.resize(static_cast<std::size_t>(top_k));
+  const auto indices = stable_topk_indices(scores, static_cast<std::size_t>(top_k));
   std::vector<float> gathered(static_cast<std::size_t>(top_k) * 4U);
   for (int output = 0; output < top_k; ++output) {
     const auto source = static_cast<std::size_t>(indices[static_cast<std::size_t>(output)]) * 4U;
@@ -435,12 +446,7 @@ postprocess(const std::vector<float>& boxes, const std::vector<float>& logits, i
     value = std::clamp(value, -80.0F, 80.0F);
     return 1.0F / (1.0F + std::exp(-value));
   });
-  std::vector<int> ranking(probabilities.size());
-  std::iota(ranking.begin(), ranking.end(), 0);
-  std::stable_sort(ranking.begin(), ranking.end(), [&probabilities](int left, int right) {
-    return probabilities[static_cast<std::size_t>(left)] >
-           probabilities[static_cast<std::size_t>(right)];
-  });
+  const auto ranking = stable_topk_indices(probabilities, kClassificationTopK);
 
   std::vector<sima_examples::MetadataBox> objects;
   objects.reserve(static_cast<std::size_t>(max_detections));
@@ -473,12 +479,6 @@ postprocess(const std::vector<float>& boxes, const std::vector<float>& logits, i
   return objects;
 }
 
-struct SegmentationCandidate {
-  int query = 0;
-  int class_id = 0;
-  float score = 0.0F;
-};
-
 float sigmoid(float value) {
   value = std::clamp(value, -80.0F, 80.0F);
   return 1.0F / (1.0F + std::exp(-value));
@@ -503,14 +503,14 @@ cv::Rect frame_rect(const std::vector<float>& boxes, int query, int width, int h
 
 std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, const cv::Rect& box,
                                     int frame_width, int frame_height, float threshold) {
-  const double scale_x = static_cast<double>(kMaskSize) / frame_width;
-  const double scale_y = static_cast<double>(kMaskSize) / frame_height;
-  const int x0 = std::clamp(static_cast<int>(std::floor(box.x * scale_x)), 0, kMaskSize - 1);
-  const int y0 = std::clamp(static_cast<int>(std::floor(box.y * scale_y)), 0, kMaskSize - 1);
-  const int x1 =
-      std::clamp(static_cast<int>(std::ceil((box.x + box.width) * scale_x)), x0 + 1, kMaskSize);
-  const int y1 =
-      std::clamp(static_cast<int>(std::ceil((box.y + box.height) * scale_y)), y0 + 1, kMaskSize);
+  const double mask_scale_x = static_cast<double>(kMaskSize) / frame_width;
+  const double mask_scale_y = static_cast<double>(kMaskSize) / frame_height;
+  const int x0 = std::clamp(static_cast<int>(std::floor(box.x * mask_scale_x)), 0, kMaskSize - 1);
+  const int y0 = std::clamp(static_cast<int>(std::floor(box.y * mask_scale_y)), 0, kMaskSize - 1);
+  const int x1 = std::clamp(static_cast<int>(std::ceil((box.x + box.width) * mask_scale_x)), x0 + 1,
+                            kMaskSize);
+  const int y1 = std::clamp(static_cast<int>(std::ceil((box.y + box.height) * mask_scale_y)),
+                            y0 + 1, kMaskSize);
   cv::Mat mask(y1 - y0, x1 - x0, CV_32FC1);
   for (int y = y0; y < y1; ++y) {
     auto* row = mask.ptr<float>(y - y0);
@@ -518,11 +518,10 @@ std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, co
       row[x - x0] = sigmoid(masks[(y * kMaskSize + x) * top_k + query]);
     }
   }
-  cv::Mat projected;
-  cv::resize(mask, projected, box.size(), 0, 0, cv::INTER_LINEAR);
-  cv::compare(projected, threshold, projected, cv::CMP_GE);
+  cv::Mat binary;
+  cv::compare(mask, threshold, binary, cv::CMP_GE);
   std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(projected, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+  cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
   if (contours.empty()) {
     return {};
   }
@@ -535,8 +534,13 @@ std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, co
   if (polygon.size() < 3U) {
     return {};
   }
+  const double scale_x = static_cast<double>(box.width - 1) / std::max(mask.cols - 1, 1);
+  const double scale_y = static_cast<double>(box.height - 1) / std::max(mask.rows - 1, 1);
   for (auto& point : polygon) {
-    point += box.tl();
+    point.x = std::clamp(box.x + static_cast<int>(std::nearbyint(point.x * scale_x)), box.x,
+                         box.x + box.width - 1);
+    point.y = std::clamp(box.y + static_cast<int>(std::nearbyint(point.y * scale_y)), box.y,
+                         box.y + box.height - 1);
   }
   return polygon;
 }
@@ -564,34 +568,25 @@ std::string segmentation_metadata(const TransformerOutputs& output, int frame_wi
     masks = masks_copy.data();
   }
 
-  std::vector<SegmentationCandidate> candidates;
-  for (int query = 0; query < cfg.top_k; ++query) {
-    int class_id = 0;
-    float best_logit = logits[static_cast<std::size_t>(query) * kNumClasses];
-    for (int candidate = 1; candidate < kNumClasses; ++candidate) {
-      const float value = logits[static_cast<std::size_t>(query) * kNumClasses + candidate];
-      if (value > best_logit) {
-        best_logit = value;
-        class_id = candidate;
-      }
-    }
-    const float score = sigmoid(best_logit);
-    if (score >= cfg.min_score && class_id != 0 &&
-        labels[static_cast<std::size_t>(class_id)] != "unused") {
-      candidates.push_back({query, class_id, score});
-    }
-  }
-  std::stable_sort(candidates.begin(), candidates.end(),
-                   [](const auto& left, const auto& right) { return left.score > right.score; });
+  std::vector<float> probabilities(logits.size());
+  std::transform(logits.begin(), logits.end(), probabilities.begin(), sigmoid);
+  const auto ranking = stable_topk_indices(probabilities, kClassificationTopK);
+
   nlohmann::json segments = nlohmann::json::array();
   std::size_t encoded_bytes = sizeof(R"({"segments":[]})") - 1U;
-  for (const auto& candidate : candidates) {
-    if (segments.size() >= static_cast<std::size_t>(cfg.max_results)) {
+  for (const int flat_index : ranking) {
+    const float score = probabilities[static_cast<std::size_t>(flat_index)];
+    if (score < cfg.min_score || segments.size() >= static_cast<std::size_t>(cfg.max_results)) {
       break;
     }
-    const cv::Rect box = frame_rect(boxes, candidate.query, frame_width, frame_height);
-    const auto polygon = mask_polygon(masks, candidate.query, cfg.top_k, box, frame_width,
-                                      frame_height, cfg.mask_threshold);
+    const int query = flat_index / kNumClasses;
+    const int class_id = flat_index % kNumClasses;
+    if (class_id == 0 || labels[static_cast<std::size_t>(class_id)] == "unused") {
+      continue;
+    }
+    const cv::Rect box = frame_rect(boxes, query, frame_width, frame_height);
+    const auto polygon =
+        mask_polygon(masks, query, cfg.top_k, box, frame_width, frame_height, cfg.mask_threshold);
     if (polygon.empty()) {
       continue;
     }
@@ -601,8 +596,8 @@ std::string segmentation_metadata(const TransformerOutputs& output, int frame_wi
     }
     nlohmann::json segment = {
         {"id", "seg_" + std::to_string(segments.size() + 1U)},
-        {"label", labels[static_cast<std::size_t>(candidate.class_id)]},
-        {"confidence", candidate.score},
+        {"label", labels[static_cast<std::size_t>(class_id)]},
+        {"confidence", score},
         {"bbox", {box.x, box.y, box.width, box.height}},
         {"mask_format", "polygon"},
         {"mask", std::move(points)},
