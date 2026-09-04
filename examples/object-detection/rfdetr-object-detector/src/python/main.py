@@ -507,10 +507,19 @@ def run(cfg: Config) -> int:
                 gathered_tensor = pyneat.Tensor.from_numpy(
                     gathered, copy=True, memory=pyneat.TensorMemory.EV74
                 )
+                # Hand the transformer an owned EV74 copy of the feature. Pushing the
+                # pulled tensor pins the detessdequant output-pool buffer for the whole
+                # transformer inference, which exhausts that 4-deep pool at 60 fps.
+                # to_numpy(copy=True) detaches from the pooled segment, and from_numpy
+                # with a device memory target transfers into Neat-owned storage that
+                # holds no reference to the backbone output.
+                feature_tensor = pyneat.Tensor.from_numpy(
+                    feature.to_numpy(copy=True), copy=True, memory=pyneat.TensorMemory.EV74
+                )
                 transformer_sample = pyneat.Sample()
                 transformer_sample.kind = pyneat.SampleKind.TensorSet
                 transformer_sample.tensors = transformer_inputs(
-                    transformer, feature, gathered_tensor
+                    transformer, feature_tensor, gathered_tensor
                 )
                 copy_identity(sample, transformer_sample)
                 key = identity_key(sample)
