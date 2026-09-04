@@ -27,6 +27,7 @@ from server.test_asr_switching import (  # noqa: E402
     AsrSwitchingTests,
     AsrWarmupBehaviourTests,
     AsrWarmupPayloadTests,
+    MlaFailureClassificationTests,
 )
 
 # Applies to every TestCase collected from this module.
@@ -36,4 +37,5 @@ __all__ = [
     "AsrSwitchingTests",
     "AsrWarmupBehaviourTests",
     "AsrWarmupPayloadTests",
+    "MlaFailureClassificationTests",
 ]
