@@ -925,6 +925,12 @@ body.solutions-open { overflow: hidden; }
 .model-unload-button:disabled { opacity: .5; cursor: default; }
 .model-unload-button[hidden] { display: none; }
 /* Load status is its own block, divided from the Load action above it. */
+.model-reset-row {
+  /* Set the recovery action apart from the load-status panel above it: it
+     acts on the board runtime, not on this load, and sat flush against it. */
+  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); gap: 8px;
+}
+.model-reset-row .setting-button { align-self: flex-start; }
 .model-load-progress {
   margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 8px;

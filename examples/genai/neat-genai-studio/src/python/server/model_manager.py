@@ -80,6 +80,17 @@ def parse_quantization(name: str) -> str | None:
 # so they do not need the chat warm-up's 600s ceiling.
 _ASR_WARM_TIMEOUT_S = 300
 
+# Seed for the load-time estimate, in seconds per GB of ELF stages. Measured on a
+# Modalix DevKit, where the observed rate spans roughly 1.2-2.7 s/GB depending on
+# how a model's stages are structured. Deliberately seeded at the SLOW end: an
+# over-estimate makes the bar advance conservatively and finish early, whereas an
+# under-estimate pins it at 99% and looks hung. Only used until the board has
+# timed that model once — _sec_per_gb and the per-model history then take over
+# and are accurate (a re-load of a 7 GB model estimated 19 s and took 19.8 s).
+# Without any seed the FIRST load of a session has no bar and no countdown at
+# all, which is exactly when a user is most likely to be watching.
+_DEFAULT_SEC_PER_GB = 2.7
+
 _MLA_FAILURE_MARKERS = (
     "mlashm",
     "mla_load",
@@ -154,7 +165,7 @@ class ModelManager:
         # so we expose elapsed time + a learned ETA from weight size / past loads.
         self._loading: dict | None = None
         self._load_history: dict[str, float] = {}  # name -> last load seconds
-        self._sec_per_gb: float | None = None       # learned rate for ETA
+        self._sec_per_gb: float | None = _DEFAULT_SEC_PER_GB   # learned rate for ETA
         # Optional stdout tap: real per-ELF load progress + a live loading log.
         self._log_tap = log_tap
         # Last load failure, retained so the UI can surface it prominently.
@@ -387,24 +398,35 @@ class ModelManager:
                     victims = [v for v in self._resident if v != name]
 
             size_bytes = self._size_of(path)
+            # Estimate and learn against the ELF bytes actually transferred, so
+            # the rate stays comparable across models whose directories carry
+            # very different amounts of non-ELF baggage.
+            load_bytes = self._elf_bytes(path) or size_bytes
             started = time.monotonic()
             self._last_error = None
             self._loading = {
                 "name": name,
                 "startedAt": started,
-                "estTotalS": self._estimate_load_seconds(name, size_bytes),
+                "estTotalS": self._estimate_load_seconds(name, load_bytes),
                 # Real progress: count completed ELF-stage loads (from the
                 # stdout tap) minus the baseline against the on-disk total.
                 "elfTotal": self._count_elf_stages(path),
                 "elfBase": self._log_tap.loaded_count if self._log_tap else 0,
             }
             evicted: list = []
+            stages = self._loading.get("elfTotal")
+            self._log_note(
+                f"Loading {name} — {self._fmt_size(size_bytes)}"
+                + (f", {stages} stages" if stages else "")
+                + (f", est {self._loading['estTotalS']:.0f}s" if self._loading.get("estTotalS") else "")
+            )
             try:
                 # Clear every other chat/VLM model. _stop_model_streams (an HTTP
                 # /stop) and remove_model (which triggers the outgoing model's RAII
                 # free of MLA memory) can each block for seconds — do them WITHOUT
                 # holding _lock so status polls stay responsive during the switch.
                 for victim in victims:
+                    self._log_note(f"Unloading {victim}")
                     self._stop_model_streams(victim)
                     try:
                         self._server.remove_model(victim)
@@ -435,7 +457,11 @@ class ModelManager:
 
                 # add_model returns the name the server actually served it under,
                 # which may differ from the requested one — that is the truth.
+                self._log_note(f"Registering {name} with the runtime…")
                 served = self._server.add_model(str(path), name)
+                self._log_note(
+                    f"Registered {served}; transferring weights to the accelerator…"
+                )
                 with self._lock:
                     if is_asr:
                         self._active_asr = served
@@ -450,10 +476,12 @@ class ModelManager:
                         return {"name": served, "state": "ready", "evicted": evicted,
                                 "cold_start": True,
                                 "load_seconds": round(time.monotonic() - started, 1)}
+                    self._log_note("Warming up (first transcription forces the load)…")
                     ok, detail = self._warm_check_asr(served)
                     if ok:
-                        self._record_load_duration(name, size_bytes,
+                        self._record_load_duration(name, load_bytes,
                                                    time.monotonic() - started)
+                        self._log_note(f"Ready: {served} in {time.monotonic() - started:.1f}s")
                         return {"name": served, "state": "ready", "evicted": evicted,
                                 "cold_start": True,
                                 "load_seconds": round(time.monotonic() - started, 1)}
@@ -477,9 +505,11 @@ class ModelManager:
                     return {"name": served, "state": "ready", "evicted": evicted,
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
+                self._log_note("Warming up (first inference forces the load)…")
                 ok, detail = self._warm_check(name)
                 if ok:
-                    self._record_load_duration(name, size_bytes, time.monotonic() - started)
+                    self._record_load_duration(name, load_bytes, time.monotonic() - started)
+                    self._log_note(f"Ready: {served} in {time.monotonic() - started:.1f}s")
                     return {"name": served, "state": "ready", "evicted": evicted,
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
@@ -525,6 +555,34 @@ class ModelManager:
         result["previous"] = previous if previous != active else None
         return result
 
+    def _log_note(self, text: str) -> None:
+        """Add a studio-side line to the load log (no-op without a tap)."""
+        if self._log_tap is not None:
+            try:
+                self._log_tap.note(text)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _fmt_size(size_bytes: int | None) -> str:
+        if not size_bytes:
+            return "size unknown"
+        gb = size_bytes / 1e9
+        return f"{gb:.1f} GB" if gb >= 1 else f"{size_bytes / 1e6:.0f} MB"
+
+    def _elf_bytes(self, path) -> int | None:
+        """Total size of the ELF stages — the bytes the accelerator actually
+        loads. A model directory can be twice this (safetensors, tokenizer,
+        configs), so estimating from the directory size overshoots badly."""
+        if not path:
+            return None
+        try:
+            total = sum(f.stat().st_size
+                        for f in Path(path).glob("elf_files/*_mla.elf"))
+        except Exception:
+            return None
+        return total or None
+
     def _estimate_load_seconds(self, name: str, size_bytes: int | None) -> float | None:
         """Best-effort ETA: the model's own last load time, else a learned rate."""
         if name in self._load_history:
@@ -558,7 +616,12 @@ class ModelManager:
         if self._log_tap and elf_total:
             elf_done = max(0, min(self._log_tap.loaded_count - info.get("elfBase", 0), elf_total))
 
-        if elf_done is not None and elf_total:
+        # Only trust the stage counter once it has actually moved. Current
+        # runtimes load every stage in a single bulk call and print no per-stage
+        # lines, so the counter sits at 0 for the whole load — and taking this
+        # branch on the strength of "a tap exists and there are ELFs on disk"
+        # pinned the bar to 0% and threw away the time-based estimate below.
+        if elf_done and elf_total:
             pct = int(elf_done / elf_total * 100)
             if elf_done > 0:
                 eta_total = elapsed / elf_done * elf_total   # observed per-stage rate
@@ -570,24 +633,33 @@ class ModelManager:
                 "name": info["name"],
                 "elapsedS": round(elapsed, 1),
                 "etaS": round(eta_total, 1) if eta_total else None,
+                "remainingS": round(max(0.0, eta_total - elapsed), 1) if eta_total else None,
                 "pct": pct,
                 "filesDone": elf_done,
                 "filesTotal": elf_total,
+                "stagesTotal": elf_total,
                 "estimated": estimated,
             }
 
         # Fallback: elapsed / learned-size estimate (no per-stage signal). Report
         # filesTotal=None too, so the UI shows elapsed time rather than a frozen
         # "stage 0 of N" against a total it can never make progress against.
+        # No per-stage signal (current runtimes load every stage in one bulk call
+        # and print nothing per stage). Drive the bar from elapsed/estimate, and
+        # hold at 99 rather than 100 so it never claims to be finished early.
         est = info.get("estTotalS")
-        pct = int(min(97, elapsed / est * 100)) if est and est > 0 else None
+        pct = int(min(99, elapsed / est * 100)) if est and est > 0 else None
         return {
             "name": info["name"],
             "elapsedS": round(elapsed, 1),
             "etaS": round(est, 1) if est else None,
+            "remainingS": round(max(0.0, est - elapsed), 1) if est else None,
             "pct": pct,
             "filesDone": None,
             "filesTotal": None,
+            # The stage count is still worth showing as scale, even when the
+            # runtime gives us no way to count them off.
+            "stagesTotal": info.get("elfTotal"),
             "estimated": True,
         }
 

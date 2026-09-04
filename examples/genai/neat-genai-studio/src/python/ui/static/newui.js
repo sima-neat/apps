@@ -4684,20 +4684,32 @@ let _logLineCount = 0;
 
 function applyLoadingStatus(ld, name) {
   if (!ld || ld.name !== name) return;
-  let txt;
-  // Only show the stage count when the server has a REAL completed count;
-  // filesDone == null means no per-stage signal, so use elapsed time instead.
+  const parts = [];
+  // Percent first — it is what the eye goes to. `estimated` says whether it is
+  // derived from counted stages or from elapsed-vs-expected time.
+  if (ld.pct != null) parts.push(`${ld.pct}%`);
+
   if (ld.filesTotal && ld.filesDone != null) {
-    txt = `Loading ${name}… stage ${ld.filesDone} of ${ld.filesTotal}`;
-  } else {
-    txt = `Loading ${name}… ${fmtDuration(ld.elapsedS)}`;
+    // Real per-stage counter (older runtimes report one).
+    parts.push(`stage ${ld.filesDone} of ${ld.filesTotal}`);
+  } else if (ld.stagesTotal) {
+    // Current runtimes load every stage in one bulk call and count nothing, so
+    // show the scale of the work rather than a counter frozen at zero.
+    parts.push(`${ld.stagesTotal} stages`);
   }
-  if (ld.etaS != null) {
-    const remain = Math.max(0, ld.etaS - ld.elapsedS);
-    txt += ` · ~${fmtDuration(remain)} left`;
+  parts.push(fmtDuration(ld.elapsedS));
+
+  // The countdown. Say "~" while it is an estimate so the number is not read as
+  // a promise, and stop counting down past zero on a slower-than-expected load.
+  const remain = (ld.remainingS != null)
+    ? ld.remainingS
+    : (ld.etaS != null ? Math.max(0, ld.etaS - ld.elapsedS) : null);
+  if (remain != null) {
+    parts.push(remain > 0 ? `~${fmtDuration(remain)} left` : 'finishing…');
   }
-  setModelStatus(txt, 'loading');
-  setModelLoadBar('active');   // indeterminate — model load has no true percentage
+
+  setModelStatus(`Loading ${name} · ${parts.join(' · ')}`, 'loading');
+  setModelLoadBar(ld.pct != null ? ld.pct : 'active');
 }
 
 function processLoadUpdate(d, name) {
@@ -4852,7 +4864,17 @@ function setModelLoadBar(state) {
     return;
   }
   bar.style.display = 'block';
-  if (fill) { fill.style.width = '100%'; fill.classList.add('indeterminate'); }
+  if (fill) {
+    if (typeof state === 'number' && isFinite(state)) {
+      // A real percentage: fill to it and drop the barber-pole animation.
+      fill.classList.remove('indeterminate');
+      fill.style.width = `${Math.max(0, Math.min(100, state))}%`;
+    } else {
+      // No percentage available — keep the indeterminate sweep.
+      fill.style.width = '100%';
+      fill.classList.add('indeterminate');
+    }
+  }
   // Pin the status panel to the top and bring it into view — with per-row Load
   // buttons the click may happen far below it (especially on a small screen).
   if (panel) {
