@@ -248,6 +248,25 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
             manager.set_active_asr("whisper-medium-a16w8")
         warm.assert_called_once_with("whisper-medium-a16w8")
 
+    def test_a_registered_but_inactive_asr_is_re_warmed_before_adoption(self):
+        # The state a failed warm-up leaves behind: still registered on the
+        # server, but not active. Adopting it without re-checking would declare
+        # the very model that just failed to be ready.
+        manager, server = self.manager()
+        with self.assertRaises(RuntimeError):
+            with patch.object(ModelManager, "_warm_check_asr",
+                              return_value=(False, "MLA_LOAD_FAILED: bulk")):
+                with patch.object(server, "remove_model", return_value=False):
+                    manager.set_active_asr("whisper-medium-a16w8")
+        self.assertIsNone(manager.active_asr())
+        self.assertIn("whisper-medium-a16w8", server.model_names())
+
+        with patch.object(ModelManager, "_warm_check_asr",
+                          return_value=(True, "")) as warm:
+            manager.set_active_asr("whisper-medium-a16w8")
+        warm.assert_called_once_with("whisper-medium-a16w8")
+        self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
+
     def test_a_non_mla_warm_failure_leaves_the_model_active(self):
         manager, _ = self.manager()
         with patch.object(ModelManager, "_warm_check_asr",
