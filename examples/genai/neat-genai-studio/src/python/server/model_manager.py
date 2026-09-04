@@ -259,6 +259,7 @@ class ModelManager:
         entries = []                                # outside the lock (walks are slow)
         for info in infos:
             complete, reason = self._is_model_complete(info.get("path"))
+            path = info.get("path")
             entries.append({
                 "name": info["name"],
                 "type": info.get("type", "chat"),
@@ -270,7 +271,15 @@ class ModelManager:
                 "pinned": info["name"] == self._configured_asr,
                 "activeAsr": (info.get("type") == "asr"
                               and info["name"] == active_asr),
-                "sizeBytes": self._size_of(info.get("path")),
+                "sizeBytes": self._size_of(path),
+                # How long this model is expected to take to load, so the client
+                # can run its own countdown. add_model() does the bulk MLA load
+                # in native code without releasing the GIL, which freezes this
+                # whole process — control API included — for the duration, so
+                # nothing can be polled while a load is actually in flight.
+                "estimatedLoadS": self._estimate_load_seconds(
+                    info["name"], self._elf_bytes(path) or self._size_of(path)),
+                "stagesTotal": self._count_elf_stages(path),
                 "complete": complete,
                 "incompleteReason": reason or None,
             })

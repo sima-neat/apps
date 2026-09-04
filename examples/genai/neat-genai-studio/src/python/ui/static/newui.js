@@ -4030,6 +4030,8 @@ function populateModelSelect(catalog) {
 let _catalog = [];
 let _pendingLoad = '';    // name of the model currently loading (for the row label)
 let _resetting = false;   // an accelerator reset + server relaunch is in flight
+let _loadTicker = null;   // client-side load countdown (see startLoadTicker)
+let _lastServerLoadUpdate = 0;   // when the server last reported real progress
 let _asrActive = '';     // ASR model serving transcriptions
 let _asrPending = '';    // ASR model mid-switch (for the row label)
 
@@ -4355,6 +4357,55 @@ function updateAsrModelIndicator() {
   el.title = name ? `Transcribed by ${name}` : '';
 }
 
+// Drive the load bar from the browser's own clock.
+//
+// The server cannot report progress while a load is in flight: add_model() does
+// the bulk MLA transfer in native code without releasing the GIL, so the whole
+// model-server process — control API included — stops answering for the entire
+// load (measured: 6s timeouts, zero bytes, for a 20s load). Polling therefore
+// yields nothing exactly when there is something to show. So take the estimate
+// from the catalog BEFORE starting, and count down locally.
+//
+// Server-side polling still runs and wins whenever it does answer (a short load,
+// or an ASR warm-up, where the process is responsive); this only fills the gap.
+function startLoadTicker(name, estimateS, stagesTotal) {
+  stopLoadTicker();
+  _lastServerLoadUpdate = 0;
+  const started = Date.now();
+  const est = (typeof estimateS === 'number' && estimateS > 0) ? estimateS : null;
+  const tick = () => {
+    // Server-reported progress is authoritative; only fill in while it is silent.
+    if (Date.now() - _lastServerLoadUpdate < 2000) return;
+    const elapsed = (Date.now() - started) / 1000;
+    // Hold at 99: the load is finished when the request returns, not when the
+    // estimate runs out, and a bar that sits at 100% while still working lies.
+    const pct = est ? Math.min(99, Math.floor(elapsed / est * 100)) : null;
+    const parts = [];
+    if (pct != null) parts.push(`${pct}%`);
+    if (stagesTotal) parts.push(`${stagesTotal} stages`);
+    parts.push(fmtDuration(Math.round(elapsed)));
+    if (est) {
+      const remain = Math.max(0, est - elapsed);
+      parts.push(remain > 0 ? `~${fmtDuration(Math.round(remain))} left` : 'finishing…');
+    }
+    setModelStatus(`Loading ${name} · ${parts.join(' · ')}`, 'loading');
+    setModelLoadBar(pct != null ? pct : 'active');
+  };
+  tick();
+  _loadTicker = setInterval(tick, 250);
+}
+
+function stopLoadTicker() {
+  if (_loadTicker) { clearInterval(_loadTicker); _loadTicker = null; }
+}
+
+// The catalog carries a per-model estimate and stage count; both may be absent
+// for a model the board has never sized.
+function modelLoadHints(name) {
+  const m = _catalog.find(x => x.name === name) || {};
+  return { est: m.estimatedLoadS, stages: m.stagesTotal };
+}
+
 // Reset the accelerator: asks the model server to exit with the sentinel code so
 // the supervisor (run.sh) restarts the MLA dispatcher — which owns models across
 // processes, so killing the server alone does not free them — and relaunches it.
@@ -4366,6 +4417,7 @@ async function resetMla() {
       + 'In-progress generation will stop.')) return;
   _resetting = true;
   stopLoadPolling();          // the outgoing server's log feed is about to die
+  stopLoadTicker();
   clearModelError();
   updateManageButtons();
   setModelStatus('Resetting the accelerator and restarting…', 'loading');
@@ -4526,6 +4578,8 @@ async function switchAsrModel(name) {
   setModelStatus(`${note}Switching speech-to-text to ${name}…`, 'loading');
   setModelLoadBar('active');
   startLoadPolling(name);
+  const asrHints = modelLoadHints(name);
+  startLoadTicker(name, asrHints.est, asrHints.stages);
   try {
     const resp = await fetch('/models/asr', {
       method: 'POST',
@@ -4545,6 +4599,7 @@ async function switchAsrModel(name) {
     showModelError(name, err.message);
   } finally {
     stopLoadPolling();
+    stopLoadTicker();
     _modelBusy = false;
     _asrPending = '';
     await pollLoadLogsOnce(name);
@@ -4649,6 +4704,8 @@ async function loadModelAndActivate(name) {
   setModelStatus(`${switchNote}Loading ${name}… preparing`, 'loading');
   setModelLoadBar('active');
   startLoadPolling(name);
+  const hints = modelLoadHints(name);
+  startLoadTicker(name, hints.est, hints.stages);
   try {
     const resp = await fetch('/models/load', {
       method: 'POST',
@@ -4669,6 +4726,7 @@ async function loadModelAndActivate(name) {
     showModelError(name, err.message);
   } finally {
     stopLoadPolling();
+    stopLoadTicker();
     if (select) select.disabled = false;
     _modelBusy = false;
     _pendingLoad = '';
@@ -4692,6 +4750,7 @@ let _logLineCount = 0;
 
 function applyLoadingStatus(ld, name) {
   if (!ld || ld.name !== name) return;
+  _lastServerLoadUpdate = Date.now();
   const parts = [];
   // Percent first — it is what the eye goes to. `estimated` says whether it is
   // derived from counted stages or from elapsed-vs-expected time.
