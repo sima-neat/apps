@@ -176,12 +176,6 @@ validate_rag_database = None
 wait_for_rag_service = None
 
 
-# How long the UI trusts its copy of the active ASR model name before asking
-# the control API again. Short: the model can be switched out from under this
-# process, and a stale name means a failed transcription.
-_ASR_NAME_TTL_S = 5
-
-
 def save_image_upload_as_base64(image_file, upload_folder):
     filename = secure_filename(image_file.filename or "")
     if not filename:
@@ -996,19 +990,18 @@ class AppContext:
         return self.asr_model_name
 
     def resolve_asr_model(self):
-        """The ASR model serving transcriptions, refreshed on a short TTL.
+        """The ASR model serving transcriptions, read fresh from the server.
 
-        The startup name is not permanently authoritative: the active model can
-        change without passing through this process — an operator calling
-        /control/asr directly, as the README documents — and sending an evicted
-        name just fails the transcription. So re-read it from the control API
-        rather than trusting what we were told last. One local request per
-        recording at most; if it cannot be reached we keep using the last known
-        name rather than caching the failure.
+        Nothing this process knows is authoritative: the active model can change
+        without passing through here — an operator calling /control/asr directly,
+        as the README documents — and sending an evicted name just fails the
+        transcription. Any cache window is a window in which we get it wrong, so
+        ask every time. This runs once per recording, against a localhost
+        endpoint, next to an MLA transcription that costs orders of magnitude
+        more; if it cannot be reached we keep the last known name rather than
+        caching the failure.
         """
-        cached_at, cached = self._asr_name_cache
-        if cached and (time.monotonic() - cached_at) < _ASR_NAME_TTL_S:
-            return cached
+        _, cached = self._asr_name_cache
         try:
             resp = requests.get(
                 f"{self.control_base_url.rstrip('/')}/control/status", timeout=5

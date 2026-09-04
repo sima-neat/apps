@@ -2,6 +2,8 @@ import io
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 import wave
@@ -170,6 +172,36 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertEqual(manager.active_asr(), "whisper-small-a16w8")
         self.assertIn("whisper-small-a16w8", server.model_names())
         self.assertNotIn("whisper-medium-a16w8", server.model_names())
+
+    def test_a_switch_racing_a_delete_cannot_delete_the_new_active_model(self):
+        """delete() must re-check the active ASR after taking _op_lock.
+
+        Models the race directly: the deleter passes its guard while
+        whisper-medium is inactive, then blocks on _op_lock; a switch makes it
+        active before the lock is released.
+        """
+        manager, _ = self.manager()
+        started = threading.Event()
+        errors = []
+
+        def deleter():
+            started.set()
+            try:
+                manager.delete("whisper-medium-a16w8")
+            except ValueError as exc:
+                errors.append(str(exc))
+
+        thread = threading.Thread(target=deleter)
+        with manager._op_lock:
+            thread.start()
+            started.wait(5)
+            time.sleep(0.1)                              # let it reach the lock
+            manager._active_asr = "whisper-medium-a16w8"  # the switch lands here
+        thread.join(10)
+
+        self.assertTrue(errors, "delete proceeded against the now-active model")
+        self.assertIn("cannot be deleted", errors[0])
+        self.assertTrue((self.tmp / "whisper-medium-a16w8").is_dir())
 
     def test_status_reports_active_and_configured_asr_separately(self):
         manager, _ = self.manager()

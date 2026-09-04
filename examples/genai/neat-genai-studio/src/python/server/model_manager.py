@@ -822,14 +822,24 @@ class ModelManager:
             self._stop_model_streams(model)
         return {"stopped": True}
 
-    def unload(self, name: str) -> dict:
-        name = (name or "").strip()
+    def _refuse_if_active_asr(self, name: str, verb: str) -> None:
+        """Guard against touching the ASR model that is serving transcriptions.
+
+        Must be called while holding ``_op_lock``: checking before taking it
+        races a concurrent ``set_active_asr``, which could make ``name`` active
+        while this operation waits, and the model would then be unloaded or
+        deleted out from under transcription.
+        """
         if name and name == self._active_asr:
             raise ValueError(
-                "The active speech-to-text model cannot be unloaded — "
-                "switch to another ASR model instead."
+                f"The active speech-to-text model cannot be {verb} — "
+                "switch to another ASR model first."
             )
+
+    def unload(self, name: str) -> dict:
+        name = (name or "").strip()
         with self._op_lock:
+            self._refuse_if_active_asr(name, "unloaded")
             # remove_model frees MLA memory and can block for seconds — keep it
             # out of _lock so concurrent status polls are not held up.
             self._stop_model_streams(name)
@@ -848,14 +858,10 @@ class ModelManager:
         away from.
         """
         name = (name or "").strip()
-        if name and name == self._active_asr:
-            raise ValueError(
-                "The active speech-to-text model cannot be deleted — "
-                "switch to another ASR model first."
-            )
         if not self._catalog_dir:
             raise ValueError("No catalog_dir configured; refusing to delete")
         with self._op_lock:
+            self._refuse_if_active_asr(name, "deleted")
             with self._lock:
                 info = self._catalog.get(name)
             if info is None:

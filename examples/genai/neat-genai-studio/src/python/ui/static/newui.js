@@ -5703,9 +5703,20 @@ function startVisionLoop() {
   _visionLoop.on = true;
   setVisionLoopUI(true);
   setVisionAskHint('Looping — asking about the live camera continuously. Tap Stop to end.');
-  // Start from a clean slate too, so the first frame is not judged against
-  // whatever was said in the chat before the loop began.
-  clearLoopContext().then(visionLoopRun);
+  startVisionLoopRun();
+}
+
+// Start from a clean slate, so the first frame is not judged against whatever
+// was said before the loop began — but never clear while a reply is streaming:
+// that drops the server's generation id, so the stream ends without its `end`
+// event and the loop would then wait out waitForGenerationEnd's full timeout.
+async function startVisionLoopRun() {
+  if (activeGeneration) {
+    try { await stop(true); } catch (e) { /* best effort */ }
+    await waitForGenerationEnd(15000);
+  }
+  await clearLoopContext();
+  visionLoopRun();
 }
 
 function stopVisionLoop() {
