@@ -150,6 +150,9 @@ def main() -> int:
             # bad load surfaces during the switch, not on the next transcription.
             asr_warmup=os.environ.get("STUDIO_ASR_WARMUP", "1") != "0",
             mla_reset_exit_code=int(os.environ.get("MLA_RESET_EXIT_CODE", "75")),
+            # run.sh exports MLA_RESET; refuse the reset here so a disabled
+            # board is never torn down for a reset that will not happen.
+            mla_reset_enabled=os.environ.get("MLA_RESET", "1") != "0",
             hub=cfg.hub,
             openai_base_url=cfg.openai.base_url,
             log_tap=log_tap,

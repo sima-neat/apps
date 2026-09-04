@@ -130,6 +130,7 @@ class ModelManager:
         warmup: bool = True,
         asr_warmup: bool = True,
         mla_reset_exit_code: int = 75,
+        mla_reset_enabled: bool = True,
         switch_settle_s: float = 0.6,
         log_tap=None,
     ) -> None:
@@ -149,6 +150,7 @@ class ModelManager:
         # Sentinel exit code that asks the supervisor (run.sh) to reset the MLA
         # dispatcher and relaunch. Only ever used for an explicit user request.
         self._mla_reset_exit_code = int(mla_reset_exit_code)
+        self._mla_reset_enabled = bool(mla_reset_enabled)
         # After unloading the outgoing model, wait briefly so its RAII free
         # (which returns MLA memory to the dispatcher) completes before loading
         # the replacement — avoids transient double-residency (MLA_LOAD_FAILED).
@@ -951,6 +953,30 @@ class ModelManager:
                 f"The active speech-to-text model cannot be {verb} — "
                 "switch to another ASR model first."
             )
+        # The same directory can appear under two names: register_startup_model()
+        # adds the configured `asr.name` while the catalog scan adds the
+        # directory's basename. Deleting the "other" name would rmtree the weights
+        # the active model is serving from, so compare resolved paths too.
+        active_path = self._resolved_path(self._active_asr)
+        if active_path and self._resolved_path(name) == active_path:
+            raise ValueError(
+                f"'{name}' is the active speech-to-text model under another name "
+                f"({self._active_asr}) — switch to another ASR model first."
+            )
+
+    def _resolved_path(self, name: str | None):
+        """Resolved on-disk path for a catalog entry, or None."""
+        if not name:
+            return None
+        with self._lock:
+            info = self._catalog.get(name)
+        raw = (info or {}).get("path")
+        if not raw:
+            return None
+        try:
+            return Path(raw).resolve()
+        except Exception:
+            return None
 
     def unload(self, name: str) -> dict:
         name = (name or "").strip()
@@ -1197,6 +1223,13 @@ class ModelManager:
         wedged and is holding that lock. Nothing else in the studio calls this —
         startup and load failures leave the board runtime alone.
         """
+        if not self._mla_reset_enabled:
+            # Refuse before scheduling the sentinel exit. Returning success here
+            # would still tear the server down and interrupt generations, which
+            # is exactly what MLA_RESET=0 is set to prevent.
+            raise ValueError(
+                "Accelerator reset is disabled on this board (MLA_RESET=0)."
+            )
         for victim in list(self._resident):
             try:
                 self._stop_model_streams(victim)

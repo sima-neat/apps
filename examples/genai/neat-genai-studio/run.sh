@@ -43,6 +43,7 @@ SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 # alone. MLA_RESET=0 refuses the request outright; MLA_RESET_CMD overrides how the
 # reset is performed.
 MLA_RESET="${MLA_RESET:-1}"
+export MLA_RESET          # the model server refuses a reset request when this is 0
 MLA_RESET_CMD="${MLA_RESET_CMD:-}"
 # The MLA shared-memory dispatcher service that holds loaded models across client
 # processes; restarting it releases every model on the MLA.

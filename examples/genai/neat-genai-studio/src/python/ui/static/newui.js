@@ -4236,8 +4236,12 @@ function updateHomeModelIndicator() {
 // Refresh the per-row actions in the model list (Load / Unload / active state)
 // and composer whenever model state changes.
 function updateManageButtons() {
+  // Deliberately NOT disabled by _modelBusy: a wedged load holds that flag for
+  // the life of the request (up to 600s), which is exactly when this recovery
+  // action is needed. reset_mla() bypasses the server's op-lock for the same
+  // reason. Only a reset already in flight disables it.
   const mlaReset = document.getElementById('mlaResetButton');
-  if (mlaReset) mlaReset.disabled = _modelBusy || _resetting;
+  if (mlaReset) mlaReset.disabled = _resetting;
   renderInstalledList();
   renderAsrList();
   updateComposerEnabled();
@@ -4352,7 +4356,11 @@ async function deleteModel(name, extraWarning) {
 function updateAsrModelIndicator() {
   const el = document.getElementById('asrModelName');
   if (!el) return;
-  const name = _asrActive || window.SIMA_CONFIG?.asrModelName || '';
+  // In control mode the catalog is authoritative — an empty _asrActive means the
+  // server reports none active, and naming the configured model anyway would
+  // credit transcripts to a model that is not running. The configured name is
+  // only a stand-in for static mode, which has no catalog to consult.
+  const name = _asrActive || (controlEnabled() ? '' : (window.SIMA_CONFIG?.asrModelName || ''));
   el.textContent = name;
   el.title = name ? `Transcribed by ${name}` : '';
 }

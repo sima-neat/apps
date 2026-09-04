@@ -407,6 +407,21 @@ def catalog(ctrl):
         return []
 
 
+def wait_gone(oai, timeout=30):
+    """Wait for the model server to stop answering. Used after requesting a
+    reset: the endpoint replies before exiting, so 'is it back?' is meaningless
+    until the outgoing process has actually gone."""
+    deadline = time.monotonic() + timeout
+    url = f"http://{oai[0]}:{oai[1]}/v1/models"
+    while time.monotonic() < deadline:
+        try:
+            _http(url, timeout=2)
+        except Exception:
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def wait_ready(oai, timeout=90):
     deadline = time.monotonic() + timeout
     url = f"http://{oai[0]}:{oai[1]}/v1/models"
@@ -1910,11 +1925,20 @@ def main():
                       f"model server…{RESET}")
                 try:
                     ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
-                except Exception:
-                    pass          # the server exits mid-reply; that is success
+                except Exception as exc:  # noqa: BLE001
+                    # A dropped connection is the success path (the server exits
+                    # mid-reply); a refusal is not — MLA_RESET=0 answers 400.
+                    if "disabled" in str(exc).lower():
+                        print(f"{ERR}  {exc}{RESET}")
+                        continue
                 active = ""
                 camera_device = None      # no model resident → no live camera
-                if wait_ready(oai, timeout=120):
+                # The endpoint replies BEFORE exiting (~1.5s later), so polling
+                # immediately would find the outgoing server and report success
+                # while nothing has been reset. Wait for it to go away first.
+                if not wait_gone(oai, timeout=30):
+                    print(f"{ERR}  the model server did not stop — check run.sh.{RESET}")
+                elif wait_ready(oai, timeout=180):
                     print(f"{OK}✔ model server is back. Load a model with /load.{RESET}")
                 else:
                     print(f"{ERR}  the model server did not come back — check run.sh.{RESET}")

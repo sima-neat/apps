@@ -203,6 +203,25 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertIn("cannot be deleted", errors[0])
         self.assertTrue((self.tmp / "whisper-medium-a16w8").is_dir())
 
+    def test_deleting_an_alias_of_the_active_asr_is_refused(self):
+        # register_startup_model() can add the configured `asr.name` while the
+        # catalog scan adds the directory basename: two names, one directory.
+        # Deleting the "inactive" one would rmtree the active model's weights.
+        manager, _ = self.manager()
+        manager.register_startup_model(
+            "configured-alias", self.tmp / "whisper-small-a16w8", "asr", False, None)
+        manager._active_asr = "configured-alias"
+
+        with self.assertRaisesRegex(ValueError, "under another name"):
+            manager.delete("whisper-small-a16w8")
+        self.assertTrue((self.tmp / "whisper-small-a16w8").is_dir())
+
+    def test_reset_is_refused_when_disabled(self):
+        manager, _ = self.manager()
+        manager._mla_reset_enabled = False
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            manager.reset_mla()
+
     def test_status_reports_active_and_configured_asr_separately(self):
         manager, _ = self.manager()
         manager.set_active_asr("whisper-medium-a16w8")
