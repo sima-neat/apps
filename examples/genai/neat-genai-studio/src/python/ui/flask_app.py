@@ -1844,6 +1844,10 @@ class AppContext:
                                 'rag_hits': 0,
                             })
 
+                        # Name the model that actually produced this, so the
+                        # browser cannot keep crediting a model that was
+                        # switched away from outside this process.
+                        asr['model'] = genai_app.resolve_asr_model()
                         self.socketio.emit('transcription', asr)
                     else:
                         logging.warning("Backend transcription returned no result")

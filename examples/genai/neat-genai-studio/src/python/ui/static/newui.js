@@ -2329,6 +2329,14 @@ function scrollChatToBottom() {
 }
 
 function updateAsrMetrics(metadata) {
+  // The server names the model that produced this transcript. It is the only
+  // signal the browser gets when the active ASR was changed from outside the
+  // UI (an operator calling /control/asr), so trust it over the cached name.
+  if (metadata && metadata.model && metadata.model !== _asrActive) {
+    _asrActive = metadata.model;
+    updateAsrModelIndicator();
+    if (typeof updateManageButtons === 'function') updateManageButtons();
+  }
   if (!metadata || typeof metadata !== 'object') return;
   const language = metadata.language || '—';
   const noSpeech = metadata.no_speech_prob == null ? NaN : Number(metadata.no_speech_prob);

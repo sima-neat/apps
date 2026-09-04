@@ -361,13 +361,37 @@ class ModelManager:
                 is_asr = info.get("type") == "asr"
 
             if name in self._server_model_names():
-                if is_asr:
+                if not is_asr:
+                    self.touch(name)
+                    return {"name": name, "state": "ready", "evicted": [],
+                            "cold_start": False, "load_seconds": 0.0}
+                # An ASR model can be registered yet NOT active: a warm-up that
+                # failed leaves the registration behind when remove_model also
+                # fails. Declaring it active on that basis would report ready
+                # without ever re-checking, and the next transcription would fail
+                # the same way — so prove it works before adopting it.
+                if self._active_asr == name or not (self._warmup and self._asr_warmup):
                     with self._lock:
                         self._active_asr = name
-                else:
-                    self.touch(name)
-                return {"name": name, "state": "ready", "evicted": [], "cold_start": False,
-                        "load_seconds": 0.0}
+                    return {"name": name, "state": "ready", "evicted": [],
+                            "cold_start": False, "load_seconds": 0.0}
+                probe_started = time.monotonic()
+                self._log_note(f"Re-checking {name} (already registered)…")
+                ok, detail = self._warm_check_asr(name)
+                if not ok and _is_mla_failure(detail):
+                    with self._lock:
+                        self._active_asr = None
+                    return self._handle_mla_failure(name, detail)
+                with self._lock:
+                    self._active_asr = name
+                result = {"name": name, "state": "ready", "evicted": [],
+                          "cold_start": False,
+                          "load_seconds": round(time.monotonic() - probe_started, 1)}
+                if not ok:
+                    logging.warning("ASR re-check for '%s' did not complete: %s",
+                                    name, detail)
+                    result["warm_warning"] = detail[:500]
+                return result
 
             if not path or not Path(path).is_dir():
                 raise ValueError(f"Model directory not found for: {name}")
