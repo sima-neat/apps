@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -713,6 +714,81 @@ def _arrow_multiselect(items, prompt):
 
 
 # ---- model loading + Hugging Face (reuses server/hub.py, like the UI) --------
+def fmt_secs(s):
+    """Compact duration: 45s, 1m 20s."""
+    try:
+        s = max(0, int(round(float(s))))
+    except (TypeError, ValueError):
+        return ""
+    return f"{s}s" if s < 60 else f"{s // 60}m {s % 60:02d}s"
+
+
+def _load_progress_line(ld):
+    """One redraw of the load bar from a /control/status `loading` block.
+
+    Mirrors the download bar's look so the two read as the same thing. The
+    accelerator reports no per-stage signal on current runtimes, so the percent
+    is usually an estimate against the model's measured load time — the stage
+    count is shown as scale, and "~" marks the countdown as approximate.
+    """
+    bits = []
+    pct = ld.get("pct")
+    if isinstance(pct, (int, float)):
+        filled = max(0, min(20, int(pct / 5)))
+        bits.append(f"[{'█' * filled}{'░' * (20 - filled)}] {int(pct)}%")
+    done, total = ld.get("filesDone"), ld.get("filesTotal")
+    if total and done is not None:
+        bits.append(f"stage {done}/{total}")
+    elif ld.get("stagesTotal"):
+        bits.append(f"{ld['stagesTotal']} stages")
+    if ld.get("elapsedS") is not None:
+        bits.append(fmt_secs(ld["elapsedS"]))
+    remain = ld.get("remainingS")
+    if remain is not None:
+        bits.append(f"~{fmt_secs(remain)} left" if remain > 0 else "finishing…")
+    return "  ".join(b for b in bits if b)
+
+
+def _post_load_with_progress(ctrl, name, do_post):
+    """Run `do_post` on a worker thread and draw live load progress until it
+    returns. Falls back to the plain blocking call when stdout is not a TTY (a
+    redirected log should not collect carriage returns and escape codes)."""
+    if not sys.stdout.isatty():
+        return do_post()
+
+    box = {}
+
+    def _work():
+        try:
+            box["result"] = do_post()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=_work, name="model-load", daemon=True)
+    worker.start()
+    drew = False
+    while worker.is_alive():
+        worker.join(0.5)
+        if not worker.is_alive():
+            break
+        try:
+            ld = (ctrl_get(ctrl, "/control/status") or {}).get("loading")
+        except Exception:
+            ld = None
+        if ld and ld.get("name") == name:
+            line = _load_progress_line(ld)
+            if line:
+                sys.stdout.write(f"\r\x1b[K{MUTED}  {line}{RESET}")
+                sys.stdout.flush()
+                drew = True
+    if drew:
+        sys.stdout.write("\r\x1b[K")   # clear the bar before the result line
+        sys.stdout.flush()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
 def load_model(ctrl, name, oai=None, auto_retry=True):
     """Load a model via the control API. Returns True on success. Loading a
     chat/VLM model evicts any other resident one, so that is made explicit."""
@@ -734,7 +810,7 @@ def load_model(ctrl, name, oai=None, auto_retry=True):
         return r
 
     try:
-        r = _attempt()
+        r = _post_load_with_progress(ctrl, name, _attempt)
     except Exception as exc:  # noqa: BLE001
         print(f"{ERR}  {exc}{RESET}")
         return False
