@@ -286,6 +286,17 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
         warm.assert_called_once_with("whisper-medium-a16w8")
         self.assertEqual(manager.active_asr(), "whisper-medium-a16w8")
 
+    def test_a_warm_up_timeout_fails_the_switch(self):
+        # A probe that ran out of time proved nothing; reporting "ready" would
+        # announce speech-to-text as working and hang the next recording.
+        manager, server = self.manager()
+        with patch.object(ModelManager, "_warm_check_asr",
+                          return_value=(False, "<urlopen error timed out>")):
+            with self.assertRaisesRegex(RuntimeError, "accelerator"):
+                manager.set_active_asr("whisper-medium-a16w8")
+        self.assertIsNone(manager.active_asr())
+        self.assertNotIn("whisper-medium-a16w8", server.model_names())
+
     def test_a_non_mla_warm_failure_leaves_the_model_active(self):
         manager, _ = self.manager()
         with patch.object(ModelManager, "_warm_check_asr",

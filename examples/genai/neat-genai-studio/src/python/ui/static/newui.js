@@ -4107,7 +4107,7 @@ function renderInstalledList() {
   }
 
   const control = controlEnabled();
-  const busy = _modelBusy;
+  const busy = serverBusy();
   const activeName = control ? _activeChatModel : getSelectedChatModel();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
@@ -4249,8 +4249,15 @@ function updateManageButtons() {
 
 // A model is usable for chat only once it is FULLY resident (not mid-load and
 // not mid-reset). The composer is locked until then.
+function serverBusy() {
+  // Any state in which the model server cannot service a request: a model
+  // operation in flight, or a reset during which the old server is exiting and
+  // the replacement is not yet up.
+  return _modelBusy || _resetting;
+}
+
 function modelReady() {
-  return !!getSelectedChatModel() && !_modelBusy;
+  return !!getSelectedChatModel() && !serverBusy();
 }
 
 // Enable/disable the chat input interface based on model readiness.
@@ -4499,7 +4506,7 @@ function renderAsrList() {
   }
 
   const control = controlEnabled();
-  const busy = _modelBusy;
+  const busy = serverBusy();
   filtered.forEach(m => {
     const incomplete = m.complete === false;
     const isActive = !!m.name && m.name === _asrActive;
@@ -6648,7 +6655,7 @@ function updateBenchModelState() {
   const run = document.getElementById('benchRunBtn');
   const hint = document.getElementById('benchHint');
   const n = benchSelectedModels().length;
-  const busy = _modelBusy;
+  const busy = serverBusy();
   if (run) {
     run.disabled = n === 0 || busy;
     run.textContent = n > 1 ? `Run benchmark · ${n} models` : 'Run benchmark';

@@ -396,7 +396,7 @@ class ModelManager:
                 probe_started = time.monotonic()
                 self._log_note(f"Re-checking {name} (already registered)…")
                 ok, detail = self._warm_check_asr(name)
-                if not ok and _is_mla_failure(detail):
+                if not ok and (_is_mla_failure(detail) or self._is_probe_timeout(detail)):
                     with self._lock:
                         self._active_asr = None
                     return self._handle_mla_failure(name, detail)
@@ -527,7 +527,7 @@ class ModelManager:
                         return {"name": served, "state": "ready", "evicted": evicted,
                                 "cold_start": True,
                                 "load_seconds": round(time.monotonic() - started, 1)}
-                    if _is_mla_failure(detail):
+                    if _is_mla_failure(detail) or self._is_probe_timeout(detail):
                         with self._lock:
                             self._active_asr = None
                         return self._handle_mla_failure(served, detail)
@@ -1239,6 +1239,17 @@ class ModelManager:
             "user requested MLA reset",
             "Resetting the accelerator and restarting. Reconnecting shortly…",
         )
+
+    @staticmethod
+    def _is_probe_timeout(detail: str) -> bool:
+        """A warm-up that ran out of time proved nothing.
+
+        Treated as a failed load rather than a soft warning: the fail-soft rule
+        exists because the silence probe's *contract* is uncertain, not because
+        a model that never answered in 300s is fit to serve.
+        """
+        text = (detail or "").lower()
+        return "timed out" in text or "timeout" in text
 
     def _handle_mla_failure(self, name: str, detail: str) -> dict:
         """Roll back a failed MLA load and report it without runtime recovery."""
