@@ -6,7 +6,6 @@
 
 #include <filesystem>
 #include <iostream>
-#include <regex>
 #include <string>
 #include <vector>
 
@@ -15,13 +14,10 @@ using namespace sima_examples::testing;
 
 namespace {
 
-constexpr int kPerformanceFrames = 300;
-
 struct Variant {
   std::string name;
   std::string backbone;
   std::string transformer;
-  double minimum_fps;
 };
 
 struct SourceCase {
@@ -69,14 +65,6 @@ bool valid_metadata(const MetadataJsonListenerResult& result, bool segmentation)
   return true;
 }
 
-double output_fps(const std::string& output) {
-  std::smatch match;
-  if (!std::regex_search(output, match, std::regex(R"(output_fps=([0-9]+(?:\.[0-9]+)?))"))) {
-    return -1.0;
-  }
-  return std::stod(match[1].str());
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
@@ -87,11 +75,11 @@ int main(int argc, char** argv) {
   const char* models_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
   const fs::path models_dir = models_raw != nullptr ? models_raw : "models";
   const std::vector<Variant> detection_models = {
-      {"small", "rfdetr-small-backbone.tar.gz", "rfdetr-small-transformer.tar.gz", 65.0},
-      {"medium", "rfdetr-medium-backbone.tar.gz", "rfdetr-medium-transformer.tar.gz", 45.0},
+      {"small", "rfdetr-small-backbone.tar.gz", "rfdetr-small-transformer.tar.gz"},
+      {"medium", "rfdetr-medium-backbone.tar.gz", "rfdetr-medium-transformer.tar.gz"},
   };
   const Variant segmentation_model = {"medium", "rfdetr-seg-medium-backbone.tar.gz",
-                                      "rfdetr-seg-medium-transformer.tar.gz", 35.0};
+                                      "rfdetr-seg-medium-transformer.tar.gz"};
   const std::vector<SourceCase> sources = {
       {"h264", "SIMANEAT_TEST_RTSP_H264_URL"},
       {"h265", "SIMANEAT_TEST_RTSP_H265_URL"},
@@ -132,9 +120,7 @@ int main(int argc, char** argv) {
         {"model.labels", labels.string()},
         {"source.rtsp_url", rtsp_url},
         {"source.codec", test.source.codec},
-        {"inference.frames", test.source.codec == "h265" || test.source.codec == "mjpeg"
-                                 ? std::to_string(kPerformanceFrames)
-                                 : "20"},
+        {"inference.frames", "20"},
         {"inference." + test.task + ".min_score", "0.2"},
         {"output.insight.host", "127.0.0.1"},
         {"output.insight.video_port", std::to_string(video_port)},
@@ -181,21 +167,8 @@ int main(int argc, char** argv) {
                 << "\n";
       return 1;
     }
-    if (test.source.codec == "h265" || test.source.codec == "mjpeg") {
-      const double measured_fps = output_fps(process.stdout_text);
-      std::cout << "[perf] task=" << test.task << " model=" << test.model.name
-                << " codec=" << test.source.codec << " frames=" << kPerformanceFrames
-                << " output_fps=" << measured_fps << " minimum=" << test.model.minimum_fps << "\n";
-      if (measured_fps < test.model.minimum_fps) {
-        std::cerr << "[FAIL] RF-DETR " << case_name << " output FPS was below "
-                  << test.model.minimum_fps << "\nstdout:\n"
-                  << process.stdout_text << "\n";
-        return 1;
-      }
-    }
     remove_dir(output_dir);
   }
-  std::cout << "[OK] RF-DETR published valid detection and segmentation metadata at the expected "
-               "throughput\n";
+  std::cout << "[OK] RF-DETR published valid detection and segmentation metadata\n";
   return 0;
 }

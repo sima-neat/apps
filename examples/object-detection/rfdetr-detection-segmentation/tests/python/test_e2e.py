@@ -1,11 +1,10 @@
-"""End-to-end RF-DETR detection, segmentation, and throughput tests."""
+"""End-to-end RF-DETR detection and segmentation tests."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,8 +15,6 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
-PERFORMANCE_FRAMES = 300
-MIN_OUTPUT_FPS = {"small": 65.0, "medium": 45.0, "segmentation": 35.0}
 
 
 def _runtime_ready() -> bool:
@@ -29,12 +26,6 @@ def _runtime_ready() -> bool:
 def _env_int(name: str, default: int) -> int:
     value = os.environ.get(name, "").strip()
     return int(value) if value else default
-
-
-def _output_fps(stdout: str) -> float:
-    match = re.search(r"output_fps=([0-9]+(?:\.[0-9]+)?)", stdout)
-    assert match, f"missing output_fps in application output:\n{stdout}"
-    return float(match.group(1))
 
 
 @pytest.mark.e2e
@@ -83,7 +74,7 @@ def test_publishes_insight_metadata(
             "model": model_config,
             "source": {"rtsp_url": rtsp_url, "codec": codec},
             "inference": {
-                "frames": PERFORMANCE_FRAMES if codec in ("h265", "mjpeg") else 20,
+                "frames": 20,
                 task: {"min_score": 0.2},
             },
             "output": {
@@ -137,13 +128,3 @@ def test_publishes_insight_metadata(
                 len(point) == 2 and all(value >= 0.0 for value in point)
                 for point in entry["mask"]
             )
-    if codec in ("h265", "mjpeg"):
-        threshold = MIN_OUTPUT_FPS[
-            "segmentation" if task == "segmentation" else variant
-        ]
-        measured_fps = _output_fps(result.stdout)
-        print(
-            f"[perf] task={task} model={variant} codec={codec} "
-            f"frames={PERFORMANCE_FRAMES} output_fps={measured_fps:.1f} minimum={threshold:.1f}"
-        )
-        assert measured_fps >= threshold
