@@ -149,6 +149,7 @@ def main() -> int:
             # Switching ASR models warms the new one (a short silent clip) so a
             # bad load surfaces during the switch, not on the next transcription.
             asr_warmup=os.environ.get("STUDIO_ASR_WARMUP", "1") != "0",
+            mla_reset_exit_code=int(os.environ.get("MLA_RESET_EXIT_CODE", "75")),
             hub=cfg.hub,
             openai_base_url=cfg.openai.base_url,
             log_tap=log_tap,

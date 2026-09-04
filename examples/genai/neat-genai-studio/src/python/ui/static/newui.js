@@ -4021,6 +4021,7 @@ function populateModelSelect(catalog) {
 // <select id="chatModelSelect"> stays the source of truth for the rest of the app.
 let _catalog = [];
 let _pendingLoad = '';    // name of the model currently loading (for the row label)
+let _resetting = false;   // an accelerator reset + server relaunch is in flight
 let _asrActive = '';     // ASR model serving transcriptions
 let _asrPending = '';    // ASR model mid-switch (for the row label)
 
@@ -4225,6 +4226,8 @@ function updateHomeModelIndicator() {
 // Refresh the per-row actions in the model list (Load / Unload / active state)
 // and composer whenever model state changes.
 function updateManageButtons() {
+  const mlaReset = document.getElementById('mlaResetButton');
+  if (mlaReset) mlaReset.disabled = _modelBusy || _resetting;
   renderInstalledList();
   renderAsrList();
   updateComposerEnabled();
@@ -4264,6 +4267,9 @@ function initModelManage() {
   // Info / delete / load / unload are per-row buttons in the list now.
   const sel = document.getElementById('chatModelSelect');
   if (sel) sel.addEventListener('change', updateManageButtons);
+
+  const mlaReset = document.getElementById('mlaResetButton');
+  if (mlaReset) mlaReset.addEventListener('click', () => resetMla());
 
   const retry = document.getElementById('modelLoadRetry');
   const viewLogs = document.getElementById('modelLoadErrorLogs');
@@ -4339,6 +4345,60 @@ function updateAsrModelIndicator() {
   const name = _asrActive || window.SIMA_CONFIG?.asrModelName || '';
   el.textContent = name;
   el.title = name ? `Transcribed by ${name}` : '';
+}
+
+// Reset the accelerator: asks the model server to exit with the sentinel code so
+// the supervisor (run.sh) restarts the MLA dispatcher — which owns models across
+// processes, so killing the server alone does not free them — and relaunches it.
+// Explicit only: nothing else in the studio triggers this.
+async function resetMla() {
+  if (_resetting) return;
+  if (!window.confirm('Reset the accelerator (MLA)?\n\nThis unloads all models and briefly '
+      + 'restarts the model server — it will be unavailable for a few seconds. '
+      + 'In-progress generation will stop.')) return;
+  _resetting = true;
+  stopLoadPolling();          // the outgoing server's log feed is about to die
+  clearModelError();
+  updateManageButtons();
+  setModelStatus('Resetting the accelerator and restarting…', 'loading');
+  setModelLoadBar('active');
+  try {
+    // The server exits ~1.5s after replying, so this may never return — that is
+    // the success path, not a failure.
+    try { await fetch('/models/reset-mla', { method: 'POST' }); } catch (e) { /* expected */ }
+    await waitForServerBack();
+  } finally {
+    // Always release the lock, even if the wait threw, so the UI cannot get
+    // stuck with every action disabled.
+    _resetting = false;
+    _modelBusy = false;       // a wedged load is gone with the restart
+    setModelLoadBar(null);
+    clearModelError();        // drop a stale error a concurrent load's 502 raised
+    await refreshCatalog();
+    updateManageButtons();
+    if (typeof updateSelectedModelVisionState === 'function') updateSelectedModelVisionState();
+  }
+}
+
+// Poll /models/status until the relaunched model server answers.
+async function waitForServerBack() {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const start = Date.now();
+  const timeoutMs = 90000;
+  await sleep(2500);          // let the old process exit before polling
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await fetch('/models/status', { cache: 'no-store' });
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}));
+        // Back up. Whether the dispatcher itself was reset depends on run.sh
+        // having the privileges, so do not over-claim a full accelerator reset.
+        if (d && !d.error) { setModelStatus('Model server restarted — ready', 'ready'); return; }
+      }
+    } catch (e) { /* still down */ }
+    await sleep(1500);
+  }
+  setModelStatus('Reset requested, but the server is slow to return — check run.sh.', 'error');
 }
 
 // ---- Speech-to-text (ASR) models --------------------------------------------

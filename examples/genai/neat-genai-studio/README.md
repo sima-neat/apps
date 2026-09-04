@@ -163,8 +163,9 @@ sidebar. Both methods stop the UI and model server cleanly, just like
 `./run.sh stop`).
 
 ### Terminal chat (CLI)
-Prefer the terminal? `--cli` starts the model server (same MLA reset/clean-slate
-as usual) and drops you into an interactive chat instead of the web UI:
+Prefer the terminal? `--cli` starts the model server (clearing stale processes
+first, as usual) and drops you into an interactive chat instead of the web UI.
+`/reset` performs the same explicit accelerator reset as the web UI's button:
 
 ```bash
 ./run.sh --cli    # or `neat-ai --cli`
@@ -269,10 +270,11 @@ default 10). `run.sh` records its PID in `.neat-genai-studio.pid` (used by
 `stop`/`status`) and refuses to start a second instance while one is running.
 
 On launch, `run.sh` stops stale model-server/UI processes from an interrupted
-Studio run and waits for the model-server port to become available. It never
-restarts the MLA dispatcher, initializes the MLA, or runs a board-runtime
-recovery script. Model/runtime failures are reported and left to board runtime
-management outside this application.
+Studio run and waits for the model-server port to become available. It does not
+restart the MLA dispatcher, initialize the MLA, or run a board-runtime recovery
+script on startup, and model/runtime failures are reported rather than silently
+recovered from. The accelerator is only ever reset when you explicitly ask for
+it — see [Reset the accelerator](#reset-the-accelerator).
 
 Open the Flask UI:
 
@@ -299,7 +301,8 @@ the outgoing model's in-flight generation and waits for its memory to be release
 before loading the new one, then warms it so your first message is instant.
 
 If a switch hits an accelerator error, the Studio rolls back the failed model
-registration and reports the error. It does not restart or reset board services.
+registration and reports the error. It does not restart or reset board services
+on its own — use **Reset MLA** below if the accelerator is genuinely wedged.
 
 ### Switch the speech-to-text model
 The same tab lists your speech-to-text (ASR) models in their own
@@ -328,6 +331,25 @@ what a restart re-selects, and the model it names carries a `startup default`
 badge. Edit it to make a different choice permanent. Set `STUDIO_ASR_WARMUP=0`
 to skip the warm-up a switch performs (the first transcription then pays the
 load cost instead).
+
+### Reset the accelerator
+Models are held by the MLA shared-memory dispatcher, which outlives the studio's
+own processes — so if a load wedges it, restarting the studio does not clear it.
+**Settings → Models → Reset MLA** (or `/reset` in the CLI) unloads everything and
+asks `run.sh` to restart the dispatcher and relaunch the model server. The web UI
+stays up and reconnects on its own; expect a few seconds of unavailability, and
+any in-progress generation stops.
+
+This is the **only** thing in the studio that touches the board runtime, and it
+never happens on its own — not at startup, and not when a model fails to load.
+
+Restarting the dispatcher needs privileges. `run.sh` prefers the board's own
+`fix_devkit_runtime.sh` when present and otherwise restarts
+`simaai-appcomplex.service` via `sudo`, so run the studio as root, give the
+account passwordless sudo for those commands, or point `MLA_RESET_CMD` at your
+own reset command. Without privileges the model server still relaunches, the
+dispatcher is left alone, and a warning says so. `MLA_RESET=0` refuses the
+request outright.
 
 ### Download models from Hugging Face
 When the board is online, the **Settings → Add Model** tab appears (it's hidden

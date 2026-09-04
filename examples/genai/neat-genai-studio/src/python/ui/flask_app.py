@@ -1521,6 +1521,17 @@ class AppContext:
             return Response(resp.content, status=resp.status_code,
                             mimetype='application/json')
 
+        @self.app.route('/models/reset-mla', methods=['POST'])
+        def models_reset_mla():
+            # The server exits ~1.5s after replying, so the response may not
+            # arrive at all — a dropped connection here is success, not failure.
+            try:
+                resp = requests.post(_control_url('/control/reset_mla'), timeout=10)
+            except requests.RequestException:
+                return jsonify({'state': 'resetting', 'reset': True}), 202
+            return Response(resp.content, status=resp.status_code,
+                            mimetype='application/json')
+
         @self.app.route('/models/unload', methods=['POST'])
         def models_unload():
             name = (request.get_json(silent=True) or {}).get('name', '')

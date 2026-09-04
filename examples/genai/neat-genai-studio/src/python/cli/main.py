@@ -513,6 +513,7 @@ HELP = f"""{MUTED}Commands:
   /new               clear the conversation history
   /export [file]     save this chat to a .log file (default neat-chat-<time>.log)
   /tokens <n>        set the max response tokens
+  /reset             reset the accelerator (MLA) and relaunch the model server
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
   /rag [filter]      inspect the RAG database — list ingested chunks (aliases /docs)
@@ -1825,6 +1826,22 @@ def main():
                 if not (active and cur and cur.get("supportsVision")):
                     print(f"{MUTED}  note: the current model isn't a VLM — frames send "
                           f"once you load one.{RESET}")
+            elif cmd == "reset":
+                # Explicit accelerator reset: the server exits with the sentinel
+                # code and run.sh restarts the MLA dispatcher and relaunches it,
+                # so the request itself usually dies with the connection.
+                print(f"{MUTED}  resetting the accelerator and relaunching the "
+                      f"model server…{RESET}")
+                try:
+                    ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
+                except Exception:
+                    pass          # the server exits mid-reply; that is success
+                active = ""
+                camera_device = None      # no model resident → no live camera
+                if wait_ready(oai, timeout=120):
+                    print(f"{OK}✔ model server is back. Load a model with /load.{RESET}")
+                else:
+                    print(f"{ERR}  the model server did not come back — check run.sh.{RESET}")
             elif cmd == "unload":
                 names = [arg] if arg else [
                     m.get('name') for m in catalog(ctrl)
