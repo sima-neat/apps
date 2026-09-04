@@ -781,7 +781,7 @@ class AppContext:
         self.chat_model_names = ("model",)
         self.chat_model_capabilities = {"model": {"supportsVision": True, "imageSize": None}}
         self.active_chat_model_name = "model"
-        self.asr_model_name = "whisper-small"
+        self.asr_model_name = ""
         self.max_tokens = None
         self.web_host = "0.0.0.0"
         self.web_port = 5000
@@ -796,6 +796,7 @@ class AppContext:
         self.ui_font_family = "Inter"
         self.ui_font_size = 15
         self._catalog_names_cache = (0.0, frozenset())
+        self._asr_name_cache = (0.0, "")
 
         # Conversation history for OpenAI-style chat
         self.conversation_history = []
@@ -980,6 +981,52 @@ class AppContext:
         self._catalog_names_cache = (time.monotonic(), names)
         return names
 
+    def set_asr_model_name(self, name):
+        """Point transcription at a new ASR model after a successful switch."""
+        self.asr_model_name = (name or "").strip()
+        self._asr_name_cache = (time.monotonic(), self.asr_model_name)
+        if self.app is not None:
+            self.app.config['ASR_MODEL_NAME'] = self.asr_model_name
+        return self.asr_model_name
+
+    def resolve_asr_model(self):
+        """The ASR model serving transcriptions, read fresh from the server.
+
+        Nothing this process knows is authoritative: the active model can change
+        without passing through here — an operator calling /control/asr directly,
+        as the README documents — and sending an evicted name just fails the
+        transcription. Any cache window is a window in which we get it wrong, so
+        ask every time. This runs once per recording, against a localhost
+        endpoint, next to an MLA transcription that costs orders of magnitude
+        more; if it cannot be reached we keep the last known name rather than
+        caching the failure.
+        """
+        _, cached = self._asr_name_cache
+        try:
+            resp = requests.get(
+                f"{self.control_base_url.rstrip('/')}/control/status", timeout=5
+            )
+            name = str((resp.json() or {}).get("asrModel") or "")
+            reachable = True
+        except Exception:
+            name, reachable = "", False
+        if not reachable:
+            # Say nothing new: keep using the last known name rather than
+            # caching a failure that says nothing about what is loaded.
+            return cached or self.asr_model_name
+        if not name:
+            # A successful status with no active model is real — a switch that
+            # failed after eviction leaves exactly this. Forget the stale name
+            # so recordings report "unavailable" instead of being sent to a
+            # model the server no longer serves.
+            logging.warning("No speech-to-text model is active on the server.")
+            return self.set_asr_model_name("")
+        if name != self.asr_model_name:
+            logging.info("Active ASR model changed out from under the UI: %r", name)
+            return self.set_asr_model_name(name)
+        self._asr_name_cache = (time.monotonic(), name)
+        return name
+
     def resolve_chat_model(self, requested_model=None):
         model_name = str(requested_model or self.chat_model_name).strip()
         if not model_name:
@@ -1138,6 +1185,9 @@ class AppContext:
                 f"window.SIMA_CONFIG.chatModelCapabilities={json.dumps(self.chat_model_capabilities)};"
                 f"window.SIMA_CONFIG.visionImageHeight='{height_val}';"
                 f"window.SIMA_CONFIG.visionImageWidth='{width_val}';"
+                # Seeds the metrics caption before the first catalog fetch (and
+                # is all there is in static mode); the catalog wins once loaded.
+                f"window.SIMA_CONFIG.asrModelName={json.dumps(self.asr_model_name)};"
                 "window.SIMA_CONFIG.controlEnabled='true';"
                 f"window.SIMA_CONFIG.hubOrg={json.dumps(hub_org)};"
                 f"window.SIMA_CONFIG.defaultFontFamily={json.dumps(self.ui_font_family)};"
@@ -1449,6 +1499,39 @@ class AppContext:
             name = (request.get_json(silent=True) or {}).get('name', '')
             return _proxy_control('POST', '/control/load', 600, {'name': name})
 
+        @self.app.route('/models/asr', methods=['POST'])
+        def models_asr():
+            # Not _proxy_control: the response body carries the name the server
+            # actually served the model under, and transcription must follow it.
+            name = (request.get_json(silent=True) or {}).get('name', '')
+            try:
+                resp = requests.post(
+                    _control_url('/control/asr'), json={'name': name}, timeout=600
+                )
+            except requests.RequestException as exc:
+                logging.warning("Control API ASR switch failed: %s", exc)
+                return jsonify({'error': 'control API unreachable'}), 502
+            if resp.status_code < 300:
+                try:
+                    active = (resp.json() or {}).get('activeAsr') or name
+                except ValueError:
+                    active = name
+                self.set_asr_model_name(active)
+                logging.info("Active ASR model is now %r", active)
+            return Response(resp.content, status=resp.status_code,
+                            mimetype='application/json')
+
+        @self.app.route('/models/reset-mla', methods=['POST'])
+        def models_reset_mla():
+            # The server exits ~1.5s after replying, so the response may not
+            # arrive at all — a dropped connection here is success, not failure.
+            try:
+                resp = requests.post(_control_url('/control/reset_mla'), timeout=10)
+            except requests.RequestException:
+                return jsonify({'state': 'resetting', 'reset': True}), 202
+            return Response(resp.content, status=resp.status_code,
+                            mimetype='application/json')
+
         @self.app.route('/models/unload', methods=['POST'])
         def models_unload():
             name = (request.get_json(silent=True) or {}).get('name', '')
@@ -1710,7 +1793,9 @@ class AppContext:
                     # Use MLA Backend transcription - read directly from FileStorage
                     start_time = time.time()
                     audio_bytes = audio_file.read()
-                    result = post_audio_to_mla(audio_bytes, language=language)
+                    asr_used = []
+                    result = post_audio_to_mla(audio_bytes, language=language,
+                                               used_model=asr_used)
 
                     if result:
                         elapsed_time = round(time.time() - start_time, 2)
@@ -1744,6 +1829,12 @@ class AppContext:
                         # detected language. Unsupported languages intentionally
                         # produce text only instead of using a mismatched voice.
                         self.talk_ctrl.set_language(asr['tts_language'] or 'xx')
+
+                        # Name the model that actually served this request, so
+                        # the browser cannot credit a model that was switched to
+                        # afterwards, and so ignored results are attributable too.
+                        if asr_used:
+                            asr['model'] = asr_used[0]
 
                         if asr['ignored']:
                             message = (
@@ -2540,7 +2631,7 @@ def post_stop_to_sima(model_name=None):
         logging.error(f"Failed to send stop signal: {e}")
         return False
 
-def post_audio_to_mla(audio_bytes, language="auto"):
+def post_audio_to_mla(audio_bytes, language="auto", used_model=None):
     """
     Sends an audio file (as bytes) to the SIMA model server for transcription.
     """
@@ -2550,8 +2641,16 @@ def post_audio_to_mla(audio_bytes, language="auto"):
     files = {
         'file': ('audio.wav', audio_bytes, 'audio/wav')
     }
+    model = genai_app.resolve_asr_model()
+    if not model:
+        logging.error("No speech-to-text model is active; cannot transcribe.")
+        return None
+    # Report back which model served this request. Resolving again after the
+    # call would race a concurrent switch and mislabel the transcript.
+    if isinstance(used_model, list):
+        used_model.append(model)
     data = {
-        'model': cfg.get('ASR_MODEL_NAME', 'whisper-small'),
+        'model': model,
         'language': language
     }
 

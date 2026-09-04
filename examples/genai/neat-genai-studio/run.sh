@@ -38,6 +38,22 @@ if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python"
 fi
 export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
+# Explicit accelerator reset (the UI's "Reset MLA" button and the CLI's /reset).
+# Never runs on its own: normal startup and load failures leave the board runtime
+# alone. MLA_RESET=0 refuses the request outright; MLA_RESET_CMD overrides how the
+# reset is performed.
+MLA_RESET="${MLA_RESET:-1}"
+export MLA_RESET          # the model server refuses a reset request when this is 0
+MLA_RESET_CMD="${MLA_RESET_CMD:-}"
+# The MLA shared-memory dispatcher service that holds loaded models across client
+# processes; restarting it releases every model on the MLA.
+MLA_DISPATCHER_SERVICE="${MLA_DISPATCHER_SERVICE:-simaai-appcomplex.service}"
+# Sentinel exit code the model server uses to ask for a reset + relaunch.
+MLA_RESET_EXIT_CODE="${MLA_RESET_EXIT_CODE:-75}"
+# Bounded relaunches so a server that dies immediately cannot respawn forever.
+MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
+# Where the CLI-mode server records its exit status (see launch_server).
+SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.status}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
@@ -254,11 +270,11 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}"
+      rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}"
+    rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
@@ -552,6 +568,65 @@ finally:
 ' "$1" 2>/dev/null
 }
 
+# Run a privileged command best-effort. As root, run it directly; otherwise defer
+# to sudo, which prompts or succeeds passwordlessly according to the board's own
+# policy. Deliberately carries no password of its own — callers tolerate failure
+# and report it, rather than the studio shipping a credential.
+mla_sudo() {
+  if [[ "$(id -u)" == "0" ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    # -n: never prompt. The supervisor may be running detached with no terminal,
+    # where a password prompt would block the relaunch indefinitely instead of
+    # failing fast; callers warn and carry on.
+    sudo -n "$@"
+  else
+    return 1
+  fi
+}
+
+# Clear models held by the MLA shared-memory dispatcher. Models live in the
+# dispatcher daemon, which outlives our client processes, so killing the model
+# server is not enough — a wedged dispatcher keeps models resident and every
+# subsequent load fails with MLA_LOAD_FAILED. Only ever called for an EXPLICIT
+# user request (the UI button or the CLI's /reset); needs privileges, and says so
+# instead of failing silently when it does not have them.
+reset_mla_dispatcher() {
+  if [[ "${MLA_RESET}" != "1" ]]; then
+    warn "Accelerator reset requested but MLA_RESET=0; leaving the runtime alone."
+    return 0
+  fi
+
+  # 1) Explicit override wins.
+  if [[ -n "${MLA_RESET_CMD}" ]]; then
+    info "Resetting MLA via MLA_RESET_CMD: ${C_DIM}${MLA_RESET_CMD}${C_RESET}"
+    bash -c "${MLA_RESET_CMD}" || warn "MLA_RESET_CMD failed (continuing)"
+    return 0
+  fi
+
+  # 2) The SDK's own runtime-recovery script, when the board ships it.
+  local fixer
+  for fixer in \
+    "$(command -v fix_devkit_runtime.sh 2>/dev/null || true)" \
+    /usr/bin/fix_devkit_runtime.sh /usr/local/bin/fix_devkit_runtime.sh; do
+    if [[ -n "${fixer}" && -x "${fixer}" ]]; then
+      info "Resetting MLA runtime via ${C_DIM}${fixer}${C_RESET}…"
+      mla_sudo "${fixer}" || warn "MLA runtime reset failed (continuing)"
+      return 0
+    fi
+  done
+
+  # 3) Fallback: restart the dispatcher service and re-init MLA memory.
+  if command -v systemctl >/dev/null 2>&1; then
+    info "Restarting MLA dispatcher (${MLA_DISPATCHER_SERVICE})…"
+    mla_sudo systemctl restart "${MLA_DISPATCHER_SERVICE}" 2>/dev/null \
+      || warn "could not restart ${MLA_DISPATCHER_SERVICE} — needs passwordless privileges; grant NOPASSWD for it, set MLA_RESET_CMD, or run the board's recovery script yourself"
+  fi
+  if [[ -x /usr/bin/init_mla_memory.sh ]]; then
+    mla_sudo /usr/bin/init_mla_memory.sh 2>/dev/null || true
+  fi
+}
+
 # Stop stale Studio processes from a previous (e.g. crashed) run and wait for
 # the OpenAI port to become available. Do not touch the board runtime or restart
 # the MLA dispatcher during normal application startup.
@@ -643,7 +718,7 @@ cleanup() {
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -656,7 +731,7 @@ if [[ -f "${PID_FILE}" ]]; then
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
 fi
 
 trap cleanup EXIT
@@ -676,14 +751,54 @@ launch_server() {
   # so its logs would land on the "you ▸" prompt. Send them to a log file
   # instead; the CLI drives the server over HTTP and doesn't need its stdout.
   if [[ "${CLI_MODE}" == "1" ]]; then
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" \
-      >"${SERVER_LOG}" 2>&1 &
+    # Wrap the server so its exit status lands in a file: the CLI watchdog polls
+    # a sibling PID and so cannot `wait` for it, and without the status it could
+    # not tell an explicit reset request from an ordinary crash.
+    rm -f "${SERVER_STATUS_FILE}"
+    setsid bash -c \
+      '"$1" "$2" --config "$3" >"$4" 2>&1; echo $? >"$5"' _ \
+      "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${CONFIG_PATH}" \
+      "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
   else
     setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
   fi
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
+}
+
+# Background watchdog for --cli mode, which has no supervisor loop: if the model
+# server exits to service an explicit reset (the CLI's /reset) — or crashes —
+# reset the dispatcher and relaunch so the CLI can reconnect. Poll-based, since a
+# backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
+# cannot respawn forever. Strays are swept by cleanup().
+cli_supervise() {
+  # `tries` is NOT cleared when a relaunch survives: these are total resets for
+  # the session, so a crash/reset cycle cannot continue indefinitely.
+  local tries=0 status
+  while true; do
+    sleep 2
+    kill -0 "${server_pid}" 2>/dev/null && continue
+
+    # Reset the accelerator ONLY when the server asked for it. An ordinary crash
+    # must not restart the board-wide dispatcher — the studio touches the board
+    # runtime on explicit request and at no other time.
+    status=""
+    for _ in 1 2 3 4 5; do
+      [[ -s "${SERVER_STATUS_FILE}" ]] && { status="$(cat "${SERVER_STATUS_FILE}" 2>/dev/null)"; break; }
+      sleep 0.4
+    done
+    if [[ "${status}" != "${MLA_RESET_EXIT_CODE}" ]]; then
+      return 0    # crash or clean exit: leave the runtime alone and stop watching
+    fi
+    if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
+      return 0
+    fi
+    tries=$((tries + 1))
+    reset_mla_dispatcher
+    launch_server
+    sleep "${MODEL_SERVER_START_DELAY:-2}"
+  done
 }
 
 prepare_clean_start
@@ -698,7 +813,15 @@ if ! child_running "${server_pid}"; then
   wait "${server_pid}"
   status=$?
   set -e
-  exit "${status}"
+  if [[ "${status}" -eq "${MLA_RESET_EXIT_CODE}" ]]; then
+    section "Accelerator"
+    reset_mla_dispatcher
+    section "Model Server"
+    launch_server
+    sleep "${MODEL_SERVER_START_DELAY:-2}"
+  else
+    exit "${status}"
+  fi
 fi
 
 # CLI mode: skip the web UI and run an interactive terminal chat in the
@@ -710,8 +833,11 @@ if [[ "${CLI_MODE}" == "1" ]]; then
   info "Model server logs → ${C_DIM}${SERVER_LOG}${C_RESET}"
   printf '\n'
   trap - INT            # let the Python CLI own Ctrl+C (abort a reply, not exit)
+  cli_supervise &
+  cli_watchdog_pid="$!"
   "${APP_PYTHON}" "${PYTHON_DIR}/cli/main.py" --config "${CONFIG_PATH}" \
     ${CLI_EXTRA_ARGS[@]+"${CLI_EXTRA_ARGS[@]}"} || true
+  kill "${cli_watchdog_pid}" 2>/dev/null || true
   exit 0                # -> EXIT trap stops the model server
 fi
 
@@ -731,15 +857,30 @@ fi
 info "Press ${C_BOLD}Ctrl+C${C_RESET} to stop, or run ${C_BOLD}./run.sh stop${C_RESET} from another shell."
 printf '\n'
 
-# Supervisor: keep both processes alive. A child failure stops the Studio; board
-# runtime recovery remains outside this application.
+# Supervisor: keep both processes alive. A child failure stops the Studio, except
+# for the sentinel exit code, which is the model server asking for the explicit
+# accelerator reset the user requested. Nothing else touches the board runtime.
 status=0
+reset_tries=0
 while true; do
   if ! child_running "${server_pid}"; then
     set +e
     wait "${server_pid}"
     status=$?
     set -e
+    if [[ "${status}" -eq "${MLA_RESET_EXIT_CODE}" ]]; then
+      if [[ "${reset_tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
+        errln "Model server kept asking for an accelerator reset; giving up."
+        break
+      fi
+      reset_tries=$((reset_tries + 1))
+      section "Accelerator"
+      reset_mla_dispatcher
+      section "Model Server"
+      launch_server
+      sleep "${MODEL_SERVER_START_DELAY:-2}"
+      continue
+    fi
     if [[ "${status}" -ne 0 ]]; then
       errln "Model server exited with status ${status}; shutting down."
     fi

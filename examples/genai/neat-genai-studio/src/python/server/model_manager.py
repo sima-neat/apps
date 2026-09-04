@@ -8,12 +8,15 @@ additional compatible models from the Hugging Face Hub when the board is
 online.
 
 pyneat's ``add_model`` / ``remove_model`` are thread-safe and may be called
-after ``server.start()``; this class serializes catalog mutations under a lock
-and treats the ASR model as pinned (never evicted).
+after ``server.start()``; this class serializes catalog mutations under a lock.
+ASR (speech-to-text) models get their own slot: exactly one is resident at a
+time and switching to another evicts the previous one, so an ASR switch never
+disturbs the resident chat/VLM model (and vice versa).
 """
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -23,6 +26,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import wave
 from pathlib import Path
 
 from shared.chat_template import repair_chat_template_files
@@ -72,6 +76,21 @@ def parse_quantization(name: str) -> str | None:
     return None
 
 # Substrings that identify an MLA (accelerator) load failure in an error message.
+# Whisper builds are ~1.5 GB at most — an order of magnitude below a 7B VLM —
+# so they do not need the chat warm-up's 600s ceiling.
+_ASR_WARM_TIMEOUT_S = 300
+
+# Seed for the load-time estimate, in seconds per GB of ELF stages. Measured on a
+# Modalix DevKit, where the observed rate spans roughly 1.2-2.7 s/GB depending on
+# how a model's stages are structured. Deliberately seeded at the SLOW end: an
+# over-estimate makes the bar advance conservatively and finish early, whereas an
+# under-estimate pins it at 99% and looks hung. Only used until the board has
+# timed that model once — _sec_per_gb and the per-model history then take over
+# and are accurate (a re-load of a 7 GB model estimated 19 s and took 19.8 s).
+# Without any seed the FIRST load of a session has no bar and no countdown at
+# all, which is exactly when a user is most likely to be watching.
+_DEFAULT_SEC_PER_GB = 2.7
+
 _MLA_FAILURE_MARKERS = (
     "mlashm",
     "mla_load",
@@ -81,6 +100,13 @@ _MLA_FAILURE_MARKERS = (
     "dispatcher_unavailable",
     "warmup failed",
     "failed to acquire",
+    # Allocation failures matter as much as dispatcher ones: accelerator memory
+    # is not always reclaimed when models are switched, and the load then fails
+    # with a plain "Cannot allocate memory" naming neither the MLA nor a remedy.
+    "cannot allocate memory",
+    "failed to allocate",
+    "out of memory",
+    "shm memory handle",
 )
 
 
@@ -102,16 +128,29 @@ class ModelManager:
         hub: HubConfig,
         openai_base_url: str,
         warmup: bool = True,
+        asr_warmup: bool = True,
+        mla_reset_exit_code: int = 75,
+        mla_reset_enabled: bool = True,
         switch_settle_s: float = 0.6,
         log_tap=None,
     ) -> None:
         self._server = server
         self._catalog_dir = Path(catalog_dir) if catalog_dir else None
         self._max_resident = max(1, int(max_resident_chat_models))
-        self._asr_name = asr_name
+        # What config pins at startup (immutable) vs what serves transcriptions
+        # right now (mutable — the UI can switch it). The active name is only a
+        # cache: eviction victims are DERIVED from the server's loaded set, so a
+        # stale pointer can never strand a resident ASR model.
+        self._configured_asr = asr_name
+        self._active_asr = asr_name
         self._hub = hub
         self._openai_base_url = openai_base_url.rstrip("/")
         self._warmup = warmup
+        self._asr_warmup = asr_warmup
+        # Sentinel exit code that asks the supervisor (run.sh) to reset the MLA
+        # dispatcher and relaunch. Only ever used for an explicit user request.
+        self._mla_reset_exit_code = int(mla_reset_exit_code)
+        self._mla_reset_enabled = bool(mla_reset_enabled)
         # After unloading the outgoing model, wait briefly so its RAII free
         # (which returns MLA memory to the dispatcher) completes before loading
         # the replacement — avoids transient double-residency (MLA_LOAD_FAILED).
@@ -135,7 +174,7 @@ class ModelManager:
         # so we expose elapsed time + a learned ETA from weight size / past loads.
         self._loading: dict | None = None
         self._load_history: dict[str, float] = {}  # name -> last load seconds
-        self._sec_per_gb: float | None = None       # learned rate for ETA
+        self._sec_per_gb: float | None = _DEFAULT_SEC_PER_GB   # learned rate for ETA
         # Optional stdout tap: real per-ELF load progress + a live loading log.
         self._log_tap = log_tap
         # Last load failure, retained so the UI can surface it prominently.
@@ -145,6 +184,17 @@ class ModelManager:
         self._bench_lock = threading.Lock()
 
         self.scan_catalog()
+        # Only claim the configured ASR is active if the server really loaded it.
+        # main.py skips one whose directory is missing — which is exactly what a
+        # user sees after switching away from the startup default and deleting
+        # it — and advertising an unregistered model sends transcriptions to a
+        # name the server does not serve.
+        if self._active_asr and self._active_asr not in self._server_model_names():
+            logging.info(
+                "configured ASR model %r is not loaded; starting with none active",
+                self._active_asr,
+            )
+            self._active_asr = None
         self._sync_resident_from_server()
 
     # -- catalog ---------------------------------------------------------------
@@ -212,19 +262,33 @@ class ModelManager:
 
     def catalog(self) -> list[dict]:
         loaded = set(self._server_model_names())
+        active_asr = self._active_asr
         with self._lock:
             infos = list(self._catalog.values())   # snapshot; then walk the FS
         entries = []                                # outside the lock (walks are slow)
         for info in infos:
             complete, reason = self._is_model_complete(info.get("path"))
+            path = info.get("path")
             entries.append({
                 "name": info["name"],
                 "type": info.get("type", "chat"),
                 "supportsVision": bool(info.get("supports_vision")),
                 "imageSize": info.get("image_size"),
                 "loaded": info["name"] in loaded,
-                "pinned": info["name"] == self._asr_name,
-                "sizeBytes": self._size_of(info.get("path")),
+                # "pinned" = the ASR model config re-selects on restart;
+                # "activeAsr" = the one serving transcriptions right now.
+                "pinned": info["name"] == self._configured_asr,
+                "activeAsr": (info.get("type") == "asr"
+                              and info["name"] == active_asr),
+                "sizeBytes": self._size_of(path),
+                # How long this model is expected to take to load, so the client
+                # can run its own countdown. add_model() does the bulk MLA load
+                # in native code without releasing the GIL, which freezes this
+                # whole process — control API included — for the duration, so
+                # nothing can be polled while a load is actually in flight.
+                "estimatedLoadS": self._estimate_load_seconds(
+                    info["name"], self._elf_bytes(path) or self._size_of(path)),
+                "stagesTotal": self._count_elf_stages(path),
                 "complete": complete,
                 "incompleteReason": reason or None,
             })
@@ -249,14 +313,40 @@ class ModelManager:
         except Exception:
             return []
 
-    def _sync_resident_from_server(self) -> None:
+    def _catalog_type(self, name: str) -> str:
         with self._lock:
-            loaded = self._server_model_names()
+            info = self._catalog.get(name)
+        return (info or {}).get("type", "chat")
+
+    def _loaded_asr_names(self) -> list[str]:
+        """ASR models currently registered on the server.
+
+        Derived from the catalog type rather than from ``_active_asr`` so a
+        stale pointer can never leave an ASR model resident forever.
+        """
+        loaded = self._server_model_names()
+        names = [n for n in loaded if self._catalog_type(n) == "asr"]
+        active = self._active_asr
+        if active and active in loaded and active not in names:
+            names.append(active)
+        return names
+
+    def active_asr(self) -> str | None:
+        """The ASR model currently serving transcriptions."""
+        return self._active_asr
+
+    def _sync_resident_from_server(self) -> None:
+        # Exclude ASR models by TYPE, not by name: after a switch the active ASR
+        # has a different name than the configured one, and letting it leak into
+        # _resident would make the next chat load evict it.
+        loaded = self._server_model_names()
+        asr = set(self._loaded_asr_names())
+        with self._lock:
             self._resident = [
-                n for n in self._resident if n in loaded and n != self._asr_name
+                n for n in self._resident if n in loaded and n not in asr
             ]
             for name in loaded:
-                if name != self._asr_name and name not in self._resident:
+                if name not in asr and name not in self._resident:
                     self._resident.append(name)
 
     def touch(self, name: str) -> None:
@@ -289,9 +379,37 @@ class ModelManager:
                 is_asr = info.get("type") == "asr"
 
             if name in self._server_model_names():
-                self.touch(name)
-                return {"name": name, "state": "ready", "evicted": [], "cold_start": False,
-                        "load_seconds": 0.0}
+                if not is_asr:
+                    self.touch(name)
+                    return {"name": name, "state": "ready", "evicted": [],
+                            "cold_start": False, "load_seconds": 0.0}
+                # An ASR model can be registered yet NOT active: a warm-up that
+                # failed leaves the registration behind when remove_model also
+                # fails. Declaring it active on that basis would report ready
+                # without ever re-checking, and the next transcription would fail
+                # the same way — so prove it works before adopting it.
+                if self._active_asr == name or not (self._warmup and self._asr_warmup):
+                    with self._lock:
+                        self._active_asr = name
+                    return {"name": name, "state": "ready", "evicted": [],
+                            "cold_start": False, "load_seconds": 0.0}
+                probe_started = time.monotonic()
+                self._log_note(f"Re-checking {name} (already registered)…")
+                ok, detail = self._warm_check_asr(name)
+                if not ok and (_is_mla_failure(detail) or self._is_probe_timeout(detail)):
+                    with self._lock:
+                        self._active_asr = None
+                    return self._handle_mla_failure(name, detail)
+                with self._lock:
+                    self._active_asr = name
+                result = {"name": name, "state": "ready", "evicted": [],
+                          "cold_start": False,
+                          "load_seconds": round(time.monotonic() - probe_started, 1)}
+                if not ok:
+                    logging.warning("ASR re-check for '%s' did not complete: %s",
+                                    name, detail)
+                    result["warm_warning"] = detail[:500]
+                return result
 
             if not path or not Path(path).is_dir():
                 raise ValueError(f"Model directory not found for: {name}")
@@ -313,60 +431,128 @@ class ModelManager:
             except Exception:  # noqa: BLE001 - repair is best-effort
                 pass
 
-            with self._lock:
-                # The ASR model is pinned and not tracked in _resident.
-                victims = [] if is_asr else [v for v in self._resident if v != name]
+            # ASR models have their own slot: switching evicts the previous ASR
+            # and leaves the resident chat/VLM model alone (and vice versa).
+            if is_asr:
+                victims = [v for v in self._loaded_asr_names() if v != name]
+            else:
+                with self._lock:
+                    victims = [v for v in self._resident if v != name]
 
             size_bytes = self._size_of(path)
+            # Estimate and learn against the ELF bytes actually transferred, so
+            # the rate stays comparable across models whose directories carry
+            # very different amounts of non-ELF baggage.
+            load_bytes = self._elf_bytes(path) or size_bytes
             started = time.monotonic()
             self._last_error = None
-            if not is_asr:
-                self._loading = {
-                    "name": name,
-                    "startedAt": started,
-                    "estTotalS": self._estimate_load_seconds(name, size_bytes),
-                    # Real progress: count completed ELF-stage loads (from the
-                    # stdout tap) minus the baseline against the on-disk total.
-                    "elfTotal": self._count_elf_stages(path),
-                    "elfBase": self._log_tap.loaded_count if self._log_tap else 0,
-                }
+            self._loading = {
+                "name": name,
+                "startedAt": started,
+                "estTotalS": self._estimate_load_seconds(name, load_bytes),
+                # Real progress: count completed ELF-stage loads (from the
+                # stdout tap) minus the baseline against the on-disk total.
+                "elfTotal": self._count_elf_stages(path),
+                "elfBase": self._log_tap.loaded_count if self._log_tap else 0,
+            }
             evicted: list = []
+            stages = self._loading.get("elfTotal")
+            self._log_note(
+                f"Loading {name} — {self._fmt_size(size_bytes)}"
+                + (f", {stages} stages" if stages else "")
+                + (f", est {self._loading['estTotalS']:.0f}s" if self._loading.get("estTotalS") else "")
+            )
             try:
                 # Clear every other chat/VLM model. _stop_model_streams (an HTTP
                 # /stop) and remove_model (which triggers the outgoing model's RAII
                 # free of MLA memory) can each block for seconds — do them WITHOUT
                 # holding _lock so status polls stay responsive during the switch.
                 for victim in victims:
+                    self._log_note(f"Unloading {victim}")
                     self._stop_model_streams(victim)
                     try:
                         self._server.remove_model(victim)
                         evicted.append(victim)
-                    except Exception:
-                        pass
-                if not is_asr:
-                    with self._lock:
+                    except Exception as exc:
+                        if not is_asr:
+                            continue
+                        # There is only one ASR slot. If the outgoing model will
+                        # not free, adding the replacement leaves two resident —
+                        # which can fail the load outright on double residency —
+                        # and the state below would report no active ASR while
+                        # the old one is still serving. Abort with it untouched.
+                        raise RuntimeError(
+                            f"Could not unload the current speech-to-text model "
+                            f"'{victim}': {exc}"
+                        ) from exc
+                with self._lock:
+                    if is_asr:
+                        # Honest during the eviction window: nothing can serve a
+                        # transcription until the replacement is registered.
+                        self._active_asr = None
+                    else:
                         self._resident = []
-                    # Let the free complete before loading the replacement, so the
-                    # old and new model are never briefly co-resident.
-                    if evicted and self._switch_settle_s:
-                        time.sleep(self._switch_settle_s)
+                # Let the free complete before loading the replacement, so the
+                # old and new model are never briefly co-resident.
+                if evicted and self._switch_settle_s:
+                    time.sleep(self._switch_settle_s)
 
+                # add_model returns the name the server actually served it under,
+                # which may differ from the requested one — that is the truth.
+                self._log_note(f"Registering {name} with the runtime…")
                 served = self._server.add_model(str(path), name)
-                if not is_asr:
-                    with self._lock:
+                self._log_note(
+                    f"Registered {served}; transferring weights to the accelerator…"
+                )
+                with self._lock:
+                    if is_asr:
+                        self._active_asr = served
+                    else:
                         self._resident = [served]
 
                 # add_model only registers; the real MLA load is deferred to first
                 # inference. Warm synchronously so a load failure is catchable and
                 # so we can time the load (this is where the wait actually happens).
-                if is_asr or not self._warmup:
-                    return {"name": name, "state": "ready", "evicted": evicted,
+                if is_asr:
+                    if not (self._warmup and self._asr_warmup):
+                        return {"name": served, "state": "ready", "evicted": evicted,
+                                "cold_start": True,
+                                "load_seconds": round(time.monotonic() - started, 1)}
+                    self._log_note("Warming up (first transcription forces the load)…")
+                    ok, detail = self._warm_check_asr(served)
+                    if ok:
+                        self._record_load_duration(name, load_bytes,
+                                                   time.monotonic() - started)
+                        self._log_note(f"Ready: {served} in {time.monotonic() - started:.1f}s")
+                        return {"name": served, "state": "ready", "evicted": evicted,
+                                "cold_start": True,
+                                "load_seconds": round(time.monotonic() - started, 1)}
+                    if _is_mla_failure(detail) or self._is_probe_timeout(detail):
+                        with self._lock:
+                            self._active_asr = None
+                        return self._handle_mla_failure(served, detail)
+                    # Soft failure: unlike the chat probe, this one depends on the
+                    # runtime's multipart handling and on how a given Whisper
+                    # artifact reacts to pure silence. A non-MLA error here most
+                    # likely means the model is fine, so keep it active — it will
+                    # load on first use, exactly as it did before warming existed.
+                    logging.warning("ASR warm-up for '%s' did not complete: %s",
+                                    served, detail)
+                    return {"name": served, "state": "ready", "evicted": evicted,
+                            "cold_start": True,
+                            "load_seconds": round(time.monotonic() - started, 1),
+                            "warm_warning": detail[:500]}
+
+                if not self._warmup:
+                    return {"name": served, "state": "ready", "evicted": evicted,
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
+                self._log_note("Warming up (first inference forces the load)…")
                 ok, detail = self._warm_check(name)
                 if ok:
-                    self._record_load_duration(name, size_bytes, time.monotonic() - started)
-                    return {"name": name, "state": "ready", "evicted": evicted,
+                    self._record_load_duration(name, load_bytes, time.monotonic() - started)
+                    self._log_note(f"Ready: {served} in {time.monotonic() - started:.1f}s")
+                    return {"name": served, "state": "ready", "evicted": evicted,
                             "cold_start": True, "load_seconds": round(time.monotonic() - started, 1)}
 
                 if _is_mla_failure(detail):
@@ -383,6 +569,61 @@ class ModelManager:
                 raise RuntimeError(f"Model '{name}' failed to load: {detail}")
             finally:
                 self._loading = None
+
+    def set_active_asr(self, name: str) -> dict:
+        """Make ``name`` the ASR model that serves transcriptions.
+
+        Only one ASR model is resident at a time, so this evicts the previous
+        one. The resident chat/VLM model is untouched.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("An ASR model name is required")
+        if name not in self._catalog:
+            self.scan_catalog()
+        with self._lock:
+            info = self._catalog.get(name)
+        if info is None:
+            raise ValueError(f"Unknown model: {name}")
+        # Refuse anything that is not speech-to-text, rather than quietly
+        # pointing transcription at a chat model that cannot serve it.
+        if info.get("type") != "asr":
+            raise ValueError(f"'{name}' is not a speech-to-text (ASR) model")
+
+        previous = self._active_asr
+        result = self.load(name)
+        active = self._active_asr
+        result["activeAsr"] = active
+        result["previous"] = previous if previous != active else None
+        return result
+
+    def _log_note(self, text: str) -> None:
+        """Add a studio-side line to the load log (no-op without a tap)."""
+        if self._log_tap is not None:
+            try:
+                self._log_tap.note(text)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _fmt_size(size_bytes: int | None) -> str:
+        if not size_bytes:
+            return "size unknown"
+        gb = size_bytes / 1e9
+        return f"{gb:.1f} GB" if gb >= 1 else f"{size_bytes / 1e6:.0f} MB"
+
+    def _elf_bytes(self, path) -> int | None:
+        """Total size of the ELF stages — the bytes the accelerator actually
+        loads. A model directory can be twice this (safetensors, tokenizer,
+        configs), so estimating from the directory size overshoots badly."""
+        if not path:
+            return None
+        try:
+            total = sum(f.stat().st_size
+                        for f in Path(path).glob("elf_files/*_mla.elf"))
+        except Exception:
+            return None
+        return total or None
 
     def _estimate_load_seconds(self, name: str, size_bytes: int | None) -> float | None:
         """Best-effort ETA: the model's own last load time, else a learned rate."""
@@ -417,7 +658,12 @@ class ModelManager:
         if self._log_tap and elf_total:
             elf_done = max(0, min(self._log_tap.loaded_count - info.get("elfBase", 0), elf_total))
 
-        if elf_done is not None and elf_total:
+        # Only trust the stage counter once it has actually moved. Current
+        # runtimes load every stage in a single bulk call and print no per-stage
+        # lines, so the counter sits at 0 for the whole load — and taking this
+        # branch on the strength of "a tap exists and there are ELFs on disk"
+        # pinned the bar to 0% and threw away the time-based estimate below.
+        if elf_done and elf_total:
             pct = int(elf_done / elf_total * 100)
             if elf_done > 0:
                 eta_total = elapsed / elf_done * elf_total   # observed per-stage rate
@@ -429,24 +675,33 @@ class ModelManager:
                 "name": info["name"],
                 "elapsedS": round(elapsed, 1),
                 "etaS": round(eta_total, 1) if eta_total else None,
+                "remainingS": round(max(0.0, eta_total - elapsed), 1) if eta_total else None,
                 "pct": pct,
                 "filesDone": elf_done,
                 "filesTotal": elf_total,
+                "stagesTotal": elf_total,
                 "estimated": estimated,
             }
 
         # Fallback: elapsed / learned-size estimate (no per-stage signal). Report
         # filesTotal=None too, so the UI shows elapsed time rather than a frozen
         # "stage 0 of N" against a total it can never make progress against.
+        # No per-stage signal (current runtimes load every stage in one bulk call
+        # and print nothing per stage). Drive the bar from elapsed/estimate, and
+        # hold at 99 rather than 100 so it never claims to be finished early.
         est = info.get("estTotalS")
-        pct = int(min(97, elapsed / est * 100)) if est and est > 0 else None
+        pct = int(min(99, elapsed / est * 100)) if est and est > 0 else None
         return {
             "name": info["name"],
             "elapsedS": round(elapsed, 1),
             "etaS": round(est, 1) if est else None,
+            "remainingS": round(max(0.0, est - elapsed), 1) if est else None,
             "pct": pct,
             "filesDone": None,
             "filesTotal": None,
+            # The stage count is still worth showing as scale, even when the
+            # runtime gives us no way to count them off.
+            "stagesTotal": info.get("elfTotal"),
             "estimated": True,
         }
 
@@ -685,11 +940,48 @@ class ModelManager:
             self._stop_model_streams(model)
         return {"stopped": True}
 
+    def _refuse_if_active_asr(self, name: str, verb: str) -> None:
+        """Guard against touching the ASR model that is serving transcriptions.
+
+        Must be called while holding ``_op_lock``: checking before taking it
+        races a concurrent ``set_active_asr``, which could make ``name`` active
+        while this operation waits, and the model would then be unloaded or
+        deleted out from under transcription.
+        """
+        if name and name == self._active_asr:
+            raise ValueError(
+                f"The active speech-to-text model cannot be {verb} — "
+                "switch to another ASR model first."
+            )
+        # The same directory can appear under two names: register_startup_model()
+        # adds the configured `asr.name` while the catalog scan adds the
+        # directory's basename. Deleting the "other" name would rmtree the weights
+        # the active model is serving from, so compare resolved paths too.
+        active_path = self._resolved_path(self._active_asr)
+        if active_path and self._resolved_path(name) == active_path:
+            raise ValueError(
+                f"'{name}' is the active speech-to-text model under another name "
+                f"({self._active_asr}) — switch to another ASR model first."
+            )
+
+    def _resolved_path(self, name: str | None):
+        """Resolved on-disk path for a catalog entry, or None."""
+        if not name:
+            return None
+        with self._lock:
+            info = self._catalog.get(name)
+        raw = (info or {}).get("path")
+        if not raw:
+            return None
+        try:
+            return Path(raw).resolve()
+        except Exception:
+            return None
+
     def unload(self, name: str) -> dict:
         name = (name or "").strip()
-        if name == self._asr_name:
-            raise ValueError("The ASR model cannot be unloaded")
         with self._op_lock:
+            self._refuse_if_active_asr(name, "unloaded")
             # remove_model frees MLA memory and can block for seconds — keep it
             # out of _lock so concurrent status polls are not held up.
             self._stop_model_streams(name)
@@ -702,15 +994,16 @@ class ModelManager:
     def delete(self, name: str) -> dict:
         """Unload (if loaded) and delete a model's files from the catalog.
 
-        Guarded: refuses to delete the pinned ASR model or anything outside
-        ``catalog_dir``.
+        Guarded: refuses to delete the active ASR model or anything outside
+        ``catalog_dir``. An ASR model that is merely installed (not active) is
+        deletable — that is how you reclaim the space of a model you switched
+        away from.
         """
         name = (name or "").strip()
-        if name == self._asr_name:
-            raise ValueError("The ASR model cannot be deleted")
         if not self._catalog_dir:
             raise ValueError("No catalog_dir configured; refusing to delete")
         with self._op_lock:
+            self._refuse_if_active_asr(name, "deleted")
             with self._lock:
                 info = self._catalog.get(name)
             if info is None:
@@ -842,6 +1135,122 @@ class ModelManager:
         except Exception as exc:  # noqa: BLE001 - surfaced to caller
             return False, str(exc)
 
+    @staticmethod
+    def _silence_wav(seconds: float = 1.0, rate: int = 16000) -> bytes:
+        """16 kHz mono 16-bit PCM silence — the shape Whisper preprocessing wants."""
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(rate)
+            out.writeframes(b"\x00\x00" * int(rate * seconds))
+        return buf.getvalue()
+
+    @staticmethod
+    def _multipart_body(fields: dict, file_field: str, filename: str,
+                        content: bytes, content_type: str) -> tuple[bytes, str]:
+        """Encode a multipart/form-data body (this process is stdlib-only)."""
+        boundary = "----neat" + os.urandom(16).hex()
+        body = bytearray()
+        for key, value in fields.items():
+            body += (f"--{boundary}\r\n"
+                     f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+                     f"{value}\r\n").encode("utf-8")
+        body += (f"--{boundary}\r\n"
+                 f'Content-Disposition: form-data; name="{file_field}"; '
+                 f'filename="{filename}"\r\n'
+                 f"Content-Type: {content_type}\r\n\r\n").encode("utf-8")
+        body += content + b"\r\n" + f"--{boundary}--\r\n".encode("utf-8")
+        return bytes(body), f"multipart/form-data; boundary={boundary}"
+
+    def _warm_check_asr(self, name: str) -> tuple[bool, str]:
+        """Force an ASR model's deferred MLA load by transcribing silence.
+
+        The chat ``_warm_check`` sends a completion an ASR model cannot serve,
+        so speech models need their own probe. A silent clip is a legitimate
+        request: Whisper answers 200 with empty/low-confidence text, which is
+        all we need to know the weights reached the accelerator.
+        """
+        body, content_type = self._multipart_body(
+            {"model": name, "language": "en"},
+            "file", "warmup.wav", self._silence_wav(), "audio/wav",
+        )
+        req = urllib.request.Request(
+            f"{self._openai_base_url}/v1/audio/transcriptions",
+            data=body,
+            headers={"Content-Type": content_type},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_ASR_WARM_TIMEOUT_S) as resp:
+                resp.read()
+            return True, ""
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", "replace")
+            except Exception:
+                detail = ""
+            return False, f"HTTP {exc.code}: {detail}".strip()
+        except Exception as exc:  # noqa: BLE001 - surfaced to caller
+            return False, str(exc)
+
+    def _request_supervised_reset(self, reason: str, message: str) -> dict:
+        """Ask the supervisor (run.sh) to reset the MLA dispatcher and relaunch.
+
+        A dispatcher restart cannot be done from inside this process — it frees
+        the models this process still holds and the runtime cannot reconnect — so
+        exit with the sentinel code once the HTTP response has had a moment to
+        flush. run.sh resets the dispatcher and relaunches just the model server;
+        the UI stays up and reconnects.
+        """
+        logging.error(
+            "requesting supervised MLA reset + relaunch (%s; exit code %d)",
+            reason, self._mla_reset_exit_code,
+        )
+
+        def _exit_soon() -> None:
+            time.sleep(1.5)
+            os._exit(self._mla_reset_exit_code)
+
+        threading.Thread(target=_exit_soon, daemon=True).start()
+        return {"state": "resetting", "reset": True, "message": message}
+
+    def reset_mla(self) -> dict:
+        """Explicit, user-triggered accelerator reset.
+
+        Drains in-flight streams best-effort and deliberately WITHOUT taking
+        ``_op_lock``: the whole point is that it still works when a load has
+        wedged and is holding that lock. Nothing else in the studio calls this —
+        startup and load failures leave the board runtime alone.
+        """
+        if not self._mla_reset_enabled:
+            # Refuse before scheduling the sentinel exit. Returning success here
+            # would still tear the server down and interrupt generations, which
+            # is exactly what MLA_RESET=0 is set to prevent.
+            raise ValueError(
+                "Accelerator reset is disabled on this board (MLA_RESET=0)."
+            )
+        for victim in list(self._resident):
+            try:
+                self._stop_model_streams(victim)
+            except Exception:
+                pass
+        return self._request_supervised_reset(
+            "user requested MLA reset",
+            "Resetting the accelerator and restarting. Reconnecting shortly…",
+        )
+
+    @staticmethod
+    def _is_probe_timeout(detail: str) -> bool:
+        """A warm-up that ran out of time proved nothing.
+
+        Treated as a failed load rather than a soft warning: the fail-soft rule
+        exists because the silence probe's *contract* is uncertain, not because
+        a model that never answered in 300s is fit to serve.
+        """
+        text = (detail or "").lower()
+        return "timed out" in text or "timeout" in text
+
     def _handle_mla_failure(self, name: str, detail: str) -> dict:
         """Roll back a failed MLA load and report it without runtime recovery."""
         logging.error("MLA load failed for '%s': %s", name, detail)
@@ -853,9 +1262,14 @@ class ModelManager:
         with self._lock:
             if name in self._resident:
                 self._resident = []
+            if name == self._active_asr:
+                self._active_asr = None
         raise RuntimeError(
-            f"Model '{name}' could not be loaded because the accelerator (MLA) "
-            "reported an error. Check the board runtime before retrying."
+            f"Model '{name}' could not be loaded: the accelerator (MLA) reported "
+            "an error. Accelerator memory is not always reclaimed when models are "
+            "switched, so this can follow several switches even when the model "
+            "fits on its own. Use 'Reset MLA' in Settings -> Models (or /reset in "
+            "the CLI) to clear the accelerator, then load it again."
         )
 
     # -- status ----------------------------------------------------------------
@@ -892,7 +1306,10 @@ class ModelManager:
             "catalog": self.catalog(),
             "loaded": self._server_model_names(),
             "maxResident": self._max_resident,
-            "asrModel": self._asr_name,
+            # The ASR model serving transcriptions now, and the one a restart
+            # re-selects from config (they differ after a runtime switch).
+            "asrModel": self._active_asr,
+            "configuredAsrModel": self._configured_asr,
             "hubEnabled": self.hub_enabled(),
             "loading": self.loading_status(),
             "disk": self.disk_info(),

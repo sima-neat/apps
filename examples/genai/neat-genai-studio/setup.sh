@@ -16,7 +16,14 @@ CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-}"
 # Extra compatible chat/VLM models to seed the catalog (space-separated HF repos).
 # Example: CATALOG_MODEL_REPOS="simaai/Llama-3.2-3B-Instruct-... simaai/..."
 CATALOG_MODEL_REPOS="${CATALOG_MODEL_REPOS:-}"
-ASR_MODEL_REPO="simaai/whisper-small-a16w8"
+# Speech-to-text model downloaded and made active at startup.
+# Set ASR_MODEL_REPO="" to install none (note the `-`, not `:-`, so an
+# explicitly empty value is honoured rather than falling back to the default).
+ASR_MODEL_REPO="${ASR_MODEL_REPO-simaai/whisper-small-a16w8}"
+# Extra ASR models to seed the catalog (space-separated HF repos); switch
+# between them at runtime in Settings -> Models. Example:
+#   ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8"
+ASR_CATALOG_MODEL_REPOS="${ASR_CATALOG_MODEL_REPOS:-}"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
 # Only one chat/VLM model is resident at a time — loading a new one clears all
@@ -232,7 +239,13 @@ if [[ -n "${CHAT_MODEL_REPO}" ]]; then
 else
   CHAT_MODEL_DIR=""
 fi
-ASR_MODEL_DIR="${MODELS_DIR}/whisper-small-a16w8"
+if [[ -n "${ASR_MODEL_REPO}" ]]; then
+  ASR_MODEL_NAME="$(catalog_dir_name "${ASR_MODEL_REPO}")"
+  ASR_MODEL_DIR="${MODELS_DIR}/${ASR_MODEL_NAME}"
+else
+  ASR_MODEL_NAME=""
+  ASR_MODEL_DIR=""
+fi
 RAG_EMBEDDING_DIR="${MODELS_DIR}/gte-small"
 
 section "Models"
@@ -245,8 +258,20 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
     info "No default chat/VLM model — download one from the UI (or set CHAT_MODEL_REPO)."
   fi
 
-  step "Downloading ASR model: ${ASR_MODEL_REPO}"
-  "${APP_VENV}/bin/hf" download "${ASR_MODEL_REPO}" --local-dir "${ASR_MODEL_DIR}"
+  if [[ -n "${ASR_MODEL_REPO}" ]]; then
+    step "Downloading ASR model: ${ASR_MODEL_REPO}"
+    "${APP_VENV}/bin/hf" download "${ASR_MODEL_REPO}" --local-dir "${ASR_MODEL_DIR}"
+    write_repo_marker "${ASR_MODEL_REPO}" "${ASR_MODEL_DIR}"
+  else
+    info "No default ASR model — download one from the UI (or set ASR_MODEL_REPO)."
+  fi
+
+  for repo in ${ASR_CATALOG_MODEL_REPOS}; do
+    name="$(catalog_dir_name "${repo}")"
+    step "Downloading ASR catalog model: ${repo}"
+    "${APP_VENV}/bin/hf" download "${repo}" --local-dir "${MODELS_DIR}/${name}"
+    write_repo_marker "${repo}" "${MODELS_DIR}/${name}"
+  done
 
   step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
   "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
@@ -273,6 +298,17 @@ else
   CHAT_YAML="    chat: []            # No model preloaded; load on demand from the UI."
 fi
 
+if [[ -n "${ASR_MODEL_REPO}" ]]; then
+  ASR_YAML=$(cat <<ASR
+    asr:                # Active at startup; switch at runtime in Settings -> Models.
+      name: ${ASR_MODEL_NAME}
+      path: ${ASR_MODEL_DIR}
+ASR
+)
+else
+  ASR_YAML="    # asr: omitted — no speech-to-text model is preloaded."
+fi
+
 # Render "simaai TDoSiMa" -> "simaai, TDoSiMa" for the YAML flow list.
 HUB_ORGS_YAML="$(echo "${HUB_ORGS}" | tr -s ' ' | sed 's/^ //; s/ $//; s/ /, /g')"
 section "Configuration"
@@ -293,9 +329,7 @@ server:
     catalog_dir: ${MODELS_DIR}
     max_resident_chat_models: ${MAX_RESIDENT_CHAT_MODELS}
 ${CHAT_YAML}
-    asr:
-      name: whisper-small-a16w8
-      path: ${ASR_MODEL_DIR}
+${ASR_YAML}
 
   hub:
     allow_download: ${ALLOW_HUB_DOWNLOAD}

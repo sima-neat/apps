@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -406,6 +407,21 @@ def catalog(ctrl):
         return []
 
 
+def wait_gone(oai, timeout=30):
+    """Wait for the model server to stop answering. Used after requesting a
+    reset: the endpoint replies before exiting, so 'is it back?' is meaningless
+    until the outgoing process has actually gone."""
+    deadline = time.monotonic() + timeout
+    url = f"http://{oai[0]}:{oai[1]}/v1/models"
+    while time.monotonic() < deadline:
+        try:
+            _http(url, timeout=2)
+        except Exception:
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def wait_ready(oai, timeout=90):
     deadline = time.monotonic() + timeout
     url = f"http://{oai[0]}:{oai[1]}/v1/models"
@@ -513,6 +529,7 @@ HELP = f"""{MUTED}Commands:
   /new               clear the conversation history
   /export [file]     save this chat to a .log file (default neat-chat-<time>.log)
   /tokens <n>        set the max response tokens
+  /reset             reset the accelerator (MLA) and relaunch the model server
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
   /rag [filter]      inspect the RAG database — list ingested chunks (aliases /docs)
@@ -712,6 +729,81 @@ def _arrow_multiselect(items, prompt):
 
 
 # ---- model loading + Hugging Face (reuses server/hub.py, like the UI) --------
+def fmt_secs(s):
+    """Compact duration: 45s, 1m 20s."""
+    try:
+        s = max(0, int(round(float(s))))
+    except (TypeError, ValueError):
+        return ""
+    return f"{s}s" if s < 60 else f"{s // 60}m {s % 60:02d}s"
+
+
+def _load_progress_line(ld):
+    """One redraw of the load bar from a /control/status `loading` block.
+
+    Mirrors the download bar's look so the two read as the same thing. The
+    accelerator reports no per-stage signal on current runtimes, so the percent
+    is usually an estimate against the model's measured load time — the stage
+    count is shown as scale, and "~" marks the countdown as approximate.
+    """
+    bits = []
+    pct = ld.get("pct")
+    if isinstance(pct, (int, float)):
+        filled = max(0, min(20, int(pct / 5)))
+        bits.append(f"[{'█' * filled}{'░' * (20 - filled)}] {int(pct)}%")
+    done, total = ld.get("filesDone"), ld.get("filesTotal")
+    if total and done is not None:
+        bits.append(f"stage {done}/{total}")
+    elif ld.get("stagesTotal"):
+        bits.append(f"{ld['stagesTotal']} stages")
+    if ld.get("elapsedS") is not None:
+        bits.append(fmt_secs(ld["elapsedS"]))
+    remain = ld.get("remainingS")
+    if remain is not None:
+        bits.append(f"~{fmt_secs(remain)} left" if remain > 0 else "finishing…")
+    return "  ".join(b for b in bits if b)
+
+
+def _post_load_with_progress(ctrl, name, do_post):
+    """Run `do_post` on a worker thread and draw live load progress until it
+    returns. Falls back to the plain blocking call when stdout is not a TTY (a
+    redirected log should not collect carriage returns and escape codes)."""
+    if not sys.stdout.isatty():
+        return do_post()
+
+    box = {}
+
+    def _work():
+        try:
+            box["result"] = do_post()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=_work, name="model-load", daemon=True)
+    worker.start()
+    drew = False
+    while worker.is_alive():
+        worker.join(0.5)
+        if not worker.is_alive():
+            break
+        try:
+            ld = (ctrl_get(ctrl, "/control/status") or {}).get("loading")
+        except Exception:
+            ld = None
+        if ld and ld.get("name") == name:
+            line = _load_progress_line(ld)
+            if line:
+                sys.stdout.write(f"\r\x1b[K{MUTED}  {line}{RESET}")
+                sys.stdout.flush()
+                drew = True
+    if drew:
+        sys.stdout.write("\r\x1b[K")   # clear the bar before the result line
+        sys.stdout.flush()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
+
+
 def load_model(ctrl, name, oai=None, auto_retry=True):
     """Load a model via the control API. Returns True on success. Loading a
     chat/VLM model evicts any other resident one, so that is made explicit."""
@@ -733,7 +825,7 @@ def load_model(ctrl, name, oai=None, auto_retry=True):
         return r
 
     try:
-        r = _attempt()
+        r = _post_load_with_progress(ctrl, name, _attempt)
     except Exception as exc:  # noqa: BLE001
         print(f"{ERR}  {exc}{RESET}")
         return False
@@ -1825,6 +1917,31 @@ def main():
                 if not (active and cur and cur.get("supportsVision")):
                     print(f"{MUTED}  note: the current model isn't a VLM — frames send "
                           f"once you load one.{RESET}")
+            elif cmd == "reset":
+                # Explicit accelerator reset: the server exits with the sentinel
+                # code and run.sh restarts the MLA dispatcher and relaunches it,
+                # so the request itself usually dies with the connection.
+                print(f"{MUTED}  resetting the accelerator and relaunching the "
+                      f"model server…{RESET}")
+                try:
+                    ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
+                except Exception as exc:  # noqa: BLE001
+                    # A dropped connection is the success path (the server exits
+                    # mid-reply); a refusal is not — MLA_RESET=0 answers 400.
+                    if "disabled" in str(exc).lower():
+                        print(f"{ERR}  {exc}{RESET}")
+                        continue
+                active = ""
+                camera_device = None      # no model resident → no live camera
+                # The endpoint replies BEFORE exiting (~1.5s later), so polling
+                # immediately would find the outgoing server and report success
+                # while nothing has been reset. Wait for it to go away first.
+                if not wait_gone(oai, timeout=30):
+                    print(f"{ERR}  the model server did not stop — check run.sh.{RESET}")
+                elif wait_ready(oai, timeout=180):
+                    print(f"{OK}✔ model server is back. Load a model with /load.{RESET}")
+                else:
+                    print(f"{ERR}  the model server did not come back — check run.sh.{RESET}")
             elif cmd == "unload":
                 names = [arg] if arg else [
                     m.get('name') for m in catalog(ctrl)
