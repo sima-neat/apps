@@ -51,6 +51,8 @@ MLA_DISPATCHER_SERVICE="${MLA_DISPATCHER_SERVICE:-simaai-appcomplex.service}"
 MLA_RESET_EXIT_CODE="${MLA_RESET_EXIT_CODE:-75}"
 # Bounded relaunches so a server that dies immediately cannot respawn forever.
 MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
+# Where the CLI-mode server records its exit status (see launch_server).
+SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.status}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
@@ -267,11 +269,11 @@ do_stop() {
         warn "Not responding after ${STOP_TIMEOUT}s; sending KILL…"
         kill -KILL "${pid}" 2>/dev/null || true
       fi
-      rm -f "${PID_FILE}"
+      rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
       ok "Stopped."
       return 0
     fi
-    rm -f "${PID_FILE}"
+    rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
   fi
   # No recorded instance — best-effort cleanup of any stray studio processes.
   info "No running instance recorded; cleaning up any stray processes…"
@@ -712,7 +714,7 @@ cleanup() {
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -725,7 +727,7 @@ if [[ -f "${PID_FILE}" ]]; then
     info "Run './run.sh stop' first, or './run.sh status' to check."
     exit 1
   fi
-  rm -f "${PID_FILE}"
+  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
 fi
 
 trap cleanup EXIT
@@ -745,8 +747,14 @@ launch_server() {
   # so its logs would land on the "you ▸" prompt. Send them to a log file
   # instead; the CLI drives the server over HTTP and doesn't need its stdout.
   if [[ "${CLI_MODE}" == "1" ]]; then
-    setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" \
-      >"${SERVER_LOG}" 2>&1 &
+    # Wrap the server so its exit status lands in a file: the CLI watchdog polls
+    # a sibling PID and so cannot `wait` for it, and without the status it could
+    # not tell an explicit reset request from an ordinary crash.
+    rm -f "${SERVER_STATUS_FILE}"
+    setsid bash -c \
+      '"$1" "$2" --config "$3" >"$4" 2>&1; echo $? >"$5"' _ \
+      "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${CONFIG_PATH}" \
+      "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
   else
     setsid "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" --config "${CONFIG_PATH}" &
   fi
@@ -761,14 +769,27 @@ launch_server() {
 # backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
 # cannot respawn forever. Strays are swept by cleanup().
 cli_supervise() {
-  local tries=0
+  # `tries` is NOT cleared when a relaunch survives: these are total resets for
+  # the session, so a crash/reset cycle cannot continue indefinitely.
+  local tries=0 status
   while true; do
     sleep 2
-    if kill -0 "${server_pid}" 2>/dev/null; then
-      tries=0
-      continue
+    kill -0 "${server_pid}" 2>/dev/null && continue
+
+    # Reset the accelerator ONLY when the server asked for it. An ordinary crash
+    # must not restart the board-wide dispatcher — the studio touches the board
+    # runtime on explicit request and at no other time.
+    status=""
+    for _ in 1 2 3 4 5; do
+      [[ -s "${SERVER_STATUS_FILE}" ]] && { status="$(cat "${SERVER_STATUS_FILE}" 2>/dev/null)"; break; }
+      sleep 0.4
+    done
+    if [[ "${status}" != "${MLA_RESET_EXIT_CODE}" ]]; then
+      return 0    # crash or clean exit: leave the runtime alone and stop watching
     fi
-    [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]] && return 0
+    if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
+      return 0
+    fi
     tries=$((tries + 1))
     reset_mla_dispatcher
     launch_server

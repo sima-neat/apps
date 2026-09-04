@@ -1793,7 +1793,9 @@ class AppContext:
                     # Use MLA Backend transcription - read directly from FileStorage
                     start_time = time.time()
                     audio_bytes = audio_file.read()
-                    result = post_audio_to_mla(audio_bytes, language=language)
+                    asr_used = []
+                    result = post_audio_to_mla(audio_bytes, language=language,
+                                               used_model=asr_used)
 
                     if result:
                         elapsed_time = round(time.time() - start_time, 2)
@@ -1828,6 +1830,12 @@ class AppContext:
                         # produce text only instead of using a mismatched voice.
                         self.talk_ctrl.set_language(asr['tts_language'] or 'xx')
 
+                        # Name the model that actually served this request, so
+                        # the browser cannot credit a model that was switched to
+                        # afterwards, and so ignored results are attributable too.
+                        if asr_used:
+                            asr['model'] = asr_used[0]
+
                         if asr['ignored']:
                             message = (
                                 'No clear speech detected. Please try again.'
@@ -1844,10 +1852,6 @@ class AppContext:
                                 'rag_hits': 0,
                             })
 
-                        # Name the model that actually produced this, so the
-                        # browser cannot keep crediting a model that was
-                        # switched away from outside this process.
-                        asr['model'] = genai_app.resolve_asr_model()
                         self.socketio.emit('transcription', asr)
                     else:
                         logging.warning("Backend transcription returned no result")
@@ -2627,7 +2631,7 @@ def post_stop_to_sima(model_name=None):
         logging.error(f"Failed to send stop signal: {e}")
         return False
 
-def post_audio_to_mla(audio_bytes, language="auto"):
+def post_audio_to_mla(audio_bytes, language="auto", used_model=None):
     """
     Sends an audio file (as bytes) to the SIMA model server for transcription.
     """
@@ -2641,6 +2645,10 @@ def post_audio_to_mla(audio_bytes, language="auto"):
     if not model:
         logging.error("No speech-to-text model is active; cannot transcribe.")
         return None
+    # Report back which model served this request. Resolving again after the
+    # call would race a concurrent switch and mislabel the transcript.
+    if isinstance(used_model, list):
+        used_model.append(model)
     data = {
         'model': model,
         'language': language
