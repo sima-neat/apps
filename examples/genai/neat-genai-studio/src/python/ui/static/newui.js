@@ -3952,8 +3952,7 @@ function populateModelSelect(catalog) {
   // Speech models are tracked separately: they never appear in the chat select,
   // and exactly one of them is active at a time.
   const asrModels = _catalog.filter(m => (m.type || 'chat') === 'asr');
-  _asrActive = (asrModels.find(m => m.activeAsr)
-             || asrModels.find(m => m.loaded) || {}).name || '';
+  _asrActive = (asrModels.find(m => m.activeAsr) || {}).name || '';
   updateAsrModelIndicator();
   const chatModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
   const previous = select.value;
@@ -5630,6 +5629,10 @@ function askVision(query) {
 
 // ---- Continuous camera loop: repeatedly ask the VLM about the live camera ----
 let _visionLoop = { on: false, prompt: '', delayMs: 800 };
+// Bumped on every start and stop. A startup that is mid-await when the
+// loop is stopped (or restarted) sees a stale token and bows out, so it
+// cannot clear a fresh conversation or race a second runner.
+let _visionLoopToken = 0;
 
 function waitForGenerationEnd(timeoutMs) {
   timeoutMs = timeoutMs || 90000;
@@ -5668,8 +5671,8 @@ function setVisionLoopUI(on) {
   btn.textContent = on ? '■ Stop' : '↻ Loop';
 }
 
-async function visionLoopRun() {
-  while (_visionLoop.on) {
+async function visionLoopRun(token) {
+  while (_visionLoop.on && token === _visionLoopToken) {
     // The loop only makes sense on the live camera with a vision model.
     if (!isVisionOpen() || _visionSource !== 'camera' || !selectedChatModelSupportsVision()) {
       stopVisionLoop();
@@ -5703,24 +5706,28 @@ function startVisionLoop() {
   _visionLoop.on = true;
   setVisionLoopUI(true);
   setVisionAskHint('Looping — asking about the live camera continuously. Tap Stop to end.');
-  startVisionLoopRun();
+  startVisionLoopRun(++_visionLoopToken);
 }
 
 // Start from a clean slate, so the first frame is not judged against whatever
 // was said before the loop began — but never clear while a reply is streaming:
 // that drops the server's generation id, so the stream ends without its `end`
 // event and the loop would then wait out waitForGenerationEnd's full timeout.
-async function startVisionLoopRun() {
+async function startVisionLoopRun(token) {
   if (activeGeneration) {
     try { await stop(true); } catch (e) { /* best effort */ }
     await waitForGenerationEnd(15000);
+    if (token !== _visionLoopToken) return;   // stopped or restarted meanwhile
   }
   await clearLoopContext();
-  visionLoopRun();
+  if (token !== _visionLoopToken) return;
+  visionLoopRun(token);
 }
 
 function stopVisionLoop() {
   _visionLoop.on = false;
+  _visionLoopToken++;          // invalidate any startup still mid-await
+
   setVisionLoopUI(false);
   if (isVisionOpen()) setVisionAskHint('');
 }
