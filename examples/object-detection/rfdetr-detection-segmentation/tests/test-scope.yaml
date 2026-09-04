@@ -15,6 +15,14 @@ models:
     source: url
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-medium-transformer.tar.gz
     file: rfdetr-medium-transformer.tar.gz
+  rfdetr-seg-medium-backbone:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-seg-medium-backbone.tar.gz
+    file: rfdetr-seg-medium-backbone.tar.gz
+  rfdetr-seg-medium-transformer:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/rfdetr-seg-medium-transformer.tar.gz
+    file: rfdetr-seg-medium-transformer.tar.gz
 unit:
   python: true
   cpp: true
@@ -26,6 +34,8 @@ e2e:
       - rfdetr-small-transformer
       - rfdetr-medium-backbone
       - rfdetr-medium-transformer
+      - rfdetr-seg-medium-backbone
+      - rfdetr-seg-medium-transformer
   cpp:
     enabled: true
     models:
@@ -33,3 +43,5 @@ e2e:
       - rfdetr-small-transformer
       - rfdetr-medium-backbone
       - rfdetr-medium-transformer
+      - rfdetr-seg-medium-backbone
+      - rfdetr-seg-medium-transformer

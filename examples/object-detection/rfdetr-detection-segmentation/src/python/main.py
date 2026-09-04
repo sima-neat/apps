@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -19,7 +20,6 @@ import yaml
 NUM_CLASSES = 91
 MASK_SIZE = 108
 METADATA_BYTE_BUDGET = 32_768
-_runtime_pyneat = None
 
 
 @dataclass(frozen=True)
@@ -365,9 +365,9 @@ def collect_tensors(sample) -> list:
     if sample is None:
         return []
     tensors = []
-    if sample.kind == _runtime_pyneat.SampleKind.Tensor and sample.tensor is not None:
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         tensors.append(sample.tensor)
-    elif sample.kind == _runtime_pyneat.SampleKind.TensorSet:
+    elif sample.kind == pyneat.SampleKind.TensorSet:
         tensors.extend(sample.tensors)
     for field in sample.fields:
         tensors.extend(collect_tensors(field))
@@ -449,10 +449,9 @@ def transformer_inputs(model, feature, gathered, top_k: int) -> list:
 
 
 def run(cfg: Config) -> int:
-    global _runtime_pyneat
+    global pyneat
     import pyneat
 
-    _runtime_pyneat = pyneat
     labels = load_labels(cfg.labels)
     width, height, fps = probe_source_geometry(cfg)
     if cfg.codec == "h264":
@@ -498,12 +497,11 @@ def run(cfg: Config) -> int:
     transformer = pyneat.Model(cfg.transformer, transformer_options)
 
     side = cfg.feature_size
-    score_shape = [1, side * side] if cfg.task == "detection" else [1, 1, side * side]
     transformer_outputs = [[1, cfg.top_k, 4], [1, cfg.top_k, NUM_CLASSES]]
     if cfg.task == "segmentation":
         transformer_outputs.append([MASK_SIZE, MASK_SIZE, cfg.top_k])
     expected_shapes = (
-        [[1, side, side, 256], score_shape, [1, side * side, 4]],
+        [[1, side, side, 256], [1, side * side], [1, side * side, 4]],
         [[side, side, 256], [1, cfg.top_k, 4]],
         transformer_outputs,
     )
@@ -661,6 +659,8 @@ def run(cfg: Config) -> int:
     )
     transformer_worker.start()
     processed = 0
+    first_completed_at = None
+    last_completed_at = None
     try:
         while not stop.is_set() and (cfg.frames == 0 or processed < cfg.frames):
             sample = transformer_runner.pull(timeout_ms=500)
@@ -711,6 +711,9 @@ def run(cfg: Config) -> int:
             ):
                 print("[warn] Insight metadata send failed", file=sys.stderr)
             processed += 1
+            last_completed_at = time.monotonic()
+            if first_completed_at is None:
+                first_completed_at = last_completed_at
         if bridge_error:
             raise bridge_error[0]
     finally:
@@ -721,7 +724,12 @@ def run(cfg: Config) -> int:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         _ = (backbone, source_graph)
-    print(f"RF-DETR {cfg.task}: completed {processed} results", flush=True)
+    elapsed = (last_completed_at - first_completed_at) if processed > 1 else 0.0
+    output_fps = (processed - 1) / elapsed if elapsed > 0.0 else 0.0
+    print(
+        f"RF-DETR {cfg.task}: completed={processed} output_fps={output_fps:.1f}",
+        flush=True,
+    )
     return 0
 
 

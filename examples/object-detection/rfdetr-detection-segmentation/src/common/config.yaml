@@ -10,8 +10,8 @@ model:                          # Select one RF-DETR task and its model pair.
       backbone: models/rfdetr-medium-backbone.tar.gz
       transformer: models/rfdetr-medium-transformer.tar.gz
   segmentation:
-    backbone: models/rfdetr-segmentation-backbone.tar.gz
-    transformer: models/rfdetr-segmentation-transformer.tar.gz
+    backbone: models/rfdetr-seg-medium-backbone.tar.gz
+    transformer: models/rfdetr-seg-medium-transformer.tar.gz
 
 source:                         # H.264, H.265, or MJPEG RTSP source properties.
   rtsp_url: rtsp://<rtsp-source-ip>:<port>/<stream-name>

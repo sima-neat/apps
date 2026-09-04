@@ -10,7 +10,7 @@
 | Languages | C++, Python |
 | Status | stable |
 | Binary Name | rfdetr-detection-segmentation |
-| Model | RF-DETR Small, Medium, or Segmentation |
+| Model | RF-DETR Small, Medium, or Segmentation Medium |
 
 ## Concept
 
@@ -50,7 +50,16 @@ sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/mod
 cd ..
 ```
 
-For Medium detection, download `rfdetr-medium-backbone.tar.gz` and `rfdetr-medium-transformer.tar.gz` from the same SDK model directory. Segmentation uses `rfdetr-segmentation-backbone.tar.gz` and `rfdetr-segmentation-transformer.tar.gz`; their public download links must be added before this draft is ready to merge.
+For Medium detection, download `rfdetr-medium-backbone.tar.gz` and `rfdetr-medium-transformer.tar.gz` from the same SDK model directory.
+
+For segmentation, download the RF-DETR Segmentation Medium model pair:
+
+```bash
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-seg-medium-backbone.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-seg-medium-transformer.tar.gz"
+cd ..
+```
 
 ## Configure
 
@@ -83,15 +92,16 @@ python3 "$APP_DIR/src/python/main.py" --config "$APP_DIR/src/common/config.yaml"
 
 Insight receives `object-detection` metadata for detection or `segmentation` polygon metadata for segmentation. Stop a continuous run with Ctrl-C.
 
-## Detection Performance
+## Performance
 
 Measured end-to-end throughput on Modalix:
 
-| Input Resolution | Codec | RF-DETR Small | RF-DETR Medium |
-| --- | --- | ---: | ---: |
-| 720p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS |
-| 1080p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS |
-| 4K | H.264 | Up to 60 FPS | Up to 50 FPS |
+| Input Resolution | Codec | Detection Small | Detection Medium | Segmentation Medium |
+| --- | --- | ---: | ---: | ---: |
+| 720p | H.264, H.265, MJPEG | Up to 70 FPS | Up to 50 FPS | Up to 39 FPS |
+| 1080p | H.264, H.265 | Up to 70 FPS | Up to 50 FPS | Up to 39 FPS |
+| 1080p | MJPEG | Up to 70 FPS | Up to 50 FPS | Not verified |
+| 4K | H.264 | Up to 60 FPS | Up to 50 FPS | Up to 39 FPS |
 
 ## Source Files
 

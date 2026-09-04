@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cmath>
@@ -699,9 +700,6 @@ int run(const Config& cfg) {
     return true;
   };
   const int side = cfg.feature_size;
-  const std::vector<int64_t> score_shape = cfg.task == Task::Detection
-                                               ? std::vector<int64_t>{1, side * side}
-                                               : std::vector<int64_t>{1, 1, side * side};
   std::vector<std::vector<int64_t>> transformer_outputs = {{1, cfg.top_k, 4},
                                                            {1, cfg.top_k, kNumClasses}};
   if (cfg.task == Task::Segmentation) {
@@ -713,7 +711,7 @@ int run(const Config& cfg) {
       backbone_inputs.front().shape == std::vector<int64_t>{-1, -1, 3} &&
       backbone_inputs.front().dtypes == std::vector<neat::TensorDType>{neat::TensorDType::UInt8} &&
       has_specs(backbone.output_specs(),
-                {{1, side, side, 256}, score_shape, {1, side * side, 4}}) &&
+                {{1, side, side, 256}, {1, side * side}, {1, side * side, 4}}) &&
       has_specs(transformer.input_specs(), {{side, side, 256}, {1, cfg.top_k, 4}}) &&
       has_specs(transformer.output_specs(), transformer_outputs);
   sima_examples::require(valid_contract,
@@ -847,6 +845,8 @@ int run(const Config& cfg) {
   });
 
   int processed = 0;
+  std::chrono::steady_clock::time_point first_completed_at;
+  std::chrono::steady_clock::time_point last_completed_at;
   try {
     while (!g_stop.load() && (cfg.frames == 0 || processed < cfg.frames)) {
       const auto sample = transformer_runner.pull(500);
@@ -879,6 +879,10 @@ int run(const Config& cfg) {
         std::cerr << "[warn] Insight metadata send failed: " << error << "\n";
       }
       ++processed;
+      last_completed_at = std::chrono::steady_clock::now();
+      if (processed == 1) {
+        first_completed_at = last_completed_at;
+      }
     }
   } catch (...) {
     g_stop.store(true);
@@ -895,7 +899,12 @@ int run(const Config& cfg) {
   if (!transformer_bridge_error.empty()) {
     throw std::runtime_error(transformer_bridge_error);
   }
-  std::cout << "RF-DETR " << task_name(cfg.task) << ": completed " << processed << " results\n";
+  const double elapsed_seconds =
+      processed > 1 ? std::chrono::duration<double>(last_completed_at - first_completed_at).count()
+                    : 0.0;
+  const double output_fps = elapsed_seconds > 0.0 ? (processed - 1) / elapsed_seconds : 0.0;
+  std::cout << "RF-DETR " << task_name(cfg.task) << ": completed=" << processed
+            << " output_fps=" << output_fps << "\n";
   return 0;
 }
 

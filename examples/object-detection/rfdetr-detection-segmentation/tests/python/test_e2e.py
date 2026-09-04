@@ -1,10 +1,11 @@
-"""End-to-end detection tests for both RF-DETR variants."""
+"""End-to-end RF-DETR detection, segmentation, and throughput tests."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,10 +16,14 @@ from tests.utils.metadata_json_listener import MetadataJsonListener
 
 EXAMPLE_DIR = Path(__file__).resolve().parent.parent.parent
 MAIN_PY = EXAMPLE_DIR / "src" / "python" / "main.py"
+PERFORMANCE_FRAMES = 300
+MIN_OUTPUT_FPS = {"small": 65.0, "medium": 45.0, "segmentation": 35.0}
 
 
 def _runtime_ready() -> bool:
-    return all(importlib.util.find_spec(name) is not None for name in ("numpy", "pyneat"))
+    return all(
+        importlib.util.find_spec(name) is not None for name in ("numpy", "pyneat")
+    )
 
 
 def _env_int(name: str, default: int) -> int:
@@ -26,17 +31,27 @@ def _env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def _output_fps(stdout: str) -> float:
+    match = re.search(r"output_fps=([0-9]+(?:\.[0-9]+)?)", stdout)
+    assert match, f"missing output_fps in application output:\n{stdout}"
+    return float(match.group(1))
+
+
 @pytest.mark.e2e
-@pytest.mark.parametrize("variant", ["small", "medium"])
 @pytest.mark.parametrize(
-    ("codec", "stream_fixture"),
+    ("task", "variant", "codec", "stream_fixture"),
     [
-        ("h264", "rtsp_h264_url"),
-        ("h265", "rtsp_h265_url"),
-        ("mjpeg", "rtsp_mjpeg_url"),
+        ("detection", variant, codec, f"rtsp_{codec}_url")
+        for codec in ("h264", "h265", "mjpeg")
+        for variant in ("small", "medium")
+    ]
+    + [
+        ("segmentation", "medium", "h264", "rtsp_h264_url"),
+        ("segmentation", "medium", "h265", "rtsp_h265_url"),
     ],
 )
-def test_variant_publishes_insight_metadata(
+def test_publishes_insight_metadata(
+    task,
     variant,
     codec,
     stream_fixture,
@@ -47,48 +62,50 @@ def test_variant_publishes_insight_metadata(
     request,
 ):
     skip_unless_e2e_ready(_runtime_ready(), "numpy and pyneat are required")
+    model_name = f"rfdetr-{'seg-' if task == 'segmentation' else ''}{variant}"
     paths = {
-        "small": {
-            "backbone": models_dir / "rfdetr-small-backbone.tar.gz",
-            "transformer": models_dir / "rfdetr-small-transformer.tar.gz",
-        },
-        "medium": {
-            "backbone": models_dir / "rfdetr-medium-backbone.tar.gz",
-            "transformer": models_dir / "rfdetr-medium-transformer.tar.gz",
-        },
+        "backbone": models_dir / f"{model_name}-backbone.tar.gz",
+        "transformer": models_dir / f"{model_name}-transformer.tar.gz",
     }
-    for path in paths[variant].values():
+    for path in paths.values():
         skip_unless_e2e_ready(path.exists(), f"missing RF-DETR artifact: {path}")
     rtsp_url = request.getfixturevalue(stream_fixture)
+
+    model_paths = {key: str(value) for key, value in paths.items()}
+    if task == "detection":
+        model_config = {"task": task, task: {"variant": variant, variant: model_paths}}
+    else:
+        model_config = {"task": task, task: model_paths}
 
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
     config_path = e2e_config_writer(
         {
-            "model": {
-                "task": "detection",
-                "detection": {
-                    "variant": variant,
-                    variant: {key: str(value) for key, value in paths[variant].items()},
-                },
-            },
+            "model": model_config,
             "source": {"rtsp_url": rtsp_url, "codec": codec},
-            "inference": {"frames": 20, "detection": {"min_score": 0.2}},
+            "inference": {
+                "frames": PERFORMANCE_FRAMES if codec == "h265" else 20,
+                task: {"min_score": 0.2},
+            },
             "output": {
                 "insight": {
                     "host": "127.0.0.1",
-                    "video_port": _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000),
+                    "video_port": _env_int(
+                        "SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000
+                    ),
                     "metadata_port": metadata_port,
                 }
             },
         }
     )
 
+    metadata_type = "object-detection" if task == "detection" else "segmentation"
+    data_key = "objects" if task == "detection" else "segments"
     with MetadataJsonListener(
         "127.0.0.1",
         metadata_port,
         num_ports=1,
-        metadata_type="object-detection",
-        data_array_key="objects",
+        metadata_type=metadata_type,
+        data_array_key=data_key,
         require_all_ports=True,
         min_object_count=1,
     ) as listener:
@@ -103,15 +120,30 @@ def test_variant_publishes_insight_metadata(
         metadata = listener.wait_for_messages(5.0)
 
     assert result.returncode == 0, (
-        f"RF-DETR {variant} exited with {result.returncode}\n"
+        f"RF-DETR {task} {variant} exited with {result.returncode}\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     assert metadata.success, metadata.error
-    objects = json.loads(metadata.messages[-1].payload)["data"]["objects"]
-    assert all(
-        obj.get("label")
-        and 0.0 <= obj.get("confidence", -1.0) <= 1.0
-        and len(obj.get("bbox", [])) == 4
-        and all(value >= 0.0 for value in obj["bbox"])
-        for obj in objects
-    )
+    entries = json.loads(metadata.messages[-1].payload)["data"][data_key]
+    for entry in entries:
+        assert entry.get("label")
+        assert 0.0 <= entry.get("confidence", -1.0) <= 1.0
+        assert len(entry.get("bbox", [])) == 4
+        assert all(value >= 0.0 for value in entry["bbox"])
+        if task == "segmentation":
+            assert entry.get("mask_format") == "polygon"
+            assert len(entry.get("mask", [])) >= 3
+            assert all(
+                len(point) == 2 and all(value >= 0.0 for value in point)
+                for point in entry["mask"]
+            )
+    if codec == "h265":
+        threshold = MIN_OUTPUT_FPS[
+            "segmentation" if task == "segmentation" else variant
+        ]
+        measured_fps = _output_fps(result.stdout)
+        print(
+            f"[perf] task={task} model={variant} codec={codec} "
+            f"frames={PERFORMANCE_FRAMES} output_fps={measured_fps:.1f} minimum={threshold:.1f}"
+        )
+        assert measured_fps >= threshold
