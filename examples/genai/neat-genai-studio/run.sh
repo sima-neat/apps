@@ -575,7 +575,10 @@ mla_sudo() {
   if [[ "$(id -u)" == "0" ]]; then
     "$@"
   elif command -v sudo >/dev/null 2>&1; then
-    sudo "$@"
+    # -n: never prompt. The supervisor may be running detached with no terminal,
+    # where a password prompt would block the relaunch indefinitely instead of
+    # failing fast; callers warn and carry on.
+    sudo -n "$@"
   else
     return 1
   fi
@@ -616,7 +619,7 @@ reset_mla_dispatcher() {
   if command -v systemctl >/dev/null 2>&1; then
     info "Restarting MLA dispatcher (${MLA_DISPATCHER_SERVICE})…"
     mla_sudo systemctl restart "${MLA_DISPATCHER_SERVICE}" 2>/dev/null \
-      || warn "could not restart ${MLA_DISPATCHER_SERVICE} — needs privileges; set MLA_RESET_CMD, or run the board's recovery script yourself"
+      || warn "could not restart ${MLA_DISPATCHER_SERVICE} — needs passwordless privileges; grant NOPASSWD for it, set MLA_RESET_CMD, or run the board's recovery script yourself"
   fi
   if [[ -x /usr/bin/init_mla_memory.sh ]]; then
     mla_sudo /usr/bin/init_mla_memory.sh 2>/dev/null || true
