@@ -100,6 +100,13 @@ _MLA_FAILURE_MARKERS = (
     "dispatcher_unavailable",
     "warmup failed",
     "failed to acquire",
+    # Allocation failures matter as much as dispatcher ones: accelerator memory
+    # is not always reclaimed when models are switched, and the load then fails
+    # with a plain "Cannot allocate memory" naming neither the MLA nor a remedy.
+    "cannot allocate memory",
+    "failed to allocate",
+    "out of memory",
+    "shm memory handle",
 )
 
 
@@ -1214,8 +1221,11 @@ class ModelManager:
             if name == self._active_asr:
                 self._active_asr = None
         raise RuntimeError(
-            f"Model '{name}' could not be loaded because the accelerator (MLA) "
-            "reported an error. Check the board runtime before retrying."
+            f"Model '{name}' could not be loaded: the accelerator (MLA) reported "
+            "an error. Accelerator memory is not always reclaimed when models are "
+            "switched, so this can follow several switches even when the model "
+            "fits on its own. Use 'Reset MLA' in Settings -> Models (or /reset in "
+            "the CLI) to clear the accelerator, then load it again."
         )
 
     # -- status ----------------------------------------------------------------

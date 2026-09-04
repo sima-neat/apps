@@ -17,7 +17,7 @@ try:
 except ModuleNotFoundError:
     sys.modules["yaml"] = types.ModuleType("yaml")
 
-from server.model_manager import ModelManager
+from server.model_manager import ModelManager, _is_mla_failure
 from shared.config import HubConfig
 
 
@@ -286,6 +286,32 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
 
         self.assertIsNone(manager.active_asr())
         self.assertNotIn("whisper-medium-a16w8", server.model_names())
+
+
+class MlaFailureClassificationTests(unittest.TestCase):
+    """Real accelerator failures seen on a Modalix DevKit.
+
+    Misclassifying one costs the user the remedy: the load is not rolled back
+    and the error arrives as a raw runtime string instead of the message that
+    names Reset MLA.
+    """
+
+    def test_dispatcher_and_allocation_failures_are_recognised(self):
+        for detail in (
+            'Failed to bulk load model through MLASHM dispatcher: "...stage1_mla.elf" '
+            "(code=8 job_type=loadMany component=rpcmlashm name=MLA_LOAD_FAILED op_name=MLA_LOAD)",
+            "Failed to allocate buffer (per_layer_embeddings_s1): Cannot allocate memory",
+            "GenAIServer warmup failed for model 'x': Failed to open shm memory handle",
+        ):
+            with self.subTest(detail=detail[:40]):
+                self.assertTrue(_is_mla_failure(detail))
+
+    def test_ordinary_errors_are_not_mistaken_for_accelerator_failures(self):
+        for detail in ("Model directory not found for: x",
+                       "Unknown model: x",
+                       "HTTP 400: bad request"):
+            with self.subTest(detail=detail):
+                self.assertFalse(_is_mla_failure(detail))
 
 
 class AsrWarmupPayloadTests(unittest.TestCase):
