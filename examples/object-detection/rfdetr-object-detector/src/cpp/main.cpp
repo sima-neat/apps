@@ -587,6 +587,7 @@ int run(const Config& cfg) {
   std::map<int64_t, int64_t> source_pts;
   std::thread transformer_bridge([&] {
     try {
+      std::vector<float> feature_values;
       while (!g_stop.load()) {
         auto sample = source_run.pull("backbone", 500);
         if (!sample.has_value()) {
@@ -598,10 +599,24 @@ int run(const Config& cfg) {
         (void)indices;
         neat::Tensor gathered_tensor =
             neat::Tensor::from_vector(gathered, {1, kTopK, 4}, neat::TensorMemory::EV74);
+        // Hand the transformer an owned EV74 copy of the feature. Pushing the pulled
+        // tensor pins the detessdequant output-pool buffer for the whole transformer
+        // inference, which exhausts that 4-deep pool at 60 fps. read_floats cannot be
+        // used here: the backbone's three outputs are byte-offset views into one
+        // pooled segment, so it would return the whole segment rather than the
+        // feature's dense extent.
+        feature_values.resize(element_count(outputs.feature.shape));
+        if (!outputs.feature.copy_dense_bytes_tight_to(
+                reinterpret_cast<uint8_t*>(feature_values.data()),
+                feature_values.size() * sizeof(float))) {
+          throw std::runtime_error("backbone feature tensor is not densely copyable");
+        }
+        neat::Tensor feature_tensor = neat::Tensor::from_vector(
+            feature_values, outputs.feature.shape, neat::TensorMemory::EV74);
         neat::Sample transformer_sample;
         transformer_sample.kind = neat::SampleKind::TensorSet;
         transformer_sample.tensors =
-            transformer_inputs(transformer, outputs.feature, gathered_tensor);
+            transformer_inputs(transformer, feature_tensor, gathered_tensor);
         copy_identity(*sample, transformer_sample);
         {
           std::lock_guard lock(identity_mutex);
