@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -32,10 +33,9 @@ def test_topk_gather_is_stable_and_deterministic():
     proposals = np.zeros((305, 4), dtype=np.float32)
     proposals[:, 0] = np.arange(305)
 
-    gathered, indices = main.stable_topk_gather(scores, proposals)
+    gathered = main.stable_topk_gather(scores, proposals, 300)
 
     assert gathered.shape == (1, 300, 4)
-    assert indices[:3].tolist() == [3, 4, 0]
     assert gathered[0, :3, 0].tolist() == [3.0, 4.0, 0.0]
 
 
@@ -62,13 +62,20 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
     labels.write_text("\n".join(f"label-{index}" for index in range(91)) + "\n")
     config = {
         "model": {
-            "variant": variant,
+            "task": "detection",
             "labels": str(labels),
-            "small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz", "input_size": 512},
-            "medium": {"backbone": "medium-b.tar.gz", "transformer": "medium-t.tar.gz", "input_size": 576},
+            "detection": {
+                "variant": variant,
+                "small": {"backbone": "small-b.tar.gz", "transformer": "small-t.tar.gz"},
+                "medium": {"backbone": "medium-b.tar.gz", "transformer": "medium-t.tar.gz"},
+            },
         },
         "source": {"rtsp_url": "rtsp://camera/live", "codec": "h265"},
-        "inference": {"frames": 1, "min_score": 0.5, "max_detections": 10},
+        "inference": {
+            "frames": 1,
+            "detection": {"min_score": 0.5, "max_detections": 10},
+            "segmentation": {"mask_threshold": 2.0},
+        },
         "output": {"insight": {"host": "127.0.0.1", "video_port": 9000, "metadata_port": 9100}},
     }
     path = tmp_path / "config.yaml"
@@ -81,6 +88,34 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
     assert selected.backbone.startswith(variant)
     assert selected.codec == "h265"
     assert (selected.width, selected.height, selected.fps) == (0, 0, 0)
+
+
+@pytest.mark.unit
+def test_config_selects_segmentation_model_pair(tmp_path):
+    labels = tmp_path / "labels.txt"
+    labels.write_text("\n".join(f"label-{index}" for index in range(91)) + "\n")
+    config = {
+        "model": {
+            "task": "segmentation",
+            "labels": str(labels),
+            "segmentation": {
+                "backbone": "segmentation-b.tar.gz",
+                "transformer": "segmentation-t.tar.gz",
+            },
+        },
+        "source": {"rtsp_url": "rtsp://camera/live", "codec": "h264"},
+        "inference": {"segmentation": {"min_score": 0.3, "max_segments": 24}},
+        "output": {"insight": {"host": "127.0.0.1"}},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(config))
+
+    selected = main.load_config(path)
+
+    assert selected.task == "segmentation"
+    assert selected.backbone == "segmentation-b.tar.gz"
+    assert selected.input_size == 432
+    assert selected.top_k == 200
 
 
 @pytest.mark.unit
@@ -109,7 +144,7 @@ def test_probed_geometry_uses_configured_fallbacks_and_fps_override():
 @pytest.mark.unit
 def test_config_rejects_unknown_model_variant(tmp_path):
     config = {
-        "model": {"variant": "large"},
+        "model": {"task": "detection", "detection": {"variant": "large"}},
         "source": {},
         "inference": {},
         "output": {"insight": {}},
@@ -119,3 +154,30 @@ def test_config_rejects_unknown_model_variant(tmp_path):
 
     with pytest.raises(ValueError, match="small or medium"):
         main.load_config(path)
+
+
+@pytest.mark.unit
+def test_segmentation_metadata_contains_polygons():
+    labels = ["unused"] * 91
+    labels[1] = "person"
+    boxes = np.zeros((1, 200, 4), dtype=np.float32)
+    boxes[0, 0] = [0.5, 0.5, 0.5, 0.5]
+    boxes[0, 1] = [0.5, 0.5, 0.5, 0.5]
+    logits = np.full((1, 200, 91), -20.0, dtype=np.float32)
+    logits[0, 0, 1] = 11.0
+    logits[0, 1, 1] = 10.0
+    masks = np.full((108, 108, 200), -20.0, dtype=np.float32)
+    masks[40:68, 40:68, 1] = 10.0
+
+    payload = main.segmentation_metadata(
+        boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08
+    )
+
+    segments = json.loads(payload)["segments"]
+    assert len(payload.encode()) <= main.METADATA_BYTE_BUDGET
+    assert len(segments) == 1
+    segment = segments[0]
+    assert segment["label"] == "person"
+    assert segment["mask_format"] == "polygon"
+    assert len(segment["mask"]) >= 3
+    assert all(0 <= x < 1280 and 0 <= y < 720 for x, y in segment["mask"])

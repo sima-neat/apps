@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
   const int metadata_port = env_int_or_default("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100);
   const int timeout_ms = env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000);
   const fs::path labels =
-      example_common_config_path("rfdetr-object-detector").parent_path() / "coco-labels.txt";
+      example_common_config_path("rfdetr-detection-segmentation").parent_path() / "coco-labels.txt";
 
   for (const auto& source : sources) {
     const char* rtsp_url = env_or_null(source.environment);
@@ -81,20 +81,21 @@ int main(int argc, char** argv) {
         return skip_or_fail("missing RF-DETR " + variant.name + " artifacts");
       }
       const std::string output_dir = create_test_output_dir(
-          "rfdetr-object-detector", "test_" + variant.name + "_" + source.codec);
+          "rfdetr-detection-segmentation", "test_" + variant.name + "_" + source.codec);
       if (output_dir.empty()) {
         return 1;
       }
       const fs::path config_path = fs::path(output_dir).parent_path() / "config.yaml";
-      write_e2e_config("rfdetr-object-detector", config_path,
-                       {{"model.variant", variant.name},
+      write_e2e_config("rfdetr-detection-segmentation", config_path,
+                       {{"model.task", "detection"},
+                        {"model.detection.variant", variant.name},
                         {"model.labels", labels.string()},
-                        {"model." + variant.name + ".backbone", backbone.string()},
-                        {"model." + variant.name + ".transformer", transformer.string()},
+                        {"model.detection." + variant.name + ".backbone", backbone.string()},
+                        {"model.detection." + variant.name + ".transformer", transformer.string()},
                         {"source.rtsp_url", rtsp_url},
                         {"source.codec", source.codec},
                         {"inference.frames", "20"},
-                        {"inference.min_score", "0.2"},
+                        {"inference.detection.min_score", "0.2"},
                         {"output.insight.host", "127.0.0.1"},
                         {"output.insight.video_port", std::to_string(video_port)},
                         {"output.insight.metadata_port", std::to_string(metadata_port)}});

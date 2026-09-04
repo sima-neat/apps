@@ -1,4 +1,4 @@
-"""End-to-end tests for both RF-DETR variants."""
+"""End-to-end detection tests for both RF-DETR variants."""
 
 from __future__ import annotations
 
@@ -65,11 +65,14 @@ def test_variant_publishes_insight_metadata(
     config_path = e2e_config_writer(
         {
             "model": {
-                "variant": variant,
-                variant: {key: str(value) for key, value in paths[variant].items()},
+                "task": "detection",
+                "detection": {
+                    "variant": variant,
+                    variant: {key: str(value) for key, value in paths[variant].items()},
+                },
             },
             "source": {"rtsp_url": rtsp_url, "codec": codec},
-            "inference": {"frames": 20, "min_score": 0.2},
+            "inference": {"frames": 20, "detection": {"min_score": 0.2}},
             "output": {
                 "insight": {
                     "host": "127.0.0.1",
