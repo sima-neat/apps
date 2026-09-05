@@ -767,7 +767,7 @@ int run(const Config& cfg) {
   neat::RunOptions transformer_run_options;
   transformer_run_options.preset = neat::RunPreset::Realtime;
   transformer_run_options.queue_depth = 1;
-  transformer_run_options.overflow_policy = neat::OverflowPolicy::Block;
+  transformer_run_options.overflow_policy = neat::OverflowPolicy::KeepLatest;
   transformer_run_options.output_memory = neat::OutputMemory::Owned;
   neat::TensorList transformer_seed;
   for (const auto& spec : transformer.input_specs()) {
@@ -824,7 +824,7 @@ int run(const Config& cfg) {
             source_pts.erase(source_pts.begin());
           }
         }
-        if (!transformer_runner.push(transformer_sample)) {
+        if (!transformer_runner.try_push(transformer_sample)) {
           if (!g_stop.load()) {
             throw std::runtime_error("transformer input closed");
           }

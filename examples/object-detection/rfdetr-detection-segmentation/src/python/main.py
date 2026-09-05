@@ -595,7 +595,7 @@ def run(cfg: Config) -> int:
     transformer_run_options = pyneat.RunOptions()
     transformer_run_options.preset = pyneat.RunPreset.Realtime
     transformer_run_options.queue_depth = 1
-    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
+    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     transformer_run_options.output_memory = pyneat.OutputMemory.Owned
     dummy_inputs = [
         pyneat.Tensor.from_numpy(
@@ -659,7 +659,7 @@ def run(cfg: Config) -> int:
                     source_pts[key] = sample.pts_ns
                     if len(source_pts) > 8:
                         source_pts.pop(next(iter(source_pts)))
-                if not transformer_runner.push_samples(transformer_sample):
+                if not transformer_runner.try_push_samples(transformer_sample):
                     if not stop.is_set():
                         raise RuntimeError("transformer input closed")
                     break
