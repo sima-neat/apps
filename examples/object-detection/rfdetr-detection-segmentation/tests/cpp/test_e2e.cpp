@@ -4,6 +4,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -34,10 +39,17 @@ struct TestCase {
 bool valid_metadata(const MetadataJsonListenerResult& result, bool segmentation) {
   const char* data_key = segmentation ? "segments" : "objects";
   for (const auto& message : result.messages) {
+    if (message.frame_id.empty() ||
+        message.frame_id.find_first_not_of("0123456789") != std::string::npos ||
+        message.timestamp_ms < 0) {
+      return false;
+    }
     const auto payload = nlohmann::json::parse(message.payload);
     for (const auto& entry : payload.at("data").at(data_key)) {
       if (!entry.contains("label") || entry.at("label").get<std::string>().empty() ||
           !entry.contains("confidence") || !entry.at("confidence").is_number() ||
+          entry.at("confidence").get<double>() < 0.0 ||
+          entry.at("confidence").get<double>() > 1.0 ||
           !entry.contains("bbox") || !entry.at("bbox").is_array() ||
           entry.at("bbox").size() != 4U) {
         return false;
@@ -152,8 +164,25 @@ int main(int argc, char** argv) {
       return 1;
     }
 
+    const int video_socket = ::socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in video_address{};
+    video_address.sin_family = AF_INET;
+    video_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    video_address.sin_port = htons(video_port);
+    if (video_socket < 0 ||
+        ::bind(video_socket, reinterpret_cast<sockaddr*>(&video_address), sizeof(video_address)) != 0) {
+      if (video_socket >= 0) {
+        ::close(video_socket);
+      }
+      std::cerr << "[FAIL] could not bind Insight video port\n";
+      return 1;
+    }
     const ProcessResult process =
         spawn_and_wait(argv[1], {"--config", config_path.string()}, timeout_ms);
+    std::array<unsigned char, 65536> video_packet{};
+    const auto video_bytes =
+        ::recv(video_socket, video_packet.data(), video_packet.size(), MSG_DONTWAIT);
+    ::close(video_socket);
     if (process.exit_code != 0) {
       std::cerr << "[FAIL] RF-DETR " << case_name << " exited with " << process.exit_code
                 << "\nstdout:\n"
@@ -162,13 +191,31 @@ int main(int argc, char** argv) {
       return 1;
     }
     const auto metadata = listener.wait_for_messages();
-    if (!metadata.success || !valid_metadata(metadata, segmentation)) {
+    const auto following = listener.wait_for_messages();
+    if (!metadata.success || !following.success || !valid_metadata(metadata, segmentation) ||
+        !valid_metadata(following, segmentation)) {
       std::cerr << "[FAIL] invalid RF-DETR " << case_name << " metadata: " << metadata.error
                 << "\n";
       return 1;
     }
+    const auto& first = metadata.messages.back();
+    const auto& last = following.messages.back();
+    if (std::stoll(last.frame_id) <= std::stoll(first.frame_id) ||
+        last.timestamp_ms <= first.timestamp_ms ||
+        process.stdout_text.find("RF-DETR " + test.task + ": completed=20 ") == std::string::npos) {
+      std::cerr << "[FAIL] RF-DETR " << case_name
+                << " did not complete with progressing frame identities\n";
+      return 1;
+    }
+    // VideoSender uses RTP H.265 (98) or H.264 (96). MJPEG is re-encoded as H.264.
+    const int payload_type = test.source.codec == "h265" ? 98 : 96;
+    if (video_bytes <= 12 || (video_packet[0] >> 6) != 2 ||
+        (video_packet[1] & 0x7f) != payload_type) {
+      std::cerr << "[FAIL] RF-DETR " << case_name << " did not publish the expected RTP video\n";
+      return 1;
+    }
     remove_dir(output_dir);
   }
-  std::cout << "[OK] RF-DETR published valid detection and segmentation metadata\n";
+  std::cout << "[OK] RF-DETR published video and valid detection and segmentation metadata\n";
   return 0;
 }

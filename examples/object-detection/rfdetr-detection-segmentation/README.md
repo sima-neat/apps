@@ -20,7 +20,7 @@ The application decodes to NV12 once. EV74 converts, resizes, and normalizes eac
 
 ## Preview
 
-![RF-DETR detection preview](../../../portal/assets/examples/object-detection/rfdetr-detection-segmentation/image.jpg)
+![RF-DETR detection and segmentation preview](../../../portal/assets/examples/object-detection/rfdetr-detection-segmentation/image.jpg)
 
 ## Prerequisites
 
@@ -39,27 +39,46 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-The packaged configuration selects RF-DETR Small detection. Download its model pair:
+Prepare the model directory, then download the pair for your selected task:
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
 mkdir -p models
 cd models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-backbone.tar.gz"
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-transformer.tar.gz"
-cd ..
 ```
 
-For Medium detection, download `rfdetr-medium-backbone.tar.gz` and `rfdetr-medium-transformer.tar.gz` from the same SDK model directory.
+Small detection is selected by default:
+
+```bash
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-backbone.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-small-transformer.tar.gz"
+```
+
+For Medium detection:
+
+```bash
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-backbone.tar.gz"
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-medium-transformer.tar.gz"
+```
 
 For segmentation, download the RF-DETR Segmentation Medium model pair:
 
 ```bash
-cd models
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-seg-medium-backbone.tar.gz"
 sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/rfdetr-seg-medium-transformer.tar.gz"
+```
+
+Return to `prebuilt-apps/` after downloading your model pair:
+
+```bash
 cd ..
 ```
+
+## Prepare an RTSP source
+
+1. In Insight, open **Media Sources** and import a video from the catalog or your own file.
+2. Assign the video under **Streaming Sources** and start the source.
+3. Copy its RTSP URL into `source.rtsp_url` and set `source.codec` to match the video. Use a host and published port reachable from the target, not `localhost`.
 
 ## Configure
 

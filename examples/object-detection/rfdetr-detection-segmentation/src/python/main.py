@@ -493,16 +493,10 @@ def run(cfg: Config) -> int:
     backbone_options.preprocess.color_convert.enable = pyneat.AutoFlag.On
     backbone_options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     backbone_options.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
+    backbone_options.preprocess.preset = pyneat.NormalizePreset.ImageNet
     if cfg.task == "segmentation":
         backbone_options.preprocess.resize.width = cfg.input_size
         backbone_options.preprocess.resize.height = cfg.input_size
-        backbone_options.preprocess.resize.scaling_type = "BILINEAR"
-        backbone_options.preprocess.normalize.enable = pyneat.AutoFlag.On
-        backbone_options.preprocess.normalize.mean = [0.485, 0.456, 0.406]
-        backbone_options.preprocess.normalize.stddev = [0.229, 0.224, 0.225]
-        backbone_options.preprocess.normalize.has_explicit_stats = True
-    else:
-        backbone_options.preprocess.preset = pyneat.NormalizePreset.ImageNet
     backbone_options.processcvu.pre_run_target = "EV74"
     backbone_options.processcvu.post_run_target = "A65"
     backbone = pyneat.Model(cfg.backbone, backbone_options)

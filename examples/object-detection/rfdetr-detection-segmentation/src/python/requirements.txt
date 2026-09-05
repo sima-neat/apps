@@ -1,3 +1,2 @@
-numpy
-opencv-python
+opencv-python-headless<4.12
 PyYAML

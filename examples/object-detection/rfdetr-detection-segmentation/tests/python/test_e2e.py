@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +42,7 @@ def _env_int(name: str, default: int) -> int:
         for codec in ("h264", "h265", "mjpeg")
     ],
 )
-def test_publishes_insight_metadata(
+def test_publishes_insight_video_and_metadata(
     task,
     variant,
     codec,
@@ -69,6 +70,7 @@ def test_publishes_insight_metadata(
         model_config = {"task": task, task: model_paths}
 
     metadata_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", 9100)
+    video_port = _env_int("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000)
     config_path = e2e_config_writer(
         {
             "model": model_config,
@@ -80,9 +82,7 @@ def test_publishes_insight_metadata(
             "output": {
                 "insight": {
                     "host": "127.0.0.1",
-                    "video_port": _env_int(
-                        "SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", 9000
-                    ),
+                    "video_port": video_port,
                     "metadata_port": metadata_port,
                 }
             },
@@ -99,7 +99,9 @@ def test_publishes_insight_metadata(
         data_array_key=data_key,
         require_all_ports=True,
         min_object_count=1,
-    ) as listener:
+    ) as listener, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as video:
+        video.bind(("127.0.0.1", video_port))
+        video.settimeout(5.0)
         result = subprocess.run(
             [sys.executable, str(MAIN_PY), "--config", str(config_path)],
             capture_output=True,
@@ -108,14 +110,26 @@ def test_publishes_insight_metadata(
             cwd=str(EXAMPLE_DIR),
             check=False,
         )
+        assert result.returncode == 0, (
+            f"RF-DETR {task} {variant} exited with {result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
         metadata = listener.wait_for_messages(5.0)
+        following = listener.wait_for_messages(5.0)
+        video_packet = video.recv(65536)
 
-    assert result.returncode == 0, (
-        f"RF-DETR {task} {variant} exited with {result.returncode}\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
     assert metadata.success, metadata.error
-    entries = json.loads(metadata.messages[-1].payload)["data"][data_key]
+    assert following.success, following.error
+    assert f"RF-DETR {task}: completed=20 " in result.stdout
+    # VideoSender uses RTP H.265 (98) or H.264 (96). MJPEG is re-encoded as H.264.
+    assert len(video_packet) > 12 and video_packet[0] >> 6 == 2
+    assert video_packet[1] & 0x7F == (98 if codec == "h265" else 96)
+    for message in metadata.messages + following.messages:
+        assert message.frame_id.isdecimal() and message.timestamp_ms >= 0
+    first, last = metadata.messages[-1], following.messages[-1]
+    assert int(last.frame_id) > int(first.frame_id)
+    assert last.timestamp_ms > first.timestamp_ms
+    entries = json.loads(last.payload)["data"][data_key]
     for entry in entries:
         assert entry.get("label")
         assert 0.0 <= entry.get("confidence", -1.0) <= 1.0

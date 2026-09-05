@@ -660,16 +660,10 @@ int run(const Config& cfg) {
   backbone_options.preprocess.color_convert.enable = neat::AutoFlag::On;
   backbone_options.preprocess.color_convert.input_format = neat::PreprocessColorFormat::NV12;
   backbone_options.preprocess.color_convert.output_format = neat::PreprocessColorFormat::RGB;
+  backbone_options.preprocess.preset = neat::NormalizePreset::ImageNet;
   if (cfg.task == Task::Segmentation) {
     backbone_options.preprocess.resize.width = cfg.input_size;
     backbone_options.preprocess.resize.height = cfg.input_size;
-    backbone_options.preprocess.resize.scaling_type = "BILINEAR";
-    backbone_options.preprocess.normalize.enable = neat::AutoFlag::On;
-    backbone_options.preprocess.normalize.mean = {0.485F, 0.456F, 0.406F};
-    backbone_options.preprocess.normalize.stddev = {0.229F, 0.224F, 0.225F};
-    backbone_options.preprocess.normalize.has_explicit_stats = true;
-  } else {
-    backbone_options.preprocess.preset = neat::NormalizePreset::ImageNet;
   }
   backbone_options.processcvu.pre_run_target = "EV74";
   backbone_options.processcvu.post_run_target = "A65";
@@ -882,15 +876,15 @@ int run(const Config& cfg) {
   } catch (...) {
     g_stop.store(true);
     source_run.stop();
-    transformer_runner.close();
     transformer_bridge.join();
+    transformer_runner.close();
     throw;
   }
 
   g_stop.store(true);
   source_run.stop();
-  transformer_runner.close();
   transformer_bridge.join();
+  transformer_runner.close();
   if (!transformer_bridge_error.empty()) {
     throw std::runtime_error(transformer_bridge_error);
   }
