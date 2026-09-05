@@ -1,4 +1,4 @@
-"""Single-stream RF-DETR object detection for Neat Insight."""
+"""Single-stream RF-DETR detection and segmentation for Neat Insight."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -16,16 +17,21 @@ import cv2
 import numpy as np
 import yaml
 
-TOP_K = 300
-_runtime_pyneat = None
+NUM_CLASSES = 91
+MASK_SIZE = 108
+CLASSIFICATION_TOP_K = 300
+METADATA_BYTE_BUDGET = 32_768
 
 
 @dataclass(frozen=True)
 class Config:
+    task: str
     variant: str
     backbone: str
     transformer: str
     input_size: int
+    feature_size: int
+    top_k: int
     labels: Path
     rtsp_url: str
     codec: str
@@ -36,14 +42,15 @@ class Config:
     fps: int
     frames: int
     min_score: float
-    max_detections: int
+    max_results: int
+    mask_threshold: float
     insight_host: str
     video_port: int
     metadata_port: int
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="RF-DETR RTSP object detection for Insight")
+    parser = argparse.ArgumentParser(description="RF-DETR RTSP detection and segmentation")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--validate-config-only", action="store_true")
     return parser.parse_args(argv)
@@ -74,16 +81,40 @@ def load_config(path: Path) -> Config:
     source = _mapping(raw, "source")
     inference = _mapping(raw, "inference")
     insight = _mapping(_mapping(raw, "output"), "insight")
-    variant = str(model.get("variant", "small")).lower()
-    if variant not in {"small", "medium"}:
-        raise ValueError("model.variant must be small or medium")
-    selected = _mapping(model, variant)
+    task = str(model.get("task", "detection")).lower()
+    if task not in {"detection", "segmentation"}:
+        raise ValueError("model.task must be detection or segmentation")
+    if task == "detection":
+        detection = _mapping(model, "detection")
+        variant = str(detection.get("variant", "small")).lower()
+        if variant not in {"small", "medium"}:
+            raise ValueError("model.detection.variant must be small or medium")
+        selected = _mapping(detection, variant)
+        inference_options = _mapping(inference, "detection")
+        input_size, feature_size, top_k = {
+            "small": (512, 32, 300),
+            "medium": (576, 36, 300),
+        }[variant]
+        max_results_key = "max_detections"
+        default_score = 0.5
+        default_max_results = 100
+    else:
+        variant = "segmentation"
+        selected = _mapping(model, "segmentation")
+        inference_options = _mapping(inference, "segmentation")
+        input_size, feature_size, top_k = 432, 36, 200
+        max_results_key = "max_segments"
+        default_score = 0.3
+        default_max_results = 24
     labels_path = str(model.get("labels", ""))
     cfg = Config(
+        task=task,
         variant=variant,
         backbone=str(selected.get("backbone", "")),
         transformer=str(selected.get("transformer", "")),
-        input_size=int(selected.get("input_size", 0)),
+        input_size=input_size,
+        feature_size=feature_size,
+        top_k=top_k,
         labels=Path(labels_path),
         rtsp_url=str(source.get("rtsp_url", "")),
         codec=parse_source_codec(str(source.get("codec", "h264"))),
@@ -93,16 +124,15 @@ def load_config(path: Path) -> Config:
         height=int(source.get("height", 0)),
         fps=int(source.get("fps", 0)),
         frames=int(inference.get("frames", 0)),
-        min_score=float(inference.get("min_score", 0.5)),
-        max_detections=int(inference.get("max_detections", 100)),
+        min_score=float(inference_options.get("min_score", default_score)),
+        max_results=int(inference_options.get(max_results_key, default_max_results)),
+        mask_threshold=float(inference_options.get("mask_threshold", 0.08)),
         insight_host=str(insight.get("host", "")),
         video_port=int(insight.get("video_port", 9000)),
         metadata_port=int(insight.get("metadata_port", 9100)),
     )
     if not cfg.backbone or not cfg.transformer:
-        raise ValueError(f"model.{variant} backbone and transformer must be set")
-    if cfg.input_size <= 0 or cfg.input_size % 16:
-        raise ValueError(f"model.{variant}.input_size must be a positive multiple of 16")
+        raise ValueError(f"model.{task} backbone and transformer must be set")
     if not labels_path:
         raise ValueError("model.labels must be set")
     if not cfg.rtsp_url.startswith("rtsp://"):
@@ -112,9 +142,11 @@ def load_config(path: Path) -> Config:
     if cfg.width < 0 or cfg.height < 0 or cfg.fps < 0:
         raise ValueError("source.width, source.height, and source.fps must be >= 0")
     if not 0.0 <= cfg.min_score <= 1.0:
-        raise ValueError("inference.min_score must be in [0, 1]")
-    if cfg.max_detections <= 0:
-        raise ValueError("inference.max_detections must be > 0")
+        raise ValueError(f"inference.{task}.min_score must be in [0, 1]")
+    if cfg.max_results <= 0:
+        raise ValueError(f"inference.{task}.{max_results_key} must be > 0")
+    if not 0.0 <= cfg.mask_threshold <= 1.0:
+        raise ValueError("inference.segmentation.mask_threshold must be in [0, 1]")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
     if not all(0 < port <= 65535 for port in (cfg.video_port, cfg.metadata_port)):
@@ -205,15 +237,30 @@ def load_labels(path: Path) -> list[str]:
     return labels
 
 
-def stable_topk_gather(scores: np.ndarray, proposals: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def stable_topk_indices(values: np.ndarray, count: int) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32).reshape(-1)
+    count = min(count, values.size)
+    if count <= 0:
+        return np.empty(0, dtype=np.int64)
+    candidates = np.argpartition(-values, count - 1)[:count]
+    cutoff = values[candidates].min()
+    selected = np.concatenate(
+        (np.flatnonzero(values > cutoff), np.flatnonzero(values == cutoff)[:count])
+    )[:count]
+    return selected[np.lexsort((selected, -values[selected]))]
+
+
+def stable_topk_gather(
+    scores: np.ndarray, proposals: np.ndarray, top_k: int
+) -> np.ndarray:
     flat_scores = np.asarray(scores, dtype=np.float32).reshape(-1)
     flat_proposals = np.asarray(proposals, dtype=np.float32).reshape(-1, 4)
-    if flat_scores.size != flat_proposals.shape[0] or flat_scores.size < TOP_K:
+    if flat_scores.size != flat_proposals.shape[0] or flat_scores.size < top_k:
         raise ValueError("backbone score and proposal shapes do not match")
     if not np.isfinite(flat_scores).all() or not np.isfinite(flat_proposals).all():
         raise ValueError("backbone output contains non-finite values")
-    indices = np.argsort(-flat_scores, kind="stable")[:TOP_K]
-    return flat_proposals[indices].reshape(1, TOP_K, 4), indices
+    indices = stable_topk_indices(flat_scores, top_k)
+    return flat_proposals[indices].reshape(1, top_k, 4)
 
 
 def postprocess(
@@ -224,17 +271,19 @@ def postprocess(
     labels: list[str],
     min_score: float,
     max_detections: int,
+    top_k: int = 300,
 ) -> list[dict]:
-    boxes = np.asarray(boxes, dtype=np.float32).reshape(TOP_K, 4)
-    logits = np.asarray(logits, dtype=np.float32).reshape(TOP_K, 91)
+    boxes = np.asarray(boxes, dtype=np.float32).reshape(top_k, 4)
+    logits = np.asarray(logits, dtype=np.float32).reshape(top_k, NUM_CLASSES)
     probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
-    ranked = np.argsort(-probabilities.reshape(-1), kind="stable")
+    flat_probabilities = probabilities.reshape(-1)
+    ranked = stable_topk_indices(flat_probabilities, CLASSIFICATION_TOP_K)
     objects: list[dict] = []
     for flat_index in ranked:
-        score = float(probabilities.reshape(-1)[flat_index])
+        score = float(flat_probabilities[flat_index])
         if score < min_score or len(objects) >= max_detections:
             break
-        query, class_id = divmod(int(flat_index), 91)
+        query, class_id = divmod(int(flat_index), NUM_CLASSES)
         if class_id == 0 or labels[class_id] == "unused":
             continue
         cx, cy, box_w, box_h = (float(value) for value in boxes[query])
@@ -253,13 +302,90 @@ def postprocess(
     return objects
 
 
+def segmentation_metadata(
+    boxes: np.ndarray,
+    logits: np.ndarray,
+    masks: np.ndarray,
+    width: int,
+    height: int,
+    labels: list[str],
+    min_score: float,
+    max_segments: int,
+    mask_threshold: float,
+) -> str:
+    boxes = np.asarray(boxes, dtype=np.float32).reshape(200, 4)
+    logits = np.asarray(logits, dtype=np.float32).reshape(200, NUM_CLASSES)
+    masks = np.asarray(masks, dtype=np.float32).reshape(MASK_SIZE, MASK_SIZE, 200)
+    probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
+    flat_probabilities = probabilities.reshape(-1)
+    ranked = stable_topk_indices(flat_probabilities, CLASSIFICATION_TOP_K)
+
+    segments: list[dict] = []
+    for flat_index in ranked:
+        score = float(flat_probabilities[flat_index])
+        if score < min_score or len(segments) >= max_segments:
+            break
+        query, class_id = divmod(int(flat_index), NUM_CLASSES)
+        if class_id == 0 or labels[class_id] == "unused":
+            continue
+
+        cx, cy, box_width, box_height = (float(value) for value in boxes[query])
+        x0 = max(0, min(width - 1, round((cx - box_width / 2.0) * width)))
+        y0 = max(0, min(height - 1, round((cy - box_height / 2.0) * height)))
+        x1 = max(x0 + 1, min(width, round((cx + box_width / 2.0) * width)))
+        y1 = max(y0 + 1, min(height, round((cy + box_height / 2.0) * height)))
+
+        mx0 = max(0, min(MASK_SIZE - 1, int(np.floor(x0 * MASK_SIZE / width))))
+        my0 = max(0, min(MASK_SIZE - 1, int(np.floor(y0 * MASK_SIZE / height))))
+        mx1 = max(mx0 + 1, min(MASK_SIZE, int(np.ceil(x1 * MASK_SIZE / width))))
+        my1 = max(my0 + 1, min(MASK_SIZE, int(np.ceil(y1 * MASK_SIZE / height))))
+        mask = 1.0 / (1.0 + np.exp(-np.clip(masks[my0:my1, mx0:mx1, query], -80.0, 80.0)))
+        binary = (mask >= mask_threshold).astype(np.uint8)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        contour = max(contours, key=cv2.contourArea)
+        polygon = cv2.approxPolyDP(contour, 0.004 * cv2.arcLength(contour, True), True)
+        if len(polygon) < 3:
+            continue
+        scale_x = (x1 - x0 - 1) / max(binary.shape[1] - 1, 1)
+        scale_y = (y1 - y0 - 1) / max(binary.shape[0] - 1, 1)
+        points = [
+            [
+                min(x1 - 1, x0 + round(int(point[0][0]) * scale_x)),
+                min(y1 - 1, y0 + round(int(point[0][1]) * scale_y)),
+            ]
+            for point in polygon
+        ]
+        segments.append(
+            {
+                "id": f"seg_{len(segments) + 1}",
+                "label": labels[class_id],
+                "confidence": score,
+                "bbox": [x0, y0, x1 - x0, y1 - y0],
+                "mask_format": "polygon",
+                "mask": points,
+            }
+        )
+
+    kept: list[dict] = []
+    size = len('{"segments":[]}')
+    for segment in segments:
+        entry_size = len(json.dumps(segment, separators=(",", ":"))) + 1
+        if size + entry_size > METADATA_BYTE_BUDGET:
+            break
+        size += entry_size
+        kept.append(segment)
+    return json.dumps({"segments": kept}, separators=(",", ":"))
+
+
 def collect_tensors(sample) -> list:
     if sample is None:
         return []
     tensors = []
-    if sample.kind == _runtime_pyneat.SampleKind.Tensor and sample.tensor is not None:
+    if sample.kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
         tensors.append(sample.tensor)
-    elif sample.kind == _runtime_pyneat.SampleKind.TensorSet:
+    elif sample.kind == pyneat.SampleKind.TensorSet:
         tensors.extend(sample.tensors)
     for field in sample.fields:
         tensors.extend(collect_tensors(field))
@@ -286,17 +412,20 @@ def split_backbone(sample, proposal_count: int):
     return feature, scores, proposals
 
 
-def split_transformer(sample):
-    boxes = logits = None
+def split_transformer(sample, cfg: Config):
+    boxes = logits = masks = None
     for tensor in collect_tensors(sample):
         shape = _shape(tensor)
-        if int(np.prod(shape)) == TOP_K * 4:
+        elements = int(np.prod(shape))
+        if elements == cfg.top_k * 4:
             boxes = tensor
-        elif int(np.prod(shape)) == TOP_K * 91:
+        elif elements == cfg.top_k * NUM_CLASSES:
             logits = tensor
-    if boxes is None or logits is None:
-        raise RuntimeError("transformer did not produce box and class tensors")
-    return boxes, logits
+        elif cfg.task == "segmentation" and elements == cfg.top_k * MASK_SIZE * MASK_SIZE:
+            masks = tensor
+    if boxes is None or logits is None or (cfg.task == "segmentation" and masks is None):
+        raise RuntimeError("transformer did not produce the expected task outputs")
+    return boxes, logits, masks
 
 
 def copy_identity(source, target) -> None:
@@ -312,12 +441,12 @@ def identity_key(sample) -> int:
     return sample.frame_id if sample.frame_id >= 0 else sample.input_seq
 
 
-def transformer_inputs(model, feature, gathered) -> list:
+def transformer_inputs(model, feature, gathered, top_k: int) -> list:
     ordered = []
     for spec in model.input_specs():
         expected = tuple(int(value) for value in spec.shape)
         elements = int(np.prod(expected))
-        tensor = gathered if elements == TOP_K * 4 else feature
+        tensor = gathered if elements == top_k * 4 else feature
         current = _shape(tensor)
         if current == (1, *expected):
             tensor.shape = list(expected)
@@ -338,10 +467,9 @@ def transformer_inputs(model, feature, gathered) -> list:
 
 
 def run(cfg: Config) -> int:
-    global _runtime_pyneat
+    global pyneat
     import pyneat
 
-    _runtime_pyneat = pyneat
     labels = load_labels(cfg.labels)
     width, height, fps = probe_source_geometry(cfg)
     if cfg.codec == "h264":
@@ -365,7 +493,16 @@ def run(cfg: Config) -> int:
     backbone_options.preprocess.color_convert.enable = pyneat.AutoFlag.On
     backbone_options.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.NV12
     backbone_options.preprocess.color_convert.output_format = pyneat.PreprocessColorFormat.RGB
-    backbone_options.preprocess.preset = pyneat.NormalizePreset.ImageNet
+    if cfg.task == "segmentation":
+        backbone_options.preprocess.resize.width = cfg.input_size
+        backbone_options.preprocess.resize.height = cfg.input_size
+        backbone_options.preprocess.resize.scaling_type = "BILINEAR"
+        backbone_options.preprocess.normalize.enable = pyneat.AutoFlag.On
+        backbone_options.preprocess.normalize.mean = [0.485, 0.456, 0.406]
+        backbone_options.preprocess.normalize.stddev = [0.229, 0.224, 0.225]
+        backbone_options.preprocess.normalize.has_explicit_stats = True
+    else:
+        backbone_options.preprocess.preset = pyneat.NormalizePreset.ImageNet
     backbone_options.processcvu.pre_run_target = "EV74"
     backbone_options.processcvu.post_run_target = "A65"
     backbone = pyneat.Model(cfg.backbone, backbone_options)
@@ -377,11 +514,14 @@ def run(cfg: Config) -> int:
     transformer_options.processcvu.post_run_target = "A65"
     transformer = pyneat.Model(cfg.transformer, transformer_options)
 
-    side = cfg.input_size // 16
+    side = cfg.feature_size
+    transformer_outputs = [[1, cfg.top_k, 4], [1, cfg.top_k, NUM_CLASSES]]
+    if cfg.task == "segmentation":
+        transformer_outputs.append([MASK_SIZE, MASK_SIZE, cfg.top_k])
     expected_shapes = (
         [[1, side, side, 256], [1, side * side], [1, side * side, 4]],
-        [[side, side, 256], [1, TOP_K, 4]],
-        [[1, TOP_K, 4], [1, TOP_K, 91]],
+        [[side, side, 256], [1, cfg.top_k, 4]],
+        transformer_outputs,
     )
     actual_specs = (
         backbone.output_specs(),
@@ -437,12 +577,12 @@ def run(cfg: Config) -> int:
     queue_options = pyneat.QueueOptions()
     queue_options.max_buffers = 1
     queue_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
-    detector = pyneat.Graph("detector")
-    detector.add(pyneat.nodes.queue(queue_options))
-    detector.add(backbone.graph())
+    inference_graph = pyneat.Graph("inference")
+    inference_graph.add(pyneat.nodes.queue(queue_options))
+    inference_graph.add(backbone.graph())
     backbone_output = pyneat.Graph("backbone_output")
     backbone_output.add(pyneat.nodes.output("backbone", pyneat.OutputOptions.latest()))
-    detector.add(backbone_output)
+    inference_graph.add(backbone_output)
 
     source_graph = pyneat.Graph("rfdetr_source")
     source_graph.connect(source, decoder)
@@ -450,12 +590,12 @@ def run(cfg: Config) -> int:
         source_graph.connect(decoder, video)
     else:
         source_graph.connect(source, video)
-    source_graph.connect(decoder, detector)
+    source_graph.connect(decoder, inference_graph)
 
     transformer_run_options = pyneat.RunOptions()
     transformer_run_options.preset = pyneat.RunPreset.Realtime
     transformer_run_options.queue_depth = 1
-    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.Block
+    transformer_run_options.overflow_policy = pyneat.OverflowPolicy.KeepLatest
     transformer_run_options.output_memory = pyneat.OutputMemory.Owned
     dummy_inputs = [
         pyneat.Tensor.from_numpy(
@@ -483,7 +623,8 @@ def run(cfg: Config) -> int:
     metadata_options.channel = 0
     metadata_sender = pyneat.MetadataSender(metadata_options)
     print(
-        f"RF-DETR {cfg.variant} {cfg.codec}: {cfg.rtsp_url} ({width}x{height}@{fps}) -> "
+        f"RF-DETR {cfg.task} {cfg.variant} {cfg.codec}: {cfg.rtsp_url} "
+        f"({width}x{height}@{fps}) -> "
         f"Insight video={video_port} metadata={metadata_sender.metadata_port()}",
         flush=True,
     )
@@ -492,7 +633,7 @@ def run(cfg: Config) -> int:
     bridge_error: list[BaseException] = []
     identity_lock = threading.Lock()
     source_pts: dict[int, int] = {}
-    proposal_count = (cfg.input_size // 16) ** 2
+    proposal_count = cfg.feature_size**2
 
     def transformer_bridge() -> None:
         try:
@@ -501,8 +642,8 @@ def run(cfg: Config) -> int:
                 if sample is None:
                     continue
                 feature, scores, proposals = split_backbone(sample, proposal_count)
-                gathered, _ = stable_topk_gather(
-                    scores.to_numpy(copy=False), proposals.to_numpy(copy=False)
+                gathered = stable_topk_gather(
+                    scores.to_numpy(copy=False), proposals.to_numpy(copy=False), cfg.top_k
                 )
                 gathered_tensor = pyneat.Tensor.from_numpy(
                     gathered, copy=True, memory=pyneat.TensorMemory.EV74
@@ -510,7 +651,7 @@ def run(cfg: Config) -> int:
                 transformer_sample = pyneat.Sample()
                 transformer_sample.kind = pyneat.SampleKind.TensorSet
                 transformer_sample.tensors = transformer_inputs(
-                    transformer, feature, gathered_tensor
+                    transformer, feature, gathered_tensor, cfg.top_k
                 )
                 copy_identity(sample, transformer_sample)
                 key = identity_key(sample)
@@ -518,7 +659,7 @@ def run(cfg: Config) -> int:
                     source_pts[key] = sample.pts_ns
                     if len(source_pts) > 8:
                         source_pts.pop(next(iter(source_pts)))
-                if not transformer_runner.push_samples(transformer_sample):
+                if not transformer_runner.try_push_samples(transformer_sample):
                     if not stop.is_set():
                         raise RuntimeError("transformer input closed")
                     break
@@ -536,35 +677,61 @@ def run(cfg: Config) -> int:
     )
     transformer_worker.start()
     processed = 0
+    first_completed_at = None
+    last_completed_at = None
     try:
         while not stop.is_set() and (cfg.frames == 0 or processed < cfg.frames):
             sample = transformer_runner.pull(timeout_ms=500)
             tensors = collect_tensors(sample)
             if not tensors:
                 continue
-            box_tensor, logit_tensor = split_transformer(sample)
-            objects = postprocess(
-                box_tensor.to_numpy(copy=False),
-                logit_tensor.to_numpy(copy=False),
-                width,
-                height,
-                labels,
-                cfg.min_score,
-                cfg.max_detections,
-            )
+            box_tensor, logit_tensor, mask_tensor = split_transformer(sample, cfg)
+            if cfg.task == "detection":
+                data = json.dumps(
+                    {
+                        "objects": postprocess(
+                            box_tensor.to_numpy(copy=False),
+                            logit_tensor.to_numpy(copy=False),
+                            width,
+                            height,
+                            labels,
+                            cfg.min_score,
+                            cfg.max_results,
+                            cfg.top_k,
+                        )
+                    },
+                    separators=(",", ":"),
+                )
+                metadata_type = "object-detection"
+            else:
+                data = segmentation_metadata(
+                    box_tensor.to_numpy(copy=False),
+                    logit_tensor.to_numpy(copy=False),
+                    mask_tensor.to_numpy(copy=False),
+                    width,
+                    height,
+                    labels,
+                    cfg.min_score,
+                    cfg.max_results,
+                    cfg.mask_threshold,
+                )
+                metadata_type = "segmentation"
             source_frame_id = sample.frame_id
             with identity_lock:
                 source_pts_ns = source_pts.pop(identity_key(sample), sample.pts_ns)
             timestamp_ms = source_pts_ns // 1_000_000 if source_pts_ns >= 0 else -1
             frame_id = str(source_frame_id) if source_frame_id >= 0 else ""
             if not metadata_sender.send_metadata(
-                "object-detection",
-                json.dumps({"objects": objects}, separators=(",", ":")),
+                metadata_type,
+                data,
                 timestamp_ms,
                 frame_id,
             ):
                 print("[warn] Insight metadata send failed", file=sys.stderr)
             processed += 1
+            last_completed_at = time.monotonic()
+            if first_completed_at is None:
+                first_completed_at = last_completed_at
         if bridge_error:
             raise bridge_error[0]
     finally:
@@ -575,7 +742,12 @@ def run(cfg: Config) -> int:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         _ = (backbone, source_graph)
-    print(f"RF-DETR {cfg.variant}: completed {processed} detections", flush=True)
+    elapsed = (last_completed_at - first_completed_at) if processed > 1 else 0.0
+    output_fps = (processed - 1) / elapsed if elapsed > 0.0 else 0.0
+    print(
+        f"RF-DETR {cfg.task}: completed={processed} output_fps={output_fps:.1f}",
+        flush=True,
+    )
     return 0
 
 
@@ -585,7 +757,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_config(args.config)
         if args.validate_config_only:
             load_labels(cfg.labels)
-            print(f"RF-DETR {cfg.variant} configuration is valid")
+            print(f"RF-DETR {cfg.task} {cfg.variant} configuration is valid")
             return 0
         return run(cfg)
     except Exception as exc:
