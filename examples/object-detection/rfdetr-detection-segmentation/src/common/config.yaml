@@ -1,0 +1,39 @@
+model:                          # Select one RF-DETR task and its model pair.
+  task: detection               # detection or segmentation.
+  labels: examples/object-detection/rfdetr-detection-segmentation/src/common/coco-labels.txt
+  detection:
+    variant: small              # small or medium.
+    small:
+      backbone: models/rfdetr-small-backbone.tar.gz
+      transformer: models/rfdetr-small-transformer.tar.gz
+    medium:
+      backbone: models/rfdetr-medium-backbone.tar.gz
+      transformer: models/rfdetr-medium-transformer.tar.gz
+  segmentation:
+    backbone: models/rfdetr-seg-medium-backbone.tar.gz
+    transformer: models/rfdetr-seg-medium-transformer.tar.gz
+
+source:                         # H.264, H.265, or MJPEG RTSP source properties.
+  rtsp_url: rtsp://<rtsp-source-ip>:<port>/<stream-name>
+  codec: h264                   # h264/avc, h265/hevc, or mjpeg/jpeg.
+  tcp: true                     # Use RTSP over TCP.
+  latency_ms: 100               # RTSP receive latency.
+  width: 0                      # Optional width fallback. 0 uses the probe.
+  height: 0                     # Optional height fallback. 0 uses the probe.
+  fps: 0                        # Optional FPS override. 0 uses the probe.
+
+inference:
+  frames: 0                     # 0 runs continuously.
+  detection:
+    min_score: 0.5              # Minimum confidence to publish.
+    max_detections: 100         # Maximum objects per frame.
+  segmentation:
+    min_score: 0.3              # Minimum confidence to publish.
+    max_segments: 24            # Maximum instances per frame.
+    mask_threshold: 0.08        # Foreground threshold for the compiled model.
+
+output:
+  insight:
+    host: <insight-host-ip>     # Insight host reachable from the target.
+    video_port: 9000            # Video ingest port.
+    metadata_port: 9100         # Metadata ingest port.
