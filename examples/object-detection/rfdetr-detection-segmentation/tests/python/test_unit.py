@@ -6,6 +6,8 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -24,6 +26,31 @@ _SPEC.loader.exec_module(main)
 def test_config_argument_is_required():
     with pytest.raises(SystemExit):
         main.parse_args([])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("storage_kind", ["CpuOwned", "CpuExternal", "GstSample"])
+def test_transformer_inputs_copy_only_cpu_features(monkeypatch, storage_kind):
+    kinds = SimpleNamespace(CpuOwned="CpuOwned", CpuExternal="CpuExternal")
+    monkeypatch.setattr(main, "pyneat", SimpleNamespace(StorageKind=kinds), raising=False)
+    device_feature = SimpleNamespace(shape=[1, 4, 256])
+    feature = SimpleNamespace(
+        shape=[1, 4, 256],
+        storage=SimpleNamespace(kind=storage_kind),
+        cvu=Mock(return_value=device_feature),
+    )
+    gathered = SimpleNamespace(shape=[1, 2, 4])
+    model = SimpleNamespace(input_specs=lambda: [gathered, device_feature])
+
+    inputs = main.transformer_inputs(model, feature, gathered, 2)
+
+    assert inputs[0] is gathered
+    if storage_kind == "GstSample":
+        assert inputs[1] is feature
+        feature.cvu.assert_not_called()
+    else:
+        assert inputs[1] is device_feature
+        feature.cvu.assert_called_once_with()
 
 
 @pytest.mark.unit

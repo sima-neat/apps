@@ -404,8 +404,13 @@ int64_t identity_key(const neat::Sample& sample) {
   return sample.frame_id >= 0 ? sample.frame_id : sample.input_seq;
 }
 
-neat::TensorList transformer_inputs(const neat::Model& model, const neat::Tensor& feature,
+neat::TensorList transformer_inputs(const neat::Model& model, neat::Tensor feature,
                                     const neat::Tensor& gathered, int top_k) {
+  // Keep SiMa-backed features zero-copy; Core may return a CPU-owned output.
+  if (feature.storage && (feature.storage->kind == neat::StorageKind::CpuOwned ||
+                          feature.storage->kind == neat::StorageKind::CpuExternal)) {
+    feature = feature.cvu();
+  }
   neat::TensorList inputs;
   for (const auto& spec : model.input_specs()) {
     neat::Tensor tensor =
@@ -820,7 +825,7 @@ int run(const Config& cfg) {
         }
         if (!transformer_runner.try_push(transformer_sample)) {
           if (!g_stop.load()) {
-            throw std::runtime_error("transformer input closed");
+            throw std::runtime_error("Transformer rejected input");
           }
           break;
         }

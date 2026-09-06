@@ -442,6 +442,9 @@ def identity_key(sample) -> int:
 
 
 def transformer_inputs(model, feature, gathered, top_k: int) -> list:
+    # Keep SiMa-backed features zero-copy; Core may return a CPU-owned output.
+    if feature.storage.kind in (pyneat.StorageKind.CpuOwned, pyneat.StorageKind.CpuExternal):
+        feature = feature.cvu()
     ordered = []
     for spec in model.input_specs():
         expected = tuple(int(value) for value in spec.shape)
@@ -655,7 +658,7 @@ def run(cfg: Config) -> int:
                         source_pts.pop(next(iter(source_pts)))
                 if not transformer_runner.try_push_samples(transformer_sample):
                     if not stop.is_set():
-                        raise RuntimeError("transformer input closed")
+                        raise RuntimeError("Transformer rejected input")
                     break
         except BaseException as exc:
             if not stop.is_set():
