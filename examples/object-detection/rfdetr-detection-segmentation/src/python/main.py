@@ -44,6 +44,7 @@ class Config:
     min_score: float
     max_results: int
     mask_threshold: float
+    mask_grid_size: int
     insight_host: str
     video_port: int
     metadata_port: int
@@ -127,6 +128,7 @@ def load_config(path: Path) -> Config:
         min_score=float(inference_options.get("min_score", default_score)),
         max_results=int(inference_options.get(max_results_key, default_max_results)),
         mask_threshold=float(inference_options.get("mask_threshold", 0.08)),
+        mask_grid_size=int(inference_options.get("mask_grid_size", 640)),
         insight_host=str(insight.get("host", "")),
         video_port=int(insight.get("video_port", 9000)),
         metadata_port=int(insight.get("metadata_port", 9100)),
@@ -147,6 +149,8 @@ def load_config(path: Path) -> Config:
         raise ValueError(f"inference.{task}.{max_results_key} must be > 0")
     if not 0.0 <= cfg.mask_threshold <= 1.0:
         raise ValueError("inference.segmentation.mask_threshold must be in [0, 1]")
+    if cfg.mask_grid_size < MASK_SIZE:
+        raise ValueError("inference.segmentation.mask_grid_size must be >= 108")
     if not cfg.insight_host:
         raise ValueError("output.insight.host must be set")
     if not all(0 < port <= 65535 for port in (cfg.video_port, cfg.metadata_port)):
@@ -312,6 +316,7 @@ def segmentation_metadata(
     min_score: float,
     max_segments: int,
     mask_threshold: float,
+    mask_grid_size: int = 640,
 ) -> str:
     boxes = np.asarray(boxes, dtype=np.float32).reshape(200, 4)
     logits = np.asarray(logits, dtype=np.float32).reshape(200, NUM_CLASSES)
@@ -340,6 +345,9 @@ def segmentation_metadata(
         mx1 = max(mx0 + 1, min(MASK_SIZE, int(np.ceil(x1 * MASK_SIZE / width))))
         my1 = max(my0 + 1, min(MASK_SIZE, int(np.ceil(y1 * MASK_SIZE / height))))
         mask = 1.0 / (1.0 + np.exp(-np.clip(masks[my0:my1, mx0:mx1, query], -80.0, 80.0)))
+        if mask_grid_size != MASK_SIZE:
+            size = tuple((n * mask_grid_size + MASK_SIZE - 1) // MASK_SIZE for n in mask.shape[::-1])
+            mask = cv2.resize(mask, size, interpolation=cv2.INTER_LINEAR)
         binary = (mask >= mask_threshold).astype(np.uint8)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
@@ -711,6 +719,7 @@ def run(cfg: Config) -> int:
                     cfg.min_score,
                     cfg.max_results,
                     cfg.mask_threshold,
+                    cfg.mask_grid_size,
                 )
                 metadata_type = "segmentation"
             source_frame_id = sample.frame_id

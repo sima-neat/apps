@@ -31,6 +31,7 @@ inference:
     min_score: 0.3              # Minimum confidence to publish.
     max_segments: 24            # Maximum instances per frame.
     mask_threshold: 0.08        # Foreground threshold for the compiled model.
+    mask_grid_size: 640         # Smoother contours; use 108 for less CPU work.
 
 output:
   insight:

@@ -100,22 +100,25 @@ int main(int argc, char** argv) {
       neat::Tensor::from_vector(segmentation_logits, {1, 200, 91}, neat::TensorMemory::CPU),
       neat::Tensor::from_vector(masks, {108, 108, 200}, neat::TensorMemory::CPU),
   };
-  const auto segments = nlohmann::json::parse(
-      segmentation_metadata(segmentation_output, 1280, 720, labels, segmentation_config));
-  const auto& segment_entries = segments.at("segments");
-  bool valid_polygon = segment_entries.size() == 1U &&
-                       segment_entries.front().at("label") == "person" &&
-                       segment_entries.front().at("mask").size() >= 3U;
-  if (valid_polygon) {
-    for (const auto& point : segment_entries.front().at("mask")) {
-      valid_polygon = valid_polygon && point.at(0).get<int>() >= 0 &&
-                      point.at(0).get<int>() < 1280 && point.at(1).get<int>() >= 0 &&
-                      point.at(1).get<int>() < 720;
+  for (const int grid_size : {108, 432, 640}) {
+    segmentation_config.mask_grid_size = grid_size;
+    const auto segments = nlohmann::json::parse(
+        segmentation_metadata(segmentation_output, 1280, 720, labels, segmentation_config));
+    const auto& segment_entries = segments.at("segments");
+    bool valid_polygon = segment_entries.size() == 1U &&
+                         segment_entries.front().at("label") == "person" &&
+                         segment_entries.front().at("mask").size() >= 3U;
+    if (valid_polygon) {
+      for (const auto& point : segment_entries.front().at("mask")) {
+        valid_polygon = valid_polygon && point.at(0).get<int>() >= 0 &&
+                        point.at(0).get<int>() < 1280 && point.at(1).get<int>() >= 0 &&
+                        point.at(1).get<int>() < 720;
+      }
     }
-  }
-  if (!valid_polygon || segments.dump().size() > kMetadataByteBudget) {
-    std::cerr << "[FAIL] segmentation metadata must contain a labeled polygon\n";
-    ++failures;
+    if (!valid_polygon || segments.dump().size() > kMetadataByteBudget) {
+      std::cerr << "[FAIL] segmentation metadata must contain a labeled polygon\n";
+      ++failures;
+    }
   }
 
   const std::string temp_dir =
@@ -145,13 +148,13 @@ int main(int argc, char** argv) {
               "    backbone: segmentation-b.tar.gz\n"
               "    transformer: segmentation-t.tar.gz\n"
               "source:\n  rtsp_url: rtsp://camera/live\n"
-              "inference:\n  segmentation:\n    max_segments: 24\n"
+              "inference:\n  segmentation:\n    max_segments: 24\n    mask_grid_size: 640\n"
               "output:\n  insight:\n    host: 127.0.0.1\n";
     config.close();
     try {
       const auto selected = load_config(config_path);
       if (selected.task != Task::Segmentation || selected.input_size != 432 ||
-          selected.feature_size != 36 || selected.top_k != 200 ||
+          selected.feature_size != 36 || selected.top_k != 200 || selected.mask_grid_size != 640 ||
           selected.backbone != "segmentation-b.tar.gz" || selected.min_score != 0.3F) {
         std::cerr << "[FAIL] config must select the fixed segmentation model contract\n";
         ++failures;

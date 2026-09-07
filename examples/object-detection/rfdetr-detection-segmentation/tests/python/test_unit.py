@@ -118,7 +118,8 @@ def test_config_selects_one_model_pair(tmp_path, variant, size):
 
 
 @pytest.mark.unit
-def test_config_selects_segmentation_model_pair(tmp_path):
+@pytest.mark.parametrize("mask_grid_size", [None, 108, 432, 640, 107])
+def test_config_selects_segmentation_model_pair(tmp_path, mask_grid_size):
     labels = tmp_path / "labels.txt"
     labels.write_text("\n".join(f"label-{index}" for index in range(91)) + "\n")
     config = {
@@ -134,11 +135,18 @@ def test_config_selects_segmentation_model_pair(tmp_path):
         "inference": {"segmentation": {"min_score": 0.3, "max_segments": 24}},
         "output": {"insight": {"host": "127.0.0.1"}},
     }
+    if mask_grid_size is not None:
+        config["inference"]["segmentation"]["mask_grid_size"] = mask_grid_size
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
+    if mask_grid_size == 107:
+        with pytest.raises(ValueError, match="mask_grid_size must be >= 108"):
+            main.load_config(path)
+        return
 
     selected = main.load_config(path)
 
+    assert selected.mask_grid_size == (mask_grid_size or 640)
     assert selected.task == "segmentation"
     assert selected.backbone == "segmentation-b.tar.gz"
     assert selected.input_size == 432
@@ -184,7 +192,8 @@ def test_config_rejects_unknown_model_variant(tmp_path):
 
 
 @pytest.mark.unit
-def test_segmentation_metadata_contains_polygons():
+@pytest.mark.parametrize("mask_grid_size", [108, 432, 640])
+def test_segmentation_metadata_contains_polygons(mask_grid_size):
     labels = ["unused"] * 91
     labels[1] = "person"
     boxes = np.zeros((1, 200, 4), dtype=np.float32)
@@ -198,7 +207,7 @@ def test_segmentation_metadata_contains_polygons():
     masks[40:68, 40:68, 0] = 10.0
 
     payload = main.segmentation_metadata(
-        boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08
+        boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08, mask_grid_size
     )
 
     segments = json.loads(payload)["segments"]

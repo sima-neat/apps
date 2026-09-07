@@ -131,6 +131,7 @@ struct Config {
   float min_score = 0.5F;
   int max_results = 100;
   float mask_threshold = 0.08F;
+  int mask_grid_size = 640;
   std::string insight_host;
   int video_port = 9000;
   int metadata_port = 9100;
@@ -208,6 +209,7 @@ Config load_config(const fs::path& path) {
   if (cfg.task == Task::Segmentation) {
     cfg.mask_threshold =
         static_cast<float>(raw.double_or("inference.segmentation.mask_threshold", 0.08));
+    cfg.mask_grid_size = raw.int_or("inference.segmentation.mask_grid_size", cfg.mask_grid_size);
   }
   cfg.insight_host = raw.string_or("output.insight.host", "");
   cfg.video_port = raw.int_or("output.insight.video_port", 9000);
@@ -229,6 +231,8 @@ Config load_config(const fs::path& path) {
   if (cfg.task == Task::Segmentation) {
     sima_examples::require(cfg.mask_threshold >= 0.0F && cfg.mask_threshold <= 1.0F,
                            "inference.segmentation.mask_threshold must be in [0, 1]");
+    sima_examples::require(cfg.mask_grid_size >= kMaskSize,
+                           "inference.segmentation.mask_grid_size must be >= 108");
   }
   sima_examples::require(!cfg.insight_host.empty(), "output.insight.host must be set");
   sima_examples::require(cfg.video_port > 0 && cfg.video_port <= 65535 && cfg.metadata_port > 0 &&
@@ -507,7 +511,8 @@ cv::Rect frame_rect(const std::vector<float>& boxes, int query, int width, int h
 }
 
 std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, const cv::Rect& box,
-                                    int frame_width, int frame_height, float threshold) {
+                                    int frame_width, int frame_height, float threshold,
+                                    int mask_grid_size) {
   const double mask_scale_x = static_cast<double>(kMaskSize) / frame_width;
   const double mask_scale_y = static_cast<double>(kMaskSize) / frame_height;
   const int x0 = std::clamp(static_cast<int>(std::floor(box.x * mask_scale_x)), 0, kMaskSize - 1);
@@ -522,6 +527,11 @@ std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, co
     for (int x = x0; x < x1; ++x) {
       row[x - x0] = sigmoid(masks[(y * kMaskSize + x) * top_k + query]);
     }
+  }
+  if (mask_grid_size != kMaskSize) {
+    const cv::Size size((mask.cols * mask_grid_size + kMaskSize - 1) / kMaskSize,
+                        (mask.rows * mask_grid_size + kMaskSize - 1) / kMaskSize);
+    cv::resize(mask, mask, size, 0.0, 0.0, cv::INTER_LINEAR);
   }
   cv::Mat binary;
   cv::compare(mask, threshold, binary, cv::CMP_GE);
@@ -590,8 +600,8 @@ std::string segmentation_metadata(const TransformerOutputs& output, int frame_wi
       continue;
     }
     const cv::Rect box = frame_rect(boxes, query, frame_width, frame_height);
-    const auto polygon =
-        mask_polygon(masks, query, cfg.top_k, box, frame_width, frame_height, cfg.mask_threshold);
+    const auto polygon = mask_polygon(masks, query, cfg.top_k, box, frame_width, frame_height,
+                                      cfg.mask_threshold, cfg.mask_grid_size);
     if (polygon.empty()) {
       continue;
     }

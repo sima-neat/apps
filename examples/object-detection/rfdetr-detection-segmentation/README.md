@@ -93,6 +93,8 @@ Edit `$APP_DIR/src/common/config.yaml`:
 
 EV74 resizes the decoded frame to the input size required by the selected model.
 
+Segmentation uses `inference.segmentation.mask_grid_size: 640` for smoother outlines. Set it to `108` for native contours with less CPU work, or `432` as an intermediate option. This only upsamples mask probabilities before contour extraction; the model output remains 108×108.
+
 ## Run
 
 ### C++
@@ -113,7 +115,7 @@ Insight receives `object-detection` metadata for detection or `segmentation` pol
 
 ## Performance
 
-End-to-end throughput measured on Modalix under sustained load, using input streams with frame rates exceeding the application's processing capacity. Figures represent the maximum observed inference output rate at each resolution.
+End-to-end throughput measured on Modalix under sustained load, using input streams with frame rates exceeding the application's processing capacity. Figures represent the maximum observed inference output rate at each resolution. Segmentation figures use `mask_grid_size: 108`.
 
 | Input resolution | Codec | Small detector | Medium detector | Medium segmenter |
 | --- | --- | ---: | ---: | ---: |
