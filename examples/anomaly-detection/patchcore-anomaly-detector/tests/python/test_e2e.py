@@ -37,12 +37,21 @@ SCORE_RE = re.compile(r"^(?P<path>.+): score=(?P<score>[-\d.]+) threshold=(?P<th
 def _find_cpp_binary() -> Path | None:
     """Resolve the patchcore C++ binary for the cross-language regression test
     below. Not a general repo convention -- this test is the only thing in the
-    example that needs the sibling language's binary."""
+    example that needs the sibling language's binary, so unlike e2e_model_path
+    et al. there's no shared fixture for it."""
     raw = os.environ.get("SIMANEAT_APPS_TEST_CPP_BINARY", "").strip()
     if raw:
         return Path(raw)
-    guess = APPS_ROOT / "build" / "examples" / "anomaly-detection" / "patchcore-anomaly-detector" / "patchcore-anomaly-detector"
-    return guess if guess.is_file() else None
+    candidates = (
+        # Installed/packaged layout (CI, and `sima-cli neat install`) -- see
+        # scripts/ci/validate_apps_runtime_archive.sh, which asserts every
+        # example's C++ executable lives here.
+        EXAMPLE_DIR / "src" / "cpp" / "pre-built" / "patchcore-anomaly-detector",
+        # Raw monorepo CMake build tree (local/DevKit development).
+        APPS_ROOT / "build" / "examples" / "anomaly-detection" / "patchcore-anomaly-detector"
+        / "patchcore-anomaly-detector",
+    )
+    return next((c for c in candidates if c.is_file()), None)
 
 
 @pytest.mark.e2e
