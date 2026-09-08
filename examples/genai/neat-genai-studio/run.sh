@@ -37,6 +37,15 @@ if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python"
   PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
 fi
 export PIPERTTS_PYTHON="${PIPERTTS_PYTHON:-}"
+# Supertonic 3 (MLA TTS) lives in its own checkout + venv (see setup.sh). The UI
+# spawns supertonic_worker.py with this interpreter; when it is absent the
+# engine is simply not offered. Exported so the UI child process inherits them.
+export SUPERTONIC_REPO_ROOT="${SUPERTONIC_REPO_ROOT:-/media/nvme/repos/supertonic-sima}"
+export SUPERTONIC_APP_ROOT="${SUPERTONIC_APP_ROOT:-/media/nvme/supertonic-tts}"
+if [[ -z "${SUPERTONIC_PYTHON:-}" && -x "${SUPERTONIC_APP_ROOT}/.venv/bin/python" ]]; then
+  SUPERTONIC_PYTHON="${SUPERTONIC_APP_ROOT}/.venv/bin/python"
+fi
+export SUPERTONIC_PYTHON="${SUPERTONIC_PYTHON:-}"
 SHUTDOWN_GRACE_SECONDS="${SHUTDOWN_GRACE_SECONDS:-10}"
 # Explicit accelerator reset (the UI's "Reset MLA" button and the CLI's /reset).
 # Never runs on its own: normal startup and load failures leave the board runtime
@@ -213,6 +222,7 @@ system_info() {
   _kv "neat-llima" "${llima_ver:-unknown}"
   [[ -n "${runtime_ver}" ]] && _kv "neat-runtime" "${runtime_ver}"
   _kv "python" "${py_ver:-unknown}"
+  _kv "supertonic" "$([[ -n "${SUPERTONIC_PYTHON}" ]] && echo "${SUPERTONIC_APP_ROOT}" || echo "not installed")"
   _kv "host" "$(uname -sm 2>/dev/null || echo unknown)"
 }
 
@@ -518,6 +528,9 @@ if [[ ! -x "${DEFAULT_APP_VENV}/bin/python" || ! -f "${DEFAULT_LOCAL_CONFIG}" ]]
   fi
   if [[ -z "${PIPERTTS_PYTHON:-}" && -x "${EXAMPLE_DIR}/.venv-pipertts/bin/python" ]]; then
     export PIPERTTS_PYTHON="${EXAMPLE_DIR}/.venv-pipertts/bin/python"
+  fi
+  if [[ -z "${SUPERTONIC_PYTHON:-}" && -x "${SUPERTONIC_APP_ROOT}/.venv/bin/python" ]]; then
+    export SUPERTONIC_PYTHON="${SUPERTONIC_APP_ROOT}/.venv/bin/python"
   fi
 fi
 

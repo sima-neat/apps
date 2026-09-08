@@ -37,6 +37,13 @@ INSTALL_TTS_VOICES="${INSTALL_TTS_VOICES:-1}"
 DEFAULT_TTS_LANGUAGES="en,de,es,fr,it,ja,pt,vi,zh"
 TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
+# Supertonic 3 (MLA-accelerated multilingual TTS). The engine lives in its own
+# repository and runtime venv (pyneat + onnxruntime); setup clones and installs
+# it when INSTALL_SUPERTONIC=1, and the UI reaches it through a subprocess worker.
+INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
+SUPERTONIC_REPO_URL="${SUPERTONIC_REPO_URL:-https://github.com/florianvoss-commit/supertonic-sima.git}"
+SUPERTONIC_REPO_ROOT="${SUPERTONIC_REPO_ROOT:-/media/nvme/repos/supertonic-sima}"
+SUPERTONIC_APP_ROOT="${SUPERTONIC_APP_ROOT:-/media/nvme/supertonic-tts}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
 DEPENDENCIES_ONLY=0
@@ -152,6 +159,13 @@ Environment:
                                 en,de,es,fr,it,ja,pt,vi,zh
   TTS_OPTIONAL_VOICES           Optional catalogued voice ids to also install,
                                 e.g. mera,en_US-ljspeech-medium
+  INSTALL_SUPERTONIC            Install Supertonic 3, the MLA-accelerated TTS
+                                engine (clones supertonic-sima, builds its venv,
+                                downloads its models), 1 or 0. default: 1
+  SUPERTONIC_REPO_ROOT          supertonic-sima checkout (cloned when missing)
+                                default: /media/nvme/repos/supertonic-sima
+  SUPERTONIC_APP_ROOT           Supertonic venv + model root
+                                default: /media/nvme/supertonic-tts
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
                                 default: 2.8.0+cpu
   SKIP_MODEL_DOWNLOAD           Write config without downloading models, 1 or 0
@@ -414,6 +428,57 @@ except Exception:
     pass
 PY
   ok "Voices installed."
+fi
+
+# Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
+# PyNeat. Its runtime (pyneat, onnxruntime, numpy 1.26) cannot share the UI venv,
+# so the upstream repository's own setup builds an isolated venv and downloads
+# the pinned CPU models plus the precompiled MLA packages from Hugging Face. The
+# UI talks to it through supertonic_worker.py. Optional: a failure here only
+# leaves the CPU engines in place.
+install_supertonic() {
+  section "Supertonic 3 (MLA text-to-speech)"
+  if [[ ! -d "${SUPERTONIC_REPO_ROOT}/.git" ]]; then
+    step "Cloning supertonic-sima into ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET}"
+    mkdir -p "$(dirname "${SUPERTONIC_REPO_ROOT}")"
+    if ! git clone --quiet "${SUPERTONIC_REPO_URL}" "${SUPERTONIC_REPO_ROOT}"; then
+      warn "Could not clone ${SUPERTONIC_REPO_URL}; Supertonic TTS skipped."
+      return 0
+    fi
+  else
+    ok "supertonic-sima checkout: ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET}"
+  fi
+  if [[ ! -f "${SUPERTONIC_REPO_ROOT}/scripts/setup_devkit.sh" ]]; then
+    warn "${SUPERTONIC_REPO_ROOT} has no scripts/setup_devkit.sh; Supertonic TTS skipped."
+    return 0
+  fi
+  local st_python="${SUPERTONIC_APP_ROOT}/.venv/bin/python"
+  if [[ -x "${st_python}" ]] \
+      && "${st_python}" -c 'import pyneat, onnxruntime, numpy' >/dev/null 2>&1 \
+      && [[ -f "${SUPERTONIC_APP_ROOT}/models/supertonic-3/onnx/tts.json" ]] \
+      && [[ -f "${SUPERTONIC_APP_ROOT}/models/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz" ]]; then
+    ok "Supertonic runtime already installed: ${C_DIM}${SUPERTONIC_APP_ROOT}${C_RESET}"
+    return 0
+  fi
+  # The upstream installer fetches the PyNeat wheel with sima-cli, which the
+  # DevKit exposes on PATH only for login shells.
+  if ! command -v sima-cli >/dev/null 2>&1 && [[ -x /data/sima-cli/.venv/bin/sima-cli ]]; then
+    export PATH="${PATH}:/data/sima-cli/.venv/bin"
+  fi
+  step "Installing the Supertonic runtime + models under ${C_DIM}${SUPERTONIC_APP_ROOT}${C_RESET}"
+  if SUPERTONIC_APP_ROOT="${SUPERTONIC_APP_ROOT}" \
+      SUPERTONIC_REPO_ROOT="${SUPERTONIC_REPO_ROOT}" \
+      bash "${SUPERTONIC_REPO_ROOT}/scripts/setup_devkit.sh"; then
+    ok "Supertonic 3 ready (MLA engine, 10 voices, 30+ languages)."
+  else
+    warn "Supertonic setup failed; the CPU TTS engines remain available."
+  fi
+}
+
+if [[ "${INSTALL_SUPERTONIC}" == "1" ]]; then
+  install_supertonic
+else
+  info "Supertonic 3 install skipped (INSTALL_SUPERTONIC=0)."
 fi
 
 # Offer a convenient `neat-ai` shell alias for ./run.sh. Noninteractive setup

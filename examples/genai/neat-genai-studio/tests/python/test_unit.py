@@ -36,6 +36,11 @@ from server.test_asr_switching import (  # noqa: E402
 )
 from server.test_hub_security import HubPathSecurityTests  # noqa: E402,F401
 from test_asr_metadata import AsrMetadataTests  # noqa: E402,F401
+from test_supertonic_tts import (  # noqa: E402,F401
+    ClientConfigurationTests as SupertonicClientConfigurationTests,
+    EnvironmentDiscoveryTests as SupertonicEnvironmentDiscoveryTests,
+    SegmentTextTests as SupertonicSegmentTextTests,
+)
 from test_voice_catalog import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
     test_catalog_rejects_blocked_license,
@@ -69,4 +74,7 @@ __all__ = [
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
     "AsrMetadataTests",
+    "SupertonicClientConfigurationTests",
+    "SupertonicEnvironmentDiscoveryTests",
+    "SupertonicSegmentTextTests",
 ]
