@@ -11,7 +11,9 @@ subprocess. A crashed or reset worker is simply respawned by the client, which
 also covers the Studio's supervised accelerator reset: restarting the MLA
 dispatcher tears down every runner in every process, including this one.
 
-Protocol over stdin/stdout (identical to ``pipertts_worker.py``):
+Protocol over stdin/stdout (identical to ``pipertts_worker.py``; the worker
+duplicates its stdout before the Neat runtime initializes because the runtime
+redirects fd 1, see ``_claim_protocol_channel``):
 
     request  (stdin) : one JSON object per line
         {"cmd": "load"}
@@ -138,8 +140,23 @@ def wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
+def _claim_protocol_channel():
+    """Return an unbuffered writer on the parent's stdout pipe.
+
+    The Neat runtime re-plumbs file descriptor 1 while a model loads (it
+    points at a runtime-owned pipe afterwards), so anything written through
+    ``sys.stdout`` from then on never reaches the client. Duplicate the
+    original descriptor first and send every protocol frame through the copy;
+    fd 1 itself is pointed at stderr so stray prints cannot corrupt the frames.
+    """
+    protocol_fd = os.dup(sys.stdout.fileno())
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout = sys.stderr
+    return os.fdopen(protocol_fd, "wb", buffering=0)
+
+
 def main() -> None:
-    out = sys.stdout.buffer
+    out = _claim_protocol_channel()
 
     def respond(status: int, payload: bytes) -> None:
         out.write(bytes([status]))
