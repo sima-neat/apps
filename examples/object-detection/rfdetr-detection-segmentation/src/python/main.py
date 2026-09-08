@@ -269,46 +269,28 @@ def stable_topk_gather(
 
 def postprocess(
     boxes: np.ndarray,
-    logits: np.ndarray,
     width: int,
     height: int,
     labels: list[str],
     min_score: float,
     max_detections: int,
-    top_k: int = 300,
 ) -> list[dict]:
-    boxes = np.asarray(boxes, dtype=np.float32).reshape(top_k, 4)
-    logits = np.asarray(logits, dtype=np.float32).reshape(top_k, NUM_CLASSES)
-    probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
-    flat_probabilities = probabilities.reshape(-1)
-    ranked = stable_topk_indices(flat_probabilities, CLASSIFICATION_TOP_K)
     objects: list[dict] = []
-    for flat_index in ranked:
-        score = float(flat_probabilities[flat_index])
+    for x1, y1, x2, y2, score, class_value in np.asarray(boxes).reshape(-1, 6):
+        score, class_id = float(score), int(class_value)
         if score < min_score or len(objects) >= max_detections:
             break
-        query, class_id = divmod(int(flat_index), NUM_CLASSES)
         if class_id == 0 or labels[class_id] == "unused":
             continue
-        cx, cy, box_w, box_h = (float(value) for value in boxes[query])
-        x = max(0.0, min((cx - box_w / 2.0) * width, float(width)))
-        y = max(0.0, min((cy - box_h / 2.0) * height, float(height)))
-        x2 = max(x, min((cx + box_w / 2.0) * width, float(width)))
-        y2 = max(y, min((cy + box_h / 2.0) * height, float(height)))
-        objects.append(
-            {
-                "id": f"obj_{len(objects) + 1}",
-                "label": labels[class_id],
-                "confidence": score,
-                "bbox": [x, y, x2 - x, y2 - y],
-            }
-        )
+        x, y = max(0.0, min(float(x1), width)), max(0.0, min(float(y1), height))
+        x2, y2 = max(x, min(float(x2), width)), max(y, min(float(y2), height))
+        objects.append({"id": f"obj_{len(objects) + 1}", "label": labels[class_id],
+                        "confidence": score, "bbox": [x, y, x2 - x, y2 - y]})
     return objects
 
 
 def segmentation_metadata(
     boxes: np.ndarray,
-    logits: np.ndarray,
     masks: np.ndarray,
     width: int,
     height: int,
@@ -318,35 +300,31 @@ def segmentation_metadata(
     mask_threshold: float,
     mask_grid_size: int = 640,
 ) -> str:
-    boxes = np.asarray(boxes, dtype=np.float32).reshape(200, 4)
-    logits = np.asarray(logits, dtype=np.float32).reshape(200, NUM_CLASSES)
-    masks = np.asarray(masks, dtype=np.float32).reshape(MASK_SIZE, MASK_SIZE, 200)
-    probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
-    flat_probabilities = probabilities.reshape(-1)
-    ranked = stable_topk_indices(flat_probabilities, CLASSIFICATION_TOP_K)
-
+    boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 6)
+    masks = np.asarray(masks, dtype=np.float32)
+    if masks.ndim != 3 or masks.shape[0] != boxes.shape[0]:
+        raise ValueError("decoded boxes and masks must have matching detection counts")
+    mask_height, mask_width = masks.shape[1:]
     segments: list[dict] = []
-    for flat_index in ranked:
-        score = float(flat_probabilities[flat_index])
+    for index, (bx0, by0, bx1, by1, score, class_value) in enumerate(boxes):
+        score, class_id = float(score), int(class_value)
         if score < min_score or len(segments) >= max_segments:
             break
-        query, class_id = divmod(int(flat_index), NUM_CLASSES)
         if class_id == 0 or labels[class_id] == "unused":
             continue
 
-        cx, cy, box_width, box_height = (float(value) for value in boxes[query])
-        x0 = max(0, min(width - 1, round((cx - box_width / 2.0) * width)))
-        y0 = max(0, min(height - 1, round((cy - box_height / 2.0) * height)))
-        x1 = max(x0 + 1, min(width, round((cx + box_width / 2.0) * width)))
-        y1 = max(y0 + 1, min(height, round((cy + box_height / 2.0) * height)))
-
-        mx0 = max(0, min(MASK_SIZE - 1, int(np.floor(x0 * MASK_SIZE / width))))
-        my0 = max(0, min(MASK_SIZE - 1, int(np.floor(y0 * MASK_SIZE / height))))
-        mx1 = max(mx0 + 1, min(MASK_SIZE, int(np.ceil(x1 * MASK_SIZE / width))))
-        my1 = max(my0 + 1, min(MASK_SIZE, int(np.ceil(y1 * MASK_SIZE / height))))
-        mask = 1.0 / (1.0 + np.exp(-np.clip(masks[my0:my1, mx0:mx1, query], -80.0, 80.0)))
-        if mask_grid_size != MASK_SIZE:
-            size = tuple((n * mask_grid_size + MASK_SIZE - 1) // MASK_SIZE for n in mask.shape[::-1])
+        x0 = max(0, min(width - 1, round(float(bx0))))
+        y0 = max(0, min(height - 1, round(float(by0))))
+        x1 = max(x0 + 1, min(width, round(float(bx1))))
+        y1 = max(y0 + 1, min(height, round(float(by1))))
+        mx0 = max(0, min(mask_width - 1, int(np.floor(x0 * mask_width / width))))
+        my0 = max(0, min(mask_height - 1, int(np.floor(y0 * mask_height / height))))
+        mx1 = max(mx0 + 1, min(mask_width, int(np.ceil(x1 * mask_width / width))))
+        my1 = max(my0 + 1, min(mask_height, int(np.ceil(y1 * mask_height / height))))
+        mask = masks[index, my0:my1, mx0:mx1]
+        if mask_grid_size != mask_width or mask_grid_size != mask_height:
+            size = ((mask.shape[1] * mask_grid_size + mask_width - 1) // mask_width,
+                    (mask.shape[0] * mask_grid_size + mask_height - 1) // mask_height)
             mask = cv2.resize(mask, size, interpolation=cv2.INTER_LINEAR)
         binary = (mask >= mask_threshold).astype(np.uint8)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -421,19 +399,13 @@ def split_backbone(sample, proposal_count: int):
 
 
 def split_transformer(sample, cfg: Config):
-    boxes = logits = masks = None
-    for tensor in collect_tensors(sample):
-        shape = _shape(tensor)
-        elements = int(np.prod(shape))
-        if elements == cfg.top_k * 4:
-            boxes = tensor
-        elif elements == cfg.top_k * NUM_CLASSES:
-            logits = tensor
-        elif cfg.task == "segmentation" and elements == cfg.top_k * MASK_SIZE * MASK_SIZE:
-            masks = tensor
-    if boxes is None or logits is None or (cfg.task == "segmentation" and masks is None):
-        raise RuntimeError("transformer did not produce the expected task outputs")
-    return boxes, logits, masks
+    tensors = collect_tensors(sample)
+    if len(tensors) != 1:
+        raise RuntimeError("transformer must produce one BoxDecode result")
+    if cfg.task == "segmentation":
+        result = pyneat.decode_segmentation(tensors)[0]
+        return result.boxes, result.masks
+    return pyneat.decode_bbox(tensors)[0], None
 
 
 def copy_identity(source, target) -> None:
@@ -515,23 +487,28 @@ def run(cfg: Config) -> int:
     transformer_options = pyneat.ModelOptions()
     transformer_options.preprocess.kind = pyneat.InputKind.Tensor
     transformer_options.preprocess.enable = pyneat.AutoFlag.Off
+    transformer_options.decode_type = (pyneat.BoxDecodeType.RfDetrSeg
+                                       if cfg.task == "segmentation" else pyneat.BoxDecodeType.RfDetr)
+    transformer_options.score_threshold = cfg.min_score
+    # Keep all prepared candidates so unused labels or empty polygons do not
+    # consume the application's final result limit.
+    transformer_options.top_k = CLASSIFICATION_TOP_K
+    transformer_options.masks.output = pyneat.MaskOutput.Probabilities
+    transformer_options.boxdecode_original_width = width
+    transformer_options.boxdecode_original_height = height
+    transformer_options.boxdecode_resize_mode = pyneat.ResizeMode.Stretch
     transformer_options.processcvu.pre_run_target = "A65"
     transformer_options.processcvu.post_run_target = "A65"
     transformer = pyneat.Model(cfg.transformer, transformer_options)
 
     side = cfg.feature_size
-    transformer_outputs = [[1, cfg.top_k, 4], [1, cfg.top_k, NUM_CLASSES]]
-    if cfg.task == "segmentation":
-        transformer_outputs.append([MASK_SIZE, MASK_SIZE, cfg.top_k])
     expected_shapes = (
         [[1, side, side, 256], [1, side * side], [1, side * side, 4]],
         [[side, side, 256], [1, cfg.top_k, 4]],
-        transformer_outputs,
     )
     actual_specs = (
         backbone.output_specs(),
         transformer.input_specs(),
-        transformer.output_specs(),
     )
     backbone_inputs = backbone.input_specs()
     valid_contract = (
@@ -544,6 +521,8 @@ def run(cfg: Config) -> int:
             list(spec.dtypes) != [pyneat.TensorDType.Float32] for spec in specs
         ):
             valid_contract = False
+    decoded_specs = transformer.output_specs()
+    valid_contract = valid_contract and len(decoded_specs) == 1 and list(decoded_specs[0].dtypes) == [pyneat.TensorDType.UInt8]
     if not valid_contract:
         raise RuntimeError("selected RF-DETR model pair has an unexpected I/O contract")
 
@@ -690,19 +669,17 @@ def run(cfg: Config) -> int:
             tensors = collect_tensors(sample)
             if not tensors:
                 continue
-            box_tensor, logit_tensor, mask_tensor = split_transformer(sample, cfg)
+            box_tensor, mask_tensor = split_transformer(sample, cfg)
             if cfg.task == "detection":
                 data = json.dumps(
                     {
                         "objects": postprocess(
                             box_tensor.to_numpy(copy=False),
-                            logit_tensor.to_numpy(copy=False),
                             width,
                             height,
                             labels,
                             cfg.min_score,
                             cfg.max_results,
-                            cfg.top_k,
                         )
                     },
                     separators=(",", ":"),
@@ -711,7 +688,6 @@ def run(cfg: Config) -> int:
             else:
                 data = segmentation_metadata(
                     box_tensor.to_numpy(copy=False),
-                    logit_tensor.to_numpy(copy=False),
                     mask_tensor.to_numpy(copy=False),
                     width,
                     height,

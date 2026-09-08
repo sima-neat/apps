@@ -18,6 +18,11 @@ Run RF-DETR detection or instance segmentation on one H.264, H.265, or MJPEG RTS
 
 The application decodes to NV12 once. EV74 converts, resizes, and normalizes each frame for the selected backbone. A one-frame queue drops stale decoded frames if inference falls behind. Host code then selects the strongest proposals and passes the matching boxes and feature tensor to the transformer. Insight receives the source video and matching detection boxes or segmentation polygons.
 
+RF-DETR BoxDecode performs final detection selection in the Neat runtime without
+NMS. Segmentation returns only selected native mask probabilities. The example
+keeps mask cropping, resizing and polygon extraction in application code, using
+the existing confidence, mask threshold and result-limit settings.
+
 ## Preview
 
 ![RF-DETR detection and segmentation preview](../../../portal/assets/examples/object-detection/rfdetr-detection-segmentation/image.jpg)

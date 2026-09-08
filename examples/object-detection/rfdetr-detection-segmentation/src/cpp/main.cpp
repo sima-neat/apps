@@ -364,32 +364,18 @@ BackboneOutputs split_backbone(const neat::Sample& sample, int proposal_count) {
 
 struct TransformerOutputs {
   neat::Tensor boxes;
-  neat::Tensor logits;
   std::optional<neat::Tensor> masks;
 };
 
 TransformerOutputs split_transformer(const neat::Sample& sample, const Config& cfg) {
-  TransformerOutputs output;
-  bool have_boxes = false;
-  bool have_logits = false;
-  for (const auto& tensor : collect_tensors(sample)) {
-    const auto elements = element_count(tensor.shape);
-    if (elements == static_cast<std::size_t>(cfg.top_k) * 4U) {
-      output.boxes = tensor;
-      have_boxes = true;
-    } else if (elements == static_cast<std::size_t>(cfg.top_k) * kNumClasses) {
-      output.logits = tensor;
-      have_logits = true;
-    } else if (cfg.task == Task::Segmentation &&
-               elements == static_cast<std::size_t>(kMaskSize) * kMaskSize * cfg.top_k) {
-      output.masks = tensor;
-    }
+  const auto tensors = collect_tensors(sample);
+  if (tensors.size() != 1U)
+    throw std::runtime_error("transformer must produce one BoxDecode result");
+  if (cfg.task == Task::Segmentation) {
+    auto result = neat::decode_segmentation(tensors).front();
+    return {std::move(result.boxes), std::move(result.masks)};
   }
-  if (!have_boxes || !have_logits ||
-      (cfg.task == Task::Segmentation && !output.masks.has_value())) {
-    throw std::runtime_error("transformer did not produce the expected output tensors");
-  }
-  return output;
+  return {neat::decode_bbox(tensors).front(), std::nullopt};
 }
 
 void copy_identity(const neat::Sample& source, neat::Sample& target) {
@@ -442,95 +428,61 @@ neat::TensorList transformer_inputs(const neat::Model& model, neat::Tensor featu
   return inputs;
 }
 
-std::vector<sima_examples::MetadataBox>
-postprocess(const std::vector<float>& boxes, const std::vector<float>& logits, int frame_width,
-            int frame_height, const std::vector<std::string>& labels, float min_score,
-            int max_detections, int top_k) {
-  if (boxes.size() != static_cast<std::size_t>(top_k) * 4U ||
-      logits.size() != static_cast<std::size_t>(top_k) * kNumClasses) {
-    throw std::runtime_error("unexpected transformer output shape");
-  }
-  std::vector<float> probabilities(logits.size());
-  std::transform(logits.begin(), logits.end(), probabilities.begin(), [](float value) {
-    value = std::clamp(value, -80.0F, 80.0F);
-    return 1.0F / (1.0F + std::exp(-value));
-  });
-  const auto ranking = stable_topk_indices(probabilities, kClassificationTopK);
-
+std::vector<sima_examples::MetadataBox> postprocess(const std::vector<float>& boxes,
+                                                    int frame_width, int frame_height,
+                                                    const std::vector<std::string>& labels,
+                                                    float min_score, int max_detections) {
+  if (boxes.size() % 6U)
+    throw std::runtime_error("decoded boxes must have six columns");
   std::vector<sima_examples::MetadataBox> objects;
   objects.reserve(static_cast<std::size_t>(max_detections));
-  for (const int flat_index : ranking) {
-    const float score = probabilities[static_cast<std::size_t>(flat_index)];
-    if (score < min_score || objects.size() >= static_cast<std::size_t>(max_detections)) {
+  for (std::size_t offset = 0; offset < boxes.size(); offset += 6U) {
+    const float score = boxes[offset + 4U];
+    if (score < min_score || objects.size() >= static_cast<std::size_t>(max_detections))
       break;
-    }
-    const int query = flat_index / kNumClasses;
-    const int class_id = flat_index % kNumClasses;
-    if (class_id == 0 || labels[static_cast<std::size_t>(class_id)] == "unused") {
+    const int class_id = static_cast<int>(boxes[offset + 5U]);
+    if (class_id == 0 || labels.at(static_cast<std::size_t>(class_id)) == "unused")
       continue;
-    }
-    const auto offset = static_cast<std::size_t>(query) * 4U;
-    const float cx = boxes[offset];
-    const float cy = boxes[offset + 1U];
-    const float box_width = boxes[offset + 2U];
-    const float box_height = boxes[offset + 3U];
-    const float x =
-        std::clamp((cx - box_width / 2.0F) * frame_width, 0.0F, static_cast<float>(frame_width));
-    const float y =
-        std::clamp((cy - box_height / 2.0F) * frame_height, 0.0F, static_cast<float>(frame_height));
-    const float x2 =
-        std::clamp((cx + box_width / 2.0F) * frame_width, x, static_cast<float>(frame_width));
-    const float y2 =
-        std::clamp((cy + box_height / 2.0F) * frame_height, y, static_cast<float>(frame_height));
+    const float x = std::clamp(boxes[offset], 0.0F, static_cast<float>(frame_width));
+    const float y = std::clamp(boxes[offset + 1U], 0.0F, static_cast<float>(frame_height));
+    const float x2 = std::clamp(boxes[offset + 2U], x, static_cast<float>(frame_width));
+    const float y2 = std::clamp(boxes[offset + 3U], y, static_cast<float>(frame_height));
     objects.push_back({"obj_" + std::to_string(objects.size() + 1U),
                        labels[static_cast<std::size_t>(class_id)], score, x, y, x2 - x, y2 - y});
   }
   return objects;
 }
 
-float sigmoid(float value) {
-  value = std::clamp(value, -80.0F, 80.0F);
-  return 1.0F / (1.0F + std::exp(-value));
-}
-
-cv::Rect frame_rect(const std::vector<float>& boxes, int query, int width, int height) {
-  const auto offset = static_cast<std::size_t>(query) * 4U;
-  const float cx = boxes[offset];
-  const float cy = boxes[offset + 1U];
-  const float box_width = boxes[offset + 2U];
-  const float box_height = boxes[offset + 3U];
-  const int x0 =
-      std::clamp(static_cast<int>(std::nearbyint((cx - box_width / 2.0F) * width)), 0, width - 1);
-  const int y0 = std::clamp(static_cast<int>(std::nearbyint((cy - box_height / 2.0F) * height)), 0,
-                            height - 1);
-  const int x1 =
-      std::clamp(static_cast<int>(std::nearbyint((cx + box_width / 2.0F) * width)), x0 + 1, width);
-  const int y1 = std::clamp(static_cast<int>(std::nearbyint((cy + box_height / 2.0F) * height)),
-                            y0 + 1, height);
+cv::Rect frame_rect(const std::vector<float>& boxes, int index, int width, int height) {
+  const auto offset = static_cast<std::size_t>(index) * 6U;
+  const int x0 = std::clamp(static_cast<int>(std::nearbyint(boxes[offset])), 0, width - 1);
+  const int y0 = std::clamp(static_cast<int>(std::nearbyint(boxes[offset + 1U])), 0, height - 1);
+  const int x1 = std::clamp(static_cast<int>(std::nearbyint(boxes[offset + 2U])), x0 + 1, width);
+  const int y1 = std::clamp(static_cast<int>(std::nearbyint(boxes[offset + 3U])), y0 + 1, height);
   return {x0, y0, x1 - x0, y1 - y0};
 }
 
-std::vector<cv::Point> mask_polygon(const float* masks, int query, int top_k, const cv::Rect& box,
-                                    int frame_width, int frame_height, float threshold,
-                                    int mask_grid_size) {
-  const double mask_scale_x = static_cast<double>(kMaskSize) / frame_width;
-  const double mask_scale_y = static_cast<double>(kMaskSize) / frame_height;
-  const int x0 = std::clamp(static_cast<int>(std::floor(box.x * mask_scale_x)), 0, kMaskSize - 1);
-  const int y0 = std::clamp(static_cast<int>(std::floor(box.y * mask_scale_y)), 0, kMaskSize - 1);
+std::vector<cv::Point> mask_polygon(const float* masks, int index, int mask_width, int mask_height,
+                                    const cv::Rect& box, int frame_width, int frame_height,
+                                    float threshold, int mask_grid_size) {
+  const double mask_scale_x = static_cast<double>(mask_width) / frame_width;
+  const double mask_scale_y = static_cast<double>(mask_height) / frame_height;
+  const int x0 = std::clamp(static_cast<int>(std::floor(box.x * mask_scale_x)), 0, mask_width - 1);
+  const int y0 = std::clamp(static_cast<int>(std::floor(box.y * mask_scale_y)), 0, mask_height - 1);
   const int x1 = std::clamp(static_cast<int>(std::ceil((box.x + box.width) * mask_scale_x)), x0 + 1,
-                            kMaskSize);
+                            mask_width);
   const int y1 = std::clamp(static_cast<int>(std::ceil((box.y + box.height) * mask_scale_y)),
-                            y0 + 1, kMaskSize);
+                            y0 + 1, mask_height);
   cv::Mat mask(y1 - y0, x1 - x0, CV_32FC1);
   for (int y = y0; y < y1; ++y) {
     auto* row = mask.ptr<float>(y - y0);
     for (int x = x0; x < x1; ++x) {
-      row[x - x0] = sigmoid(masks[(y * kMaskSize + x) * top_k + query]);
+      row[x - x0] = masks[(static_cast<std::size_t>(index) * mask_height + y) * mask_width + x];
     }
   }
-  if (mask_grid_size != kMaskSize) {
-    const cv::Size size((mask.cols * mask_grid_size + kMaskSize - 1) / kMaskSize,
-                        (mask.rows * mask_grid_size + kMaskSize - 1) / kMaskSize);
+  if (mask_grid_size != mask_width || mask_grid_size != mask_height) {
+    const cv::Size size((mask.cols * mask_grid_size + mask_width - 1) / mask_width,
+                        (mask.rows * mask_grid_size + mask_height - 1) / mask_height);
     cv::resize(mask, mask, size, 0.0, 0.0, cv::INTER_LINEAR);
   }
   cv::Mat binary;
@@ -564,18 +516,22 @@ std::string segmentation_metadata(const TransformerOutputs& output, int frame_wi
                                   int frame_height, const std::vector<std::string>& labels,
                                   const Config& cfg) {
   const auto boxes = read_floats(output.boxes);
-  const auto logits = read_floats(output.logits);
   const auto& masks_tensor = *output.masks;
   if (masks_tensor.dtype != neat::TensorDType::Float32) {
     throw std::runtime_error("segmentation mask output must be float32");
   }
+  if (masks_tensor.shape.size() != 3U ||
+      masks_tensor.shape[0] != static_cast<int64_t>(boxes.size() / 6U))
+    throw std::runtime_error("decoded boxes and masks must have matching detection counts");
+  const int mask_height = static_cast<int>(masks_tensor.shape[1]);
+  const int mask_width = static_cast<int>(masks_tensor.shape[2]);
   neat::Mapping masks_map = masks_tensor.is_dense() && masks_tensor.is_contiguous()
                                 ? masks_tensor.view_read()
                                 : neat::Mapping{};
   std::vector<float> masks_copy;
   const float* masks = nullptr;
   const std::size_t expected_bytes =
-      static_cast<std::size_t>(kMaskSize) * kMaskSize * cfg.top_k * sizeof(float);
+      static_cast<std::size_t>(mask_width) * mask_height * (boxes.size() / 6U) * sizeof(float);
   if (masks_map.data != nullptr && masks_map.size_bytes >= expected_bytes) {
     masks = static_cast<const float*>(masks_map.data);
   } else {
@@ -583,25 +539,21 @@ std::string segmentation_metadata(const TransformerOutputs& output, int frame_wi
     masks = masks_copy.data();
   }
 
-  std::vector<float> probabilities(logits.size());
-  std::transform(logits.begin(), logits.end(), probabilities.begin(), sigmoid);
-  const auto ranking = stable_topk_indices(probabilities, kClassificationTopK);
-
   nlohmann::json segments = nlohmann::json::array();
   std::size_t encoded_bytes = sizeof(R"({"segments":[]})") - 1U;
-  for (const int flat_index : ranking) {
-    const float score = probabilities[static_cast<std::size_t>(flat_index)];
+  for (std::size_t index = 0; index < boxes.size() / 6U; ++index) {
+    const float score = boxes[index * 6U + 4U];
     if (score < cfg.min_score || segments.size() >= static_cast<std::size_t>(cfg.max_results)) {
       break;
     }
-    const int query = flat_index / kNumClasses;
-    const int class_id = flat_index % kNumClasses;
+    const int class_id = static_cast<int>(boxes[index * 6U + 5U]);
     if (class_id == 0 || labels[static_cast<std::size_t>(class_id)] == "unused") {
       continue;
     }
-    const cv::Rect box = frame_rect(boxes, query, frame_width, frame_height);
-    const auto polygon = mask_polygon(masks, query, cfg.top_k, box, frame_width, frame_height,
-                                      cfg.mask_threshold, cfg.mask_grid_size);
+    const cv::Rect box = frame_rect(boxes, static_cast<int>(index), frame_width, frame_height);
+    const auto polygon =
+        mask_polygon(masks, static_cast<int>(index), mask_width, mask_height, box, frame_width,
+                     frame_height, cfg.mask_threshold, cfg.mask_grid_size);
     if (polygon.empty()) {
       continue;
     }
@@ -687,6 +639,15 @@ int run(const Config& cfg) {
   neat::Model::Options transformer_options;
   transformer_options.preprocess.kind = neat::InputKind::Tensor;
   transformer_options.preprocess.enable = neat::AutoFlag::Off;
+  transformer_options.decode_type =
+      cfg.task == Task::Segmentation ? neat::BoxDecodeType::RfDetrSeg : neat::BoxDecodeType::RfDetr;
+  transformer_options.score_threshold = cfg.min_score;
+  // Unused labels and empty polygons must not consume the final application cap.
+  transformer_options.top_k = kClassificationTopK;
+  transformer_options.masks.output = neat::MaskOutput::Probabilities;
+  transformer_options.boxdecode_original_width = geometry.width;
+  transformer_options.boxdecode_original_height = geometry.height;
+  transformer_options.boxdecode_resize_mode = neat::ResizeMode::Stretch;
   transformer_options.processcvu.pre_run_target = "A65";
   transformer_options.processcvu.post_run_target = "A65";
   neat::Model transformer(cfg.transformer, transformer_options);
@@ -704,11 +665,6 @@ int run(const Config& cfg) {
     return true;
   };
   const int side = cfg.feature_size;
-  std::vector<std::vector<int64_t>> transformer_outputs = {{1, cfg.top_k, 4},
-                                                           {1, cfg.top_k, kNumClasses}};
-  if (cfg.task == Task::Segmentation) {
-    transformer_outputs.push_back({kMaskSize, kMaskSize, cfg.top_k});
-  }
   const auto backbone_inputs = backbone.input_specs();
   const bool valid_contract =
       backbone_inputs.size() == 1U &&
@@ -717,7 +673,9 @@ int run(const Config& cfg) {
       has_specs(backbone.output_specs(),
                 {{1, side, side, 256}, {1, side * side}, {1, side * side, 4}}) &&
       has_specs(transformer.input_specs(), {{side, side, 256}, {1, cfg.top_k, 4}}) &&
-      has_specs(transformer.output_specs(), transformer_outputs);
+      transformer.output_specs().size() == 1U &&
+      transformer.output_specs().front().dtypes ==
+          std::vector<neat::TensorDType>{neat::TensorDType::UInt8};
   sima_examples::require(valid_contract,
                          "selected RF-DETR model pair has an unexpected I/O contract");
 
@@ -861,9 +819,8 @@ int run(const Config& cfg) {
       const std::string data =
           cfg.task == Task::Detection
               ? sima_examples::metadata_boxes_data_json(
-                    "objects", postprocess(read_floats(output.boxes), read_floats(output.logits),
-                                           geometry.width, geometry.height, labels, cfg.min_score,
-                                           cfg.max_results, cfg.top_k))
+                    "objects", postprocess(read_floats(output.boxes), geometry.width,
+                                           geometry.height, labels, cfg.min_score, cfg.max_results))
               : segmentation_metadata(output, geometry.width, geometry.height, labels, cfg);
       const int64_t source_frame_id = sample.frame_id;
       int64_t source_pts_ns = sample.pts_ns;
