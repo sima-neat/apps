@@ -493,7 +493,6 @@ def run(cfg: Config) -> int:
     # Keep all prepared candidates so unused labels or empty polygons do not
     # consume the application's final result limit.
     transformer_options.top_k = CLASSIFICATION_TOP_K
-    transformer_options.masks.output = pyneat.MaskOutput.Probabilities
     transformer_options.boxdecode_original_width = width
     transformer_options.boxdecode_original_height = height
     transformer_options.boxdecode_resize_mode = pyneat.ResizeMode.Stretch

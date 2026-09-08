@@ -644,7 +644,6 @@ int run(const Config& cfg) {
   transformer_options.score_threshold = cfg.min_score;
   // Unused labels and empty polygons must not consume the final application cap.
   transformer_options.top_k = kClassificationTopK;
-  transformer_options.masks.output = neat::MaskOutput::Probabilities;
   transformer_options.boxdecode_original_width = geometry.width;
   transformer_options.boxdecode_original_height = geometry.height;
   transformer_options.boxdecode_resize_mode = neat::ResizeMode::Stretch;
