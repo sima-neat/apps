@@ -1967,6 +1967,14 @@ class AppContext:
                 if str(language).strip().lower() == 'auto'
                 else normalize_language_code(language)
             )
+            # In auto mode the browser echoes the last *detected* speech
+            # language for typed prompts. When that is not a language any
+            # server voice speaks, a typed prompt would otherwise be answered
+            # silently; speak English instead. Voice input keeps its own
+            # routing below (unsupported detected languages stay text-only).
+            if (str(language).strip().lower() == 'auto'
+                    and initial_tts_language not in self.talk_ctrl.supported_langs):
+                initial_tts_language = 'en'
             self.talk_ctrl.set_language(initial_tts_language)
             # Set before any tokens are enqueued so the worker never synthesizes.
             self.talk_ctrl.set_tts_enabled(enable_tts)

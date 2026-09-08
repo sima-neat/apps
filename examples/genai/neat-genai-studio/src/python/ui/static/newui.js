@@ -2354,7 +2354,11 @@ function updateAsrMetrics(metadata) {
   if (logprobEl) {
     logprobEl.textContent = Number.isFinite(avgLogprob) ? avgLogprob.toFixed(2) : '—';
   }
-  if (metadata.language_detected && metadata.language) {
+  // Adopt the detected language only from a clip that actually held speech.
+  // Whisper still guesses a language for silence or noise (an ignored result),
+  // and that guess is arbitrary — adopting it (e.g. 'nn') would make every
+  // following typed prompt ask for a voice no engine has, silencing replies.
+  if (metadata.language_detected && metadata.language && !metadata.ignored) {
     _detectedSpeechLanguage = metadata.tts_language || metadata.language;
     updateVoiceEngineForLanguage();
   }
