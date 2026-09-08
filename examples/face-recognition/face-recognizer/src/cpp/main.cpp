@@ -1,5 +1,9 @@
 #include "neat.h"
 #include "support/runtime/config_utils.h"
+#include "support/runtime/example_utils.h"
+
+#include <nodes/io/MetadataSender.h>
+#include <nlohmann/json.hpp>
 
 #include "scrfd_decode.h"
 #include "align.h"
@@ -48,8 +52,9 @@ struct AppConfig {
     bool        gallery_path_set = false;  // true when --gallery was explicitly passed
     std::string input_uri;          // RTSP URL, video file path, or empty for webcam 0
     std::string output_sink;        // file path, "display", or empty (no output)
-    std::string insight_host;       // Insight host IP for overlay video; read from output.insight.host
-    int  insight_video_port  = 9000;// Insight video UDP port; read from output.insight.video_port
+    std::string insight_host;             // Insight host IP; read from output.insight.host
+    int  insight_video_port    = 9000;   // Insight video UDP port; read from output.insight.video_port
+    int  insight_metadata_port = 9100;   // Insight metadata UDP port; read from output.insight.metadata_port
     std::string stream_host;        // CLI override: redirect overlay to custom receiver instead of Insight
     int  stream_port         = 5000;// CLI override port (used only when --stream-host is set)
     int  max_frames          = 0;   // 0 = unlimited
@@ -95,10 +100,19 @@ static AppConfig load_config(const fs::path& path) {
     cfg.scrfd_model   = resolve(raw.string_or("scrfd.model",   cfg.scrfd_model));
     cfg.arcface_model = resolve(raw.string_or("arcface.model", cfg.arcface_model));
     cfg.gallery_path  = resolve(raw.string_or("gallery.path",  cfg.gallery_path));
-    cfg.input_uri          = raw.string_or("input.uri",                  "");
-    cfg.output_sink        = raw.string_or("output.sink",                "");
-    cfg.insight_host       = raw.string_or("output.insight.host",        "");
-    cfg.insight_video_port = raw.int_or   ("output.insight.video_port",  9000);
+    // For file-based input/output, resolve relative paths from the package root just like
+    // model and gallery paths. Skip URIs (contain "://") and special tokens ("display", "0").
+    auto resolve_media = [&](const std::string& p) -> std::string {
+        if (p.empty() || fs::path(p).is_absolute()) return p;
+        if (p.find("://") != std::string::npos) return p;
+        if (p == "display" || p == "0") return p;
+        return (pkg_root / p).lexically_normal().string();
+    };
+    cfg.input_uri          = resolve_media(raw.string_or("input.uri",   ""));
+    cfg.output_sink        = resolve_media(raw.string_or("output.sink",  ""));
+    cfg.insight_host          = raw.string_or("output.insight.host",            "");
+    cfg.insight_video_port    = raw.int_or   ("output.insight.video_port",       9000);
+    cfg.insight_metadata_port = raw.int_or   ("output.insight.metadata_port",    9100);
     cfg.timeout_ms      = raw.int_or("runtime.timeout_ms",     cfg.timeout_ms);
     cfg.queue_depth     = raw.int_or("runtime.queue_depth",    cfg.queue_depth);
     cfg.recog_interval  = raw.int_or("runtime.recog_interval", cfg.recog_interval);
@@ -179,8 +193,9 @@ static AppConfig parse_args(int argc, char** argv) {
     cfg.queue_depth         = yaml_cfg.queue_depth;
     cfg.recog_interval      = yaml_cfg.recog_interval;
     cfg.supported_fps       = yaml_cfg.supported_fps;
-    cfg.insight_host        = yaml_cfg.insight_host;
-    cfg.insight_video_port  = yaml_cfg.insight_video_port;
+    cfg.insight_host           = yaml_cfg.insight_host;
+    cfg.insight_video_port     = yaml_cfg.insight_video_port;
+    cfg.insight_metadata_port  = yaml_cfg.insight_metadata_port;
     cfg.scrfd         = yaml_cfg.scrfd;
     cfg.match         = yaml_cfg.match;
     cfg.overlay       = yaml_cfg.overlay;
@@ -697,11 +712,33 @@ int main(int argc, char** argv) {
     long   enc_push_ok    = 0;   // frames accepted by the encoder input queue
     long   enc_push_drop  = 0;   // frames dropped because that queue was full
     double enc_push_ms    = 0.0; // cumulative time spent in try_push
+
+    // Metadata sender — publishes face boxes + identity labels to Insight per frame.
+    // Skipped when no insight/stream host is configured or when a custom stream host is
+    // used (custom receivers do not speak the Insight metadata protocol).
+    std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
+    const bool use_insight = !cfg.insight_host.empty() && cfg.stream_host.empty();
+    if (use_insight) {
+        simaai::neat::MetadataSenderOptions meta_opt;
+        meta_opt.host = cfg.insight_host;
+        meta_opt.channel = 0;
+        meta_opt.metadata_port_base = cfg.insight_metadata_port;
+        std::string meta_err;
+        metadata_sender = std::make_unique<simaai::neat::MetadataSender>(meta_opt, &meta_err);
+        if (!metadata_sender->ok()) {
+            std::cerr << "[stream] MetadataSender init failed: " << meta_err << "\n";
+            metadata_sender.reset();
+        }
+    }
+
     if (!eff_stream_host.empty()) {
         const bool custom = !cfg.stream_host.empty();
         std::cout << "[stream] Will send overlay H.264 stream (SiMa HW encoder) -> udp://"
                   << eff_stream_host << ":" << eff_stream_port
                   << (custom ? "  [custom receiver]\n" : "  [Insight viewer]\n");
+        if (metadata_sender)
+            std::cout << "[stream] MetadataSender -> udp://" << cfg.insight_host
+                      << ":" << metadata_sender->metadata_port() << " channel=0\n";
     }
 
     // Async display thread — decouples imshow/waitKey from the pipeline loop.
@@ -995,6 +1032,33 @@ int main(int argc, char** argv) {
         }
         const auto& matches = cached_matches;
         const auto tc2 = Clock::now();
+
+        // Publish face boxes + identity labels to Insight metadata overlay.
+        if (metadata_sender) {
+            nlohmann::json objects = nlohmann::json::array();
+            for (size_t i = 0; i < detections.size(); ++i) {
+                const auto& det = detections[i];
+                const std::string& label = (i < matches.size()) ? matches[i].name : "Unknown";
+                const float score = (i < matches.size()) ? matches[i].score : 0.f;
+                objects.push_back({
+                    {"id",         "face_" + std::to_string(i + 1)},
+                    {"label",      label},
+                    {"confidence", score},
+                    {"bbox",       {std::max(0.f, det.x1), std::max(0.f, det.y1),
+                                    std::max(0.f, det.x2 - det.x1),
+                                    std::max(0.f, det.y2 - det.y1)}}
+                });
+            }
+            const std::string data_json = nlohmann::json{{"objects", std::move(objects)}}.dump();
+            const int64_t ts_ms = (is_rtsp && last_pull_pts_ns >= 0) ? last_pull_pts_ns / 1'000'000 : -1;
+            const std::string frame_id_str = std::to_string(frame_count);
+            std::string meta_err;
+            if (!metadata_sender->send_metadata("object-detection", data_json, ts_ms,
+                                                frame_id_str, &meta_err)) {
+                if (frame_count % 100 == 0)
+                    std::cerr << "[stream] metadata send failed: " << meta_err << "\n";
+            }
+        }
 
         // NV12 path: annotate the NV12 buffer in place (fast). A full-frame NV12→BGR
         // conversion is produced only when a file writer actually needs one; the encoder

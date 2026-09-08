@@ -9,7 +9,7 @@
 namespace face_recog {
 
 static constexpr char kMagic[8] = {'F','R','G','A','L','1','\n','\0'};
-static constexpr uint32_t kVersion = 2;  // v2 adds uint32_t sample_count after each embedding
+static constexpr uint32_t kVersion = 3;  // v3 adds float32[512] raw_mean after sample_count
 
 // ── l2-normalization ──────────────────────────────────────────────────────────
 
@@ -43,6 +43,10 @@ void save_gallery(const Gallery& g, const std::filesystem::path& path) {
         f.write(reinterpret_cast<const char*>(e.embedding.data()),
                 kEmbeddingDim * sizeof(float));
         f.write(reinterpret_cast<const char*>(&e.sample_count), 4);
+        // v3: raw_mean is the unnormalized mean (weighted_sum/count) before L2-norm,
+        // so re-enrollment can reconstruct the original weighted sum accurately.
+        const Embedding& rm = (e.raw_mean.size() == kEmbeddingDim) ? e.raw_mean : e.embedding;
+        f.write(reinterpret_cast<const char*>(rm.data()), kEmbeddingDim * sizeof(float));
     }
 
     if (!f)
@@ -61,7 +65,7 @@ Gallery load_gallery(const std::filesystem::path& path) {
 
     uint32_t ver = 0;
     f.read(reinterpret_cast<char*>(&ver), 4);
-    if (ver != 1 && ver != 2)
+    if (ver < 1 || ver > 3)
         throw std::runtime_error("load_gallery: unsupported version " + std::to_string(ver));
 
     uint32_t n = 0;
@@ -87,7 +91,17 @@ Gallery load_gallery(const std::filesystem::path& path) {
             if (!f)
                 throw std::runtime_error("load_gallery: truncated file reading sample_count: " + path.string());
         }
-        g.entries.push_back({std::move(name), std::move(emb), sample_count});
+        // v3: read the unnormalized mean for accurate re-enrollment weight reconstruction.
+        // For v1/v2, approximate with the normalized embedding (introduces small error on re-enroll).
+        Embedding raw_mean(kEmbeddingDim);
+        if (ver >= 3) {
+            f.read(reinterpret_cast<char*>(raw_mean.data()), kEmbeddingDim * sizeof(float));
+            if (!f)
+                throw std::runtime_error("load_gallery: truncated file reading raw_mean: " + path.string());
+        } else {
+            raw_mean = emb;
+        }
+        g.entries.push_back({std::move(name), std::move(emb), std::move(raw_mean), sample_count});
     }
 
     return g;
@@ -115,11 +129,14 @@ Gallery GalleryBuilder::finish() const {
     g.entries.reserve(accum.size());
     for (const auto& acc : accum) {
         if (acc.total_count == 0) continue;
-        Embedding mean = acc.weighted_sum;
+        // raw_mean = weighted_sum / count (unnormalized); stored so re-enrollment can
+        // reconstruct the original weighted sum as raw_mean * count without magnitude loss.
+        Embedding raw_mean = acc.weighted_sum;
         const float inv = 1.f / static_cast<float>(acc.total_count);
-        for (float& v : mean) v *= inv;
-        l2_normalize(mean);
-        g.entries.push_back({acc.name, std::move(mean), acc.total_count});
+        for (float& v : raw_mean) v *= inv;
+        Embedding normalized = raw_mean;
+        l2_normalize(normalized);
+        g.entries.push_back({acc.name, std::move(normalized), std::move(raw_mean), acc.total_count});
     }
     return g;
 }

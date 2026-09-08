@@ -12,7 +12,8 @@ using Embedding = std::vector<float>;
 
 struct GalleryEntry {
     std::string name;
-    Embedding   embedding;    // L2-normalized, length kEmbeddingDim
+    Embedding   embedding;    // L2-normalized centroid, length kEmbeddingDim (for matching)
+    Embedding   raw_mean;     // unnormalized mean = weighted_sum/count before L2-norm (for re-enrollment)
     uint32_t    sample_count; // number of raw embeddings averaged into this centroid
 };
 
