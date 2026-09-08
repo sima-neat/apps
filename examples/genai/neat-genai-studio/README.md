@@ -475,6 +475,13 @@ selector in Settings.
 - The default router preference is `supertonic` when its runtime loaded and
   `piper-tts` otherwise. Selecting `piper-plus` under **Settings → Voice engine**
   switches supported languages to the active multilingual voice.
+- **CPU engines load on demand.** When Supertonic is available, piper-plus and
+  the dedicated piper-tts voices stay out of RAM at startup; only languages
+  Supertonic cannot speak (Chinese, Norwegian) get their Piper voice loaded.
+  The **Voice engine** picker still lists installed CPU engines, marked
+  "loads on select"; choosing piper-tts loads the voice for the current
+  language (a few seconds) and other languages load on their first spoken
+  reply. Without Supertonic every installed engine loads at startup as before.
 - **Supertonic runs in its own venv and worker too.** Its runtime needs `pyneat`,
   `onnxruntime` and `numpy 1.26`, which the UI venv does not carry, so `setup.sh`
   clones [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima)

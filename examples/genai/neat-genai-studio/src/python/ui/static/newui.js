@@ -3102,7 +3102,8 @@ async function updateVoiceEngineForLanguage() {
   engines.forEach(e => {
     const o = document.createElement('option');
     o.value = e.key;
-    o.textContent = e.label || e.key;
+    // CPU engines stay out of RAM until selected; say so in the picker.
+    o.textContent = (e.label || e.key) + (e.loaded === false ? ' · loads on select' : '');
     sel.appendChild(o);
   });
   sel.value = engines.some(e => e.key === _currentTtsEngine) ? _currentTtsEngine : engines[0].value;
@@ -3111,18 +3112,20 @@ async function updateVoiceEngineForLanguage() {
   row.style.display = '';              // always show the supported engine(s)
   sel.onchange = async () => {
     const status = document.getElementById('voiceEngineStatus');
-    if (status) status.textContent = 'Saving…';
+    const chosen = engines.find(e => e.key === sel.value);
+    if (status) status.textContent = (chosen && chosen.loaded === false) ? 'Loading engine…' : 'Saving…';
     sel.disabled = true;
     try {
       const r = await fetch('/tts/engine', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine: sel.value })
+        body: JSON.stringify({ engine: sel.value, lang: getSelectedVoiceLanguage() })
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed');
       _currentTtsEngine = sel.value;
       applyEngineVoiceVisibility();     // swap which voice picker is shown
       updateTtsEngineIndicator();
+      if (chosen && chosen.loaded === false) { updateVoiceEngineForLanguage(); initPiperPlusVoices(); return; }
       if (status) status.textContent = 'Active';
     } catch (err) {
       if (status) status.textContent = 'Failed: ' + err.message;

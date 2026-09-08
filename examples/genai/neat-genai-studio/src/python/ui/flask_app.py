@@ -283,15 +283,23 @@ class TalkController:
         self.browser_tts = False    # when True, no server synthesis — the client speaks via Web Speech
         self.utterance_speed = 1.0
         self.missing_voice_warnings = set()
-        # Supertonic loads its two MPKs on the MLA in a separate worker process;
-        # start it alongside the CPU engines so startup is not serialized on it.
-        st_thread = threading.Thread(target=self._init_supertonic)
-        st_thread.start()
-        # Load Piper Plus first so the dedicated voice loader can report which
-        # allowlisted languages already have a fallback.
-        self._init_piper_plus()
-        self._init_pipers_threaded(supported_langs or ['en'])
-        st_thread.join()
+        self._cpu_engine_lock = threading.Lock()   # serializes deferred CPU engine loads
+        self._pp_attempted = False                  # piper-plus load tried (success or not)
+        langs = supported_langs or ['en']
+        # Supertonic is the default engine. When it loads, the CPU engines stay
+        # out of RAM until a user selects them; only languages Supertonic cannot
+        # speak (Chinese, Norwegian) get their dedicated Piper voice at startup.
+        # Without Supertonic every installed CPU engine loads as before.
+        self._init_supertonic()
+        if self.st is None:
+            self._init_piper_plus()
+            self._init_pipers_threaded(langs)
+        else:
+            uncovered = [lang for lang in langs if not self.st.supports(lang)]
+            if uncovered:
+                self._init_pipers_threaded(uncovered)
+            logging.info("CPU TTS engines (piper-plus, piper-tts) load on demand "
+                         "when selected under Settings -> Voice engine.")
         
         self.lock = threading.Lock()
         self._reset_tps_counters()
@@ -425,6 +433,7 @@ class TalkController:
 
         self.pp = None
         self.pp_current = None
+        self._pp_attempted = True
         if not self.pp_models:
             logging.info("No piper-plus voice found under assets/piper-plus/ — "
                          "multilingual alternative unavailable (run voice_install.sh).")
@@ -467,7 +476,10 @@ class TalkController:
 
     def piper_plus_voices(self):
         """Available piper-plus voices + the current one, for the UI picker."""
-        installed = {model["key"] for model in getattr(self, "pp_models", [])}
+        installed = {
+            voice["id"] for voice in installed_voices(
+                VOICE_CATALOG, assets_path=Path("assets"), engine="piper-plus")
+        }
         return {
             "voices": [
                 {
@@ -522,11 +534,51 @@ class TalkController:
             "current": self.st.voice,
         }
 
-    def set_voice_engine(self, engine):
+    # -- deferred CPU engine loading -------------------------------------------
+    def _installed_piper_plus(self, language=None):
+        """Catalogued piper-plus models on disk (optionally speaking `language`)."""
+        return installed_voices(
+            VOICE_CATALOG, assets_path=Path("assets"), engine="piper-plus",
+            language=language)
+
+    def _installed_pipers(self, language=None):
+        """Catalogued dedicated Piper voices on disk (optionally for `language`)."""
+        return installed_voices(
+            VOICE_CATALOG, assets_path=Path("assets"), engine="piper-tts",
+            language=language)
+
+    def _ensure_piper_plus_loaded(self):
+        """Load piper-plus on first selection. Returns True when an engine is up."""
+        with self._cpu_engine_lock:
+            if self.pp is None and not self._pp_attempted:
+                self._init_piper_plus()
+            return self.pp is not None
+
+    def _load_piper_language(self, language):
+        """Load the dedicated Piper voice for one language if it is installed
+        and not resident yet. Voices load one at a time in the Piper worker, so
+        this is deliberately per language: loading everything on selection would
+        queue tens of seconds of loads ahead of the first utterance."""
+        if not language or language in self.pipers or not self._installed_pipers(language):
+            return language in self.pipers
+        with self._cpu_engine_lock:
+            if language not in self.pipers:
+                self._init_pipers_threaded([language])
+        return language in self.pipers
+
+    def _ensure_pipers_loaded(self, language=None):
+        """Make piper-tts selectable: load the voice for `language` now; other
+        languages load on their first utterance. Returns True when the engine
+        has at least one usable voice (loaded or installed)."""
+        self._load_piper_language(language)
+        return bool(self.pipers) or bool(self._installed_pipers())
+
+    def set_voice_engine(self, engine, language=None):
         """Choose the preferred TTS engine for languages several can speak.
         'supertonic' -> the MLA engine; 'piper-plus' -> prefer piper-plus;
         'piper-tts' -> prefer rhasspy piper; 'browser' -> client-side speech.
-        Languages only one engine supports are unaffected."""
+        Languages only one engine supports are unaffected. CPU engines that
+        were deferred at startup load here, on first selection."""
         engine = (engine or "").strip().lower()
         if engine in ("browser", "web", "webspeech", "web-speech"):
             self.browser_tts = True
@@ -536,10 +588,14 @@ class TalkController:
             self.browser_tts = False
             self.prefer_supertonic = True
         elif engine in ("piper-plus", "piperplus", "pp"):
+            if not self._ensure_piper_plus_loaded():
+                return False
             self.browser_tts = False
             self.prefer_supertonic = False
             self.prefer_piper_plus = True
         elif engine in ("piper-tts", "pipertts", "piper", "rhasspy"):
+            if not self._ensure_pipers_loaded(language):
+                return False
             self.browser_tts = False
             self.prefer_supertonic = False
             self.prefer_piper_plus = False
@@ -561,23 +617,36 @@ class TalkController:
         language are returned, so the UI never offers an incompatible engine."""
         engines = []
         st_ok = self.st is not None and (language is None or self.st.supports(language))
-        pp_ok = self.pp is not None and (language is None or self.pp.supports(language))
-        tts_ok = bool(self.pipers) and (language is None or language in self.pipers)
+        pp_loaded = self.pp is not None and (language is None or self.pp.supports(language))
+        # Deferred engines are offered when their models are installed; selecting
+        # one loads it.
+        pp_ok = pp_loaded or (self.pp is None and not self._pp_attempted
+                              and bool(self._installed_piper_plus(language)))
+        tts_loaded = bool(self.pipers) and (language is None or language in self.pipers)
+        tts_ok = tts_loaded or (
+            (language is None or language not in self.pipers)
+            and bool(self._installed_pipers(language)))
         if st_ok:
-            engines.append({"key": "supertonic", "label": "Supertonic 3 (MLA, multilingual)"})
+            engines.append({"key": "supertonic", "label": "Supertonic 3 (MLA, multilingual)",
+                            "loaded": True})
         if pp_ok:
-            engines.append({"key": "piper-plus", "label": "piper-plus (multilingual)"})
+            engines.append({"key": "piper-plus", "label": "piper-plus (multilingual)",
+                            "loaded": pp_loaded})
         if tts_ok:
-            engines.append({"key": "piper-tts", "label": "piper-tts (rhasspy voices)"})
+            engines.append({"key": "piper-tts", "label": "piper-tts (rhasspy voices)",
+                            "loaded": tts_loaded})
         # Browser TTS runs entirely in the client via the Web Speech API, so it is
         # always available and works for any language the device has a voice for.
-        engines.append({"key": "browser", "label": "Browser (device voices)"})
+        engines.append({"key": "browser", "label": "Browser (device voices)", "loaded": True})
         # The engine the router actually uses for this language.
         if self.browser_tts:
             current = "browser"
         else:
             current = self._preferred_engine_key()
-            if language:
+            if language and current == "piper-tts" and language not in self.pipers \
+                    and self._installed_pipers(language):
+                pass   # deferred dedicated voice: it loads on the first utterance
+            elif language:
                 _, eng = self._get_piper(language)
                 if eng is not None and eng is self.st:
                     current = "supertonic"
@@ -590,18 +659,21 @@ class TalkController:
             current = keys[0]
         return {"engines": engines, "current": current}
 
-    def _get_piper(self, language):
+    def _get_piper(self, language, load=False):
         """Route a language to the best available TTS engine, returning
         ``(effective_language, engine)`` or ``(None, None)`` when nothing can
         speak it. Preference: Supertonic (when preferred) → piper-plus (when
         preferred) → a dedicated catalogued voice → piper-plus → Supertonic →
         English as a *latin-script only* fallback.
         CJK/Korean never fall back to an English voice — better silent than
-        mispronounced."""
+        mispronounced. With ``load=True`` (synthesis paths) an installed but
+        deferred dedicated voice is loaded before it is chosen."""
         if self.prefer_supertonic and self.st is not None and self.st.supports(language):
             return language, self.st
         if self.prefer_piper_plus and self.pp is not None and self.pp.supports(language):
             return language, self.pp
+        if load and language not in self.pipers:
+            self._load_piper_language(language)
         if language in self.pipers:
             return language, self.pipers[language]
         if self.pp is not None and self.pp.supports(language):
@@ -609,8 +681,11 @@ class TalkController:
         # Supertonic covers languages no CPU voice is installed for (incl. Korean).
         if self.st is not None and self.st.supports(language):
             return language, self.st
-        if language not in ('ja', 'ko', 'zh') and 'en' in self.pipers:
-            return 'en', self.pipers['en']
+        if language not in ('ja', 'ko', 'zh'):
+            if 'en' in self.pipers:
+                return 'en', self.pipers['en']
+            if self.st is not None and self.st.supports('en'):
+                return 'en', self.st
         return None, None
 
     def has_voice(self, language='en'):
@@ -738,7 +813,7 @@ class TalkController:
                 })
                 self.chunk_count += 1
             else:
-                _, piper = self._get_piper(self.current_language)
+                _, piper = self._get_piper(self.current_language, load=True)
                 if piper is None:
                     self._warn_missing_voice_once(self.current_language)
                 else:
@@ -871,7 +946,7 @@ class TalkController:
                 and self.st.supports(language)):
             piper = self.st
         else:
-            language, piper = self._get_piper(language)
+            language, piper = self._get_piper(language, load=True)
         if piper is None:
             raise RuntimeError("No TTS voice model is loaded. Install Piper .onnx voice assets under assets/ or the Supertonic runtime.")
 
@@ -1401,8 +1476,9 @@ class AppContext:
         def tts_engine_set():
             data = request.get_json(silent=True) or {}
             engine = (data.get('engine') or '').strip()
-            if self.talk_ctrl is None or not self.talk_ctrl.set_voice_engine(engine):
-                return jsonify({'status': 'error', 'error': 'unknown engine'}), 400
+            lang = (data.get('lang') or '').strip() or None
+            if self.talk_ctrl is None or not self.talk_ctrl.set_voice_engine(engine, lang):
+                return jsonify({'status': 'error', 'error': 'unknown or unavailable engine'}), 400
             return jsonify({'status': 'ok', 'current': self.talk_ctrl.voice_engine()['current']})
 
         @self.app.route('/piperplus/voices', methods=['GET'])
