@@ -49,6 +49,10 @@ _worker = None
 _worker_lock = threading.Lock()
 
 
+class WorkerDied(RuntimeError):
+    """The worker reported a fatal runtime error and exited (status 3)."""
+
+
 # --------------------------------------------------------------------------
 # Environment discovery
 # --------------------------------------------------------------------------
@@ -240,6 +244,12 @@ def _request_stream(req):
                 elif status == 0:
                     complete = True
                     return
+                elif status == 3:
+                    # Fatal: the worker is exiting. Reap it now so the next
+                    # request spawns a fresh one instead of writing to a corpse.
+                    complete = True
+                    _discard_worker()
+                    raise WorkerDied(payload.decode("utf-8", "replace"))
                 else:
                     complete = True
                     raise RuntimeError(payload.decode("utf-8", "replace"))
@@ -251,8 +261,10 @@ def _request_stream(req):
                 try:
                     while True:
                         status, _ = _read_frame(proc)
-                        if status in (0, 1):
+                        if status in (0, 1, 3):
                             complete = True
+                            if status == 3:
+                                _discard_worker()
                             break
                 except Exception:
                     pass
@@ -307,15 +319,27 @@ class SupertonicTTS:
         segments = segment_text(text, language)
         if not segments:
             return
-        stream = _request_stream({
+        req = {
             "cmd": "synth_stream", "segments": segments, "voice": voice,
             "language": language, "speed": self.speed,
-        })
-        try:
-            for data in stream:
-                yield io.BytesIO(data)
-        finally:
-            stream.close()
+        }
+        # The worker exits on a runtime failure (e.g. its MLA runners died under
+        # an accelerator reset). If that happened before any audio was produced,
+        # respawn it and retry this utterance once.
+        for attempt in (0, 1):
+            yielded = False
+            stream = _request_stream(req)
+            try:
+                for data in stream:
+                    yielded = True
+                    yield io.BytesIO(data)
+                return
+            except WorkerDied as exc:
+                if yielded or attempt:
+                    raise
+                logging.warning("Supertonic worker died (%s); respawning and retrying once", exc)
+            finally:
+                stream.close()
 
     def synthesize(self, text, language=None, voice=None):
         chunks = list(self.synthesize_stream(text, language=language, voice=voice))

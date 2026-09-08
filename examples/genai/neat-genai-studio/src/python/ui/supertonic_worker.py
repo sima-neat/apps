@@ -20,9 +20,11 @@ redirects fd 1, see ``_claim_protocol_channel``):
         {"cmd": "synth_stream", "segments": ["..."], "voice": "M1",
          "language": "en", "speed": 1.0}
     response (stdout): 1 status byte + 4-byte big-endian length + payload.
-        0 = complete, 1 = error, 2 = streaming WAV chunk. ``load`` answers with
-        a status-0 JSON payload describing the engine (languages, voices,
-        sample rate). A streaming response ends with an empty status-0 frame.
+        0 = complete, 1 = error (bad request; worker keeps serving),
+        2 = streaming WAV chunk, 3 = fatal error (the worker exits right after
+        this frame; the client respawns it). ``load`` answers with a status-0
+        JSON payload describing the engine (languages, voices, sample rate).
+        A streaming response ends with an empty status-0 frame.
 
 Each element of ``segments`` must already fit the compiled 192-character
 contract (the client splits, see ``supertonic_tts.segment_text``). One WAV is
@@ -218,11 +220,21 @@ def main() -> None:
                     waveform = trim_trailing_silence(waveform, result.sample_rate)
                 respond(2, wav_bytes(waveform, result.sample_rate))
             respond(0, b"")
-        except Exception as exc:  # noqa: BLE001 - report to the client, keep serving
+        except (ValueError, KeyError, TypeError) as exc:
+            # Bad request (unknown voice, text too long, ...): report and keep serving.
             try:
                 respond(1, f"{type(exc).__name__}: {exc}".encode("utf-8", "replace"))
             except Exception:
                 pass
+        except Exception as exc:  # noqa: BLE001
+            # Anything else is a runtime failure, typically the MLA runners dying
+            # under an accelerator reset. Report it as fatal, then exit so the
+            # client respawns a fresh process (reloading the models).
+            try:
+                respond(3, f"{type(exc).__name__}: {exc}".encode("utf-8", "replace"))
+            except Exception:
+                pass
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

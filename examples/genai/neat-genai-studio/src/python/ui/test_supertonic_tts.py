@@ -7,6 +7,7 @@ client. Nothing here spawns the worker or needs pyneat.
 
 from __future__ import annotations
 
+import io
 import os
 import unittest
 from pathlib import Path
@@ -220,6 +221,74 @@ class ClientConfigurationTests(unittest.TestCase):
             list(tts.synthesize_stream("Hello.", language="en", voice="nope"))
             self.assertEqual(captured["voice"], "M1")
         self.assertEqual(tts.voice, "M1")
+
+    def test_dead_worker_is_retried_once_before_any_audio(self):
+        tts = self._client()
+        calls = []
+
+        def failing_then_ok(req):
+            calls.append(req)
+            if len(calls) == 1:
+                raise supertonic_tts.WorkerDied("NeatError: accelerator_execution_failed")
+                yield  # pragma: no cover - makes this a generator
+            yield b"RIFF-recovered"
+
+        with mock.patch.object(supertonic_tts, "_request_stream", side_effect=failing_then_ok):
+            chunks = [c.getvalue() for c in tts.synthesize_stream("Hello.", language="en")]
+        self.assertEqual(chunks, [b"RIFF-recovered"])
+        self.assertEqual(len(calls), 2)
+
+    def test_failure_after_audio_or_with_live_worker_is_not_retried(self):
+        tts = self._client()
+
+        def mid_stream_failure(req):
+            yield b"RIFF-first"
+            raise supertonic_tts.WorkerDied("boom")
+
+        with mock.patch.object(supertonic_tts, "_request_stream", side_effect=mid_stream_failure):
+            with self.assertRaises(supertonic_tts.WorkerDied):
+                list(tts.synthesize_stream("Hello.", language="en"))
+
+        calls = []
+
+        def bad_request(req):
+            calls.append(req)
+            raise RuntimeError("ValueError: text too long")   # status 1: worker alive
+            yield  # pragma: no cover
+
+        with mock.patch.object(supertonic_tts, "_request_stream", side_effect=bad_request):
+            with self.assertRaises(RuntimeError):
+                list(tts.synthesize_stream("Hello.", language="en"))
+        self.assertEqual(len(calls), 1)
+
+    def test_fatal_frame_reaps_worker_and_raises_worker_died(self):
+        import struct
+
+        class FakeProc:
+            def __init__(self, frames):
+                self.stdin = io.BytesIO()
+                self.stdout = io.BytesIO(b"".join(
+                    bytes([st]) + struct.pack(">I", len(body)) + body for st, body in frames))
+                self.killed = False
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                self.killed = True
+
+            def wait(self, timeout=None):
+                return 0
+
+        proc = FakeProc([(2, b"RIFF-a"), (3, b"NeatError: accelerator_execution_failed")])
+        with mock.patch.object(supertonic_tts, "_ensure_worker", return_value=proc):
+            supertonic_tts._worker = proc
+            stream = supertonic_tts._request_stream({"cmd": "synth_stream"})
+            self.assertEqual(next(stream), b"RIFF-a")
+            with self.assertRaises(supertonic_tts.WorkerDied):
+                next(stream)
+        self.assertTrue(proc.killed)
+        self.assertIsNone(supertonic_tts._worker)
 
     def test_blank_text_makes_no_request(self):
         tts = self._client()

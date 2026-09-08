@@ -298,6 +298,7 @@ class TalkController:
 
         self.current_language = 'en'
         self.supported_langs = supported_langs or ['en']
+        self._log_tts_coverage()
         # When False, spoken responses (PiperTTS) are skipped entirely — no
         # synthesis compute and no audio_chunk emitted.
         self.tts_enabled = True
@@ -312,6 +313,29 @@ class TalkController:
         self.chunk_count = 0
         self.permissive_chunks = 3  # first N chunks use permissive boundaries
         self.min_chars_first_chunks = 20  # require at least this many chars before first N flushes
+
+    def _engine_name(self, eng):
+        if eng is None:
+            return None
+        if eng is self.st:
+            return 'supertonic'
+        if eng is self.pp:
+            return 'piper-plus'
+        return 'piper-tts'
+
+    def _log_tts_coverage(self):
+        """One line per UI language naming the engine that will speak it. The
+        per-engine loaders run concurrently, so only this summary is
+        authoritative about what has no server voice."""
+        for lang in self.supported_langs:
+            effective, eng = self._get_piper(lang)
+            name = self._engine_name(eng)
+            if name is None:
+                logging.info("TTS coverage: %s -> browser/text only", lang)
+            elif effective != lang:
+                logging.info("TTS coverage: %s -> %s (via '%s' voice)", lang, name, effective)
+            else:
+                logging.info("TTS coverage: %s -> %s", lang, name)
 
     def set_language(self, lang):
         self.current_language = lang if lang in self.supported_langs else 'xx'
