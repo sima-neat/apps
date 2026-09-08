@@ -78,9 +78,23 @@ static AppConfig load_config(const fs::path& path) {
     const auto raw = sima_examples::ScalarConfig::load(path);
     AppConfig cfg;
 
-    cfg.scrfd_model   = raw.string_or("scrfd.model",   cfg.scrfd_model);
-    cfg.arcface_model = raw.string_or("arcface.model", cfg.arcface_model);
-    cfg.gallery_path  = raw.string_or("gallery.path",  cfg.gallery_path);
+    // config.yaml paths are relative to the face-recognizer package root
+    // (3 levels up from src/common/config.yaml). Normalise first so that the
+    // default path (src/cpp/../common/config.yaml) resolves correctly, then
+    // walk up to the package root. This lets the binary run from any CWD —
+    // including prebuilt-apps/ in the installed bundle.
+    const fs::path pkg_root = fs::absolute(path).lexically_normal()
+                                                 .parent_path()  // src/common/
+                                                 .parent_path()  // src/
+                                                 .parent_path(); // face-recognizer/
+    auto resolve = [&](const std::string& p) -> std::string {
+        if (p.empty() || fs::path(p).is_absolute()) return p;
+        return (pkg_root / p).lexically_normal().string();
+    };
+
+    cfg.scrfd_model   = resolve(raw.string_or("scrfd.model",   cfg.scrfd_model));
+    cfg.arcface_model = resolve(raw.string_or("arcface.model", cfg.arcface_model));
+    cfg.gallery_path  = resolve(raw.string_or("gallery.path",  cfg.gallery_path));
     cfg.input_uri          = raw.string_or("input.uri",                  "");
     cfg.output_sink        = raw.string_or("output.sink",                "");
     cfg.insight_host       = raw.string_or("output.insight.host",        "");
@@ -924,25 +938,30 @@ int main(int argc, char** argv) {
         const auto tc1 = Clock::now();
 
         // Determine whether to re-run ArcFace recognition this frame.
-        // Always rerun when count changes. When count is the same, check if
-        // detection boxes have drifted significantly from the cached positions —
-        // SCRFD sorts by score, so a confidence crossover between two faces
-        // silently reorders them and would attach the wrong cached label.
-        // A centroid shift > half a box width signals a likely reorder or
-        // new face and forces fresh recognition.
+        // Always rerun when face count changes. When count is the same, match each
+        // current detection to its nearest cached detection by centroid distance.
+        // If the nearest cached box is not at the same list index a confidence
+        // crossover has reordered SCRFD's score-sorted output, attaching wrong labels.
+        // A large centroid shift (> half box width) means a new face entered.
+        // Either condition forces fresh recognition.
         const bool face_count_changed = detections.size() != cached_matches.size();
         bool boxes_reordered = false;
-        // Check for all face counts, including single-face scenes: when one person
-        // leaves and another enters with count staying at 1 the centroid shift still
-        // signals a new face and must trigger fresh recognition.
         if (!face_count_changed) {
-            for (size_t di = 0; di < detections.size() && !boxes_reordered; ++di) {
+            const size_t N = detections.size();
+            for (size_t di = 0; di < N && !boxes_reordered; ++di) {
                 const auto& cur = detections[di];
-                const auto& prv = cached_detections[di];
                 const float cx = (cur.x1 + cur.x2) * 0.5f, cy = (cur.y1 + cur.y2) * 0.5f;
-                const float px = (prv.x1 + prv.x2) * 0.5f, py = (prv.y1 + prv.y2) * 0.5f;
-                const float half_w = (prv.x2 - prv.x1) * 0.5f;
-                boxes_reordered = (std::abs(cx - px) + std::abs(cy - py)) > half_w;
+                float best_dist = std::numeric_limits<float>::max();
+                size_t best_pi  = di;
+                for (size_t pi = 0; pi < N; ++pi) {
+                    const auto& prv = cached_detections[pi];
+                    const float px = (prv.x1 + prv.x2) * 0.5f, py = (prv.y1 + prv.y2) * 0.5f;
+                    const float d  = std::abs(cx - px) + std::abs(cy - py);
+                    if (d < best_dist) { best_dist = d; best_pi = pi; }
+                }
+                const float half_w = (cached_detections[best_pi].x2
+                                    - cached_detections[best_pi].x1) * 0.5f;
+                boxes_reordered = (best_pi != di) || (best_dist > half_w);
             }
         }
         const bool recog_due = face_count_changed || boxes_reordered ||

@@ -209,14 +209,21 @@ static void nv12_half_resize_to_rgb_f32_neon(
         const int16x8_t v16 = vmovl_s8(vreinterpret_s8_u8(veor_u8(v8, k128)));
 
         // R = Y + (359*V) >> 8  [1.402 * 256 = 358.9]
-        const int16x8_t r16 = vqaddq_s16(y16, vshrq_n_s16(vmulq_n_s16(v16, 359), 8));
+        // 127*359=45593 overflows int16; widen V to s32, multiply, shift, narrow.
+        const int16x8_t r_chroma = vcombine_s16(
+            vqmovn_s32(vshrq_n_s32(vmulq_n_s32(vmovl_s16(vget_low_s16(v16)),  359), 8)),
+            vqmovn_s32(vshrq_n_s32(vmulq_n_s32(vmovl_s16(vget_high_s16(v16)), 359), 8)));
+        const int16x8_t r16 = vqaddq_s16(y16, r_chroma);
         // G = Y - (88*U + 183*V) >> 8  [0.344*256=88.1, 0.714*256=182.8]
-        //   vqaddq_s16: intermediate 88*u+183*v can hit ~34000 > INT16_MAX on vivid
-        //   colors; saturating add limits error to ≤7 intensity levels (3%), fine for SCRFD.
+        // Individual products fit in int16 (127*183=23241); saturating add for the sum.
         const int16x8_t g16 = vqsubq_s16(y16, vshrq_n_s16(
             vqaddq_s16(vmulq_n_s16(u16, 88), vmulq_n_s16(v16, 183)), 8));
         // B = Y + (454*U) >> 8  [1.772 * 256 = 453.6]
-        const int16x8_t b16 = vqaddq_s16(y16, vshrq_n_s16(vmulq_n_s16(u16, 454), 8));
+        // 128*454=58112 overflows int16; widen U to s32, multiply, shift, narrow.
+        const int16x8_t b_chroma = vcombine_s16(
+            vqmovn_s32(vshrq_n_s32(vmulq_n_s32(vmovl_s16(vget_low_s16(u16)),  454), 8)),
+            vqmovn_s32(vshrq_n_s32(vmulq_n_s32(vmovl_s16(vget_high_s16(u16)), 454), 8)));
+        const int16x8_t b16 = vqaddq_s16(y16, b_chroma);
 
         // vqmovun_s16: saturating pack s16 → u8 — clamp to [0,255] implicit, no vmin/vmax.
         r8 = vqmovun_s16(r16);
