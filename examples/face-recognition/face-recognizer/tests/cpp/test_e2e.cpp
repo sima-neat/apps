@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
                 std::istringstream ls(dl);
                 std::string tok;
                 int col = 0;
-                while (ls >> tok) { if (col++ == 2) { zero_face_frames = std::stoi(tok); break; } }
+                while (ls >> tok) { if (col++ == 3) { zero_face_frames = std::stoi(tok); break; } }
             }
         }
         if (total_frames <= 0) {

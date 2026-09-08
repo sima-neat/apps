@@ -140,23 +140,7 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 
 ## Testing
 
-Tests require a source build (see [Development From Source](#development-from-source) below).
-Unit tests need no hardware; the E2E test requires models and an input source — all three
-env vars must be set or the test fails.
-
-```bash
-# Set required prerequisites
-export SIMANEAT_APPS_TEST_MODELS_DIR=${APP_DIR}/models
-export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<HOST>:<PORT>/<STREAM>
-# Optional — enables recognition identity check in addition to detection check:
-export SIMANEAT_APPS_TEST_GALLERY_BIN=${APP_DIR}/gallery.bin
-
-# Unit tests — no hardware required
-ctest --test-dir build -L unit -R 'face-recognizer' --output-on-failure -V
-
-# E2E test — requires models and input source above
-ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
-```
+Tests require a source build — see [Development From Source](#development-from-source) below for build commands. Unit tests need no hardware; the E2E test requires models and a live input source.
 
 ## Source Files
 
@@ -185,6 +169,20 @@ cmake --build build --target face-recognizer -j4
 
 Binary: `build/examples/face-recognition/face-recognizer_cpp/face-recognizer`
 
+### Run Tests
+
+```bash
+# Unit tests — no hardware required
+ctest --test-dir build -L unit -R 'face-recognizer' --output-on-failure -V
+
+# E2E test — requires models and an input source; all env vars must be set
+export SIMANEAT_APPS_TEST_MODELS_DIR=${APP_DIR}/models
+export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<HOST>:<PORT>/<STREAM>
+# Optional: enables identity recognition assertion on top of detection check
+export SIMANEAT_APPS_TEST_GALLERY_BIN=${APP_DIR}/gallery.bin
+ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
+```
+
 ### Recompile Models from Source
 
 Model preparation and compilation scripts are under
@@ -204,10 +202,10 @@ python3 ${APP}/src/common/model/scrfd_to_mla.py \
     --output /tmp/scrfd_2.5g_bnkps.mla.onnx
 
 # Step 3 — Compile both for Modalix (BF16 + MLA-tessellation)
+# Omit --calib-dir to use synthetic calibration (faster; real images improve accuracy)
 bash ${APP}/src/common/model/compile_models.sh \
     --models-dir /tmp \
-    --build-dir /tmp/compiled \
-    [--calib-dir /path/to/face_images]
+    --build-dir /tmp/compiled
 ```
 
 </details>

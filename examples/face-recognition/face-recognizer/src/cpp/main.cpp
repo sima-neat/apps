@@ -1202,7 +1202,8 @@ int main(int argc, char** argv) {
             }
         }
         if (write_video && writer.isOpened()) writer.write(frame);
-        if (write_image && frame_count == 0) cv::imwrite(cfg.output_sink, frame);
+        if (write_image && frame_count == 0 && !cv::imwrite(cfg.output_sink, frame))
+            throw std::runtime_error("Failed to write image output: " + cfg.output_sink);
 
         if (cfg.test_mode) {
             for (size_t i = 0; i < matches.size(); ++i)
