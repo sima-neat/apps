@@ -120,19 +120,41 @@ int main(int argc, char** argv) {
     }
 
     // ── Mandatory detection check (gallery-independent) ───────────────────────
-    // Prove SCRFD detected at least one face; a zero-detection run is a regression
-    // regardless of whether a gallery is present.
+    // Parse the shutdown "Detection quality" summary that main.cpp always prints.
+    // "0 faces : <N>" tells us how many frames had zero detections; if ALL frames
+    // had zero detections SCRFD is broken regardless of gallery presence.
+    // The progress block that prints "det[0]=" only fires at frame 100, so it is
+    // never visible in a 60-frame run — parse the summary instead.
     {
-        bool has_detection = false;
+        // Find the "0 faces :" line and extract the count.
+        int zero_face_frames = -1;  // -1 = summary block not found
+        int total_frames     = -1;
         std::istringstream ds(r.stdout_text);
         std::string dl;
         while (std::getline(ds, dl)) {
-            if (dl.find("det[0]=") != std::string::npos) { has_detection = true; break; }
+            // "═══ Detection quality (N frames) ═══"
+            if (dl.find("Detection quality") != std::string::npos) {
+                const auto lp = dl.find('(');
+                const auto rp = dl.find(' ', lp + 1);
+                if (lp != std::string::npos && rp != std::string::npos)
+                    total_frames = std::stoi(dl.substr(lp + 1, rp - lp - 1));
+            }
+            // "  0 faces :     N (X.X%)   <- misses"
+            if (dl.find("0 faces :") != std::string::npos) {
+                std::istringstream ls(dl);
+                std::string tok;
+                int col = 0;
+                while (ls >> tok) { if (col++ == 2) { zero_face_frames = std::stoi(tok); break; } }
+            }
         }
-        if (!has_detection) {
-            std::cerr << "[FAIL] No face detected in 60 frames — "
-                         "ensure the test input contains at least one visible face.\n"
+        if (total_frames <= 0) {
+            std::cerr << "[FAIL] Detection quality summary not found in output.\n"
                       << "stdout:\n" << r.stdout_text << "\n";
+            return 1;
+        }
+        if (zero_face_frames == total_frames) {
+            std::cerr << "[FAIL] SCRFD detected zero faces in all " << total_frames << " frames — "
+                         "ensure the test input contains at least one visible face.\n";
             return 1;
         }
     }

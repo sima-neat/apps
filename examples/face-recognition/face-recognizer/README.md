@@ -174,23 +174,26 @@ Binary: `build/examples/face-recognition/face-recognizer_cpp/face-recognizer`
 
 ### Recompile Models from Source
 
-Model preparation and compilation scripts are under `src/common/model/`:
+Model preparation and compilation scripts are under
+`examples/face-recognition/face-recognizer/src/common/model/`:
 
 ```bash
+APP=examples/face-recognition/face-recognizer
+
 # Step 1 — Apply graph surgery to ArcFace (required for MLA compatibility)
-python3 src/common/model/arcface_to_mla.py \
+python3 ${APP}/src/common/model/arcface_to_mla.py \
     --input  /path/to/w600k_r50.onnx \
     --output /tmp/w600k_r50.surgery.onnx
 
 # Step 2 — Prepare SCRFD for MLA (rename outputs, fix input shape)
-python3 src/common/model/scrfd_to_mla.py \
+python3 ${APP}/src/common/model/scrfd_to_mla.py \
     --input  /path/to/scrfd_2.5g_bnkps.onnx \
     --output /tmp/scrfd_2.5g_bnkps.mla.onnx
 
 # Step 3 — Compile both for Modalix (BF16 + MLA-tessellation)
-bash src/common/model/compile_models.sh \
+bash ${APP}/src/common/model/compile_models.sh \
     --models-dir /tmp \
-    --output-dir /tmp/compiled \
+    --build-dir /tmp/compiled \
     [--calib-dir /path/to/face_images]
 ```
 
