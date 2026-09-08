@@ -15,7 +15,14 @@ unit:
 e2e:
   python:
     enabled: false
-    reason: No Python implementation; C++ only.
+    reason: >
+      Python is omitted because the application relies on three C++-only SDK
+      paths that have no Python equivalents in this SDK version: the SiMa HW
+      H.264 encoder (VideoSender / H264RtpUdpFromRaw), the EV74 CVU preproc
+      node (InputKind::Image / RtspDecodedInput NV12 zero-copy chain), and
+      the NV12 buffer manipulation required for low-latency overlay.
+      A Python implementation will be added when the SDK exposes bindings for
+      these capabilities.
   cpp:
     enabled: true
     models:

@@ -688,7 +688,7 @@ int main(int argc, char** argv) {
                              (out_ext == ".jpg" || out_ext == ".jpeg" || out_ext == ".png");
     const bool write_video = !cfg.output_sink.empty() && cfg.output_sink != "display" && !write_image;
     cv::VideoWriter writer;
-    bool writer_failed = false;
+    // writer_failed removed: the lazy RTSP writer init now throws on failure.
     if (write_video && !is_rtsp) {
         const double fps_src = cap.get(cv::CAP_PROP_FPS);
         const int W = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
@@ -850,6 +850,13 @@ int main(int argc, char** argv) {
     while (!g_stop) {
         if (cfg.max_frames > 0 && frame_count >= cfg.max_frames) break;
         const auto t_frame = Clock::now();
+
+        // Capture the current frame's PTS and frame_id before Phase A reads the
+        // next frame and overwrites last_pull_pts_ns / last_pull_frame_id.
+        // These are used later to stamp metadata with the frame being displayed,
+        // not the next frame that was just pulled.
+        const int64_t curr_frame_pts_ns = last_pull_pts_ns;
+        const int64_t curr_frame_id_val = last_pull_frame_id;
 
         // ── Phase A: read + preprocess NEXT frame (CPU, overlaps SCRFD on MLA) ─
         // RTSP NV12 path: copy_nv12_contiguous() + fused NV12→resize→RGB_FP32.
@@ -1050,8 +1057,9 @@ int main(int argc, char** argv) {
                 });
             }
             const std::string data_json = nlohmann::json{{"objects", std::move(objects)}}.dump();
-            const int64_t ts_ms = (is_rtsp && last_pull_pts_ns >= 0) ? last_pull_pts_ns / 1'000'000 : -1;
-            const std::string frame_id_str = std::to_string(frame_count);
+            const int64_t ts_ms = (is_rtsp && curr_frame_pts_ns >= 0) ? curr_frame_pts_ns / 1'000'000 : -1;
+            const std::string frame_id_str = std::to_string(
+                (is_rtsp && curr_frame_id_val >= 0) ? curr_frame_id_val : (int64_t)frame_count);
             std::string meta_err;
             if (!metadata_sender->send_metadata("object-detection", data_json, ts_ms,
                                                 frame_id_str, &meta_err)) {
@@ -1176,12 +1184,12 @@ int main(int argc, char** argv) {
             enc_push_ms += Ms(Clock::now() - te0).count();
         }
 
-        if (write_video && is_rtsp && !writer.isOpened() && !writer_failed) {
+        if (write_video && is_rtsp && !writer.isOpened()) {
+            const double rtsp_fps = detected_fps > 0 ? detected_fps : 25.0;
             if (!writer.open(cfg.output_sink,
                              cv::VideoWriter::fourcc('M', 'P', '4', 'V'),
-                             25.0, cv::Size(frame.cols, frame.rows))) {
-                std::cerr << "[OUTPUT] Failed to open video writer: " << cfg.output_sink << "\n";
-                writer_failed = true;
+                             rtsp_fps, cv::Size(frame.cols, frame.rows))) {
+                throw std::runtime_error("Failed to open video output: " + cfg.output_sink);
             }
         }
         if (write_video && writer.isOpened()) writer.write(frame);

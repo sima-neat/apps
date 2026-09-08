@@ -211,9 +211,26 @@ int run_enrollment_mode(int argc, char** argv) {
         return 1;
     }
 
+    if (sample_every <= 0) {
+        std::cerr << "Error: --sample-every must be a positive integer (got " << sample_every << ")\n";
+        return 1;
+    }
+
+    // Resolve model and gallery paths relative to the package root (same logic as
+    // load_config() in main.cpp) so enrollment works from any CWD, including
+    // prebuilt-apps/ where relative paths like "models/..." would otherwise resolve
+    // to prebuilt-apps/models instead of the face-recognizer package directory.
     const auto raw = sima_examples::ScalarConfig::load(config_path_str);
-    const std::string scrfd_model  = raw.string_or("scrfd.model",   "models/scrfd_2.5g_bnkps.mla_mpk.tar.gz");
-    const std::string arcface_model= raw.string_or("arcface.model", "models/w600k_r50.surgery_mpk.tar.gz");
+    const fs::path pkg_root = fs::absolute(config_path_str).lexically_normal()
+                                                            .parent_path()  // src/common/
+                                                            .parent_path()  // src/
+                                                            .parent_path(); // face-recognizer/
+    auto resolve = [&](const std::string& p) -> std::string {
+        if (p.empty() || fs::path(p).is_absolute()) return p;
+        return (pkg_root / p).lexically_normal().string();
+    };
+    const std::string scrfd_model  = resolve(raw.string_or("scrfd.model",   "models/scrfd_2.5g_bnkps.mla_mpk.tar.gz"));
+    const std::string arcface_model= resolve(raw.string_or("arcface.model", "models/w600k_r50.surgery_mpk.tar.gz"));
     const int timeout_ms           = raw.int_or("runtime.timeout_ms", 20000);
 
     face_recog::ScrfdConfig scrfd_cfg;
