@@ -193,13 +193,11 @@ APP=examples/face-recognition/face-recognizer
 
 # Step 1 — Apply graph surgery to ArcFace (required for MLA compatibility)
 python3 ${APP}/src/common/model/arcface_to_mla.py \
-    --input  /path/to/w600k_r50.onnx \
-    --output /tmp/w600k_r50.surgery.onnx
+    /path/to/w600k_r50.onnx --out /tmp/w600k_r50.surgery.onnx
 
 # Step 2 — Prepare SCRFD for MLA (rename outputs, fix input shape)
 python3 ${APP}/src/common/model/scrfd_to_mla.py \
-    --input  /path/to/scrfd_2.5g_bnkps.onnx \
-    --output /tmp/scrfd_2.5g_bnkps.mla.onnx
+    /path/to/scrfd_2.5g_bnkps.onnx --out /tmp/scrfd_2.5g_bnkps.mla.onnx
 
 # Step 3 — Compile both for Modalix (BF16 + MLA-tessellation)
 # Omit --calib-dir to use synthetic calibration (faster; real images improve accuracy)

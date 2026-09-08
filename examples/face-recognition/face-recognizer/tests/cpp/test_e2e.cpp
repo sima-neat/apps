@@ -94,10 +94,12 @@ int main(int argc, char** argv) {
     const fs::path config_path = config_dir / "config.yaml";
 
     ConfigScalars overrides = {
-        {"scrfd.model",   scrfd_path},
-        {"arcface.model", arcface_path},
-        {"input.uri",     input},
-        {"output.sink",   ""},   // headless
+        {"scrfd.model",          scrfd_path},
+        {"arcface.model",        arcface_path},
+        {"input.uri",            input},
+        {"output.sink",          ""},            // headless
+        {"output.insight.host",  "127.0.0.1"},  // exercise encoder + MetadataSender;
+                                                 // UDP drops silently with no listener
     };
     if (!gallery_path.empty()) {
         overrides["gallery.path"] = gallery_path;

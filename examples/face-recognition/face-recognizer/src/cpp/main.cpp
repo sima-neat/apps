@@ -1056,13 +1056,19 @@ int main(int argc, char** argv) {
                 const auto& det = detections[i];
                 const std::string& label = (i < matches.size()) ? matches[i].name : "Unknown";
                 const float score = (i < matches.size()) ? matches[i].score : 0.f;
+                // Clamp both endpoints to the frame before deriving width/height
+                // so Insight metadata matches the clamped overlay in the video.
+                const float fw = static_cast<float>(curr_nv12_w > 0 ? curr_nv12_w : frame.cols);
+                const float fh = static_cast<float>(curr_nv12_h > 0 ? curr_nv12_h : frame.rows);
+                const float cx1 = std::clamp(det.x1, 0.f, fw);
+                const float cy1 = std::clamp(det.y1, 0.f, fh);
+                const float cx2 = std::clamp(det.x2, cx1,  fw);
+                const float cy2 = std::clamp(det.y2, cy1,  fh);
                 objects.push_back({
                     {"id",         "face_" + std::to_string(i + 1)},
                     {"label",      label},
                     {"confidence", score},
-                    {"bbox",       {std::max(0.f, det.x1), std::max(0.f, det.y1),
-                                    std::max(0.f, det.x2 - det.x1),
-                                    std::max(0.f, det.y2 - det.y1)}}
+                    {"bbox",       {cx1, cy1, cx2 - cx1, cy2 - cy1}}
                 });
             }
             const std::string data_json = nlohmann::json{{"objects", std::move(objects)}}.dump();

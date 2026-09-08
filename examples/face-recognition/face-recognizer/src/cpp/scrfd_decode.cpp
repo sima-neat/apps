@@ -215,9 +215,16 @@ static void nv12_half_resize_to_rgb_f32_neon(
             vqmovn_s32(vshrq_n_s32(vmulq_n_s32(vmovl_s16(vget_high_s16(v16)), 359), 8)));
         const int16x8_t r16 = vqaddq_s16(y16, r_chroma);
         // G = Y - (88*U + 183*V) >> 8  [0.344*256=88.1, 0.714*256=182.8]
-        // Individual products fit in int16 (127*183=23241); saturating add for the sum.
-        const int16x8_t g16 = vqsubq_s16(y16, vshrq_n_s16(
-            vqaddq_s16(vmulq_n_s16(u16, 88), vmulq_n_s16(v16, 183)), 8));
+        // 127*88+127*183=34417 overflows int16 (max 32767); widen both to s32,
+        // add in 32-bit, shift, narrow — same pattern as R and B channels.
+        const int16x8_t g_chroma = vcombine_s16(
+            vqmovn_s32(vshrq_n_s32(vaddq_s32(
+                vmulq_n_s32(vmovl_s16(vget_low_s16(u16)),  88),
+                vmulq_n_s32(vmovl_s16(vget_low_s16(v16)), 183)), 8)),
+            vqmovn_s32(vshrq_n_s32(vaddq_s32(
+                vmulq_n_s32(vmovl_s16(vget_high_s16(u16)),  88),
+                vmulq_n_s32(vmovl_s16(vget_high_s16(v16)), 183)), 8)));
+        const int16x8_t g16 = vqsubq_s16(y16, g_chroma);
         // B = Y + (454*U) >> 8  [1.772 * 256 = 453.6]
         // 128*454=58112 overflows int16; widen U to s32, multiply, shift, narrow.
         const int16x8_t b_chroma = vcombine_s16(
