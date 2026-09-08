@@ -323,6 +323,14 @@ class TalkController:
             return 'piper-plus'
         return 'piper-tts'
 
+    def _engine_voice(self, eng):
+        """Speaker label for the metrics strip, where an engine has one."""
+        if eng is not None and eng is self.st:
+            return self.st.voice
+        if eng is not None and eng is self.pp:
+            return self.pp_current
+        return None
+
     def _log_tts_coverage(self):
         """One line per UI language naming the engine that will speak it. The
         per-engine loaders run concurrently, so only this summary is
@@ -726,6 +734,7 @@ class TalkController:
                     'browser': True,
                     'lang': self.current_language,
                     'tps': round(self.tps, 2),
+                    'engine': 'browser',
                 })
                 self.chunk_count += 1
             else:
@@ -755,7 +764,9 @@ class TalkController:
                                 'text': sanitized_sentence.strip(),
                                 'audio': buffer.getvalue(),
                                 'tps': round(self.tps, 2),
-                                'rtf': round(rtf, 2)
+                                'rtf': round(rtf, 2),
+                                'engine': self._engine_name(piper),
+                                'voice': self._engine_voice(piper),
                             })
                     finally:
                         close = getattr(buffers, 'close', None)

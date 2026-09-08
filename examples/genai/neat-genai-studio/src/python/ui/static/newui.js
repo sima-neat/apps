@@ -2206,6 +2206,7 @@ socket.on('audio_chunk', (data) => {
 
   if (data.tps != null) { const t = document.getElementById('tpsValue'); if (t) t.textContent = data.tps; }
   if (data.rtf != null) { const r = document.getElementById('rtfValue'); if (r) r.textContent = data.rtf; }
+  if (data.engine) updateTtsEngineIndicator(data.engine, data.voice);
 
   // Browser TTS: the server sent only the (already sanitized) sentence text —
   // speak it locally with the Web Speech API instead of playing server audio.
@@ -3095,6 +3096,7 @@ async function updateVoiceEngineForLanguage() {
   } catch (e) { row.style.display = 'none'; return; }
   const engines = (data && data.engines) || [];
   if (data.current) _currentTtsEngine = data.current;
+  updateTtsEngineIndicator();
   if (!engines.length) { row.style.display = 'none'; applyEngineVoiceVisibility(); return; }
   sel.innerHTML = '';
   engines.forEach(e => {
@@ -3120,6 +3122,7 @@ async function updateVoiceEngineForLanguage() {
       if (!r.ok || d.status !== 'ok') throw new Error((d && d.error) || 'failed');
       _currentTtsEngine = sel.value;
       applyEngineVoiceVisibility();     // swap which voice picker is shown
+      updateTtsEngineIndicator();
       if (status) status.textContent = 'Active';
     } catch (err) {
       if (status) status.textContent = 'Failed: ' + err.message;
@@ -4418,6 +4421,25 @@ function updateAsrModelIndicator() {
   const name = _asrActive || (controlEnabled() ? '' : (window.SIMA_CONFIG?.asrModelName || ''));
   el.textContent = name;
   el.title = name ? `Transcribed by ${name}` : '';
+}
+
+// Name the engine behind the "Spoke back" metrics, mirroring the ASR indicator.
+// Before anything has been spoken it shows the engine the router will use for
+// the selected language; each audio chunk then names the engine (and speaker)
+// that actually produced it, so RTF reads against the right engine.
+const TTS_ENGINE_LABELS = {
+  'supertonic': 'Supertonic 3',
+  'piper-plus': 'piper-plus',
+  'piper-tts': 'piper-tts',
+  'browser': 'Browser',
+};
+function updateTtsEngineIndicator(engine, voice) {
+  const el = document.getElementById('ttsEngineName');
+  if (!el) return;
+  const key = engine || _currentTtsEngine;
+  const label = TTS_ENGINE_LABELS[key] || key || '';
+  el.textContent = label && voice ? `${label} · ${voice}` : label;
+  el.title = label ? `Spoken by ${el.textContent}` : '';
 }
 
 // Drive the load bar from the browser's own clock.
