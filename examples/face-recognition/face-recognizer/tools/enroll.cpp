@@ -238,8 +238,9 @@ int run_enrollment_mode(int argc, char** argv) {
     scrfd_cfg.nms_iou        = static_cast<float>(raw.double_or("scrfd.nms_iou", 0.4));
     scrfd_cfg.top_k          = raw.int_or("scrfd.top_k", 100);
     scrfd_cfg.keep_top_k     = raw.int_or("scrfd.keep_top_k", 5);
-    scrfd_cfg.cls_per_anchor = raw.int_or("scrfd.cls_per_anchor", 1);
-    scrfd_cfg.num_anchors    = raw.int_or("scrfd.num_anchors", 2);
+    scrfd_cfg.cls_per_anchor  = raw.int_or("scrfd.cls_per_anchor", 1);
+    scrfd_cfg.num_anchors     = raw.int_or("scrfd.num_anchors", 2);
+    scrfd_cfg.scale_by_stride = raw.bool_or("scrfd.scale_by_stride", scrfd_cfg.scale_by_stride);
 
     try {
         std::cout << "[BUILD] SCRFD pipeline...\n";

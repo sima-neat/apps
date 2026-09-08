@@ -12,8 +12,9 @@
 # Usage:
 #   ./create_test_gallery.sh <images_dir> [output_gallery.bin]
 #
-# The script enrolls each sub-directory as one identity by running face-enroll
-# on the Modalix device via SSH and copying the result back.
+# The script copies the whole images directory to the Modalix device, runs
+# face-recognizer --enroll (which walks sub-directories, using each sub-directory
+# name as the identity label), and copies the resulting gallery back.
 set -euo pipefail
 
 IMAGES_DIR="${1:-}"
@@ -31,7 +32,6 @@ fi
 
 DEVICE="${SIMA_DEVICE:-sima@192.168.135.41}"
 APPS_BIN="/workspace/sima-neat/apps/build/examples/face-recognition/face-recognizer_cpp"
-ENROLL_BIN="${APPS_BIN}/face-enroll"
 GALLERY_BIN="${APPS_BIN}/face-recognizer"
 REMOTE_TMP="/tmp/face_recog_test_data"
 
@@ -55,34 +55,34 @@ sima_scp_from() {
     scp -i "${SSH_KEY}" -o StrictHostKeyChecking=no "${DEVICE}:$1" "$2"
 }
 
-echo "Preparing remote workspace..."
-sima_ssh "rm -rf '${REMOTE_TMP}' && mkdir -p '${REMOTE_TMP}/images'"
-
-GALLERY_ARGS=()
+# Verify at least one person sub-directory with images exists before uploading
+has_images=0
 while IFS= read -r person_dir; do
-    person="$(basename "${person_dir}")"
     [[ -d "${person_dir}" ]] || continue
     image_count="$(find "${person_dir}" -maxdepth 1 -type f \
         \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | wc -l)"
-    if [[ "${image_count}" -eq 0 ]]; then
-        echo "  SKIP ${person}: no images"
-        continue
+    if [[ "${image_count}" -gt 0 ]]; then
+        has_images=1
+        break
     fi
-    echo "  Uploading ${image_count} image(s) for ${person}..."
-    sima_ssh "mkdir -p '${REMOTE_TMP}/images/${person}'"
-    sima_scp_to "${person_dir}/." "${REMOTE_TMP}/images/${person}/"
-    GALLERY_ARGS+=("--name" "${person}" "--images" "${REMOTE_TMP}/images/${person}")
 done < <(find "${IMAGES_DIR}" -mindepth 1 -maxdepth 1 -type d | sort)
 
-if [[ "${#GALLERY_ARGS[@]}" -eq 0 ]]; then
+if [[ "${has_images}" -eq 0 ]]; then
     echo "ERROR: no person directories with images found in ${IMAGES_DIR}" >&2
     exit 1
 fi
 
+echo "Preparing remote workspace..."
+REMOTE_IMAGES="${REMOTE_TMP}/images"
+sima_ssh "rm -rf '${REMOTE_TMP}' && mkdir -p '${REMOTE_IMAGES}'"
+
+echo "Uploading images to device..."
+sima_scp_to "${IMAGES_DIR}/." "${REMOTE_IMAGES}/"
+
 REMOTE_GALLERY="${REMOTE_TMP}/test_gallery.bin"
-echo "Running face-enroll on device..."
-sima_ssh "QT_QPA_PLATFORM=offscreen '${ENROLL_BIN}' ${GALLERY_ARGS[*]} \
-    --output '${REMOTE_GALLERY}'"
+echo "Running face-recognizer --enroll on device..."
+sima_ssh "QT_QPA_PLATFORM=offscreen '${GALLERY_BIN}' --enroll \
+    --images '${REMOTE_IMAGES}' --gallery '${REMOTE_GALLERY}'"
 
 mkdir -p "$(dirname "${OUTPUT}")"
 echo "Copying gallery.bin to ${OUTPUT}..."

@@ -399,10 +399,19 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, [](int){ g_stop = true; });
     std::cout.setf(std::ios::unitbuf);
     std::cerr.setf(std::ios::unitbuf);
-    // Required for neatdecoder NV12 buffers to be readable from EV74/CPU
-    ::setenv("SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY", "1", 1);
-    ::setenv("GST_PLUGIN_PATH_1_0",
-             "/usr/lib/aarch64-linux-gnu/neat/gst-plugins", 1);
+    // Required for neatdecoder NV12 buffers to be readable from EV74/CPU.
+    // overwrite=0 so a caller that already set these keeps their values.
+    ::setenv("SIMA_ALLOW_INPUTSTREAM_CPU_TO_EV74_COPY", "1", 0);
+    // Extend GST_PLUGIN_PATH_1_0 rather than replacing it so other GStreamer
+    // plugins already present in the environment are not silently dropped.
+    {
+        const char* existing = ::getenv("GST_PLUGIN_PATH_1_0");
+        const std::string neat_gst = "/usr/lib/aarch64-linux-gnu/neat/gst-plugins";
+        const std::string new_val  = existing && *existing
+                                     ? std::string(existing) + ":" + neat_gst
+                                     : neat_gst;
+        ::setenv("GST_PLUGIN_PATH_1_0", new_val.c_str(), 1);
+    }
 
     AppConfig cfg;
     try {

@@ -70,6 +70,8 @@ Gallery load_gallery(const std::filesystem::path& path) {
 
     uint32_t n = 0;
     f.read(reinterpret_cast<char*>(&n), 4);
+    if (!f)
+        throw std::runtime_error("load_gallery: truncated header: " + path.string());
 
     Gallery g;
     g.entries.reserve(n);

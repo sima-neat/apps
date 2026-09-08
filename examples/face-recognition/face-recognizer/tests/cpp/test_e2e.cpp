@@ -80,9 +80,8 @@ int main(int argc, char** argv) {
     if (const char* g = env_or_null("SIMANEAT_APPS_TEST_GALLERY_BIN")) {
         gallery_path = g;
         if (!fs::exists(gallery_path)) {
-            std::cerr << "[WARN] SIMANEAT_APPS_TEST_GALLERY_BIN set but not found: "
-                      << gallery_path << " — running without recognition check\n";
-            gallery_path.clear();
+            throw std::runtime_error(
+                "SIMANEAT_APPS_TEST_GALLERY_BIN set but not found: " + gallery_path);
         }
     }
 
