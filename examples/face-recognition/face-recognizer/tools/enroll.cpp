@@ -314,6 +314,13 @@ int run_enrollment_mode(int argc, char** argv) {
                             return a.score < b.score;
                         });
 
+                    if (best.score < min_score) {
+                        std::cerr << "  [skip] best face score " << best.score
+                                  << " < --min-score " << min_score
+                                  << " in: " << img_path.filename() << "\n";
+                        ++skipped; continue;
+                    }
+
                     const cv::Mat crop = face_recog::align_face(bgr, best.landmarks);
                     const cv::Mat f32  = face_recog::preprocess_arcface_crop(crop);
                     const auto arc_t   = face_recog::tensor_from_hwc_f32(f32);

@@ -30,7 +30,7 @@ if [[ ! -d "${IMAGES_DIR}" ]]; then
     exit 1
 fi
 
-DEVICE="${SIMA_DEVICE:-sima@192.168.135.41}"
+DEVICE="${SIMA_DEVICE:?ERROR: set SIMA_DEVICE=sima@<device-ip> before running this script}"
 APPS_BIN="/workspace/sima-neat/apps/build/examples/face-recognition/face-recognizer_cpp"
 GALLERY_BIN="${APPS_BIN}/face-recognizer"
 REMOTE_TMP="/tmp/face_recog_test_data"

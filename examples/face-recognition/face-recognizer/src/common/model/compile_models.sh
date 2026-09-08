@@ -31,8 +31,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # src/common/model → src/common → src → face-recognizer → face-recognition → examples → apps
-APPS_ROOT="$(cd "${SCRIPT_DIR}/../../../../../../.." && pwd)"
-MOD_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"  # face-recognizer/
+APPS_ROOT="$(cd "${SCRIPT_DIR}/../../../../../../" && pwd)"
+MOD_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"  # face-recognizer/
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 MODELS_DIR=""

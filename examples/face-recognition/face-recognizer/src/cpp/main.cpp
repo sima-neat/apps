@@ -734,10 +734,8 @@ int main(int argc, char** argv) {
         meta_opt.metadata_port_base = cfg.insight_metadata_port;
         std::string meta_err;
         metadata_sender = std::make_unique<simaai::neat::MetadataSender>(meta_opt, &meta_err);
-        if (!metadata_sender->ok()) {
-            std::cerr << "[stream] MetadataSender init failed: " << meta_err << "\n";
-            metadata_sender.reset();
-        }
+        if (!metadata_sender->ok())
+            throw std::runtime_error("[stream] MetadataSender init failed: " + meta_err);
     }
 
     if (!eff_stream_host.empty()) {
@@ -827,6 +825,8 @@ int main(int argc, char** argv) {
             auto [t, p] = face_recog::preprocess_scrfd(frame0, cfg.scrfd.infer_w, cfg.scrfd.infer_h);
             t0 = std::move(t);
             pad_meta_curr = p;
+            curr_nv12_w = frame0.cols;
+            curr_nv12_h = frame0.rows;
             frame = std::move(frame0);
         }
         if (!scrfd_run.push(simaai::neat::TensorList{t0}))
@@ -1165,8 +1165,8 @@ int main(int argc, char** argv) {
                           << " fps, " << vsopt.encoder.bitrate_kbps << " kbps, "
                           << vsopt.encoder.profile << " profile)\n";
             } catch (const std::exception& ex) {
-                std::cerr << "[stream] Failed to open HW encoder: " << ex.what() << "\n";
-                enc_run_failed = true;
+                throw std::runtime_error(
+                    std::string("[stream] Failed to open HW encoder: ") + ex.what());
             }
         }
 

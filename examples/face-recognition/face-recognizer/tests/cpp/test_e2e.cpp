@@ -119,6 +119,24 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // ── Mandatory detection check (gallery-independent) ───────────────────────
+    // Prove SCRFD detected at least one face; a zero-detection run is a regression
+    // regardless of whether a gallery is present.
+    {
+        bool has_detection = false;
+        std::istringstream ds(r.stdout_text);
+        std::string dl;
+        while (std::getline(ds, dl)) {
+            if (dl.find("det[0]=") != std::string::npos) { has_detection = true; break; }
+        }
+        if (!has_detection) {
+            std::cerr << "[FAIL] No face detected in 60 frames — "
+                         "ensure the test input contains at least one visible face.\n"
+                      << "stdout:\n" << r.stdout_text << "\n";
+            return 1;
+        }
+    }
+
     // ── Optional recognition check ────────────────────────────────────────────
     if (!gallery_path.empty()) {
         // test mode prints: "  face[N] → <name>  similarity=X.XXXX"
