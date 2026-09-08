@@ -1,110 +1,114 @@
 # Face Recognizer
 
 ## Metadata
+
 | Field | Value |
 | --- | --- |
 | Category | face-recognition |
 | Difficulty | Advanced |
 | Tags | face-detection, face-recognition, scrfd, arcface, rtsp, enrollment, bf16, mla-tessellation |
 | Languages | C++ |
-| Status | experimental |
+| Status | stable |
 | Binary Name | face-recognizer |
 | Model | scrfd_2.5g_bnkps.mla, w600k_r50.surgery |
 
 ## Concept
 
-Real-time face detection and recognition on SiMa.ai Modalix hardware using the Neat Library. Two models run back-to-back on the MLA:
+Real-time face detection and recognition on SiMa.ai Modalix hardware using SCRFD face detection and ArcFace embeddings, both running BF16 MLA-tessellated on the MLA at over 40 FPS.
 
-1. **SCRFD 2.5G** — detects faces and 5 facial landmarks per detection (~5.4 ms, BF16 + MLA-tessellated)
-2. **ArcFace W600K R50** — produces a 512-d embedding per aligned face crop (~5.5 ms, BF16 + MLA-tessellated)
+## Preview
 
-Embeddings are compared against a pre-enrolled gallery using cosine similarity to produce an identity label for each detected face. The EV74 CVU preproc node handles NV12-to-BF16 conversion in hardware (~0.01 ms), with no CPU preproc for the detection stage.
+![Face recognizer preview](../../../portal/assets/examples/face-recognition/face-recognizer/image.png)
 
-**Throughput:** ~56.5 FPS on 1280×720 @ 45 FPS RTSP.
+## Prerequisites
 
-## Install
+- `sima-cli` ([documentation](https://developer.sima.ai/software/tools/sima-cli/)) on a supported Modalix or DevKit target.
+- An H.264 RTSP source for the input stream.
+- An [Insight](https://developer.sima.ai/software/tools/insight/) host reachable from the target for viewing the annotated output stream (optional).
+
+## Install Apps
+
+Install the latest Neat Apps runtime and enter the installed bundle:
 
 ```bash
-sima-cli neat install face-recognizer
+sima-cli neat install apps
+cd prebuilt-apps
+APP_DIR=examples/face-recognition/face-recognizer
 ```
 
-This installs the `face-recognizer` binary and the default `config.yaml` under the package install path.
+Run the remaining commands from `prebuilt-apps/`.
 
-## Configure
+## Prepare the Model
 
-All runtime options are in one `config.yaml`. Edit it before running:
-
-```yaml
-scrfd:
-  model: models/scrfd_2.5g_bnkps.mla_mpk.tar.gz
-  conf_threshold: 0.65    # Minimum face detection confidence
-
-arcface:
-  model: models/w600k_r50.surgery_mpk.tar.gz
-
-gallery:
-  path: gallery.bin       # Enrollment data; build with --enroll first
-
-input:
-  uri: rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME>   # RTSP source
-
-output:
-  sink: ""                # "" = headless; "display" = cv::imshow
-
-match:
-  threshold: 0.55         # Cosine similarity cutoff; below → Unknown
-  margin:    0.12         # Min gap between best and 2nd-best score
-
-runtime:
-  recog_interval: 8       # Re-embed every N frames (lower = faster updates)
-  timeout_ms:  20000
-```
-
-## Download Models
+Download the pre-compiled model packages from the Model Zoo:
 
 ```bash
 export MODELZOO_VERSION="2.1.3"
-mkdir -p models
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz" -o models/
-sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/w600k_r50.surgery_mpk.tar.gz" -o models/
+mkdir -p ${APP_DIR}/models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz" -o ${APP_DIR}/models/
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/w600k_r50.surgery_mpk.tar.gz" -o ${APP_DIR}/models/
 ```
 
 ## Enroll Faces
 
-Build a gallery before running recognition. Each call is additive — run once per person.
+Build a gallery before running recognition. Each invocation is additive — run once per person. When re-enrolling an existing identity, sample counts from the previous enrollment are preserved so centroids stay correctly weighted.
 
 ```bash
 # From a video clip:
-./face-recognizer --enroll \
-    --config config.yaml \
+${APP_DIR}/src/cpp/pre-built/face-recognizer --enroll \
+    --config ${APP_DIR}/src/common/config.yaml \
     --video  /path/to/alice.mp4 --name "Alice" \
-    --gallery gallery.bin
+    --gallery ${APP_DIR}/gallery.bin
 
-# From an image folder (subdirectory per identity):
+# From an image folder (one subdirectory per identity):
 #   gallery_images/Alice/photo1.jpg, photo2.jpg …
-./face-recognizer --enroll \
-    --config config.yaml \
+${APP_DIR}/src/cpp/pre-built/face-recognizer --enroll \
+    --config ${APP_DIR}/src/common/config.yaml \
     --images gallery_images/ \
-    --gallery gallery.bin
+    --gallery ${APP_DIR}/gallery.bin
+```
+
+## Configure
+
+Open `${APP_DIR}/src/common/config.yaml`. Key settings:
+
+```yaml
+gallery:
+  path: gallery.bin           # Enrollment data; build with --enroll first
+
+input:
+  uri: rtsp://<HOST>:<PORT>/<STREAM>   # RTSP source
+
+output:
+  insight:
+    host: ""                  # Set to Insight host IP to stream annotated output
+    video_port: 29656         # Docker-mapped UDP port for Insight video input
+
+match:
+  threshold: 0.55             # Cosine similarity cutoff; below → Unknown
+  margin:    0.12             # Min gap between best and 2nd-best score
+
+runtime:
+  recog_interval: 8           # Re-embed every N frames
 ```
 
 ## Run
 
 ```bash
-./face-recognizer --config config.yaml
+./${APP_DIR}/src/cpp/pre-built/face-recognizer \
+    --config ${APP_DIR}/src/common/config.yaml
 ```
 
-The RTSP input URI, gallery path, model paths, and output options are all read from `config.yaml`. No extra flags are needed for a normal run.
+The RTSP input URI, gallery path, model paths, and output options are all read from `config.yaml`.
 
 **Optional overrides:**
 
 | Flag | Description |
 |---|---|
-| `--config <path>` | Config file (default: `src/common/config.yaml`) |
 | `--input <uri>` | Override `input.uri` in config |
 | `--gallery <path>` | Override `gallery.path` in config |
-| `--stream-host <ip>` | Send H.264 overlay stream over UDP to this host |
-| `--stream-port <n>` | UDP port for overlay stream (default: 5000) |
+| `--stream-host <ip>` | Send annotated H.264 stream to a custom UDP receiver instead of Insight |
+| `--stream-port <n>` | UDP port for custom receiver (default: 5000) |
 | `--max-frames <n>` | Stop after N frames (0 = unlimited) |
 | `--test` | Print per-frame results and FPS report; headless |
 
@@ -114,7 +118,7 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 |---|---|
 | `--video <path>` | Enrollment video; requires `--name` |
 | `--name <name>` | Identity label for `--video` mode |
-| `--images <dir>` | Enrollment image folder (subdirectory per identity) |
+| `--images <dir>` | Enrollment image folder (one subdirectory per identity) |
 | `--gallery <path>` | Gallery file to write or append to |
 | `--sample-every <n>` | Sample 1 frame every N from video (default: 5) |
 | `--min-score <f>` | Minimum SCRFD confidence for enrollment (default: 0.75) |
@@ -135,26 +139,27 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 ctest --test-dir build -L unit -R 'face-recognizer' --output-on-failure -V
 
 # E2E test — skips gracefully when models or input are absent
-export SIMANEAT_APPS_TEST_MODELS_DIR=examples/face-recognition/face-recognizer/models
-export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<RTSP_HOST>:<RTSP_PORT>/<STREAM_NAME>
-export SIMANEAT_APPS_TEST_GALLERY_BIN=examples/face-recognition/face-recognizer/gallery.bin
+export SIMANEAT_APPS_TEST_MODELS_DIR=${APP_DIR}/models
+export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<HOST>:<PORT>/<STREAM>
+export SIMANEAT_APPS_TEST_GALLERY_BIN=${APP_DIR}/gallery.bin
 ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
 ```
 
----
+## Source Files
 
-## Development from Source
+- C++ recognition source: `src/cpp/main.cpp`
+- Enrollment source: `tools/enroll.cpp`
+- Shared runtime files: `src/common/`
+- Model scripts: `src/common/model/`
+
+The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
+
+## Development From Source
+
+To modify, compile, or test this example, use the [Apps contributor workflow](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md).
 
 <details>
-<summary>Build from the Apps repository</summary>
-
-### Prerequisites
-
-- Neat Development Environment (SDK container)
-- SiMa Modalix DevKit accessible over the network
-- NFS mount at `/workspace` on the board
-
-### Build
+<summary>Build commands</summary>
 
 Inside the SDK container:
 
@@ -188,7 +193,5 @@ bash src/common/model/compile_models.sh \
     --output-dir /tmp/compiled \
     [--calib-dir /path/to/face_images]
 ```
-
-Compiled packages land in `models/` for use with `config.yaml`.
 
 </details>

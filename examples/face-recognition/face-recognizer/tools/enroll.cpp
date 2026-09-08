@@ -240,7 +240,7 @@ int run_enrollment_mode(int argc, char** argv) {
             try {
                 const auto existing = face_recog::load_gallery(gallery_out);
                 for (const auto& e : existing.entries)
-                    builder.add(e.name, e.embedding);
+                    builder.add(e.name, e.embedding, e.sample_count);
                 std::cout << "[GALLERY] Loaded " << existing.entries.size()
                           << " existing identit" << (existing.entries.size() == 1 ? "y" : "ies")
                           << " from " << gallery_out << "\n";
@@ -329,6 +329,13 @@ int run_enrollment_mode(int argc, char** argv) {
                                             builder);
             total_faces  += n;
             total_images += n;
+        }
+
+        if (total_faces == 0) {
+            std::cerr << "ERROR: no faces were enrolled — all inputs yielded no detections.\n"
+                      << "  Check that images/video contain visible, forward-facing faces\n"
+                      << "  and that the SCRFD model path is correct.\n";
+            return 2;
         }
 
         const auto gallery = builder.finish();

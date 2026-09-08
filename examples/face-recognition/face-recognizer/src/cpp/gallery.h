@@ -12,7 +12,8 @@ using Embedding = std::vector<float>;
 
 struct GalleryEntry {
     std::string name;
-    Embedding   embedding;  // L2-normalized, length kEmbeddingDim
+    Embedding   embedding;    // L2-normalized, length kEmbeddingDim
+    uint32_t    sample_count; // number of raw embeddings averaged into this centroid
 };
 
 struct Gallery {
@@ -35,17 +36,19 @@ Gallery load_gallery(const std::filesystem::path& path);
 // ── helpers ──────────────────────────────────────────────────────────────────
 void l2_normalize(Embedding& emb);
 
-// Add or update an entry (accumulates multiple embeddings by mean-pooling).
-// Call finish_gallery() after all images for a person have been enrolled.
+// Accumulates embeddings and produces a gallery with properly-weighted centroids.
+// Use add() for individual raw embeddings; use add_weighted() when importing an
+// existing centroid with a known sample count so weights are preserved correctly.
 struct GalleryBuilder {
     struct Accum {
         std::string name;
-        std::vector<Embedding> embeddings;
+        Embedding   weighted_sum;  // sum of (embedding * sample_count) for each add
+        uint32_t    total_count;   // total number of raw samples represented
     };
     std::vector<Accum> accum;
 
-    void add(const std::string& name, const Embedding& raw_emb);
-    Gallery finish() const;  // mean-pool + L2-normalize each entry
+    void add(const std::string& name, const Embedding& raw_emb, uint32_t count = 1);
+    Gallery finish() const;  // divide by total_count + L2-normalize each entry
 };
 
 } // namespace face_recog

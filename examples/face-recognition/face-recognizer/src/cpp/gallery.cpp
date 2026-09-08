@@ -9,7 +9,7 @@
 namespace face_recog {
 
 static constexpr char kMagic[8] = {'F','R','G','A','L','1','\n','\0'};
-static constexpr uint32_t kVersion = 1;
+static constexpr uint32_t kVersion = 2;  // v2 adds uint32_t sample_count after each embedding
 
 // ── l2-normalization ──────────────────────────────────────────────────────────
 
@@ -42,6 +42,7 @@ void save_gallery(const Gallery& g, const std::filesystem::path& path) {
         f.write(e.name.data(), nl);
         f.write(reinterpret_cast<const char*>(e.embedding.data()),
                 kEmbeddingDim * sizeof(float));
+        f.write(reinterpret_cast<const char*>(&e.sample_count), 4);
     }
 
     if (!f)
@@ -60,7 +61,7 @@ Gallery load_gallery(const std::filesystem::path& path) {
 
     uint32_t ver = 0;
     f.read(reinterpret_cast<char*>(&ver), 4);
-    if (ver != kVersion)
+    if (ver != 1 && ver != 2)
         throw std::runtime_error("load_gallery: unsupported version " + std::to_string(ver));
 
     uint32_t n = 0;
@@ -80,7 +81,13 @@ Gallery load_gallery(const std::filesystem::path& path) {
         f.read(reinterpret_cast<char*>(emb.data()), kEmbeddingDim * sizeof(float));
         if (!f)
             throw std::runtime_error("load_gallery: truncated file: " + path.string());
-        g.entries.push_back({std::move(name), std::move(emb)});
+        uint32_t sample_count = 1;
+        if (ver >= 2) {
+            f.read(reinterpret_cast<char*>(&sample_count), 4);
+            if (!f)
+                throw std::runtime_error("load_gallery: truncated file reading sample_count: " + path.string());
+        }
+        g.entries.push_back({std::move(name), std::move(emb), sample_count});
     }
 
     return g;
@@ -88,26 +95,31 @@ Gallery load_gallery(const std::filesystem::path& path) {
 
 // ── GalleryBuilder ────────────────────────────────────────────────────────────
 
-void GalleryBuilder::add(const std::string& name, const Embedding& raw_emb) {
-    for (auto& acc : accum)
-        if (acc.name == name) { acc.embeddings.push_back(raw_emb); return; }
-    accum.push_back({name, {raw_emb}});
+void GalleryBuilder::add(const std::string& name, const Embedding& raw_emb, uint32_t count) {
+    for (auto& acc : accum) {
+        if (acc.name == name) {
+            for (size_t j = 0; j < raw_emb.size(); ++j)
+                acc.weighted_sum[j] += raw_emb[j] * static_cast<float>(count);
+            acc.total_count += count;
+            return;
+        }
+    }
+    Embedding ws(raw_emb.size());
+    for (size_t j = 0; j < raw_emb.size(); ++j)
+        ws[j] = raw_emb[j] * static_cast<float>(count);
+    accum.push_back({name, std::move(ws), count});
 }
 
 Gallery GalleryBuilder::finish() const {
     Gallery g;
     g.entries.reserve(accum.size());
     for (const auto& acc : accum) {
-        if (acc.embeddings.empty()) continue;
-        const size_t dim = acc.embeddings.front().size();
-        Embedding mean(dim, 0.f);
-        for (const auto& e : acc.embeddings)
-            for (size_t j = 0; j < dim; ++j)
-                mean[j] += e[j];
-        const float inv = 1.f / acc.embeddings.size();
+        if (acc.total_count == 0) continue;
+        Embedding mean = acc.weighted_sum;
+        const float inv = 1.f / static_cast<float>(acc.total_count);
         for (float& v : mean) v *= inv;
         l2_normalize(mean);
-        g.entries.push_back({acc.name, std::move(mean)});
+        g.entries.push_back({acc.name, std::move(mean), acc.total_count});
     }
     return g;
 }
