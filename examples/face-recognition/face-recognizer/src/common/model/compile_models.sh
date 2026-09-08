@@ -59,6 +59,10 @@ if [[ -z "${MODELS_DIR}" ]]; then
   echo "  Run prepare_models.py first to produce the prepared ONNX files."
   exit 1
 fi
+if [[ -n "${CALIB_DIR}" && ! -d "${CALIB_DIR}" ]]; then
+  echo "ERROR: --calib-dir is not a directory: ${CALIB_DIR}"
+  exit 1
+fi
 if [[ -z "${BUILD_DIR}" ]]; then
   BUILD_DIR="${MODELS_DIR}/build_bf16_mlatess"
   echo "  [info] --build-dir not set; using ${BUILD_DIR}"
