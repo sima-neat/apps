@@ -5,7 +5,7 @@
 // is present.  The test skips (exit 77) gracefully when assets are absent so
 // it never blocks CI that lacks an RTSP source or gallery.
 //
-// Required env vars to run (any missing → skip):
+// Required env vars (any missing → hard fail):
 //   SIMANEAT_APPS_TEST_MODELS_DIR    directory holding model tar.gz files
 //   SIMANEAT_TEST_RTSP_H264_URL      RTSP stream  OR
 //   SIMANEAT_APPS_TEST_INPUT_VIDEO   path to a local MP4/H.264 video file
@@ -48,14 +48,16 @@ int main(int argc, char** argv) {
     // ── Models ────────────────────────────────────────────────────────────────
     const char* models_dir_raw = env_or_null("SIMANEAT_APPS_TEST_MODELS_DIR");
     if (!models_dir_raw) {
-        return skip_or_fail("SIMANEAT_APPS_TEST_MODELS_DIR not set");
+        std::cerr << "[FAIL] SIMANEAT_APPS_TEST_MODELS_DIR not set\n";
+        return 1;
     }
     const std::string models_dir = models_dir_raw;
 
     const std::string scrfd_path   = find_in_dir(models_dir, kScrfdFile);
     const std::string arcface_path = find_in_dir(models_dir, kArcFaceFile);
     if (scrfd_path.empty() || arcface_path.empty()) {
-        return skip_or_fail("SCRFD or ArcFace model not found under SIMANEAT_APPS_TEST_MODELS_DIR");
+        std::cerr << "[FAIL] SCRFD or ArcFace model not found under SIMANEAT_APPS_TEST_MODELS_DIR\n";
+        return 1;
     }
 
     // ── Input source ──────────────────────────────────────────────────────────
@@ -63,14 +65,15 @@ int main(int argc, char** argv) {
     if (const char* v = env_or_null("SIMANEAT_APPS_TEST_INPUT_VIDEO")) {
         input = v;
         if (!fs::exists(input)) {
-            return skip_or_fail("SIMANEAT_APPS_TEST_INPUT_VIDEO file not found: " + input);
+            std::cerr << "[FAIL] SIMANEAT_APPS_TEST_INPUT_VIDEO file not found: " << input << "\n";
+            return 1;
         }
     } else {
         const auto rtsp_urls = rtsp_h264_urls_from_env();
         if (rtsp_urls.empty()) {
-            return skip_or_fail(
-                "No input source: set SIMANEAT_APPS_TEST_INPUT_VIDEO (video file) "
-                "or SIMANEAT_TEST_RTSP_H264_URL (RTSP stream)");
+            std::cerr << "[FAIL] No input source: set SIMANEAT_APPS_TEST_INPUT_VIDEO (video file)"
+                         " or SIMANEAT_TEST_RTSP_H264_URL (RTSP stream)\n";
+            return 1;
         }
         input = rtsp_urls.front();
     }

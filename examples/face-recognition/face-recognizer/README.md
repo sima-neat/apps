@@ -83,6 +83,7 @@ output:
   insight:
     host: ""                  # Set to Insight host IP to stream annotated output
     video_port: 29656         # Docker-mapped UDP port for Insight video input
+    metadata_port: 23838      # Docker-mapped UDP port for Insight metadata input
 
 match:
   threshold: 0.55             # Cosine similarity cutoff; below → Unknown
@@ -107,10 +108,14 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 |---|---|
 | `--input <uri>` | Override `input.uri` in config |
 | `--gallery <path>` | Override `gallery.path` in config |
+| `--scrfd-model <path>` | Override `scrfd.model` in config |
+| `--arcface-model <path>` | Override `arcface.model` in config |
 | `--stream-host <ip>` | Send annotated H.264 stream to a custom UDP receiver instead of Insight |
 | `--stream-port <n>` | UDP port for custom receiver (default: 5000) |
+| `--rtsp-fps <n>` | Force decoder FPS; omit to auto-detect from stream (recommended) |
 | `--max-frames <n>` | Stop after N frames (0 = unlimited) |
 | `--test` | Print per-frame results and FPS report; headless |
+| `--cpu-preproc` | Force CPU NEON preproc instead of EV74 CVU (slower; useful for A/B accuracy comparison) |
 
 **Enrollment flags (with `--enroll`):**
 
@@ -122,6 +127,7 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 | `--gallery <path>` | Gallery file to write or append to |
 | `--sample-every <n>` | Sample 1 frame every N from video (default: 5) |
 | `--min-score <f>` | Minimum SCRFD confidence for enrollment (default: 0.75) |
+| `--max-per-person <n>` | Cap images per identity when using `--images` (default: unlimited) |
 
 ## Tuning
 
@@ -134,14 +140,21 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 
 ## Testing
 
+Tests require a source build (see [Development From Source](#development-from-source) below).
+Unit tests need no hardware; the E2E test requires models and an input source — all three
+env vars must be set or the test fails.
+
 ```bash
+# Set required prerequisites
+export SIMANEAT_APPS_TEST_MODELS_DIR=${APP_DIR}/models
+export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<HOST>:<PORT>/<STREAM>
+# Optional — enables recognition identity check in addition to detection check:
+export SIMANEAT_APPS_TEST_GALLERY_BIN=${APP_DIR}/gallery.bin
+
 # Unit tests — no hardware required
 ctest --test-dir build -L unit -R 'face-recognizer' --output-on-failure -V
 
-# E2E test — skips gracefully when models or input are absent
-export SIMANEAT_APPS_TEST_MODELS_DIR=${APP_DIR}/models
-export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<HOST>:<PORT>/<STREAM>
-export SIMANEAT_APPS_TEST_GALLERY_BIN=${APP_DIR}/gallery.bin
+# E2E test — requires models and input source above
 ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
 ```
 
