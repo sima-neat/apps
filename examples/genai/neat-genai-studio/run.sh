@@ -764,7 +764,7 @@ launch_server() {
     # not tell an explicit reset request from an ordinary crash.
     rm -f "${SERVER_STATUS_FILE}"
     setsid bash -c \
-      '"$1" "$2" --config "$3" >"$4" 2>&1; echo $? >"$5"' _ \
+      '"$1" "$2" --config "$3" >"$4" 2>&1; s=$?; echo "$s" >"$5"; exit "$s"' _ \
       "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${CONFIG_PATH}" \
       "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
   else

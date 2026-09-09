@@ -708,9 +708,8 @@ Then test the browser UI:
 ## Development From Source
 See the Apps repository [contributor guide](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md)
 for contribution requirements. The repository (not the installed bundle) also
-carries the host-runnable unit suites beside the code they cover:
-`src/python/server/test_asr_switching.py`, `src/python/server/test_hub_security.py`,
-`src/python/ui/test_asr_metadata.py`, `src/python/ui/test_tts_text.py` and
-`src/python/ui/test_voice_catalog.py`, collected by `tests/python/test_unit.py`. The single-example download contains the Studio
+carries the host-runnable unit suites under `tests/python/` (`*_suite.py` plus
+the `tts_text_check.py` script), collected by `tests/python/test_unit.py`;
+`./tests/test.sh --unit` runs them and they need only pytest and PyYAML. The single-example download contains the Studio
 source and can be edited directly; cloning the complete Apps repository is not
 required to run or customize it.

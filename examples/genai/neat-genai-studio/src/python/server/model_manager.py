@@ -471,10 +471,15 @@ class ModelManager:
                     self._log_note(f"Unloading {victim}")
                     self._stop_model_streams(victim)
                     try:
-                        self._server.remove_model(victim)
+                        # remove_model reports a model it did not remove by
+                        # returning False rather than raising; treat that the
+                        # same way unload() does — as authoritative.
+                        if not self._server.remove_model(victim):
+                            raise RuntimeError("the runtime reported it was not removed")
                         evicted.append(victim)
                     except Exception as exc:
                         if not is_asr:
+                            self._log_note(f"Could not unload {victim}: {exc}")
                             continue
                         # There is only one ASR slot. If the outgoing model will
                         # not free, adding the replacement leaves two resident —
