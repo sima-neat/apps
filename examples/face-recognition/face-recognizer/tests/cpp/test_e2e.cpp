@@ -2,19 +2,23 @@
 //
 // Launches face-recognizer with real SCRFD + ArcFace models and checks the
 // pipeline exits cleanly.  Recognition accuracy is verified when a test gallery
-// is present.  The test skips (exit 77) gracefully when assets are absent so
-// it never blocks CI that lacks an RTSP source or gallery.
+// is present.
 //
 // Required env vars (any missing → hard fail):
 //   SIMANEAT_APPS_TEST_MODELS_DIR    directory holding model tar.gz files
 //   SIMANEAT_TEST_RTSP_H264_URL      RTSP stream  OR
-//   SIMANEAT_APPS_TEST_INPUT_VIDEO   path to a local MP4/H.264 video file
+//   SIMANEAT_APPS_TEST_INPUT_VIDEO   path to a face-containing MP4/H.264 file
 //
 // Optional:
 //   SIMANEAT_APPS_TEST_GALLERY_BIN   path to a pre-enrolled gallery.bin;
 //                                    when set, at least one recognised identity
 //                                    must appear in stdout (non-Unknown match).
 //   SIMANEAT_APPS_TEST_TIMEOUT_MS    per-run timeout (default 60 000 ms)
+//
+// Face detection assertion:
+//   Asserted only when SIMANEAT_APPS_TEST_INPUT_VIDEO is set, because a generic
+//   shared RTSP stream may not contain detectable faces in any 60-frame window.
+//   When only RTSP is available the test verifies exit 0 and prints a warning.
 #include "support/testing/test_process.h"
 #include "support/testing/test_config.h"
 
@@ -61,9 +65,14 @@ int main(int argc, char** argv) {
     }
 
     // ── Input source ──────────────────────────────────────────────────────────
+    // Track whether the input is a known face-containing video so the detection
+    // assertion can be gated appropriately (a shared generic RTSP stream may not
+    // contain detectable faces in a 60-frame window).
+    bool input_is_face_video = false;
     std::string input;
     if (const char* v = env_or_null("SIMANEAT_APPS_TEST_INPUT_VIDEO")) {
         input = v;
+        input_is_face_video = true;
         if (!fs::exists(input)) {
             std::cerr << "[FAIL] SIMANEAT_APPS_TEST_INPUT_VIDEO file not found: " << input << "\n";
             return 1;
@@ -158,9 +167,15 @@ int main(int argc, char** argv) {
             return 1;
         }
         if (zero_face_frames == total_frames) {
-            std::cerr << "[FAIL] SCRFD detected zero faces in all " << total_frames << " frames — "
-                         "ensure the test input contains at least one visible face.\n";
-            return 1;
+            if (input_is_face_video) {
+                std::cerr << "[FAIL] SCRFD detected zero faces in all " << total_frames << " frames — "
+                             "ensure SIMANEAT_APPS_TEST_INPUT_VIDEO contains at least one visible face.\n";
+                return 1;
+            }
+            std::cout << "[WARN] SCRFD detected zero faces in " << total_frames << " frames using a "
+                         "generic RTSP stream; face detection not verified.\n"
+                         "       Set SIMANEAT_APPS_TEST_INPUT_VIDEO to a face-containing video "
+                         "to enable this check.\n";
         }
     }
 
