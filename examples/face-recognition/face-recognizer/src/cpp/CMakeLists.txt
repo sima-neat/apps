@@ -130,4 +130,22 @@ if (BUILD_TESTING)
       SKIP_RETURN_CODE 77
       LABELS           "e2e")
   endif()
+
+  # Enrollment E2E test: runs --enroll mode; skips when models or video are absent.
+  set(_ENROLL_E2E_SRC "${_MOD_ROOT}/tests/cpp/test_enroll_e2e.cpp")
+  if (EXISTS "${_ENROLL_E2E_SRC}")
+    add_executable(face-recognizer_enroll_e2e_test "${_ENROLL_E2E_SRC}")
+    target_link_libraries(face-recognizer_enroll_e2e_test
+      PRIVATE SimaNeatApps::support_testing
+    )
+    target_include_directories(face-recognizer_enroll_e2e_test
+      PRIVATE "${_APPS_ROOT}"
+    )
+    add_test(NAME face-recognizer.enroll_e2e
+             COMMAND face-recognizer_enroll_e2e_test $<TARGET_FILE:face-recognizer>
+             WORKING_DIRECTORY "${_APPS_ROOT}")
+    set_tests_properties(face-recognizer.enroll_e2e PROPERTIES
+      SKIP_RETURN_CODE 77
+      LABELS           "e2e")
+  endif()
 endif()

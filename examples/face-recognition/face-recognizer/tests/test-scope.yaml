@@ -28,3 +28,26 @@ e2e:
     models:
       - scrfd
       - arcface
+    env:
+      required:
+        SIMANEAT_APPS_TEST_MODELS_DIR: directory containing model tar.gz files (scrfd, arcface)
+      optional:
+        SIMANEAT_APPS_TEST_INPUT_VIDEO: >
+          Path to an H.264/MP4 file containing at least one visible face.
+          When set, the face detection assertion is enabled (SCRFD must detect ≥1 face
+          in the 60-frame window); when unset, the test verifies only that the process
+          exits cleanly on the available RTSP stream and prints a warning.
+        SIMANEAT_APPS_TEST_GALLERY_BIN: >
+          Path to a pre-enrolled gallery.bin.  When set, at least one non-Unknown
+          recognition result must appear in the 60-frame window.
+        SIMANEAT_TEST_RTSP_H264_URL: >
+          RTSP H.264 stream URL (fallback when SIMANEAT_APPS_TEST_INPUT_VIDEO is unset).
+    notes:
+      - >
+        Face detection is only asserted when SIMANEAT_APPS_TEST_INPUT_VIDEO is set.
+        A shared RTSP stream may not contain detectable faces in any 60-frame window,
+        so the detection check is skipped and a warning is printed instead.
+      - >
+        Enrollment E2E (--enroll mode) is covered by the face-recognizer.enroll_e2e
+        test target, which requires SIMANEAT_APPS_TEST_MODELS_DIR and
+        SIMANEAT_APPS_TEST_INPUT_VIDEO.

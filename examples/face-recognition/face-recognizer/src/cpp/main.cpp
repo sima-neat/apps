@@ -15,7 +15,6 @@
 // is the first argument so both recognition and enrollment ship in one binary.
 int run_enrollment_mode(int argc, char** argv);
 
-#include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
@@ -36,7 +35,6 @@ int run_enrollment_mode(int argc, char** argv);
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -65,7 +63,6 @@ struct AppConfig {
     int  recog_interval      = 5;
     bool is_live             = false; // inferred from URI
     bool test_mode           = false;
-    bool show_display        = false;
     bool force_cpu_preproc   = false; // --cpu-preproc: use A65 NEON preproc even for RTSP (A/B vs EV74 CVU)
     bool output_sink_explicit = false; // true when --output/--test/--no-display set output_sink from CLI
 
@@ -155,14 +152,12 @@ static AppConfig parse_args(int argc, char** argv) {
         else if (arg == "--max-frames"   && i + 1 < argc) { cfg.max_frames     = std::stoi(argv[++i]); }
         else if (arg == "--rtsp-fps"     && i + 1 < argc) { cfg.rtsp_fps       = std::stoi(argv[++i]); }
         else if (arg == "--cpu-preproc") { cfg.force_cpu_preproc = true; }
-        else if (arg == "--test")   { cfg.test_mode = true; cfg.show_display = false; cfg.output_sink = ""; cfg.output_sink_explicit = true; }
-        else if (arg == "--no-display") { cfg.show_display = false; cfg.output_sink = ""; cfg.output_sink_explicit = true; }
-        else if (arg == "--display")    { cfg.show_display = true;  }
+        else if (arg == "--test")   { cfg.test_mode = true; cfg.output_sink = ""; cfg.output_sink_explicit = true; }
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: face-recognizer [--config <path>] [--input <uri>]\n"
                       << "       [--gallery <path>] [--scrfd-model <path>] [--arcface-model <path>]\n"
                       << "       [--output <sink>] [--stream-host <host>] [--stream-port N]\n"
-                      << "       [--test] [--display] [--no-display]\n"
+                      << "       [--test]\n"
                       << "\n"
                       << "  output.insight.host / output.insight.video_port (config.yaml):\n"
                       << "                      Send the overlay H.264 stream to the Insight viewer.\n"
@@ -200,7 +195,6 @@ static AppConfig parse_args(int argc, char** argv) {
     cfg.match         = yaml_cfg.match;
     cfg.overlay       = yaml_cfg.overlay;
     cfg.is_live       = looks_live(cfg.input_uri);
-    if (cfg.show_display && cfg.output_sink.empty()) cfg.output_sink = "display";
     return cfg;
 }
 
@@ -748,40 +742,6 @@ int main(int argc, char** argv) {
                       << ":" << metadata_sender->metadata_port() << " channel=0\n";
     }
 
-    // Async display thread — decouples imshow/waitKey from the pipeline loop.
-    // cv::waitKey(1) on X11/GTK can stall 4-8 ms per frame while the compositor
-    // flushes; running it on a dedicated thread lets Phase A start immediately.
-    std::mutex disp_mutex;
-    std::condition_variable disp_cv;
-    cv::Mat disp_frame;        // either 3-ch BGR or 1-ch NV12 (rows=H*3/2, cols=W)
-    bool disp_ready = false;
-    bool disp_stop  = false;
-    std::thread disp_thread;
-    if (cfg.show_display || cfg.output_sink == "display") {
-        disp_thread = std::thread([&]() {
-            while (true) {
-                cv::Mat f;
-                {
-                    std::unique_lock<std::mutex> lk(disp_mutex);
-                    disp_cv.wait(lk, [&]{ return disp_ready || disp_stop; });
-                    if (disp_stop && !disp_ready) break;
-                    f = std::move(disp_frame);
-                    disp_ready = false;
-                }
-                // If 1-channel, it's NV12 (H*3/2 × W): convert to BGR here,
-                // off the pipeline hot path.
-                if (f.channels() == 1) {
-                    cv::Mat bgr;
-                    cv::cvtColor(f, bgr, cv::COLOR_YUV2BGR_NV12);
-                    f = std::move(bgr);
-                }
-                cv::imshow("face-recognizer", f);
-                if (cv::waitKey(1) == 27) g_stop = true;
-                if (disp_stop) break;
-            }
-        });
-    }
-
     Timings timings;
     int frame_count = 0;
     const auto loop_start = Clock::now();
@@ -1216,25 +1176,6 @@ int main(int argc, char** argv) {
                 printf("  face[%zu] → %-20s  similarity=%.4f\n",
                        i, matches[i].name.c_str(), matches[i].score);
         }
-        if (cfg.show_display || cfg.output_sink == "display") {
-            {
-                std::lock_guard<std::mutex> lk(disp_mutex);
-                if (!frame.empty()) {
-                    // BGR frame with overlay already drawn — display thread shows directly.
-                    disp_frame = frame.clone();
-                } else if (use_nv12_path) {
-                    // NV12-only path (no stream/write): display thread converts to BGR.
-                    cv::Mat nv12_view(curr_nv12_h * 3 / 2, curr_nv12_w,
-                                      CV_8UC1, curr_nv12_buf.data());
-                    nv12_view.copyTo(disp_frame);
-                } else {
-                    disp_frame = frame.clone();
-                }
-                disp_ready = true;
-            }
-            disp_cv.notify_one();
-        }
-
         ++frame_count;
 
         if (cfg.test_mode) {
@@ -1299,12 +1240,6 @@ int main(int argc, char** argv) {
         std::cout << "\n[SDK SCRFD]\n"   << scrfd_report.to_text()   << "\n";
         std::cout << "[SDK ArcFace]\n"  << arcface_report.to_text() << "\n";
         print_timings(timings, frame_count, total_s > 0 ? total_s : 1.0);
-    }
-
-    if (disp_thread.joinable()) {
-        { std::lock_guard<std::mutex> lk(disp_mutex); disp_stop = true; }
-        disp_cv.notify_one();
-        disp_thread.join();
     }
 
     scrfd_run.close();

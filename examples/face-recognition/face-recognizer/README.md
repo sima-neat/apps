@@ -175,13 +175,25 @@ Binary: `build/examples/face-recognition/face-recognizer_cpp/face-recognizer`
 # Unit tests — no hardware required
 ctest --test-dir build -L unit -R 'face-recognizer' --output-on-failure -V
 
-# E2E test — requires models and an input source; all env vars must be set
+# E2E test — requires models and an input source
 export SIMANEAT_APPS_TEST_MODELS_DIR=${APP_DIR}/models
+
+# Option A (recommended): face-containing video — enables the SCRFD detection assertion
+export SIMANEAT_APPS_TEST_INPUT_VIDEO=/path/to/face_clip.mp4
+
+# Option B: RTSP stream — detection assertion is skipped; process exit verified only
 export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<HOST>:<PORT>/<STREAM>
+
 # Optional: enables identity recognition assertion on top of detection check
 export SIMANEAT_APPS_TEST_GALLERY_BIN=${APP_DIR}/gallery.bin
+
 ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
 ```
+
+> **Note:** When only `SIMANEAT_TEST_RTSP_H264_URL` is set, the E2E test verifies
+> that the pipeline starts cleanly and exits 0, but skips the face-detection assertion
+> (a shared RTSP stream may not contain detectable faces in any 60-frame window).
+> Set `SIMANEAT_APPS_TEST_INPUT_VIDEO` to a face-containing clip to enable the full check.
 
 ### Recompile Models from Source
 

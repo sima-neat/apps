@@ -46,19 +46,19 @@ namespace fs = std::filesystem;
 
 static bool test_gallery_roundtrip() {
     const fs::path tmp = fs::temp_directory_path() / "fr_test_gallery.bin";
-    face_recog::Gallery g;
-    {
-        face_recog::Embedding e(face_recog::kEmbeddingDim, 0.f);
-        e[0] = 1.f;
-        face_recog::l2_normalize(e);
-        g.entries.push_back({"Alice", e});
-    }
-    {
-        face_recog::Embedding e(face_recog::kEmbeddingDim, 0.f);
-        e[511] = -1.f;
-        face_recog::l2_normalize(e);
-        g.entries.push_back({"Bob", e});
-    }
+
+    // Use GalleryBuilder so entries have proper raw_mean and sample_count set
+    // (direct Gallery construction leaves raw_mean empty and sample_count=0).
+    face_recog::GalleryBuilder builder;
+    face_recog::Embedding e_alice(face_recog::kEmbeddingDim, 0.f);
+    e_alice[0] = 3.f; e_alice[1] = 4.f;  // raw; norm=5, so normalized[0]=0.6, [1]=0.8
+    builder.add("Alice", e_alice);
+
+    face_recog::Embedding e_bob(face_recog::kEmbeddingDim, 0.f);
+    e_bob[511] = -2.f;  // raw; norm=2, so normalized[511]=-1
+    builder.add("Bob", e_bob);
+
+    const auto g = builder.finish();
     face_recog::save_gallery(g, tmp);
     const auto loaded = face_recog::load_gallery(tmp);
     fs::remove(tmp);
@@ -66,8 +66,17 @@ static bool test_gallery_roundtrip() {
     ASSERT_TRUE_MSG(loaded.entries.size() == 2, "entry count");
     ASSERT_TRUE_MSG(loaded.entries[0].name == "Alice", "name[0]");
     ASSERT_TRUE_MSG(loaded.entries[1].name == "Bob",   "name[1]");
-    ASSERT_NEAR_F(loaded.entries[0].embedding[0], 1.f, 1e-5f);
+    // normalized embedding
+    ASSERT_NEAR_F(loaded.entries[0].embedding[0],   0.6f, 1e-5f);
+    ASSERT_NEAR_F(loaded.entries[0].embedding[1],   0.8f, 1e-5f);
     ASSERT_NEAR_F(loaded.entries[1].embedding[511], -1.f, 1e-5f);
+    // raw_mean is the unnormalized mean (must be distinct from embedding and round-trip exactly)
+    ASSERT_NEAR_F(loaded.entries[0].raw_mean[0],   0.6f, 1e-5f);  // e_alice/5 = [0.6, 0.8, 0…]
+    ASSERT_NEAR_F(loaded.entries[0].raw_mean[1],   0.8f, 1e-5f);
+    ASSERT_NEAR_F(loaded.entries[1].raw_mean[511], -1.f, 1e-5f);  // e_bob/2 = [0,…,-1]
+    // sample_count persists
+    ASSERT_TRUE_MSG(loaded.entries[0].sample_count == 1, "alice sample_count");
+    ASSERT_TRUE_MSG(loaded.entries[1].sample_count == 1, "bob sample_count");
     return true;
 }
 
