@@ -47,6 +47,26 @@ class ThinkSplitterTests(unittest.TestCase):
     def test_unterminated_reasoning_is_flushed_as_reasoning(self):
         self.assertEqual(_split(["<think>unterminated"]), [("think", "unterminated")])
 
+    def test_template_injected_close_reclassifies_prior_text(self):
+        # No <think> was emitted (the runtime put it in the prompt), so the
+        # text before the bare </think> is reasoning and the caller is told.
+        pieces = []
+        splitter = cli._ThinkSplitter()
+        for delta in ["step one ", "step two</think>", " Final answer."]:
+            pieces += splitter.feed(delta)
+        pieces += splitter.flush()
+        kinds = [k for k, _ in pieces]
+        self.assertIn("reclassify", kinds)
+        # Model the caller: everything before the marker was reasoning (text
+        # that streamed before the tag arrived may have been labelled answer),
+        # everything after it is the answer.
+        marker = kinds.index("reclassify")
+        before = "".join(t for _, t in pieces[:marker])
+        after = "".join(t for k, t in pieces[marker + 1:] if k == "answer")
+        self.assertEqual(before, "step one step two")
+        self.assertEqual(after, " Final answer.")
+        self.assertEqual([k for k, _ in pieces[marker + 1:]], ["answer"])
+
     def test_multiple_blocks(self):
         self.assertEqual(
             _split(["a<think>b</think>c<think>d</think>e"]),
