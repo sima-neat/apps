@@ -70,10 +70,12 @@ static bool test_gallery_roundtrip() {
     ASSERT_NEAR_F(loaded.entries[0].embedding[0],   0.6f, 1e-5f);
     ASSERT_NEAR_F(loaded.entries[0].embedding[1],   0.8f, 1e-5f);
     ASSERT_NEAR_F(loaded.entries[1].embedding[511], -1.f, 1e-5f);
-    // raw_mean is the unnormalized mean (must be distinct from embedding and round-trip exactly)
-    ASSERT_NEAR_F(loaded.entries[0].raw_mean[0],   0.6f, 1e-5f);  // e_alice/5 = [0.6, 0.8, 0…]
-    ASSERT_NEAR_F(loaded.entries[0].raw_mean[1],   0.8f, 1e-5f);
-    ASSERT_NEAR_F(loaded.entries[1].raw_mean[511], -1.f, 1e-5f);  // e_bob/2 = [0,…,-1]
+    // raw_mean is the unnormalized mean (distinct from embedding, must round-trip exactly)
+    // GalleryBuilder stores weighted_sum / total_count before L2-norm, so for 1 sample:
+    // Alice raw_mean = e_alice / 1 = [3, 4, 0, ...];  Bob raw_mean = e_bob / 1 = [0, ..., -2]
+    ASSERT_NEAR_F(loaded.entries[0].raw_mean[0],   3.f, 1e-5f);
+    ASSERT_NEAR_F(loaded.entries[0].raw_mean[1],   4.f, 1e-5f);
+    ASSERT_NEAR_F(loaded.entries[1].raw_mean[511], -2.f, 1e-5f);
     // sample_count persists
     ASSERT_TRUE_MSG(loaded.entries[0].sample_count == 1, "alice sample_count");
     ASSERT_TRUE_MSG(loaded.entries[1].sample_count == 1, "bob sample_count");
