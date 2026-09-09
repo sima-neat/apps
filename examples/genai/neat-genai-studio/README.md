@@ -343,6 +343,16 @@ any in-progress generation stops.
 This is the **only** thing in the studio that touches the board runtime, and it
 never happens on its own — not at startup, and not when a model fails to load.
 
+The request normally goes through the model server's control API, which exits
+with a sentinel status that `run.sh` acts on. A server wedged inside a native
+model load cannot answer that API at all, so when the request times out the web
+UI and the CLI instead write a request file (`.neat-genai-reset.request`, see
+`NEAT_RESET_REQUEST_FILE`) that `run.sh` polls every second: it stops the server
+itself (TERM, then KILL after `SHUTDOWN_GRACE_SECONDS`), resets the dispatcher
+and relaunches. Both paths share the relaunch budget (`MLA_MAX_RESTART_RETRIES`
+consecutive relaunches that fail within `RELAUNCH_STABLE_SECONDS`) and both are
+refused when `MLA_RESET=0`.
+
 Restarting the dispatcher needs privileges. `run.sh` prefers the board's own
 `fix_devkit_runtime.sh` when present and otherwise restarts
 `simaai-appcomplex.service` via `sudo`, so run the studio as root, give the

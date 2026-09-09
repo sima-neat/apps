@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import os
 import re
 import shutil
@@ -405,6 +406,24 @@ def catalog(ctrl):
         return ctrl_get(ctrl, "/control/catalog").get("catalog", []) or []
     except Exception:
         return []
+
+
+def _request_supervisor_reset():
+    """Ask run.sh to reset a model server that cannot answer its control API.
+    Returns True when the request was handed over."""
+    request_file = os.environ.get("NEAT_RESET_REQUEST_FILE", "")
+    if not request_file:
+        print(f"{ERR}  the model server is not responding and no supervisor is "
+              f"available to reset it (start the Studio with run.sh --cli).{RESET}")
+        return False
+    try:
+        with open(request_file, "w", encoding="utf-8") as handle:
+            handle.write("reset\n")
+    except OSError as exc:
+        print(f"{ERR}  could not hand the reset to the supervisor: {exc}{RESET}")
+        return False
+    print(f"{MUTED}  model server is not responding — asked run.sh to reset it…{RESET}")
+    return True
 
 
 def wait_gone(oai, timeout=30):
@@ -1923,8 +1942,17 @@ def main():
                 # so the request itself usually dies with the connection.
                 print(f"{MUTED}  resetting the accelerator and relaunching the "
                       f"model server…{RESET}")
+                if os.environ.get("MLA_RESET", "1") != "1":
+                    print(f"{ERR}  accelerator reset is disabled (MLA_RESET=0).{RESET}")
+                    continue
                 try:
                     ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
+                except (socket.timeout, TimeoutError) as exc:
+                    # No answer at all: the server is wedged (typically inside a
+                    # native model load) and cannot service its own control API.
+                    # Hand the reset to run.sh, which polls the request file.
+                    if not _request_supervisor_reset():
+                        continue
                 except urllib.error.HTTPError as exc:
                     # The server answered, so it is not resetting: MLA_RESET=0
                     # refuses with 400. The reason is in the JSON body, which
@@ -1935,9 +1963,13 @@ def main():
                         detail = ""
                     print(f"{ERR}  reset refused ({exc.code}): {detail or exc.reason}{RESET}")
                     continue
+                except urllib.error.URLError as exc:
+                    if isinstance(exc.reason, (socket.timeout, TimeoutError)):
+                        if not _request_supervisor_reset():
+                            continue
+                    # Otherwise a dropped connection: the success path (the
+                    # server exits mid-reply).
                 except Exception:  # noqa: BLE001
-                    # A dropped connection is the success path: the server exits
-                    # mid-reply.
                     pass
                 active = ""
                 camera_device = None      # no model resident → no live camera
