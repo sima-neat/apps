@@ -50,8 +50,11 @@ MLA_RESET_CMD="${MLA_RESET_CMD:-}"
 MLA_DISPATCHER_SERVICE="${MLA_DISPATCHER_SERVICE:-simaai-appcomplex.service}"
 # Sentinel exit code the model server uses to ask for a reset + relaunch.
 MLA_RESET_EXIT_CODE="${MLA_RESET_EXIT_CODE:-75}"
-# Bounded relaunches so a server that dies immediately cannot respawn forever.
+# Bounded relaunches so a server that dies immediately cannot respawn forever:
+# the budget counts consecutive relaunches that fail within
+# RELAUNCH_STABLE_SECONDS; one that stays up that long clears it.
 MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
+RELAUNCH_STABLE_SECONDS="${RELAUNCH_STABLE_SECONDS:-60}"
 # Where the CLI-mode server records its exit status (see launch_server).
 SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.status}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
@@ -711,10 +714,15 @@ cleanup() {
     wait "${pid}" 2>/dev/null || true
   done
   # In --cli mode the watchdog may have relaunched the model server under a new
-  # process group (not in our remembered groups) — sweep any stray one.
+  # process group (not in our remembered groups, since the watchdog runs in a
+  # subshell). Sweep it with the same grace the supervised server gets, so a
+  # loaded server can still release its MLA models in server.stop().
   if [[ "${CLI_MODE}" == "1" ]] && command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
-    sleep 1
+    local sweep_deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
+    while pgrep -f "${SERVER_PATTERN}" >/dev/null 2>&1 && [[ "${SECONDS}" -lt "${sweep_deadline}" ]]; do
+      sleep 1
+    done
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
@@ -773,12 +781,19 @@ launch_server() {
 # backgrounded subshell cannot `wait` a sibling PID; bounded so a broken server
 # cannot respawn forever. Strays are swept by cleanup().
 cli_supervise() {
-  # `tries` is NOT cleared when a relaunch survives: these are total resets for
-  # the session, so a crash/reset cycle cannot continue indefinitely.
-  local tries=0 status
+  # `tries` counts consecutive relaunches that did not survive: a relaunched
+  # server that stays up for RELAUNCH_STABLE_SECONDS clears it, so explicit
+  # user resets never exhaust the budget, while a crash/reset cycle still cannot
+  # continue indefinitely.
+  local tries=0 status launched_at=0
   while true; do
     sleep 2
-    kill -0 "${server_pid}" 2>/dev/null && continue
+    if kill -0 "${server_pid}" 2>/dev/null; then
+      if [[ "${tries}" -gt 0 && $((SECONDS - launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]]; then
+        tries=0
+      fi
+      continue
+    fi
 
     # Reset the accelerator ONLY when the server asked for it. An ordinary crash
     # must not restart the board-wide dispatcher — the studio touches the board
@@ -797,6 +812,7 @@ cli_supervise() {
     tries=$((tries + 1))
     reset_mla_dispatcher
     launch_server
+    launched_at="${SECONDS}"
     sleep "${MODEL_SERVER_START_DELAY:-2}"
   done
 }
@@ -861,8 +877,16 @@ printf '\n'
 # for the sentinel exit code, which is the model server asking for the explicit
 # accelerator reset the user requested. Nothing else touches the board runtime.
 status=0
+# Consecutive relaunches that did not survive RELAUNCH_STABLE_SECONDS. A
+# relaunch that stays up clears it, so a user can reset the accelerator as often
+# as needed; only a tight reset/exit loop exhausts the budget.
 reset_tries=0
+reset_launched_at=0
 while true; do
+  if [[ "${reset_tries}" -gt 0 && $((SECONDS - reset_launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]] \
+      && child_running "${server_pid}"; then
+    reset_tries=0
+  fi
   if ! child_running "${server_pid}"; then
     set +e
     wait "${server_pid}"
@@ -878,6 +902,7 @@ while true; do
       reset_mla_dispatcher
       section "Model Server"
       launch_server
+      reset_launched_at="${SECONDS}"
       sleep "${MODEL_SERVER_START_DELAY:-2}"
       continue
     fi

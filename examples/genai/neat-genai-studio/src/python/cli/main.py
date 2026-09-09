@@ -1925,12 +1925,20 @@ def main():
                       f"model server…{RESET}")
                 try:
                     ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
-                except Exception as exc:  # noqa: BLE001
-                    # A dropped connection is the success path (the server exits
-                    # mid-reply); a refusal is not — MLA_RESET=0 answers 400.
-                    if "disabled" in str(exc).lower():
-                        print(f"{ERR}  {exc}{RESET}")
-                        continue
+                except urllib.error.HTTPError as exc:
+                    # The server answered, so it is not resetting: MLA_RESET=0
+                    # refuses with 400. The reason is in the JSON body, which
+                    # str(exc) does not include.
+                    try:
+                        detail = json.loads(exc.read().decode("utf-8") or "{}").get("error") or ""
+                    except Exception:  # noqa: BLE001
+                        detail = ""
+                    print(f"{ERR}  reset refused ({exc.code}): {detail or exc.reason}{RESET}")
+                    continue
+                except Exception:  # noqa: BLE001
+                    # A dropped connection is the success path: the server exits
+                    # mid-reply.
+                    pass
                 active = ""
                 camera_device = None      # no model resident → no live camera
                 # The endpoint replies BEFORE exiting (~1.5s later), so polling

@@ -203,6 +203,25 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertIn("cannot be deleted", errors[0])
         self.assertTrue((self.tmp / "whisper-medium-a16w8").is_dir())
 
+    def test_a_normalized_served_name_cannot_strand_the_active_asr(self):
+        # The runtime may register a model under a normalized name. The served
+        # name must become a catalog entry, or the requested name reads as
+        # inactive and deleting it would rmtree the weights the active model is
+        # serving from.
+        manager, server = self.manager()
+        server.add_model = lambda path, name: (
+            server.names.append("served-" + name) or "served-" + name)
+        (self.tmp / "whisper-tiny-a16w8").mkdir()
+        manager.register_startup_model(
+            "whisper-tiny-a16w8", self.tmp / "whisper-tiny-a16w8", "asr", False, None)
+        result = manager.set_active_asr("whisper-tiny-a16w8")
+        self.assertEqual(result["name"], "served-whisper-tiny-a16w8")
+        self.assertEqual(manager._active_asr, "served-whisper-tiny-a16w8")
+        self.assertIn("served-whisper-tiny-a16w8", manager._catalog)
+        with self.assertRaisesRegex(ValueError, "active speech-to-text"):
+            manager.delete("whisper-tiny-a16w8")
+        self.assertTrue((self.tmp / "whisper-tiny-a16w8").is_dir())
+
     def test_deleting_an_alias_of_the_active_asr_is_refused(self):
         # register_startup_model() can add the configured `asr.name` while the
         # catalog scan adds the directory basename: two names, one directory.
