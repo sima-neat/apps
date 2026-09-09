@@ -36,8 +36,8 @@ output:
   # Insight Web UI.  Override at runtime with --stream-host / --stream-port.
   insight:
     host:           ""      # set to Insight host IP to enable streaming
-    video_port:     29656   # host port (Docker maps 29656 → container:9000)
-    metadata_port:  23838   # host port (Docker maps 23838 → container:9100)
+    video_port:     9000    # UDP port Insight listens on for H.264 video input
+    metadata_port:  9100    # UDP port Insight listens on for metadata input
 
 # ── Matching ──────────────────────────────────────────────────────────────────
 match:

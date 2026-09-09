@@ -82,8 +82,8 @@ input:
 output:
   insight:
     host: ""                  # Set to Insight host IP to stream annotated output
-    video_port: 29656         # Docker-mapped UDP port for Insight video input
-    metadata_port: 23838      # Docker-mapped UDP port for Insight metadata input
+    video_port: 9000          # UDP port Insight listens on for H.264 video input
+    metadata_port: 9100       # UDP port Insight listens on for metadata input
 
 match:
   threshold: 0.55             # Cosine similarity cutoff; below → Unknown
