@@ -178,14 +178,15 @@ ctest --test-dir build -L unit -R 'face-recognizer' --output-on-failure -V
 # E2E test — requires models and an input source
 export SIMANEAT_APPS_TEST_MODELS_DIR=${APP_DIR}/models
 
-# Option A (recommended): face-containing video — enables the SCRFD detection assertion
-export SIMANEAT_APPS_TEST_INPUT_VIDEO=/path/to/face_clip.mp4
+# Option A (recommended): face-containing video — enables detection + recognition assertions.
+# Download the reference test video and gallery (requires gdown: pip install gdown):
+#   gdown 18uSg5S4CEUBWuCNM2rjs_8CF0B5taJ9v -O /tmp/face_test.mp4
+#   gdown 1BTOMCMQzUG2dkIhrr1q1SdDoRe2g1v5f -O /tmp/test_gallery.bin
+export SIMANEAT_APPS_TEST_INPUT_VIDEO=/tmp/face_test.mp4
+export SIMANEAT_APPS_TEST_GALLERY_BIN=/tmp/test_gallery.bin   # optional: enables recognition check
 
 # Option B: RTSP stream — detection assertion is skipped; process exit verified only
 export SIMANEAT_TEST_RTSP_H264_URL=rtsp://<HOST>:<PORT>/<STREAM>
-
-# Optional: enables identity recognition assertion on top of detection check
-export SIMANEAT_APPS_TEST_GALLERY_BIN=${APP_DIR}/gallery.bin
 
 ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
 ```
@@ -194,6 +195,7 @@ ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
 > that the pipeline starts cleanly and exits 0, but skips the face-detection assertion
 > (a shared RTSP stream may not contain detectable faces in any 60-frame window).
 > Set `SIMANEAT_APPS_TEST_INPUT_VIDEO` to a face-containing clip to enable the full check.
+> When `SIMANEAT_APPS_TEST_INPUT_VIDEO` is set, enrollment mode is also tested automatically.
 
 ### Recompile Models from Source
 

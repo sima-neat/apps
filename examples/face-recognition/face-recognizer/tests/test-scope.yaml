@@ -8,6 +8,27 @@ models:
     url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/w600k_r50.surgery_mpk.tar.gz
     file: w600k_r50.surgery_mpk.tar.gz
 
+# ── Test assets ───────────────────────────────────────────────────────────────
+# These files enable the face-detection assertion and recognition check in the
+# E2E test.  Download them once and point the env vars below at the local paths.
+#
+# NOTE: Google Drive links are reference-only — automated download via CI scripts
+# is not supported because Drive imposes confirmation tokens on large files and
+# per-user quotas.  Host on a stable CDN (e.g. docs.sima.ai) to enable CI
+# auto-download via download_models.sh.
+#
+# Test video  (H.264/MP4, contains faces for detection + recognition):
+#   https://drive.google.com/file/d/18uSg5S4CEUBWuCNM2rjs_8CF0B5taJ9v/view
+#   → set as SIMANEAT_APPS_TEST_INPUT_VIDEO=/path/to/face_test.mp4
+#
+# Test gallery (pre-enrolled gallery.bin for the identities in the test video):
+#   https://drive.google.com/file/d/1BTOMCMQzUG2dkIhrr1q1SdDoRe2g1v5f/view
+#   → set as SIMANEAT_APPS_TEST_GALLERY_BIN=/path/to/gallery.bin
+#
+# Quick download (requires gdown: pip install gdown):
+#   gdown 18uSg5S4CEUBWuCNM2rjs_8CF0B5taJ9v -O face_test.mp4
+#   gdown 1BTOMCMQzUG2dkIhrr1q1SdDoRe2g1v5f -O gallery.bin
+
 unit:
   python: false
   cpp: true
