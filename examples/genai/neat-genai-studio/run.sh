@@ -637,17 +637,17 @@ reset_mla_dispatcher() {
     return 0
   fi
 
-  # 2) The SDK's own runtime-recovery script, when the board ships it.
+  # 2) The board's own runtime-recovery script, when it is exposed on PATH.
+  #    Its install location is not part of the public runtime contract, so it
+  #    is looked up rather than hard-coded (the release bundle validator
+  #    rejects a literal path to it).
   local fixer
-  for fixer in \
-    "$(command -v fix_devkit_runtime.sh 2>/dev/null || true)" \
-    /usr/bin/fix_devkit_runtime.sh /usr/local/bin/fix_devkit_runtime.sh; do
-    if [[ -n "${fixer}" && -x "${fixer}" ]]; then
-      info "Resetting MLA runtime via ${C_DIM}${fixer}${C_RESET}…"
-      mla_sudo "${fixer}" || warn "MLA runtime reset failed (continuing)"
-      return 0
-    fi
-  done
+  fixer="$(command -v fix_devkit_runtime.sh 2>/dev/null || true)"
+  if [[ -n "${fixer}" && -x "${fixer}" ]]; then
+    info "Resetting MLA runtime via ${C_DIM}${fixer}${C_RESET}…"
+    mla_sudo "${fixer}" || warn "MLA runtime reset failed (continuing)"
+    return 0
+  fi
 
   # 3) Fallback: restart the dispatcher service and re-init MLA memory.
   if command -v systemctl >/dev/null 2>&1; then
