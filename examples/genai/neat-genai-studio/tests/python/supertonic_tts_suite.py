@@ -1,5 +1,8 @@
 """Unit tests for the Supertonic client module (no board, no worker process).
 
+Lives under tests/python (imported by test_unit.py) so the installed bundle,
+which packages src/python wholesale, does not ship it.
+
 Covers the text segmenter that keeps every request inside the compiled
 192-character contract, environment discovery, and the worker-free parts of the
 client. Nothing here spawns the worker or needs pyneat.

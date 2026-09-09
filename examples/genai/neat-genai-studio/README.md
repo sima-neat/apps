@@ -208,6 +208,10 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 /export [file]   save this chat to a .log file (default neat-chat-<time>.log)
 /reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
+/think [on|off]  let reasoning models think before answering (default on):
+                 the reasoning streams dimmed, is counted separately, and stays
+                 out of the history and /export; off sends /no_think like the
+                 web UI's Thinking toggle (start with --no-think for the same)
 /rag [filter]    inspect the RAG database: list chunks (/docs; filter narrows)
 /rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
 /rag search <q>  semantic search: show top matches without asking the model
@@ -350,6 +354,16 @@ any in-progress generation stops.
 
 This is the **only** thing in the studio that touches the board runtime, and it
 never happens on its own — not at startup, and not when a model fails to load.
+
+The request normally goes through the model server's control API, which exits
+with a sentinel status that `run.sh` acts on. A server wedged inside a native
+model load cannot answer that API at all, so when the request times out the web
+UI and the CLI instead write a request file (`.neat-genai-reset.request`, see
+`NEAT_RESET_REQUEST_FILE`) that `run.sh` polls every second: it stops the server
+itself (TERM, then KILL after `SHUTDOWN_GRACE_SECONDS`), resets the dispatcher
+and relaunches. Both paths share the relaunch budget (`MLA_MAX_RESTART_RETRIES`
+consecutive relaunches that fail within `RELAUNCH_STABLE_SECONDS`) and both are
+refused when `MLA_RESET=0`.
 
 Restarting the dispatcher needs privileges. `run.sh` prefers the board's own
 `fix_devkit_runtime.sh` when present and otherwise restarts
@@ -758,9 +772,8 @@ Then test the browser UI:
 ## Development From Source
 See the Apps repository [contributor guide](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md)
 for contribution requirements. The repository (not the installed bundle) also
-carries the host-runnable unit suites beside the code they cover:
-`src/python/server/test_asr_switching.py`, `src/python/server/test_hub_security.py`,
-`src/python/ui/test_asr_metadata.py`, `src/python/ui/test_tts_text.py` and
-`src/python/ui/test_voice_catalog.py`, collected by `tests/python/test_unit.py`. The single-example download contains the Studio
+carries the host-runnable unit suites under `tests/python/` (`*_suite.py` plus
+the `tts_text_check.py` script), collected by `tests/python/test_unit.py`;
+`./tests/test.sh --unit` runs them and they need only pytest and PyYAML. The single-example download contains the Studio
 source and can be edited directly; cloning the complete Apps repository is not
 required to run or customize it.

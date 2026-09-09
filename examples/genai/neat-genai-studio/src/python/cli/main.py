@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import os
 import re
 import shutil
@@ -407,6 +408,24 @@ def catalog(ctrl):
         return []
 
 
+def _request_supervisor_reset():
+    """Ask run.sh to reset a model server that cannot answer its control API.
+    Returns True when the request was handed over."""
+    request_file = os.environ.get("NEAT_RESET_REQUEST_FILE", "")
+    if not request_file:
+        print(f"{ERR}  the model server is not responding and no supervisor is "
+              f"available to reset it (start the Studio with run.sh --cli).{RESET}")
+        return False
+    try:
+        with open(request_file, "w", encoding="utf-8") as handle:
+            handle.write("reset\n")
+    except OSError as exc:
+        print(f"{ERR}  could not hand the reset to the supervisor: {exc}{RESET}")
+        return False
+    print(f"{MUTED}  model server is not responding — asked run.sh to reset it…{RESET}")
+    return True
+
+
 def wait_gone(oai, timeout=30):
     """Wait for the model server to stop answering. Used after requesting a
     reset: the endpoint replies before exiting, so 'is it back?' is meaningless
@@ -434,21 +453,115 @@ def wait_ready(oai, timeout=90):
     return False
 
 
-def stream_chat(oai, model, messages, max_tokens, render=False):
-    """Stream a completion. Returns (text, ttft_seconds, tps, tokens).
+def _without_thinking(messages):
+    """Copy of ``messages`` with ``/no_think`` appended to the last user turn —
+    the same switch the web UI uses for reasoning models."""
+    out = [dict(m) for m in messages]
+    for m in reversed(out):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            m["content"] = (content + " /no_think").strip()
+        elif isinstance(content, list):
+            parts = [dict(p) for p in content]
+            for part in reversed(parts):
+                if part.get("type") == "text":
+                    part["text"] = (part.get("text", "") + " /no_think").strip()
+                    break
+            else:
+                parts.append({"type": "text", "text": "/no_think"})
+            m["content"] = parts
+        break
+    return out
+
+
+class _ThinkSplitter:
+    """Separate a reasoning model's ``<think>…</think>`` block from its answer
+    while the reply streams. Deltas are fed in; ``feed`` yields
+    ``(kind, text)`` pieces with kind ``"think"`` or ``"answer"``. A tag split
+    across deltas is held back until it can be resolved."""
+
+    OPEN, CLOSE = "<think>", "</think>"
+
+    def __init__(self):
+        self.in_think = False
+        self.saw_open = False
+        self.pending = ""
+
+    def feed(self, delta):
+        self.pending += delta
+        out = []
+        while self.pending:
+            tag = self.CLOSE if self.in_think else self.OPEN
+            idx = self.pending.find(tag)
+            if idx >= 0:
+                if idx:
+                    out.append(("think" if self.in_think else "answer", self.pending[:idx]))
+                self.pending = self.pending[idx + len(tag):]
+                if self.in_think:
+                    self.in_think = False
+                else:
+                    self.in_think = True
+                    self.saw_open = True
+                continue
+            # No full tag: emit everything except a suffix that could still be
+            # the start of one.
+            keep = 0
+            for n in range(min(len(tag) - 1, len(self.pending)), 0, -1):
+                if tag.startswith(self.pending[-n:]):
+                    keep = n
+                    break
+            emit, self.pending = self.pending[:len(self.pending) - keep], self.pending[len(self.pending) - keep:]
+            if emit:
+                out.append(("think" if self.in_think else "answer", emit))
+            break
+        return out
+
+    def flush(self):
+        rest, self.pending = self.pending, ""
+        return [("think" if self.in_think else "answer", rest)] if rest else []
+
+
+def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
+    """Stream a completion. Returns (text, ttft_seconds, tps, tokens,
+    reasoning_tokens). ``text`` is the answer with any reasoning block removed.
     With render=True the response is shown live, rendered as Markdown line-by-line
     (complete lines are rendered as they arrive; the trailing partial line is
     flushed at the end) so the reply is visible while it streams. A live token
     count trails the current line. With render=False raw tokens are printed as
-    they arrive."""
-    payload = {"model": model, "messages": messages,
+    they arrive. Reasoning (``<think>…</think>``) streams dimmed, is counted
+    separately, and is kept out of the returned text. With think=False the
+    request asks the model not to reason, the way the web UI's toggle does."""
+    payload = {"model": model,
+               "messages": messages if think else _without_thinking(messages),
                "max_tokens": max_tokens, "stream": True}
+    if not think:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     req = urllib.request.Request(
         f"http://{oai[0]}:{oai[1]}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     parts, ttft, tps, tokens = [], None, None, 0
+    reasoning_tokens, think_open = 0, False
+    splitter = _ThinkSplitter()
     buf, md_state = "", [False, False]   # render: [in code fence, in $$ math block]
+
+    def _show_think(text):
+        nonlocal think_open
+        if not think_open:
+            sys.stdout.write("\r\x1b[K" if render else "")
+            sys.stdout.write(f"{DIM}💭 thinking…{RESET}\n")
+            think_open = True
+        sys.stdout.write(f"{DIM}{text}{RESET}")
+        sys.stdout.flush()
+
+    def _end_think():
+        nonlocal think_open
+        if think_open:
+            sys.stdout.write(f"\n{DIM}💭 {reasoning_tokens} reasoning tok{RESET}\n")
+            sys.stdout.flush()
+            think_open = False
 
     def _redraw_partial():
         # Show the in-progress line live with a trailing "… N tok" count, redrawn
@@ -491,26 +604,45 @@ def stream_chat(oai, model, messages, max_tokens, render=False):
             if not delta:
                 continue
             clean = _CTRL_TOKENS.sub("", delta)
-            if clean:
-                parts.append(clean)
+            if not clean:
+                continue
+            for kind, piece in splitter.feed(clean):
+                if kind == "think":
+                    reasoning_tokens += 1
+                    _show_think(piece)
+                    continue
+                _end_think()
+                parts.append(piece)
                 tokens += 1
                 if render:
-                    buf += clean
+                    buf += piece
                     while "\n" in buf:   # flush every completed line as rendered Markdown
                         line_text, buf = buf.split("\n", 1)
                         sys.stdout.write("\r\x1b[K")   # drop the partial+counter line
                         print(render_md_line(line_text, md_state))
                     _redraw_partial()   # keep the in-progress line + live count visible
                 else:
-                    sys.stdout.write(clean)
+                    sys.stdout.write(piece)
                     sys.stdout.flush()
+    for kind, piece in splitter.flush():
+        if kind == "think":
+            reasoning_tokens += 1
+            _show_think(piece)
+        else:
+            parts.append(piece)
+            tokens += 1
+            if render:
+                buf += piece
+            else:
+                sys.stdout.write(piece)
+    _end_think()
     if render:
         sys.stdout.write("\r\x1b[K")   # clear the trailing partial+counter
         if buf:
             print(render_md_line(buf, md_state))   # render the last (unterminated) line
         else:
             sys.stdout.flush()
-    return "".join(parts), ttft, tps, tokens
+    return "".join(parts), ttft, tps, tokens, reasoning_tokens
 
 
 HELP = f"""{MUTED}Commands:
@@ -529,6 +661,9 @@ HELP = f"""{MUTED}Commands:
   /new               clear the conversation history
   /export [file]     save this chat to a .log file (default neat-chat-<time>.log)
   /tokens <n>        set the max response tokens
+  /think [on|off]    let reasoning models think before answering (default on).
+                     Reasoning streams dimmed and stays out of history/export;
+                     off sends /no_think, like the web UI's Thinking toggle
   /reset             reset the accelerator (MLA) and relaunch the model server
   /benchmark [sel] [runs] [tok]   TTFT/TPS benchmark. sel: blank=active model,
                      'all', or a comma-list. e.g. /benchmark all 5 128 (aliases /bench, /perf)
@@ -1712,6 +1847,8 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--model", default="", help="model to make active on start")
     ap.add_argument("--max-tokens", type=int, default=0)
+    ap.add_argument("--no-think", action="store_true",
+                    help="start with reasoning off for reasoning models (see /think)")
     # Jump straight to an action, skipping the interactive startup menu. Each
     # takes an optional model: `--chat MODEL` loads it and chats, `--download REPO`
     # downloads it, `--benchmark MODEL` benchmarks it (bare flag prompts/menus).
@@ -1727,6 +1864,7 @@ def main():
 
     ctrl, oai, cfg_max = load_config(args.config)
     max_tokens = args.max_tokens or cfg_max
+    think = not args.no_think    # reasoning models think unless told otherwise (/think)
 
     print(f"{ACCENT}{BOLD}▸{RESET} Neat GenAI Studio — terminal chat")
     print(f"{MUTED}  connecting to the model server ({oai[0]}:{oai[1]})…{RESET}")
@@ -1923,8 +2061,17 @@ def main():
                 # so the request itself usually dies with the connection.
                 print(f"{MUTED}  resetting the accelerator and relaunching the "
                       f"model server…{RESET}")
+                if os.environ.get("MLA_RESET", "1") != "1":
+                    print(f"{ERR}  accelerator reset is disabled (MLA_RESET=0).{RESET}")
+                    continue
                 try:
                     ctrl_post(ctrl, "/control/reset_mla", {}, timeout=10)
+                except (socket.timeout, TimeoutError) as exc:
+                    # No answer at all: the server is wedged (typically inside a
+                    # native model load) and cannot service its own control API.
+                    # Hand the reset to run.sh, which polls the request file.
+                    if not _request_supervisor_reset():
+                        continue
                 except urllib.error.HTTPError as exc:
                     # The server answered, so it is not resetting: MLA_RESET=0
                     # refuses with 400. The reason is in the JSON body, which
@@ -1935,9 +2082,13 @@ def main():
                         detail = ""
                     print(f"{ERR}  reset refused ({exc.code}): {detail or exc.reason}{RESET}")
                     continue
+                except urllib.error.URLError as exc:
+                    if isinstance(exc.reason, (socket.timeout, TimeoutError)):
+                        if not _request_supervisor_reset():
+                            continue
+                    # Otherwise a dropped connection: the success path (the
+                    # server exits mid-reply).
                 except Exception:  # noqa: BLE001
-                    # A dropped connection is the success path: the server exits
-                    # mid-reply.
                     pass
                 active = ""
                 camera_device = None      # no model resident → no live camera
@@ -2032,6 +2183,17 @@ def main():
                     print(f"{OK}✔ exported {turns} turn(s) to {path}{RESET}")
                 except Exception as exc:  # noqa: BLE001
                     print(f"{ERR}  export failed: {exc}{RESET}")
+            elif cmd in ("think", "thinking", "reason"):
+                choice = arg.strip().lower()
+                if choice in ("on", "1", "true", "yes"):
+                    think = True
+                elif choice in ("off", "0", "false", "no"):
+                    think = False
+                elif choice:
+                    print(f"{MUTED}  usage: /think on|off{RESET}")
+                    continue
+                print(f"{OK}✔ thinking {'on' if think else 'off'}{RESET}"
+                      f"{MUTED}  (reasoning models only; others are unaffected){RESET}")
             elif cmd in ("tokens", "max"):
                 try:
                     max_tokens = max(1, int(arg))
@@ -2131,7 +2293,8 @@ def main():
         else:
             print(f"{TEAL}{BOLD}neat ◂{RESET} ", end="", flush=True)
         try:
-            text, ttft, tps, tokens = stream_chat(oai, active, msgs, max_tokens, render=render)
+            text, ttft, tps, tokens, reasoning_tokens = stream_chat(
+                oai, active, msgs, max_tokens, render=render, think=think)
         except KeyboardInterrupt:
             try:
                 _http(f"http://{oai[0]}:{oai[1]}/stop", {"model": active}, timeout=5)
@@ -2150,7 +2313,7 @@ def main():
             print()   # render mode already printed the reply live, line-by-line
         bits = []
         if tokens:
-            bits.append(f"{tokens} tok")
+            bits.append(f"{tokens} tok" + (f" (+{reasoning_tokens} reasoning)" if reasoning_tokens else ""))
         if ttft is not None:
             bits.append(f"ttft {ttft * 1000:.0f}ms")
         if tps is not None:

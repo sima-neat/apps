@@ -63,6 +63,12 @@ MLA_MAX_RESTART_RETRIES="${MLA_MAX_RESTART_RETRIES:-4}"
 RELAUNCH_STABLE_SECONDS="${RELAUNCH_STABLE_SECONDS:-60}"
 # Where the CLI-mode server records its exit status (see launch_server).
 SERVER_STATUS_FILE="${SERVER_STATUS_FILE:-${EXAMPLE_DIR}/.neat-genai-server.status}"
+# Out-of-band reset request. A model server wedged inside a native model load
+# cannot answer its own control API, so the UI and the CLI fall back to writing
+# this file; the supervisor polls it, stops the server, resets the dispatcher
+# and relaunches. Exported so both front ends know where to write.
+RESET_REQUEST_FILE="${RESET_REQUEST_FILE:-${EXAMPLE_DIR}/.neat-genai-reset.request}"
+export NEAT_RESET_REQUEST_FILE="${RESET_REQUEST_FILE}"
 RAG_WORKER_PATTERN="${PYTHON_DIR}/rag/vectordb_worker.py"
 SERVER_PATTERN="${PYTHON_DIR}/server/main.py"
 UI_PATTERN="${PYTHON_DIR}/ui/main.py"
@@ -691,6 +697,7 @@ reset_mla_dispatcher() {
 # the MLA dispatcher during normal application startup.
 prepare_clean_start() {
   step "Clearing stale Neat GenAI Studio processes…"
+  rm -f "${RESET_REQUEST_FILE}"
   if command -v pkill >/dev/null 2>&1; then
     pkill -TERM -f "${SERVER_PATTERN}" 2>/dev/null || true
     pkill -TERM -f "${UI_PATTERN}" 2>/dev/null || true
@@ -782,7 +789,7 @@ cleanup() {
     pkill -KILL -f "${SERVER_PATTERN}" 2>/dev/null || true
   fi
   stop_stale_rag_worker
-  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}"
+  rm -f "${PID_FILE}" "${SERVER_STATUS_FILE}" "${RESET_REQUEST_FILE}"
   ok "Neat GenAI Studio stopped."
 }
 
@@ -820,7 +827,7 @@ launch_server() {
     # not tell an explicit reset request from an ordinary crash.
     rm -f "${SERVER_STATUS_FILE}"
     setsid bash -c \
-      '"$1" "$2" --config "$3" >"$4" 2>&1; echo $? >"$5"' _ \
+      '"$1" "$2" --config "$3" >"$4" 2>&1; s=$?; echo "$s" >"$5"; exit "$s"' _ \
       "${PYNEAT_PYTHON}" "${PYTHON_DIR}/server/main.py" "${CONFIG_PATH}" \
       "${SERVER_LOG}" "${SERVER_STATUS_FILE}" &
   else
@@ -829,6 +836,41 @@ launch_server() {
   server_pid="$!"
   pids[0]="${server_pid}"
   remember_process_group "${server_pid}"
+}
+
+# Stop the model server's own process group when it cannot exit by itself (a
+# wedged native load ignores SIGTERM because the interpreter never regains
+# control). TERM first with the normal grace, then KILL.
+force_stop_server() {
+  local pgid
+  pgid="$(ps -o pgid= -p "${server_pid}" 2>/dev/null | tr -d ' ' || true)"
+  if [[ -n "${pgid}" ]]; then
+    kill -TERM "-${pgid}" 2>/dev/null || true
+  else
+    kill -TERM "${server_pid}" 2>/dev/null || true
+  fi
+  local deadline=$((SECONDS + SHUTDOWN_GRACE_SECONDS))
+  while kill -0 "${server_pid}" 2>/dev/null && [[ "${SECONDS}" -lt "${deadline}" ]]; do
+    sleep 1
+  done
+  if kill -0 "${server_pid}" 2>/dev/null; then
+    warn "Model server did not stop within ${SHUTDOWN_GRACE_SECONDS}s — killing it."
+    if [[ -n "${pgid}" ]]; then kill -KILL "-${pgid}" 2>/dev/null || true; fi
+    kill -KILL "${server_pid}" 2>/dev/null || true
+  fi
+  wait "${server_pid}" 2>/dev/null || true
+}
+
+# True (and the request consumed) when a front end asked the supervisor for a
+# reset because the server could not answer. Refuses it when MLA_RESET=0.
+consume_reset_request() {
+  [[ -f "${RESET_REQUEST_FILE}" ]] || return 1
+  rm -f "${RESET_REQUEST_FILE}"
+  if [[ "${MLA_RESET}" != "1" ]]; then
+    warn "Supervisor reset requested but MLA_RESET=0; ignoring it."
+    return 1
+  fi
+  return 0
 }
 
 # Background watchdog for --cli mode, which has no supervisor loop: if the model
@@ -847,6 +889,20 @@ cli_supervise() {
     if kill -0 "${server_pid}" 2>/dev/null; then
       if [[ "${tries}" -gt 0 && $((SECONDS - launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]]; then
         tries=0
+      fi
+      if consume_reset_request; then
+        if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
+          errln "Model server kept needing an accelerator reset; not resetting again."
+          continue
+        fi
+        tries=$((tries + 1))
+        warn "Model server is unresponsive; resetting the accelerator on request."
+        force_stop_server
+        rm -f "${SERVER_STATUS_FILE}"
+        reset_mla_dispatcher
+        launch_server
+        launched_at="${SECONDS}"
+        sleep "${MODEL_SERVER_START_DELAY:-2}"
       fi
       continue
     fi
@@ -942,6 +998,24 @@ while true; do
   if [[ "${reset_tries}" -gt 0 && $((SECONDS - reset_launched_at)) -ge "${RELAUNCH_STABLE_SECONDS}" ]] \
       && child_running "${server_pid}"; then
     reset_tries=0
+  fi
+  # A front end asked for a reset the server itself could not service (wedged
+  # native load): stop it from here, then follow the normal reset + relaunch.
+  if child_running "${server_pid}" && consume_reset_request; then
+    if [[ "${reset_tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
+      errln "Model server kept needing an accelerator reset; giving up."
+      break
+    fi
+    reset_tries=$((reset_tries + 1))
+    section "Accelerator"
+    warn "Model server is unresponsive; resetting the accelerator on request."
+    force_stop_server
+    reset_mla_dispatcher
+    section "Model Server"
+    launch_server
+    reset_launched_at="${SECONDS}"
+    sleep "${MODEL_SERVER_START_DELAY:-2}"
+    continue
   fi
   if ! child_running "${server_pid}"; then
     set +e

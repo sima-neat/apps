@@ -1744,8 +1744,28 @@ class AppContext:
         def models_reset_mla():
             # The server exits ~1.5s after replying, so the response may not
             # arrive at all — a dropped connection here is success, not failure.
+            # A server wedged inside a native model load is different: it
+            # accepts the connection but never answers (the GIL is held), so the
+            # request times out. That is exactly the case the button exists for,
+            # and only the supervisor (run.sh) can recover it: ask it through the
+            # request file it polls.
+            if os.environ.get('MLA_RESET', '1') != '1':
+                return jsonify({'error': 'Accelerator reset is disabled (MLA_RESET=0).'}), 400
             try:
                 resp = requests.post(_control_url('/control/reset_mla'), timeout=10)
+            except requests.Timeout:
+                request_file = os.environ.get('NEAT_RESET_REQUEST_FILE', '')
+                if not request_file:
+                    return jsonify({'error': 'The model server is not responding and no '
+                                             'supervisor is available to reset it '
+                                             '(start the Studio with run.sh).'}), 503
+                try:
+                    Path(request_file).write_text('reset\n', encoding='utf-8')
+                except OSError as exc:
+                    logging.error("Could not write the reset request file %s: %s", request_file, exc)
+                    return jsonify({'error': 'Could not hand the reset to the supervisor.'}), 500
+                logging.warning("Model server unresponsive; reset handed to the supervisor")
+                return jsonify({'state': 'resetting', 'reset': True, 'via': 'supervisor'}), 202
             except requests.RequestException:
                 return jsonify({'state': 'resetting', 'reset': True}), 202
             return Response(resp.content, status=resp.status_code,

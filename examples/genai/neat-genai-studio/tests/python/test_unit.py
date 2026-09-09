@@ -1,10 +1,13 @@
 """Unit tests for neat-genai-studio (Python).
 
-The suites live next to the code they cover, under ``src/python``, so they stay
-runnable in place with ``python -m unittest``. This module is what the
-repository harness collects: it puts ``src/python`` on the path, re-exports the
-TestCase classes, and marks them as unit coverage so ``./tests/test.sh --unit``
-runs them.
+The suites live beside this module as ``*_suite.py`` (deliberately not
+``test_*.py``, so an ad-hoc ``pytest`` over the tree does not collect them a
+second time). The installed bundle packages ``src/python`` wholesale, so tests
+must not live there. This module is what the repository harness collects: it
+puts ``src/python`` and ``src/python/ui`` on the path, re-exports the TestCase
+classes, and marks them as unit coverage so ``./tests/test.sh --unit`` runs
+them. Run one suite in place with ``python -m unittest asr_switching_suite``
+from this directory (with the same two paths on PYTHONPATH).
 
 No hardware, no model downloads, no live server — the ASR switching suite drives
 a fake GenAIServer against model directories built in a temp dir.
@@ -28,20 +31,28 @@ UI_PYTHON = SRC_PYTHON / "ui"
 if str(UI_PYTHON) not in sys.path:
     sys.path.insert(0, str(UI_PYTHON))   # the ui suites import their modules bare
 
-from server.test_asr_switching import (  # noqa: E402
+TESTS_DIR = Path(__file__).resolve().parent
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+
+from asr_switching_suite import (  # noqa: E402
     AsrSwitchingTests,
     AsrWarmupBehaviourTests,
     AsrWarmupPayloadTests,
     MlaFailureClassificationTests,
 )
-from server.test_hub_security import HubPathSecurityTests  # noqa: E402,F401
-from test_asr_metadata import AsrMetadataTests  # noqa: E402,F401
-from test_supertonic_tts import (  # noqa: E402,F401
+from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
+from cli_think_suite import (  # noqa: E402,F401
+    NoThinkRewriteTests as CliNoThinkRewriteTests,
+    ThinkSplitterTests as CliThinkSplitterTests,
+)
+from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
+from supertonic_tts_suite import (  # noqa: E402,F401
     ClientConfigurationTests as SupertonicClientConfigurationTests,
     EnvironmentDiscoveryTests as SupertonicEnvironmentDiscoveryTests,
     SegmentTextTests as SupertonicSegmentTextTests,
 )
-from test_voice_catalog import (  # noqa: E402,F401
+from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
     test_catalog_rejects_blocked_license,
     test_chinese_has_default_and_optional_dedicated_voices,
@@ -84,7 +95,7 @@ def test_tts_text_sanitizer() -> None:
     sys.exit — so run it as a subprocess and check the exit code instead of
     importing it, which would execute it at collection time.
     """
-    script = SRC_PYTHON / "ui" / "test_tts_text.py"
+    script = TESTS_DIR / "tts_text_check.py"
     result = subprocess.run([sys.executable, str(script)],
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -95,6 +106,8 @@ __all__ = [
     "AsrWarmupPayloadTests",
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
+    "CliNoThinkRewriteTests",
+    "CliThinkSplitterTests",
     "AsrMetadataTests",
     "SupertonicClientConfigurationTests",
     "SupertonicEnvironmentDiscoveryTests",

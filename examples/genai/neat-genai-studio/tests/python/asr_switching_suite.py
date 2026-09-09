@@ -4,18 +4,20 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import unittest
 import wave
 from pathlib import Path
 from unittest.mock import patch
 
-# ModelManager itself does not parse YAML; keep this host-only unit test
-# runnable even when the example's runtime dependencies are not installed.
+# shared.config (imported below for HubConfig) needs PyYAML. Fail with a clear
+# prerequisite message rather than stubbing the module process-wide, which
+# would break every later test that parses YAML for real.
 try:
     import yaml  # noqa: F401
-except ModuleNotFoundError:
-    sys.modules["yaml"] = types.ModuleType("yaml")
+except ModuleNotFoundError as exc:  # pragma: no cover - environment check
+    raise ModuleNotFoundError(
+        "PyYAML is required to run the Studio unit tests (pip install PyYAML)"
+    ) from exc
 
 from server.model_manager import ModelManager, _is_mla_failure
 from shared.config import HubConfig
@@ -203,6 +205,14 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertIn("cannot be deleted", errors[0])
         self.assertTrue((self.tmp / "whisper-medium-a16w8").is_dir())
 
+    def test_an_eviction_reported_as_not_removed_aborts_the_switch(self):
+        manager, server = self.manager()
+        server.remove_model = lambda name: False
+        with self.assertRaisesRegex(RuntimeError, "not removed"):
+            manager.set_active_asr("whisper-medium-a16w8")
+        self.assertEqual(manager._active_asr, "whisper-small-a16w8")
+        self.assertNotIn("whisper-medium-a16w8", server.names)
+
     def test_a_normalized_served_name_cannot_strand_the_active_asr(self):
         # The runtime may register a model under a normalized name. The served
         # name must become a catalog entry, or the requested name reads as
@@ -291,10 +301,17 @@ class AsrWarmupBehaviourTests(AsrSwitchingTests):
         # server, but not active. Adopting it without re-checking would declare
         # the very model that just failed to be ready.
         manager, server = self.manager()
+        real_remove = server.remove_model
+
+        def remove_only_the_outgoing(name):
+            # The eviction of the previous ASR succeeds; the rollback of the
+            # failed replacement does not, leaving it registered.
+            return real_remove(name) if name == "whisper-small-a16w8" else False
+
         with self.assertRaises(RuntimeError):
             with patch.object(ModelManager, "_warm_check_asr",
                               return_value=(False, "MLA_LOAD_FAILED: bulk")):
-                with patch.object(server, "remove_model", return_value=False):
+                with patch.object(server, "remove_model", side_effect=remove_only_the_outgoing):
                     manager.set_active_asr("whisper-medium-a16w8")
         self.assertIsNone(manager.active_asr())
         self.assertIn("whisper-medium-a16w8", server.model_names())
