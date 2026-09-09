@@ -264,6 +264,7 @@ to reclaim space or start fresh:
 ```bash
 ./run.sh --clean        # lists what will be removed, then asks to confirm
 ./run.sh --clean -y     # skip the prompt (or CLEAN_YES=1)
+CLEAN_SUPERTONIC=1 ./run.sh --clean   # also remove the Supertonic runtime + checkout
 ```
 
 It stops a running instance first and lists each target with the total size
@@ -502,7 +503,12 @@ selector in Settings.
   `run.sh` and the UI read them from there, with the environment variables as
   overrides, and `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set
   `INSTALL_SUPERTONIC=0` to skip it; when the runtime is missing the engine is
-  simply not offered and the CPU engines behave as before. The worker holds the
+  simply not offered and the CPU engines behave as before. An existing checkout
+  is only used when it is clean and at the reviewed revision (a clean one at
+  another revision is moved there; `SUPERTONIC_ALLOW_UNPINNED=1` runs it as
+  is). `./run.sh --clean` keeps the runtime and checkout, since they live
+  outside the example directory and are shared with the standalone
+  supertonic-sima app; `CLEAN_SUPERTONIC=1` removes them too. The worker holds the
   two Supertonic models on the MLA next to the chat and speech-to-text models.
   An accelerator reset (**Reset MLA**) tears the worker down; the next spoken
   reply respawns it.

@@ -167,8 +167,10 @@ Environment:
                                 downloads its models), 1 or 0. default: 1
   SUPERTONIC_REPO_ROOT          supertonic-sima checkout (cloned when missing)
                                 default: /media/nvme/repos/supertonic-sima
-  SUPERTONIC_REPO_REVISION      Commit a fresh clone is pinned to
+  SUPERTONIC_REPO_REVISION      Commit the checkout is pinned to
                                 default: the reviewed revision in this script
+  SUPERTONIC_ALLOW_UNPINNED     Run an existing checkout at another revision
+                                or with local changes, 1 or 0. default: 0
   SUPERTONIC_APP_ROOT           Supertonic venv + model root
                                 default: /media/nvme/supertonic-tts
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
@@ -381,8 +383,8 @@ app:
   tts:
     supertonic:
       # Supertonic 3 (MLA TTS) checkout and runtime; see INSTALL_SUPERTONIC.
-      repo_root: ${SUPERTONIC_REPO_ROOT}
-      app_root: ${SUPERTONIC_APP_ROOT}
+      repo_root: "${SUPERTONIC_REPO_ROOT}"
+      app_root: "${SUPERTONIC_APP_ROOT}"
 
   rag:
     enabled: true
@@ -464,11 +466,28 @@ install_supertonic() {
     fi
     ok "supertonic-sima pinned at ${C_DIM}${SUPERTONIC_REPO_REVISION:0:12}${C_RESET}"
   else
-    local have_rev
+    # An existing checkout must also be the reviewed revision, unmodified,
+    # before its installer is executed. A clean checkout at another revision is
+    # moved to the pinned one; a modified worktree is refused. Developers who
+    # deliberately want to run their own checkout set SUPERTONIC_ALLOW_UNPINNED=1.
+    local have_rev dirty
     have_rev="$(git -C "${SUPERTONIC_REPO_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
-    ok "supertonic-sima checkout: ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET} at ${C_DIM}${have_rev:0:12}${C_RESET}"
-    if [[ "${have_rev}" != "${SUPERTONIC_REPO_REVISION}" ]]; then
-      warn "Existing checkout is not the reviewed revision ${SUPERTONIC_REPO_REVISION:0:12}; it is left as is."
+    dirty="$(git -C "${SUPERTONIC_REPO_ROOT}" status --porcelain --untracked-files=no 2>/dev/null | head -n1)"
+    if [[ "${have_rev}" == "${SUPERTONIC_REPO_REVISION}" && -z "${dirty}" ]]; then
+      ok "supertonic-sima checkout: ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET} at reviewed ${C_DIM}${have_rev:0:12}${C_RESET}"
+    elif [[ "${SUPERTONIC_ALLOW_UNPINNED:-0}" == "1" ]]; then
+      warn "Using unreviewed supertonic-sima checkout at ${have_rev:0:12}${dirty:+ (modified)} because SUPERTONIC_ALLOW_UNPINNED=1."
+    elif [[ -n "${dirty}" ]]; then
+      warn "${SUPERTONIC_REPO_ROOT} has local modifications; its installer is not run. Commit or stash them, or set SUPERTONIC_ALLOW_UNPINNED=1. Supertonic TTS skipped."
+      return 0
+    else
+      step "Moving ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET} from ${have_rev:0:12} to the reviewed revision ${SUPERTONIC_REPO_REVISION:0:12}"
+      git -C "${SUPERTONIC_REPO_ROOT}" fetch --quiet origin 2>/dev/null || true
+      if ! git -C "${SUPERTONIC_REPO_ROOT}" checkout --quiet "${SUPERTONIC_REPO_REVISION}"; then
+        warn "Revision ${SUPERTONIC_REPO_REVISION:0:12} is not available in ${SUPERTONIC_REPO_ROOT}; Supertonic TTS skipped."
+        return 0
+      fi
+      ok "supertonic-sima pinned at ${C_DIM}${SUPERTONIC_REPO_REVISION:0:12}${C_RESET}"
     fi
   fi
   if [[ ! -f "${SUPERTONIC_REPO_ROOT}/scripts/setup_devkit.sh" ]]; then
@@ -484,7 +503,16 @@ install_supertonic() {
     "${models}/supertonic-3/onnx/unicode_indexer.json"
     "${models}/supertonic-3/onnx/duration_predictor.onnx"
     "${models}/supertonic-3/onnx/text_encoder.onnx"
+    "${models}/supertonic-3/voice_styles/F1.json"
+    "${models}/supertonic-3/voice_styles/F2.json"
+    "${models}/supertonic-3/voice_styles/F3.json"
+    "${models}/supertonic-3/voice_styles/F4.json"
+    "${models}/supertonic-3/voice_styles/F5.json"
     "${models}/supertonic-3/voice_styles/M1.json"
+    "${models}/supertonic-3/voice_styles/M2.json"
+    "${models}/supertonic-3/voice_styles/M3.json"
+    "${models}/supertonic-3/voice_styles/M4.json"
+    "${models}/supertonic-3/voice_styles/M5.json"
     "${models}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz"
     "${models}/supertonic-3-sima/supertonic_runtime_data.npz"
     "${models}/supertonic-3-sima/artifact_manifest.json"

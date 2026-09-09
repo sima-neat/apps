@@ -300,6 +300,36 @@ do_stop() {
   ok "Done."
 }
 
+# Supertonic paths: environment > app.tts.supertonic in the config > defaults.
+# Only values that are set are exported, so the UI applies the same precedence.
+_supertonic_config_value() {
+  awk -v key="$1" '
+    /^  tts:/ {tts=1; next}
+    tts && /^  [a-z]/ {tts=0}
+    tts && /^    supertonic:/ {st=1; next}
+    tts && st && /^    [a-z]/ {st=0}
+    tts && st && $1 == key":" {
+      v = $0
+      sub(/^[ \t]*[A-Za-z_]+:[ \t]*/, "", v)   # drop the key: keep the whole value
+      sub(/[ \t]+#.*$/, "", v)                 # trailing comment
+      gsub(/^["\x27]|["\x27]$/, "", v)        # surrounding quotes
+      print v; exit
+    }
+  ' "${CONFIG_PATH}" 2>/dev/null || true
+}
+resolve_supertonic_env() {
+  local repo app
+  repo="${SUPERTONIC_REPO_ROOT:-$(_supertonic_config_value repo_root)}"
+  app="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
+  [[ -n "${repo}" ]] && export SUPERTONIC_REPO_ROOT="${repo}"
+  [[ -n "${app}" ]] && export SUPERTONIC_APP_ROOT="${app}"
+  app="${app:-/media/nvme/supertonic-tts}"
+  if [[ -z "${SUPERTONIC_PYTHON}" && -x "${app}/.venv/bin/python" ]]; then
+    SUPERTONIC_PYTHON="${app}/.venv/bin/python"
+  fi
+  export SUPERTONIC_PYTHON
+  SUPERTONIC_APP_ROOT_RESOLVED="${app}"
+}
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
 # Downloaded chat/VLM/ASR models under catalog_dir are left intact.
@@ -311,7 +341,15 @@ do_clean() {
     do_stop >/dev/null 2>&1 || true
   fi
 
+  # Supertonic lives outside the example dir (its venv and models are shared
+  # with the standalone supertonic-sima app), so it is kept unless asked for.
+  resolve_supertonic_env
   local -a targets=() t
+  if [[ "${CLEAN_SUPERTONIC:-0}" == "1" ]]; then
+    for t in "${SUPERTONIC_APP_ROOT:-}" "${SUPERTONIC_REPO_ROOT:-}"; do
+      [[ -n "$t" && -e "$t" ]] && targets+=("$t")
+    done
+  fi
   for t in \
     "${DEFAULT_APP_VENV}" \
     "${EXAMPLE_DIR}/.venv-pipertts" \
@@ -347,6 +385,12 @@ do_clean() {
   local catalog; catalog="$(sed -n 's/^[[:space:]]*catalog_dir:[[:space:]]*\(.*\)/\1/p' \
     "${CONFIG_PATH}" 2>/dev/null | head -n1)"
   [[ -n "${catalog}" ]] && info "Downloaded models under ${C_DIM}${catalog}${C_RESET} are kept."
+  if [[ "${CLEAN_SUPERTONIC:-0}" != "1" ]]; then
+    local st_kept=()
+    [[ -n "${SUPERTONIC_APP_ROOT:-}" && -e "${SUPERTONIC_APP_ROOT}" ]] && st_kept+=("${SUPERTONIC_APP_ROOT}")
+    [[ -n "${SUPERTONIC_REPO_ROOT:-}" && -e "${SUPERTONIC_REPO_ROOT}" ]] && st_kept+=("${SUPERTONIC_REPO_ROOT}")
+    [[ ${#st_kept[@]} -gt 0 ]] && info "Supertonic runtime under ${C_DIM}${st_kept[*]}${C_RESET} is kept (CLEAN_SUPERTONIC=1 removes it)."
+  fi
 
   if [[ "${yes}" != "-y" && "${yes}" != "--yes" && "${CLEAN_YES:-0}" != "1" ]]; then
     printf '   Remove these? [y/N] '
@@ -544,30 +588,6 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
 fi
 info "Config: ${C_DIM}${CONFIG_PATH}${C_RESET}"
 
-# Supertonic paths: environment > app.tts.supertonic in the config > defaults.
-# Only values that are set are exported, so the UI applies the same precedence.
-_supertonic_config_value() {
-  awk -v key="$1" '
-    /^  tts:/ {tts=1; next}
-    tts && /^  [a-z]/ {tts=0}
-    tts && /^    supertonic:/ {st=1; next}
-    tts && st && /^    [a-z]/ {st=0}
-    tts && st && $1 == key":" {sub(/#.*/, ""); print $2; exit}
-  ' "${CONFIG_PATH}" 2>/dev/null || true
-}
-resolve_supertonic_env() {
-  local repo app
-  repo="${SUPERTONIC_REPO_ROOT:-$(_supertonic_config_value repo_root)}"
-  app="${SUPERTONIC_APP_ROOT:-$(_supertonic_config_value app_root)}"
-  [[ -n "${repo}" ]] && export SUPERTONIC_REPO_ROOT="${repo}"
-  [[ -n "${app}" ]] && export SUPERTONIC_APP_ROOT="${app}"
-  app="${app:-/media/nvme/supertonic-tts}"
-  if [[ -z "${SUPERTONIC_PYTHON}" && -x "${app}/.venv/bin/python" ]]; then
-    SUPERTONIC_PYTHON="${app}/.venv/bin/python"
-  fi
-  export SUPERTONIC_PYTHON
-  SUPERTONIC_APP_ROOT_RESOLVED="${app}"
-}
 resolve_supertonic_env
 
 # `neat` runs an online update check, so allow skipping this with SHOW_SYSTEM_INFO=0.
