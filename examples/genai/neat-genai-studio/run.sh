@@ -324,11 +324,14 @@ resolve_supertonic_env() {
   [[ -n "${repo}" ]] && export SUPERTONIC_REPO_ROOT="${repo}"
   [[ -n "${app}" ]] && export SUPERTONIC_APP_ROOT="${app}"
   app="${app:-/media/nvme/supertonic-tts}"
+  repo="${repo:-/media/nvme/repos/supertonic-sima}"
   if [[ -z "${SUPERTONIC_PYTHON}" && -x "${app}/.venv/bin/python" ]]; then
     SUPERTONIC_PYTHON="${app}/.venv/bin/python"
   fi
   export SUPERTONIC_PYTHON
+  # Effective paths (defaults applied) for run.sh's own use: the banner and --clean.
   SUPERTONIC_APP_ROOT_RESOLVED="${app}"
+  SUPERTONIC_REPO_ROOT_RESOLVED="${repo}"
 }
 # Remove app-generated data (venvs, generated config, RAG db, downloaded TTS
 # voices, pid, caches, logs). Confirms first unless -y/--yes or CLEAN_YES=1.
@@ -346,7 +349,7 @@ do_clean() {
   resolve_supertonic_env
   local -a targets=() t
   if [[ "${CLEAN_SUPERTONIC:-0}" == "1" ]]; then
-    for t in "${SUPERTONIC_APP_ROOT:-}" "${SUPERTONIC_REPO_ROOT:-}"; do
+    for t in "${SUPERTONIC_APP_ROOT_RESOLVED}" "${SUPERTONIC_REPO_ROOT_RESOLVED}"; do
       [[ -n "$t" && -e "$t" ]] && targets+=("$t")
     done
   fi
@@ -387,8 +390,8 @@ do_clean() {
   [[ -n "${catalog}" ]] && info "Downloaded models under ${C_DIM}${catalog}${C_RESET} are kept."
   if [[ "${CLEAN_SUPERTONIC:-0}" != "1" ]]; then
     local st_kept=()
-    [[ -n "${SUPERTONIC_APP_ROOT:-}" && -e "${SUPERTONIC_APP_ROOT}" ]] && st_kept+=("${SUPERTONIC_APP_ROOT}")
-    [[ -n "${SUPERTONIC_REPO_ROOT:-}" && -e "${SUPERTONIC_REPO_ROOT}" ]] && st_kept+=("${SUPERTONIC_REPO_ROOT}")
+    [[ -e "${SUPERTONIC_APP_ROOT_RESOLVED}" ]] && st_kept+=("${SUPERTONIC_APP_ROOT_RESOLVED}")
+    [[ -e "${SUPERTONIC_REPO_ROOT_RESOLVED}" ]] && st_kept+=("${SUPERTONIC_REPO_ROOT_RESOLVED}")
     [[ ${#st_kept[@]} -gt 0 ]] && info "Supertonic runtime under ${C_DIM}${st_kept[*]}${C_RESET} is kept (CLEAN_SUPERTONIC=1 removes it)."
   fi
 
