@@ -42,6 +42,10 @@ from asr_switching_suite import (  # noqa: E402
     MlaFailureClassificationTests,
 )
 from hub_security_suite import HubPathSecurityTests  # noqa: E402,F401
+from cli_think_suite import (  # noqa: E402,F401
+    NoThinkRewriteTests as CliNoThinkRewriteTests,
+    ThinkSplitterTests as CliThinkSplitterTests,
+)
 from asr_metadata_suite import AsrMetadataTests  # noqa: E402,F401
 from voice_catalog_suite import (  # noqa: E402,F401
     test_catalog_has_simple_licenses_and_pinned_sources,
@@ -75,5 +79,7 @@ __all__ = [
     "AsrWarmupPayloadTests",
     "MlaFailureClassificationTests",
     "HubPathSecurityTests",
+    "CliNoThinkRewriteTests",
+    "CliThinkSplitterTests",
     "AsrMetadataTests",
 ]

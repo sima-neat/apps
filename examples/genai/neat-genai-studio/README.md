@@ -201,6 +201,10 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 /export [file]   save this chat to a .log file (default neat-chat-<time>.log)
 /reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
+/think [on|off]  let reasoning models think before answering (default on):
+                 the reasoning streams dimmed, is counted separately, and stays
+                 out of the history and /export; off sends /no_think like the
+                 web UI's Thinking toggle (start with --no-think for the same)
 /rag [filter]    inspect the RAG database: list chunks (/docs; filter narrows)
 /rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
 /rag search <q>  semantic search: show top matches without asking the model
