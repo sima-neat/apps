@@ -505,6 +505,14 @@ class ModelManager:
                     f"Registered {served}; transferring weights to the accelerator…"
                 )
                 with self._lock:
+                    # The runtime may serve the model under a normalized name.
+                    # Every guard (active-ASR refusal, path resolution, catalog
+                    # loaded/active flags) is keyed by catalog name, so the
+                    # served name must be a catalog entry too, or a delete of
+                    # the requested name could rmtree the weights of a model
+                    # that is still registered and active.
+                    if served != name and served not in self._catalog:
+                        self._catalog[served] = dict(info, name=served)
                     if is_asr:
                         self._active_asr = served
                     else:
