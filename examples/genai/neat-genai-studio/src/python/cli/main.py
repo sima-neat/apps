@@ -495,6 +495,31 @@ class _ThinkSplitter:
         while self.pending:
             tag = self.CLOSE if self.in_think else self.OPEN
             idx = self.pending.find(tag)
+            if not self.in_think and not self.saw_open:
+                # Template-injected reasoning: the runtime put <think> in the
+                # prompt, so the model emits only </think>. Everything before
+                # it was reasoning; tell the caller to reclassify what it saw.
+                close = self.pending.find(self.CLOSE)
+                if close >= 0 and (idx < 0 or close < idx):
+                    if close:
+                        out.append(("think", self.pending[:close]))
+                    out.append(("reclassify", ""))
+                    self.pending = self.pending[close + len(self.CLOSE):]
+                    self.saw_open = True
+                    continue
+                if idx < 0:
+                    # Hold back a possible </think> prefix as well.
+                    tag_alt = self.CLOSE
+                    keep = 0
+                    for n in range(min(len(tag_alt) - 1, len(self.pending)), 0, -1):
+                        if tag_alt.startswith(self.pending[-n:]) or tag.startswith(self.pending[-n:]):
+                            keep = n
+                            break
+                    emit = self.pending[:len(self.pending) - keep]
+                    self.pending = self.pending[len(self.pending) - keep:]
+                    if emit:
+                        out.append(("answer", emit))
+                    break
             if idx >= 0:
                 if idx:
                     out.append(("think" if self.in_think else "answer", self.pending[:idx]))
@@ -607,6 +632,14 @@ def stream_chat(oai, model, messages, max_tokens, render=False, think=True):
             if not clean:
                 continue
             for kind, piece in splitter.feed(clean):
+                if kind == "reclassify":
+                    # Everything streamed so far was template-injected reasoning:
+                    # keep it out of the answer and count it as reasoning.
+                    reasoning_tokens += tokens
+                    tokens, parts, buf = 0, [], ""
+                    sys.stdout.write(f"\n{DIM}💭 (the text above was the model's reasoning){RESET}\n")
+                    _end_think()
+                    continue
                 if kind == "think":
                     reasoning_tokens += 1
                     _show_think(piece)
