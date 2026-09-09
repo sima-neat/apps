@@ -48,6 +48,7 @@ e2e:
         A shared RTSP stream may not contain detectable faces in any 60-frame window,
         so the detection check is skipped and a warning is printed instead.
       - >
-        Enrollment E2E (--enroll mode) is covered by the face-recognizer.enroll_e2e
-        test target, which requires SIMANEAT_APPS_TEST_MODELS_DIR and
-        SIMANEAT_APPS_TEST_INPUT_VIDEO.
+        Enrollment E2E (--enroll mode) is exercised within the main face-recognizer.e2e
+        test when SIMANEAT_APPS_TEST_INPUT_VIDEO is set: after the 60-frame recognition
+        run the test enrolls the video into a temporary gallery and verifies exit 0 and
+        gallery.bin creation.

@@ -207,5 +207,53 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "[OK] face-recognizer processed 60 frames (exit 0)\n";
+
+    // ── Enrollment E2E (when face video is available) ─────────────────────────
+    // Run --enroll mode using the same video input.  This exercises the enrollment
+    // path (SCRFD → ArcFace → GalleryBuilder → gallery.bin write) without needing
+    // a separate binary or a second test executable that would confuse the CI
+    // runner's binary-name derivation heuristic.
+    if (input_is_face_video) {
+        const fs::path enroll_dir     = fs::temp_directory_path() / "face_recognizer_enroll_e2e";
+        const fs::path enroll_gallery = enroll_dir / "gallery.bin";
+        const fs::path enroll_config  = enroll_dir / "config.yaml";
+        fs::create_directories(enroll_dir);
+
+        ConfigScalars enroll_overrides = {
+            {"scrfd.model",   scrfd_path},
+            {"arcface.model", arcface_path},
+            {"input.uri",     ""},
+            {"output.sink",   ""},
+        };
+        write_e2e_config("face-recognizer", enroll_config, enroll_overrides);
+
+        const std::vector<std::string> enroll_args = {
+            "--enroll",
+            "--config",       enroll_config.string(),
+            "--video",        input,
+            "--name",         "TestIdentity",
+            "--gallery",      enroll_gallery.string(),
+            "--sample-every", "10",
+        };
+
+        std::cout << "[RUN] " << binary << " --enroll --video " << input
+                  << " --name TestIdentity --gallery " << enroll_gallery << "\n";
+
+        const ProcessResult er = spawn_and_wait(binary, enroll_args, timeout);
+        const bool gallery_written = fs::exists(enroll_gallery) && fs::file_size(enroll_gallery) > 0;
+        fs::remove_all(enroll_dir);
+
+        if (er.exit_code != 0) {
+            std::cerr << "[FAIL] --enroll exit code " << er.exit_code << "\n"
+                      << "stderr:\n" << er.stderr_text << "\n";
+            return 1;
+        }
+        if (!gallery_written) {
+            std::cerr << "[FAIL] --enroll exited 0 but gallery.bin was not written\n";
+            return 1;
+        }
+        std::cout << "[OK] enrollment completed and gallery.bin written\n";
+    }
+
     return 0;
 }
