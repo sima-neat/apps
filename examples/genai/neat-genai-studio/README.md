@@ -108,9 +108,13 @@ Other useful environment variables:
 - `TTS_LANGUAGES`: comma- or space-separated catalogued server-TTS languages to
   install. Interactive setup prompts when this is unset; non-interactive setup
   defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
-- `INSTALL_SUPERTONIC`, `SUPERTONIC_REPO_ROOT`, `SUPERTONIC_APP_ROOT`: install
-  the MLA-accelerated Supertonic 3 engine (default on) and where its checkout
-  and runtime live; see [Text-to-speech](#text-to-speech-voices--languages).
+- `INSTALL_SUPERTONIC`, `SUPERTONIC_REPO_ROOT`, `SUPERTONIC_APP_ROOT`,
+  `SUPERTONIC_REPO_REVISION`: install the MLA-accelerated Supertonic 3 engine
+  (default on), where its checkout and runtime live, and the reviewed upstream
+  commit a fresh clone is pinned to; see
+  [Text-to-speech](#text-to-speech-voices--languages). The paths are written to
+  `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
+  non-default install without re-exporting them.
 - `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
   `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
@@ -490,9 +494,13 @@ selector in Settings.
   `SUPERTONIC_APP_ROOT` (default `/media/nvme/supertonic-tts`) and downloads the
   pinned upstream CPU models plus the precompiled MLA packages from
   [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima).
-  No on-device compilation is needed. The UI reaches the engine through
-  `supertonic_worker.py`; `run.sh` exports `SUPERTONIC_PYTHON`,
-  `SUPERTONIC_REPO_ROOT` and `SUPERTONIC_APP_ROOT` for this. Set
+  No on-device compilation is needed. A fresh clone is checked out at the
+  reviewed commit in `SUPERTONIC_REPO_REVISION` before its installer runs, and
+  an install is only treated as complete when every file the worker needs is
+  present, so an interrupted download is repaired on the next `setup.sh`. Both
+  paths are persisted under `app.tts.supertonic` in `config.local.yaml`;
+  `run.sh` and the UI read them from there, with the environment variables as
+  overrides, and `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set
   `INSTALL_SUPERTONIC=0` to skip it; when the runtime is missing the engine is
   simply not offered and the CPU engines behave as before. The worker holds the
   two Supertonic models on the MLA next to the chat and speech-to-text models.

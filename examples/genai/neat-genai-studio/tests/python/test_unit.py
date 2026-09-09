@@ -55,6 +55,28 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.unit
+def test_ui_config_reads_supertonic_paths(tmp_path) -> None:
+    """app.tts.supertonic persists the machine-specific Supertonic paths that
+    setup.sh wrote, and defaults apply when the section is absent."""
+    from shared.config import load_ui_config
+
+    base = "app:\n  web:\n    port: 5000\n"
+    with_paths = tmp_path / "with.yaml"
+    with_paths.write_text(
+        base + "  tts:\n    supertonic:\n      repo_root: /data/st-repo\n"
+        "      app_root: /data/st-app\n", encoding="utf-8")
+    cfg = load_ui_config(with_paths, tmp_path)
+    assert cfg.supertonic.repo_root == "/data/st-repo"
+    assert cfg.supertonic.app_root == "/data/st-app"
+
+    without = tmp_path / "without.yaml"
+    without.write_text(base, encoding="utf-8")
+    cfg = load_ui_config(without, tmp_path)
+    assert cfg.supertonic.repo_root == "/media/nvme/repos/supertonic-sima"
+    assert cfg.supertonic.app_root == "/media/nvme/supertonic-tts"
+
+
+@pytest.mark.unit
 def test_tts_text_sanitizer() -> None:
     """Run the TTS sanitizer suite.
 

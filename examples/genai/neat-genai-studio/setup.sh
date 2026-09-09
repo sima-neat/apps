@@ -42,6 +42,9 @@ TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
 # it when INSTALL_SUPERTONIC=1, and the UI reaches it through a subprocess worker.
 INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
 SUPERTONIC_REPO_URL="${SUPERTONIC_REPO_URL:-https://github.com/florianvoss-commit/supertonic-sima.git}"
+# The reviewed upstream commit. A fresh clone is checked out at exactly this
+# revision before its installer runs; bump it deliberately, with review.
+SUPERTONIC_REPO_REVISION="${SUPERTONIC_REPO_REVISION:-3b837b3e1b6a378ab8c24c3c04b079429b67e237}"
 SUPERTONIC_REPO_ROOT="${SUPERTONIC_REPO_ROOT:-/media/nvme/repos/supertonic-sima}"
 SUPERTONIC_APP_ROOT="${SUPERTONIC_APP_ROOT:-/media/nvme/supertonic-tts}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
@@ -164,6 +167,8 @@ Environment:
                                 downloads its models), 1 or 0. default: 1
   SUPERTONIC_REPO_ROOT          supertonic-sima checkout (cloned when missing)
                                 default: /media/nvme/repos/supertonic-sima
+  SUPERTONIC_REPO_REVISION      Commit a fresh clone is pinned to
+                                default: the reviewed revision in this script
   SUPERTONIC_APP_ROOT           Supertonic venv + model root
                                 default: /media/nvme/supertonic-tts
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
@@ -373,6 +378,12 @@ app:
     font_family: Inter
     font_size: 15
 
+  tts:
+    supertonic:
+      # Supertonic 3 (MLA TTS) checkout and runtime; see INSTALL_SUPERTONIC.
+      repo_root: ${SUPERTONIC_REPO_ROOT}
+      app_root: ${SUPERTONIC_APP_ROOT}
+
   rag:
     enabled: true
     embedding_model_dir: ${RAG_EMBEDDING_DIR}
@@ -445,20 +456,51 @@ install_supertonic() {
       warn "Could not clone ${SUPERTONIC_REPO_URL}; Supertonic TTS skipped."
       return 0
     fi
+    # Never run an unreviewed upstream HEAD: pin the fresh clone.
+    if ! git -C "${SUPERTONIC_REPO_ROOT}" checkout --quiet "${SUPERTONIC_REPO_REVISION}"; then
+      warn "Revision ${SUPERTONIC_REPO_REVISION} not found in ${SUPERTONIC_REPO_URL}; Supertonic TTS skipped."
+      rm -rf "${SUPERTONIC_REPO_ROOT}"
+      return 0
+    fi
+    ok "supertonic-sima pinned at ${C_DIM}${SUPERTONIC_REPO_REVISION:0:12}${C_RESET}"
   else
-    ok "supertonic-sima checkout: ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET}"
+    local have_rev
+    have_rev="$(git -C "${SUPERTONIC_REPO_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
+    ok "supertonic-sima checkout: ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET} at ${C_DIM}${have_rev:0:12}${C_RESET}"
+    if [[ "${have_rev}" != "${SUPERTONIC_REPO_REVISION}" ]]; then
+      warn "Existing checkout is not the reviewed revision ${SUPERTONIC_REPO_REVISION:0:12}; it is left as is."
+    fi
   fi
   if [[ ! -f "${SUPERTONIC_REPO_ROOT}/scripts/setup_devkit.sh" ]]; then
     warn "${SUPERTONIC_REPO_ROOT} has no scripts/setup_devkit.sh; Supertonic TTS skipped."
     return 0
   fi
+  # Every file supertonic_worker.py needs must be present; a partial download
+  # must be repaired by the installer, not reported as installed.
   local st_python="${SUPERTONIC_APP_ROOT}/.venv/bin/python"
+  local models="${SUPERTONIC_APP_ROOT}/models"
+  local required=(
+    "${models}/supertonic-3/onnx/tts.json"
+    "${models}/supertonic-3/onnx/unicode_indexer.json"
+    "${models}/supertonic-3/onnx/duration_predictor.onnx"
+    "${models}/supertonic-3/onnx/text_encoder.onnx"
+    "${models}/supertonic-3/voice_styles/M1.json"
+    "${models}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz"
+    "${models}/supertonic-3-sima/supertonic_runtime_data.npz"
+    "${models}/supertonic-3-sima/artifact_manifest.json"
+    "${models}/supertonic-3-sima/supertonic_vocoder_sima_bf16_mpk.tar.gz"
+    "${models}/supertonic-3-sima/vocoder_bf16_manifest.json"
+  )
+  local missing=() f
+  for f in "${required[@]}"; do [[ -f "${f}" ]] || missing+=("${f#${SUPERTONIC_APP_ROOT}/}"); done
   if [[ -x "${st_python}" ]] \
       && "${st_python}" -c 'import pyneat, onnxruntime, numpy' >/dev/null 2>&1 \
-      && [[ -f "${SUPERTONIC_APP_ROOT}/models/supertonic-3/onnx/tts.json" ]] \
-      && [[ -f "${SUPERTONIC_APP_ROOT}/models/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz" ]]; then
+      && [[ "${#missing[@]}" -eq 0 ]]; then
     ok "Supertonic runtime already installed: ${C_DIM}${SUPERTONIC_APP_ROOT}${C_RESET}"
     return 0
+  fi
+  if [[ "${#missing[@]}" -gt 0 && -x "${st_python}" ]]; then
+    info "Supertonic install is incomplete (missing: ${missing[*]}); repairing."
   fi
   # The upstream installer fetches the PyNeat wheel with sima-cli, which the
   # DevKit exposes on PATH only for login shells.

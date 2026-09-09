@@ -54,6 +54,11 @@ app:                         # Assistant web app settings.
     font_family: Inter       # Default UI font family.
     font_size: 15            # Default UI font size in px.
 
+  tts:                       # Server-side text-to-speech settings.
+    supertonic:              # Supertonic 3, the MLA engine installed by setup.sh (optional).
+      repo_root: /media/nvme/repos/supertonic-sima   # supertonic-sima checkout.
+      app_root: /media/nvme/supertonic-tts           # Its runtime venv and models.
+
   rag:                       # Retrieval-augmented generation settings.
     enabled: false                             # Enable document retrieval.
     embedding_model_dir: <path-to-embedding-model-dir> # Embedding model directory.

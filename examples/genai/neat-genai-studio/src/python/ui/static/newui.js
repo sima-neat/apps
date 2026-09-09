@@ -4516,8 +4516,22 @@ async function resetMla() {
   setModelLoadBar('active');
   try {
     // The server exits ~1.5s after replying, so this may never return — that is
-    // the success path, not a failure.
-    try { await fetch('/models/reset-mla', { method: 'POST' }); } catch (e) { /* expected */ }
+    // the success path, not a failure. A response that does arrive can still be
+    // a refusal (MLA_RESET=0 answers 400): surface it instead of waiting for a
+    // restart that will never happen and then reporting the old server as new.
+    let refused = '';
+    try {
+      const r = await fetch('/models/reset-mla', { method: 'POST' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        refused = (d && (d.error || d.message)) || `reset refused (HTTP ${r.status})`;
+      }
+    } catch (e) { /* expected: the server went away */ }
+    if (refused) {
+      setModelStatus(`Reset refused: ${refused}`, 'error');
+      setModelLoadBar(0);
+      return;
+    }
     await waitForServerBack();
   } finally {
     // Always release the lock, even if the wait threw, so the UI cannot get

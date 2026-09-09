@@ -2913,6 +2913,11 @@ def run_ui(app_cfg):
 
     configure_logging()
     logging.info('Initializing Neat GenAI Studio app (frontend and TTS) please wait....')
+    # Supertonic paths, before the TTS engines initialize: an explicit
+    # environment override (run.sh exports one only when set) wins, then the
+    # persisted config, then the module defaults.
+    os.environ.setdefault("SUPERTONIC_REPO_ROOT", app_cfg.supertonic.repo_root)
+    os.environ.setdefault("SUPERTONIC_APP_ROOT", app_cfg.supertonic.app_root)
     genai_app = AppContext()
     genai_app.initialize()
     genai_app.update_from_config(app_cfg)
