@@ -1,0 +1,138 @@
+"""Run 16 real RTSP pipelines and verify Insight metadata and send throughput."""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from tests.utils.metadata_json_listener import MetadataJsonListener
+
+EXAMPLE_DIR = Path(__file__).resolve().parents[2]
+
+
+def select_source(urls, codec):
+    errors = []
+    for url in dict.fromkeys(urls):
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-rtsp_transport",
+                    "tcp",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=codec_name,width,height,avg_frame_rate,has_b_frames",
+                    "-of",
+                    "json",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            errors.append("RTSP source probe timed out")
+            continue
+        if result.returncode:
+            errors.append(result.stderr)
+            continue
+        streams = json.loads(result.stdout).get("streams", [])
+        if not streams:
+            continue
+        stream = streams[0]
+        rate = stream.get("avg_frame_rate", "0/1")
+        numerator, denominator = map(int, rate.split("/"))
+        fps = numerator / denominator if denominator else 0
+        if (
+            stream.get("codec_name") == {"h264": "h264", "h265": "hevc"}[codec]
+            and stream.get("width") == 1280
+            and stream.get("height") == 720
+            and stream.get("has_b_frames") == 0
+            and (abs(fps - 30) < 0.001 or abs(fps - 30000 / 1001) < 0.001)
+        ):
+            print(
+                f"source codec={codec} width=1280 height=720 fps={fps} unique_publishers=1"
+            )
+            return url
+        errors.append(str(stream))
+    pytest.fail(f"No 720p30 {codec} source without B-frames: {errors}")
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("codec", ["h264", "h265"])
+def test_metadata_throughput(
+    codec, request, e2e_model_path, e2e_config_writer, test_timeout_ms
+):
+    url = select_source(request.getfixturevalue(f"rtsp_{codec}_urls"), codec)
+    port = int(os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_METADATA_PORT", "9100"))
+    config = e2e_config_writer(
+        {
+            "streams": [url] * 16,
+            "input": {"codec": codec, "width": 1280, "height": 720, "fps": 30},
+            "runtime": {"warmup_frames": 100, "profile": False},
+            "output": {
+                "video_enabled": True,
+                "insight": {
+                    "host": "127.0.0.1",
+                    "metadata_port_base": port,
+                    "video_port_base": int(
+                        os.environ.get("SIMANEAT_APPS_TEST_INSIGHT_VIDEO_PORT", "9000")
+                    ),
+                    "max_visible_streams": 16,
+                },
+            },
+        }
+    )
+    env = dict(
+        os.environ,
+        HIGH_DENSITY_DETECTOR_MEASURE_FRAMES="5000",
+        HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM="0",
+    )
+    with MetadataJsonListener(
+        "127.0.0.1", port, num_ports=16, require_all_ports=True
+    ) as listener:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(EXAMPLE_DIR / "src/python/main.py"),
+                "--config",
+                str(config),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=test_timeout_ms / 1000,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        metadata = listener.wait_for_messages(5)
+    assert metadata.success, metadata.error
+    for message in metadata.messages:
+        payload = json.loads(message.payload)
+        index = message.port - port
+        assert payload["stream_index"] == index
+        assert payload["stream_id"] == f"stream{index}"
+        assert payload["frame_id"] and payload["pts_ns"] >= 0
+        assert "rtp_timestamp" in payload
+    summaries = [
+        json.loads(line.removeprefix("[measurement] "))
+        for line in result.stdout.splitlines()
+        if line.startswith("[measurement] ")
+    ]
+    assert len(summaries) == 1, result.stdout
+    summary = summaries[0]
+    print(f"{codec}: {json.dumps(summary)}")
+    assert summary["frames"] == 5000
+    assert len(summary["per_stream_frames"]) == 16
+    assert min(summary["per_stream_frames"]) > 0
+    assert sum(summary["per_stream_frames"]) == 5000
+    assert summary["elapsed_s"] > 0
+    assert summary["aggregate_fps"] == pytest.approx(5000 / summary["elapsed_s"])
+    assert summary["aggregate_fps"] > 450

@@ -14,6 +14,8 @@ import time
 
 import yaml
 
+from metadata_measurement import MetadataMeasurement
+
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 MAX_STREAMS = 80
 DEFAULT_INITIAL_DETECTION_TIMEOUT_MS = 30_000
@@ -1261,6 +1263,13 @@ def complete_detection(
 
 
 def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: AggregateProfile) -> None:
+    measured_frames = int(os.environ.get("HIGH_DENSITY_DETECTOR_MEASURE_FRAMES", "0"))
+    if measured_frames < 0:
+        raise ValueError("measurement frame target must be nonnegative")
+    measurement = (
+        MetadataMeasurement(len(app.sources), cfg.warmup_frames, measured_frames)
+        if measured_frames else None
+    )
     watchdog = DetectionWatchdog(
         len(app.sources),
         DETECTION_PRIMING_OBSERVATIONS,
@@ -1287,7 +1296,18 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
             did_work = True
             stream_index = stream_index_from_detection(detections, len(app.sources))
             watchdog.observe(stream_index)
-            complete_detection(app.sources[stream_index], cfg, aggregate_profile, detections)
+            source = app.sources[stream_index]
+            if measurement is not None:
+                sent_before, failed_before = source.metadata_send_ok, source.metadata_send_fail
+            complete_detection(source, cfg, aggregate_profile, detections)
+            if measurement is not None and measurement.observe(
+                stream_index, source.processed,
+                source.metadata_send_ok > sent_before,
+                source.metadata_send_fail > failed_before, time.monotonic(),
+            ):
+                print("[measurement] " + json.dumps(measurement.summary()), flush=True)
+                reached_target = True
+                break
             if target_reached(app.sources):
                 reached_target = True
                 break

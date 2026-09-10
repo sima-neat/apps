@@ -1298,3 +1298,19 @@ class TestMetadata:
         assert payload["timestamp"] == -1
         assert payload["frame_id"] == ""
         assert "rtp_timestamp" not in payload
+
+
+def test_measurement_excludes_warmup_and_failed_sends():
+    from metadata_measurement import MetadataMeasurement
+
+    measurement = MetadataMeasurement(2, 100, 3)
+    assert not measurement.observe(0, 100, False, False, 1.0)
+    assert not measurement.observe(0, 101, True, False, 2.0)
+    assert not measurement.observe(1, 100, False, False, 3.0)
+    assert measurement.total == 0
+    assert not measurement.observe(1, 101, False, True, 4.0)
+    assert not measurement.observe(0, 102, True, False, 5.0)
+    assert not measurement.observe(1, 102, True, False, 6.0)
+    assert measurement.observe(0, 103, True, False, 7.0)
+    assert measurement.summary() == dict(frames=3, elapsed_s=4.0, aggregate_fps=0.75,
+                                        per_stream_frames=[2, 1], per_stream_send_failures=[0, 1])

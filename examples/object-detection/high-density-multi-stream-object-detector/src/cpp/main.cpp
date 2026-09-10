@@ -17,11 +17,13 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "detection_watchdog.h"
+#include "metadata_measurement.h"
 #include "support/object_detection/detection_egress.h"
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 
+#include <nlohmann/json.hpp>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
@@ -1132,6 +1134,10 @@ void complete_detection(SourceRuntime& source, const AppConfig& cfg,
 }
 
 void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& aggregate_profile) {
+  const int measured_frames = env_int("HIGH_DENSITY_DETECTOR_MEASURE_FRAMES", 0);
+  sima_examples::require(measured_frames >= 0, "measurement frame target must be nonnegative");
+  high_density::MetadataMeasurement measurement(app.sources.size(), cfg.warmup_frames,
+                                                measured_frames);
   std::uint64_t total_pulls = 0;
   const int liveness_ms = app_liveness_ms();
   auto now = std::chrono::steady_clock::now();
@@ -1171,7 +1177,24 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
           stream_index_from_detection(detections, static_cast<int>(app.sources.size()));
       watchdog.observe(static_cast<std::size_t>(stream_index));
       auto& source = app.sources[static_cast<std::size_t>(stream_index)];
+      const auto sent_before = source.metadata_send_ok;
+      const auto failed_before = source.metadata_send_fail;
       complete_detection(source, cfg, aggregate_profile, detections);
+      if (measured_frames > 0 &&
+          measurement.observe(
+              stream_index, source.processed, source.metadata_send_ok > sent_before,
+              source.metadata_send_fail > failed_before,
+              std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                  .count())) {
+        const nlohmann::json summary = {{"frames", measurement.total},
+                                        {"elapsed_s", measurement.elapsed},
+                                        {"aggregate_fps", measurement.total / measurement.elapsed},
+                                        {"per_stream_frames", measurement.frames},
+                                        {"per_stream_send_failures", measurement.failures}};
+        std::cout << "[measurement] " << summary.dump() << std::endl;
+        reached_target = true;
+        break;
+      }
       if (target_reached(app.sources)) {
         reached_target = true;
         break;
