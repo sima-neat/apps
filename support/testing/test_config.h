@@ -23,13 +23,7 @@ std::string configured_model_path(const std::string& example_name, const std::st
 
 // Read a required scalar from an example src/common/config.yaml under:
 // <section>.<key>
-double e2e_double(const std::string& example_name, const std::string& section,
-                  const std::string& key);
-
 int e2e_int(const std::string& example_name, const std::string& section, const std::string& key);
-
-bool e2e_bool(const std::string& example_name, const std::string& section, const std::string& key,
-              bool default_value);
 
 // Write an e2e runtime config by starting from src/common/config.yaml and applying
 // only test-harness overrides. The generated config omits testing.* keys.
