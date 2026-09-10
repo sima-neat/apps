@@ -117,6 +117,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   const auto result = process.get();
   require(result.exit_code == 0, result.stdout_text + result.stderr_text);
   std::vector<std::set<std::string>> received(16);
+  std::set<int> detected_streams;
   for (const auto& message : messages) {
     const auto payload = json::parse(message.payload);
     const int index = message.port - port;
@@ -127,7 +128,10 @@ void run_case(const std::string& binary, const std::string& model, const std::st
                 payload.at("pts_ns").get<int64_t>() >= 0 && payload.contains("rtp_timestamp"),
             "missing frame identity");
     received.at(index).insert(payload.at("frame_id").get<std::string>());
+    if (message.object_count > 0)
+      detected_streams.insert(index);
   }
+  require(detected_streams.size() == 16, "missing detections on one or more streams");
   json summary;
   int summaries = 0;
   std::istringstream lines(result.stdout_text);

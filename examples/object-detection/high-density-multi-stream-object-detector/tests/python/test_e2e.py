@@ -128,6 +128,7 @@ def test_metadata_throughput(
         result = process.result()
     assert result.returncode == 0, result.stdout + result.stderr
     received = [set() for _ in range(16)]
+    detected_streams = set()
     for message in messages:
         payload = json.loads(message.payload)
         index = message.port - port
@@ -136,6 +137,9 @@ def test_metadata_throughput(
         assert payload["frame_id"] and payload["pts_ns"] >= 0
         assert "rtp_timestamp" in payload
         received[index].add(payload["frame_id"])
+        if message.object_count > 0:
+            detected_streams.add(index)
+    assert detected_streams == set(range(16)), "missing detections on one or more streams"
     summaries = [
         json.loads(line.removeprefix("[measurement] "))
         for line in result.stdout.splitlines()
