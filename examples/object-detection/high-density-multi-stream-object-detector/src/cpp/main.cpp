@@ -1186,10 +1186,14 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
               source.metadata_send_fail > failed_before,
               std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
                   .count())) {
+        std::vector<std::uint64_t> total_sent;
+        for (const auto& stream : app.sources)
+          total_sent.push_back(stream.metadata_send_ok);
         const nlohmann::json summary = {{"frames", measurement.total},
                                         {"elapsed_s", measurement.elapsed},
                                         {"aggregate_fps", measurement.total / measurement.elapsed},
                                         {"per_stream_frames", measurement.frames},
+                                        {"per_stream_total_sent", total_sent},
                                         {"per_stream_send_failures", measurement.failures}};
         std::cout << "[measurement] " << summary.dump() << std::endl;
         reached_target = true;

@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -95,10 +97,13 @@ def test_metadata_throughput(
         HIGH_DENSITY_DETECTOR_MEASURE_FRAMES="5000",
         HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM="0",
     )
-    with MetadataJsonListener(
-        "127.0.0.1", port, num_ports=16, require_all_ports=True
-    ) as listener:
-        result = subprocess.run(
+    messages = []
+    with (
+        MetadataJsonListener("127.0.0.1", port, num_ports=16) as listener,
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
+        process = executor.submit(
+            subprocess.run,
             [
                 sys.executable,
                 str(EXAMPLE_DIR / "src/python/main.py"),
@@ -111,16 +116,26 @@ def test_metadata_throughput(
             timeout=test_timeout_ms / 1000,
             check=False,
         )
-        assert result.returncode == 0, result.stdout + result.stderr
-        metadata = listener.wait_for_messages(5)
-    assert metadata.success, metadata.error
-    for message in metadata.messages:
+        drain_until = float("inf")
+        while True:
+            metadata = listener.wait_for_messages(0.2)
+            messages.extend(metadata.messages)
+            if process.done():
+                now = time.monotonic()
+                if not metadata.messages or now >= drain_until:
+                    break
+                drain_until = min(drain_until, now + 1)
+        result = process.result()
+    assert result.returncode == 0, result.stdout + result.stderr
+    received = [set() for _ in range(16)]
+    for message in messages:
         payload = json.loads(message.payload)
         index = message.port - port
         assert payload["stream_index"] == index
         assert payload["stream_id"] == f"stream{index}"
         assert payload["frame_id"] and payload["pts_ns"] >= 0
         assert "rtp_timestamp" in payload
+        received[index].add(payload["frame_id"])
     summaries = [
         json.loads(line.removeprefix("[measurement] "))
         for line in result.stdout.splitlines()
@@ -131,8 +146,9 @@ def test_metadata_throughput(
     print(f"{codec}: {json.dumps(summary)}")
     assert summary["frames"] == 5000
     assert len(summary["per_stream_frames"]) == 16
-    assert min(summary["per_stream_frames"]) > 0
     assert sum(summary["per_stream_frames"]) == 5000
     assert summary["elapsed_s"] > 0
     assert summary["aggregate_fps"] == pytest.approx(5000 / summary["elapsed_s"])
     assert summary["aggregate_fps"] > 450
+    assert min(summary["per_stream_frames"]) / summary["elapsed_s"] > 450 / 16
+    assert [len(frames) for frames in received] == summary["per_stream_total_sent"]

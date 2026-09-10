@@ -1305,7 +1305,9 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
                 source.metadata_send_ok > sent_before,
                 source.metadata_send_fail > failed_before, time.monotonic(),
             ):
-                print("[measurement] " + json.dumps(measurement.summary()), flush=True)
+                summary = measurement.summary()
+                summary["per_stream_total_sent"] = [s.metadata_send_ok for s in app.sources]
+                print("[measurement] " + json.dumps(summary), flush=True)
                 reached_target = True
                 break
             if target_reached(app.sources):

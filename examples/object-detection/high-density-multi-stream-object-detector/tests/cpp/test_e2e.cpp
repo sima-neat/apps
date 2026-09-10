@@ -4,8 +4,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -89,19 +92,32 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   MetadataJsonListenerOptions options;
   options.base_port = port;
   options.num_ports = 16;
-  options.require_all_ports = true;
-  options.timeout_ms = 5000;
+  options.timeout_ms = 200;
   MetadataJsonListener listener(options);
   require(listener.ok(), listener.error());
-  const auto result = spawn_and_wait("/usr/bin/env",
-                                     {"HIGH_DENSITY_DETECTOR_MEASURE_FRAMES=5000",
-                                      "HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM=0", binary,
-                                      "--config", config.string()},
-                                     env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000));
+  auto process = std::async(std::launch::async, [&] {
+    return spawn_and_wait("/usr/bin/env",
+                          {"HIGH_DENSITY_DETECTOR_MEASURE_FRAMES=5000",
+                           "HIGH_DENSITY_DETECTOR_FRAMES_PER_STREAM=0", binary,
+                           "--config", config.string()},
+                          env_int_or_default("SIMANEAT_APPS_TEST_TIMEOUT_MS", 180000));
+  });
+  std::vector<MetadataJsonMessage> messages;
+  auto drain_until = std::chrono::steady_clock::time_point::max();
+  while (true) {
+    const auto metadata = listener.wait_for_messages();
+    messages.insert(messages.end(), metadata.messages.begin(), metadata.messages.end());
+    if (process.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      const auto now = std::chrono::steady_clock::now();
+      if (metadata.messages.empty() || now >= drain_until)
+        break;
+      drain_until = std::min(drain_until, now + std::chrono::seconds(1));
+    }
+  }
+  const auto result = process.get();
   require(result.exit_code == 0, result.stdout_text + result.stderr_text);
-  const auto metadata = listener.wait_for_messages();
-  require(metadata.success, metadata.error);
-  for (const auto& message : metadata.messages) {
+  std::vector<std::set<std::string>> received(16);
+  for (const auto& message : messages) {
     const auto payload = json::parse(message.payload);
     const int index = message.port - port;
     require(payload.at("stream_index") == index &&
@@ -110,6 +126,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
     require(!payload.at("frame_id").get<std::string>().empty() &&
                 payload.at("pts_ns").get<int64_t>() >= 0 && payload.contains("rtp_timestamp"),
             "missing frame identity");
+    received.at(index).insert(payload.at("frame_id").get<std::string>());
   }
   json summary;
   int summaries = 0;
@@ -127,7 +144,6 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   require(counts.size() == 16, "expected 16 measured streams");
   int total = 0;
   for (const int count : counts) {
-    require(count > 0, "stream produced no measured metadata");
     total += count;
   }
   require(total == 5000, "per-stream counts disagree with total");
@@ -135,6 +151,13 @@ void run_case(const std::string& binary, const std::string& model, const std::st
   const double fps = summary.at("aggregate_fps");
   require(elapsed > 0 && std::abs(fps - 5000.0 / elapsed) < 0.001, "invalid measurement rate");
   require(fps > 450, "metadata throughput must exceed 450 FPS");
+  for (const int count : counts)
+    require(count / elapsed > 450.0 / 16, "per-stream throughput must exceed 28.125 FPS");
+  std::vector<std::size_t> received_counts;
+  for (const auto& frames : received)
+    received_counts.push_back(frames.size());
+  require(json(received_counts) == summary.at("per_stream_total_sent"),
+          "received unique metadata counts disagree with successful sends");
   remove_dir(output);
 }
 } // namespace
