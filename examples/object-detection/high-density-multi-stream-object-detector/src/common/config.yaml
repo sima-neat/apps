@@ -1,4 +1,4 @@
-# Default profile: 16 x 720p @ 30 FPS.
+# Default profile: 16 x 720p at the input stream cadence.
 # Relative model paths use this file; label paths use the Apps root.
 model:
   path: <model-path>
