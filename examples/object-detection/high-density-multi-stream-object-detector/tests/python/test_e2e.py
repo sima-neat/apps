@@ -77,7 +77,7 @@ def test_metadata_throughput(
     config = e2e_config_writer(
         {
             "streams": [url] * 16,
-            "input": {"codec": codec, "width": 1280, "height": 720, "fps": 30},
+            "input": {"codec": codec, "width": 1280, "height": 720, "fps": 0},
             "runtime": {"warmup_frames": 100, "profile": False},
             "output": {
                 "video_enabled": True,

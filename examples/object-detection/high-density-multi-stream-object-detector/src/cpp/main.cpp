@@ -831,8 +831,9 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
     opt.output_caps.height = height_out;
   }
   if (fps_out > 0) {
-    opt.source_fps = fps_out;
-    opt.output_caps.fps = fps_out;
+    opt.source_fps = cfg.input_fps;
+    opt.dec_fps = fps_out;
+    opt.output_caps.fps = cfg.input_fps;
   }
   opt.output_caps.enable = true;
   opt.output_caps.format = simaai::neat::FormatTag::NV12;
@@ -856,6 +857,7 @@ make_rtsp_encoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptio
   encoded.payload_type = opt.payload_type;
   if (opt.codec != simaai::neat::nodes::groups::RtspCodec::H265) {
     encoded.h264_parse_config_interval = opt.h264_parse_config_interval;
+    encoded.fallback_h264_fps = opt.dec_fps;
     encoded.fallback_h264_width = opt.fallback_h264_width;
     encoded.fallback_h264_height = opt.fallback_h264_height;
   }
@@ -876,7 +878,7 @@ simaai::neat::Graph make_decoder(const simaai::neat::nodes::groups::RtspDecodedI
   decode.next_element = opt.decoder_next_element;
   decode.dec_width = opt.dec_width;
   decode.dec_height = opt.dec_height;
-  decode.dec_fps = opt.source_fps;
+  decode.dec_fps = opt.dec_fps;
   decode.num_buffers = decoder_buffers;
   decode.input_buffers = opt.decoder_input_buffers;
   decode.decoder_tuning = opt.decoder_tuning;

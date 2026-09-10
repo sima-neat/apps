@@ -80,7 +80,7 @@ void run_case(const std::string& binary, const std::string& model, const std::st
        {"input.codec", codec},
        {"input.width", "1280"},
        {"input.height", "720"},
-       {"input.fps", "30"},
+       {"input.fps", "0"},
        {"runtime.warmup_frames", "100"},
        {"runtime.profile", "false"},
        {"output.video_enabled", "true"},

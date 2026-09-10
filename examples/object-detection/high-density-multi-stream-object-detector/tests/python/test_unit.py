@@ -118,7 +118,7 @@ class TestConfigLoading:
             "max_inflight_total",
         ),
         [
-            ("config.yaml", 16, 30, 8, 2, "throughput-low-latency", 16, 1, 1, 8),
+            ("config.yaml", 16, 0, 8, 2, "throughput-low-latency", 16, 1, 1, 8),
             (
                 "config-24x720p20fps.yaml",
                 24,
@@ -188,10 +188,11 @@ class TestConfigLoading:
         assert not Path(raw["model"]["path"]).is_absolute()
         assert not Path(raw["model"]["labels"]).is_absolute()
 
-    def test_default_config_is_the_16x30_profile(self):
+    def test_default_config_uses_16_streams_and_auto_fps(self):
         default = yaml.safe_load((COMMON_DIR / "config.yaml").read_text(encoding="utf-8"))
         assert len(default["streams"]) == 16
-        assert default["input"]["fps"] == 30
+        assert default["input"]["fps"] == 0
+        assert default["input"]["skip_rtsp_probe"] is False
 
     def test_config_rejects_overlapping_insight_port_ranges(self, tmp_path: Path):
         from main import load_app_config
@@ -644,14 +645,15 @@ class TestRuntimeOptions:
         assert opt.codec == "H265"
         assert opt.dec_width == 640
         assert opt.dec_height == 480
-        assert opt.source_fps == 30
+        assert opt.source_fps == 0
+        assert opt.dec_fps == 30
         assert opt.auto_caps_from_stream is True
         assert opt.num_buffers == main.DEFAULT_DECODER_BUFFERS
         assert opt.output_caps.enable is True
         assert opt.output_caps.format == "NV12"
         assert opt.output_caps.width == 640
         assert opt.output_caps.height == 480
-        assert opt.output_caps.fps == 30
+        assert opt.output_caps.fps == 0
         assert opt.output_caps.memory == "Any"
         assert (fps, width, height) == (30, 640, 480)
 
@@ -698,6 +700,7 @@ class TestRuntimeOptions:
         assert opt.dec_width == 1280
         assert opt.dec_height == 720
         assert opt.source_fps == 20
+        assert opt.dec_fps == 20
         assert opt.fallback_h264_width == 1280
         assert opt.fallback_h264_height == 720
         assert getattr(opt, "fallback_h264_fps", -1) == -1
@@ -818,7 +821,8 @@ class TestRuntimeOptions:
             codec="H264",
             dec_width=1280,
             dec_height=720,
-            source_fps=20,
+            source_fps=0,
+            dec_fps=20,
             sima_allocator_type=2,
             decoder_name="decoder",
             decoder_raw_output=True,

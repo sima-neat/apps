@@ -28,10 +28,10 @@ input:
   tcp: true
   latency_ms: 100
   drop_on_latency: true
-  skip_rtsp_probe: true
+  skip_rtsp_probe: false
   width: 1280
   height: 720
-  fps: 30
+  fps: 0                    # 0 uses the input stream cadence.
   decoder_buffers: 8
   decoder_input_buffers: 2
   decoder_tuning: throughput-low-latency

@@ -1010,8 +1010,9 @@ def make_source_options(
         opt.output_caps.width = width_out
         opt.output_caps.height = height_out
     if fps_out > 0:
-        opt.source_fps = fps_out
-        opt.output_caps.fps = fps_out
+        opt.source_fps = cfg.input_fps
+        opt.dec_fps = fps_out
+        opt.output_caps.fps = cfg.input_fps
     return opt, fps_out, width_out, height_out
 
 
@@ -1031,6 +1032,7 @@ def make_rtsp_encoded_input(opt):
     encoded.payload_type = opt.payload_type
     if opt.codec != pyneat.RtspCodec.H265:
         encoded.h264_parse_config_interval = opt.h264_parse_config_interval
+        encoded.fallback_h264_fps = opt.dec_fps
         encoded.fallback_h264_width = opt.fallback_h264_width
         encoded.fallback_h264_height = opt.fallback_h264_height
     return pyneat.groups.rtsp_encoded_input(encoded)
@@ -1054,7 +1056,7 @@ def append_decoder(
     decode.next_element = opt.decoder_next_element
     decode.dec_width = opt.dec_width
     decode.dec_height = opt.dec_height
-    decode.dec_fps = opt.source_fps
+    decode.dec_fps = opt.dec_fps
     decode.num_buffers = decoder_buffers
     decode.input_buffers = decoder_input_buffers
     decode.decoder_tuning = decoder_tuning
