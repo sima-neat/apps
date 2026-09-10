@@ -174,14 +174,21 @@ int main(int argc, char** argv) {
   if (model.empty() || !fs::exists(model))
     return skip_or_fail("configured high-density model is unavailable");
   int rc = 0;
+  int cases_run = 0;
   for (const std::string codec : {"h264", "h265"}) {
+    const auto urls = codec == "h264" ? rtsp_h264_urls_from_env() : rtsp_h265_urls_from_env();
+    if (urls.empty()) {
+      if (skip_or_fail("no RTSP " + codec + " URLs configured") != kSkipCode)
+        rc = 1;
+      continue;
+    }
+    ++cases_run;
     try {
-      run_case(argv[1], model, codec,
-               codec == "h264" ? rtsp_h264_urls_from_env() : rtsp_h265_urls_from_env());
+      run_case(argv[1], model, codec, urls);
     } catch (const std::exception& error) {
       std::cerr << "[FAIL] " << codec << ": " << error.what() << "\n";
       rc = 1;
     }
   }
-  return rc;
+  return cases_run == 0 && rc == 0 ? kSkipCode : rc;
 }
