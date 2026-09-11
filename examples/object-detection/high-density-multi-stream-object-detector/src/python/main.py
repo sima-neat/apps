@@ -14,6 +14,8 @@ import time
 
 import yaml
 
+from metadata_measurement import MetadataMeasurement
+
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 MAX_STREAMS = 80
 DEFAULT_INITIAL_DETECTION_TIMEOUT_MS = 30_000
@@ -1008,8 +1010,9 @@ def make_source_options(
         opt.output_caps.width = width_out
         opt.output_caps.height = height_out
     if fps_out > 0:
-        opt.source_fps = fps_out
-        opt.output_caps.fps = fps_out
+        opt.source_fps = cfg.input_fps
+        opt.dec_fps = fps_out
+        opt.output_caps.fps = cfg.input_fps
     return opt, fps_out, width_out, height_out
 
 
@@ -1029,6 +1032,7 @@ def make_rtsp_encoded_input(opt):
     encoded.payload_type = opt.payload_type
     if opt.codec != pyneat.RtspCodec.H265:
         encoded.h264_parse_config_interval = opt.h264_parse_config_interval
+        encoded.fallback_h264_fps = opt.dec_fps
         encoded.fallback_h264_width = opt.fallback_h264_width
         encoded.fallback_h264_height = opt.fallback_h264_height
     return pyneat.groups.rtsp_encoded_input(encoded)
@@ -1052,7 +1056,7 @@ def append_decoder(
     decode.next_element = opt.decoder_next_element
     decode.dec_width = opt.dec_width
     decode.dec_height = opt.dec_height
-    decode.dec_fps = opt.source_fps
+    decode.dec_fps = opt.dec_fps
     decode.num_buffers = decoder_buffers
     decode.input_buffers = decoder_input_buffers
     decode.decoder_tuning = decoder_tuning
@@ -1261,6 +1265,13 @@ def complete_detection(
 
 
 def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: AggregateProfile) -> None:
+    measured_frames = int(os.environ.get("HIGH_DENSITY_DETECTOR_MEASURE_FRAMES", "0"))
+    if measured_frames < 0:
+        raise ValueError("measurement frame target must be nonnegative")
+    measurement = (
+        MetadataMeasurement(len(app.sources), cfg.warmup_frames, measured_frames)
+        if measured_frames else None
+    )
     watchdog = DetectionWatchdog(
         len(app.sources),
         DETECTION_PRIMING_OBSERVATIONS,
@@ -1287,7 +1298,20 @@ def pull_detections(app: AppRuntime, cfg: AppConfig, aggregate_profile: Aggregat
             did_work = True
             stream_index = stream_index_from_detection(detections, len(app.sources))
             watchdog.observe(stream_index)
-            complete_detection(app.sources[stream_index], cfg, aggregate_profile, detections)
+            source = app.sources[stream_index]
+            if measurement is not None:
+                sent_before, failed_before = source.metadata_send_ok, source.metadata_send_fail
+            complete_detection(source, cfg, aggregate_profile, detections)
+            if measurement is not None and measurement.observe(
+                stream_index, source.processed,
+                source.metadata_send_ok > sent_before,
+                source.metadata_send_fail > failed_before, time.monotonic(),
+            ):
+                summary = measurement.summary()
+                summary["per_stream_total_sent"] = [s.metadata_send_ok for s in app.sources]
+                print("[measurement] " + json.dumps(summary), flush=True)
+                reached_target = True
+                break
             if target_reached(app.sources):
                 reached_target = True
                 break

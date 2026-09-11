@@ -8,8 +8,10 @@ unit:
   cpp: true
 e2e:
   python:
-    enabled: false
-    reason: Requires 16, 24, or 48 live RTSP sources and Insight.
+    enabled: true
+    models:
+      - yolo26n-det-int8-b1
   cpp:
-    enabled: false
-    reason: Requires 16, 24, or 48 live RTSP sources and Insight.
+    enabled: true
+    models:
+      - yolo26n-det-int8-b1
