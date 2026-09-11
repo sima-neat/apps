@@ -1,26 +1,24 @@
 """PCB defect detection over a folder of images using pyneat.
 
-Images of any resolution are letterboxed to the model input (640x640) before
-inference. The compiled YOLO26n model pack owns the rest of the Neat path:
+Images of any resolution go straight to the model: Core letterboxes them to the
+packaged input size on device. The compiled YOLO26n model pack owns the whole
+Neat path:
 
-    color convert + normalize -> MLA inference -> on-device YOLO26 box decode
+    letterbox -> color convert + normalize -> MLA inference -> YOLO26 box decode
 
-Detections come back in letterboxed coordinates, are mapped onto the original
-frame, and are drawn on the original image, one annotated image per input.
-
-Exit codes: 0 success | 1 invalid configuration | 2 missing config or input
-directory | 3 no images | 4 runtime error.
+decode_bbox_tensor returns boxes already in source-image coordinates, so the
+application performs no geometry of its own. One annotated image is written per
+input image.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
-import struct
 import sys
 import time
 from collections import Counter
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
@@ -28,13 +26,16 @@ import yaml
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
-DEFAULT_INPUT_SIZE = 640
-# Grey pad value used by the YOLO letterbox convention.
-PAD_VALUE = 114
 
-# One BBOX record: x, y, w, h (int32), score (float32), class_id (int32).
-BBOX_RECORD_FORMAT = "<iiiifi"
-BBOX_RECORD_SIZE = struct.calcsize(BBOX_RECORD_FORMAT)
+
+# Appended to the stem of every annotated image.
+OUTPUT_TAG = "_pcb"
+DEFAULT_INPUT_SIZE = 640
+# Floor for the one-off priming run of the graph seed.
+WARMUP_TIMEOUT_MS = 30000
+# Ingress capacity of the graph; boards up to this size share one graph.
+DEFAULT_INPUT_MAX_WIDTH = 3840
+DEFAULT_INPUT_MAX_HEIGHT = 2160
 
 # BGR colors, index-aligned with pcb_label.txt.
 DEFECT_COLORS = [
@@ -54,6 +55,8 @@ class AppConfig:
     model_path: str
     labels_path: Path
     input_size: int
+    input_max_width: int
+    input_max_height: int
     input_dir: Path
     output_dir: Path
     score_threshold: float
@@ -66,31 +69,76 @@ class AppConfig:
     overlay: bool
 
 
+def format_counts(counts) -> str:
+    """Render per-class counts the same way the C++ twin does."""
+    return "{" + ", ".join(f"{name}: {n}" for name, n in sorted(counts.items())) + "}"
+
+
 def load_config(path: Path) -> dict:
     with Path(path).open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
+        raw = yaml.safe_load(handle) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"config root must be a mapping: {path}")
+    return raw
+
+
+def _section(raw: dict, name: str) -> dict:
+    """One config section, rejecting a non-mapping the way the C++ parser does."""
+    section = raw.get(name)
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise ValueError(f"{name} must be a mapping")
+    return section
+
+
+def _int(section: dict, key: str, default: int, name: str) -> int:
+    """Integer config value; a fractional or non-numeric value is an error."""
+    value = section.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value:
+        raise ValueError(f"{name} must be an integer, got {value!r}")
+    return int(value)
+
+
+def _float(section: dict, key: str, default: float, name: str) -> float:
+    """Floating-point config value; a non-numeric value is an error."""
+    value = section.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be numeric, got {value!r}")
+    return float(value)
 
 
 def build_app_config(raw: dict) -> AppConfig:
     """Map a parsed config mapping onto AppConfig without validating it."""
-    model_cfg = raw.get("model") or {}
-    io_cfg = raw.get("io") or {}
-    decode_cfg = raw.get("decode") or {}
-    runtime_cfg = raw.get("runtime") or {}
-    output_cfg = raw.get("output") or {}
+    model_cfg = _section(raw, "model")
+    io_cfg = _section(raw, "io")
+    decode_cfg = _section(raw, "decode")
+    runtime_cfg = _section(raw, "runtime")
+    output_cfg = _section(raw, "output")
 
     return AppConfig(
         model_path=str(model_cfg.get("path", "")),
-        labels_path=Path(str(model_cfg.get("labels", ""))),
-        input_size=int(model_cfg.get("input_size", DEFAULT_INPUT_SIZE)),
+        labels_path=Path(str(model_cfg.get(
+            "labels",
+            "examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt",
+        ))),
+        input_size=_int(model_cfg, "input_size", DEFAULT_INPUT_SIZE, "model.input_size"),
+        input_max_width=_int(model_cfg, "input_max_width", DEFAULT_INPUT_MAX_WIDTH,
+                             "model.input_max_width"),
+        input_max_height=_int(model_cfg, "input_max_height", DEFAULT_INPUT_MAX_HEIGHT,
+                              "model.input_max_height"),
         input_dir=Path(str(io_cfg.get("input_dir", "assets/datasets/pcb"))),
         output_dir=Path(str(io_cfg.get("output_dir", "sandbox/pcb-defect-detector"))),
-        score_threshold=float(decode_cfg.get("score_threshold", 0.25)),
-        nms_iou=float(decode_cfg.get("nms_iou", 0.45)),
-        max_detections=int(decode_cfg.get("max_detections", 300)),
-        timeout_ms=int(runtime_cfg.get("timeout_ms", 8000)),
-        num_runs=int(runtime_cfg.get("num_runs", 1)),
-        queue_depth=int(runtime_cfg.get("queue_depth", 8)),
+        score_threshold=_float(decode_cfg, "score_threshold", 0.25, "decode.score_threshold"),
+        nms_iou=_float(decode_cfg, "nms_iou", 0.45, "decode.nms_iou"),
+        max_detections=_int(decode_cfg, "max_detections", 300, "decode.max_detections"),
+        timeout_ms=_int(runtime_cfg, "timeout_ms", 8000, "runtime.timeout_ms"),
+        num_runs=_int(runtime_cfg, "num_runs", 1, "runtime.num_runs"),
+        queue_depth=_int(runtime_cfg, "queue_depth", 8, "runtime.queue_depth"),
         profile=bool(runtime_cfg.get("profile", False)),
         overlay=bool(output_cfg.get("overlay", True)),
     )
@@ -104,6 +152,10 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("model.labels must point to a labels file")
     if cfg.input_size < 1:
         raise ValueError(f"model.input_size must be >= 1, got {cfg.input_size}")
+    if cfg.input_max_width < 1:
+        raise ValueError(f"model.input_max_width must be >= 1, got {cfg.input_max_width}")
+    if cfg.input_max_height < 1:
+        raise ValueError(f"model.input_max_height must be >= 1, got {cfg.input_max_height}")
     if not 0.0 <= cfg.score_threshold <= 1.0:
         raise ValueError(
             f"decode.score_threshold must be in [0.0, 1.0], got {cfg.score_threshold}"
@@ -118,13 +170,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError(f"runtime.num_runs must be >= 1, got {cfg.num_runs}")
     if cfg.queue_depth < 1:
         raise ValueError(f"runtime.queue_depth must be >= 1, got {cfg.queue_depth}")
-
-
-def load_app_config(config_path: Path) -> AppConfig:
-    """Read, resolve, and validate the example configuration."""
-    cfg = build_app_config(load_config(config_path))
-    validate_config(cfg)
-    return cfg
 
 
 def load_labels(path: Path) -> list[str]:
@@ -151,17 +196,7 @@ def class_name(class_id: int, labels: list[str]) -> str:
 
 
 def class_color(class_id: int) -> tuple[int, int, int]:
-    return DEFECT_COLORS[max(0, class_id) % len(DEFECT_COLORS)]
-
-
-@dataclass(frozen=True)
-class Letterbox:
-    """How a source frame was fitted into the square model input."""
-
-    image: object
-    scale: float = 1.0
-    pad_x: int = 0
-    pad_y: int = 0
+    return DEFECT_COLORS[abs(class_id) % len(DEFECT_COLORS)]
 
 
 def round_half_up(value: float) -> int:
@@ -170,120 +205,63 @@ def round_half_up(value: float) -> int:
     return int(math.floor(value + 0.5))
 
 
-def letterbox(bgr, size: int) -> Letterbox:
-    """Aspect-preserving resize into a size x size canvas, centered on a grey pad."""
-    import cv2
-    import numpy as np
-
-    height, width = bgr.shape[:2]
-    if (width, height) == (size, size):
-        return Letterbox(image=bgr)  # Already model-sized: no resample, so pixels stay exact.
-
-    scale = min(size / width, size / height)
-    scaled_w = max(1, round_half_up(width * scale))
-    scaled_h = max(1, round_half_up(height * scale))
-    pad_x = (size - scaled_w) // 2
-    pad_y = (size - scaled_h) // 2
-
-    canvas = np.full((size, size, bgr.shape[2]), PAD_VALUE, dtype=bgr.dtype)
-    canvas[pad_y:pad_y + scaled_h, pad_x:pad_x + scaled_w] = cv2.resize(
-        bgr, (scaled_w, scaled_h), interpolation=cv2.INTER_LINEAR
-    )
-    return Letterbox(image=canvas, scale=scale, pad_x=pad_x, pad_y=pad_y)
-
-
-def to_source_coordinates(detections: list[dict], lb: Letterbox, width: int, height: int) -> list[dict]:
-    """Undo the letterbox so boxes land on the original frame."""
-
-    def unpad(value: float, pad: int, limit: int) -> float:
-        return max(0.0, min((value - pad) / lb.scale, float(limit)))
-
-    mapped: list[dict] = []
-    for detection in detections:
-        box = dict(
-            detection,
-            x1=unpad(detection["x1"], lb.pad_x, width),
-            x2=unpad(detection["x2"], lb.pad_x, width),
-            y1=unpad(detection["y1"], lb.pad_y, height),
-            y2=unpad(detection["y2"], lb.pad_y, height),
-        )
-        if box["x2"] > box["x1"] and box["y2"] > box["y1"]:
-            mapped.append(box)
-    return mapped
-
-
 def output_path_for(image_path: Path, output_dir: Path) -> Path:
-    return output_dir / f"{image_path.stem}.png"
+    """Annotated-output path for one input image."""
+    return output_dir / f"{image_path.stem}{OUTPUT_TAG}{image_path.suffix}"
 
 
-def clear_output_images(output_dir: Path, input_dir: Path) -> int:
-    """Remove stale annotated images so a rerun cannot leave orphaned results."""
-    if output_dir.resolve() == input_dir.resolve():
-        print(
-            f"Skipping output cleanup because output_dir matches input_dir: {output_dir}",
-            file=sys.stderr,
+def decode_detections(outputs, img_w: int, img_h: int, cfg: AppConfig) -> list[dict]:
+    """Decode the model's BBOX payload into source-image coordinates.
+
+    Raises RuntimeError if the response is not a usable detection result;
+    returns [] when a valid response found nothing.
+    """
+    if not outputs:
+        raise RuntimeError("model returned no detection tensors")
+    if len(outputs) != 1:
+        raise RuntimeError(
+            f"expected one BBOX tensor from model-managed BoxDecode, got {len(outputs)}"
         )
-        return 0
 
-    removed = 0
-    for path in output_dir.iterdir():
-        if path.is_file() and is_image(path):
-            path.unlink()
-            removed += 1
-    return removed
+    bbox_tensor = outputs[0]
+    try:
+        detection_format = pyneat.detections.read_detection_format(bbox_tensor)
+    except Exception:  # noqa: BLE001 - a non-detection tensor has no format tag
+        detection_format = ""
+    if not detection_format or not pyneat.detections.format_is_bbox(detection_format):
+        raise RuntimeError(
+            f"model returned no BBOX detection tensor (format: '{detection_format or '<none>'}'); "
+            "check that the model package matches decode.decode_type"
+        )
 
+    # strict=True rejects a truncated or over-long payload instead of decoding it
+    # as zero boxes. expected_topk is 0 because strict also throws on it; the cap
+    # is applied below.
+    try:
+        result = pyneat.detections.decode_bbox_tensor(bbox_tensor, img_w, img_h, 0, True)
+    except Exception as error:  # noqa: BLE001 - Core raises a plain runtime error
+        raise RuntimeError(f"malformed BBOX payload: {error}") from error
 
-def extract_bbox_payload(tensors) -> bytes | None:
-    for tensor in tensors:
-        try:
-            payload = tensor.copy_payload_bytes()
-        except Exception:
-            continue
-        if payload:
-            return payload
-    return None
-
-
-def parse_bbox_payload(
-    payload: bytes,
-    img_w: int,
-    img_h: int,
-    min_score: float,
-    max_detections: int = 0,
-) -> list[dict]:
-    """Parse a BBOX payload into detections clamped to the original image size."""
-    if not payload or len(payload) < 4:
-        return []
-
-    declared = struct.unpack_from("<I", payload, 0)[0]
-    count = min(declared, (len(payload) - 4) // BBOX_RECORD_SIZE)
-    if max_detections > 0:
-        count = min(count, max_detections)
     detections: list[dict] = []
-    offset = 4
-    for _ in range(count):
-        x, y, w, h, score, class_id = struct.unpack_from(BBOX_RECORD_FORMAT, payload, offset)
-        offset += BBOX_RECORD_SIZE
-        if float(score) < min_score:
+    for box in result.boxes:
+        # Core stores the threshold as float32; compare there so a boundary
+        # score is kept or dropped identically in both twins.
+        if np.float32(box.score) < np.float32(cfg.score_threshold):
             continue
-
-        x1 = max(0.0, min(float(img_w), float(x)))
-        y1 = max(0.0, min(float(img_h), float(y)))
-        x2 = max(0.0, min(float(img_w), float(x + w)))
-        y2 = max(0.0, min(float(img_h), float(y + h)))
+        x1, y1 = float(box.x1), float(box.y1)
+        x2, y2 = float(box.x2), float(box.y2)
         if x2 <= x1 or y2 <= y1:
             continue
-
         detections.append(
-            dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(score), class_id=int(class_id))
+            dict(x1=x1, y1=y1, x2=x2, y2=y2, score=float(box.score), class_id=int(box.class_id))
         )
+        if len(detections) >= cfg.max_detections:
+            break
     return detections
 
 
 def draw_boxes(bgr, detections: list[dict], labels: list[str], thickness: int = 2) -> None:
     """Draw class-colored defect boxes and labels on a BGR image in place."""
-    import cv2
-
     for detection in detections:
         x1 = max(0, round_half_up(detection["x1"]))
         y1 = max(0, round_half_up(detection["y1"]))
@@ -313,9 +291,6 @@ def draw_boxes(bgr, detections: list[dict], labels: list[str], thickness: int = 
 
 def to_bgr_tensor(bgr):
     """Wrap a raw BGR uint8 image in a pyneat tensor placed in EV74 memory."""
-    import numpy as np
-    import pyneat
-
     if bgr is None or bgr.size == 0:
         raise ValueError("empty input image")
     return pyneat.Tensor.from_numpy(
@@ -350,25 +325,29 @@ def main() -> int:
 
     try:
         raw = load_config(args.config)
-    except OSError as error:
-        print(f"Error: failed to read config {args.config}: {error}", file=sys.stderr)
-        return 2
     except yaml.YAMLError as error:
         print(f"Error: invalid YAML in {args.config}: {error}", file=sys.stderr)
         return 2
-
-    if args.score is not None:
-        raw.setdefault("decode", {})["score_threshold"] = args.score
-    if args.nms is not None:
-        raw.setdefault("decode", {})["nms_iou"] = args.nms
+    except OSError as error:
+        print(f"Error: failed to read config {args.config}: {error}", file=sys.stderr)
+        return 2
+    except (ValueError, AttributeError, TypeError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
 
     try:
         cfg = build_app_config(raw)
+        # Overrides are applied to the resolved config, not injected into the raw
+        # mapping, so a malformed value in the file is still reported.
+        if args.score is not None:
+            cfg = replace(cfg, score_threshold=args.score)
+        if args.nms is not None:
+            cfg = replace(cfg, nms_iou=args.nms)
         validate_config(cfg)
         labels = load_labels(cfg.labels_path)
-    except (ValueError, TypeError, FileNotFoundError) as error:
+    except (ValueError, TypeError, AttributeError, OSError) as error:
         print(f"Error: {error}", file=sys.stderr)
-        return 1
+        return 2
 
     if args.validate_config_only:
         print(
@@ -385,21 +364,42 @@ def main() -> int:
         print(f"Input directory does not exist: {cfg.input_dir}", file=sys.stderr)
         return 2
 
-    images = discover_images(cfg.input_dir)
+    try:
+        images = discover_images(cfg.input_dir)
+    except OSError as error:
+        print(f"Error: cannot read {cfg.input_dir}: {error}", file=sys.stderr)
+        return 2
     if not images:
         print(f"No images found in {cfg.input_dir}", file=sys.stderr)
         return 3
 
+    global cv2, np, pyneat
     import cv2
+    import numpy as np
     import pyneat
 
-    cfg.output_dir.mkdir(parents=True, exist_ok=True)
-    removed_outputs = clear_output_images(cfg.output_dir, cfg.input_dir)
-    if removed_outputs:
-        print(f"Cleared {removed_outputs} stale output images", flush=True)
+    try:
+        cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        print(f"Error: cannot create {cfg.output_dir}: {error}", file=sys.stderr)
+        return 2
+
     print(f"Model: {cfg.model_path}", flush=True)
     print(f"Found {len(images)} images in {cfg.input_dir}", flush=True)
-    print(f"Classes: {', '.join(labels)}", flush=True)
+
+    # Inputs we were asked to inspect but could not complete.
+    failed_images: list[str] = []
+    # Declared before the try so the abort handler can always report progress,
+    # even when the failure happens before the loop starts.
+    all_images: list[Path] = []
+    processed = 0
+    runner = None
+    images_with_defects = 0
+    per_class: Counter = Counter()
+    # The image in flight when a systemic failure aborts the batch, so the summary
+    # names it rather than reporting failed=0.
+    aborted_on = ""
+
 
     try:
         opt = pyneat.ModelOptions()
@@ -407,6 +407,9 @@ def main() -> int:
         opt.preprocess.enable = pyneat.AutoFlag.On
         opt.preprocess.color_convert.input_format = pyneat.PreprocessColorFormat.BGR
         opt.preprocess.preset = pyneat.NormalizePreset.COCO_YOLO
+        # Resize stays at the model package default: letterbox, grey padding.
+        opt.preprocess.input_max_width = cfg.input_max_width
+        opt.preprocess.input_max_height = cfg.input_max_height
         opt.decode_type = pyneat.BoxDecodeType.YoloV26
         opt.score_threshold = cfg.score_threshold
         opt.nms_iou_threshold = cfg.nms_iou
@@ -414,24 +417,25 @@ def main() -> int:
         opt.num_classes = len(labels)
         model = pyneat.Model(cfg.model_path, opt)
 
-        seed = cv2.imread(str(images[0]), cv2.IMREAD_COLOR)
-        if seed is None:
-            print(f"Error: failed to read build seed image: {images[0].name}", file=sys.stderr)
-            return 4
-        # Every frame is letterboxed to this shape, so the graph ingress caps never change.
-        seed_lb = letterbox(seed, cfg.input_size)
-
         run_opt = pyneat.RunOptions()
         run_opt.queue_depth = cfg.queue_depth
-        run_opt.overflow_policy = pyneat.OverflowPolicy.Block
-        run_opt.preset = pyneat.RunPreset.Balanced
+        # Realtime applies new input caps on the first frame. The other presets
+        # wait for a second frame at the same size, which a folder never sends.
+        run_opt.preset = pyneat.RunPreset.Realtime
+
+        # The build seed fixes the graph's input caps, so it is a frame at the
+        # configured capacity rather than any particular board.
+        seed = np.full((cfg.input_max_height, cfg.input_max_width, 3), 114, dtype=np.uint8)
+
         runner = model.build(
-            [to_bgr_tensor(seed_lb.image)],
+            [to_bgr_tensor(seed)],
             route_options=pyneat.ModelRouteOptions(),
             run_options=run_opt,
         )
-        runner.run([to_bgr_tensor(seed_lb.image)], timeout_ms=cfg.timeout_ms)
-        print("[WARMUP] done")
+        # One-off graph settling and first-touch allocation, which
+        # runtime.timeout_ms does not cover.
+        runner.run([to_bgr_tensor(seed)], timeout_ms=max(cfg.timeout_ms, WARMUP_TIMEOUT_MS))
+
 
         all_images = images * cfg.num_runs
         if cfg.num_runs > 1:
@@ -442,44 +446,47 @@ def main() -> int:
             )
 
         pipeline_start = time.perf_counter()
-        processed = 0
-        images_with_defects = 0
-        per_class: Counter = Counter()
 
         for image_path in all_images:
+            aborted_on = image_path.name
             image_start = time.perf_counter()
 
             bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
             if bgr is None:
-                print(f"Skipping unreadable: {image_path.name}", file=sys.stderr)
+                # An input we were asked to inspect and could not: record it so
+                # the summary and the exit code stay honest.
+                print(f"Failed to read: {image_path.name}", file=sys.stderr)
+                failed_images.append(image_path.name)
                 continue
 
             original_h, original_w = bgr.shape[:2]
-            lb = letterbox(bgr, cfg.input_size)
+            if original_w > cfg.input_max_width or original_h > cfg.input_max_height:
+                print(f"Image {original_w}x{original_h} exceeds model.input_max_width/height "
+                      f"({cfg.input_max_width}x{cfg.input_max_height}): {image_path.name}",
+                      file=sys.stderr)
+                failed_images.append(image_path.name)
+                continue
 
             infer_start = time.perf_counter()
-            outputs = runner.run([to_bgr_tensor(lb.image)], timeout_ms=cfg.timeout_ms)
+            outputs = runner.run([to_bgr_tensor(bgr)], timeout_ms=cfg.timeout_ms)
             infer_end = time.perf_counter()
 
-            # Detections arrive in letterboxed coordinates; draw them on the original frame.
-            payload = extract_bbox_payload(outputs)
-            detections = (
-                parse_bbox_payload(
-                    payload,
-                    cfg.input_size,
-                    cfg.input_size,
-                    cfg.score_threshold,
-                    cfg.max_detections,
-                )
-                if payload
-                else []
-            )
-            detections = to_source_coordinates(detections, lb, original_w, original_h)
+            # Raises rather than reporting a clean board if the model produced no
+            # usable detection output; a valid empty result returns [].
+            detections = decode_detections(outputs, original_w, original_h, cfg)
 
             out_path = output_path_for(image_path, cfg.output_dir)
             if cfg.overlay:
                 draw_boxes(bgr, detections, labels)
-                cv2.imwrite(str(out_path), bgr)
+                # imwrite reports failure by return value, not by raising.
+                try:
+                    written = cv2.imwrite(str(out_path), bgr)
+                except cv2.error:  # encoder failure, not a batch-wide problem
+                    written = False
+                if not written:
+                    print(f"Failed to write: {out_path}", file=sys.stderr)
+                    failed_images.append(image_path.name)
+                    continue
             image_end = time.perf_counter()
 
             counts = Counter(class_name(d["class_id"], labels) for d in detections)
@@ -492,7 +499,7 @@ def main() -> int:
             if cfg.overlay:
                 progress += f" -> {out_path.name}"
             print(
-                f"{progress} ({len(detections)} defects) {dict(counts)}",
+                f"{progress} ({len(detections)} defects) {format_counts(counts)}",
                 flush=True,
             )
             if cfg.profile:
@@ -503,20 +510,57 @@ def main() -> int:
                     f"total={(image_end - image_start) * 1000:.1f}ms",
                     flush=True,
                 )
+            aborted_on = ""
 
-        runner.close()
     except Exception as error:  # noqa: BLE001 - report any runtime failure to the caller
+        # A systemic failure repeats on every image, so stop the batch but still
+        # report what completed and what failed.
+        sys.stdout.flush()
+        if aborted_on:
+            failed_images.append(aborted_on)
         print(f"Error: {error}", file=sys.stderr)
+        print(
+            f"Aborted after {processed}/{len(all_images) or len(images)} images | "
+            f"images_with_defects={images_with_defects} "
+            f"total_defects={sum(per_class.values())} failed={len(failed_images)}",
+            file=sys.stderr,
+        )
+        if failed_images:
+            print(f"Previously failed: {', '.join(failed_images[:5])}"
+                  f"{', ...' if len(failed_images) > 5 else ''}", file=sys.stderr)
         return 4
+
+    finally:
+        if runner is not None:
+            runner.close()
 
     elapsed = time.perf_counter() - pipeline_start
     print(
         f"Done: {processed}/{len(all_images)} images in {elapsed:.2f}s | "
-        f"images_with_defects={images_with_defects} total_defects={sum(per_class.values())}"
+        f"images_with_defects={images_with_defects} total_defects={sum(per_class.values())} "
+        f"failed={len(failed_images)}"
     )
     if per_class:
-        print(f"Per-class totals: {dict(per_class)}")
-    return 0 if processed > 0 else 4
+        print(f"Per-class totals: {format_counts(per_class)}")
+    sys.stdout.flush()
+
+    # A batch that skipped inputs is not a success.
+    if failed_images:
+        shown = ", ".join(failed_images[:5])
+        suffix = ", ..." if len(failed_images) > 5 else ""
+        print(
+            f"Error: {len(failed_images)} of {len(all_images)} image(s) could not be "
+            f"processed or saved: {shown}{suffix}",
+            file=sys.stderr,
+        )
+        return 4
+    if processed != len(all_images):
+        print(
+            f"Error: processed {processed} of {len(all_images)} images",
+            file=sys.stderr,
+        )
+        return 4
+    return 0
 
 
 if __name__ == "__main__":

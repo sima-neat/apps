@@ -2,10 +2,11 @@
 
 import importlib.util
 import re
-import struct
 import subprocess
 import sys
 from pathlib import Path
+
+import types
 
 import pytest
 import yaml
@@ -24,14 +25,6 @@ main = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = main
 _SPEC.loader.exec_module(main)
 
-
-def bbox_payload(records: list[tuple[int, int, int, int, float, int]], declared: int | None = None) -> bytes:
-    """Build a BBOX payload; declared overrides the record count in the header."""
-    count = len(records) if declared is None else declared
-    payload = struct.pack("<I", count)
-    for x, y, w, h, score, class_id in records:
-        payload += struct.pack(main.BBOX_RECORD_FORMAT, x, y, w, h, score, class_id)
-    return payload
 
 
 def valid_config() -> dict:
@@ -87,13 +80,23 @@ class TestArgParsing:
         assert main.parse_args([]).config == CONFIG_YAML
 
 
+@pytest.fixture(autouse=True)
+def _bind_runtime_modules():
+    """main() binds cv2/np/pyneat as module globals; unit tests call helpers directly."""
+    for attr, name in (("cv2", "cv2"), ("np", "numpy"), ("pyneat", "pyneat")):
+        if getattr(main, attr, None) is None:
+            module = pytest.importorskip(name)
+            setattr(main, attr, module)
+
+
 @pytest.mark.unit
 class TestConfigLoading:
     """Validate config loading and value checking."""
 
     def test_shipped_config_is_valid(self):
         """The packaged config.yaml must load and validate as-is."""
-        cfg = main.load_app_config(CONFIG_YAML)
+        cfg = main.build_app_config(main.load_config(CONFIG_YAML))
+        main.validate_config(cfg)
         # Like every other example, the shipped config ships a placeholder the
         # reader replaces after downloading the pack. A concrete path here would
         # mean someone committed a machine-local model location.
@@ -170,19 +173,19 @@ class TestValidateConfigOnly:
         assert "score_threshold=0.40" in r.stdout
         assert "nms_iou=0.55" in r.stdout
 
-    def test_out_of_range_override_exits_with_code_1(self, tmp_path: Path):
+    def test_out_of_range_override_exits_with_code_2(self, tmp_path: Path):
         config_path = self.write_config(tmp_path, valid_config())
         r = self.run_validate(config_path, "--score", "1.5")
 
-        assert r.returncode == 1
+        assert r.returncode == 2
         assert "decode.score_threshold" in r.stderr
 
-    def test_missing_labels_file_exits_with_code_1(self, tmp_path: Path):
+    def test_missing_labels_file_exits_with_code_2(self, tmp_path: Path):
         raw = valid_config()
         raw["model"]["labels"] = "/nonexistent/pcb_label.txt"
         r = self.run_validate(self.write_config(tmp_path, raw))
 
-        assert r.returncode == 1
+        assert r.returncode == 2
         assert "labels file does not exist" in r.stderr
 
     def test_missing_input_dir_exits_with_code_2(self, tmp_path: Path):
@@ -303,7 +306,8 @@ class TestLabels:
     def test_class_color_is_stable_and_in_range(self):
         assert main.class_color(0) == main.DEFECT_COLORS[0]
         assert main.class_color(len(main.DEFECT_COLORS)) == main.DEFECT_COLORS[0]
-        assert main.class_color(-3) == main.DEFECT_COLORS[0]
+        # Negative ids fold by absolute value, matching the C++ twin.
+        assert main.class_color(-3) == main.DEFECT_COLORS[3]
 
 
 @pytest.mark.unit
@@ -327,185 +331,70 @@ class TestImageDiscovery:
             "pcb_03.jpg",
         ]
 
-    def test_output_path_uses_png_extension(self, tmp_path: Path):
-        out = main.output_path_for(Path("images/pcb_01_missing_hole.jpg"), tmp_path)
-        assert out == tmp_path / "pcb_01_missing_hole.png"
+    def test_output_paths_are_unique_per_input(self, tmp_path: Path):
+        """Distinct inputs must never collapse onto one output file.
+
+        Keeping the source extension is what separates board.jpg from
+        board.png; without it one result would be lost.
+        """
+        inputs = [tmp_path / "board.jpg", tmp_path / "board.png", tmp_path / "board.bmp"]
+        outputs = [main.output_path_for(path, tmp_path / "out") for path in inputs]
+
+        assert len({path.name for path in outputs}) == len(inputs)
+        assert [path.name for path in outputs] == [
+            "board_pcb.jpg", "board_pcb.png", "board_pcb.bmp"
+        ]
+
+    def test_output_never_resolves_onto_its_own_source(self, tmp_path: Path):
+        """A PNG input must not map onto itself even when in/out dirs match."""
+        source = tmp_path / "board.png"
+        assert main.output_path_for(source, tmp_path).resolve() != source.resolve()
 
 
 @pytest.mark.unit
-class TestOutputCleanup:
-    """Validate stale-output removal between runs."""
+class TestDetectionOutput:
+    """A missing detection result must fail, not read as a clean board."""
 
-    def test_stale_images_are_removed(self, tmp_path: Path):
-        input_dir = tmp_path / "in"
-        output_dir = tmp_path / "out"
-        input_dir.mkdir()
-        output_dir.mkdir()
-        (output_dir / "old_a.png").write_bytes(b"x")
-        (output_dir / "old_b.jpg").write_bytes(b"x")
-        (output_dir / "report.txt").write_bytes(b"x")
-
-        assert main.clear_output_images(output_dir, input_dir) == 2
-        assert [p.name for p in output_dir.iterdir()] == ["report.txt"]
-
-    def test_cleanup_is_skipped_when_output_matches_input(self, tmp_path: Path):
-        shared = tmp_path / "images"
-        shared.mkdir()
-        (shared / "pcb_01.jpg").write_bytes(b"x")
-
-        assert main.clear_output_images(shared, shared) == 0
-        assert (shared / "pcb_01.jpg").exists()
-
-
-@pytest.mark.unit
-class TestBboxPayload:
-    """Validate BBOX payload decoding into original image coordinates."""
-
-    def test_record_layout_is_24_bytes(self):
-        assert main.BBOX_RECORD_SIZE == 24
-
-    def test_parses_records_into_xyxy(self):
-        payload = bbox_payload([(10, 20, 30, 40, 0.9, 2)])
-        boxes = main.parse_bbox_payload(payload, 640, 480, 0.25)
-
-        assert len(boxes) == 1
-        assert boxes[0] == {
-            "x1": 10.0, "y1": 20.0, "x2": 40.0, "y2": 60.0,
-            "score": pytest.approx(0.9), "class_id": 2,
-        }
-
-    def test_scores_below_threshold_are_dropped(self):
-        payload = bbox_payload([(10, 10, 20, 20, 0.10, 0), (10, 10, 20, 20, 0.80, 1)])
-        boxes = main.parse_bbox_payload(payload, 640, 480, 0.25)
-
-        assert [b["class_id"] for b in boxes] == [1]
-
-    def test_boxes_are_clamped_to_the_image(self):
-        payload = bbox_payload([(-20, -30, 100, 100, 0.9, 0), (90, 90, 100, 100, 0.9, 1)])
-        boxes = main.parse_bbox_payload(payload, 100, 100, 0.25)
-
-        assert boxes[0]["x1"] == 0.0 and boxes[0]["y1"] == 0.0
-        assert boxes[1]["x2"] == 100.0 and boxes[1]["y2"] == 100.0
-
-    def test_degenerate_boxes_are_dropped(self):
-        payload = bbox_payload([(10, 10, 0, 0, 0.9, 0)])
-
-        assert main.parse_bbox_payload(payload, 640, 480, 0.25) == []
-
-    def test_max_detections_caps_the_parse(self):
-        """max_detections bounds the host parse the way the C++ expected_topk does."""
-        payload = bbox_payload([(10, 10, 20, 20, 0.9, i) for i in range(5)])
-
-        assert len(main.parse_bbox_payload(payload, 640, 480, 0.25, 2)) == 2
-        assert len(main.parse_bbox_payload(payload, 640, 480, 0.25, 0)) == 5
-
-    def test_truncated_payload_uses_available_records(self):
-        """A header count larger than the payload must not over-read."""
-        payload = bbox_payload([(10, 10, 20, 20, 0.9, 0)], declared=5)
-
-        assert len(main.parse_bbox_payload(payload, 640, 480, 0.25)) == 1
-
-    @pytest.mark.parametrize("payload", [b"", b"\x00", b"\x01\x00\x00"])
-    def test_short_payloads_return_no_detections(self, payload):
-        assert main.parse_bbox_payload(payload, 640, 480, 0.25) == []
-
-    def test_header_only_payload_returns_no_detections(self):
-        assert main.parse_bbox_payload(struct.pack("<I", 0), 640, 480, 0.25) == []
-
-
-@pytest.mark.unit
-class TestLetterbox:
-    """Validate the letterbox and its inverse, which must mirror main.cpp."""
+    class _FakeTensor:
+        def __init__(self, detection_format):
+            self.detection_format = detection_format
 
     @staticmethod
-    def frame(width: int, height: int):
-        np = pytest.importorskip("numpy")
-        return np.full((height, width, 3), 200, dtype=np.uint8)
+    def _config(tmp_path: Path):
+        return main.build_app_config({
+            "model": {"path": "m.tar.gz", "labels": str(LABELS_TXT)},
+            "io": {"input_dir": str(tmp_path), "output_dir": str(tmp_path / "out")},
+        })
 
-    def test_rounding_matches_the_cpp_twin(self):
-        """std::round is half-away-from-zero; Python's round() is banker's rounding."""
-        assert main.round_half_up(160.5) == 161
-        assert main.round_half_up(161.5) == 162
-        assert main.round_half_up(160.4999) == 160
-        assert main.round_half_up(0.5) == 1
+    def test_no_output_tensors_raises(self, tmp_path: Path):
+        pytest.importorskip("pyneat")
+        with pytest.raises(RuntimeError, match="no detection tensors"):
+            main.decode_detections([], 640, 640, self._config(tmp_path))
 
-    def test_model_sized_input_is_passed_through_untouched(self):
-        """A 640x640 frame must not be resampled, so results stay bit-exact."""
-        np = pytest.importorskip("numpy")
-        pytest.importorskip("cv2")
-        frame = self.frame(640, 640)
-        lb = main.letterbox(frame, 640)
+    def test_missing_bbox_tensor_raises(self, tmp_path: Path, monkeypatch):
+        """An output route that returns non-detection tensors is a failure.
 
-        assert lb.scale == 1.0 and (lb.pad_x, lb.pad_y) == (0, 0)
-        assert lb.image is frame
-        assert np.array_equal(lb.image, frame)
+        Treating it as zero defects would report an incompatible model package
+        as a clean inspection.
+        """
+        pyneat = pytest.importorskip("pyneat")
+        monkeypatch.setattr(pyneat.detections, "read_detection_format", lambda t: "FEATURE_POINTS_V1")
+        monkeypatch.setattr(pyneat.detections, "format_is_bbox", lambda f: False)
 
-    @pytest.mark.parametrize("width,height", [(1280, 960), (320, 480), (1000, 100), (77, 640)])
-    def test_letterbox_fills_the_square_and_preserves_aspect(self, width, height):
-        pytest.importorskip("cv2")
-        lb = main.letterbox(self.frame(width, height), 640)
+        with pytest.raises(RuntimeError, match="no BBOX detection tensor"):
+            main.decode_detections([self._FakeTensor("FEATURE_POINTS_V1")], 640, 640,
+                                   self._config(tmp_path))
 
-        assert lb.image.shape[:2] == (640, 640)
-        assert lb.scale == pytest.approx(min(640 / width, 640 / height))
-        assert round(width * lb.scale) <= 640 and round(height * lb.scale) <= 640
-        assert lb.pad_x >= 0 and lb.pad_y >= 0
+    def test_valid_empty_result_is_zero_detections_not_an_error(self, tmp_path: Path, monkeypatch):
+        """A BBOX payload with count zero is a real 'no defects' answer."""
+        pyneat = pytest.importorskip("pyneat")
+        monkeypatch.setattr(pyneat.detections, "read_detection_format", lambda t: "BBOX")
+        monkeypatch.setattr(pyneat.detections, "format_is_bbox", lambda f: True)
+        monkeypatch.setattr(pyneat.detections, "decode_bbox_tensor",
+                            lambda *a, **k: types.SimpleNamespace(boxes=[], raw=b""))
 
-    def test_padding_uses_the_yolo_grey(self):
-        pytest.importorskip("cv2")
-        lb = main.letterbox(self.frame(1280, 320), 640)
-
-        assert lb.pad_y > 0, "a wide frame must be padded vertically"
-        assert (lb.image[0, 0] == main.PAD_VALUE).all()
-
-    def test_round_trip_maps_a_box_back_onto_the_source(self):
-        """A box drawn around the whole letterboxed content maps to the whole frame."""
-        pytest.importorskip("cv2")
-        width, height = 1280, 960
-        lb = main.letterbox(self.frame(width, height), 640)
-        content = {
-            "x1": float(lb.pad_x),
-            "y1": float(lb.pad_y),
-            "x2": float(640 - lb.pad_x),
-            "y2": float(640 - lb.pad_y),
-            "score": 0.9,
-            "class_id": 0,
-        }
-
-        mapped = main.to_source_coordinates([content], lb, width, height)
-
-        assert len(mapped) == 1
-        assert mapped[0]["x1"] == pytest.approx(0.0, abs=1.0)
-        assert mapped[0]["y1"] == pytest.approx(0.0, abs=1.0)
-        assert mapped[0]["x2"] == pytest.approx(width, abs=1.0)
-        assert mapped[0]["y2"] == pytest.approx(height, abs=1.0)
-        assert mapped[0]["score"] == pytest.approx(0.9) and mapped[0]["class_id"] == 0
-
-    def test_identity_letterbox_leaves_boxes_untouched(self):
-        pytest.importorskip("cv2")
-        lb = main.letterbox(self.frame(640, 640), 640)
-        box = {"x1": 10.0, "y1": 20.0, "x2": 40.0, "y2": 60.0, "score": 0.5, "class_id": 2}
-
-        assert main.to_source_coordinates([box], lb, 640, 640) == [box]
-
-    def test_mapped_boxes_are_clamped_to_the_source(self):
-        pytest.importorskip("cv2")
-        lb = main.letterbox(self.frame(1280, 960), 640)
-        box = {"x1": -50.0, "y1": -50.0, "x2": 900.0, "y2": 900.0, "score": 0.5, "class_id": 0}
-
-        mapped = main.to_source_coordinates([box], lb, 1280, 960)
-
-        assert mapped[0]["x1"] == 0.0 and mapped[0]["y1"] == 0.0
-        assert mapped[0]["x2"] == 1280.0 and mapped[0]["y2"] == 960.0
-
-    def test_degenerate_mapped_boxes_are_dropped(self):
-        pytest.importorskip("cv2")
-        lb = main.letterbox(self.frame(1280, 960), 640)
-        pad_only = {
-            "x1": 0.0, "y1": 0.0, "x2": 5.0, "y2": float(lb.pad_y),
-            "score": 0.9, "class_id": 0,
-        }
-
-        assert main.to_source_coordinates([pad_only], lb, 1280, 960) == []
+        assert main.decode_detections([self._FakeTensor("BBOX")], 640, 640,
+                                      self._config(tmp_path)) == []
 
 
 @pytest.mark.unit

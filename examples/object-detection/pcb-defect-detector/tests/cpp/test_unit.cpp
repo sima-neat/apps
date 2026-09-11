@@ -77,7 +77,7 @@ bool validate_rejects(const std::string& binary, const std::string& test_name,
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok =
-      expect_true(result.exit_code == 1, message + " is rejected") &&
+      expect_true(result.exit_code == 2, message + " is rejected") &&
       expect_contains(result.stderr_text, expected_error, message + " names the setting");
   remove_dir(config_path.parent_path().string());
   return ok;
@@ -101,7 +101,7 @@ bool test_unknown_flag_is_rejected(const std::string& binary) {
 
 bool test_missing_config_value_is_rejected(const std::string& binary) {
   const auto result = spawn_and_wait(binary, {"--config"}, 20000);
-  return expect_true(result.exit_code == 1, "bare --config exits with code 1") &&
+  return expect_true(result.exit_code == 2, "bare --config exits with code 2") &&
          expect_contains(result.stderr_text, "--config requires a path",
                          "bare --config explains the missing value");
 }
@@ -115,7 +115,7 @@ bool test_missing_config_file_fails_cleanly(const std::string& binary) {
 
 bool test_non_numeric_score_is_rejected(const std::string& binary) {
   const auto result = spawn_and_wait(binary, {"--score", "high"}, 20000);
-  return expect_true(result.exit_code == 1, "non-numeric --score exits with code 1") &&
+  return expect_true(result.exit_code == 2, "non-numeric --score exits with code 2") &&
          expect_contains(result.stderr_text, "--score requires a number",
                          "non-numeric --score explains the expected value");
 }
@@ -168,7 +168,7 @@ bool test_out_of_range_score_override_is_rejected(const std::string& binary) {
   const auto result = spawn_and_wait(
       binary, {"--config", config_path.string(), "--score", "1.5", "--validate-config-only"},
       20000);
-  const bool ok = expect_true(result.exit_code == 1, "out-of-range --score override is rejected") &&
+  const bool ok = expect_true(result.exit_code == 2, "out-of-range --score override is rejected") &&
                   expect_contains(result.stderr_text, "decode.score_threshold",
                                   "override error names decode.score_threshold");
   remove_dir(config_path.parent_path().string());
@@ -186,7 +186,7 @@ bool test_zero_input_size_is_rejected(const std::string& binary) {
                        .append("  input_dir: assets/datasets/pcb\n"));
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok = expect_true(result.exit_code == 1, "zero model.input_size is rejected") &&
+  const bool ok = expect_true(result.exit_code == 2, "zero model.input_size is rejected") &&
                   expect_contains(result.stderr_text, "model.input_size",
                                   "input size error names model.input_size");
   remove_dir(config_path.parent_path().string());
@@ -203,7 +203,7 @@ bool test_missing_model_path_is_rejected(const std::string& binary) {
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok =
-      expect_true(result.exit_code == 1, "config without model.path is rejected") &&
+      expect_true(result.exit_code == 2, "config without model.path is rejected") &&
       expect_contains(result.stderr_text, "model.path", "missing model error names model.path");
   remove_dir(config_path.parent_path().string());
   return ok;
@@ -215,7 +215,7 @@ bool test_missing_labels_file_is_rejected(const std::string& binary) {
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok =
-      expect_true(result.exit_code == 1, "config with a missing labels file is rejected") &&
+      expect_true(result.exit_code == 2, "config with a missing labels file is rejected") &&
       expect_contains(result.stderr_text, "labels file does not exist",
                       "missing labels error names the labels file");
   remove_dir(config_path.parent_path().string());
@@ -238,7 +238,7 @@ bool test_empty_labels_file_is_rejected(const std::string& binary) {
   const auto result =
       spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
   const bool ok =
-      expect_true(result.exit_code == 1, "config with an empty labels file is rejected") &&
+      expect_true(result.exit_code == 2, "config with an empty labels file is rejected") &&
       expect_contains(result.stderr_text, "labels file is empty",
                       "empty labels error names the labels file");
   remove_dir(temp_dir);
