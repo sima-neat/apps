@@ -18,7 +18,7 @@ Batch visual inspection of printed circuit boards with a custom-trained YOLO26n
 detector. Every image in a folder is run on the MLA and saved back annotated with
 defect boxes and labels.
 
-Images of any resolution are accepted and may be mixed in one folder. Core
+Images of any resolution up to the configured capacity are accepted and may be mixed in one folder. Core
 letterboxes each one to the model input on device, so boxes are drawn on the
 full-resolution source image.
 

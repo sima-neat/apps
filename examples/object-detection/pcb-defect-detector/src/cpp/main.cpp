@@ -42,7 +42,6 @@ constexpr int kDefaultMaxDetections = 300;
 constexpr int kDefaultTimeoutMs = 8000;
 constexpr int kDefaultNumRuns = 1;
 constexpr int kDefaultQueueDepth = 8;
-constexpr int kDefaultInputSize = 640;
 // Floor for the one-off priming run of the graph seed.
 constexpr int kWarmupTimeoutMs = 30000;
 // Appended to the stem of every annotated image.
@@ -54,7 +53,6 @@ constexpr int kDefaultInputMaxHeight = 2160;
 struct Config {
   std::string model_path;
   std::string labels_path;
-  int input_size = kDefaultInputSize;
   int input_max_width = kDefaultInputMaxWidth;
   int input_max_height = kDefaultInputMaxHeight;
   std::string input_dir;
@@ -138,7 +136,6 @@ Config load_config(const CliOptions& cli) {
   cfg.model_path = raw.string_or("model.path", "");
   cfg.labels_path = raw.string_or(
       "model.labels", "examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt");
-  cfg.input_size = raw.int_or("model.input_size", kDefaultInputSize);
   cfg.input_max_width = raw.int_or("model.input_max_width", kDefaultInputMaxWidth);
   cfg.input_max_height = raw.int_or("model.input_max_height", kDefaultInputMaxHeight);
   cfg.input_dir = raw.string_or("io.input_dir", "assets/datasets/pcb");
@@ -165,9 +162,6 @@ Config load_config(const CliOptions& cli) {
   }
   if (cfg.labels_path.empty()) {
     throw std::runtime_error("model.labels must point to a labels file");
-  }
-  if (cfg.input_size < 1) {
-    throw std::runtime_error("model.input_size must be >= 1");
   }
   if (cfg.input_max_width < 1) {
     throw std::runtime_error("model.input_max_width must be >= 1");
@@ -248,7 +242,10 @@ cv::Scalar class_color(int class_id) {
   static const std::array<cv::Scalar, 6> kColors = {
       cv::Scalar(56, 56, 255), cv::Scalar(29, 178, 255), cv::Scalar(10, 249, 72),
       cv::Scalar(255, 194, 0), cv::Scalar(255, 0, 200),  cv::Scalar(49, 210, 207)};
-  const size_t index = static_cast<size_t>(static_cast<unsigned>(class_id)) % kColors.size();
+  // Fold by absolute value, matching the Python twin. Widened first so that
+  // negating INT_MIN is not signed overflow.
+  const long long folded = class_id < 0 ? -static_cast<long long>(class_id) : class_id;
+  const size_t index = static_cast<size_t>(folded) % kColors.size();
   return kColors[index];
 }
 
@@ -312,7 +309,7 @@ std::vector<simaai::neat::Box> decode_detections(const simaai::neat::TensorList&
     throw std::runtime_error(
         "model returned no BBOX detection tensor (format: '" +
         (detection_format.empty() ? std::string("<none>") : detection_format) +
-        "'); check that the model package matches decode.decode_type");
+        "'); the model package must expose YOLO26 BoxDecode output");
   }
 
   // strict=true rejects a truncated or over-long payload instead of decoding it
@@ -390,7 +387,6 @@ int main(int argc, char** argv) {
 
   if (cli.validate_only) {
     std::cout << "[validate] model=" << cfg.model_path << " classes=" << labels.size()
-              << " input_size=" << cfg.input_size
               << " score_threshold=" << cv::format("%.2f", cfg.score_threshold)
               << " nms_iou=" << cv::format("%.2f", cfg.nms_iou)
               << " max_detections=" << cfg.max_detections << " timeout_ms=" << cfg.timeout_ms

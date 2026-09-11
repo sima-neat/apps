@@ -137,8 +137,6 @@ bool test_shipped_config_validates(const std::string& binary) {
   const bool ok = expect_true(result.exit_code == 0, "shipped config validates") &&
                   expect_contains(result.stdout_text, "classes=6",
                                   "validate output reports the six defect classes") &&
-                  expect_contains(result.stdout_text, "input_size=640",
-                                  "validate output reports the model input size") &&
                   expect_contains(result.stdout_text, "max_detections=300",
                                   "validate output reports the decode cap") &&
                   expect_contains(result.stdout_text, "configuration OK",
@@ -171,24 +169,6 @@ bool test_out_of_range_score_override_is_rejected(const std::string& binary) {
   const bool ok = expect_true(result.exit_code == 2, "out-of-range --score override is rejected") &&
                   expect_contains(result.stderr_text, "decode.score_threshold",
                                   "override error names decode.score_threshold");
-  remove_dir(config_path.parent_path().string());
-  return ok;
-}
-
-bool test_zero_input_size_is_rejected(const std::string& binary) {
-  const fs::path config_path =
-      write_config("test_zero_input_size_is_rejected",
-                   std::string("model:\n")
-                       .append("  path: models/yolo26n_plc_mpk.tar.gz\n")
-                       .append("  labels: " + std::string(kShippedLabels) + "\n")
-                       .append("  input_size: 0\n")
-                       .append("io:\n")
-                       .append("  input_dir: assets/datasets/pcb\n"));
-  const auto result =
-      spawn_and_wait(binary, {"--config", config_path.string(), "--validate-config-only"}, 20000);
-  const bool ok = expect_true(result.exit_code == 2, "zero model.input_size is rejected") &&
-                  expect_contains(result.stderr_text, "model.input_size",
-                                  "input size error names model.input_size");
   remove_dir(config_path.parent_path().string());
   return ok;
 }
@@ -304,7 +284,6 @@ int main(int argc, char** argv) {
   ok &= test_shipped_config_validates(binary);
   ok &= test_cli_overrides_apply(binary);
   ok &= test_out_of_range_score_override_is_rejected(binary);
-  ok &= test_zero_input_size_is_rejected(binary);
   ok &= test_missing_model_path_is_rejected(binary);
   ok &= test_missing_labels_file_is_rejected(binary);
   ok &= test_empty_labels_file_is_rejected(binary);

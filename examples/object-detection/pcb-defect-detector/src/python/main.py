@@ -30,7 +30,6 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 
 # Appended to the stem of every annotated image.
 OUTPUT_TAG = "_pcb"
-DEFAULT_INPUT_SIZE = 640
 # Floor for the one-off priming run of the graph seed.
 WARMUP_TIMEOUT_MS = 30000
 # Ingress capacity of the graph; boards up to this size share one graph.
@@ -54,7 +53,6 @@ class AppConfig:
 
     model_path: str
     labels_path: Path
-    input_size: int
     input_max_width: int
     input_max_height: int
     input_dir: Path
@@ -126,7 +124,6 @@ def build_app_config(raw: dict) -> AppConfig:
             "labels",
             "examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt",
         ))),
-        input_size=_int(model_cfg, "input_size", DEFAULT_INPUT_SIZE, "model.input_size"),
         input_max_width=_int(model_cfg, "input_max_width", DEFAULT_INPUT_MAX_WIDTH,
                              "model.input_max_width"),
         input_max_height=_int(model_cfg, "input_max_height", DEFAULT_INPUT_MAX_HEIGHT,
@@ -150,8 +147,6 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("model.path must be set to a compiled model package")
     if not str(cfg.labels_path):
         raise ValueError("model.labels must point to a labels file")
-    if cfg.input_size < 1:
-        raise ValueError(f"model.input_size must be >= 1, got {cfg.input_size}")
     if cfg.input_max_width < 1:
         raise ValueError(f"model.input_max_width must be >= 1, got {cfg.input_max_width}")
     if cfg.input_max_height < 1:
@@ -231,7 +226,7 @@ def decode_detections(outputs, img_w: int, img_h: int, cfg: AppConfig) -> list[d
     if not detection_format or not pyneat.detections.format_is_bbox(detection_format):
         raise RuntimeError(
             f"model returned no BBOX detection tensor (format: '{detection_format or '<none>'}'); "
-            "check that the model package matches decode.decode_type"
+            "the model package must expose YOLO26 BoxDecode output"
         )
 
     # strict=True rejects a truncated or over-long payload instead of decoding it
@@ -352,7 +347,6 @@ def main() -> int:
     if args.validate_config_only:
         print(
             f"[validate] model={cfg.model_path} classes={len(labels)} "
-            f"input_size={cfg.input_size} "
             f"score_threshold={cfg.score_threshold:.2f} nms_iou={cfg.nms_iou:.2f} "
             f"max_detections={cfg.max_detections} timeout_ms={cfg.timeout_ms} "
             f"num_runs={cfg.num_runs} queue_depth={cfg.queue_depth}"

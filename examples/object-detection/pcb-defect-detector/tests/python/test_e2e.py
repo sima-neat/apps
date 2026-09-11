@@ -175,7 +175,7 @@ class TestE2E:
         )
 
         # Distinct sizes, all larger than the model input, so every image needs a
-        # real letterbox and the batch spans more than one graph.
+        # real letterbox through the single graph.
         scales = [2.0, 1.5, 1.25]
         mixed_dir = tmp_output_dir.parent / "mixed-input"
         mixed_dir.mkdir(parents=True, exist_ok=True)

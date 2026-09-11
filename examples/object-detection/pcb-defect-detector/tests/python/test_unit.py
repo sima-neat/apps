@@ -29,7 +29,7 @@ _SPEC.loader.exec_module(main)
 
 def valid_config() -> dict:
     return {
-        "model": {"path": "models/pack.tar.gz", "labels": str(LABELS_TXT), "input_size": 640},
+        "model": {"path": "models/pack.tar.gz", "labels": str(LABELS_TXT)},
         "io": {"input_dir": "assets/datasets/pcb", "output_dir": "sandbox/pcb-defect-detector"},
         "decode": {"score_threshold": 0.25, "nms_iou": 0.45, "max_detections": 300},
         "runtime": {"timeout_ms": 8000, "num_runs": 1, "queue_depth": 8},
@@ -80,9 +80,13 @@ class TestArgParsing:
         assert main.parse_args([]).config == CONFIG_YAML
 
 
-@pytest.fixture(autouse=True)
-def _bind_runtime_modules():
-    """main() binds cv2/np/pyneat as module globals; unit tests call helpers directly."""
+@pytest.fixture
+def runtime_modules():
+    """Bind cv2/np/pyneat onto the module the way main() does.
+
+    Requested only by the few tests that call a helper needing them, so the
+    host-only tests still run (and fail) on a machine without the runtime.
+    """
     for attr, name in (("cv2", "cv2"), ("np", "numpy"), ("pyneat", "pyneat")):
         if getattr(main, attr, None) is None:
             module = pytest.importorskip(name)
@@ -103,13 +107,11 @@ class TestConfigLoading:
         assert cfg.model_path == "<model-path>"
         assert cfg.labels_path.name == "pcb_label.txt"
         assert cfg.input_dir == Path("assets/datasets/pcb")
-        assert cfg.input_size == 640
         assert cfg.max_detections == 300
 
     def test_defaults_apply_to_missing_sections(self):
         cfg = main.build_app_config({"model": {"path": "models/pack.tar.gz", "labels": "l.txt"}})
         assert cfg.score_threshold == pytest.approx(0.25)
-        assert cfg.input_size == 640
         assert cfg.max_detections == 300
         assert cfg.profile is False
 
@@ -126,7 +128,6 @@ class TestConfigLoading:
             ("decode", "score_threshold", -0.1),
             ("decode", "nms_iou", 1.2),
             ("decode", "max_detections", 0),
-            ("model", "input_size", 0),
             ("runtime", "timeout_ms", 0),
             ("runtime", "num_runs", 0),
             ("runtime", "queue_depth", 0),
@@ -366,12 +367,12 @@ class TestDetectionOutput:
             "io": {"input_dir": str(tmp_path), "output_dir": str(tmp_path / "out")},
         })
 
-    def test_no_output_tensors_raises(self, tmp_path: Path):
+    def test_no_output_tensors_raises(self, tmp_path: Path, runtime_modules):
         pytest.importorskip("pyneat")
         with pytest.raises(RuntimeError, match="no detection tensors"):
             main.decode_detections([], 640, 640, self._config(tmp_path))
 
-    def test_missing_bbox_tensor_raises(self, tmp_path: Path, monkeypatch):
+    def test_missing_bbox_tensor_raises(self, tmp_path: Path, monkeypatch, runtime_modules):
         """An output route that returns non-detection tensors is a failure.
 
         Treating it as zero defects would report an incompatible model package
@@ -385,7 +386,7 @@ class TestDetectionOutput:
             main.decode_detections([self._FakeTensor("FEATURE_POINTS_V1")], 640, 640,
                                    self._config(tmp_path))
 
-    def test_valid_empty_result_is_zero_detections_not_an_error(self, tmp_path: Path, monkeypatch):
+    def test_valid_empty_result_is_zero_detections_not_an_error(self, tmp_path: Path, monkeypatch, runtime_modules):
         """A BBOX payload with count zero is a real 'no defects' answer."""
         pyneat = pytest.importorskip("pyneat")
         monkeypatch.setattr(pyneat.detections, "read_detection_format", lambda t: "BBOX")
@@ -401,7 +402,7 @@ class TestDetectionOutput:
 class TestOverlay:
     """Validate the annotation overlay."""
 
-    def test_overlay_changes_pixels(self):
+    def test_overlay_changes_pixels(self, runtime_modules):
         np = pytest.importorskip("numpy")
         pytest.importorskip("cv2")
 
@@ -415,7 +416,7 @@ class TestOverlay:
 
         assert not np.array_equal(before, frame)
 
-    def test_overlay_skips_degenerate_boxes(self):
+    def test_overlay_skips_degenerate_boxes(self, runtime_modules):
         np = pytest.importorskip("numpy")
         pytest.importorskip("cv2")
 

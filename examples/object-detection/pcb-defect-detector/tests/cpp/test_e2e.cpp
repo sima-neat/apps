@@ -557,9 +557,14 @@ int main(int argc, char** argv) {
     }
 
     if (!sealed) {
-      std::cout << "[SKIP] " << readonly_out
-                << " is still writable, so the write-failure path cannot be exercised "
-                   "(running as root?)\n";
+      // Strict mode must not pass on an unverified scenario; the Python twin
+      // routes the same condition through skip_unless_e2e_ready.
+      const int outcome = skip_or_fail(readonly_out.string() +
+                                       " is still writable, so the write-failure path cannot be "
+                                       "exercised (running as root?)");
+      if (outcome != kSkipCode) {
+        rc = outcome;
+      }
     } else {
       const auto denied = spawn_and_wait(binary, {"--config", readonly_config.string()}, timeout);
       const std::string done = extract_line(denied.stdout_text, "Done: ");

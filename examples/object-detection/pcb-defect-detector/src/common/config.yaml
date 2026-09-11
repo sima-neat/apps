@@ -1,7 +1,6 @@
 model:                       # PCB defect detector model selection.
   path: <model-path>         # Example: models/<model-pack>.tar.gz
   labels: examples/object-detection/pcb-defect-detector/src/common/pcb_label.txt
-  input_size: 640            # Model input size declared by the compiled package.
   input_max_width: 3840      # Largest input width one graph accepts (ingress capacity).
   input_max_height: 2160     # Largest input height one graph accepts.
 
