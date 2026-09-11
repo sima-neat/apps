@@ -522,6 +522,49 @@ int main(int argc, char** argv) {
     remove_dir(timeout_out.string());
   }
 
+  // One directory for both input and output would make outputs become inputs.
+  //
+  // An annotated image written for one board would be re-read as a source for a
+  // later board in the same run, and a rerun would discover the previous outputs
+  // as fresh inputs.
+  if (rc == 0) {
+    const auto shared = fs::path(out_dir).parent_path() / "shared-io";
+    fs::create_directories(shared);
+    std::ofstream(shared / "board.jpg") << "not a real jpeg";
+
+    const fs::path shared_config = fs::path(out_dir).parent_path() / "config_shared.yaml";
+    write_e2e_config(kExample, shared_config,
+                     {{"model.path", model_path},
+                      {"model.labels", labels_file},
+                      {"io.input_dir", shared.string()},
+                      {"io.output_dir", shared.string()}});
+
+    const auto shared_run = spawn_and_wait(binary, {"--config", shared_config.string()}, timeout);
+    bool wrote_output = false;
+    for (const auto& entry : fs::directory_iterator(shared)) {
+      if (entry.path().filename().string().find("_pcb.") != std::string::npos) {
+        wrote_output = true;
+      }
+    }
+
+    if (shared_run.exit_code != 2) {
+      std::cerr << "[FAIL] a shared input/output directory must exit 2, got "
+                << shared_run.exit_code << "\n";
+      std::cerr << "stderr:\n" << shared_run.stderr_text << "\n";
+      rc = 1;
+    } else if (shared_run.stderr_text.find("must differ") == std::string::npos) {
+      std::cerr << "[FAIL] the rejection must name the constraint\n";
+      std::cerr << "stderr:\n" << shared_run.stderr_text << "\n";
+      rc = 1;
+    } else if (wrote_output) {
+      std::cerr << "[FAIL] nothing may be written into a rejected shared directory\n";
+      rc = 1;
+    } else {
+      std::cout << "[OK] a shared input/output directory is rejected before anything is written\n";
+    }
+    remove_dir(shared.string());
+  }
+
   // A save that fails must be reported, not counted as a processed image. The
   // application checks the image writer's return value; nothing else in this
   // suite drives that branch.

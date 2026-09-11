@@ -14,6 +14,7 @@ input image.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from collections import Counter
@@ -22,6 +23,26 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
+
+
+class _ConfigLoader(yaml.SafeLoader):
+    """SafeLoader that leaves yes/no/on/off as strings.
+
+    PyYAML follows YAML 1.1 and coerces those to booleans, but the C++ parser
+    accepts only true/false. Narrowing the resolver keeps both twins rejecting
+    the same spellings.
+    """
+
+
+_ConfigLoader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) for tag, regexp in resolvers if tag != "tag:yaml.org,2002:bool"]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_ConfigLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
@@ -74,7 +95,7 @@ def format_counts(counts) -> str:
 
 def load_config(path: Path) -> dict:
     with Path(path).open("r", encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
+        raw = yaml.load(handle, Loader=_ConfigLoader) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"config root must be a mapping: {path}")
     return raw
@@ -110,6 +131,22 @@ def _float(section: dict, key: str, default: float, name: str) -> float:
     return float(value)
 
 
+def _bool(section: dict, key: str, default: bool, name: str) -> bool:
+    """Boolean config value, accepting the same spellings as the C++ parser.
+
+    A quoted YAML scalar arrives as a string, and every nonempty string is
+    truthy in Python, so "false" would silently mean True.
+    """
+    value = section.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
 def build_app_config(raw: dict) -> AppConfig:
     """Map a parsed config mapping onto AppConfig without validating it."""
     model_cfg = _section(raw, "model")
@@ -136,8 +173,8 @@ def build_app_config(raw: dict) -> AppConfig:
         timeout_ms=_int(runtime_cfg, "timeout_ms", 8000, "runtime.timeout_ms"),
         num_runs=_int(runtime_cfg, "num_runs", 1, "runtime.num_runs"),
         queue_depth=_int(runtime_cfg, "queue_depth", 8, "runtime.queue_depth"),
-        profile=bool(runtime_cfg.get("profile", False)),
-        overlay=bool(output_cfg.get("overlay", True)),
+        profile=_bool(runtime_cfg, "profile", False, "runtime.profile"),
+        overlay=_bool(output_cfg, "overlay", True, "output.overlay"),
     )
 
 
@@ -356,6 +393,14 @@ def main() -> int:
 
     if not cfg.input_dir.is_dir():
         print(f"Input directory does not exist: {cfg.input_dir}", file=sys.stderr)
+        return 2
+
+    # Sharing one directory corrupts the run: an annotated image written for one
+    # board is re-read as a source for a later one, and a rerun discovers the
+    # previous outputs as new inputs.
+    if cfg.input_dir.resolve() == cfg.output_dir.resolve():
+        print("Error: io.output_dir must differ from io.input_dir; annotated images written "
+              "beside their sources are re-read as inputs.", file=sys.stderr)
         return 2
 
     try:

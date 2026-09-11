@@ -407,6 +407,39 @@ class TestE2E:
             f"processed\nstderr:\n{result.stderr}"
         )
 
+    def test_shared_input_and_output_directory_is_rejected(
+        self, apps_root, tmp_output_dir, test_timeout_ms, e2e_config_writer,
+    ):
+        """One directory for both would make outputs become inputs.
+
+        An annotated image written for one board would be re-read as a source for
+        a later board in the same run, and a rerun would discover the previous
+        outputs as fresh inputs.
+        """
+        shared = tmp_output_dir / "shared"
+        shared.mkdir(parents=True, exist_ok=True)
+        (shared / "board.jpg").write_bytes(b"not a real jpeg")
+
+        config_path = e2e_config_writer({
+            "io": {"input_dir": str(shared), "output_dir": str(shared)},
+        })
+        result = subprocess.run(
+            [sys.executable, str(MAIN_PY), "--config", str(config_path)],
+            capture_output=True, text=True, timeout=test_timeout_ms / 1000,
+            cwd=str(EXAMPLE_DIR),
+        )
+
+        assert result.returncode == 2, (
+            f"a shared input/output directory must exit 2, got {result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert "must differ" in result.stderr, (
+            f"the rejection must name the constraint\nstderr:\n{result.stderr}"
+        )
+        assert not any(p.name.endswith("_pcb.jpg") for p in shared.iterdir()), (
+            "nothing may be written into a rejected shared directory"
+        )
+
     def test_missing_input_directory_fails(self, apps_root, tmp_output_dir, e2e_config_writer,
                                            test_timeout_ms, skip_unless_e2e_ready):
         """A batch that cannot run must report failure, not success."""

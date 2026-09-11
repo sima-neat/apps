@@ -115,6 +115,24 @@ class TestConfigLoading:
         assert cfg.max_detections == 300
         assert cfg.profile is False
 
+    @pytest.mark.parametrize("raw_value,expected", [
+        (True, True), (False, False), ("true", True), ("false", False),
+        ("True", True), ("FALSE", False),
+    ])
+    def test_quoted_booleans_match_the_cpp_parser(self, raw_value, expected):
+        """A quoted "false" must not be read as True; every nonempty str is truthy."""
+        raw = valid_config()
+        raw["output"] = {"overlay": raw_value}
+        assert main.build_app_config(raw).overlay is expected
+
+    @pytest.mark.parametrize("bad", ["yes", "no", "1", "0", 1, 0, ""])
+    def test_non_boolean_values_are_rejected(self, bad):
+        """The C++ parser accepts only true/false; Python must agree."""
+        raw = valid_config()
+        raw["runtime"] = {"profile": bad}
+        with pytest.raises(ValueError, match="runtime.profile must be true or false"):
+            main.build_app_config(raw)
+
     def test_missing_model_path_is_rejected(self):
         raw = valid_config()
         raw["model"]["path"] = ""

@@ -403,6 +403,17 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // Sharing one directory corrupts the run: an annotated image written for one
+  // board is re-read as a source for a later one, and a rerun discovers the
+  // previous outputs as new inputs.
+  std::error_code same_error;
+  if (fs::weakly_canonical(input_dir, same_error) ==
+      fs::weakly_canonical(output_dir, same_error)) {
+    std::cerr << "Error: io.output_dir must differ from io.input_dir; annotated images written "
+                 "beside their sources are re-read as inputs.\n";
+    return 2;
+  }
+
   std::vector<fs::path> images;
   try {
     images = discover_images(input_dir);
