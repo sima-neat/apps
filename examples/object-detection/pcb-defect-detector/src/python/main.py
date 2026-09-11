@@ -111,24 +111,39 @@ def _section(raw: dict, name: str) -> dict:
     return section
 
 
+_INT_TEXT = re.compile(r"^[+-]?[0-9]+$")
+
+
 def _int(section: dict, key: str, default: int, name: str) -> int:
-    """Integer config value; a fractional or non-numeric value is an error."""
+    """Integer config value, accepting the same spellings as the C++ parser.
+
+    The C++ parser unquotes before parsing, so "8000" and 8000 are the same
+    setting. A YAML float such as 1.0 reaches it as the text "1.0", which it
+    rejects, so it is rejected here too.
+    """
     value = section.get(key)
     if value is None:
         return default
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value:
-        raise ValueError(f"{name} must be an integer, got {value!r}")
-    return int(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and _INT_TEXT.match(value.strip()):
+        return int(value)
+    raise ValueError(f"{name} must be an integer, got {value!r}")
 
 
 def _float(section: dict, key: str, default: float, name: str) -> float:
-    """Floating-point config value; a non-numeric value is an error."""
+    """Floating-point config value, accepting the same spellings as the C++ parser."""
     value = section.get(key)
     if value is None:
         return default
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be numeric, got {value!r}")
-    return float(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str) and "_" not in value:
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    raise ValueError(f"{name} must be numeric, got {value!r}")
 
 
 def _bool(section: dict, key: str, default: bool, name: str) -> bool:

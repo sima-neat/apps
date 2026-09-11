@@ -133,6 +133,40 @@ class TestConfigLoading:
         with pytest.raises(ValueError, match="runtime.profile must be true or false"):
             main.build_app_config(raw)
 
+    @pytest.mark.parametrize("raw_value,expected", [
+        (8000, 8000), ("8000", 8000), ("+8000", 8000), (" 8000 ", 8000),
+    ])
+    def test_quoted_integers_match_the_cpp_parser(self, raw_value, expected):
+        """The C++ parser unquotes before parsing, so "8000" is the same setting."""
+        raw = valid_config()
+        raw["runtime"]["timeout_ms"] = raw_value
+        assert main.build_app_config(raw).timeout_ms == expected
+
+    @pytest.mark.parametrize("bad", [1.0, 1.5, "1.0", "8e3", "abc", "", True, "1_0"])
+    def test_non_integer_values_are_rejected(self, bad):
+        """The C++ parser rejects anything stoi cannot fully consume; Python must agree."""
+        raw = valid_config()
+        raw["runtime"]["num_runs"] = bad
+        with pytest.raises(ValueError, match="runtime.num_runs must be an integer"):
+            main.build_app_config(raw)
+
+    @pytest.mark.parametrize("raw_value,expected", [
+        (0.25, 0.25), ("0.25", 0.25), (1, 1.0), ("1", 1.0), ("2.5e-1", 0.25),
+    ])
+    def test_quoted_floats_match_the_cpp_parser(self, raw_value, expected):
+        """A quoted "0.25" parses in C++ via stod; Python must accept it too."""
+        raw = valid_config()
+        raw["decode"]["score_threshold"] = raw_value
+        assert main.build_app_config(raw).score_threshold == pytest.approx(expected)
+
+    @pytest.mark.parametrize("bad", ["abc", "", True, "0_25"])
+    def test_non_numeric_values_are_rejected(self, bad):
+        """The C++ parser rejects anything stod cannot fully consume; Python must agree."""
+        raw = valid_config()
+        raw["decode"]["nms_iou"] = bad
+        with pytest.raises(ValueError, match="decode.nms_iou must be numeric"):
+            main.build_app_config(raw)
+
     def test_missing_model_path_is_rejected(self):
         raw = valid_config()
         raw["model"]["path"] = ""
