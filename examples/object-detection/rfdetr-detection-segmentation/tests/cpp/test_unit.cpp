@@ -58,14 +58,8 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> labels(91, "unused");
   labels[1] = "person";
-  std::vector<float> boxes(1200, 0.0F);
-  boxes[0] = 0.5F;
-  boxes[1] = 0.5F;
-  boxes[2] = 0.5F;
-  boxes[3] = 0.25F;
-  std::vector<float> logits(27300, -20.0F);
-  logits[1] = 10.0F;
-  const auto objects = postprocess(boxes, logits, 1920, 1080, labels, 0.5F, 10, 300);
+  const std::vector<float> boxes = {480, 405, 1440, 675, 1.0F, 0, 480, 405, 1440, 675, 0.99F, 1};
+  const auto objects = postprocess(boxes, 1920, 1080, labels, 0.5F, 10);
   if (objects.size() != 1U || objects[0].label != "person" ||
       std::abs(objects[0].x - 480.0F) > 0.01F || std::abs(objects[0].y - 405.0F) > 0.01F ||
       std::abs(objects[0].w - 960.0F) > 0.01F || std::abs(objects[0].h - 270.0F) > 0.01F) {
@@ -79,26 +73,16 @@ int main(int argc, char** argv) {
   segmentation_config.min_score = 0.3F;
   segmentation_config.max_results = 1;
   segmentation_config.mask_threshold = 0.08F;
-  std::vector<float> segmentation_boxes(200U * 4U, 0.0F);
-  segmentation_boxes[0] = 0.5F;
-  segmentation_boxes[1] = 0.5F;
-  segmentation_boxes[2] = 0.5F;
-  segmentation_boxes[3] = 0.5F;
-  std::copy_n(segmentation_boxes.begin(), 4, segmentation_boxes.begin() + 4);
-  std::vector<float> segmentation_logits(200U * 91U, -20.0F);
-  segmentation_logits[0] = 12.0F;
-  segmentation_logits[1] = 11.0F;
-  segmentation_logits[91U + 1U] = 10.0F;
-  std::vector<float> masks(108U * 108U * 200U, -20.0F);
+  const std::vector<float> segmentation_boxes = {320, 180,   960, 540, 1.0F, 0,   320, 180,   960,
+                                                 540, 0.99F, 1,   320, 180,  960, 540, 0.98F, 1};
+  std::vector<float> masks(3U * 108U * 108U, 0.0F);
   for (int y = 40; y < 68; ++y) {
-    for (int x = 40; x < 68; ++x) {
-      masks[static_cast<std::size_t>((y * 108 + x) * 200)] = 10.0F;
-    }
+    for (int x = 40; x < 68; ++x)
+      masks[(2U * 108U + y) * 108U + x] = 1.0F;
   }
   TransformerOutputs segmentation_output{
-      neat::Tensor::from_vector(segmentation_boxes, {1, 200, 4}, neat::TensorMemory::CPU),
-      neat::Tensor::from_vector(segmentation_logits, {1, 200, 91}, neat::TensorMemory::CPU),
-      neat::Tensor::from_vector(masks, {108, 108, 200}, neat::TensorMemory::CPU),
+      neat::Tensor::from_vector(segmentation_boxes, {3, 6}, neat::TensorMemory::CPU),
+      neat::Tensor::from_vector(masks, {3, 108, 108}, neat::TensorMemory::CPU),
   };
   for (const int grid_size : {108, 432, 640}) {
     segmentation_config.mask_grid_size = grid_size;
@@ -119,6 +103,71 @@ int main(int argc, char** argv) {
       std::cerr << "[FAIL] segmentation metadata must contain a labeled polygon\n";
       ++failures;
     }
+  }
+
+  // Inclusive cutoffs, clipping and repeated selected-mask associations.
+  const std::vector<float> boundary_boxes = {-2, -3, 20, 15, 0.5F, 1, -2, -3, 20, 15, 0.5F, 1};
+  const auto boundary_objects = postprocess(boundary_boxes, 13, 9, labels, 0.5F, 2);
+  if (boundary_objects.size() != 2U || boundary_objects[0].x != 0 || boundary_objects[0].y != 0 ||
+      boundary_objects[0].w != 13 || boundary_objects[0].h != 9 ||
+      !postprocess({}, 13, 9, labels, 0.5F, 2).empty()) {
+    std::cerr << "[FAIL] decoded boxes must preserve equality, repeats and clipping\n";
+    ++failures;
+  }
+  segmentation_config.min_score = 0.5F;
+  segmentation_config.mask_threshold = 0.5F;
+  segmentation_config.mask_grid_size = 108;
+  segmentation_config.max_results = 2;
+  auto boundary_output = [&](int count, float probability) {
+    if (count == 0) {
+      const uint32_t header[] = {0x31564452, 1, 40, 0, 40, 40, 0, 108, 108, 2};
+      std::vector<uint8_t> bytes(sizeof(header));
+      std::memcpy(bytes.data(), header, sizeof(header));
+      auto wire = neat::Tensor::from_vector(bytes, {40}, neat::TensorMemory::CPU);
+      neat::tag_detection_format(wire, "RFDETR_V1");
+      auto decoded = neat::decode_segmentation({wire}).front();
+      return TransformerOutputs{decoded.boxes, decoded.masks};
+    }
+    return TransformerOutputs{
+        neat::Tensor::from_vector(
+            std::vector<float>(boundary_boxes.begin(), boundary_boxes.begin() + count * 6),
+            {count, 6}, neat::TensorMemory::CPU),
+        neat::Tensor::from_vector(std::vector<float>(count * 108U * 108U, probability),
+                                  {count, 108, 108}, neat::TensorMemory::CPU)};
+  };
+  const auto repeated_output = boundary_output(2, 0.5F);
+  const auto boundary_segments = nlohmann::json::parse(
+      segmentation_metadata(repeated_output, 13, 9, labels, segmentation_config));
+  nlohmann::json expected_segments = nlohmann::json::array();
+  for (int i = 1; i <= 2; ++i) {
+    expected_segments.push_back({{"id", "seg_" + std::to_string(i)},
+                                 {"label", "person"},
+                                 {"confidence", 0.5},
+                                 {"bbox", {0, 0, 13, 9}},
+                                 {"mask_format", "polygon"},
+                                 {"mask", {{0, 0}, {0, 8}, {12, 8}, {12, 0}}}});
+  }
+  if (boundary_segments.at("segments") != expected_segments) {
+    std::cerr << "[FAIL] native equality masks must preserve exact clipped polygons\n";
+    ++failures;
+  }
+  for (const auto& output :
+       {boundary_output(0, 0.5F), boundary_output(2, std::nextafter(0.5F, 0.0F))}) {
+    const auto empty =
+        nlohmann::json::parse(segmentation_metadata(output, 13, 9, labels, segmentation_config));
+    if (!empty.at("segments").empty()) {
+      std::cerr << "[FAIL] empty/below-threshold masks must clear segments\n";
+      ++failures;
+    }
+  }
+  auto long_labels = labels;
+  long_labels[1] = std::string(kMetadataByteBudget / 2, 'x');
+  const auto limited =
+      segmentation_metadata(repeated_output, 13, 9, long_labels, segmentation_config);
+  if (nlohmann::json::parse(limited).at("segments").size() != 1U ||
+      limited.size() > kMetadataByteBudget) {
+    std::cerr << "[FAIL] metadata budget must truncate only complete segments\n";
+    ++failures;
   }
 
   const std::string temp_dir =
