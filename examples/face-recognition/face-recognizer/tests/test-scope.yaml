@@ -1,0 +1,75 @@
+models:
+  scrfd:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/scrfd_2.5g_bnkps.mla_mpk.tar.gz
+    file: scrfd_2.5g_bnkps.mla_mpk.tar.gz
+  arcface:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/w600k_r50.surgery_mpk.tar.gz
+    file: w600k_r50.surgery_mpk.tar.gz
+
+# ── Test assets ───────────────────────────────────────────────────────────────
+# These files enable the face-detection assertion and recognition check in the
+# E2E test.  Download them once and point the env vars below at the local paths.
+#
+# NOTE: Google Drive links are reference-only — automated download via CI scripts
+# is not supported because Drive imposes confirmation tokens on large files and
+# per-user quotas.  Host on a stable CDN (e.g. docs.sima.ai) to enable CI
+# auto-download via download_models.sh.
+#
+# Test video  (H.264/MP4, contains faces for detection + recognition):
+#   https://drive.google.com/file/d/18uSg5S4CEUBWuCNM2rjs_8CF0B5taJ9v/view
+#   → set as SIMANEAT_APPS_TEST_INPUT_VIDEO=/path/to/face_test.mp4
+#
+# Test gallery (pre-enrolled gallery.bin for the identities in the test video):
+#   https://drive.google.com/file/d/1BTOMCMQzUG2dkIhrr1q1SdDoRe2g1v5f/view
+#   → set as SIMANEAT_APPS_TEST_GALLERY_BIN=/path/to/gallery.bin
+#
+# Quick download (requires gdown: pip install gdown):
+#   gdown 18uSg5S4CEUBWuCNM2rjs_8CF0B5taJ9v -O face_test.mp4
+#   gdown 1BTOMCMQzUG2dkIhrr1q1SdDoRe2g1v5f -O gallery.bin
+
+unit:
+  python: false
+  cpp: true
+
+e2e:
+  python:
+    enabled: false
+    reason: >
+      Python is omitted because the application relies on three C++-only SDK
+      paths that have no Python equivalents in this SDK version: the SiMa HW
+      H.264 encoder (VideoSender / H264RtpUdpFromRaw), the EV74 CVU preproc
+      node (InputKind::Image / RtspDecodedInput NV12 zero-copy chain), and
+      the NV12 buffer manipulation required for low-latency overlay.
+      A Python implementation will be added when the SDK exposes bindings for
+      these capabilities.
+  cpp:
+    enabled: true
+    models:
+      - scrfd
+      - arcface
+    env:
+      required:
+        SIMANEAT_APPS_TEST_MODELS_DIR: directory containing model tar.gz files (scrfd, arcface)
+      optional:
+        SIMANEAT_APPS_TEST_INPUT_VIDEO: >
+          Path to an H.264/MP4 file containing at least one visible face.
+          When set, the face detection assertion is enabled (SCRFD must detect ≥1 face
+          in the 60-frame window); when unset, the test verifies only that the process
+          exits cleanly on the available RTSP stream and prints a warning.
+        SIMANEAT_APPS_TEST_GALLERY_BIN: >
+          Path to a pre-enrolled gallery.bin.  When set, at least one non-Unknown
+          recognition result must appear in the 60-frame window.
+        SIMANEAT_TEST_RTSP_H264_URL: >
+          RTSP H.264 stream URL (fallback when SIMANEAT_APPS_TEST_INPUT_VIDEO is unset).
+    notes:
+      - >
+        Face detection is only asserted when SIMANEAT_APPS_TEST_INPUT_VIDEO is set.
+        A shared RTSP stream may not contain detectable faces in any 60-frame window,
+        so the detection check is skipped and a warning is printed instead.
+      - >
+        Enrollment E2E (--enroll mode) is exercised within the main face-recognizer.e2e
+        test when SIMANEAT_APPS_TEST_INPUT_VIDEO is set: after the 60-frame recognition
+        run the test enrolls the video into a temporary gallery and verifies exit 0 and
+        gallery.bin creation.
