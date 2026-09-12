@@ -71,8 +71,10 @@ def start_openai_server(cfg: AppConfig):
             print(f"added chat model: {chat_name} -> {model.path}", flush=True)
             break
 
+        served_asr_name = None
         if cfg.asr_model and cfg.asr_model.path and cfg.asr_model.path.is_dir():
             asr_name = server.add_model(cfg.asr_model.path, cfg.asr_model.name)
+            served_asr_name = asr_name
             print(f"added ASR model: {asr_name} -> {cfg.asr_model.path}", flush=True)
         elif cfg.asr_model:
             print(f"skipping ASR model (missing dir): {cfg.asr_model.path}", flush=True)
@@ -85,7 +87,7 @@ def start_openai_server(cfg: AppConfig):
         )
 
         server.start()
-        return server
+        return server, served_asr_name
     except BaseException:
         if server is not None:
             server.stop()
@@ -139,13 +141,23 @@ def main() -> int:
             tap = LoadLogTap()
             log_tap = tap if tap.install() else None
 
-        server = start_openai_server(cfg)
+        server, served_asr_name = start_openai_server(cfg)
 
         manager = ModelManager(
             server,
             catalog_dir=cfg.catalog_dir,
             max_resident_chat_models=cfg.max_resident_chat_models,
-            asr_name=cfg.asr_model.name if cfg.asr_model else None,
+            # The runtime may serve the model under a different name than the
+            # configured one; the manager must track what is actually loaded, or
+            # it reports no active ASR and a later switch fails to evict it.
+            asr_name=served_asr_name or (cfg.asr_model.name if cfg.asr_model else None),
+            # Switching ASR models warms the new one (a short silent clip) so a
+            # bad load surfaces during the switch, not on the next transcription.
+            asr_warmup=os.environ.get("STUDIO_ASR_WARMUP", "1") != "0",
+            mla_reset_exit_code=int(os.environ.get("MLA_RESET_EXIT_CODE", "75")),
+            # run.sh exports MLA_RESET; refuse the reset here so a disabled
+            # board is never torn down for a reset that will not happen.
+            mla_reset_enabled=os.environ.get("MLA_RESET", "1") != "0",
             hub=cfg.hub,
             openai_base_url=cfg.openai.base_url,
             log_tap=log_tap,
@@ -158,8 +170,11 @@ def main() -> int:
                 model.supports_vision, model.vision_image_size,
             )
         if cfg.asr_model:
+            # Register under the served name so the catalog entry, the type
+            # lookup and the active-ASR pointer all agree.
             manager.register_startup_model(
-                cfg.asr_model.name, cfg.asr_model.path, "asr", False, None
+                served_asr_name or cfg.asr_model.name,
+                cfg.asr_model.path, "asr", False, None
             )
         manager.scan_catalog()
 

@@ -96,6 +96,11 @@ Other useful environment variables:
 
 - `CHAT_MODEL_REPO`: optionally download **and preload** one chat/VLM model at
   startup (empty by default, i.e. none).
+- `ASR_MODEL_REPO`: the speech-to-text model installed and made active at
+  startup (default `simaai/whisper-small-a16w8`; set to `""` to install none).
+- `ASR_CATALOG_MODEL_REPOS`: space-separated extra ASR repos to seed the
+  catalog, e.g. `simaai/whisper-medium-a16w8`, so you can switch between them
+  at runtime from **Settings → Models**.
 - `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
   chat/VLM model is resident and loading a new one clears the others.
 - `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
@@ -126,7 +131,7 @@ server:
       # To preload a model at startup instead, list it here, e.g.:
       # - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
       #   path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-    asr:
+    asr:                                    # active at startup; switchable at runtime
       name: whisper-small-a16w8
       path: /media/nvme/llima/models/whisper-small-a16w8
   hub:
@@ -158,8 +163,9 @@ sidebar. Both methods stop the UI and model server cleanly, just like
 `./run.sh stop`).
 
 ### Terminal chat (CLI)
-Prefer the terminal? `--cli` starts the model server (same MLA reset/clean-slate
-as usual) and drops you into an interactive chat instead of the web UI:
+Prefer the terminal? `--cli` starts the model server (clearing stale processes
+first, as usual) and drops you into an interactive chat instead of the web UI.
+`/reset` performs the same explicit accelerator reset as the web UI's button:
 
 ```bash
 ./run.sh --cli    # or `neat-ai --cli`
@@ -195,6 +201,10 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 /export [file]   save this chat to a .log file (default neat-chat-<time>.log)
 /reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
+/think [on|off]  let reasoning models think before answering (default on):
+                 the reasoning streams dimmed, is counted separately, and stays
+                 out of the history and /export; off sends /no_think like the
+                 web UI's Thinking toggle (start with --no-think for the same)
 /rag [filter]    inspect the RAG database: list chunks (/docs; filter narrows)
 /rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
 /rag search <q>  semantic search: show top matches without asking the model
@@ -264,10 +274,11 @@ default 10). `run.sh` records its PID in `.neat-genai-studio.pid` (used by
 `stop`/`status`) and refuses to start a second instance while one is running.
 
 On launch, `run.sh` stops stale model-server/UI processes from an interrupted
-Studio run and waits for the model-server port to become available. It never
-restarts the MLA dispatcher, initializes the MLA, or runs a board-runtime
-recovery script. Model/runtime failures are reported and left to board runtime
-management outside this application.
+Studio run and waits for the model-server port to become available. It does not
+restart the MLA dispatcher, initialize the MLA, or run a board-runtime recovery
+script on startup, and model/runtime failures are reported rather than silently
+recovered from. The accelerator is only ever reset when you explicitly ask for
+it — see [Reset the accelerator](#reset-the-accelerator).
 
 Open the Flask UI:
 
@@ -287,14 +298,72 @@ curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
-to load it at runtime and unload all other chat/VLM models (whisper is always
-kept), so the MLA holds just the active model. A **Load status** panel pins to the
+to load it at runtime and unload all other chat/VLM models (speech-to-text has
+its own slot and is untouched), so the MLA holds just the active model. A **Load status** panel pins to the
 top of the tab and shows the live progress bar while it loads. The studio cancels
 the outgoing model's in-flight generation and waits for its memory to be released
 before loading the new one, then warms it so your first message is instant.
 
 If a switch hits an accelerator error, the Studio rolls back the failed model
-registration and reports the error. It does not restart or reset board services.
+registration and reports the error. It does not restart or reset board services
+on its own — use **Reset MLA** below if the accelerator is genuinely wedged.
+
+### Switch the speech-to-text model
+The same tab lists your speech-to-text (ASR) models in their own
+**Speech-to-text** group, because they never compete with chat models for the
+same slot. Exactly one is active — marked `● active` — and pressing **Use** on
+another evicts it and makes the new one active, without restarting and without
+clearing the conversation. The chat model stays loaded throughout.
+
+`setup.sh` installs `simaai/whisper-small-a16w8` by default. To install a
+different or additional model:
+
+```bash
+# Replace the default:
+ASR_MODEL_REPO="simaai/whisper-medium-a16w8" ./setup.sh
+
+# Or keep whisper-small and seed extra models to switch between at runtime:
+ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8" ./setup.sh
+```
+
+You can also download any Whisper build from **Settings → Add Model** while the
+studio is running; it appears in the Speech-to-text group ready to use. Larger
+models transcribe more accurately at the cost of load time and memory.
+
+Switching is **not persistent**: `server.models.asr` in `config.local.yaml` is
+what a restart re-selects, and the model it names carries a `startup default`
+badge. Edit it to make a different choice permanent. Set `STUDIO_ASR_WARMUP=0`
+to skip the warm-up a switch performs (the first transcription then pays the
+load cost instead).
+
+### Reset the accelerator
+Models are held by the MLA shared-memory dispatcher, which outlives the studio's
+own processes — so if a load wedges it, restarting the studio does not clear it.
+**Settings → Models → Reset MLA** (or `/reset` in the CLI) unloads everything and
+asks `run.sh` to restart the dispatcher and relaunch the model server. The web UI
+stays up and reconnects on its own; expect a few seconds of unavailability, and
+any in-progress generation stops.
+
+This is the **only** thing in the studio that touches the board runtime, and it
+never happens on its own — not at startup, and not when a model fails to load.
+
+The request normally goes through the model server's control API, which exits
+with a sentinel status that `run.sh` acts on. A server wedged inside a native
+model load cannot answer that API at all, so when the request times out the web
+UI and the CLI instead write a request file (`.neat-genai-reset.request`, see
+`NEAT_RESET_REQUEST_FILE`) that `run.sh` polls every second: it stops the server
+itself (TERM, then KILL after `SHUTDOWN_GRACE_SECONDS`), resets the dispatcher
+and relaunches. Both paths share the relaunch budget (`MLA_MAX_RESTART_RETRIES`
+consecutive relaunches that fail within `RELAUNCH_STABLE_SECONDS`) and both are
+refused when `MLA_RESET=0`.
+
+Restarting the dispatcher needs privileges. `run.sh` prefers the board's own
+`fix_devkit_runtime.sh` when present and otherwise restarts
+`simaai-appcomplex.service` via `sudo`, so run the studio as root, give the
+account passwordless sudo for those commands, or point `MLA_RESET_CMD` at your
+own reset command. Without privileges the model server still relaunches, the
+dispatcher is left alone, and a warning says so. `MLA_RESET=0` refuses the
+request outright.
 
 ### Download models from Hugging Face
 When the board is online, the **Settings → Add Model** tab appears (it's hidden
@@ -554,6 +623,13 @@ curl -s http://127.0.0.1:9997/control/load \
 curl -s http://127.0.0.1:9997/control/unload \
   -H 'Content-Type: application/json' \
   -d '{"name":"<catalog-model-name>"}' | python3 -m json.tool
+
+# Make another speech-to-text model active (evicts the previous one). The
+# status above reports the active one as "asrModel" and the one a restart
+# re-selects as "configuredAsrModel".
+curl -s http://127.0.0.1:9997/control/asr \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"whisper-medium-a16w8"}' | python3 -m json.tool
 ```
 
 Check text chat:
@@ -645,6 +721,9 @@ Then test the browser UI:
 
 ## Development From Source
 See the Apps repository [contributor guide](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md)
-for contribution requirements. The single-example download contains the Studio
+for contribution requirements. The repository (not the installed bundle) also
+carries the host-runnable unit suites under `tests/python/` (`*_suite.py` plus
+the `tts_text_check.py` script), collected by `tests/python/test_unit.py`;
+`./tests/test.sh --unit` runs them and they need only pytest and PyYAML. The single-example download contains the Studio
 source and can be edited directly; cloning the complete Apps repository is not
 required to run or customize it.
