@@ -16,7 +16,14 @@ CHAT_MODEL_REPO="${CHAT_MODEL_REPO:-}"
 # Extra compatible chat/VLM models to seed the catalog (space-separated HF repos).
 # Example: CATALOG_MODEL_REPOS="simaai/Llama-3.2-3B-Instruct-... simaai/..."
 CATALOG_MODEL_REPOS="${CATALOG_MODEL_REPOS:-}"
-ASR_MODEL_REPO="simaai/whisper-small-a16w8"
+# Speech-to-text model downloaded and made active at startup.
+# Set ASR_MODEL_REPO="" to install none (note the `-`, not `:-`, so an
+# explicitly empty value is honoured rather than falling back to the default).
+ASR_MODEL_REPO="${ASR_MODEL_REPO-simaai/whisper-small-a16w8}"
+# Extra ASR models to seed the catalog (space-separated HF repos); switch
+# between them at runtime in Settings -> Models. Example:
+#   ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8"
+ASR_CATALOG_MODEL_REPOS="${ASR_CATALOG_MODEL_REPOS:-}"
 RAG_EMBEDDING_REPO="thenlper/gte-small"
 CHAT_MODEL_NAME="${CHAT_MODEL_NAME:-${CHAT_MODEL_REPO##*/}}"
 # Only one chat/VLM model is resident at a time — loading a new one clears all
@@ -30,6 +37,16 @@ INSTALL_TTS_VOICES="${INSTALL_TTS_VOICES:-1}"
 DEFAULT_TTS_LANGUAGES="en,de,es,fr,it,ja,pt,vi,zh"
 TTS_LANGUAGES="${TTS_LANGUAGES:-}"
 TTS_OPTIONAL_VOICES="${TTS_OPTIONAL_VOICES:-}"
+# Supertonic 3 (MLA-accelerated multilingual TTS). The engine lives in its own
+# repository and runtime venv (pyneat + onnxruntime); setup clones and installs
+# it when INSTALL_SUPERTONIC=1, and the UI reaches it through a subprocess worker.
+INSTALL_SUPERTONIC="${INSTALL_SUPERTONIC:-1}"
+SUPERTONIC_REPO_URL="${SUPERTONIC_REPO_URL:-https://github.com/florianvoss-commit/supertonic-sima.git}"
+# The reviewed upstream commit. A fresh clone is checked out at exactly this
+# revision before its installer runs; bump it deliberately, with review.
+SUPERTONIC_REPO_REVISION="${SUPERTONIC_REPO_REVISION:-3b837b3e1b6a378ab8c24c3c04b079429b67e237}"
+SUPERTONIC_REPO_ROOT="${SUPERTONIC_REPO_ROOT:-/media/nvme/repos/supertonic-sima}"
+SUPERTONIC_APP_ROOT="${SUPERTONIC_APP_ROOT:-/media/nvme/supertonic-tts}"
 SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-0}"
 CPU_TORCH_VERSION="${CPU_TORCH_VERSION:-2.8.0+cpu}"
 DEPENDENCIES_ONLY=0
@@ -145,6 +162,17 @@ Environment:
                                 en,de,es,fr,it,ja,pt,vi,zh
   TTS_OPTIONAL_VOICES           Optional catalogued voice ids to also install,
                                 e.g. mera,en_US-ljspeech-medium
+  INSTALL_SUPERTONIC            Install Supertonic 3, the MLA-accelerated TTS
+                                engine (clones supertonic-sima, builds its venv,
+                                downloads its models), 1 or 0. default: 1
+  SUPERTONIC_REPO_ROOT          supertonic-sima checkout (cloned when missing)
+                                default: /media/nvme/repos/supertonic-sima
+  SUPERTONIC_REPO_REVISION      Commit the checkout is pinned to
+                                default: the reviewed revision in this script
+  SUPERTONIC_ALLOW_UNPINNED     Run an existing checkout at another revision
+                                or with local changes, 1 or 0. default: 0
+  SUPERTONIC_APP_ROOT           Supertonic venv + model root
+                                default: /media/nvme/supertonic-tts
   CPU_TORCH_VERSION             CPU-only PyTorch version for RAG installs
                                 default: 2.8.0+cpu
   SKIP_MODEL_DOWNLOAD           Write config without downloading models, 1 or 0
@@ -232,7 +260,13 @@ if [[ -n "${CHAT_MODEL_REPO}" ]]; then
 else
   CHAT_MODEL_DIR=""
 fi
-ASR_MODEL_DIR="${MODELS_DIR}/whisper-small-a16w8"
+if [[ -n "${ASR_MODEL_REPO}" ]]; then
+  ASR_MODEL_NAME="$(catalog_dir_name "${ASR_MODEL_REPO}")"
+  ASR_MODEL_DIR="${MODELS_DIR}/${ASR_MODEL_NAME}"
+else
+  ASR_MODEL_NAME=""
+  ASR_MODEL_DIR=""
+fi
 RAG_EMBEDDING_DIR="${MODELS_DIR}/gte-small"
 
 section "Models"
@@ -245,8 +279,20 @@ if [[ "${SKIP_MODEL_DOWNLOAD}" != "1" ]]; then
     info "No default chat/VLM model — download one from the UI (or set CHAT_MODEL_REPO)."
   fi
 
-  step "Downloading ASR model: ${ASR_MODEL_REPO}"
-  "${APP_VENV}/bin/hf" download "${ASR_MODEL_REPO}" --local-dir "${ASR_MODEL_DIR}"
+  if [[ -n "${ASR_MODEL_REPO}" ]]; then
+    step "Downloading ASR model: ${ASR_MODEL_REPO}"
+    "${APP_VENV}/bin/hf" download "${ASR_MODEL_REPO}" --local-dir "${ASR_MODEL_DIR}"
+    write_repo_marker "${ASR_MODEL_REPO}" "${ASR_MODEL_DIR}"
+  else
+    info "No default ASR model — download one from the UI (or set ASR_MODEL_REPO)."
+  fi
+
+  for repo in ${ASR_CATALOG_MODEL_REPOS}; do
+    name="$(catalog_dir_name "${repo}")"
+    step "Downloading ASR catalog model: ${repo}"
+    "${APP_VENV}/bin/hf" download "${repo}" --local-dir "${MODELS_DIR}/${name}"
+    write_repo_marker "${repo}" "${MODELS_DIR}/${name}"
+  done
 
   step "Downloading RAG embedding model: ${RAG_EMBEDDING_REPO}"
   "${APP_VENV}/bin/hf" download "${RAG_EMBEDDING_REPO}" --local-dir "${RAG_EMBEDDING_DIR}"
@@ -273,6 +319,17 @@ else
   CHAT_YAML="    chat: []            # No model preloaded; load on demand from the UI."
 fi
 
+if [[ -n "${ASR_MODEL_REPO}" ]]; then
+  ASR_YAML=$(cat <<ASR
+    asr:                # Active at startup; switch at runtime in Settings -> Models.
+      name: ${ASR_MODEL_NAME}
+      path: ${ASR_MODEL_DIR}
+ASR
+)
+else
+  ASR_YAML="    # asr: omitted — no speech-to-text model is preloaded."
+fi
+
 # Render "simaai TDoSiMa" -> "simaai, TDoSiMa" for the YAML flow list.
 HUB_ORGS_YAML="$(echo "${HUB_ORGS}" | tr -s ' ' | sed 's/^ //; s/ $//; s/ /, /g')"
 section "Configuration"
@@ -293,9 +350,7 @@ server:
     catalog_dir: ${MODELS_DIR}
     max_resident_chat_models: ${MAX_RESIDENT_CHAT_MODELS}
 ${CHAT_YAML}
-    asr:
-      name: whisper-small-a16w8
-      path: ${ASR_MODEL_DIR}
+${ASR_YAML}
 
   hub:
     allow_download: ${ALLOW_HUB_DOWNLOAD}
@@ -324,6 +379,12 @@ app:
   ui:
     font_family: Inter
     font_size: 15
+
+  tts:
+    supertonic:
+      # Supertonic 3 (MLA TTS) checkout and runtime; see INSTALL_SUPERTONIC.
+      repo_root: "${SUPERTONIC_REPO_ROOT}"
+      app_root: "${SUPERTONIC_APP_ROOT}"
 
   rag:
     enabled: true
@@ -380,6 +441,114 @@ except Exception:
     pass
 PY
   ok "Voices installed."
+fi
+
+# Supertonic 3: hybrid TTS whose vector field and vocoder run on the MLA through
+# PyNeat. Its runtime (pyneat, onnxruntime, numpy 1.26) cannot share the UI venv,
+# so the upstream repository's own setup builds an isolated venv and downloads
+# the pinned CPU models plus the precompiled MLA packages from Hugging Face. The
+# UI talks to it through supertonic_worker.py. Optional: a failure here only
+# leaves the CPU engines in place.
+install_supertonic() {
+  section "Supertonic 3 (MLA text-to-speech)"
+  if [[ ! -d "${SUPERTONIC_REPO_ROOT}/.git" ]]; then
+    step "Cloning supertonic-sima into ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET}"
+    mkdir -p "$(dirname "${SUPERTONIC_REPO_ROOT}")"
+    if ! git clone --quiet "${SUPERTONIC_REPO_URL}" "${SUPERTONIC_REPO_ROOT}"; then
+      warn "Could not clone ${SUPERTONIC_REPO_URL}; Supertonic TTS skipped."
+      return 0
+    fi
+    # Never run an unreviewed upstream HEAD: pin the fresh clone.
+    if ! git -C "${SUPERTONIC_REPO_ROOT}" checkout --quiet "${SUPERTONIC_REPO_REVISION}"; then
+      warn "Revision ${SUPERTONIC_REPO_REVISION} not found in ${SUPERTONIC_REPO_URL}; Supertonic TTS skipped."
+      rm -rf "${SUPERTONIC_REPO_ROOT}"
+      return 0
+    fi
+    ok "supertonic-sima pinned at ${C_DIM}${SUPERTONIC_REPO_REVISION:0:12}${C_RESET}"
+  else
+    # An existing checkout must also be the reviewed revision, unmodified,
+    # before its installer is executed. A clean checkout at another revision is
+    # moved to the pinned one; a modified worktree is refused. Developers who
+    # deliberately want to run their own checkout set SUPERTONIC_ALLOW_UNPINNED=1.
+    local have_rev dirty
+    have_rev="$(git -C "${SUPERTONIC_REPO_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
+    dirty="$(git -C "${SUPERTONIC_REPO_ROOT}" status --porcelain --untracked-files=no 2>/dev/null | head -n1)"
+    if [[ "${have_rev}" == "${SUPERTONIC_REPO_REVISION}" && -z "${dirty}" ]]; then
+      ok "supertonic-sima checkout: ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET} at reviewed ${C_DIM}${have_rev:0:12}${C_RESET}"
+    elif [[ "${SUPERTONIC_ALLOW_UNPINNED:-0}" == "1" ]]; then
+      warn "Using unreviewed supertonic-sima checkout at ${have_rev:0:12}${dirty:+ (modified)} because SUPERTONIC_ALLOW_UNPINNED=1."
+    elif [[ -n "${dirty}" ]]; then
+      warn "${SUPERTONIC_REPO_ROOT} has local modifications; its installer is not run. Commit or stash them, or set SUPERTONIC_ALLOW_UNPINNED=1. Supertonic TTS skipped."
+      return 0
+    else
+      step "Moving ${C_DIM}${SUPERTONIC_REPO_ROOT}${C_RESET} from ${have_rev:0:12} to the reviewed revision ${SUPERTONIC_REPO_REVISION:0:12}"
+      git -C "${SUPERTONIC_REPO_ROOT}" fetch --quiet origin 2>/dev/null || true
+      if ! git -C "${SUPERTONIC_REPO_ROOT}" checkout --quiet "${SUPERTONIC_REPO_REVISION}"; then
+        warn "Revision ${SUPERTONIC_REPO_REVISION:0:12} is not available in ${SUPERTONIC_REPO_ROOT}; Supertonic TTS skipped."
+        return 0
+      fi
+      ok "supertonic-sima pinned at ${C_DIM}${SUPERTONIC_REPO_REVISION:0:12}${C_RESET}"
+    fi
+  fi
+  if [[ ! -f "${SUPERTONIC_REPO_ROOT}/scripts/setup_devkit.sh" ]]; then
+    warn "${SUPERTONIC_REPO_ROOT} has no scripts/setup_devkit.sh; Supertonic TTS skipped."
+    return 0
+  fi
+  # Every file supertonic_worker.py needs must be present; a partial download
+  # must be repaired by the installer, not reported as installed.
+  local st_python="${SUPERTONIC_APP_ROOT}/.venv/bin/python"
+  local models="${SUPERTONIC_APP_ROOT}/models"
+  local required=(
+    "${models}/supertonic-3/onnx/tts.json"
+    "${models}/supertonic-3/onnx/unicode_indexer.json"
+    "${models}/supertonic-3/onnx/duration_predictor.onnx"
+    "${models}/supertonic-3/onnx/text_encoder.onnx"
+    "${models}/supertonic-3/voice_styles/F1.json"
+    "${models}/supertonic-3/voice_styles/F2.json"
+    "${models}/supertonic-3/voice_styles/F3.json"
+    "${models}/supertonic-3/voice_styles/F4.json"
+    "${models}/supertonic-3/voice_styles/F5.json"
+    "${models}/supertonic-3/voice_styles/M1.json"
+    "${models}/supertonic-3/voice_styles/M2.json"
+    "${models}/supertonic-3/voice_styles/M3.json"
+    "${models}/supertonic-3/voice_styles/M4.json"
+    "${models}/supertonic-3/voice_styles/M5.json"
+    "${models}/supertonic-3-sima/supertonic_vector_field_sima_mpk.tar.gz"
+    "${models}/supertonic-3-sima/supertonic_runtime_data.npz"
+    "${models}/supertonic-3-sima/artifact_manifest.json"
+    "${models}/supertonic-3-sima/supertonic_vocoder_sima_bf16_mpk.tar.gz"
+    "${models}/supertonic-3-sima/vocoder_bf16_manifest.json"
+  )
+  local missing=() f
+  for f in "${required[@]}"; do [[ -f "${f}" ]] || missing+=("${f#${SUPERTONIC_APP_ROOT}/}"); done
+  if [[ -x "${st_python}" ]] \
+      && "${st_python}" -c 'import pyneat, onnxruntime, numpy' >/dev/null 2>&1 \
+      && [[ "${#missing[@]}" -eq 0 ]]; then
+    ok "Supertonic runtime already installed: ${C_DIM}${SUPERTONIC_APP_ROOT}${C_RESET}"
+    return 0
+  fi
+  if [[ "${#missing[@]}" -gt 0 && -x "${st_python}" ]]; then
+    info "Supertonic install is incomplete (missing: ${missing[*]}); repairing."
+  fi
+  # The upstream installer fetches the PyNeat wheel with sima-cli, which the
+  # DevKit exposes on PATH only for login shells.
+  if ! command -v sima-cli >/dev/null 2>&1 && [[ -x /data/sima-cli/.venv/bin/sima-cli ]]; then
+    export PATH="${PATH}:/data/sima-cli/.venv/bin"
+  fi
+  step "Installing the Supertonic runtime + models under ${C_DIM}${SUPERTONIC_APP_ROOT}${C_RESET}"
+  if SUPERTONIC_APP_ROOT="${SUPERTONIC_APP_ROOT}" \
+      SUPERTONIC_REPO_ROOT="${SUPERTONIC_REPO_ROOT}" \
+      bash "${SUPERTONIC_REPO_ROOT}/scripts/setup_devkit.sh"; then
+    ok "Supertonic 3 ready (MLA engine, 10 voices, 30+ languages)."
+  else
+    warn "Supertonic setup failed; the CPU TTS engines remain available."
+  fi
+}
+
+if [[ "${INSTALL_SUPERTONIC}" == "1" ]]; then
+  install_supertonic
+else
+  info "Supertonic 3 install skipped (INSTALL_SUPERTONIC=0)."
 fi
 
 # Offer a convenient `neat-ai` shell alias for ./run.sh. Noninteractive setup

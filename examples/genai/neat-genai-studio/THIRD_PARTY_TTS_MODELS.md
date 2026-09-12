@@ -10,6 +10,26 @@ This file records attribution and notices; it is not legal advice. Re-check an
 upstream model and its training data before adding or updating an allowlist
 entry.
 
+## Supertonic 3 (MLA-accelerated multilingual engine)
+
+- Model: `Supertone/supertonic-3`, pinned to revision
+  `724fb5abbf5502583fb520898d45929e62f02c0b`
+- Model source: <https://huggingface.co/Supertone/supertonic-3>
+- Published model licence: OpenRAIL (use-based restrictions apply; review the
+  licence text on the model card before redistribution)
+- Compiled MLA packages: `florianvoss/supertonic-3-sima`
+  (<https://huggingface.co/florianvoss/supertonic-3-sima>), derived from the
+  pinned upstream model by graph surgery and SiMa model-compiler quantization
+  (BF16 activations, INT8 vector-field weights, BF16 vocoder); same licence as
+  the base model
+- Integration software: <https://github.com/florianvoss-commit/supertonic-sima>
+- Attribution: Supertone Inc. (Supertonic 3); Florian Voss (Modalix port)
+
+Supertonic is not part of `voice_catalog.json`: its assets are installed by the
+upstream repository's `scripts/setup_devkit.sh`, which verifies every compiled
+artifact against pinned SHA-256 checksums and downloads the CPU models at the
+pinned revision. Set `INSTALL_SUPERTONIC=0` to leave it out.
+
 ## Piper Plus CSS10 (default multilingual/Japanese voice)
 
 - Model: `ayousanz/piper-plus-css10-ja-6lang`
@@ -60,5 +80,6 @@ distinct from each voice/model-data licence.
 ## Explicit exclusions
 
 The server catalog excludes Hi-Fi-Captain Japanese, KSS Korean, and HFC English
-because they use `CC-BY-NC-SA-4.0`. Korean therefore uses browser TTS when the
-client has a Korean voice, or a text-only response otherwise.
+because they use `CC-BY-NC-SA-4.0`. Korean is therefore spoken by Supertonic 3
+when it is installed; otherwise it uses browser TTS when the client has a Korean
+voice, or a text-only response.
