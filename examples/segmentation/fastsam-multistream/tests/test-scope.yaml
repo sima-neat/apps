@@ -1,0 +1,35 @@
+models:
+  fastsam_x:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/FastSAM-x_quant_mpk.tar.gz
+    file: FastSAM-x_quant_mpk.tar.gz
+  mobileclip2_s0_image_encoder:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/MobileCLIP2-S0_image_encoder_reparam_mpk.tar.gz
+    file: MobileCLIP2-S0_image_encoder_reparam_mpk.tar.gz
+  mobileclip2_s0_text_encoder:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/MobileCLIP2-S0_text_mpk.tar.gz
+    file: MobileCLIP2-S0_text_mpk.tar.gz
+  mobileclip2_s0_text_host_consts:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/MobileCLIP2-S0_text_host_consts.npz
+    file: MobileCLIP2-S0_text_host_consts.npz
+unit:
+  python: true
+  cpp: true
+e2e:
+  python:
+    enabled: true
+    models:
+      - fastsam_x
+      - mobileclip2_s0_image_encoder
+      - mobileclip2_s0_text_encoder
+      - mobileclip2_s0_text_host_consts
+  cpp:
+    enabled: true
+    models:
+      - fastsam_x
+      - mobileclip2_s0_image_encoder
+      - mobileclip2_s0_text_encoder
+      - mobileclip2_s0_text_host_consts
