@@ -44,19 +44,17 @@ Run the remaining commands from `prebuilt-apps/`.
 
 ## Prepare the Model
 
-Install the SuperPoint model package from the staging [Neat Model Registry](https://github.com/sima-neat/models/issues/24):
+| Model | Role | Source |
+| --- | --- | --- |
+| `superpoint_mpk.tar.gz` | Default | Direct artifact |
 
 ```bash
-mkdir -p models/superpoint
-sima-cli neat install --stg \
-  models/superpoint@codex/superpoint-model-matrix:latest \
-  --install-dir models/superpoint
-
-cp models/superpoint/superpoint_modalix_int8_tessellation_mla_mpk.tar.gz \
-  models/superpoint_mpk.tar.gz
+export MODELZOO_VERSION="2.1.3"
+mkdir -p models
+cd models
+sima-cli download "https://docs.sima.ai/pkg_downloads/SDK${MODELZOO_VERSION}/models/modalix/superpoint_mpk.tar.gz"
+cd ..
 ```
-
-The commands copy the INT8 MLA model to the path used by the packaged config. The model expects 640x480 grayscale input.
 
 ## Configure
 

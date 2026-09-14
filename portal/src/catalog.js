@@ -52,23 +52,7 @@ export function extractFilterOptions(examples) {
   };
 }
 
-export function matchesFilters(example, filters, query) {
-  const haystack = [
-    example.name,
-    example.summary,
-    example.category,
-    example.languages,
-    example.model,
-    example.binary_name,
-    ...(example.tags || []),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  const q = query.trim().toLowerCase();
-  if (q && !haystack.includes(q)) {
-    return false;
-  }
+export function matchesFilters(example, filters) {
   if (filters.category && example.category !== filters.category) {
     return false;
   }
