@@ -5,8 +5,10 @@ input owner, then select the smallest API that fits the application.
 
 ## Artifact and input boundary
 
-- Classic applications consume a compiled model archive, not ONNX. Complete
-  compilation before application design.
+- Classic runtime APIs consume a compiled model archive. If only ONNX is
+  available, route preparation to the Model Compiler workflow and continue
+  independent application design. Require the compiled artifact before relying
+  on its tensor or preprocessing contract and before running inference.
 - Decide whether the caller supplies decoded inputs or the `Graph` owns a source
   and topology.
 - Inspect the model package before adding preprocessing or postprocessing.
@@ -60,10 +62,3 @@ Use `GenAIServer` when:
 
 Use GenAI graph fragments only when GenAI is one stage inside a larger Neat
 `Graph`.
-
-## Reference Examples
-
-After choosing the API family, inspect the closest current Apps example under
-`/neat-resources/apps-src/examples` before writing code. Use it as the
-implementation starting point. The installed Neat Library remains the API
-contract.

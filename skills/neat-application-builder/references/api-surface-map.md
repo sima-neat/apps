@@ -1,8 +1,8 @@
 # API Surface Map
 
-Use this file to discover important Neat Library API areas without turning the
-skill into an API manual. Mention the area, then inspect the current packaged
-source before writing code or explaining behavior.
+Use the relevant section to locate a public API in matching packaged Core
+source. Paths below are relative to that source root; installed headers provide
+the callable contract. Read only the headers and docs needed for the task.
 
 ## Contents
 
@@ -13,7 +13,6 @@ source before writing code or explaining behavior.
 - GenAI Surface
 - Diagnostics And Measurement
 - Python Surface
-- Tools Outside This Skill
 
 ## Core Application Surface
 
@@ -117,15 +116,3 @@ source before writing code or explaining behavior.
 - Inspect `python/src/module.cpp` in packaged core source for binding truth.
 - Read `docs/reference/pythonapi/` when present in the installed docs.
 - For NumPy/image interop, inspect binding definitions for `Tensor`, `ModelOptions`, `RunOptions`, `GenAIModel`, and `GenAIServer`.
-
-## Tools Outside This Skill
-
-These are important Neat ecosystem areas, but this skill should only route to
-their docs. Do not inline their workflows here.
-
-- Model Compiler and model preparation
-  - Read the Model Compiler and compile-a-model docs.
-- LLiMa compile, test, and benchmark workflows
-  - Read the LLiMa / GenAI tooling docs.
-- Insight visualization or UI workflows
-  - Read the Insight docs.
