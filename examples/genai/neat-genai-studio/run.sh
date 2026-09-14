@@ -859,14 +859,21 @@ cli_supervise() {
       [[ -s "${SERVER_STATUS_FILE}" ]] && { status="$(cat "${SERVER_STATUS_FILE}" 2>/dev/null)"; break; }
       sleep 0.4
     done
-    if [[ "${status}" != "${MLA_RESET_EXIT_CODE}" ]]; then
-      return 0    # crash or clean exit: leave the runtime alone and stop watching
+    if [[ "${status}" == "0" ]]; then
+      return 0    # clean exit: nothing to recover
     fi
     if [[ "${tries}" -ge "${MLA_MAX_RESTART_RETRIES}" ]]; then
+      errln "Model server keeps exiting (last status ${status:-?}); not relaunching again — /quit and restart the Studio."
       return 0
     fi
     tries=$((tries + 1))
-    reset_mla_dispatcher
+    if [[ "${status}" == "${MLA_RESET_EXIT_CODE}" ]]; then
+      reset_mla_dispatcher
+    else
+      # An ordinary crash: relaunch so the prompt is not left talking to a dead
+      # server, but never touch the board-wide dispatcher for it.
+      warn "Model server exited with status ${status:-?}; relaunching it (models must be loaded again with /load)."
+    fi
     launch_server
     launched_at="${SECONDS}"
     sleep "${MODEL_SERVER_START_DELAY:-2}"

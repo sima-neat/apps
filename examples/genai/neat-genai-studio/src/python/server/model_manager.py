@@ -1039,10 +1039,20 @@ class ModelManager:
             # them out of _lock so status polls are not held up.
             if name in self._server_model_names():
                 self._stop_model_streams(name)
+                # A residual registration (a failed warm-up whose rollback
+                # could not remove the model) must be cleared before the files
+                # go: deleting weights the runtime still references leaves an
+                # unusable entry until the server restarts.
                 try:
-                    self._server.remove_model(name)
-                except Exception:
-                    pass
+                    removed = bool(self._server.remove_model(name))
+                    detail = "" if removed else "the runtime reported it was not removed"
+                except Exception as exc:  # noqa: BLE001
+                    removed, detail = False, str(exc)
+                if not removed:
+                    raise ValueError(
+                        f"'{name}' is still registered with the runtime and could not be "
+                        f"unloaded ({detail}); restart the model server before deleting it."
+                    )
                 with self._lock:
                     if name in self._resident:
                         self._resident.remove(name)
