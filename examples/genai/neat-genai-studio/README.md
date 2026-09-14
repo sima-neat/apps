@@ -96,6 +96,11 @@ Other useful environment variables:
 
 - `CHAT_MODEL_REPO`: optionally download **and preload** one chat/VLM model at
   startup (empty by default, i.e. none).
+- `ASR_MODEL_REPO`: the speech-to-text model installed and made active at
+  startup (default `simaai/whisper-small-a16w8`; set to `""` to install none).
+- `ASR_CATALOG_MODEL_REPOS`: space-separated extra ASR repos to seed the
+  catalog, e.g. `simaai/whisper-medium-a16w8`, so you can switch between them
+  at runtime from **Settings → Models**.
 - `MAX_RESIDENT_CHAT_MODELS`: kept for advanced use; by default only one
   chat/VLM model is resident and loading a new one clears the others.
 - `ALLOW_HUB_DOWNLOAD`: `true`/`false` to enable/disable in-UI Hugging Face
@@ -103,6 +108,13 @@ Other useful environment variables:
 - `TTS_LANGUAGES`: comma- or space-separated catalogued server-TTS languages to
   install. Interactive setup prompts when this is unset; non-interactive setup
   defaults to `en,de,es,fr,it,ja,pt,vi,zh`.
+- `INSTALL_SUPERTONIC`, `SUPERTONIC_REPO_ROOT`, `SUPERTONIC_APP_ROOT`,
+  `SUPERTONIC_REPO_REVISION`: install the MLA-accelerated Supertonic 3 engine
+  (default on), where its checkout and runtime live, and the reviewed upstream
+  commit a fresh clone is pinned to; see
+  [Text-to-speech](#text-to-speech-voices--languages). The paths are written to
+  `config.local.yaml` under `app.tts.supertonic`, so `run.sh` finds a
+  non-default install without re-exporting them.
 - `TTS_OPTIONAL_VOICES`: optional voice ids to install, for example
   `mera,en_US-ljspeech-medium,zh_CN-chaowen-medium`.
 
@@ -126,7 +138,7 @@ server:
       # To preload a model at startup instead, list it here, e.g.:
       # - name: Qwen3-VL-4B-Instruct-GPTQ-a16w4
       #   path: /media/nvme/llima/models/Qwen3-VL-4B-Instruct-GPTQ-a16w4
-    asr:
+    asr:                                    # active at startup; switchable at runtime
       name: whisper-small-a16w8
       path: /media/nvme/llima/models/whisper-small-a16w8
   hub:
@@ -158,8 +170,9 @@ sidebar. Both methods stop the UI and model server cleanly, just like
 `./run.sh stop`).
 
 ### Terminal chat (CLI)
-Prefer the terminal? `--cli` starts the model server (same MLA reset/clean-slate
-as usual) and drops you into an interactive chat instead of the web UI:
+Prefer the terminal? `--cli` starts the model server (clearing stale processes
+first, as usual) and drops you into an interactive chat instead of the web UI.
+`/reset` performs the same explicit accelerator reset as the web UI's button:
 
 ```bash
 ./run.sh --cli    # or `neat-ai --cli`
@@ -195,6 +208,10 @@ and the OpenAI endpoint to stream replies). Type a message to chat; commands:
 /export [file]   save this chat to a .log file (default neat-chat-<time>.log)
 /reset           reset the accelerator (MLA) and restart the model server
 /tokens <n>      set max response tokens
+/think [on|off]  let reasoning models think before answering (default on):
+                 the reasoning streams dimmed, is counted separately, and stays
+                 out of the history and /export; off sends /no_think like the
+                 web UI's Thinking toggle (start with --no-think for the same)
 /rag [filter]    inspect the RAG database: list chunks (/docs; filter narrows)
 /rag on|off      toggle RAG-augmented chat (top passages prepended to prompts)
 /rag search <q>  semantic search: show top matches without asking the model
@@ -251,6 +268,7 @@ to reclaim space or start fresh:
 ```bash
 ./run.sh --clean        # lists what will be removed, then asks to confirm
 ./run.sh --clean -y     # skip the prompt (or CLEAN_YES=1)
+CLEAN_SUPERTONIC=1 ./run.sh --clean   # also remove the Supertonic runtime + checkout
 ```
 
 It stops a running instance first and lists each target with the total size
@@ -264,10 +282,11 @@ default 10). `run.sh` records its PID in `.neat-genai-studio.pid` (used by
 `stop`/`status`) and refuses to start a second instance while one is running.
 
 On launch, `run.sh` stops stale model-server/UI processes from an interrupted
-Studio run and waits for the model-server port to become available. It never
-restarts the MLA dispatcher, initializes the MLA, or runs a board-runtime
-recovery script. Model/runtime failures are reported and left to board runtime
-management outside this application.
+Studio run and waits for the model-server port to become available. It does not
+restart the MLA dispatcher, initialize the MLA, or run a board-runtime recovery
+script on startup, and model/runtime failures are reported rather than silently
+recovered from. The accelerator is only ever reset when you explicitly ask for
+it — see [Reset the accelerator](#reset-the-accelerator).
 
 Open the Flask UI:
 
@@ -287,14 +306,72 @@ curl -s http://127.0.0.1:9998/v1/models | python3 -m json.tool
 ### Switch models on the fly
 The **Settings → Models** tab shows models downloaded to the board in a searchable list. Loaded models are marked
 `● loaded`, on-disk ones `○ downloaded`; press **Load** on a not-yet-loaded model
-to load it at runtime and unload all other chat/VLM models (whisper is always
-kept), so the MLA holds just the active model. A **Load status** panel pins to the
+to load it at runtime and unload all other chat/VLM models (speech-to-text has
+its own slot and is untouched), so the MLA holds just the active model. A **Load status** panel pins to the
 top of the tab and shows the live progress bar while it loads. The studio cancels
 the outgoing model's in-flight generation and waits for its memory to be released
 before loading the new one, then warms it so your first message is instant.
 
 If a switch hits an accelerator error, the Studio rolls back the failed model
-registration and reports the error. It does not restart or reset board services.
+registration and reports the error. It does not restart or reset board services
+on its own — use **Reset MLA** below if the accelerator is genuinely wedged.
+
+### Switch the speech-to-text model
+The same tab lists your speech-to-text (ASR) models in their own
+**Speech-to-text** group, because they never compete with chat models for the
+same slot. Exactly one is active — marked `● active` — and pressing **Use** on
+another evicts it and makes the new one active, without restarting and without
+clearing the conversation. The chat model stays loaded throughout.
+
+`setup.sh` installs `simaai/whisper-small-a16w8` by default. To install a
+different or additional model:
+
+```bash
+# Replace the default:
+ASR_MODEL_REPO="simaai/whisper-medium-a16w8" ./setup.sh
+
+# Or keep whisper-small and seed extra models to switch between at runtime:
+ASR_CATALOG_MODEL_REPOS="simaai/whisper-medium-a16w8" ./setup.sh
+```
+
+You can also download any Whisper build from **Settings → Add Model** while the
+studio is running; it appears in the Speech-to-text group ready to use. Larger
+models transcribe more accurately at the cost of load time and memory.
+
+Switching is **not persistent**: `server.models.asr` in `config.local.yaml` is
+what a restart re-selects, and the model it names carries a `startup default`
+badge. Edit it to make a different choice permanent. Set `STUDIO_ASR_WARMUP=0`
+to skip the warm-up a switch performs (the first transcription then pays the
+load cost instead).
+
+### Reset the accelerator
+Models are held by the MLA shared-memory dispatcher, which outlives the studio's
+own processes — so if a load wedges it, restarting the studio does not clear it.
+**Settings → Models → Reset MLA** (or `/reset` in the CLI) unloads everything and
+asks `run.sh` to restart the dispatcher and relaunch the model server. The web UI
+stays up and reconnects on its own; expect a few seconds of unavailability, and
+any in-progress generation stops.
+
+This is the **only** thing in the studio that touches the board runtime, and it
+never happens on its own — not at startup, and not when a model fails to load.
+
+The request normally goes through the model server's control API, which exits
+with a sentinel status that `run.sh` acts on. A server wedged inside a native
+model load cannot answer that API at all, so when the request times out the web
+UI and the CLI instead write a request file (`.neat-genai-reset.request`, see
+`NEAT_RESET_REQUEST_FILE`) that `run.sh` polls every second: it stops the server
+itself (TERM, then KILL after `SHUTDOWN_GRACE_SECONDS`), resets the dispatcher
+and relaunches. Both paths share the relaunch budget (`MLA_MAX_RESTART_RETRIES`
+consecutive relaunches that fail within `RELAUNCH_STABLE_SECONDS`) and both are
+refused when `MLA_RESET=0`.
+
+Restarting the dispatcher needs privileges. `run.sh` prefers the board's own
+`fix_devkit_runtime.sh` when present and otherwise restarts
+`simaai-appcomplex.service` via `sudo`, so run the studio as root, give the
+account passwordless sudo for those commands, or point `MLA_RESET_CMD` at your
+own reset command. Without privileges the model server still relaunches, the
+dispatcher is left alone, and a warning says so. `MLA_RESET=0` refuses the
+request outright.
 
 ### Download models from Hugging Face
 When the board is online, the **Settings → Add Model** tab appears (it's hidden
@@ -361,10 +438,19 @@ selector in Settings.
 
 | Engine | Licence | Runtime | Languages |
 | --- | --- | --- | --- |
+| **Supertonic 3** | OpenRAIL model terms (see notices) | PyNeat on the **MLA** (vector field + vocoder), onnxruntime (CPU text front end) | 30+ incl. English, German, Spanish, French, Italian, Portuguese, Japanese, **Korean**, Vietnamese (not Chinese) |
 | **piper-plus** | MIT runtime; model-specific terms | onnxruntime (CPU) | Japanese, English, Chinese, Spanish, French, Portuguese |
 | **piper-tts** | GPL-3.0 runtime; model-specific terms | onnxruntime (CPU) | English, Chinese, Spanish, French, Portuguese, German, Italian, Norwegian, Vietnamese |
 | **Browser** (Web Speech API) | None | client-side (your browser / OS) | any language your device has a voice for |
 
+- **Supertonic 3** is the MLA-accelerated engine from
+  [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima). It
+  is preferred for every language it speaks whenever its runtime is installed
+  (see below), synthesizes at a real-time factor of about 0.07 on a Modalix
+  DevKit, and offers ten speakers (F1-F5, M1-M5) under **Settings → Supertonic
+  voice**. `SUPERTONIC_VOICE` picks the startup speaker; `SUPERTONIC_STEPS`
+  (5-12, default 8) trades quality for latency. Replies are split into segments
+  that fit the compiled 192-character contract and streamed one WAV per segment.
 - **Japanese** defaults to Piper Plus CSS10. CSS10 is declared public domain;
   the multilingual base model is CC BY 4.0 and its attribution is preserved in
   [the TTS notices](THIRD_PARTY_TTS_MODELS.md).
@@ -374,11 +460,12 @@ selector in Settings.
 - **Chinese** defaults to the dedicated Huayan Piper voice. Chaowen is an
   optional second Chinese voice; Piper Plus CSS10 remains available as the
   multilingual alternative.
-- **Korean has no server-side TTS model.** Use Browser TTS when the client has a
-  Korean voice; otherwise replies remain text-only.
+- **Korean** is spoken by Supertonic 3 when it is installed. Without it there is
+  no server-side Korean model: use Browser TTS when the client has a Korean
+  voice; otherwise replies remain text-only.
 - **Voice engine**: a **Settings → Voice engine** dropdown chooses which engine
-  is preferred for languages more than one can speak (piper-plus or piper-tts).
-  Languages only one engine supports are unaffected.
+  is preferred for languages more than one can speak (supertonic, piper-plus or
+  piper-tts). Languages only one engine supports are unaffected.
 - **Browser**: selecting the **Browser** engine speaks replies on the client with
   the Web Speech API instead of synthesizing on the board (no server compute). The
   server still cleans each sentence (Markdown/LaTeX stripped), so the browser
@@ -404,9 +491,41 @@ selector in Settings.
   be prepared. The original model remains on disk only to rebuild the split
   files; the worker loads only the encoder and decoder sessions into memory.
   Piper Plus is a separate multilingual engine and does not use this split path.
-- The default router preference is `piper-tts`. Selecting `piper-plus` under
-  **Settings → Voice engine** switches supported languages to the active
-  multilingual voice.
+- The default router preference is `supertonic` when its runtime loaded and
+  `piper-tts` otherwise. Selecting `piper-plus` under **Settings → Voice engine**
+  switches supported languages to the active multilingual voice.
+- **CPU engines load on demand.** When Supertonic is available, piper-plus and
+  the dedicated piper-tts voices stay out of RAM at startup; only languages
+  Supertonic cannot speak (Chinese, Norwegian) get their Piper voice loaded.
+  The **Voice engine** picker still lists installed CPU engines, marked
+  "loads on select"; choosing piper-tts loads the voice for the current
+  language (a few seconds) and other languages load on their first spoken
+  reply. Without Supertonic every installed engine loads at startup as before.
+- **Supertonic runs in its own venv and worker too.** Its runtime needs `pyneat`,
+  `onnxruntime` and `numpy 1.26`, which the UI venv does not carry, so `setup.sh`
+  clones [supertonic-sima](https://github.com/florianvoss-commit/supertonic-sima)
+  to `SUPERTONIC_REPO_ROOT` (default `/media/nvme/repos/supertonic-sima`) and runs
+  its `scripts/setup_devkit.sh`, which builds the venv under
+  `SUPERTONIC_APP_ROOT` (default `/media/nvme/supertonic-tts`) and downloads the
+  pinned upstream CPU models plus the precompiled MLA packages from
+  [florianvoss/supertonic-3-sima](https://huggingface.co/florianvoss/supertonic-3-sima).
+  No on-device compilation is needed. A fresh clone is checked out at the
+  reviewed commit in `SUPERTONIC_REPO_REVISION` before its installer runs, and
+  an install is only treated as complete when every file the worker needs is
+  present, so an interrupted download is repaired on the next `setup.sh`. Both
+  paths are persisted under `app.tts.supertonic` in `config.local.yaml`;
+  `run.sh` and the UI read them from there, with the environment variables as
+  overrides, and `run.sh` exports `SUPERTONIC_PYTHON` for the worker. Set
+  `INSTALL_SUPERTONIC=0` to skip it; when the runtime is missing the engine is
+  simply not offered and the CPU engines behave as before. An existing checkout
+  is only used when it is clean and at the reviewed revision (a clean one at
+  another revision is moved there; `SUPERTONIC_ALLOW_UNPINNED=1` runs it as
+  is). `./run.sh --clean` keeps the runtime and checkout, since they live
+  outside the example directory and are shared with the standalone
+  supertonic-sima app; `CLEAN_SUPERTONIC=1` removes them too. The worker holds the
+  two Supertonic models on the MLA next to the chat and speech-to-text models.
+  An accelerator reset (**Reset MLA**) tears the worker down; the next spoken
+  reply respawns it.
 
 The authoritative reviewed catalog is `src/python/ui/voice_catalog.json`. Each
 entry has a compact licence label, pinned upstream repository revision, and
@@ -554,6 +673,13 @@ curl -s http://127.0.0.1:9997/control/load \
 curl -s http://127.0.0.1:9997/control/unload \
   -H 'Content-Type: application/json' \
   -d '{"name":"<catalog-model-name>"}' | python3 -m json.tool
+
+# Make another speech-to-text model active (evicts the previous one). The
+# status above reports the active one as "asrModel" and the one a restart
+# re-selects as "configuredAsrModel".
+curl -s http://127.0.0.1:9997/control/asr \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"whisper-medium-a16w8"}' | python3 -m json.tool
 ```
 
 Check text chat:
@@ -645,6 +771,9 @@ Then test the browser UI:
 
 ## Development From Source
 See the Apps repository [contributor guide](https://github.com/sima-neat/apps/blob/main/CONTRIBUTING.md)
-for contribution requirements. The single-example download contains the Studio
+for contribution requirements. The repository (not the installed bundle) also
+carries the host-runnable unit suites under `tests/python/` (`*_suite.py` plus
+the `tts_text_check.py` script), collected by `tests/python/test_unit.py`;
+`./tests/test.sh --unit` runs them and they need only pytest and PyYAML. The single-example download contains the Studio
 source and can be edited directly; cloning the complete Apps repository is not
 required to run or customize it.
