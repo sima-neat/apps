@@ -10,4 +10,4 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../../../../cmake/ExampleModule.cmake")
 
-sima_neat_apps_module("high-density-multi-stream-object-detector" UNIT_TEST)
+sima_neat_apps_module("high-density-multi-stream-object-detector" UNIT_TEST E2E_TEST)

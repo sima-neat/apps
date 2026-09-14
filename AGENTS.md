@@ -6,6 +6,13 @@ test registration, and validation commands.
 
 ## Application changes
 
+- Start from the linked issue and the nearest shipped applications. Prefer one
+  config-driven application flow, one entrypoint per supported language, and
+  one optional UI or controller. Add another script, tool, process, or workflow
+  only when it provides distinct required behavior in the packaged application.
+- Keep application-specific files inside the owning application. Put files
+  shared by its C++ and Python implementations under `src/common`, and use the
+  existing repository-level directories for cross-application utilities.
 - Keep the Neat Library flow easy to follow. Graph construction, model loading,
   execution, and teardown should be visible in the entrypoint. Do not hide
   public Neat API objects behind unnecessary helpers.
@@ -23,6 +30,14 @@ test registration, and validation commands.
 - New applications normally include `src/common/config.yaml`, C++ and Python
   implementations, and unit and end-to-end tests. Explain every omission in the
   pull request.
+- Match input and output handling to the application contract. Offline and
+  batch applications may read files or directories and save or display results,
+  including annotated images. When an application provides real-time
+  visualization, use Insight as the only supported visualization UI and publish
+  live video and metadata through the Neat APIs.
+- Keep system provisioning and recovery outside application code. Platform
+  tooling owns host, network, mount, device-recovery, SDK, and unrelated process
+  management.
 - Keep credentials, customer information, internal material, and disposable
   build or runtime artifacts out of this public repository.
 - Keep agent plans, scratch notes, generated reports, and work records outside
@@ -43,6 +58,42 @@ test registration, and validation commands.
 
 ## Pull request reviews
 
+- Compare the pull request claims, linked issue, and implemented behavior.
+  Report when the implementation solves a different problem, omits claimed
+  behavior, or expands the scope without justification.
+- Compare the design with the nearest shipped applications. Report duplicate
+  controllers, UIs, process stacks, entrypoints, setup paths, misplaced
+  application files, or complexity without distinct packaged customer value.
+- Trace one supported customer workflow through the package: install,
+  configure, run, and inspect the result. Report source-only paths, missing
+  packaged resources, hardcoded environment setup, or customer options spread
+  across configuration, CLI arguments, and environment variables.
+- Check visualization against the application mode. File or directory input and
+  saved or locally displayed output are valid for offline applications. When an
+  application provides real-time visualization, require Insight as the only
+  supported visualization UI and Neat video and metadata APIs for publishing
+  live results.
+- Report application code that performs platform provisioning or recovery,
+  including host filesystem, network, mount, device-recovery, SDK, or unrelated
+  process management.
+- For stateful or dynamic applications, review lifecycle transitions, resource
+  limits, cleanup, persistence safety, and the association of cached results
+  with their source. Tests must cover failure, replacement, stop, and restart
+  paths when those behaviors exist.
+- Map every advertised behavior to an end-to-end assertion and to both language
+  implementations when the application supports C++ and Python. A test that
+  only starts the process is not evidence for the feature.
+- When model-preparation files change, check whether the Model Registry should
+  own the artifacts. Temporary application-specific preparation may remain
+  under the owning application's `src/common`, but it must be one
+  development-only flow and must not become a packaged runtime dependency.
+- Before marking a new or materially changed application ready, verify or
+  require evidence that the exact branch package was installed with
+  `sima-cli neat install apps@<branch>` and that its installed README produced
+  the advertised result. The pull request description must record this
+  evidence.
+- Separate correctness, structure, packaging, and customer-workflow blockers
+  from optional performance follow-ups.
 - Review the complete affected application, including its tests, configuration,
   README, and preview. Do not review changed lines in isolation.
 - Report only concrete problems introduced or exposed by the change. Anchor

@@ -1,39 +1,15 @@
 models:
-  superpoint_int8_mla:
-    source: model-registry
-    name: superpoint
-    ref: codex/superpoint-model-matrix
-    spec: latest
-    file: superpoint_modalix_int8_tessellation_mla_mpk.tar.gz
-  superpoint_int8_ev74:
-    source: model-registry
-    name: superpoint
-    ref: codex/superpoint-model-matrix
-    spec: latest
-    file: superpoint_modalix_int8_tessellation_ev74_mpk.tar.gz
-  superpoint_bf16_mla:
-    source: model-registry
-    name: superpoint
-    ref: codex/superpoint-model-matrix
-    spec: latest
-    file: superpoint_modalix_bf16_tessellation_mla_mpk.tar.gz
-  superpoint_bf16_ev74:
-    source: model-registry
-    name: superpoint
-    ref: codex/superpoint-model-matrix
-    spec: latest
-    file: superpoint_modalix_bf16_tessellation_ev74_mpk.tar.gz
+  superpoint:
+    source: url
+    url: https://docs.sima.ai/pkg_downloads/SDK{modelzoo_version}/models/modalix/superpoint_mpk.tar.gz
+    file: superpoint_mpk.tar.gz
 unit:
   python: true
   cpp: true
 e2e:
   python:
     enabled: true
-    models:
-      - superpoint_int8_mla
-      - superpoint_int8_ev74
-      - superpoint_bf16_mla
-      - superpoint_bf16_ev74
+    models: [superpoint]
   cpp:
     enabled: true
-    models: [superpoint_int8_mla]
+    models: [superpoint]
