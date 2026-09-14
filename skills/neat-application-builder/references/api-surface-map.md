@@ -16,6 +16,11 @@ the callable contract. Read only the headers and docs needed for the task.
 
 ## Core Application Surface
 
+- Application entry point and development loop
+  - Inspect `include/neat.h`
+  - Read `docs/develop-apps/development-workflow/index.md`
+- Generated C++ and Python API reference
+  - Read `docs/reference/`
 - `Model`, `Model::Options`, `Model::RouteOptions`, and `Model::Runner`
   - Inspect `include/model/Model.h`
   - Read `docs/develop-apps/development-workflow/model.mdx`
@@ -23,15 +28,18 @@ the callable contract. Read only the headers and docs needed for the task.
   - Inspect `include/pipeline/Graph.h`
   - Inspect `include/pipeline/GraphOptions.h`
   - Read `docs/develop-apps/development-workflow/graph.mdx`
+  - Read `docs/develop-apps/advanced-concepts/application-design/graphs.md` for graph composition details
 - `Run`, `RunOptions`, push/pull, endpoint names, measurement, and close/drain behavior
   - Inspect `include/pipeline/Run.h`
   - Read `docs/develop-apps/development-workflow/overview.mdx`
+  - Read `docs/develop-apps/development-workflow/pipeline.mdx` for the built pipeline and runtime view
 
 ## Data And Boundary Types
 
 - `Tensor`, `TensorList`, `TensorSpec`, dtype/layout/pixel-format helpers, and OpenCV/NumPy adapters
-  - Inspect `include/pipeline/Tensor*.h`
+  - Inspect `include/pipeline/Tensor.h`, `include/pipeline/TensorCore.h`, and `include/pipeline/TensorTypes.h`
   - Read `docs/develop-apps/development-workflow/core_types.mdx`
+  - Read `docs/develop-apps/advanced-concepts/data-model-contracts/data_formats.md` for data and media format contracts
 - `Sample`, bundles, frame IDs, timestamps, and metadata-carrying payloads
   - Inspect `include/pipeline/Tensor.h`
   - Read `docs/develop-apps/development-workflow/core_types.mdx`
@@ -48,6 +56,7 @@ the callable contract. Read only the headers and docs needed for the task.
 - Public node umbrella includes
   - Inspect `include/neat/nodes.h`
   - Inspect `include/neat/node_groups.h`
+  - Read `docs/develop-apps/development-workflow/node.mdx` for public nodes and node groups
 - Boundary nodes and common graph nodes
   - Inspect `include/nodes/io/Input.h`
   - Inspect `include/nodes/common/Output.h`
@@ -59,9 +68,11 @@ the callable contract. Read only the headers and docs needed for the task.
   - Inspect `include/nodes/io/StillImageInput.h`
   - Inspect `include/nodes/io/UdpOutput.h`
   - Inspect `include/nodes/io/MetadataSender.h`
+  - Read `docs/develop-apps/advanced-concepts/application-design/metadata_sender.md` for metadata output patterns
 - Pre-built node groups for common application plumbing
   - Inspect `include/nodes/groups/*.h`
   - Start with `RtspEncodedInput.h`, `RtspDecodedInput.h`, `VideoSender.h`, `ImageInputGroup.h`, and `ModelGroups.h`
+  - Read `docs/develop-apps/advanced-concepts/application-design/video_sender.md` for video output patterns
 
 ## Model Pre/Post And Decode Helpers
 

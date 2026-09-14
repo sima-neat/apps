@@ -5,10 +5,8 @@ input owner, then select the smallest API that fits the application.
 
 ## Artifact and input boundary
 
-- Classic runtime APIs consume a compiled model archive. If only ONNX is
-  available, route preparation to the Model Compiler workflow and continue
-  independent application design. Require the compiled artifact before relying
-  on its tensor or preprocessing contract and before running inference.
+- Classic applications consume a compiled model archive, not ONNX. Complete
+  compilation before application design.
 - Decide whether the caller supplies decoded inputs or the `Graph` owns a source
   and topology.
 - Inspect the model package before adding preprocessing or postprocessing.
