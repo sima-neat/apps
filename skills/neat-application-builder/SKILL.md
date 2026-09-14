@@ -1,6 +1,6 @@
 ---
 name: neat-application-builder
-description: Build or adapt Neat applications using public C++ or Python APIs. Use for application logic and pipelines consuming compiled model archives or deployed GenAI model directories.
+description: Build or adapt Neat applications using public C++ or Python APIs. Use for camera, file, or RTSP pipelines and application logic consuming compiled model archives or deployed GenAI model directories.
 ---
 
 # Neat Application Builder
