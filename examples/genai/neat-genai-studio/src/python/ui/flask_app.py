@@ -1206,6 +1206,9 @@ class AppContext:
             resp = requests.get(
                 f"{self.control_base_url.rstrip('/')}/control/status", timeout=5
             )
+            # An HTTP error carries a JSON error body, not a status: a
+            # transient 500 must not read as "no model active".
+            resp.raise_for_status()
             name = str((resp.json() or {}).get("asrModel") or "")
             reachable = True
         except Exception:

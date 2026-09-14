@@ -947,6 +947,15 @@ def _post_load_with_progress(ctrl, name, do_post):
         except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
             box["error"] = exc
 
+    # The native model transfer holds the GIL, so the control API usually stops
+    # answering for the whole load. Poll it with a short timeout and, while it
+    # is silent, drive the bar from the catalog's own estimate (measured load
+    # time and stage count), as the browser does.
+    hint = next((m for m in catalog(ctrl) if m.get("name") == name), {}) or {}
+    est = hint.get("estimatedLoadS")
+    est = float(est) if isinstance(est, (int, float)) and est > 0 else None
+    stages = hint.get("stagesTotal")
+    started = time.monotonic()
     worker = threading.Thread(target=_work, name="model-load", daemon=True)
     worker.start()
     drew = False
@@ -955,9 +964,15 @@ def _post_load_with_progress(ctrl, name, do_post):
         if not worker.is_alive():
             break
         try:
-            ld = (ctrl_get(ctrl, "/control/status") or {}).get("loading")
+            ld = (_http(f"http://{ctrl[0]}:{ctrl[1]}/control/status", timeout=2) or {}).get("loading")
         except Exception:
             ld = None
+        if not (ld and ld.get("name") == name):
+            elapsed = time.monotonic() - started
+            ld = {"name": name, "elapsedS": elapsed, "stagesTotal": stages}
+            if est:
+                ld["pct"] = min(99.0, elapsed / est * 100.0)   # hold at 99: done when the call returns
+                ld["remainingS"] = max(0.0, est - elapsed)
         if ld and ld.get("name") == name:
             line = _load_progress_line(ld)
             if line:

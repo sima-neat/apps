@@ -205,6 +205,16 @@ class AsrSwitchingTests(unittest.TestCase):
         self.assertIn("cannot be deleted", errors[0])
         self.assertTrue((self.tmp / "whisper-medium-a16w8").is_dir())
 
+    def test_deleting_a_residual_registration_that_will_not_unload_is_refused(self):
+        # A failed warm-up can leave an inactive ASR registered. Deleting its
+        # files while the runtime still references it would strand the entry.
+        manager, server = self.manager()
+        server.names.append("whisper-medium-a16w8")
+        server.remove_model = lambda name: False
+        with self.assertRaisesRegex(ValueError, "still registered"):
+            manager.delete("whisper-medium-a16w8")
+        self.assertTrue((self.tmp / "whisper-medium-a16w8").is_dir())
+
     def test_an_eviction_reported_as_not_removed_aborts_the_switch(self):
         manager, server = self.manager()
         server.remove_model = lambda name: False

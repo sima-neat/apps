@@ -4020,6 +4020,7 @@ function populateModelSelect(catalog) {
   const asrModels = _catalog.filter(m => (m.type || 'chat') === 'asr');
   _asrActive = (asrModels.find(m => m.activeAsr) || {}).name || '';
   updateAsrModelIndicator();
+  updateComposerEnabled();     // the record button depends on an active ASR
   const chatModels = catalog.filter(m => (m.type || 'chat') !== 'asr');
   const previous = select.value;
   while (select.firstChild) select.removeChild(select.firstChild);
@@ -4331,7 +4332,16 @@ function updateComposerEnabled() {
         : 'Load a model in Settings to start chatting…');
   }
   if (send) send.disabled = !ready;
-  if (typeof recordButton !== 'undefined' && recordButton) recordButton.disabled = !ready;
+  if (typeof recordButton !== 'undefined' && recordButton) {
+    // Recording also needs a speech-to-text model. In control mode the catalog
+    // is authoritative: with ASR_MODEL_REPO="" (or after a failed switch) none
+    // is active, and every upload would only come back "unavailable".
+    const asrMissing = controlEnabled() && !_asrActive;
+    recordButton.disabled = !ready || asrMissing;
+    recordButton.title = asrMissing
+      ? 'No speech-to-text model is active — pick one under Settings → Models'
+      : '';
+  }
   if (composer) composer.classList.toggle('composer-locked', !ready);
   // Snap/upload additionally require a vision model. When not ready, force them
   // off here (the load-start case); when ready, updateSelectedModelVisionState ->
@@ -4695,6 +4705,7 @@ async function switchAsrModel(name) {
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.error || 'switch failed');
     _asrActive = data.activeAsr || name;
+    updateComposerEnabled();
     const evicted = Array.isArray(data.evicted) ? data.evicted : [];
     const evictedNote = evicted.length ? ` · unloaded ${evicted.join(', ')}` : '';
     const secs = (typeof data.load_seconds === 'number') ? data.load_seconds : null;
