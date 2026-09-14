@@ -35,6 +35,11 @@ from collections import deque
 _LOADING_RE = re.compile(r"^Loading model\s+(?P<path>.+\.elf)\s*$")
 _DONE_RE = re.compile(r"^Done loading\s+(?P<path>.+\.elf)\s*$")
 _TIMING_RE = re.compile(r"\[mlatiming\]\s+mlashm_load_model\s+(?P<path>.+?)\s+took\s+(?P<ms>\d+)\s+ms\s+ok=(?P<ok>\d)")
+# Newer runtimes load every stage in ONE bulk call and print only this summary —
+# no per-stage lines at all, which is why the stage counter can stay at zero.
+_BULK_RE = re.compile(r"\[mlatiming\]\s+mlashm_load_models\s+bulk\s+took\s+(?P<ms>\d+)\s+ms\s+ok=(?P<ok>\d)")
+# Runtime errors are the most useful thing the log can carry; never drop them.
+_ERROR_RE = re.compile(r"\[error\]|MLASHM|mlashm request|MLA_LOAD_FAILED", re.I)
 
 
 class LoadLogTap:
@@ -134,9 +139,23 @@ class LoadLogTap:
             except Exception:
                 buf = b""  # a parse error must never stop the drain loop
 
+    def note(self, text: str) -> None:
+        """Record a studio-side line (load lifecycle) in the same stream.
+
+        The runtime's own output during a load is sparse — some versions print a
+        single bulk-timing line and nothing else — so without these the log panel
+        would sit empty for the whole load and tell the user nothing.
+        """
+        if not text:
+            return
+        with self._lock:
+            self._seq += 1
+            self._lines.append((self._seq, round(time.monotonic(), 2), text))
+
     def _note_line(self, line: str) -> None:
         done = _DONE_RE.match(line)
-        if not (done or _LOADING_RE.match(line) or _TIMING_RE.search(line)):
+        if not (done or _LOADING_RE.match(line) or _TIMING_RE.search(line)
+                or _BULK_RE.search(line) or _ERROR_RE.search(line)):
             return
         with self._lock:
             self._seq += 1

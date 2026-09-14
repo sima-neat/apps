@@ -5,12 +5,14 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-# The security helpers do not parse YAML; keep this host-only unit test runnable
-# even when the example's runtime dependencies have not been installed.
+# shared.config needs PyYAML; require it rather than stubbing the module
+# process-wide (which would break later tests that parse YAML for real).
 try:
     import yaml  # noqa: F401
-except ModuleNotFoundError:
-    sys.modules["yaml"] = types.ModuleType("yaml")
+except ModuleNotFoundError as exc:  # pragma: no cover - environment check
+    raise ModuleNotFoundError(
+        "PyYAML is required to run the Studio unit tests (pip install PyYAML)"
+    ) from exc
 
 from server.hub import _catalog_target, hub_download_stream, safe_name, validated_repo_id
 from server.model_manager import parse_param_count
