@@ -263,7 +263,10 @@ if [[ -f ${REMOTE_PID_FILE_Q} ]]; then
         done
         if kill -0 \"\${pid}\" 2>/dev/null; then
           echo 'Card did not stop after SIGINT; sending SIGTERM.' >&2
-          echo \"\$(date '+%Y-%m-%d %H:%M:%S') card application PID \${pid} did not stop after SIGINT and was killed\" >${REMOTE_DIRTY_FILE_Q}
+          {
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') card application PID \${pid} did not stop after SIGINT and was killed\"
+            echo \"boot_id=\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)\"
+          } >${REMOTE_DIRTY_FILE_Q}
           echo 'The card was left in an unclean state; reboot it before starting a new session.' >&2
           kill -TERM \"\${pid}\" 2>/dev/null
           sleep 3
@@ -327,16 +330,22 @@ test -x ${CARD_BINARY_Q} || {
 }
 mkdir -p ${REMOTE_DIR_Q}
 if [[ -f ${REMOTE_DIRTY_FILE_Q} ]]; then
-  marked=\$(stat -c %Y ${REMOTE_DIRTY_FILE_Q} 2>/dev/null || echo 0)
-  up=\$(cut -d. -f1 /proc/uptime)
-  booted=\$(( \$(date +%s) - \${up:-0} ))
-  if [[ \"\${booted}\" -gt \"\${marked}\" ]]; then
+  # The dirty marker records the boot_id of the boot it was written on.
+  # /proc/sys/kernel/random/boot_id is regenerated only on reboot, so comparing
+  # it is immune to wall-clock steps (e.g. NTP correcting the card's clock after
+  # connectivity returns) that a date/uptime-derived boot time is not: a forward
+  # step could make the derived boot time look newer than the marker and wrongly
+  # clear the guard, and a backward step could reject a genuinely rebooted card.
+  marked_boot=\$(sed -n 's/^boot_id=//p' ${REMOTE_DIRTY_FILE_Q} 2>/dev/null | head -n1)
+  current_boot=\$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
+  if [[ -n \"\${marked_boot}\" && -n \"\${current_boot}\" && \"\${marked_boot}\" != \"\${current_boot}\" ]]; then
+    # A different boot_id means the card has rebooted since the unclean stop.
     rm -f ${REMOTE_DIRTY_FILE_Q}
   elif [[ ${ALLOW_DIRTY_CARD} -eq 1 ]]; then
     echo 'WARNING: starting on a card that was not rebooted after an unclean stop (--allow-dirty-card).' >&2
     rm -f ${REMOTE_DIRTY_FILE_Q}
   else
-    echo \"The previous session did not stop cleanly: \$(cat ${REMOTE_DIRTY_FILE_Q})\" >&2
+    echo \"The previous session did not stop cleanly: \$(head -n1 ${REMOTE_DIRTY_FILE_Q})\" >&2
     echo 'Reboot the card before starting a new session (or pass --allow-dirty-card to override).' >&2
     exit 1
   fi

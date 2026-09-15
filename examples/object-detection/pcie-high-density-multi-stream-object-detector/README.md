@@ -161,8 +161,11 @@ Do not restart only the host against an old card graph. Stop the launcher and st
 The host application exits with an error when frames are still admitted but no result has
 come back for `runtime.stall_timeout_ms` (default: twice `pcie.result_timeout_ms`). A stalled
 card does not recover on its own: stop the launcher, then reboot the card before starting
-another session. Pressing `Ctrl-C` a second time, or exceeding `runtime.teardown_timeout_ms`,
-exits the host without waiting for the card.
+another session. If the host's own teardown exceeds `runtime.teardown_timeout_ms`, it stops
+waiting for the card and exits. Avoid pressing `Ctrl-C` a second time during shutdown: the host
+runs in its own session and the launcher drops its signal handlers while waiting for it, so a
+second interrupt terminates the launcher before it finishes stopping and cleaning up the card,
+leaving the card in the unclean state described below (reboot required).
 
 A card application that does not stop on `SIGINT` is killed. That can leave PCIe endpoint queue
 state behind (`si_pep_get_rqe: No context created for Data work queue`,
