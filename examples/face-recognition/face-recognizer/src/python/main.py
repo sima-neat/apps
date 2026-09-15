@@ -700,8 +700,9 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
     else:
         print(f"rtsp={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} headless")
 
-    cached_labels: List[str]  = []
-    cached_sims:   List[float] = []
+    cached_labels:    List[str]              = []
+    cached_sims:      List[float]            = []
+    cached_centroids: List[Tuple[float, float]] = []  # box centres from last recog
     last_recog_frame = -cfg.recog_interval  # force recog on frame 0
 
     frame_count = 0
@@ -736,10 +737,32 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
             # End of file or stale RTSP; try to keep going with pyneat pipeline
             bgr = None
 
-        # Run recognition at recog_interval
-        if dets and bgr is not None and (frame_count - last_recog_frame) >= cfg.recog_interval:
-            cached_labels = []
-            cached_sims   = []
+        # Run recognition at recog_interval, or immediately when detections reorder.
+        # Detection reorder: SCRFD sorts by score; if two faces' scores cross between
+        # recog runs, index 0 and 1 swap, assigning the wrong cached label to each face.
+        # Detect this by checking whether each current box centre is still closest to
+        # the same-index cached position, and force a fresh recognition if not.
+        def _reordered(cur_dets, centroids):
+            for i, d in enumerate(cur_dets):
+                cx = (d["x1"] + d["x2"]) / 2
+                cy = (d["y1"] + d["y2"]) / 2
+                d2_same = (cx - centroids[i][0]) ** 2 + (cy - centroids[i][1]) ** 2
+                if any((cx - centroids[j][0]) ** 2 + (cy - centroids[j][1]) ** 2 < d2_same
+                       for j in range(len(centroids)) if j != i):
+                    return True
+            return False
+
+        need_recog = (
+            dets and bgr is not None and (
+                (frame_count - last_recog_frame) >= cfg.recog_interval
+                or len(dets) != len(cached_labels)
+                or (cached_centroids and _reordered(dets, cached_centroids))
+            )
+        )
+        if need_recog:
+            cached_labels    = []
+            cached_sims      = []
+            cached_centroids = []
             for det in dets:
                 crop = align_face(bgr, det["landmarks"])
                 f32  = preprocess_arcface(crop)
@@ -756,12 +779,13 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
                 )
                 cached_labels.append(label)
                 cached_sims.append(sim)
+                cached_centroids.append(((det["x1"] + det["x2"]) / 2,
+                                         (det["y1"] + det["y2"]) / 2))
             last_recog_frame = frame_count
         elif not dets or len(dets) != len(cached_labels):
-            # Clear cache when faces leave/enter; stale index→label mapping would
-            # assign the wrong identity to a face that shifted position in the list.
-            cached_labels = []
-            cached_sims   = []
+            cached_labels    = []
+            cached_sims      = []
+            cached_centroids = []
 
         # Per-frame console output in test mode (mirrors C++ --test output)
         if test_mode and dets:

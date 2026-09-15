@@ -102,6 +102,8 @@ runtime:
     --config ${APP_DIR}/src/common/config.yaml
 ```
 
+> **Insight visualization (C++):** Bounding boxes and identity labels are burned directly into the H.264 video frame before encoding. The Insight metadata channel is kept alive with an empty payload each frame so Insight does not draw its own overlay on top. This avoids double-drawing that would otherwise produce two boxes per face.
+
 **Python:**
 
 ```bash
@@ -109,9 +111,9 @@ python3 ${APP_DIR}/src/python/main.py \
     --config ${APP_DIR}/src/common/config.yaml
 ```
 
-The RTSP input URI, gallery path, model paths, and output options are all read from `config.yaml`.
+> **Python notes:** The Python pipeline requires an H.264 RTSP source (`input.uri`); local video file and webcam inputs are not supported. The `output.sink` file-write option is also not supported. When Insight is enabled the Python pipeline sends detection metadata (bounding boxes and labels) to Insight for visualization; the H.264 stream carries raw unannotated frames.
 
-> **Insight visualization note:** Bounding boxes and identity labels are burned directly into the H.264 video frame before encoding. The Insight metadata channel is kept alive with an empty payload each frame so Insight does not draw its own overlay on top. This avoids double-drawing that would otherwise produce two boxes per face.
+The RTSP input URI, gallery path, model paths, and output options are all read from `config.yaml`.
 
 **Optional overrides:**
 
