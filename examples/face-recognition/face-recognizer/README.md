@@ -95,8 +95,17 @@ runtime:
 
 ## Run
 
+**C++:**
+
 ```bash
 ./${APP_DIR}/src/cpp/pre-built/face-recognizer \
+    --config ${APP_DIR}/src/common/config.yaml
+```
+
+**Python:**
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
     --config ${APP_DIR}/src/common/config.yaml
 ```
 

@@ -28,7 +28,7 @@ from typing import List, Optional, Tuple
 
 import yaml
 
-_DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "common" / "config.yaml"
+_DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "common" / "config.yaml"
 
 # ── lazy imports (not available at build time) ────────────────────────────────
 cv2 = None
@@ -476,18 +476,6 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     rtsp_opt.output_caps.memory    = pyneat.CapsMemory.Any
 
     source = pyneat.groups.rtsp_decoded_input(rtsp_opt)
-    branch = pyneat.graphs.branch("source", ["video", "model"])
-
-    video_opt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
-    video_opt.host            = cfg.insight_host
-    video_opt.channel         = 0
-    video_opt.video_port_base = cfg.insight_video_port
-    video_opt.encoder.bitrate_kbps = 4000
-
-    video_graph = pyneat.Graph("video")
-    video_graph.connect(
-        pyneat.nodes.input("video"), pyneat.groups.video_sender(video_opt)
-    )
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), scrfd_model)
@@ -501,9 +489,24 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     g_opts = pyneat.GraphOptions()
     g_opts.advanced_execution.postprocess_target = "EV74"
     graph = pyneat.Graph(g_opts)
-    graph.connect(source, branch)
-    graph.connect(branch, video_graph, live_link)
-    graph.connect(branch, model_graph, live_link)
+
+    video_opt = None
+    if cfg.insight_host:
+        branch = pyneat.graphs.branch("source", ["video", "model"])
+        _vopt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
+        _vopt.host            = cfg.insight_host
+        _vopt.channel         = 0
+        _vopt.video_port_base = cfg.insight_video_port
+        _vopt.encoder.bitrate_kbps = 4000
+        video_graph = pyneat.Graph("video")
+        video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(_vopt))
+        graph.connect(source, branch)
+        graph.connect(branch, video_graph, live_link)
+        graph.connect(branch, model_graph, live_link)
+        video_opt = _vopt
+    else:
+        graph.connect(source, model_graph, live_link)
+
     graph.connect(model_graph, out_graph)
 
     run_opts = pyneat.RunOptions()
@@ -663,7 +666,8 @@ def _letterbox_params(orig_w: int, orig_h: int, infer_w: int, infer_h: int):
     return scale, pad_l, pad_t
 
 
-def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int) -> int:
+def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int,
+                    test_mode: bool = False) -> int:
     """Main recognition loop: RTSP → SCRFD → ArcFace → MetadataSender → Insight."""
     frame_w, frame_h, fps = _probe_rtsp(cfg.input_uri)
     scale, pad_l, pad_t = _letterbox_params(frame_w, frame_h, cfg.infer_w, cfg.infer_h)
@@ -674,22 +678,27 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
     dummy_crop = np.zeros((_ARCFACE_H, _ARCFACE_W, 3), dtype=np.float32)
     arc_run = _build_arcface_run(cfg, dummy_crop)
 
-    meta_opt = pyneat.MetadataSenderOptions()
-    meta_opt.host               = cfg.insight_host
-    meta_opt.channel            = 0
-    meta_opt.metadata_port_base = cfg.insight_metadata_port
-    metadata_sender = pyneat.MetadataSender(meta_opt)
+    metadata_sender = None
+    if cfg.insight_host:
+        meta_opt = pyneat.MetadataSenderOptions()
+        meta_opt.host               = cfg.insight_host
+        meta_opt.channel            = 0
+        meta_opt.metadata_port_base = cfg.insight_metadata_port
+        metadata_sender = pyneat.MetadataSender(meta_opt)
 
     # Open a separate cv2 capture for raw BGR frames (face alignment).
     cap = cv2.VideoCapture(cfg.input_uri)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open RTSP for frame reading: {cfg.input_uri}")
 
-    print(
-        f"rtsp={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} "
-        f"insight={cfg.insight_host} video={video_opt.video_port} "
-        f"metadata={metadata_sender.metadata_port()} channel=0"
-    )
+    if cfg.insight_host:
+        print(
+            f"rtsp={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} "
+            f"insight={cfg.insight_host} video={video_opt.video_port} "
+            f"metadata={metadata_sender.metadata_port()} channel=0"
+        )
+    else:
+        print(f"rtsp={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} headless")
 
     cached_labels: List[str]  = []
     cached_sims:   List[float] = []
@@ -754,8 +763,15 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
             cached_labels = []
             cached_sims   = []
 
+        # Per-frame console output in test mode (mirrors C++ --test output)
+        if test_mode and dets:
+            for i, det in enumerate(dets):
+                label = cached_labels[i] if i < len(cached_labels) else cfg.unknown_label
+                sim   = cached_sims[i]   if i < len(cached_sims)   else -1.0
+                print(f"  face[{i}] → {label}  similarity={sim:.4f}")
+
         # Publish metadata to Insight
-        if cfg.insight_host:
+        if cfg.insight_host and metadata_sender:
             fw = float(frame_w)
             fh = float(frame_h)
             objects = []
@@ -803,6 +819,7 @@ def _parse_args(argv):
     p.add_argument("--scrfd-model",  type=str,   default=None)
     p.add_argument("--arcface-model",type=str,   default=None)
     p.add_argument("--max-frames",   type=int,   default=0)
+    p.add_argument("--test",         action="store_true")
     p.add_argument("--enroll",       action="store_true")
     p.add_argument("--video",        type=str,   default=None)
     p.add_argument("--name",         type=str,   default=None)
@@ -862,17 +879,19 @@ def main(argv=None) -> int:
         return 1
 
     gallery: List[GalleryEntry] = []
-    if cfg.gallery_path and Path(cfg.gallery_path).exists():
+    gallery_path = Path(cfg.gallery_path) if cfg.gallery_path else None
+    if gallery_path and gallery_path.exists():
         try:
             gallery = load_gallery(cfg.gallery_path)
             print(f"[GALLERY] Loaded {len(gallery)} identity(ies) from {cfg.gallery_path}")
         except Exception as exc:
-            print(f"[WARN] Could not load gallery: {exc}", file=sys.stderr)
+            print(f"[ERR] Gallery exists but cannot be read: {exc}", file=sys.stderr)
+            return 1
     else:
         print("[WARN] No gallery loaded — all faces will be labelled Unknown", file=sys.stderr)
 
     try:
-        return run_recognition(cfg, gallery, cfg.max_frames)
+        return run_recognition(cfg, gallery, cfg.max_frames, test_mode=args.test)
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
