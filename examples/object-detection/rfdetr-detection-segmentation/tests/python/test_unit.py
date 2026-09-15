@@ -70,12 +70,9 @@ def test_topk_gather_is_stable_and_deterministic():
 def test_postprocess_uses_sparse_coco_ids_and_source_geometry():
     labels = ["unused"] * 91
     labels[1] = "person"
-    boxes = np.zeros((1, 300, 4), dtype=np.float32)
-    boxes[0, 0] = [0.5, 0.5, 0.5, 0.25]
-    logits = np.full((1, 300, 91), -20.0, dtype=np.float32)
-    logits[0, 0, 1] = 10.0
-
-    objects = main.postprocess(boxes, logits, 1920, 1080, labels, 0.5, 10)
+    boxes = np.array([[480, 405, 1440, 675, 1.0, 0],
+                      [480, 405, 1440, 675, 0.99, 1]], dtype=np.float32)
+    objects = main.postprocess(boxes, 1920, 1080, labels, 0.5, 10)
 
     assert len(objects) == 1
     assert objects[0]["label"] == "person"
@@ -196,18 +193,13 @@ def test_config_rejects_unknown_model_variant(tmp_path):
 def test_segmentation_metadata_contains_polygons(mask_grid_size):
     labels = ["unused"] * 91
     labels[1] = "person"
-    boxes = np.zeros((1, 200, 4), dtype=np.float32)
-    boxes[0, 0] = [0.5, 0.5, 0.5, 0.5]
-    boxes[0, 1] = [0.5, 0.5, 0.5, 0.5]
-    logits = np.full((1, 200, 91), -20.0, dtype=np.float32)
-    logits[0, 0, 0] = 12.0
-    logits[0, 0, 1] = 11.0
-    logits[0, 1, 1] = 10.0
-    masks = np.full((108, 108, 200), -20.0, dtype=np.float32)
-    masks[40:68, 40:68, 0] = 10.0
-
+    boxes = np.array([[320, 180, 960, 540, 1.0, 0],
+                      [320, 180, 960, 540, 0.99, 1],
+                      [320, 180, 960, 540, 0.98, 1]], dtype=np.float32)
+    masks = np.zeros((3, 108, 108), dtype=np.float32)
+    masks[2, 40:68, 40:68] = 1.0
     payload = main.segmentation_metadata(
-        boxes, logits, masks, 1280, 720, labels, 0.3, 1, 0.08, mask_grid_size
+        boxes, masks, 1280, 720, labels, 0.3, 1, 0.08, mask_grid_size
     )
 
     segments = json.loads(payload)["segments"]
@@ -218,3 +210,32 @@ def test_segmentation_metadata_contains_polygons(mask_grid_size):
     assert segment["mask_format"] == "polygon"
     assert len(segment["mask"]) >= 3
     assert all(0 <= x < 1280 and 0 <= y < 720 for x, y in segment["mask"])
+
+
+@pytest.mark.unit
+def test_decoded_boundaries_and_metadata_budget():
+    labels = ["unused", "person"]
+    boxes = np.array([[-2, -3, 20, 15, 0.5, 1]] * 2, dtype=np.float32)
+    masks = np.full((2, 108, 108), 0.5, dtype=np.float32)
+    objects = main.postprocess(boxes, 13, 9, labels, 0.5, 2)
+    assert objects == [
+        {"id": f"obj_{i}", "label": "person", "confidence": 0.5,
+         "bbox": [0.0, 0.0, 13.0, 9.0]} for i in (1, 2)
+    ]
+    assert main.postprocess(boxes[:0], 13, 9, labels, 0.5, 2) == []
+    def metadata(rows, probabilities, names):
+        return main.segmentation_metadata(rows, probabilities, 13, 9, names,
+                                          0.5, 2, 0.5, 108)
+    payload = metadata(boxes, masks, labels)
+    assert json.loads(payload) == {"segments": [
+        {"id": f"seg_{i}", "label": "person", "confidence": 0.5,
+         "bbox": [0, 0, 13, 9], "mask_format": "polygon",
+         "mask": [[0, 0], [0, 8], [12, 8], [12, 0]]} for i in (1, 2)
+    ]}
+    assert json.loads(metadata(boxes[:0], masks[:0], labels)) == {"segments": []}
+    below = np.nextafter(np.float32(0.5), np.float32(0))
+    assert json.loads(metadata(boxes, np.full_like(masks, below), labels)) == {"segments": []}
+    long_labels = ["unused", "x" * (main.METADATA_BYTE_BUDGET // 2)]
+    limited = metadata(boxes, masks, long_labels)
+    assert len(json.loads(limited)["segments"]) == 1
+    assert len(limited.encode()) <= main.METADATA_BYTE_BUDGET
