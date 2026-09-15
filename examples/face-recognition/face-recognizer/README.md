@@ -112,6 +112,8 @@ python3 ${APP_DIR}/src/python/main.py \
 ```
 
 > **Python notes:** The Python pipeline requires an H.264 RTSP source (`input.uri`); local video file and webcam inputs are not supported. The `output.sink` file-write option is also not supported. When Insight is enabled the Python pipeline sends detection metadata (bounding boxes and labels) to Insight for visualization; the H.264 stream carries raw unannotated frames.
+>
+> Face alignment uses the same decoded frame SCRFD ran on: the graph taps the decoded NV12 off the same branch that feeds the model and joins it to the detections with `CombinePolicy.ByFrame`. There is one decode and one RTSP connection, matching the C++ recognition path.
 
 The RTSP input URI, gallery path, model paths, and output options are all read from `config.yaml`.
 

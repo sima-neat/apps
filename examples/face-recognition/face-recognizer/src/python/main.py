@@ -69,6 +69,9 @@ _EMBEDDING_DIM   = 512
 _ARCFACE_W       = 112
 _ARCFACE_H       = 112
 
+# Name of the combine() output carrying {frame, detections} for the same frame.
+_JOINED_OUTPUT   = "recognizer_output"
+
 # InsightFace canonical 112×112 landmark positions (left_eye, right_eye, nose, mouth L/R).
 _ARCFACE_TEMPLATE = None  # initialized after numpy is loaded
 
@@ -317,21 +320,47 @@ def decode_scrfd(
 
 # ── face alignment ─────────────────────────────────────────────────────────────
 
+def _similarity_transform_lsq(src: "np.ndarray", dst: "np.ndarray"):
+    """Least-squares similarity transform (rotation+uniform scale+translation).
+
+    Fits all five landmarks exactly, matching similarity_transform_lsq() in
+    src/cpp/align.cpp.  A robust estimator such as estimateAffinePartial2D with
+    LMEDS/RANSAC would discard landmarks as outliers, and with only five points
+    that measurably degrades the crop and lowers ArcFace similarity.
+    """
+    n = len(src)
+    x,  y  = src[:, 0], src[:, 1]
+    dx, dy = dst[:, 0], dst[:, 1]
+    ss   = float(np.sum(x * x + y * y))
+    sx,  sy  = float(np.sum(x)),  float(np.sum(y))
+    sdx, sdy = float(np.sum(dx)), float(np.sum(dy))
+    sxdx = float(np.sum(x * dx + y * dy))
+    sxdy = float(np.sum(x * dy - y * dx))
+
+    inv_n = 1.0 / n
+    S = ss - (sx * sx + sy * sy) * inv_n
+    if abs(S) < 1e-12:
+        return None
+    a = (sxdx - (sx * sdx + sy * sdy) * inv_n) / S
+    b = (sxdy - (sx * sdy - sy * sdx) * inv_n) / S
+    c = (sdx - a * sx + b * sy) * inv_n
+    d = (sdy - b * sx - a * sy) * inv_n
+    return np.array([[a, -b, c],
+                     [b,  a, d]], dtype=np.float64)
+
+
 def align_face(bgr: "np.ndarray", landmarks: "np.ndarray") -> "np.ndarray":
     """
     Similarity-transform align a detected face to the 112×112 ArcFace template.
     landmarks: shape (5, 2) in original image pixel coords (x, y).
     Returns: 112×112 BGR uint8 aligned crop.
     """
-    M, _ = cv2.estimateAffinePartial2D(
-        landmarks.astype(np.float32),
-        _arcface_template(),
-        method=cv2.LMEDS,
-    )
+    M = _similarity_transform_lsq(landmarks.astype(np.float64), _arcface_template())
     if M is None:
         # Fallback: direct bounding-box crop without alignment.
         return np.zeros((_ARCFACE_H, _ARCFACE_W, 3), dtype=np.uint8)
-    return cv2.warpAffine(bgr, M, (_ARCFACE_W, _ARCFACE_H), flags=cv2.INTER_LINEAR)
+    return cv2.warpAffine(bgr, M, (_ARCFACE_W, _ARCFACE_H),
+                          flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
 
 def preprocess_arcface(crop: "np.ndarray") -> "np.ndarray":
@@ -366,6 +395,57 @@ def _tensor_from_f32(arr: "np.ndarray"):
         layout=pyneat.TensorLayout.HWC,
         memory=pyneat.TensorMemory.EV74,
     )
+
+
+def _find_field(sample, label: str):
+    """Locate a named sub-sample inside a combined (Bundle) sample."""
+    if getattr(sample, "stream_label", "") == label:
+        return sample
+    for f in getattr(sample, "fields", []):
+        found = _find_field(f, label)
+        if found is not None:
+            return found
+    return None
+
+
+def _joined_field(sample, label: str, bundle_index: int):
+    """Field `label` from a combine() output, falling back to positional index."""
+    field = _find_field(sample, label)
+    if field is not None:
+        return field
+    fields = list(getattr(sample, "fields", []))
+    if getattr(sample, "kind", None) == pyneat.SampleKind.Bundle and len(fields) > bundle_index:
+        return fields[bundle_index]
+    raise RuntimeError(f"joined output missing '{label}' field")
+
+
+def _first_tensor(sample):
+    tensors = _collect_tensors(sample)
+    if not tensors:
+        raise RuntimeError("sample field carries no tensor")
+    return tensors[0]
+
+
+def _tensor_dim(t, name: str) -> int:
+    v = getattr(t, name)
+    return int(v() if callable(v) else v)
+
+
+def _tensor_to_bgr(t) -> "np.ndarray":
+    """Convert a decoded frame tensor (NV12/I420) from the graph to BGR."""
+    w = _tensor_dim(t, "width")
+    h = _tensor_dim(t, "height")
+    need = w * h * 3 // 2
+    if t.is_nv12():
+        code = cv2.COLOR_YUV2BGR_NV12
+    elif t.is_i420():
+        code = cv2.COLOR_YUV2BGR_I420
+    else:
+        raise RuntimeError("decoded frame tensor is neither NV12 nor I420")
+    payload = np.frombuffer(t.copy_payload_bytes(), dtype=np.uint8)
+    if payload.size < need:
+        raise RuntimeError(f"frame payload too small: {payload.size} < {need}")
+    return np.ascontiguousarray(cv2.cvtColor(payload[:need].reshape((h * 3 // 2, w)), code))
 
 
 # ── config ─────────────────────────────────────────────────────────────────────
@@ -431,13 +511,27 @@ def _load_config(config_path: Path) -> AppConfig:
 # ── SCRFD pyneat pipeline build ────────────────────────────────────────────────
 
 def _probe_rtsp(url: str) -> Tuple[int, int, int]:
-    cap = cv2.VideoCapture(url)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open RTSP source for probing: {url}")
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    fps = round(cap.get(cv2.CAP_PROP_FPS) or 0)
-    cap.release()
+    """Read width/height/fps from the stream caps before the graph is built."""
+    # This short-lived probe joins the stream mid-GOP, so FFmpeg emits
+    # "Missing reference picture" chatter while it waits for a keyframe.  Only
+    # caps are read here, never pixels, so silence it; genuine failures still
+    # surface as the explicit errors below.
+    key  = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    prev = os.environ.get(key)
+    os.environ[key] = (prev + "|" if prev else "") + "loglevel;quiet"
+    try:
+        cap = cv2.VideoCapture(url)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open RTSP source for probing: {url}")
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        fps = round(cap.get(cv2.CAP_PROP_FPS) or 0)
+        cap.release()
+    finally:
+        if prev is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prev
     if w <= 0 or h <= 0:
         raise RuntimeError("RTSP probe: could not read frame dimensions")
     if fps <= 0:
@@ -486,8 +580,17 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), scrfd_model)
 
-    out_graph = pyneat.Graph("detections")
-    out_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+    det_graph = pyneat.Graph("detections")
+    det_graph.add(pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4)))
+
+    # Tap the decoded frame off the same branch as the model input and join it to
+    # the detections by frame.  This gives face alignment the exact frame SCRFD
+    # saw, instead of an independently decoded one from a second RTSP client.
+    frame_graph = pyneat.Graph("frame")
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    joined = pyneat.graphs.combine(
+        ["frame", "detections"], _JOINED_OUTPUT, pyneat.CombinePolicy.ByFrame
+    )
 
     live_link = pyneat.GraphLinkOptions()
     live_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
@@ -497,8 +600,11 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
     graph = pyneat.Graph(g_opts)
 
     video_opt = None
+    branch_names = ["video", "model", "frame"] if cfg.insight_host else ["model", "frame"]
+    branch = pyneat.graphs.branch("source", branch_names)
+    graph.connect(source, branch)
+
     if cfg.insight_host:
-        branch = pyneat.graphs.branch("source", ["video", "model"])
         _vopt = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(frame_w, frame_h, fps)
         _vopt.host            = cfg.insight_host
         _vopt.channel         = 0
@@ -506,14 +612,14 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
         _vopt.encoder.bitrate_kbps = 4000
         video_graph = pyneat.Graph("video")
         video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(_vopt))
-        graph.connect(source, branch)
         graph.connect(branch, video_graph, live_link)
-        graph.connect(branch, model_graph, live_link)
         video_opt = _vopt
-    else:
-        graph.connect(source, model_graph, live_link)
 
-    graph.connect(model_graph, out_graph)
+    graph.connect(branch, model_graph, live_link)
+    graph.connect(branch, frame_graph, live_link)
+    graph.connect(model_graph, det_graph)
+    graph.connect(frame_graph, joined)
+    graph.connect(det_graph, joined)
 
     run_opts = pyneat.RunOptions()
     run_opts.preset          = pyneat.RunPreset.Realtime
@@ -692,11 +798,6 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
         meta_opt.metadata_port_base = cfg.insight_metadata_port
         metadata_sender = pyneat.MetadataSender(meta_opt)
 
-    # Open a separate cv2 capture for raw BGR frames (face alignment).
-    cap = cv2.VideoCapture(cfg.input_uri)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open RTSP for frame reading: {cfg.input_uri}")
-
     if cfg.insight_host:
         print(
             f"rtsp={cfg.input_uri} stream={frame_w}x{frame_h}@{fps} "
@@ -716,8 +817,9 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
     start_ms    = _time_ms()
 
     while max_frames <= 0 or frame_count < max_frames:
-        # Pull SCRFD detections from pyneat pipeline
-        sample = scrfd_run.pull("detections", cfg.timeout_ms)
+        # Pull the joined {frame, detections} sample — both come from the same
+        # decoded frame, so landmarks always match the image they are cropped from.
+        sample = scrfd_run.pull(_JOINED_OUTPUT, cfg.timeout_ms)
         if sample is None:
             err = str(scrfd_run.last_error() or "")
             if err:
@@ -730,18 +832,15 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
         ts_ms    = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
         frame_id = getattr(sample, "frame_id", frame_count)
 
-        tensors = [_tensor_to_np(t) for t in _collect_tensors(sample)]
+        det_field   = _joined_field(sample, "detections", 1)
+        frame_field = _joined_field(sample, "frame", 0)
+
+        tensors = [_tensor_to_np(t) for t in _collect_tensors(det_field)]
         dets = decode_scrfd(
             tensors, cfg.conf_threshold, cfg.nms_iou,
             cfg.top_k, cfg.keep_top_k, cfg.infer_w, cfg.infer_h,
             cfg.num_anchors, pad_l, pad_t, scale,
         )
-
-        # Read a BGR frame for face alignment (best-effort sync with pyneat PTS)
-        ret, bgr = cap.read()
-        if not ret:
-            # End of file or stale RTSP; try to keep going with pyneat pipeline
-            bgr = None
 
         # Run recognition at recog_interval, or immediately when detections reorder.
         # Detection reorder: SCRFD sorts by score; if two faces' scores cross between
@@ -758,14 +857,14 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
                     return True
             return False
 
-        need_recog = (
-            dets and bgr is not None and (
-                (frame_count - last_recog_frame) >= cfg.recog_interval
-                or len(dets) != len(cached_labels)
-                or (cached_centroids and _reordered(dets, cached_centroids))
-            )
+        need_recog = bool(dets) and (
+            (frame_count - last_recog_frame) >= cfg.recog_interval
+            or len(dets) != len(cached_labels)
+            or (cached_centroids and _reordered(dets, cached_centroids))
         )
         if need_recog:
+            # NV12→BGR only on frames that actually re-embed (≈1 in recog_interval).
+            bgr = _tensor_to_bgr(_first_tensor(frame_field))
             cached_labels    = []
             cached_sims      = []
             cached_centroids = []
@@ -831,7 +930,6 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
     fps_out = processed / elapsed_s if elapsed_s > 0 else 0.0
     print(f"processed={processed} fps={fps_out:.1f}")
 
-    cap.release()
     scrfd_run.close()
     arc_run.close()
     return 0
