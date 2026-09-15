@@ -580,12 +580,6 @@ def run_enrollment(
     print(f"[VIDEO] {video_path} — {total} frames @ {fps:.1f} fps, sample_every={sample_every}")
 
     enrolled = skipped = frame_idx = 0
-    bgr = np.empty(0)
-    while cap.read(bgr) if not isinstance(bgr, np.ndarray) or bgr.size == 0 else True:
-        ret, bgr = cap.read() if frame_idx == 0 else (True, bgr)
-        break  # use the loop below
-
-    frame_idx = 0
     while True:
         ret, bgr = cap.read()
         if not ret:
@@ -754,7 +748,9 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
                 cached_labels.append(label)
                 cached_sims.append(sim)
             last_recog_frame = frame_count
-        elif not dets:
+        elif not dets or len(dets) != len(cached_labels):
+            # Clear cache when faces leave/enter; stale index→label mapping would
+            # assign the wrong identity to a face that shifted position in the list.
             cached_labels = []
             cached_sims   = []
 
