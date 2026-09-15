@@ -5,7 +5,7 @@ models:
     file: yolo26n-det-int8-b1.tar.gz
 unit:
   python: false
-  cpp: false
+  cpp: true
 e2e:
   python:
     enabled: false
