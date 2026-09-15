@@ -49,6 +49,7 @@ void save_gallery(const Gallery& g, const std::filesystem::path& path) {
         f.write(reinterpret_cast<const char*>(rm.data()), kEmbeddingDim * sizeof(float));
     }
 
+    f.close();
     if (!f)
         throw std::runtime_error("save_gallery: write error: " + path.string());
 }

@@ -34,7 +34,6 @@ struct ScrfdConfig {
     int   infer_w         = 640;
     int   infer_h         = 640;
     // SCRFD 2.5G: 2 anchors/location, 1 class logit per anchor (sigmoid).
-    // Set to 2 if your model was exported with 2-class softmax (RetinaFace-style).
     int   cls_per_anchor  = 1;
     int   num_anchors     = 2;
     // If true, multiply bbox/kps distance predictions by stride before decode.

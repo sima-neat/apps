@@ -45,26 +45,6 @@ target_include_directories(face_recog_nodes
     "${_APPS_ROOT}"
 )
 
-# ── Helper macro: create one executable ──────────────────────────────────────
-macro(_fr_executable _name _source)
-  add_executable(${_name} "${_source}")
-  target_link_libraries(${_name}
-    PRIVATE
-      face_recog_nodes
-      SimaNeatApps::sima_neat
-      SimaNeatApps::support_runtime
-  )
-  target_include_directories(${_name}
-    PRIVATE
-      "${_SELF_DIR}"
-      "${_APPS_ROOT}"
-  )
-  target_compile_definitions(${_name}
-    PRIVATE
-      SIMANEAT_APPS_EXAMPLE_SOURCE_DIR="${_SELF_DIR}"
-  )
-endmacro()
-
 # ── face-recognizer (includes enrollment mode via --enroll flag) ──────────────
 # Enrollment logic lives in tools/enroll.cpp and is dispatched from main() when
 # --enroll is the first argument, so the single installed binary covers both

@@ -735,27 +735,16 @@ std::vector<Detection> decode_scrfd(
         static_cast<float>(cfg.infer_w) / meta.orig_w,
         static_cast<float>(cfg.infer_h) / meta.orig_h);
 
-    // Pre-compute logit thresholds to skip std::exp for the ~99% of anchors that
+    // Pre-compute logit threshold to skip std::exp for the ~99% of anchors that
     // fall below conf_threshold.  sigmoid(logit) > t  ↔  logit > log(t / (1-t)).
+    // SCRFD 2.5G uses sigmoid (cls_per_anchor=1) — one logit per anchor.
     const float logit_thr = std::log(cfg.conf_threshold /
                                      (1.f - cfg.conf_threshold));
-    // For softmax: fg - bg > log(t / (1-t)) is the equivalent guard.
-    const float softmax_logit_diff_thr = logit_thr;
 
     for (size_t i = 0; i < total_anchors; ++i) {
-        float prob;
-        if (cls_gs == 1) {
-            const float logit = cls_rows[i];
-            if (logit < logit_thr) continue;  // skip exp for failing anchors
-            prob = 1.f / (1.f + std::exp(-logit));
-        } else {
-            const float bg = cls_rows[i * 2 + 0];
-            const float fg = cls_rows[i * 2 + 1];
-            if ((fg - bg) < softmax_logit_diff_thr) continue;
-            const float m  = std::max(bg, fg);
-            const float e0 = std::exp(bg - m), e1 = std::exp(fg - m);
-            prob = e1 / (e0 + e1);
-        }
+        const float logit = cls_rows[i];
+        if (logit < logit_thr) continue;  // skip exp for failing anchors
+        const float prob = 1.f / (1.f + std::exp(-logit));
         if (!(prob > cfg.conf_threshold))
             continue;
 

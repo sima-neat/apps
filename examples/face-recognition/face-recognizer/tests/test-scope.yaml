@@ -37,13 +37,11 @@ e2e:
   python:
     enabled: false
     reason: >
-      Python is omitted because the application relies on three C++-only SDK
-      paths that have no Python equivalents in this SDK version: the SiMa HW
-      H.264 encoder (VideoSender / H264RtpUdpFromRaw), the EV74 CVU preproc
-      node (InputKind::Image / RtspDecodedInput NV12 zero-copy chain), and
-      the NV12 buffer manipulation required for low-latency overlay.
-      A Python implementation will be added when the SDK exposes bindings for
-      these capabilities.
+      The Python E2E test requires a live RTSP source for the pyneat
+      VideoSender pipeline.  It is disabled in CI where no RTSP stream
+      is available.  Run manually on-device with SIMANEAT_TEST_RTSP_H264_URL
+      set to a live H.264 RTSP stream and SIMANEAT_APPS_TEST_MODELS_DIR
+      pointing to the model tar.gz files.
   cpp:
     enabled: true
     models:
@@ -63,13 +61,23 @@ e2e:
           recognition result must appear in the 60-frame window.
         SIMANEAT_TEST_RTSP_H264_URL: >
           RTSP H.264 stream URL (fallback when SIMANEAT_APPS_TEST_INPUT_VIDEO is unset).
+    assets:
+      bundled:
+        - path: tests/assets/gallery_images/Paresh/paresh_0012.jpg
+          description: >
+            Single enrollment image for the --images E2E sub-test.
+            The test runs --enroll --images tests/assets/gallery_images/ and
+            verifies gallery.bin is written; no extra env vars are required.
     notes:
       - >
         Face detection is only asserted when SIMANEAT_APPS_TEST_INPUT_VIDEO is set.
         A shared RTSP stream may not contain detectable faces in any 60-frame window,
         so the detection check is skipped and a warning is printed instead.
       - >
-        Enrollment E2E (--enroll mode) is exercised within the main face-recognizer.e2e
+        Enrollment E2E (--enroll --images) runs automatically whenever models are
+        available, using the bundled tests/assets/gallery_images/Paresh/paresh_0012.jpg.
+      - >
+        Enrollment E2E (--enroll --video) is exercised within the main face-recognizer.e2e
         test when SIMANEAT_APPS_TEST_INPUT_VIDEO is set: after the 60-frame recognition
         run the test enrolls the video into a temporary gallery and verifies exit 0 and
         gallery.bin creation.

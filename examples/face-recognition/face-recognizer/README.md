@@ -7,7 +7,7 @@
 | Category | face-recognition |
 | Difficulty | Advanced |
 | Tags | face-detection, face-recognition, scrfd, arcface, rtsp, enrollment, bf16, mla-tessellation |
-| Languages | C++ |
+| Languages | C++, Python |
 | Status | stable |
 | Binary Name | face-recognizer |
 | Model | scrfd_2.5g_bnkps.mla, w600k_r50.surgery |
@@ -102,6 +102,8 @@ runtime:
 
 The RTSP input URI, gallery path, model paths, and output options are all read from `config.yaml`.
 
+> **Insight visualization note:** Bounding boxes and identity labels are burned directly into the H.264 video frame before encoding. The Insight metadata channel is kept alive with an empty payload each frame so Insight does not draw its own overlay on top. This avoids double-drawing that would otherwise produce two boxes per face.
+
 **Optional overrides:**
 
 | Flag | Description |
@@ -110,8 +112,6 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 | `--gallery <path>` | Override `gallery.path` in config |
 | `--scrfd-model <path>` | Override `scrfd.model` in config |
 | `--arcface-model <path>` | Override `arcface.model` in config |
-| `--stream-host <ip>` | Send annotated H.264 stream to a custom UDP receiver instead of Insight |
-| `--stream-port <n>` | UDP port for custom receiver (default: 5000) |
 | `--rtsp-fps <n>` | Force decoder FPS; omit to auto-detect from stream (recommended) |
 | `--max-frames <n>` | Stop after N frames (0 = unlimited) |
 | `--test` | Print per-frame results and FPS report; headless |
@@ -129,6 +129,30 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 | `--min-score <f>` | Minimum SCRFD confidence for enrollment (default: 0.75) |
 | `--max-per-person <n>` | Cap images per identity when using `--images` (default: unlimited) |
 
+## Python
+
+A Python implementation is included at `src/python/main.py`. It uses the same config.yaml and gallery.bin as the C++ binary, and produces identical Insight metadata output.
+
+**Prerequisites:** `pyneat`, `numpy`, `opencv-python` installed in the Python environment on-device.
+
+**Enroll from video (Python):**
+
+```bash
+python3 ${APP_DIR}/src/python/main.py --enroll \
+    --config ${APP_DIR}/src/common/config.yaml \
+    --video  /path/to/alice.mp4 --name "Alice" \
+    --gallery ${APP_DIR}/gallery.bin
+```
+
+**Run recognition (Python):**
+
+```bash
+python3 ${APP_DIR}/src/python/main.py \
+    --config ${APP_DIR}/src/common/config.yaml
+```
+
+All optional overrides accepted by the C++ binary (`--input`, `--gallery`, `--scrfd-model`, `--arcface-model`, `--max-frames`, `--test`) are also supported by the Python implementation.
+
 ## Tuning
 
 | Parameter | Default | Notes |
@@ -145,9 +169,9 @@ Tests require a source build — see [Development From Source](#development-from
 ## Source Files
 
 - C++ recognition source: `src/cpp/main.cpp`
-- Enrollment source: `tools/enroll.cpp`
+- Python recognition source: `src/python/main.py`
+- Enrollment source (C++): `tools/enroll.cpp`
 - Shared runtime files: `src/common/`
-- Model scripts: `src/common/model/`
 
 The packaged C++ source is an implementation reference. Run the executable under `src/cpp/pre-built/`; the installed bundle does not include CMake files.
 
@@ -196,28 +220,5 @@ ctest --test-dir build -L e2e -R 'face-recognizer' --output-on-failure -V
 > (a shared RTSP stream may not contain detectable faces in any 60-frame window).
 > Set `SIMANEAT_APPS_TEST_INPUT_VIDEO` to a face-containing clip to enable the full check.
 > When `SIMANEAT_APPS_TEST_INPUT_VIDEO` is set, enrollment mode is also tested automatically.
-
-### Recompile Models from Source
-
-Model preparation and compilation scripts are under
-`examples/face-recognition/face-recognizer/src/common/model/`:
-
-```bash
-APP=examples/face-recognition/face-recognizer
-
-# Step 1 — Apply graph surgery to ArcFace (required for MLA compatibility)
-python3 ${APP}/src/common/model/arcface_to_mla.py \
-    /path/to/w600k_r50.onnx --out /tmp/w600k_r50.surgery.onnx
-
-# Step 2 — Prepare SCRFD for MLA (rename outputs, fix input shape)
-python3 ${APP}/src/common/model/scrfd_to_mla.py \
-    /path/to/scrfd_2.5g_bnkps.onnx --out /tmp/scrfd_2.5g_bnkps.mla.onnx
-
-# Step 3 — Compile both for Modalix (BF16 + MLA-tessellation)
-# Omit --calib-dir to use synthetic calibration (faster; real images improve accuracy)
-bash ${APP}/src/common/model/compile_models.sh \
-    --models-dir /tmp \
-    --build-dir /tmp/compiled
-```
 
 </details>

@@ -53,8 +53,6 @@ struct AppConfig {
     std::string insight_host;             // Insight host IP; read from output.insight.host
     int  insight_video_port    = 9000;   // Insight video UDP port; read from output.insight.video_port
     int  insight_metadata_port = 9100;   // Insight metadata UDP port; read from output.insight.metadata_port
-    std::string stream_host;        // CLI override: redirect overlay to custom receiver instead of Insight
-    int  stream_port         = 5000;// CLI override port (used only when --stream-host is set)
     int  max_frames          = 0;   // 0 = unlimited
     int  rtsp_fps            = -1;  // decoder caps fps hint; -1 = auto-detect from stream
     int  supported_fps       = 45;  // max input FPS the pipeline can sustain (warn above this)
@@ -147,8 +145,6 @@ static AppConfig parse_args(int argc, char** argv) {
         else if (arg == "--scrfd-model"  && i + 1 < argc) { cfg.scrfd_model    = argv[++i]; }
         else if (arg == "--arcface-model"&& i + 1 < argc) { cfg.arcface_model  = argv[++i]; }
         else if (arg == "--output"       && i + 1 < argc) { cfg.output_sink = argv[++i]; cfg.output_sink_explicit = true; }
-        else if (arg == "--stream-host"  && i + 1 < argc) { cfg.stream_host    = argv[++i]; }
-        else if (arg == "--stream-port"  && i + 1 < argc) { cfg.stream_port    = std::stoi(argv[++i]); }
         else if (arg == "--max-frames"   && i + 1 < argc) { cfg.max_frames     = std::stoi(argv[++i]); }
         else if (arg == "--rtsp-fps"     && i + 1 < argc) { cfg.rtsp_fps       = std::stoi(argv[++i]); }
         else if (arg == "--cpu-preproc") { cfg.force_cpu_preproc = true; }
@@ -156,17 +152,13 @@ static AppConfig parse_args(int argc, char** argv) {
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: face-recognizer [--config <path>] [--input <uri>]\n"
                       << "       [--gallery <path>] [--scrfd-model <path>] [--arcface-model <path>]\n"
-                      << "       [--output <sink>] [--stream-host <host>] [--stream-port N]\n"
-                      << "       [--test]\n"
+                      << "       [--output <sink>] [--test]\n"
                       << "\n"
                       << "  output.insight.host / output.insight.video_port (config.yaml):\n"
                       << "                      Send the overlay H.264 stream to the Insight viewer.\n"
                       << "                      Set output.insight.host to the Insight host IP and\n"
                       << "                      open the Insight Web UI to view the annotated stream.\n"
                       << "\n"
-                      << "  --stream-host HOST  Override: redirect the overlay H.264 stream to a\n"
-                      << "                      custom receiver instead of the Insight host.\n"
-                      << "  --stream-port N     UDP port for the custom receiver (default 5000).\n"
                       << "  --rtsp-fps N        Optional decoder FPS override. Omit to auto-detect\n"
                       << "                      the source rate from the stream (recommended).\n"
                       << "  --cpu-preproc       Force A65 NEON preproc for RTSP instead of the EV74\n"
@@ -705,10 +697,9 @@ int main(int argc, char** argv) {
     }
 
     // Overlay UDP stream (RTP/H264 via SiMa HW encoder) — lazy-init on first frame.
-    // Default destination: Insight host (output.insight.host / output.insight.video_port).
-    // Override: --stream-host / --stream-port redirects the stream to a custom receiver.
-    const std::string eff_stream_host = cfg.stream_host.empty() ? cfg.insight_host : cfg.stream_host;
-    const int         eff_stream_port = cfg.stream_host.empty() ? cfg.insight_video_port : cfg.stream_port;
+    // Destination: Insight host (output.insight.host / output.insight.video_port).
+    const std::string eff_stream_host = cfg.insight_host;
+    const int         eff_stream_port = cfg.insight_video_port;
 
     std::optional<simaai::neat::Run> enc_run;
     bool   enc_run_failed = false;
@@ -717,10 +708,8 @@ int main(int argc, char** argv) {
     double enc_push_ms    = 0.0; // cumulative time spent in try_push
 
     // Metadata sender — publishes face boxes + identity labels to Insight per frame.
-    // Skipped when no insight/stream host is configured or when a custom stream host is
-    // used (custom receivers do not speak the Insight metadata protocol).
     std::unique_ptr<simaai::neat::MetadataSender> metadata_sender;
-    const bool use_insight = !cfg.insight_host.empty() && cfg.stream_host.empty();
+    const bool use_insight = !cfg.insight_host.empty();
     if (use_insight) {
         simaai::neat::MetadataSenderOptions meta_opt;
         meta_opt.host = cfg.insight_host;
@@ -733,10 +722,8 @@ int main(int argc, char** argv) {
     }
 
     if (!eff_stream_host.empty()) {
-        const bool custom = !cfg.stream_host.empty();
-        std::cout << "[stream] Will send overlay H.264 stream (SiMa HW encoder) -> udp://"
-                  << eff_stream_host << ":" << eff_stream_port
-                  << (custom ? "  [custom receiver]\n" : "  [Insight viewer]\n");
+        std::cout << "[stream] Will send H.264 stream (SiMa HW encoder, overlay pre-rendered into video) -> udp://"
+                  << eff_stream_host << ":" << eff_stream_port << "  [Insight viewer]\n";
         if (metadata_sender)
             std::cout << "[stream] MetadataSender -> udp://" << cfg.insight_host
                       << ":" << metadata_sender->metadata_port() << " channel=0\n";
@@ -1009,29 +996,12 @@ int main(int argc, char** argv) {
         const auto& matches = cached_matches;
         const auto tc2 = Clock::now();
 
-        // Publish face boxes + identity labels to Insight metadata overlay.
+        // Keep Insight's metadata channel alive with an empty payload each frame.
+        // Overlay (boxes, labels) is burned into the H.264 video before encoding so
+        // Insight displays the pre-rendered annotation rather than its own metadata
+        // overlay — this avoids coordinate-system mismatches between the two renderers.
         if (metadata_sender) {
-            nlohmann::json objects = nlohmann::json::array();
-            for (size_t i = 0; i < detections.size(); ++i) {
-                const auto& det = detections[i];
-                const std::string& label = (i < matches.size()) ? matches[i].name : "Unknown";
-                const float score = (i < matches.size()) ? matches[i].score : 0.f;
-                // Clamp both endpoints to the frame before deriving width/height
-                // so Insight metadata matches the clamped overlay in the video.
-                const float fw = static_cast<float>(curr_nv12_w > 0 ? curr_nv12_w : frame.cols);
-                const float fh = static_cast<float>(curr_nv12_h > 0 ? curr_nv12_h : frame.rows);
-                const float cx1 = std::clamp(det.x1, 0.f, fw);
-                const float cy1 = std::clamp(det.y1, 0.f, fh);
-                const float cx2 = std::clamp(det.x2, cx1,  fw);
-                const float cy2 = std::clamp(det.y2, cy1,  fh);
-                objects.push_back({
-                    {"id",         "face_" + std::to_string(i + 1)},
-                    {"label",      label},
-                    {"confidence", score},
-                    {"bbox",       {cx1, cy1, cx2 - cx1, cy2 - cy1}}
-                });
-            }
-            const std::string data_json = nlohmann::json{{"objects", std::move(objects)}}.dump();
+            const std::string data_json = nlohmann::json{{"objects", nlohmann::json::array()}}.dump();
             const int64_t ts_ms = (is_rtsp && curr_frame_pts_ns >= 0) ? curr_frame_pts_ns / 1'000'000 : -1;
             const std::string frame_id_str = std::to_string(
                 (is_rtsp && curr_frame_id_val >= 0) ? curr_frame_id_val : (int64_t)frame_count);
@@ -1043,9 +1013,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        // NV12 path: annotate the NV12 buffer in place (fast). A full-frame NV12→BGR
-        // conversion is produced only when a file writer actually needs one; the encoder
-        // does its own NV12→BGR conversion separately before pushing to VideoSender.
+        // NV12 path: burn boxes and labels into the NV12 buffer in place (fast).
+        // A full-frame NV12→BGR conversion is only produced when a file writer needs one;
+        // the HW encoder does its own NV12→BGR separately before pushing to VideoSender.
         if (use_nv12_path) {
             face_recog::draw_overlay_nv12(curr_nv12_buf.data(), curr_nv12_w, curr_nv12_h,
                                           detections, matches, cfg.overlay);

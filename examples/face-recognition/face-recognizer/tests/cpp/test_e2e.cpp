@@ -208,6 +208,55 @@ int main(int argc, char** argv) {
 
     std::cout << "[OK] face-recognizer processed 60 frames (exit 0)\n";
 
+    // ── Enrollment E2E via --images (bundled test asset, no extra env vars) ─────
+    // Uses tests/assets/gallery_images/ which ships with the repo.
+    // The working directory is the apps root (set in CMakeLists WORKING_DIRECTORY).
+    {
+        const fs::path bundled_images =
+            "examples/face-recognition/face-recognizer/tests/assets/gallery_images";
+
+        if (fs::is_directory(bundled_images)) {
+            const fs::path img_enroll_dir     = fs::temp_directory_path() / "fr_img_enroll_e2e";
+            const fs::path img_enroll_gallery = img_enroll_dir / "gallery.bin";
+            const fs::path img_enroll_config  = img_enroll_dir / "config.yaml";
+            fs::create_directories(img_enroll_dir);
+
+            ConfigScalars img_enroll_overrides = {
+                {"scrfd.model",   scrfd_path},
+                {"arcface.model", arcface_path},
+                {"input.uri",     ""},
+                {"output.sink",   ""},
+            };
+            write_e2e_config("face-recognizer", img_enroll_config, img_enroll_overrides);
+
+            const std::vector<std::string> img_enroll_args = {
+                "--enroll",
+                "--config",  img_enroll_config.string(),
+                "--images",  bundled_images.string(),
+                "--gallery", img_enroll_gallery.string(),
+            };
+
+            std::cout << "[RUN] " << binary << " --enroll --images "
+                      << bundled_images << " --gallery " << img_enroll_gallery << "\n";
+
+            const ProcessResult ir = spawn_and_wait(binary, img_enroll_args, timeout);
+            const bool img_gallery_written =
+                fs::exists(img_enroll_gallery) && fs::file_size(img_enroll_gallery) > 0;
+            fs::remove_all(img_enroll_dir);
+
+            if (ir.exit_code != 0) {
+                std::cerr << "[FAIL] --enroll --images exit code " << ir.exit_code << "\n"
+                          << "stderr:\n" << ir.stderr_text << "\n";
+                return 1;
+            }
+            if (!img_gallery_written) {
+                std::cerr << "[FAIL] --enroll --images exited 0 but gallery.bin was not written\n";
+                return 1;
+            }
+            std::cout << "[OK] --images enrollment completed and gallery.bin written\n";
+        }
+    }
+
     // ── Enrollment E2E (when face video is available) ─────────────────────────
     // Run --enroll mode using the same video input.  This exercises the enrollment
     // path (SCRFD → ArcFace → GalleryBuilder → gallery.bin write) without needing

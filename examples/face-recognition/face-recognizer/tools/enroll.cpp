@@ -138,7 +138,12 @@ static int enroll_from_video(
         if (!arcface_run.push(simaai::neat::TensorList{arc_t}))
             throw std::runtime_error("ArcFace push failed: " + arcface_run.last_error());
         const auto arc_sample = arcface_run.pull(timeout_ms);
-        if (!arc_sample) { std::cerr << "  [skip] ArcFace timeout at frame " << frame_idx << "\n"; ++skipped; continue; }
+        // Timeout after push: the inference result is still in flight.  Continuing
+        // would cause the next pull() to return THIS frame's stale result attributed
+        // to the NEXT identity — silently corrupt the gallery.  Fail hard instead.
+        if (!arc_sample)
+            throw std::runtime_error("ArcFace timeout at frame " + std::to_string(frame_idx) +
+                                     " — pipeline stalled, cannot continue enrollment safely");
 
         const auto emb_tensors = face_recog::collect_tensors(*arc_sample);
         auto emb = face_recog::tensor_to_f32(emb_tensors[0]);
@@ -162,7 +167,8 @@ int run_enrollment_mode(int argc, char** argv) {
     std::string images_dir;
     std::string video_path;
     std::string video_name;
-    std::string gallery_out = "gallery.bin";
+    std::string gallery_out;        // resolved after config load; --gallery overrides gallery.path
+    bool        gallery_explicit = false;
     std::string config_path_str = sima_examples::default_config_path(
         SIMANEAT_APPS_EXAMPLE_SOURCE_DIR).string();
     int   max_per_person = 0;   // 0 = unlimited
@@ -174,7 +180,7 @@ int run_enrollment_mode(int argc, char** argv) {
         if      (a == "--images"       && i+1 < argc) images_dir    = argv[++i];
         else if (a == "--video"        && i+1 < argc) video_path    = argv[++i];
         else if (a == "--name"         && i+1 < argc) video_name    = argv[++i];
-        else if (a == "--gallery"      && i+1 < argc) gallery_out   = argv[++i];
+        else if (a == "--gallery"      && i+1 < argc) { gallery_out = argv[++i]; gallery_explicit = true; }
         else if (a == "--config"       && i+1 < argc) config_path_str = argv[++i];
         else if (a == "--max-per-person" && i+1 < argc) max_per_person = std::stoi(argv[++i]);
         else if (a == "--sample-every" && i+1 < argc) sample_every  = std::stoi(argv[++i]);
@@ -232,6 +238,9 @@ int run_enrollment_mode(int argc, char** argv) {
     const std::string scrfd_model  = resolve(raw.string_or("scrfd.model",   "models/scrfd_2.5g_bnkps.mla_mpk.tar.gz"));
     const std::string arcface_model= resolve(raw.string_or("arcface.model", "models/w600k_r50.surgery_mpk.tar.gz"));
     const int timeout_ms           = raw.int_or("runtime.timeout_ms", 20000);
+    // Resolve gallery path: --gallery CLI flag wins; otherwise use gallery.path from config.yaml.
+    if (!gallery_explicit)
+        gallery_out = resolve(raw.string_or("gallery.path", "gallery.bin"));
 
     face_recog::ScrfdConfig scrfd_cfg;
     scrfd_cfg.conf_threshold = static_cast<float>(raw.double_or("scrfd.conf_threshold", 0.5));
@@ -328,7 +337,10 @@ int run_enrollment_mode(int argc, char** argv) {
                     if (!arcface_run.push(simaai::neat::TensorList{arc_t}))
                         throw std::runtime_error("ArcFace push failed: " + arcface_run.last_error());
                     const auto arc_sample = arcface_run.pull(timeout_ms);
-                    if (!arc_sample) { std::cerr << "  [skip] ArcFace timeout\n"; ++skipped; continue; }
+                    if (!arc_sample)
+                        throw std::runtime_error("ArcFace timeout for image '" +
+                                                 img_path.filename().string() +
+                                                 "' — pipeline stalled, cannot continue enrollment safely");
 
                     const auto emb_tensors = face_recog::collect_tensors(*arc_sample);
                     auto emb = face_recog::tensor_to_f32(emb_tensors[0]);
