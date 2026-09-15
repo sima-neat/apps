@@ -34,7 +34,7 @@ The three checked-in profiles use the same application and model:
 
 | Config | Streams | Source resolution and FPS | Expected FPS per channel |
 | --- | ---: | --- | ---: |
-| `config.yaml` | 16 | 1280×720 at 30 FPS | 30 FPS |
+| `config.yaml` | 16 | 1280×720 at 30 or 29.97 FPS, detected from the source | Source rate |
 | `config-24x720p20fps.yaml` | 24 | 1280×720 at 20 FPS | 20 FPS |
 | `config-48x720p10fps.yaml` | 48 | 1280×720 at 10 FPS | 10 FPS |
 
@@ -118,7 +118,7 @@ Set `input.codec` to `h264`/`avc` or `h265`/`hevc`. H.264 is the default in all 
 
 Do not add the removed `inference.fan_in_policy` setting. Ordinary `connect()` and `build()` select the eligible realtime fan-in lowering automatically. Video/metadata synchronization is performed by Insight from each payload's source RTP timestamp; there is no application-side video-delay setting.
 
-Do not change `input.width`, `input.height`, or `input.fps` unless the RTSP sources also change. `input.skip_rtsp_probe` is enabled, so those values are the source contract.
+The default 16-stream config uses `input.fps: 0` and enables probing, so the source determines its frame rate. Keep `input.width` and `input.height` matched to the source. The 24- and 48-stream profiles keep explicit FPS values and skip probing; their configured dimensions and frame rates must match the sources.
 
 Insight channel and port mapping is deterministic:
 
@@ -173,7 +173,7 @@ Use one active Insight viewer while validating metadata. Insight currently has a
 
 - Every configured Insight channel receives live video.
 - Detection boxes appear on the matching channel.
-- Video and metadata advance at 30 FPS for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
+- Video and metadata follow the source cadence for 16 streams, 20 FPS for 24 streams, or 10 FPS for 48 streams.
 - Final per-stream counters show every stream advancing; the application fails with the missing channel IDs if a stream never starts or later stops.
 - No detection timeout or stalled channel is reported. Metadata sender counters expose any nonblocking UDP drops without stalling inference.
 
@@ -183,6 +183,7 @@ If channels do not start, confirm that every publisher was already reachable and
 
 - C++ reference source: `src/cpp/main.cpp`
 - Python implementation: `src/python/main.py`
+- Python throughput measurement: `src/python/metadata_measurement.py`
 - Default 16-stream profile: `src/common/config.yaml`
 - 24-stream profile: `src/common/config-24x720p20fps.yaml`
 - 48-stream profile: `src/common/config-48x720p10fps.yaml`

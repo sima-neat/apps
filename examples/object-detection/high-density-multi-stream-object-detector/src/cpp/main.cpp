@@ -17,11 +17,13 @@
 #include "neat/node_groups.h"
 #include "neat/nodes.h"
 #include "detection_watchdog.h"
+#include "metadata_measurement.h"
 #include "support/object_detection/detection_egress.h"
 #include "support/object_detection/obj_detection_utils.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
 
+#include <nlohmann/json.hpp>
 #include <nodes/groups/VideoSender.h>
 #include <nodes/io/MetadataSender.h>
 
@@ -829,8 +831,9 @@ make_source_options(const AppConfig& cfg, const std::string& url, int& fps_out, 
     opt.output_caps.height = height_out;
   }
   if (fps_out > 0) {
-    opt.source_fps = fps_out;
-    opt.output_caps.fps = fps_out;
+    opt.source_fps = cfg.input_fps;
+    opt.dec_fps = fps_out;
+    opt.output_caps.fps = cfg.input_fps;
   }
   opt.output_caps.enable = true;
   opt.output_caps.format = simaai::neat::FormatTag::NV12;
@@ -854,6 +857,7 @@ make_rtsp_encoded_input(const simaai::neat::nodes::groups::RtspDecodedInputOptio
   encoded.payload_type = opt.payload_type;
   if (opt.codec != simaai::neat::nodes::groups::RtspCodec::H265) {
     encoded.h264_parse_config_interval = opt.h264_parse_config_interval;
+    encoded.fallback_h264_fps = opt.dec_fps;
     encoded.fallback_h264_width = opt.fallback_h264_width;
     encoded.fallback_h264_height = opt.fallback_h264_height;
   }
@@ -874,7 +878,7 @@ simaai::neat::Graph make_decoder(const simaai::neat::nodes::groups::RtspDecodedI
   decode.next_element = opt.decoder_next_element;
   decode.dec_width = opt.dec_width;
   decode.dec_height = opt.dec_height;
-  decode.dec_fps = opt.source_fps;
+  decode.dec_fps = opt.dec_fps;
   decode.num_buffers = decoder_buffers;
   decode.input_buffers = opt.decoder_input_buffers;
   decode.decoder_tuning = opt.decoder_tuning;
@@ -1132,6 +1136,10 @@ void complete_detection(SourceRuntime& source, const AppConfig& cfg,
 }
 
 void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& aggregate_profile) {
+  const int measured_frames = env_int("HIGH_DENSITY_DETECTOR_MEASURE_FRAMES", 0);
+  sima_examples::require(measured_frames >= 0, "measurement frame target must be nonnegative");
+  high_density::MetadataMeasurement measurement(app.sources.size(), cfg.warmup_frames,
+                                                measured_frames);
   std::uint64_t total_pulls = 0;
   const int liveness_ms = app_liveness_ms();
   auto now = std::chrono::steady_clock::now();
@@ -1171,7 +1179,28 @@ void pull_detections(AppRuntime& app, const AppConfig& cfg, AggregateProfile& ag
           stream_index_from_detection(detections, static_cast<int>(app.sources.size()));
       watchdog.observe(static_cast<std::size_t>(stream_index));
       auto& source = app.sources[static_cast<std::size_t>(stream_index)];
+      const auto sent_before = source.metadata_send_ok;
+      const auto failed_before = source.metadata_send_fail;
       complete_detection(source, cfg, aggregate_profile, detections);
+      if (measured_frames > 0 &&
+          measurement.observe(
+              stream_index, source.processed, source.metadata_send_ok > sent_before,
+              source.metadata_send_fail > failed_before,
+              std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                  .count())) {
+        std::vector<std::uint64_t> total_sent;
+        for (const auto& stream : app.sources)
+          total_sent.push_back(stream.metadata_send_ok);
+        const nlohmann::json summary = {{"frames", measurement.total},
+                                        {"elapsed_s", measurement.elapsed},
+                                        {"aggregate_fps", measurement.total / measurement.elapsed},
+                                        {"per_stream_frames", measurement.frames},
+                                        {"per_stream_total_sent", total_sent},
+                                        {"per_stream_send_failures", measurement.failures}};
+        std::cout << "[measurement] " << summary.dump() << std::endl;
+        reached_target = true;
+        break;
+      }
       if (target_reached(app.sources)) {
         reached_target = true;
         break;
