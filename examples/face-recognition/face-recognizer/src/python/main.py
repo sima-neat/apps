@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import struct
 import sys
 import time
@@ -45,6 +46,11 @@ def _load_runtime_deps() -> None:
     for p in glob.glob("/usr/lib/python3*/dist-packages"):
         if p not in sys.path:
             sys.path.insert(0, p)
+    # Force TCP for OpenCV's FFmpeg RTSP client.  It defaults to UDP, which drops
+    # packets on a 720p high-fps stream — especially as a second subscriber
+    # alongside the pyneat rtspsrc (which already uses TCP) — producing
+    # "corrupted macroblock" decode errors and degraded alignment crops.
+    os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
     import cv2 as _cv2
     import numpy as _np
     import pyneat as _pyneat
