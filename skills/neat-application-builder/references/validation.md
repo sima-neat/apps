@@ -1,7 +1,8 @@
 # Validation
 
-Validate at the level the environment supports. Do not claim Neat Library
-runtime behavior is verified from source inspection alone.
+Choose checks that establish the requested behavior in the available
+environment. Source inspection, a successful build, and a Python import establish
+different facts from target runtime execution. State which evidence was obtained.
 
 ## C++ Build Check
 
@@ -41,7 +42,7 @@ environment if the installation requires it.
 
 ## Artifact Checks
 
-Before running:
+Before running, check the prerequisites used by the application:
 
 - Confirm classic `Model` inputs point at a compiled model archive.
 - Confirm GenAI inputs point at a deployed LLiMa model directory.
@@ -56,19 +57,17 @@ Before running:
 When hardware Neat Library runtime behavior matters, run on Modalix or the
 connected DevKit.
 
-Exercise at least:
+Run the supported workflow and inspect useful output against the application's
+contract, such as saved detections, streamed metadata, or a generated answer.
+A process starting or a request returning successfully is insufficient when the
+output itself has not been checked.
 
-- one successful request
-- missing model path
-- bad input path
-- timeout or empty-output behavior when the app exposes a timeout
-- wrong endpoint name for multi-input or multi-output graphs
-- invalid GenAI request shape when working with GenAI APIs
-
-When local display is part of the application, inspect the target before choosing
-the path. Confirm the selected GStreamer sink or OpenCV backend exists, identify
-the active display session, and verify DRM ownership and connector details before
-changing services or modesetting.
+Select failure cases from the behavior changed and the inputs the application
+exposes. Relevant cases include missing model or input paths, timeout or empty
+output handling, configurable endpoint names, and user-supplied GenAI requests.
+When lifecycle behavior changes, exercise stop, cleanup, and restart where
+supported. When local display changes, verify viewing and close/exit behavior on
+the target using the selected backend.
 
 For graph failures, read structured diagnostics first:
 
@@ -77,9 +76,9 @@ For graph failures, read structured diagnostics first:
 3. first terminal entry in `bus`
 4. `repro_gst_launch`
 
-## Apps Examples
+## Evidence to return
 
-Confirm the implementation follows the closest current Apps example for build
-commands and full application patterns. Do not treat reference-repository
-publication, documentation, or automation rules as required for standalone
-applications.
+Record the build/run commands, expected output, observed output, and results of
+selected failure checks. If hardware, models, or services are unavailable,
+identify the missing prerequisite and the checks left unverified. Complete the
+independent checks the environment supports.
