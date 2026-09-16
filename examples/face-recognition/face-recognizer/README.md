@@ -144,7 +144,7 @@ The RTSP input URI, gallery path, model paths, and output options are all read f
 
 ## Python
 
-A Python implementation is included at `src/python/main.py`. It uses the same config.yaml and gallery.bin as the C++ binary, and produces identical Insight metadata output.
+A Python implementation is included at `src/python/main.py`. It uses the same config.yaml and gallery.bin as the C++ binary. The Insight output contracts differ: Python sends detection metadata (bounding boxes and identity labels) via the metadata channel while the H.264 stream carries raw unannotated frames; C++ burns annotations into the video stream and sends an empty metadata payload (see the Run section above).
 
 **Prerequisites:** `pyneat`, `numpy`, `opencv-python` installed in the Python environment on-device.
 

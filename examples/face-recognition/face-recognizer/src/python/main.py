@@ -592,9 +592,6 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
         ["frame", "detections"], _JOINED_OUTPUT, pyneat.CombinePolicy.ByFrame
     )
 
-    live_link = pyneat.GraphLinkOptions()
-    live_link.policy = pyneat.GraphLinkPolicy.RealtimeLatestByStream
-
     g_opts = pyneat.GraphOptions()
     g_opts.advanced_execution.postprocess_target = "EV74"
     graph = pyneat.Graph(g_opts)
@@ -612,11 +609,11 @@ def _build_scrfd_run(cfg: AppConfig, frame_w: int, frame_h: int, fps: int):
         _vopt.encoder.bitrate_kbps = 4000
         video_graph = pyneat.Graph("video")
         video_graph.connect(pyneat.nodes.input("video"), pyneat.groups.video_sender(_vopt))
-        graph.connect(branch, video_graph, live_link)
+        graph.connect(branch, video_graph)
         video_opt = _vopt
 
-    graph.connect(branch, model_graph, live_link)
-    graph.connect(branch, frame_graph, live_link)
+    graph.connect(branch, model_graph)
+    graph.connect(branch, frame_graph)
     graph.connect(model_graph, det_graph)
     graph.connect(frame_graph, joined)
     graph.connect(det_graph, joined)
@@ -852,6 +849,12 @@ def run_recognition(cfg: AppConfig, gallery: List[GalleryEntry], max_frames: int
                 cx = (d["x1"] + d["x2"]) / 2
                 cy = (d["y1"] + d["y2"]) / 2
                 d2_same = (cx - centroids[i][0]) ** 2 + (cy - centroids[i][1]) ** 2
+                # Displacement check: if the face moved more than one face-width it is
+                # almost certainly a different person, even when len(centroids) == 1
+                # (where the any() below would produce an empty sequence and miss it).
+                face_w = d["x2"] - d["x1"]
+                if d2_same > face_w * face_w:
+                    return True
                 if any((cx - centroids[j][0]) ** 2 + (cy - centroids[j][1]) ** 2 < d2_same
                        for j in range(len(centroids)) if j != i):
                     return True

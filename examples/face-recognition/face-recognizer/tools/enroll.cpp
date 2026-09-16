@@ -113,7 +113,12 @@ static int enroll_from_video(
         if (!scrfd_run.push(simaai::neat::TensorList{tensor}))
             throw std::runtime_error("SCRFD push failed: " + scrfd_run.last_error());
         const auto sample = scrfd_run.pull(timeout_ms);
-        if (!sample) { std::cerr << "  [skip] SCRFD timeout at frame " << frame_idx << "\n"; ++skipped; continue; }
+        // Timeout after push: inference result still in flight; the next pull() would
+        // return THIS frame's stale detections attributed to a different frame —
+        // silently corrupting the enrolled embedding.  Fail hard instead.
+        if (!sample)
+            throw std::runtime_error("SCRFD timeout at frame " + std::to_string(frame_idx) +
+                                     " — pipeline stalled, cannot continue enrollment safely");
 
         const auto dets = face_recog::decode_scrfd(
             face_recog::collect_tensors(*sample), scrfd_cfg, pad_meta);
@@ -307,7 +312,11 @@ int run_enrollment_mode(int argc, char** argv) {
                     if (!scrfd_run.push(simaai::neat::TensorList{tensor}))
                         throw std::runtime_error("SCRFD push failed: " + scrfd_run.last_error());
                     const auto sample = scrfd_run.pull(timeout_ms);
-                    if (!sample) { std::cerr << "  [skip] SCRFD timeout\n"; ++skipped; continue; }
+                    // Same stale-result risk as in enroll_from_video — fail hard.
+                    if (!sample)
+                        throw std::runtime_error("SCRFD timeout for image '" +
+                                                 img_path.filename().string() +
+                                                 "' — pipeline stalled, cannot continue enrollment safely");
 
                     const auto dets = face_recog::decode_scrfd(
                         face_recog::collect_tensors(*sample), scrfd_cfg, pad_meta);

@@ -49,6 +49,7 @@ struct AppConfig {
     std::string gallery_path = "gallery.bin";
     bool        gallery_path_set = false;  // true when --gallery was explicitly passed
     std::string input_uri;          // RTSP URL, video file path, or empty for webcam 0
+    bool        input_uri_set    = false;  // true when --input was explicitly passed
     std::string output_sink;        // file path, "display", or empty (no output)
     std::string insight_host;             // Insight host IP; read from output.insight.host
     int  insight_video_port    = 9000;   // Insight video UDP port; read from output.insight.video_port
@@ -140,7 +141,7 @@ static AppConfig parse_args(int argc, char** argv) {
         const std::string arg = argv[i];
         if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
-        } else if (arg == "--input"      && i + 1 < argc) { cfg.input_uri      = argv[++i]; }
+        } else if (arg == "--input"      && i + 1 < argc) { cfg.input_uri = argv[++i]; cfg.input_uri_set = true; }
         else if (arg == "--gallery"      && i + 1 < argc) { cfg.gallery_path = argv[++i]; cfg.gallery_path_set = true; }
         else if (arg == "--scrfd-model"  && i + 1 < argc) { cfg.scrfd_model    = argv[++i]; }
         else if (arg == "--arcface-model"&& i + 1 < argc) { cfg.arcface_model  = argv[++i]; }
@@ -170,7 +171,7 @@ static AppConfig parse_args(int argc, char** argv) {
     }
 
     auto yaml_cfg = load_config(config_path);
-    if (cfg.input_uri.empty())    cfg.input_uri    = yaml_cfg.input_uri;
+    if (!cfg.input_uri_set)       cfg.input_uri    = yaml_cfg.input_uri;
     if (!cfg.gallery_path_set)
         cfg.gallery_path = yaml_cfg.gallery_path;
     if (!cfg.output_sink_explicit && cfg.output_sink.empty()) cfg.output_sink = yaml_cfg.output_sink;

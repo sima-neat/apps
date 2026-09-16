@@ -35,13 +35,43 @@ unit:
 
 e2e:
   python:
-    enabled: false
-    reason: >
-      The Python E2E test requires a live RTSP source for the pyneat
-      VideoSender pipeline.  It is disabled in CI where no RTSP stream
-      is available.  Run manually on-device with SIMANEAT_TEST_RTSP_H264_URL
-      set to a live H.264 RTSP stream and SIMANEAT_APPS_TEST_MODELS_DIR
-      pointing to the model tar.gz files.
+    enabled: true
+    models:
+      - scrfd
+      - arcface
+    env:
+      required:
+        SIMANEAT_APPS_TEST_MODELS_DIR: directory containing model tar.gz files (scrfd, arcface)
+        SIMANEAT_TEST_RTSP_H264_URL: live H.264 RTSP stream URL
+      optional:
+        SIMANEAT_APPS_TEST_GALLERY_BIN: >
+          Override the bundled gallery.bin.  When unset the test automatically
+          uses tests/assets/gallery.bin (Paresh enrolled from paresh_0012.jpg);
+          when set, the provided gallery is used instead and a non-Unknown match
+          is still required in the 60-frame window.
+    assets:
+      bundled:
+        - path: tests/assets/gallery.bin
+          description: >
+            Pre-enrolled gallery containing the Paresh identity from
+            paresh_0012.jpg.  Used by the Python E2E to assert a non-Unknown
+            recognition result; generated with the C++ binary and the bundled
+            enrollment image — re-generate with:
+              face-recognizer --enroll --config src/common/config.yaml
+                              --images tests/assets/gallery_images/
+                              --gallery tests/assets/gallery.bin
+        - path: tests/assets/gallery_images/Paresh/paresh_0012.jpg
+          description: >
+            Enrollment source for tests/assets/gallery.bin.
+    notes:
+      - >
+        The Python pipeline requires a live H.264 RTSP source; file and webcam
+        inputs are not supported.  This test is always skipped in CI where no
+        RTSP stream is available — run manually on-device with both env vars set.
+      - >
+        When the RTSP stream contains the enrolled Paresh face, the recognition
+        assertion passes automatically using the bundled gallery.bin without any
+        extra env var setup.
   cpp:
     enabled: true
     models:
