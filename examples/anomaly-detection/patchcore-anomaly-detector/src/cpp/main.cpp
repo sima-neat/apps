@@ -13,19 +13,15 @@
 #include "patchcore_memory_bank.h"
 #include "support/runtime/config_utils.h"
 #include "support/runtime/example_utils.h"
-
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
-
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -35,8 +31,6 @@ using sima_examples::time_ms;
 
 namespace {
 
-// WideResNet-50 layer2 (512ch) + upsampled layer3 (1024ch) concatenated patch embedding,
-// on a 28x28 grid for a 224x224 input -- the one qualified configuration this example ships.
 constexpr int kEmbedDim = 1536;
 constexpr int kPatchGridH = 28;
 constexpr int kPatchGridW = 28;
@@ -262,11 +256,6 @@ cv::Mat draw_overlay(const cv::Mat& bgr, const patchcore::AnomalyResult& result,
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Model: one shared Options for every source type. Each source decodes to a
-// host-side BGR cv::Mat before calling the model, so no Graph-embedded decode
-// source or hand-specified resize geometry is needed here.
-// ---------------------------------------------------------------------------
 
 simaai::neat::Model::Options image_model_options() {
   simaai::neat::Model::Options opt;
@@ -401,11 +390,6 @@ int cmd_calibrate(const Config& cfg) {
   return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Score: image_dir -- writes annotated overlays to output.dir, no live view
-// (matches every folder-based example in this repo: depth-estimator,
-// classification/image-classifier, etc.).
-// ---------------------------------------------------------------------------
 
 int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, float threshold,
                         int num_neighbors, double patch_scale_min, double patch_scale_max) {
@@ -469,11 +453,6 @@ int cmd_score_image_dir(const Config& cfg, const patchcore::MemoryBank& bank, fl
   return processed > 0 ? 0 : 3;
 }
 
-// ---------------------------------------------------------------------------
-// Score: video_file -- cv::VideoCapture, streaming the annotated overlay live
-// to Insight via a small host-pushed graph; `output.save_every > 0`
-// additionally writes periodic local snapshots. Also used by rtsp.
-// ---------------------------------------------------------------------------
 
 struct VideoSender {
   simaai::neat::Graph graph{"insight"};
@@ -592,10 +571,6 @@ int cmd_score_video_file(const Config& cfg, const patchcore::MemoryBank& bank, f
   return processed > 0 ? 0 : 3;
 }
 
-// ---------------------------------------------------------------------------
-// Score: rtsp -- see build_rtsp_runtime's comment for why the model isn't
-// embedded in the graph.
-// ---------------------------------------------------------------------------
 
 struct SourceGeometry {
   int width = 0;

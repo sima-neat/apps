@@ -15,15 +15,8 @@
 #include <stdexcept>
 #include <thread>
 
-#if defined(__aarch64__)
-#include <arm_neon.h>
-#endif
-
 namespace patchcore {
 
-// ---------------------------------------------------------------------------
-// sha256_file
-// ---------------------------------------------------------------------------
 
 std::string sha256_file(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
@@ -58,9 +51,6 @@ std::string sha256_file(const std::filesystem::path& path) {
   return hex;
 }
 
-// ---------------------------------------------------------------------------
-// extract_hwc
-// ---------------------------------------------------------------------------
 
 PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, const std::vector<float>& flat,
                             int embed_dim) {
@@ -105,9 +95,6 @@ PatchEmbeddings extract_hwc(const std::vector<int64_t>& shape, const std::vector
                            "-channel axis in the patch-embedding tensor");
 }
 
-// ---------------------------------------------------------------------------
-// NPY read/write -- minimal v1.0 float32 2D reader/writer (see header).
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -246,9 +233,6 @@ void MemoryBank::save(const std::filesystem::path& path) const {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Greedy k-center coreset
-// ---------------------------------------------------------------------------
 
 std::vector<std::size_t> greedy_coreset_indices(const std::vector<float>& vectors,
                                                 std::size_t embed_dim, double ratio,
@@ -335,9 +319,6 @@ MemoryBank MemoryBank::build(const std::vector<PatchEmbeddings>& per_image_embed
   return bank;
 }
 
-// ---------------------------------------------------------------------------
-// Scoring, with the PatchCore neighborhood-reweighting term
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -477,9 +458,6 @@ AnomalyResult MemoryBank::score(const PatchEmbeddings& embeddings, int num_neigh
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Threshold
-// ---------------------------------------------------------------------------
 
 float percentile_threshold(std::vector<float> scores, double percentile) {
   if (scores.empty()) {
@@ -496,9 +474,6 @@ float percentile_threshold(std::vector<float> scores, double percentile) {
   return static_cast<float>(scores[lo] + frac * (scores[hi] - scores[lo]));
 }
 
-// ---------------------------------------------------------------------------
-// bank_meta.json
-// ---------------------------------------------------------------------------
 
 BankMeta load_bank_meta(const std::filesystem::path& path) {
   std::ifstream in(path);

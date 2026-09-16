@@ -7,27 +7,17 @@ use `dk main.py ...` instead of a plain local `python3 main.py ...`.
     python3 main.py --config common/config.yaml               # score input
 """
 from __future__ import annotations
-
 import os
-
-# Must run before numpy (imported transitively below) picks a BLAS backend.
-# OMP/MKL/NUMEXPR stay pinned to 1: unthrottled, their thread pool overhead
-# dominates this app's tiny per-frame matmuls. OPENBLAS_NUM_THREADS=6 is the
-# measured sweet spot on this (16-core) hardware for a real OpenBLAS build;
-# it's a no-op if numpy only has reference BLAS (no such library to read it).
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "6")
 for _blas_env_var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
     os.environ.setdefault(_blas_env_var, "1")
-
 import argparse
-import json
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
-
 import pyneat
 import yaml
 
@@ -56,11 +46,6 @@ PATCH_GRID = (28, 28)  # 224x224 input -> 28x28 patch grid, see the model's comp
 
 def time_ms() -> float:
     return time.perf_counter() * 1000.0
-
-
-# --------------------------------------------------------------------------
-# Config
-# --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -224,11 +209,6 @@ def validate_config(cfg: AppConfig) -> None:
             raise ValueError("output.insight.bitrate_kbps must be > 0")
 
 
-# --------------------------------------------------------------------------
-# Model
-# --------------------------------------------------------------------------
-
-
 def is_image(path: Path) -> bool:
     return path.suffix.lower() in IMAGE_EXTS
 
@@ -265,11 +245,6 @@ def extract_from_bgr(model: "pyneat.Model", bgr, timeout_ms: int = 5000) -> "np.
     return extract_hwc(np.asarray(outputs[0].to_numpy(copy=True)))
 
 
-# --------------------------------------------------------------------------
-# Overlay
-# --------------------------------------------------------------------------
-
-
 def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: float,
                  patch_scale_max: float):
     """Heatmap overlay (blue = typical, red = anomalous) on a fixed scale
@@ -283,11 +258,6 @@ def draw_overlay(bgr, score_map, sigma: float, alpha: float, patch_scale_min: fl
     heat_u8 = (heat_norm * 255).astype(np.uint8)
     heat_color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
     return cv2.addWeighted(bgr, 1 - alpha, heat_color, alpha, 0)
-
-
-# --------------------------------------------------------------------------
-# Calibrate
-# --------------------------------------------------------------------------
 
 
 def cmd_calibrate(cfg: AppConfig) -> int:
@@ -379,13 +349,6 @@ def cmd_calibrate(cfg: AppConfig) -> int:
     return 0
 
 
-# --------------------------------------------------------------------------
-# Score: image_dir -- writes annotated overlays to output.dir, no live view
-# (matches every folder-based example in this repo: depth-estimator,
-# classification/image-classifier, etc. -- none of them stream to Insight).
-# --------------------------------------------------------------------------
-
-
 def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neighbors: int,
                         patch_scale_min: float, patch_scale_max: float) -> int:
     paths = find_images(Path(cfg.image_dir))
@@ -442,13 +405,6 @@ def cmd_score_image_dir(cfg: AppConfig, bank: MemoryBank, threshold: float, num_
         print(f"[FATAL] {write_failures} overlay(s) failed to write", file=sys.stderr)
         return 3
     return 0 if processed > 0 else 3
-
-
-# --------------------------------------------------------------------------
-# Score: video_file -- cv2.VideoCapture, streaming the annotated overlay live
-# to Insight via a small host-pushed graph; `output.save_every > 0`
-# additionally writes periodic local snapshots. Also used by rtsp.
-# --------------------------------------------------------------------------
 
 
 def build_video_sender(cfg: AppConfig, fps: float, width: int, height: int):
@@ -558,12 +514,6 @@ def cmd_score_video_file(cfg: AppConfig, bank: MemoryBank, threshold: float, num
         print(f"[FATAL] {write_failures} snapshot(s) failed to write", file=sys.stderr)
         return 3
     return 0 if processed > 0 else 3
-
-
-# --------------------------------------------------------------------------
-# Score: rtsp -- see build_rtsp_graph's docstring for why the model isn't
-# embedded in the live graph.
-# --------------------------------------------------------------------------
 
 
 def probe_ffprobe(cfg: AppConfig) -> tuple[int, int, int]:
@@ -725,7 +675,6 @@ def frame_bgr_from_sample(sample):
     return np.asarray(tensor.to_numpy(copy=True))
 
 
-
 def build_rtsp_graph(cfg: AppConfig, width: int, height: int, fps: int):
     """Decode-only graph: the model is deliberately NOT embedded here; this
     just wires the RTSP source to a "frame" output, and cmd_score_rtsp scores
@@ -813,11 +762,6 @@ def cmd_score_rtsp(cfg: AppConfig, bank: MemoryBank, threshold: float, num_neigh
     if pull_timed_out:
         return 3
     return 0 if processed > 0 else 3
-
-
-# --------------------------------------------------------------------------
-# Entry point
-# --------------------------------------------------------------------------
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
